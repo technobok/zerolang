@@ -10228,3 +10228,16 @@ class TestGeneratorEmitter:
         assert any(
             "first reachable yield" in m and "expression form" in m for m in msgs
         ), f"Expected a first-yield rejection message, got: {msgs}"
+
+    # Reftype `gives:` end-to-end emitter coverage is deferred:
+    # `_emit_yield_fragment` was written assuming the variant
+    # shape (`optionval(T).data` as an inline union with `.some`),
+    # whereas reftype wrappers (`Option(T)`, `OptionView(T)`) use
+    # the union shape (`.data` is `void*`). The typecheck-level
+    # routing this phase introduces is sound; the emitter
+    # extension to recognise union-shaped wrappers and emit the
+    # appropriate `.data = &payload` (or owned-pointer) assignment
+    # is a separate change that should land alongside a follow-up
+    # emitter phase. See plan
+    # `/home/pawe/.claude/plans/in-the-zerolang-project-linked-parasol.md`
+    # for context.

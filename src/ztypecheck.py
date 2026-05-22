@@ -3980,10 +3980,199 @@ class TypeChecker:
                 )
                 return None
 
+        self._check_generic_arg_ownership_consistency(call, template)
+        template = self._collapse_generator_wrapper_for_valtype(
+            call, template, generic_args
+        )
         defn = self._find_generic_defn(template)
         if not defn:
             return None
         return self._monomorphize(template, generic_args, defn)
+
+    def _check_generic_arg_ownership_consistency(
+        self,
+        call: zast.Call,
+        template: ZType,
+    ) -> None:
+        """For each generic argument carrying a `.take` or `.borrow`
+        suffix, verify every body-use of that generic parameter has
+        the same ownership.
+
+        Walks the template's FUNCTION children. For each function:
+        - each parameter typed as the generic param contributes its
+          effective ownership (annotation or BORROW default);
+        - the return type, if typed as the generic param, contributes
+          its effective ownership (annotation or TAKE default).
+
+        Field arms and nested types are not walked — heterogeneous
+        function uses are the practical mismatch the user-facing
+        rule targets. Iterator (a protocol with no methods) has no
+        function children and so trivially accepts any annotation,
+        which is the desugarer's intended channel for wrapper
+        selection.
+
+        `.lock` on generic args is not checked here — Iterator's
+        gives-form validator already rejects it as parameter-only
+        ownership, and the typechecker's existing lock-validation
+        catches user-defined lock misuse.
+        """
+        for arg in call.arguments:
+            if not arg.name or arg.name not in template.generic_params:
+                continue
+            if arg.valtype.nodetype != NodeType.DOTTEDPATH:
+                continue
+            dp = cast(zast.DottedPath, arg.valtype)
+            leaf = dp.child.name
+            user_own = _OWNERSHIP_SUFFIXES.get(leaf)
+            if user_own is None:
+                continue
+            if user_own == ZParamOwnership.LOCK:
+                continue
+            uses = self._collect_generic_param_uses(template, arg.name)
+            if not uses:
+                continue
+            if any(u != user_own for u in uses):
+                self._error(
+                    f"ownership '.{leaf}' on generic argument "
+                    f"'{arg.name}: ' of '{template.name}' conflicts with "
+                    f"how '{arg.name}' is used in the type's body "
+                    f"(uses found: {sorted({u.name.lower() for u in uses})})",
+                    loc=dp.start,
+                    err=ERR.OWNERERROR,
+                    hint=(
+                        f"remove the .{leaf} suffix, or restructure the "
+                        f"type so every body use of '{arg.name}' matches"
+                    ),
+                )
+
+    def _collect_generic_param_uses(
+        self, template: ZType, slot_name: str
+    ) -> list[ZParamOwnership]:
+        """Collect the effective ownership at each direct use of
+        generic parameter `slot_name` in the template's method
+        parameters and return types.
+
+        Walks the AST definition rather than the resolved type
+        children because generic classes defer method resolution to
+        monomorphization, leaving the template's children empty of
+        method types at the moment this check fires.
+
+        Only direct uses (`of`, `of.take`, `of.borrow`, `of.lock`)
+        are inspected. Uses inside nested type expressions (e.g.
+        `(List of: of)`) are not analysed here.
+        """
+        obj_defn = self._find_object_defn(template)
+        if obj_defn is None:
+            return []
+        uses: list[ZParamOwnership] = []
+        all_funcs = list(obj_defn.functions().values()) + list(
+            obj_defn.as_functions().values()
+        )
+        for func in all_funcs:
+            for _pname, ppath in func.parameters.items():
+                if self._path_is_generic_param_ref(ppath, slot_name):
+                    _stripped, own = _strip_path_ownership(ppath)
+                    uses.append(own if own is not None else ZParamOwnership.BORROW)
+            rt = func.returntype
+            if rt is not None and self._path_is_generic_param_ref(rt, slot_name):
+                _stripped, own = _strip_path_ownership(rt)
+                uses.append(own if own is not None else ZParamOwnership.TAKE)
+        return uses
+
+    def _find_object_defn(self, template: ZType) -> Optional[zast.ObjectDef]:
+        """Locate the ObjectDef AST for `template`, dereferencing
+        unit-level dotted-path aliases like `List: collections.List`
+        in system.z. Returns None if no ObjectDef is found."""
+        OBJECT_DEF_NODETYPES = (
+            NodeType.CLASS,
+            NodeType.RECORD,
+            NodeType.PROTOCOL,
+            NodeType.FACET,
+            NodeType.UNION,
+            NodeType.VARIANT,
+        )
+        name = template.name
+        for _unitname, unit in self.program.units.items():
+            entry = unit.body.get(name)
+            if entry is None:
+                continue
+            if entry.nodetype in OBJECT_DEF_NODETYPES:
+                return cast(zast.ObjectDef, entry)
+            if entry.nodetype == NodeType.DOTTEDPATH:
+                resolved = self._dereference_alias(cast(zast.DottedPath, entry))
+                if resolved is not None and resolved.nodetype in OBJECT_DEF_NODETYPES:
+                    return cast(zast.ObjectDef, resolved)
+        return None
+
+    def _dereference_alias(self, alias: zast.DottedPath) -> Optional[zast.Node]:
+        """Follow `unit.Name` and `unit.sub.Name` aliases to the
+        underlying definition. Returns None if any step cannot be
+        resolved."""
+        parts: list[str] = []
+        cur: zast.Operation = alias
+        while cur.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, cur)
+            parts.append(dp.child.name)
+            cur = dp.parent
+        if cur.nodetype not in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return None
+        parts.append(cast(zast.AtomId, cur).name)
+        parts.reverse()
+        unit = self.program.units.get(parts[0])
+        if unit is None:
+            return None
+        node: zast.Node = unit
+        for part in parts[1:]:
+            if node.nodetype != NodeType.UNIT:
+                return None
+            entry = cast(zast.Unit, node).body.get(part)
+            if entry is None:
+                return None
+            node = entry
+        return node
+
+    def _path_is_generic_param_ref(self, path: zast.Operation, slot_name: str) -> bool:
+        """True iff `path` is a direct reference to the generic
+        parameter named `slot_name`, optionally with an ownership
+        suffix. False for atoms of any other name or for compound
+        paths whose base is not a bare AtomId/LabelValue."""
+        stripped, _ = _strip_path_ownership(path)
+        if stripped.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return cast(zast.AtomId, stripped).name == slot_name
+        return False
+
+    def _collapse_generator_wrapper_for_valtype(
+        self,
+        call: zast.Call,
+        template: ZType,
+        generic_args: dict[str, ZType],
+    ) -> ZType:
+        """For a generator-synthesized `.call` return type whose `t`
+        argument resolves to a valtype, collapse Option / OptionView
+        to optionval. Ownership annotations are no-ops for valtypes
+        (`.borrow` copies, `.take` is identical), so all three
+        gives-suffix forms physically produce a copy-out wrapper.
+
+        Recognised only when the synth_origin marker on `call` matches
+        the generator desugarer; user-written Option / OptionView calls
+        are unaffected and continue to honour their own kind
+        constraints (Option requires reftype; optionval requires
+        valtype).
+        """
+        if call.synth_origin != "generator":  # ztc-string-compare-ok: synth marker
+            return template
+        if template.name not in (
+            "Option",
+            "OptionView",
+        ):  # ztc-string-compare-ok: stdlib wrapper names
+            return template
+        t_arg = generic_args.get("t")
+        if t_arg is None or not _is_valtype(t_arg):
+            return template
+        replacement = self._resolve_name("optionval")
+        if replacement is None or not replacement.isgeneric:
+            return template
+        return replacement
 
     def _resolve_type_keyword(self) -> Optional[ZType]:
         """Resolve `type` to the nearest enclosing concrete type on the resolving stack."""

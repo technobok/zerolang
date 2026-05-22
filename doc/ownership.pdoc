@@ -398,6 +398,79 @@ variables (ending the borrow), whereas #~".take" on a borrowed variable is alway
 an error.
 
 
+#--: Ownership on Generic Arguments
+
+Ownership specifiers apply uniformly to every argument position in
+zerolang, including #b:"generic arguments at type-use sites". When
+you write #~"(Foo of: T.take)" or #~"out (Iterator gives: T.take)",
+the #~".take" is a real ownership annotation -- not silently
+stripped.
+
+#---: Default rule
+
+Generic arguments follow the same default-borrow rule as ordinary
+function parameters: a generic argument with no ownership suffix
+defaults to #~".borrow". #~".take" must be explicit.
+
+For valtypes, ownership annotations are no-ops at the physical
+level: #~".borrow" copies and #~".take" is the same operation, so
+all three forms (bare, #~".borrow", #~".take") behave identically.
+
+#---: Iterator's gives: and accepts:
+
+#~"Iterator" is the canonical generic type that interprets
+ownership on its generic arguments. The generator desugarer uses
+the annotation on #~"gives:" to select the synthesised #~".call"
+return wrapper, and the annotation on #~"accepts:" to select the
+resume-input ownership. See the Generator functions section of
+#> to=./spec.html: the language specification for the full table.
+
+#---: Strict consistency for user-defined generic types
+
+When you specify an ownership suffix on a generic argument of a
+user-defined generic type, the compiler checks that every body-use
+of that generic parameter has the same effective ownership. The
+walk inspects each method's parameter and return type. If any use
+disagrees with the user-specified annotation, the call is a compile
+error pointing at the suffix and listing the conflicting uses.
+
+#code language=zerolang: """
+  # Single-use generic: 'of' appears only in .borrow position
+  Sink: class { tag: i64 } as {
+      of: Any.generic
+      inspect: function {item: of.borrow} is { }
+  }
+
+  use_ok: function {s: (Sink of: String.borrow)} is { }
+                            # ^ matches Sink.inspect's .borrow — OK
+
+  use_err: function {s: (Sink of: String.take)} is { }
+                            # ^ conflicts with Sink.inspect's .borrow — error
+  """
+
+For heterogeneous-use generics (a type whose generic parameter
+appears in both #~".borrow" and #~".take" positions inside the
+body), no annotation passes the check. Users write the bare form
+and each use site applies its own default. The stdlib #~"List" and
+#~"Map" fall into this category -- write #~"(List of: String)",
+not #~"(List of: String.take)".
+
+#---: Aliasing for repeated patterns
+
+When the same ownership-annotated iterator return type appears in
+multiple generator signatures, give it a unit-level name and reuse
+the alias. Unit-level instantiation creates a compile-time alias
+(see the generic-units section of
+#> to=./spec.html: the language specification).
+
+#code language=zerolang: """
+  MyIter: (Iterator gives: String.take)
+
+  gen1: function out MyIter is { yield "a".string }
+  gen2: function {n: i64} out MyIter is { ... }
+  """
+
+
 #--: Locking
 
 Locking is an orthogonal compile-time mechanism that prevents aliasing and

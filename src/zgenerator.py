@@ -313,20 +313,23 @@ def _option_wrapper_for_gives(rt: Path) -> Optional[Call]:
     """Synthesise the `.call` return-type AST for a generator
     whose `gives:` argument has the form recognised in `_gives_form`.
 
-    Mapping (per the plan's table):
-        bare T          -> (optionval t: T)
-        T.take          -> (Option t: T)
+    Per-suffix mapping picked here (kind dispatch deferred to typecheck):
+        bare T          -> (OptionView t: T)
         T.borrow        -> (OptionView t: T)
+        T.take          -> (Option t: T)
+
+    For valtype T, ownership annotations are no-ops (`.borrow` copies,
+    `.take` is identical), so the typechecker collapses Option /
+    OptionView to optionval on this synth wrapper when T is valtype.
+    See `_collapse_generator_wrapper_for_valtype` in ztypecheck.
     """
     base, leaf = _gives_form(rt)
     if base is None:
         return None
     if leaf == "take":  # ztc-string-compare-ok: ownership-suffix marker
         wrapper_name = "Option"
-    elif leaf == "borrow":  # ztc-string-compare-ok: ownership-suffix marker
-        wrapper_name = "OptionView"
     else:
-        wrapper_name = "optionval"
+        wrapper_name = "OptionView"
     start = base.start
     callable_node = AtomId(name=wrapper_name, start=start, synth_origin=_SYNTH_ORIGIN)
     arg = NamedOperation(

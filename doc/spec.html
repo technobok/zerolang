@@ -3207,23 +3207,38 @@ intrange: function {lo: i64 hi: i64} out (Iterator gives: i64) is {
 # call site -- the for-loop drives the synthesised .call
 for x: (intrange lo: 0 hi: 3) loop { print "\{x}" }</code></pre>
 <p>The shape of the <code>.call</code> return type is determined by the form of
-<code>gives:</code></p>
+<code>gives:</code>. Like every other argument position in zerolang, a
+generic argument defaults to <code>.borrow</code>; <code>.take</code> is explicit.</p>
 <table>
 <colgroup>
-<col style="width: 28%">
-<col style="width: 28%">
-<col style="width: 42%">
+<col style="width: 22%">
+<col style="width: 22%">
+<col style="width: 22%">
+<col style="width: 33%">
 </colgroup>
 <thead>
-<tr><th style="text-align: left">gives form</th><th style="text-align: left">.call returns</th><th style="text-align: left">Yielded value ownership</th></tr>
+<tr><th style="text-align: left">gives form</th><th style="text-align: left">Reftype T</th><th style="text-align: left">Valtype T</th><th style="text-align: left">Yielded value ownership</th></tr>
 </thead>
 <tbody>
-<tr><td><code>T</code> (valtype)</td><td><code>optionval(T)</code></td><td>Copy out</td></tr>
-<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td>Owned out to caller</td></tr>
-<tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td>Borrowed view (tied to iterator's lock)</td></tr>
+<tr><td>bare <code>T</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Borrowed view (ref) / copy (val)</td></tr>
+<tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td><code>optionval(T)</code></td><td>Same as bare</td></tr>
+<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td><code>optionval(T)</code></td><td>Owned out (ref) / copy (val)</td></tr>
+<tr><td><code>T.lock</code></td><td>Compile error</td><td>Compile error</td><td>Parameter-only ownership</td></tr>
 </tbody>
 </table>
-<p>A reftype <code>T</code> without modifier defaults to <code>.take</code>.</p>
+<p>For valtype <code>T</code>, ownership annotations are physical no-ops
+(<code>.borrow</code> copies, <code>.take</code> is identical), so all three forms
+collapse to <code>optionval(T)</code>. The typechecker performs the collapse
+on synth-class <code>.call</code> return types after generator desugaring;
+user-written <code>Option</code> or <code>OptionView</code> calls outside this context
+keep their normal kind constraints.</p>
+<p>For reftype <code>T</code>, bare and <code>.borrow</code> both yield <code>OptionView(T)</code>
+(consistent with the reftype <code>.borrow</code> convention -- pass a
+reference). Owned reftype yield requires explicit <code>T.take</code>.</p>
+<p>See the Ownership on Generic Arguments section of
+<a href="./ownership.html">the ownership document for the broader</a>
+rule that governs ownership specifiers on generic arguments at
+use sites.</p>
 <p>Because the synthesised iterator outlives the factory call, every
 parameter must declare ownership/locking explicitly. A bare <code>.borrow</code>
 or bare <code>:this</code> is rejected -- the borrow's lifetime would be the

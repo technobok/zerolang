@@ -11936,6 +11936,84 @@ class TestIteratorReturnType:
             f"Expected an error mentioning .lock, got: {[e.msg for e in errors]}"
         )
 
+    def test_gives_bare_reftype_yields_optionview(self):
+        """Phase 1: bare reftype `gives: T` defaults to `.borrow`,
+        which maps to `OptionView(T)` (borrowed-view wrapper). This is
+        the new default — formerly bare reftype silently failed at
+        monomorphization because optionval requires `Any.valtype`."""
+        program, typing = check_ok(
+            "gen: function {s: String.take} out (Iterator gives: String) is { yield s }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        call_method = synth.as_items["call"]
+        rt_zt = typing.node_type.get(call_method.returntype.nodeid)
+        assert rt_zt is not None and rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "OptionView"
+
+    def test_gives_bare_valtype_yields_optionval(self):
+        """Phase 1: bare valtype `gives: T` synthesises OptionView at
+        the AST level, but the typechecker collapses to optionval
+        because ownership annotations are no-ops on valtypes."""
+        program, typing = check_ok(
+            "gen: function out (Iterator gives: i32) is { yield 1 }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        call_method = synth.as_items["call"]
+        rt_zt = typing.node_type.get(call_method.returntype.nodeid)
+        assert rt_zt is not None and rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "optionval"
+
+    def test_gives_take_reftype_yields_option(self):
+        """`gives: T.take` for reftype T yields owned `Option(T)`
+        (unchanged from prior behaviour)."""
+        program, typing = check_ok(
+            "gen: function {s: String.take} out (Iterator gives: String.take) "
+            "is { yield s }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        call_method = synth.as_items["call"]
+        rt_zt = typing.node_type.get(call_method.returntype.nodeid)
+        assert rt_zt is not None and rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "Option"
+
+    def test_gives_take_valtype_collapses_to_optionval(self):
+        """Phase 1: `.take` on a valtype generic-arg collapses to
+        optionval (.take ≡ copy for valtypes — both physically copy
+        the value)."""
+        program, typing = check_ok(
+            "gen: function out (Iterator gives: i64.take) is { yield 1 }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        call_method = synth.as_items["call"]
+        rt_zt = typing.node_type.get(call_method.returntype.nodeid)
+        assert rt_zt is not None and rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "optionval"
+
+    def test_gives_borrow_valtype_collapses_to_optionval(self):
+        """Phase 1: `.borrow` on a valtype generic-arg collapses to
+        optionval (.borrow ≡ copy for valtypes)."""
+        program, typing = check_ok(
+            "gen: function out (Iterator gives: i64.borrow) is { yield 1 }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        call_method = synth.as_items["call"]
+        rt_zt = typing.node_type.get(call_method.returntype.nodeid)
+        assert rt_zt is not None and rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "optionval"
+
+    def test_gives_borrow_reftype_yields_optionview(self):
+        """`gives: T.borrow` for reftype T yields `OptionView(T)`
+        (unchanged from prior behaviour)."""
+        program, typing = check_ok(
+            "gen: function {s: String.lock} out (Iterator gives: String.borrow) "
+            "is { yield s }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        call_method = synth.as_items["call"]
+        rt_zt = typing.node_type.get(call_method.returntype.nodeid)
+        assert rt_zt is not None and rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "OptionView"
+
 
 class TestGeneratorDesugaring:
     """Phase G3: desugar generator functions into a synthesized
@@ -12283,6 +12361,116 @@ class TestGeneratorDesugaring:
             field_name="c",
         )
         assert field_t is not None and field_t.name == "u32", f"got {field_t!r}"
+
+
+_SINGLE_TAKE_CLS = (
+    "Producer: class { tag: i64 } as {\n"
+    "    of: Any.generic\n"
+    "    consume: function {item: of.take} is { }\n"
+    "}\n"
+)
+
+_SINGLE_BORROW_CLS = (
+    "Sink: class { tag: i64 } as {\n"
+    "    of: Any.generic\n"
+    "    inspect: function {item: of.borrow} is { }\n"
+    "}\n"
+)
+
+_BAG_HETEROGENEOUS_CLS = (
+    "Bag: class { tag: i64 } as {\n"
+    "    of: Any.generic\n"
+    "    consume: function {item: of.take} is { }\n"
+    "    inspect: function {item: of.borrow} is { }\n"
+    "}\n"
+)
+
+
+class TestGenericArgOwnershipConsistency:
+    """Phase 1.2: ownership specifiers on a generic argument at a
+    use site must be consistent with how that generic parameter is
+    used in the parent type's function children. Heterogeneous-use
+    generics (mixed `.borrow` parameter and `.take` return) cannot
+    carry an ownership annotation; users write the bare form."""
+
+    def test_consistent_single_use_take_accepted(self):
+        """A user-defined generic with a single `.take` use accepts
+        `.take` on the generic arg at the use site."""
+        check_ok(
+            _SINGLE_TAKE_CLS + "use: function {p: (Producer of: String.take)} is { }"
+        )
+
+    def test_consistent_single_use_borrow_accepted(self):
+        """A user-defined generic with a single `.borrow` use accepts
+        `.borrow` on the generic arg at the use site."""
+        check_ok(
+            _SINGLE_BORROW_CLS + "use: function {s: (Sink of: String.borrow)} is { }"
+        )
+
+    def test_conflicting_single_use_rejected(self):
+        """A `.take` annotation on a single-use `.borrow` slot is
+        rejected; the diagnostic mentions the conflict and the slot."""
+        errors = check_errors(
+            _SINGLE_BORROW_CLS + "use: function {s: (Sink of: String.take)} is { }"
+        )
+        assert any(
+            "of" in e.msg and "Sink" in e.msg and "take" in e.msg.lower()
+            for e in errors
+        ), f"Expected ownership-conflict on 'of', got: {[e.msg for e in errors]}"
+
+    def test_heterogeneous_use_rejects_take(self):
+        """Bag-style class with both .borrow (param) and .take (return)
+        uses of `of`; `.take` on the generic arg is rejected."""
+        errors = check_errors(
+            _BAG_HETEROGENEOUS_CLS + "use: function {b: (Bag of: String.take)} is { }"
+        )
+        assert any("of" in e.msg and "Bag" in e.msg for e in errors), (
+            f"Expected heterogeneous-use conflict, got: {[e.msg for e in errors]}"
+        )
+
+    def test_heterogeneous_use_rejects_borrow(self):
+        """Same Bag class; `.borrow` on the generic arg is also
+        rejected (no single ownership matches every use)."""
+        errors = check_errors(
+            _BAG_HETEROGENEOUS_CLS + "use: function {b: (Bag of: String.borrow)} is { }"
+        )
+        assert any("of" in e.msg and "Bag" in e.msg for e in errors), (
+            f"Expected heterogeneous-use conflict, got: {[e.msg for e in errors]}"
+        )
+
+    def test_heterogeneous_use_bare_accepted(self):
+        """Heterogeneous-use Bag accepts bare `String` (no annotation);
+        each use site applies its own default."""
+        check_ok(_BAG_HETEROGENEOUS_CLS + "use: function {b: (Bag of: String)} is { }")
+
+
+class TestStrayGenericArgOwnership:
+    """Phase 1.2: ownership on the generic arg of stdlib container
+    types (List, Map) is rejected because they have heterogeneous
+    uses internally (.borrow params + .take returns)."""
+
+    def test_list_of_take_rejected(self):
+        """`(List of: T.take)` at a use site is rejected by the
+        consistency check; List uses `of` in both .borrow (append's
+        `item`) and .take (`get`'s return) positions."""
+        errors = check_errors("use: function {l: (List of: String.take)} is { }")
+        assert any(
+            "of" in e.msg and "List" in e.msg and "take" in e.msg.lower()
+            for e in errors
+        ), f"Expected List.of conflict, got: {[e.msg for e in errors]}"
+
+    def test_list_of_borrow_rejected(self):
+        """`(List of: T.borrow)` at a use site is similarly rejected."""
+        errors = check_errors("use: function {l: (List of: String.borrow)} is { }")
+        assert any(
+            "of" in e.msg and "List" in e.msg and "borrow" in e.msg.lower()
+            for e in errors
+        ), f"Expected List.of conflict, got: {[e.msg for e in errors]}"
+
+    def test_list_of_bare_accepted(self):
+        """Bare `(List of: String)` continues to work (no annotation
+        = no consistency check needed)."""
+        check_ok("use: function {l: (List of: String)} is { }")
 
 
 class TestLiteralCoercion:
