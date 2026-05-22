@@ -7479,13 +7479,20 @@ class TypeChecker:
                 )
         return ZExprResult(t, borrow_target, private_access)
 
-    def _check_operation(self, op: zast.Operation) -> ZExprResult:
+    def _check_operation(
+        self, op: zast.Operation, coerce_method_to_return: bool = True
+    ) -> ZExprResult:
         """Type-check an operation. Returns a ZExprResult carrying the
         resolved ztype plus any borrow_target / private_access intent
         that the inner call or path resolution stamped. The CALL branch
         receives the intent via _check_call's ZExprResult; the BINOP /
         PATH branches still funnel it through the `_pending_*`
         side-channel, cleared at this boundary.
+
+        `coerce_method_to_return` controls the path-level auto-invoke
+        rule. The caller passes `False` when the surrounding context
+        (e.g. a function-typed parameter slot) expects a method
+        reference rather than a method call's return value.
         """
         t: Optional[ZType] = None
         borrow_target: Optional[Tuple[str, ...]] = None
@@ -7504,7 +7511,10 @@ class TypeChecker:
             NodeType.EXPRESSION,
             NodeType.LABELVALUE,
         ):
-            path_result = self._check_path(cast(zast.Path, op))
+            path_result = self._check_path(
+                cast(zast.Path, op),
+                coerce_method_to_return=coerce_method_to_return,
+            )
             t = path_result.ztype
             borrow_target = path_result.borrow_target
             private_access = path_result.private_access
@@ -8781,7 +8791,27 @@ class TypeChecker:
                 continue
             value_idx += 1
             i = value_idx
-            arg_result = self._check_operation(arg.valtype)
+            # Look up the expected parameter type (by name for named
+            # args, by position for positional) before checking the
+            # arg. If the slot expects a FUNCTION (method-reference
+            # field), suppress path-level auto-invoke so a bare
+            # `cls.method` arg resolves as the method reference, not
+            # its return value.
+            expected_ptype: Optional[ZType] = None
+            if arg.name:
+                for pname_e, ptype_e in params:
+                    if pname_e == arg.name:
+                        expected_ptype = ptype_e
+                        break
+            elif i < len(params):
+                expected_ptype = params[i][1]
+            coerce_to_ret = not (
+                expected_ptype is not None
+                and expected_ptype.typetype == ZTypeType.FUNCTION
+            )
+            arg_result = self._check_operation(
+                arg.valtype, coerce_method_to_return=coerce_to_ret
+            )
             arg_type = arg_result.ztype
             # Capture the source path that `.lock` / `.borrow` /
             # `.stringview` / `.listview` or protocol projection would

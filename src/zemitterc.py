@@ -2098,13 +2098,28 @@ class CEmitter:
             result.append(line)
         return "".join(result)
 
-    def _emit_func_typedef(self, name: str, func: zast.Function) -> None:
-        """Emit a C typedef for a function (placed after struct defs)."""
+    def _emit_func_typedef(
+        self, name: str, func: zast.Function, record_name: str = ""
+    ) -> None:
+        """Emit a C typedef for a function (placed after struct defs).
+        When `record_name` is non-empty AND that record is a class,
+        any parameter whose type is the receiver class is promoted to
+        a pointer — matching the `_emit_function` / forward-decl
+        convention that class methods take `this` (and same-typed
+        params) by pointer."""
         self.needs_stdint = True
         ret_ctype = self._return_ctype(func)
+        record_type = self._resolved_type(record_name) if record_name else None
+        is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
         params: List[str] = []
-        for pname, ppath in func.parameters.items():
+        for _pname, ppath in func.parameters.items():
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
+            if (
+                is_class_method
+                and self._node_ztype(ppath) is record_type
+                and not ptype_str.endswith("*")
+            ):
+                ptype_str = f"{ptype_str}*"
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         cname = name.replace(".", "_")
@@ -3156,13 +3171,19 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
-        # emit 'is' functions with body as regular C functions (for default values)
+        # emit 'is' functions with body as regular C functions (for default values).
+        # Method-reference fields (e.g. `instancemethod: method1`) and overrides
+        # at construction (`c val: 0 instancemethod: c.method2`) bind a function
+        # pointer typedef; emit `z_{name}_{mname}_ft` so the assignment-side
+        # hoist's local declaration has a real type.
         for mname, mfunc in cls.functions().items():
             if mfunc.body:
+                self._emit_func_typedef(f"{name}.{mname}", mfunc, record_name=name)
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit 'as' functions as methods
         for mname, mfunc in cls.as_functions().items():
             if mfunc.body:
+                self._emit_func_typedef(f"{name}.{mname}", mfunc, record_name=name)
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit protocol implementations
         if not skip_protocol_impls:

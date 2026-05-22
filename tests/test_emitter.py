@@ -2370,7 +2370,8 @@ class TestEmitterClassDestructors:
     def test_class_destructor_with_string_field(self):
         """Class with String field: destructor frees String."""
         csource = emit_source(
-            'MyClass: class { name: String\n x: 0 }\nmain: function is { c: MyClass name: "" }'
+            "MyClass: class { name: String\n x: 0 }\n"
+            'main: function is { c: MyClass name: "".string }'
         )
         assert "z_MyClass_destroy" in csource
         assert "z_String_free(&p->name);" in csource
@@ -2405,7 +2406,8 @@ class TestEmitterClassDestructors:
     def test_scope_exit_calls_destructor(self):
         """Scope-exit cleanup calls z_{name}_destroy."""
         csource = emit_source(
-            'MyClass: class { name: String }\nmain: function is { c: MyClass name: "" }'
+            "MyClass: class { name: String }\n"
+            'main: function is { c: MyClass name: "".string }'
         )
         # should call destructor with address-of, not bare free
         assert "z_MyClass_destroy(&c);" in csource
