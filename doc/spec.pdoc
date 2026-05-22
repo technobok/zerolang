@@ -3751,6 +3751,25 @@ removes the collision with the #~".take" ownership method. The
 compiler emits a targeted rename-hint error when it sees the old
 name on an iterator return type.
 
+The form of #~"accepts:" determines how the resumed value is held
+across the body's yield window:
+
+#table cols="2 2 2 3":
+  accepts form        |Reftype U            |Valtype U            |Resume-input ownership
+  bare #~"U"          |borrow (.lock field) |bare value field     |Borrow / by-value
+  #~"U.borrow"        |borrow (.lock field) |bare value field     |Same as bare
+  #~"U.lock"          |borrow (.lock field) |Compile error        |Borrow with explicit lock
+  #~"U.take"          |Owned field          |Bare value field     |Owned across yields
+
+Borrowed forms (bare, #~".borrow", #~".lock") install a lock on the
+caller's #~"value:" argument for the duration of each #~".call".
+The body's #~"name: yield v" binding is a pointer alias into the
+caller's storage; accesses through #~"name" read the live value.
+The name is valid only for one yield window — using it past the
+next #~"yield" is a compile error. To persist the resumed value
+across yields, use #~"accepts: U.take" (the synth class owns the
+value for the iterator's lifetime).
+
 #code language=zerolang: """
   # bidirectional: caller sends a bool back after each yielded line
   grep: function {pat: String.take} out

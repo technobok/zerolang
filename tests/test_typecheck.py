@@ -12375,6 +12375,139 @@ class TestGeneratorDesugaring:
         assert field_t is not None and field_t.name == "u32", f"got {field_t!r}"
 
 
+class TestGeneratorAcceptsBorrow:
+    """Phase 3: `accepts:` borrow-default and liveness check.
+
+    Mappings:
+      - bare reftype `accepts: U` → field becomes `U.lock` (pointer
+        storage), resumed name bound as borrow into caller's `value:`.
+      - `accepts: U.borrow` → desugar-rewritten to `.lock`; same as
+        bare reftype.
+      - `accepts: U.lock` → explicit lock; same shape.
+      - `accepts: U.take` → owned field stored across yields.
+      - bare valtype `accepts: U` → field stays bare; typechecker
+        collapses the desugarer's `.lock` wrap for valtype U.
+
+    Liveness rule: for any non-take accepts (bare / .borrow / .lock),
+    the local bound via `name: yield v` cannot be referenced past the
+    next yield."""
+
+    def test_accepts_lock_one_window_use_ok(self):
+        check_ok(
+            "Bag: class { x: i64 }\n"
+            "gen: function out (Iterator gives: i64 accepts: Bag.lock) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield b.x\n"
+            "}\n"
+            "main: function is { }"
+        )
+
+    def test_accepts_lock_use_past_next_yield_rejected(self):
+        errors = check_errors(
+            "Bag: class { x: i64 }\n"
+            "gen: function out (Iterator gives: i64 accepts: Bag.lock) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield 3\n"
+            "    yield b.x\n"
+            "}\n"
+            "main: function is { }"
+        )
+        assert any(
+            "borrowed resume-input local 'b'" in e.msg
+            and "past the next yield" in e.msg
+            for e in errors
+        ), f"Expected liveness diagnostic for b, got: {[e.msg for e in errors]}"
+
+    def test_accepts_borrow_one_window_use_ok(self):
+        check_ok(
+            "Bag: class { x: i64 }\n"
+            "gen: function out (Iterator gives: i64 accepts: Bag.borrow) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield b.x\n"
+            "}\n"
+            "main: function is { }"
+        )
+
+    def test_accepts_borrow_use_past_next_yield_rejected(self):
+        errors = check_errors(
+            "Bag: class { x: i64 }\n"
+            "gen: function out (Iterator gives: i64 accepts: Bag.borrow) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield 3\n"
+            "    yield b.x\n"
+            "}\n"
+            "main: function is { }"
+        )
+        assert any("borrowed resume-input local 'b'" in e.msg for e in errors), (
+            f"Expected liveness diagnostic, got: {[e.msg for e in errors]}"
+        )
+
+    def test_accepts_take_persists_across_yields(self):
+        """`.take` opts into owned storage across yields — the
+        liveness check is intentionally skipped for `.take` because
+        the synth class owns the resumed value for its lifetime."""
+        check_ok(
+            "Bag: class { x: i64 }\n"
+            "gen: function out (Iterator gives: i64 accepts: Bag.take) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield 3\n"
+            "    yield b.x\n"
+            "}\n"
+            "main: function is { }"
+        )
+
+    def test_accepts_bare_valtype_collapses_to_value_field(self):
+        """Bare valtype `accepts: bool` collapses the desugarer's
+        `.lock` wrap to a bare value field via the typechecker's
+        `_resume_input` valtype-collapse hook. Body that doesn't
+        store the resumed value across yields type-checks."""
+        check_ok(
+            "gen: function out (Iterator gives: i64 accepts: bool) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    if b then yield 99\n"
+            "}\n"
+            "main: function is { }"
+        )
+
+    def test_accepts_bare_valtype_use_past_next_yield_rejected(self):
+        """The liveness check applies uniformly to bare accepts (the
+        desugarer can't tell valtype from reftype at desugar time, so
+        the conservative rule fires for both). Users who need to store
+        the resumed value across yields write `.take`."""
+        errors = check_errors(
+            "gen: function out (Iterator gives: i64 accepts: bool) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield 3\n"
+            "    if b then yield 99\n"
+            "}\n"
+            "main: function is { }"
+        )
+        assert any("borrowed resume-input local 'b'" in e.msg for e in errors), (
+            f"Expected liveness diagnostic, got: {[e.msg for e in errors]}"
+        )
+
+    def test_accepts_take_valtype_persists_across_yields(self):
+        """`.take` on a valtype is a no-op physically (copy = take for
+        valtypes) but signals 'persist across yields' — liveness
+        check is skipped, just like the reftype `.take` case."""
+        check_ok(
+            "gen: function out (Iterator gives: i64 accepts: bool.take) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield 3\n"
+            "    if b then yield 99\n"
+            "}\n"
+            "main: function is { }"
+        )
+
+
 _SINGLE_TAKE_CLS = (
     "Producer: class { tag: i64 } as {\n"
     "    of: Any.generic\n"

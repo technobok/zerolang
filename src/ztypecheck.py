@@ -1820,6 +1820,22 @@ class TypeChecker:
         for fname, fpath in cls.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
+            # Synth-generator `_resume_input` collapse: the
+            # desugarer always emits `.lock` for non-take accepts:
+            # forms (so reftype gets the lock/borrow pattern by
+            # default). For valtype U, ownership is a physical
+            # no-op — strip the `.lock` and treat as a bare value
+            # field. Mirrors the gives: collapse for Option /
+            # OptionView -> optionval in `_collapse_generator_wrapper_for_valtype`.
+            if (
+                fname == "_resume_input"  # ztc-string-compare-ok: synth field name
+                and cls.synth_origin
+                == "generator"  # ztc-string-compare-ok: synth marker
+                and f_own == ZParamOwnership.LOCK
+                and ft is not None
+                and _is_valtype(ft)
+            ):
+                f_own = None
             if (
                 ft
                 and ft.typetype == ZTypeType.GENERIC_PARAM
@@ -7369,6 +7385,16 @@ class TypeChecker:
             self._check_expression(yield_node.expr)
             takes_t = self.symtab.lookup("value")
             t = takes_t if takes_t is not None else None
+            # If the synth `.call`'s value parameter is `.lock`, the
+            # resumed value is a borrow into the caller's storage.
+            # Surface a borrow_target on the yield expression so the
+            # surrounding `name: yield v` assignment binds the local
+            # as borrowed (with `borrow_origin` set), triggering the
+            # standard escape checks and unlocking the liveness
+            # analysis below at the `.call` body level.
+            value_own = self.func_ctx.func_ownership.get("value")
+            if t is not None and value_own == ZParamOwnership.LOCK:
+                borrow_target = ("value",)
         elif inner.nodetype in (
             NodeType.BINOP,
             NodeType.DOTTEDPATH,

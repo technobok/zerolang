@@ -10241,3 +10241,41 @@ class TestGeneratorEmitter:
     # emitter phase. See plan
     # `/home/pawe/.claude/plans/in-the-zerolang-project-linked-parasol.md`
     # for context.
+
+    # ---- Phase 3: borrowed `accepts:` ----------------------------
+
+    def test_accepts_lock_pointer_alias_runs_asan_clean(self):
+        """Bidirectional generator with `accepts: Bag.lock`: each
+        `.call value: bag.lock` deposits a pointer into the synth
+        class's `.lock` `_resume_input` field; the body's `b: yield 2`
+        binding becomes a pointer alias so `b.x` accesses the
+        caller's live Bag through the lock. Confirms emitter wires
+        the field as `z_Bag_t*`, the alias as `(*__borrow_b)`, and
+        runs ASan-clean across multiple yield windows."""
+        csource = emit_source(
+            "Bag: class { x: i64 }\n"
+            "gen: function {n: i64} out (Iterator gives: i64 accepts: Bag.lock) is {\n"
+            "    yield 1\n"
+            "    b: yield 2\n"
+            "    yield b.x\n"
+            "}\n"
+            "main: function is {\n"
+            "    bag: Bag x: 42\n"
+            "    with g: (gen n: 0) do {\n"
+            "        a: g.call value: bag.lock\n"
+            "        match (a) case some then "
+            '{ print "a=\\{a}" } case none then { print "(none)" }\n'
+            "        b: g.call value: bag.lock\n"
+            "        match (b) case some then "
+            '{ print "b=\\{b}" } case none then { print "(none)" }\n'
+            "        c: g.call value: bag.lock\n"
+            "        match (c) case some then "
+            '{ print "c=\\{c}" } case none then { print "(none)" }\n'
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        # 1 (first yield), 2 (second yield), 42 (bag.x via the locked
+        # pointer alias on the third call's resume into yield b.x).
+        assert result.stdout == "a=1\nb=2\nc=42\n"

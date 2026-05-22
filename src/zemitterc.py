@@ -5327,7 +5327,7 @@ class CEmitter:
         # `OPTION_NONE` emission.
         is_generator_call = func.synth_origin == "generator-call"
         if is_generator_call:
-            self._setup_generator_ctx(func)
+            self._setup_generator_ctx(func, name)
 
         ret_ctype = self._return_ctype(func)
 
@@ -5513,7 +5513,7 @@ class CEmitter:
 
     # ---- Generator state-machine codegen (G4) -------------------------
 
-    def _setup_generator_ctx(self, func: zast.Function) -> None:
+    def _setup_generator_ctx(self, func: zast.Function, ftype_name: str = "") -> None:
         """Build the per-call generator state-machine context: walks
         `func.body` to assign incrementing state numbers to each
         Yield node, and records the return-wrapper's mono name + tag
@@ -5565,10 +5565,27 @@ class CEmitter:
         # similarly defensive), so we can unconditionally call it
         # on every entry, including state 0.
         resume_destructor: Optional[str] = None
+        # value_is_borrow: bidirectional generator whose `value:`
+        # parameter is `.lock` (or rewritten-to-`.lock` bare/borrow).
+        # The `_resume_input` field stores a pointer, the prologue
+        # assigns the caller's pointer (no destructor), and the body's
+        # expression-form yield (`name: yield v`) binds via the
+        # pointer-alias pattern so accesses go through the source
+        # storage and the local doesn't outlive its yield window.
+        value_is_borrow = False
+        value_elem_ctype = ""
         if is_bidirectional:
             value_path = func.parameters.get("value")
             value_zt = self._node_ztype(value_path) if value_path is not None else None
-            if value_zt is not None and value_zt.destructor_name:
+            value_own: Optional[ZParamOwnership] = None
+            if ftype_name:
+                fn_ztype = self._resolved_type(ftype_name)
+                if fn_ztype is not None:
+                    value_own = self.typing.child_ownership(fn_ztype, "value")
+            if value_zt is not None and value_own == ZParamOwnership.LOCK:
+                value_is_borrow = True
+                value_elem_ctype = _ctype(self.typing, value_zt)
+            elif value_zt is not None and value_zt.destructor_name:
                 resume_destructor = value_zt.destructor_name
         self._generator_ctx = {
             "yield_states": yield_states,
@@ -5578,6 +5595,8 @@ class CEmitter:
             "n_yields": len(yield_states),
             "is_bidirectional": is_bidirectional,
             "resume_destructor": resume_destructor,
+            "value_is_borrow": value_is_borrow,
+            "value_elem_ctype": value_elem_ctype,
         }
 
     def _emit_generator_prologue(self) -> str:
@@ -5718,6 +5737,35 @@ class CEmitter:
         indent = self._indent()
         _alias_of = self.typing.assign_alias_of.get(assign.nodeid)
         _assign_ztype = self._node_ztype(assign)
+        # Bidirectional generator with `.lock` (or rewritten-to-`.lock`)
+        # `accepts:`: `name: yield v` binds `name` as a pointer alias
+        # into the synth class's `_resume_input` slot. The body's
+        # accesses through `name` are rewritten to `(*__borrow_name)`
+        # via `_alias_map`; the storage is the caller's `value:` arg,
+        # locked for the duration of the `.call`. The typechecker
+        # liveness check prevents `name` from being used past the
+        # next yield.
+        if (
+            self._generator_ctx is not None
+            and cast(bool, self._generator_ctx.get("value_is_borrow"))
+            and assign.value.expression.nodetype == NodeType.YIELD
+            and _assign_ztype is not None
+        ):
+            yield_fragment = self._emit_yield_fragment(
+                cast(zast.Yield, assign.value.expression)
+            )
+            self._temp.decls.append(yield_fragment)
+            decls = "".join(self._temp.decls)
+            self._temp.decls.clear()
+            cname = _mangle_var(assign.name)
+            ptr_name = f"__borrow_{cname}"
+            elem_ctype = _ctype(self.typing, _assign_ztype)
+            self._alias_map[assign.name] = f"(*{ptr_name})"
+            return (
+                f"{decls}{indent}{elem_ctype}* {ptr_name} = "
+                f"this->_resume_input;\n"
+                f"{indent}/* alias: {cname} => (*{ptr_name}) */\n"
+            )
         # Phase B alias optimization: inline `x: y.take` or `x: y.borrow`
         # (or similar on a valtype dotted path) becomes a C-level alias —
         # no local declaration, no destructor, substitute at reference

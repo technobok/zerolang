@@ -657,6 +657,75 @@ def _validate_first_yield_not_expression_form(
     return True
 
 
+def _validate_borrowed_accepts_liveness(
+    body: Statement, errors: List[zast.Error]
+) -> None:
+    """For a generator with a borrowed `accepts:` (i.e. bare,
+    `.borrow`, or `.lock`), verify that every local bound via
+    `name: yield v` is only referenced before the next yield. Uses
+    the same yield-count bookkeeping as `_crossing_locals` but with
+    the opposite outcome: instead of promoting crossing locals to
+    class fields, the violating bindings produce a compile error.
+
+    `.take` accepts uses an owned, stored `_resume_input` and is
+    not subject to this check (the caller has already moved
+    ownership; the binding lives for the iterator's lifetime).
+    """
+    yield_bound_def_yc: Dict[str, int] = {}
+    yield_bound_locs: Dict[str, "Token"] = {}
+    max_use_yc: Dict[str, int] = {}
+    yield_count = [0]
+
+    def walk(node: zast.Node) -> None:
+        nt = node.nodetype
+        if nt == NodeType.FUNCTION:
+            return
+        if nt == NodeType.YIELD:
+            walk(cast(Yield, node).expr)
+            yield_count[0] += 1
+            return
+        if nt == NodeType.ASSIGNMENT:
+            assn = cast(zast.Assignment, node)
+            walk(assn.value)
+            rhs = assn.value
+            inner_op = rhs.expression if rhs is not None else None
+            if inner_op is not None and inner_op.nodetype == NodeType.YIELD:
+                yield_bound_def_yc.setdefault(assn.name, yield_count[0])
+                yield_bound_locs.setdefault(assn.name, assn.start)
+            return
+        if nt == NodeType.ATOMID:
+            name = cast(AtomId, node).name
+            if name in yield_bound_def_yc:
+                yc = yield_count[0]
+                if name not in max_use_yc or yc > max_use_yc[name]:
+                    max_use_yc[name] = yc
+            return
+        for c in zast.node_children(node):
+            walk(c)
+
+    walk(body)
+    for name, def_yc in yield_bound_def_yc.items():
+        use_yc = max_use_yc.get(name, def_yc)
+        if use_yc > def_yc:
+            errors.append(
+                zast.Error(
+                    start=yield_bound_locs[name],
+                    err=ERR.OWNERERROR,
+                    msg=(
+                        f"borrowed resume-input local '{name}' is used "
+                        f"past the next yield; the borrow into the "
+                        f"caller's `value:` argument is valid only for "
+                        f"one `.call` invocation"
+                    ),
+                    hint=(
+                        f"to keep '{name}' across yields, declare "
+                        f"`accepts: T.take` to take ownership of each "
+                        f"resumed value"
+                    ),
+                )
+            )
+
+
 def _crossing_locals(body: Statement, param_names: Set[str]) -> Set[str]:
     """Return the subset of body-assigned local names that *cross a
     yield* and therefore must be promoted to class fields on the
@@ -1277,6 +1346,18 @@ def _build_generator(
     if accepts_path is not None:
         if not _validate_first_yield_not_expression_form(func.body, errors):
             return None, None
+        # Borrowed-accepts liveness: every local bound via
+        # `name: yield v` is a borrow into the caller's `value:`
+        # argument for the current `.call` invocation only. Using
+        # it past the next yield would read a different .call's
+        # caller storage. Skip the check for `.take` accepts (the
+        # resume value is owned and stored across yields).
+        _, accepts_leaf = _split_path_leaf(cast(zast.Operation, accepts_path))
+        if accepts_leaf != "take":  # ztc-string-compare-ok: ownership-suffix marker
+            pre = len(errors)
+            _validate_borrowed_accepts_liveness(func.body, errors)
+            if len(errors) != pre:
+                return None, None
 
     # 3c. Inline-iterable promotion: rewrite each suspending
     # `for x: <non-trivial-expr> loop { ... }` to insert a
@@ -1328,26 +1409,62 @@ def _build_generator(
             continue  # parameter shadows; param wins
         class_fields[lname] = _typeof_field(first_rhs, func.start)
     # Bidirectional: the resume-input slot holds the most recent
-    # `value:` argument from `.call value: <U>`. Each `.call`
-    # entry copies the new value in; the body's expression-form
-    # `name: yield v` reads it on resumption. Strip a `.take`
-    # ownership annotation -- fields store owned values directly,
-    # without the suffix; the synth class destructor handles the
-    # per-iterator-lifetime destruction.
+    # `value:` argument from `.call value: <U>`. Mapping:
+    #   .take      -> owned field (suffix stripped); destroyed
+    #                  per-iterator. Caller transfers ownership.
+    #   .borrow    -> rewritten to `.lock` (alias). Field stores a
+    #                  pointer; the lock is held for the duration
+    #                  of each `.call`. Body bindings via
+    #                  `name: yield v` are borrowed and may not be
+    #                  used past the next yield (liveness check
+    #                  enforced by the typechecker).
+    #   .lock      -> same as .borrow above (kept as-is). Explicit
+    #                  spelling.
+    #   bare       -> kept as-is. For valtype this is a value field
+    #                  (stored by copy). For reftype the typechecker
+    #                  rejects with a hint pointing at .take / .lock
+    #                  / .borrow.
+    # Field type for `_resume_input` is decided here (the `.call`'s
+    # `value:` parameter type is the user's original `accepts_path`
+    # below, so reftype bare/borrow flow through as a default-borrow
+    # parameter and `.lock` / `.take` carry through explicitly).
     if accepts_path is not None:
         field_path, leaf = _split_path_leaf(cast(zast.Operation, accepts_path))
-        class_fields["_resume_input"] = (
-            cast(Path, field_path)
-            if leaf == "take"  # ztc-string-compare-ok: ownership-suffix marker
-            else accepts_path
-        )
+        if leaf == "take":  # ztc-string-compare-ok: ownership-suffix marker
+            # owned field; strip the suffix.
+            class_fields["_resume_input"] = cast(Path, field_path)
+        elif leaf == "lock":  # ztc-string-compare-ok: ownership-suffix marker
+            # explicit lock field; keep as-is.
+            class_fields["_resume_input"] = accepts_path
+        else:
+            # bare or `.borrow` accepts: wrap in `.lock` so the
+            # field goes through the existing lock-field machinery
+            # (pointer storage, no destructor). The typechecker
+            # collapses the `.lock` back to a bare value field for
+            # valtype U (where ownership is a physical no-op) via
+            # the `_resume_input` collapse in `_resolve_class_type`.
+            lock_path = DottedPath(
+                parent=cast(Path, field_path),
+                child=AtomId(
+                    name="lock", start=accepts_path.start, synth_origin=_SYNTH_ORIGIN
+                ),
+                start=accepts_path.start,
+                synth_origin=_SYNTH_ORIGIN,
+            )
+            class_fields["_resume_input"] = lock_path
 
     # 6. build the `create` method
     create_method = _build_create_method(
         func.parameters, class_fields, func.start, receiver_type
     )
 
-    # 7. build the `call` method (body rewritten in terms of `this`)
+    # 7. build the `call` method (body rewritten in terms of `this`).
+    # The `value:` parameter uses the user's original accepts_path —
+    # the field-side `.lock` wrap is only for the synth class's
+    # storage of the resumed value across the body's yield window;
+    # the parameter ownership follows the normal function-param
+    # convention (default `.borrow` for reftype, explicit `.take` /
+    # `.lock`).
     call_method = _build_call_method(
         func.body, call_return, promoted, func.start, accepts_path
     )
