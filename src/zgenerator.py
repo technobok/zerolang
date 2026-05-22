@@ -3,8 +3,8 @@ Generator-function desugaring (Phase G3).
 
 Runs after parsing and before type resolution. Walks every parsed
 function looking for *generators* — functions whose `out` type is
-`Iterator gives: T (takes: U)` AND whose body contains at least one
-`yield` expression. For each generator, this pass:
+`Iterator gives: T (accepts: U)` AND whose body contains at least
+one `yield` expression. For each generator, this pass:
 
   1. Validates the parameter ownership annotations (bare `.borrow` is
      rejected; `:this` on methods must be `:this.lock` or
@@ -26,8 +26,9 @@ is type-checked against `gives`; the body's implicit-return check is
 skipped). The actual state-machine codegen — `switch (this->state) {
 case ...: goto L_resumeN; }` — is the emitter's job in G4.
 
-Out-only generators only (`takes` defaults to `null`). Bidirectional
-`takes != null` lands in G6.
+Out-only generators have `accepts` defaulted to `null`. Bidirectional
+generators (`accepts != null`) take a per-call resume value through
+the synthesised `.call(value: U)` parameter.
 """
 
 from typing import Dict, List, Optional, Set, Tuple, cast
@@ -175,7 +176,7 @@ def _desugar_object_def(
 
 def _is_generator_function(func: Function) -> bool:
     """A function is a generator iff:
-    (a) its declared return type is `Iterator gives: T (takes: U)`,
+    (a) its declared return type is `Iterator gives: T (accepts: U)`,
         recognised structurally on the parsed return-type AST, AND
     (b) its body contains at least one `yield` expression.
     """
@@ -271,11 +272,11 @@ def _gives_form(rt: Path) -> Tuple[Optional[Path], Optional[str]]:
     return None, None
 
 
-def _takes_type(rt: Path) -> Optional[Path]:
-    """Return the `takes:` argument's type path if specified
+def _accepts_type(rt: Path) -> Optional[Path]:
+    """Return the `accepts:` argument's type path if specified
     *and* non-null. Returns None for the out-only case (no
-    `takes:` argument, or `takes: null` explicitly). Caller must
-    have verified `_returntype_is_iterator` first.
+    `accepts:` argument, or `accepts: null` explicitly). Caller
+    must have verified `_returntype_is_iterator` first.
 
     A non-None result signals a *bidirectional* generator — the
     desugarer adds a `_resume_input` field on the synth class
@@ -288,9 +289,9 @@ def _takes_type(rt: Path) -> Optional[Path]:
         return None
     call = cast(Call, inner)
     for arg in call.arguments:
-        if arg.name == "takes":  # ztc-string-compare-ok: iterator protocol param name
+        if arg.name == "accepts":  # ztc-string-compare-ok: iterator protocol param name
             val = arg.valtype
-            # `takes: null` is the out-only sentinel; treat it
+            # `accepts: null` is the out-only sentinel; treat it
             # the same as omitting the argument.
             if (
                 val.nodetype == NodeType.ATOMID
@@ -643,7 +644,7 @@ def _validate_first_yield_not_expression_form(
                 err=ERR.BADSTATEMENT,
                 msg=(
                     "the first reachable yield in a bidirectional "
-                    "generator (takes != null) cannot be in "
+                    "generator (accepts != null) cannot be in "
                     "expression form ('x: yield v'); the caller "
                     "drives the first .call with no value, so "
                     "this->_resume_input is uninitialised. Use a "
@@ -1266,14 +1267,14 @@ def _build_generator(
         # gives form unrecognised — typechecker already complained
         return None, None
 
-    # 3b. bidirectional shape: takes: U (U != null) makes this a
-    # bidirectional generator. The synth class gets a
+    # 3b. bidirectional shape: accepts: U (U != null) makes this
+    # a bidirectional generator. The synth class gets a
     # `_resume_input` field of type U and the `.call` method
     # gains a `value: U` parameter. The body's first reachable
     # yield must not be in expression form (no resume value
     # exists on the first call) — rule 11.
-    takes_path = _takes_type(cast(Path, func.returntype))
-    if takes_path is not None:
+    accepts_path = _accepts_type(cast(Path, func.returntype))
+    if accepts_path is not None:
         if not _validate_first_yield_not_expression_form(func.body, errors):
             return None, None
 
@@ -1333,12 +1334,12 @@ def _build_generator(
     # ownership annotation -- fields store owned values directly,
     # without the suffix; the synth class destructor handles the
     # per-iterator-lifetime destruction.
-    if takes_path is not None:
-        field_path, leaf = _split_path_leaf(cast(zast.Operation, takes_path))
+    if accepts_path is not None:
+        field_path, leaf = _split_path_leaf(cast(zast.Operation, accepts_path))
         class_fields["_resume_input"] = (
             cast(Path, field_path)
             if leaf == "take"  # ztc-string-compare-ok: ownership-suffix marker
-            else takes_path
+            else accepts_path
         )
 
     # 6. build the `create` method
@@ -1348,7 +1349,7 @@ def _build_generator(
 
     # 7. build the `call` method (body rewritten in terms of `this`)
     call_method = _build_call_method(
-        func.body, call_return, promoted, func.start, takes_path
+        func.body, call_return, promoted, func.start, accepts_path
     )
 
     # 8. assemble the class
@@ -1558,7 +1559,7 @@ def _build_call_method(
     call_return: Call,
     promoted: Set[str],
     loc: Token,
-    takes_path: Optional[Path] = None,
+    accepts_path: Optional[Path] = None,
 ) -> Function:
     """Build the synthesised `.call` method.
 
@@ -1567,7 +1568,7 @@ def _build_call_method(
     The Function carries `synth_origin = "generator-call"` so the
     emitter can route it through the state-machine codegen in G4.
 
-    For bidirectional generators (`takes_path` non-None), the
+    For bidirectional generators (`accepts_path` non-None), the
     method gains a `value: U` parameter — the resume input. The
     emitter prepends an entry-time store of this value into
     `this->_resume_input` so expression-form yields can read it
@@ -1577,8 +1578,8 @@ def _build_call_method(
     params: Dict[str, Path] = {
         "this": AtomId(name="this", start=loc, synth_origin=_SYNTH_ORIGIN)
     }
-    if takes_path is not None:
-        params["value"] = takes_path
+    if accepts_path is not None:
+        params["value"] = accepts_path
     call_return_expr = Expression(
         expression=call_return, start=loc, synth_origin=_SYNTH_ORIGIN
     )

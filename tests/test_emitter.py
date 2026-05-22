@@ -10114,7 +10114,7 @@ class TestGeneratorEmitter:
         yield behind `x`."""
         csource = emit_source(
             "gen: function {n: i64} out "
-            "(Iterator gives: i64 takes: bool) is {\n"
+            "(Iterator gives: i64 accepts: bool) is {\n"
             "    yield 1\n"
             "    x: yield 2\n"
             "    if x then yield 99\n"
@@ -10144,7 +10144,7 @@ class TestGeneratorEmitter:
         assert compile_and_run(csource) == "1\n2\n99\n(none)\n"
 
     def test_bidirectional_generator_string_takes(self):
-        """P6: reftype `takes: String.take`. The synth class stores
+        """P6: reftype `accepts: String.take`. The synth class stores
         the resume-input as an owned String field (the desugarer
         strips the `.take` annotation -- fields hold owned values
         directly), and the emitter's prologue calls the
@@ -10161,7 +10161,7 @@ class TestGeneratorEmitter:
         out-of-scope C local."""
         csource = emit_source(
             "gen: function {n: i64} out "
-            "(Iterator gives: i64 takes: String.take) is {\n"
+            "(Iterator gives: i64 accepts: String.take) is {\n"
             "    yield 1\n"
             "    s: yield 2\n"
             "    yield 99\n"
@@ -10190,7 +10190,7 @@ class TestGeneratorEmitter:
 
         program = _mp(
             "gen: function {n: i64} out "
-            "(Iterator gives: i64 takes: bool) is {\n"
+            "(Iterator gives: i64 accepts: bool) is {\n"
             "    yield 1\n"
             "    x: yield 2\n"
             "}\n"
@@ -10206,7 +10206,7 @@ class TestGeneratorEmitter:
         )
 
     def test_first_yield_expression_form_rejected(self):
-        """For a `takes != null` generator, the very first reachable
+        """For a `accepts != null` generator, the very first reachable
         yield must be in statement form — `this->_resume_input` is
         uninitialised before the first `.call value:`. Reading it
         via `x: yield v` as the opening yield is a compile error
@@ -10215,7 +10215,7 @@ class TestGeneratorEmitter:
 
         program = _mp(
             "gen: function {n: i64} out "
-            "(Iterator gives: i64 takes: bool) is {\n"
+            "(Iterator gives: i64 accepts: bool) is {\n"
             "    x: yield 1\n"
             "}\n"
             "main: function is {}",

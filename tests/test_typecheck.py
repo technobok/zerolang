@@ -11889,7 +11889,7 @@ class TestOptionviewBorrowEscape:
 
 
 class TestIteratorReturnType:
-    """Phase G2: `out (Iterator gives: T (takes: U))` return type.
+    """Phase G2: `out (Iterator gives: T (accepts: U))` return type.
 
     The body is left empty here — full generator-body handling (yield
     suspension points, terminal return, etc.) lands in G3. What G2
@@ -11900,7 +11900,7 @@ class TestIteratorReturnType:
     def test_iterator_return_type_parses_and_resolves(self):
         """`out (Iterator gives: i32)` resolves to a monomorphized
         iterator protocol with `gives=i32` and the defaulted
-        `takes=null`."""
+        `accepts=null`."""
         program, typing = check_ok("g: function out (Iterator gives: i32) is { }")
         g = program.units["test"].body["g"]
         rt_zt = typing.node_type.get(g.returntype.nodeid)
@@ -11908,11 +11908,11 @@ class TestIteratorReturnType:
         assert rt_zt.generic_origin is not None
         assert rt_zt.generic_origin.name == "Iterator"
 
-    def test_iterator_return_type_takes_parses(self):
-        """`out (Iterator gives: i32 takes: bool)` — both generic
+    def test_iterator_return_type_accepts_parses(self):
+        """`out (Iterator gives: i32 accepts: bool)` — both generic
         params explicit — type-checks cleanly."""
         program, typing = check_ok(
-            "g: function out (Iterator gives: i32 takes: bool) is { }"
+            "g: function out (Iterator gives: i32 accepts: bool) is { }"
         )
         g = program.units["test"].body["g"]
         rt_zt = typing.node_type.get(g.returntype.nodeid)
@@ -11934,6 +11934,18 @@ class TestIteratorReturnType:
         errors = check_errors("g: function out (Iterator gives: String.lock) is { }")
         assert any(".lock" in e.msg for e in errors), (
             f"Expected an error mentioning .lock, got: {[e.msg for e in errors]}"
+        )
+
+    def test_iterator_takes_keyword_rejected_with_rename_hint(self):
+        """The legacy `takes:` argument name now emits a targeted
+        rename hint pointing at `accepts:`. Without this hint, the
+        unknown arg would be silently ignored and the user would
+        get an out-only generator with no warning."""
+        errors = check_errors(
+            "g: function out (Iterator gives: i64 takes: bool) is { }"
+        )
+        assert any("takes:" in e.msg and "accepts:" in e.msg for e in errors), (
+            f"Expected takes:->accepts: rename hint, got: {[e.msg for e in errors]}"
         )
 
     def test_gives_bare_reftype_yields_optionview(self):
@@ -12020,10 +12032,10 @@ class TestGeneratorDesugaring:
     iterator class + factory pair.
 
     A *generator* is any function whose declared return type is
-    `Iterator gives: T (takes: U)` AND whose body contains at least
-    one `yield`. The pass walks the parsed program before type
-    resolution; the resulting AST is ordinary class+function code
-    that the rest of the typechecker validates with no further
+    `Iterator gives: T (accepts: U)` AND whose body contains at
+    least one `yield`. The pass walks the parsed program before
+    type resolution; the resulting AST is ordinary class+function
+    code that the rest of the typechecker validates with no further
     generator-specific machinery.
     """
 

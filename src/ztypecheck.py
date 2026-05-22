@@ -1472,8 +1472,8 @@ class TypeChecker:
             if ret_own is not None:
                 ftype.return_ownership = ret_own
             # Iterator-return-type validation: when the function declares
-            # `out (Iterator gives: T (takes: U))`, the ownership form of
-            # the `gives:` argument must be one of bare / `.take` /
+            # `out (Iterator gives: T (accepts: U))`, the ownership form
+            # of the `gives:` argument must be one of bare / `.take` /
             # `.borrow` (mapping to optionval / Option / OptionView in
             # the synthesized `.call` return). `.lock` is parameter-only
             # and rejected here.
@@ -1704,8 +1704,14 @@ class TypeChecker:
             T.take      reftype owned out     -> Option(T)
             T.borrow    reftype borrowed view -> OptionView(T)
 
-        `T.lock` is parameter-only ownership and is rejected. The
-        function is called only when the resolved return type's
+        `T.lock` is parameter-only ownership and is rejected.
+
+        Also flags the legacy `takes:` argument name with a migration
+        hint pointing at `accepts:`. Without the hint, the resolver
+        would silently ignore the unknown arg, default `accepts:` to
+        `null`, and drop the user into the out-only generator shape.
+
+        The function is called only when the resolved return type's
         generic origin is `iterator`.
         """
         rt_path: Optional[zast.Operation] = func.returntype
@@ -1717,9 +1723,17 @@ class TypeChecker:
         call_node = cast(zast.Call, inner)
         gives_arg: Optional[zast.NamedOperation] = None
         for arg in call_node.arguments:
+            if arg.name == "takes":  # ztc-string-compare-ok: legacy iterator arg name
+                self._error(
+                    "'takes:' on an Iterator return type was renamed "
+                    "to 'accepts:' (to remove the collision with the "
+                    "'.take' ownership method). Replace 'takes:' with "
+                    "'accepts:'.",
+                    loc=arg.start,
+                    err=ERR.BADARGUMENT,
+                )
             if arg.name == "gives":  # noqa: E501  ztc-string-compare-ok: iterator gives arg name
                 gives_arg = arg
-                break
         if gives_arg is None:
             return
         gives_val = gives_arg.valtype
