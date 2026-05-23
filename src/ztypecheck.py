@@ -11411,6 +11411,28 @@ class TypeChecker:
                         and inner_type is not t_never
                     ):
                         elem_type = inner_type
+            # Reject ownership transfer of outer-scope variables inside the
+            # loop body. The body runs 0+ times; on iteration N+1 the
+            # variable would already be consumed. Taken overlays in the
+            # for-scope whose name is not locally defined here came from an
+            # outer scope.
+            for_scope = self.symtab._scopes[-1]
+            local_names = {e.name for e in for_scope.entries if e.is_definition}
+            reported: set = set()
+            for entry in for_scope.entries:
+                if (
+                    entry.is_taken
+                    and entry.name not in local_names
+                    and entry.name not in reported
+                ):
+                    reported.add(entry.name)
+                    self._error(
+                        f"cannot transfer ownership of '{entry.name}' inside a "
+                        f"loop body (executes 0+ times; on later iterations "
+                        f"'{entry.name}' would already be consumed)",
+                        loc=fornode.start,
+                        err=ERR.OWNERERROR,
+                    )
         # for-loop locks are released when the for scope is popped
         self._break_targets.pop()
         self.symtab.pop()

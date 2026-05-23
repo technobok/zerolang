@@ -285,6 +285,39 @@ and no auto-destroy is inserted.
   # conn is invalid here
   """
 
+#----: Ownership Transfer Inside Loop Bodies
+
+A #~"for" loop body executes zero or more times. Ownership transfer of a
+variable declared #_*"outside" the loop is therefore structurally always
+wrong: after the first iteration the variable is already consumed, so the
+second iteration would try to transfer an invalid value.
+
+The compiler rejects #~".take", #~".release", #~".box", or passing an
+outer-scope variable to a #~".take" parameter inside any reachable point
+of a #~"for"-loop body, with the diagnostic:
+
+#code language=text: """
+  cannot transfer ownership of '<name>' inside a loop body
+  (executes 0+ times; on later iterations '<name>' would already be
+  consumed)
+  """
+
+Variables declared #_*"inside" the loop body are unaffected: each iteration
+produces a fresh binding, so taking the local is fine.
+
+#code language=zerolang: """
+  a: Box value: 1
+  for i: 3.iterate loop {
+      a.take              # ERROR: outer-scope variable
+      b: Box value: 2
+      c: b.take           # OK: b is body-local
+  }
+  """
+
+The rule fires regardless of whether the alias optimiser would otherwise
+silently elide the transfer at runtime -- the source intent is rejected at
+typecheck.
+
 #---: .borrow
 
 As a parameter attribute (#~"type.borrow" or just #~"type" since borrow is

@@ -435,6 +435,28 @@ if ready then {
     log "not ready"             # compiler auto-destroys conn
 }
 # conn is invalid here</code></pre>
+<h4 id="ownership-transfer-inside-loop-bodies"><a href="#ownership-transfer-inside-loop-bodies">6.1.2. Ownership Transfer Inside Loop Bodies</a></h4>
+<p>A <code>for</code> loop body executes zero or more times. Ownership transfer of a
+variable declared <em><strong>outside</strong></em> the loop is therefore structurally always
+wrong: after the first iteration the variable is already consumed, so the
+second iteration would try to transfer an invalid value.</p>
+<p>The compiler rejects <code>.take</code>, <code>.release</code>, <code>.box</code>, or passing an
+outer-scope variable to a <code>.take</code> parameter inside any reachable point
+of a <code>for</code>-loop body, with the diagnostic:</p>
+<pre><code class="language-text">cannot transfer ownership of '&lt;name&gt;' inside a loop body
+(executes 0+ times; on later iterations '&lt;name&gt;' would already be
+consumed)</code></pre>
+<p>Variables declared <em><strong>inside</strong></em> the loop body are unaffected: each iteration
+produces a fresh binding, so taking the local is fine.</p>
+<pre><code class="language-zerolang">a: Box value: 1
+for i: 3.iterate loop {
+    a.take              # ERROR: outer-scope variable
+    b: Box value: 2
+    c: b.take           # OK: b is body-local
+}</code></pre>
+<p>The rule fires regardless of whether the alias optimiser would otherwise
+silently elide the transfer at runtime -- the source intent is rejected at
+typecheck.</p>
 <h3 id="borrow"><a href="#borrow">6.2. .borrow</a></h3>
 <p>As a parameter attribute (<code>type.borrow</code> or just <code>type</code> since borrow is
 the default for all parameters): the function borrows the argument. The

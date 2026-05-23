@@ -11628,6 +11628,109 @@ class TestTakeInArm:
         assert any("ownership transfer" in e.msg.lower() for e in errors)
 
 
+class TestTakeInLoopBody:
+    """Ownership transfer of an outer-scope reftype inside a for-loop body
+    is structurally always wrong: the body executes 0+ times, so iteration
+    N+1 would consume an already-consumed value. The check fires at the
+    transfer site regardless of whether the alias optimiser would have
+    silently elided the transfer at runtime."""
+
+    def test_standalone_take_outer_in_for_body_errors(self):
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    a.take\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() and "'a'" in e.msg for e in errors), (
+            f"expected loop-body transfer error, got: {[e.msg for e in errors]}"
+        )
+
+    def test_bind_take_outer_in_for_body_errors(self):
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    b: a.take\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
+    def test_consume_outer_in_for_body_errors(self):
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "consume: function {b: Box.take} is {}\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    consume a\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
+    def test_release_outer_in_for_body_errors(self):
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    a.release\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
+    def test_take_body_local_in_for_body_ok(self):
+        """Taking a variable that was declared INSIDE the body is fine —
+        every iteration produces a fresh binding."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  for i: 3.iterate loop {\n"
+            "    b: Box value: 1\n"
+            "    c: b.take\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_outer_in_conditional_inside_for_errors(self):
+        """Conditionally taking is just as wrong as unconditionally — the
+        if's merged taken-overlay reaches the for-scope and trips the
+        check."""
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then { b: a.take }\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
+    def test_take_outer_in_nested_inner_for_errors(self):
+        """Inner loop body taking an outer-of-outer-loop variable should
+        error when the inner loop scope closes."""
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    for j: 2.iterate loop {\n"
+            "      b: a.take\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
+
 class TestUnionLockedArm:
     """Locked union arms (W-C) — arms declared `name: t.lock` hold a
     borrowed reference into a parent rather than owning their payload."""
