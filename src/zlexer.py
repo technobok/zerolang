@@ -26,6 +26,17 @@ TokenID = NewType("TokenID", int)
 # Module-level Token id generator
 _next_token_id = count()
 
+# Named single-char string escapes -> their interpreted runtime byte.
+# Keys are the source-byte ordinal AFTER the backslash; values are
+# the runtime character. Per spec.pdoc:463-474. \r intentionally absent.
+_NAMED_ESCAPES = {
+    zchar.LC_N: "\n",
+    zchar.LC_T: "\t",
+    zchar.LC_B: "\b",
+    zchar.BACKSLASH: "\\",
+    zchar.DOUBLEQUOTE: '"',
+}
+
 
 @dataclass
 class Token:
@@ -428,65 +439,63 @@ class Tokenizer(ITokenizer):
 
     def acceptcharescape(self) -> Token:
         """
-        returns the token (which could be an error token)
-        if not valid, str will be the chars accepted until the error char
-        Must be at the leading backslash or will return error
+        Returns a STRCHR token whose tokstr is the interpreted runtime
+        bytes (per spec.pdoc: \\n -> LF, \\xHH -> one raw byte,
+        \\uHHHHHH -> codepoint as UTF-8 source byte). On malformed
+        input returns TT.ERR with the source-form tokstr seen so far
+        so error reports can echo what the user wrote. Must be at
+        the leading backslash or will return error.
         """
-        parts: List[str] = []
         c = self.atchar
         lineno = self.lineno
         colno = self.colno
-        if c == zchar.BACKSLASH:
-            parts.append(chr(c))
-            c = self._accept()
-        else:
-            # no starting backslash, error
+        if c != zchar.BACKSLASH:
             return Token(TT.ERR, chr(c), self.fsno, lineno, colno)
+        c = self._accept()
 
-        if c in (
-            zchar.LC_N,
-            zchar.LC_R,
-            zchar.LC_T,
-            zchar.LC_B,
-            zchar.BACKSLASH,
-            zchar.DOUBLEQUOTE,
-        ):
+        # Named single-char escapes -> their interpreted byte.
+        # \r intentionally absent: spec.pdoc:463-474 does not list it;
+        # use \x0d for the rare legitimate case.
+        named = _NAMED_ESCAPES.get(c)
+        if named is not None:
             self._accept()
-            parts.append(chr(c))
-            tokstr = "".join(parts)
-            return Token(TT.STRCHR, tokstr, self.fsno, lineno, colno)
+            return Token(TT.STRCHR, named, self.fsno, lineno, colno)
 
-        hexdigits: int = 0
-        if c == zchar.LC_X:
-            hexdigits = 2
-        elif c == zchar.LC_U:
-            hexdigits = 6
-
-        if hexdigits > 0:
-            parts.append(chr(c))  # store and accept the specifier
+        # \xHH (8-bit raw byte) / \uHHHHHH (24-bit codepoint, UTF-8 bytes)
+        if c == zchar.LC_X or c == zchar.LC_U:
+            hexdigits = 2 if c == zchar.LC_X else 6
+            specifier = chr(c)  # for error-form tokstr only
             c = self._accept()
-            tt = TT.STRCHR
-            for _ in range(hexdigits):  # exact number of hex chars to get
+            digits: List[str] = []
+            for _ in range(hexdigits):
                 if c < zchar.DEL and ((CHARFLAGS[c] & Charflag.HEXD) != 0):
-                    parts.append(chr(c))
+                    digits.append(chr(c))
                     c = self._accept()
                 else:
-                    tt = TT.ERR
-                    break
-
-            tokstr = "".join(parts)
-            return Token(tt, tokstr, self.fsno, lineno, colno)
+                    # malformed — echo what we saw, including the leading '\'
+                    return Token(
+                        TT.ERR,
+                        "\\" + specifier + "".join(digits),
+                        self.fsno,
+                        lineno,
+                        colno,
+                    )
+            return Token(
+                TT.STRCHR,
+                chr(int("".join(digits), 16)),
+                self.fsno,
+                lineno,
+                colno,
+            )
 
         if c == zchar.BRACEOPEN:  # start of a strexpr "\{//}"
             # do NOT accept or append the BRACEOPEN, it will be the next token
-            tokstr = "".join(parts)  # '\' only...
-            tok = Token(TT.STREXPRBEG, tokstr, self.fsno, lineno, colno)
+            tok = Token(TT.STREXPRBEG, "\\", self.fsno, lineno, colno)
             self._statepush(TokStateType.STRINGEXPR, tok)
             return tok
 
         # malformed - unknown escape character
-        tokstr = "".join(parts)
-        return Token(TT.ERR, tokstr, self.fsno, lineno, colno)
+        return Token(TT.ERR, "\\" + chr(c), self.fsno, lineno, colno)
 
     def _statecurrent(self) -> TokState:
         """

@@ -153,49 +153,52 @@ class TestTokenizerEscapeSequences:
         tokens = collect_tokens('"\\n"')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\n"
+        assert escaped[0].tokstr == "\n"
 
     def test_tab_escape(self):
         tokens = collect_tokens('"\\t"')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\t"
+        assert escaped[0].tokstr == "\t"
 
     def test_backslash_escape(self):
         tokens = collect_tokens('"\\\\"')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\\\"
+        assert escaped[0].tokstr == "\\"
 
     def test_quote_escape(self):
         tokens = collect_tokens('"\\""')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == '\\"'
+        assert escaped[0].tokstr == '"'
 
     def test_hex_escape(self):
         tokens = collect_tokens('"\\x41"')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\x41"
+        assert escaped[0].tokstr == "A"
 
     def test_unicode_escape(self):
+        # U+263A (☺) is delivered as the 1-char Python str; the emitter
+        # writes it through to the C source as UTF-8 bytes.
         tokens = collect_tokens('"\\u00263A"')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\u00263A"
+        assert escaped[0].tokstr == "☺"
 
     def test_return_escape(self):
+        # \r is not a spec-listed escape (spec.pdoc:463-474). Reject.
         tokens = collect_tokens('"\\r"')
-        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
-        assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\r"
+        errs = [t for t in tokens if t.toktype == TT.ERR]
+        assert len(errs) == 1
+        assert errs[0].tokstr == "\\r"
 
     def test_backspace_escape(self):
         tokens = collect_tokens('"\\b"')
         escaped = [t for t in tokens if t.toktype == TT.STRCHR]
         assert len(escaped) == 1
-        assert escaped[0].tokstr == "\\b"
+        assert escaped[0].tokstr == "\b"
 
 
 class TestTokenizerComments:

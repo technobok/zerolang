@@ -154,6 +154,48 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
                 os.unlink(p)
 
 
+class TestEscapeSequences:
+    """End-to-end coverage of spec.pdoc:463-474 escape sequences.
+
+    `print` appends a trailing LF, so each expected output ends in '\\n'.
+    """
+
+    def test_quote_escape(self):
+        csource = emit_source(r'main: function is { print "a\"b" }')
+        assert compile_and_run(csource) == 'a"b\n'
+
+    def test_newline_escape(self):
+        csource = emit_source(r'main: function is { print "a\nb" }')
+        assert compile_and_run(csource) == "a\nb\n"
+
+    def test_tab_escape(self):
+        csource = emit_source(r'main: function is { print "a\tb" }')
+        assert compile_and_run(csource) == "a\tb\n"
+
+    def test_backspace_escape(self):
+        csource = emit_source(r'main: function is { print "a\bb" }')
+        assert compile_and_run(csource) == "a\bb\n"
+
+    def test_backslash_escape(self):
+        csource = emit_source(r'main: function is { print "a\\b" }')
+        assert compile_and_run(csource) == "a\\b\n"
+
+    def test_hex_escape_single_byte(self):
+        # \x41 is the single byte 0x41 ('A').
+        csource = emit_source(r'main: function is { print "\x41" }')
+        assert compile_and_run(csource) == "A\n"
+
+    def test_unicode_escape_utf8(self):
+        # U+263A (&3a, ☺) emits as 3 UTF-8 bytes: 0xe2 0x98 0xba.
+        csource = emit_source('main: function is { print "\\u00263A" }')
+        assert compile_and_run(csource).encode("utf-8") == b"\xe2\x98\xba\n"
+
+    def test_escape_inside_interpolation(self):
+        # Interpolated strings flow through the same emitter path.
+        csource = emit_source('main: function is {\n  n: 5\n  print "x=\\{n}\\n"\n}')
+        assert compile_and_run(csource) == "x=5\n\n"
+
+
 class TestEmitterBasic:
     def test_hello_world(self):
         csource = emit_source('main: function is { print "Hello, World!" }')

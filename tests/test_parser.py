@@ -429,6 +429,20 @@ class TestErrorCases:
         result = parse_unit("x: system.u8\ny: system.i64")
         assert isinstance(result, zast.Program)
 
+    def test_invalid_string_escape_is_error(self):
+        """\\a is not a spec-listed escape — must surface as BADSTRING."""
+        # Lexer's acceptcharescape produces TT.ERR for unknown escapes,
+        # which _accept_atomstring lifts to ERR.BADSTRING.
+        result = parse_unit(r'main: function is { print "a\ab" }')
+        assert isinstance(result, zast.Error)
+        assert result.err == ERR.BADSTRING
+
+    def test_invalid_return_escape_is_error(self):
+        """\\r was dropped from the lexer per spec — must surface as BADSTRING."""
+        result = parse_unit(r'main: function is { print "a\rb" }')
+        assert isinstance(result, zast.Error)
+        assert result.err == ERR.BADSTRING
+
 
 class TestWithExpression:
     def test_simple_with(self):
