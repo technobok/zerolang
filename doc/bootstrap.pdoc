@@ -1,0 +1,389 @@
+#doc.lang: en
+
+#//: Zerolang Self-Hosting Bootstrap Strategy
+
+#doc.title: Zero Language Self-Hosting Bootstrap Strategy
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-05-23
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zero Language Self-Hosting Bootstrap Strategy
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Context
+
+The language is v1-complete and advancing into v2. The Python compiler is
+approximately 37.9 KLOC across 21 files; #~"ztypecheck.py" (12.2K LOC) and
+#~"zemitterc.py" (11.3K LOC) dominate. Phase 53 (Set) shipped as the last
+foundational piece for porting. Phase 51 (Self-Hosting) is the explicit next
+major target on the roadmap.
+
+The language already covers everything a tree-walking compiler needs:
+discriminated unions with pattern matching, expressive ownership and borrow,
+#~"Map", #~"Set", #~"List", file I/O, multi-file modules, the #~"native"
+keyword for compiler-provided primitives, and built-in SipHash plus sort.
+
+The bootstrap-lint already tracks the Python-specific patterns a porter would
+need to rewrite. Current baseline:
+
+#ul:
+  #*: 0 isinstance
+  #*: 8 comprehensions
+  #*: 2 lambdas
+  #*: 8 try/except
+  #*: 6 hasattr
+  #*: 4 getattr
+  #*: 42 startswith
+  #*: 269 name-literal compares
+
+Many of those name-literal compares represent the in-flight F3/F4 migration
+to ID-based dispatch.
+
+#---: Strategic decisions
+
+These decisions anchor the rest of this document.
+
+#ul:
+  [#*: #-strong "Pre-port": stabilize the language too. Close deferred
+      ownership and locking work, and the Wave 2 coercion question, before
+      porting. Defer Phase 50 (LSP, linter, formatter) -- those will be
+      written in zerolang after self-host.]
+  [#*: #-strong "During port": use the port as a forcing function. When
+      writing the compiler in zerolang exposes language pain, fix both
+      compilers in the same PR.]
+  [#*: #-strong "After verification": maintain the Python compiler in
+      parallel for approximately 6 months as a dual-implementation oracle,
+      then freeze.]
+
+This is a strategy document, not an implementation diff. Its execution spans
+roughly a year and produces no immediate code change.
+
+
+#--: Phase A: Pre-port stabilization
+
+The goal is to lock the language surface and shrink the Python compiler's
+shape so the port is hitting a fixed target.
+
+#---: Language closure (must land before the port begins)
+
+#ul:
+  [#*: Field-access locking for reftypes (deferred in Phase 8 with note
+      "requires reftype fields for meaningful testing"; the deferral
+      condition has lifted).]
+  [#*: Stable iteration order for #~"Set" (deferred from Phase 53; current
+      iteration follows bucket layout, not insertion order).]
+  [#*: Inline definitions in #~"as" blocks (deferred from Phase 49d;
+      parser's #~"_get_object_body" accepts functions/units/constants but
+      rejects inline record/class/variant/union definitions).]
+
+Branch ownership flow tracking for reftypes was the fourth originally-listed
+item; investigation on 2026-05-23 showed the if/match auto-destroy
+semantics were already implemented and ASan-verified, leaving only one
+gap: ownership transfer of an outer-scope variable inside a #~"for"-loop
+body was silently accepted (the alias optimiser masked it at runtime).
+That gap is now closed with a typecheck-time rejection in
+#~"_check_for_inner". See the "Ownership Transfer Inside Loop Bodies"
+section of #~"doc/ownership.pdoc".
+
+#---: Compiler-shape: already closed
+
+The 2026-04-28 code review's compiler-shape work (F1-F13) is complete as
+of 2026-05-17. See #~"doc/codereview20260428.md" for the per-item resolution
+trail. Items closed-as-scoped and therefore #-em "not" in this plan's
+Phase A list:
+
+#ul:
+  [#*: F3 -- bootstrap-lint expansion (#~"getattr", #~"startswith",
+      name-literal-compare) is in #~"make bootstrap-lint" with baselines
+      locked.]
+  [#*: F4 buckets A, B, C -- #~"Entry.is_receiver", #~"ZSubType"
+      String/StringView dispatch, and #~"BuiltinFunc" enum all landed.]
+  [#*: F4 bucket D -- the ~50 role-keyword sites (#~"create", #~"take",
+      #~"borrow", #~"box", #~"main", #~"copy", #~"length", #~"private",
+      #~"lock", #~"release") are #-em "deferred by design". The review's
+      decision was to revisit only if a self-hosting port hits a concrete
+      portability blocker. The porter mirrors the existing literals in
+      zerolang; no pre-emptive enumification.]
+  [#*: F6 -- #~"zsqldump.py" table-flat shape is finalized.]
+  [#*: F7 -- template-emission subsystem chosen and migrated (vtable
+      emission). Three sub-candidates (#~"_emit_protocol_impl",
+      #~"_emit_mono_map", #~"_emit_create_functions") explicitly deferred.]
+  [#*: F10 and F12 -- TODO and doc closeout completed (commit #~"f34d666"
+      plus the broader comment-history sweep).]
+
+The baselines that today's lint enforces are the post-cleanup numbers. The
+porter inherits a shape that has already been optimised for the port; no
+additional compiler-shape work is needed before Phase B begins.
+
+#---: Explicitly out of scope for pre-port
+
+#ul:
+  [#*: Phase 50 (LSP, linter, formatter). These will be written in zerolang
+      after self-host. Their absence does not block the port.]
+
+#---: Exit criterion for Phase A
+
+The language spec is frozen, the bootstrap-lint baseline shows no remaining
+Python-specific dispatch idioms, and the test suite is green. Tag this commit
+#~"python-stage0". It will be the reference compiler the port targets.
+
+
+#--: Phase B: Begin the port
+
+#---: Port order
+
+Ascending complexity, descending isolation.
+
+#ol:
+  [#*: #-strong "Lexer" (approximately 700 LOC in Python). Smallest, most
+      isolated, well-defined IO contract. Validates the toolchain end-to-end.
+      Differential test: run both lexers on every #~"examples/*.z", compare
+      token streams.]
+  [#*: #-strong "AST plus Parser" (approximately 4K LOC combined).
+      Discriminated unions with pattern matching are exactly the use case
+      zerolang's #~"union" and #~"variant" were designed for. This is where
+      the language proves itself on its own compiler.]
+  [#*: #-strong "VFS and symbol table" (approximately 1.6K LOC).
+      Self-contained.]
+  [#*: #-strong "Generator desugaring" (approximately 1.8K LOC). Pure AST
+      to AST transform; easy to differentially test.]
+  [#*: #-strong "Typechecker" (approximately 12K LOC, the hard one). Port
+      method-by-method, keep the Python version as oracle. Each ported method
+      gets a differential test that drives the same AST through both
+      implementations and compares the #~"ZTyping" output.]
+  [#*: #-strong "Emitter" (approximately 14K LOC including runtime
+      templates). The acceptance test is byte-identical (or
+      whitespace-normalized) C output versus Python.]
+  [#*: #-strong "CLI driver" (approximately 200 LOC). Trivial; do last.]
+
+#---: The bootstrap chain
+
+Rooted in #~"python-stage0":
+
+#code language=text: """
+  python-stage0 + .z compiler sources  ->  stage0.c  ->  gcc  ->  stage0 binary
+  stage0 binary + .z compiler sources  ->  stage1.c  ->  gcc  ->  stage1 binary
+  stage1 binary + .z compiler sources  ->  stage2.c  ->  gcc  ->  stage2 binary
+
+  Verify: stage1's C output == stage2's C output  (fixed point)
+  Verify: stage1 passes the full test suite (approximately 2,057 tests,
+          96 examples)
+  """
+
+#---: Co-evolution rule (the forcing-function policy)
+
+#ul:
+  [#*: The port lives on its own branch but rebases on #~"main" often.]
+  [#*: When porting reveals language pain (a missing stdlib method, an
+      awkward ownership boundary, a generic-arg ergonomics issue), the same
+      PR adds the feature or fix to #-em "both" the Python compiler and the
+      in-flight zerolang compiler, plus tests. This is the explicit signal
+      that the port is improving the language.]
+  [#*: Bootstrap-lint gets a sibling for the zerolang compiler: a fixed list
+      of zerolang features the compiler is allowed to use. This becomes the
+      "bootstrap subset" -- important after self-host (see Phase E).]
+
+
+#--: Phase C: Verification
+
+Acceptance gates. All must hold before tagging #~"selfhost-ok".
+
+#ol:
+  [#*: #-strong "Suite parity": #~"stage1" passes the full Python test suite,
+      including all 96 examples.]
+  [#*: #-strong "Fixed point": #~"stage1" compiling the compiler produces
+      #~"stage2", byte-identical to #~"stage1".]
+  [#*: #-strong "Differential parity": for every #~"examples/*.z" and every
+      test fixture, the C output of #~"python-stage0" and #~"stage1" is
+      equivalent. Whitespace-normalized comparison is acceptable; semantic
+      equivalence is not.]
+  [#*: #-strong "Performance floor": #~"stage1"'s wall-time to compile itself
+      is within some agreed multiple of Python's time. No hard target needed
+      up front. Establish a baseline and watch for regressions thereafter.]
+
+At this gate, tag #~"python-final-parallel" on the Python side -- the start
+of the parallel-maintenance window.
+
+
+#--: Phase D: Parallel maintenance, and modifying the language during the window
+
+Approximately 6 months. The most operationally interesting phase. Two
+compilers; both must accept the same source.
+
+#---: CI policy during the parallel window
+
+#ul:
+  [#*: Every PR runs the full test suite twice -- once compiled by Python,
+      once by zerolang. Both must pass.]
+  [#*: Differential-output test runs on every PR: same #~".z" inputs through
+      both compilers, C outputs compared. Any divergence is a release
+      blocker.]
+  [#*: This is expensive but it is the single most valuable invariant during
+      the window: it catches typechecker and emitter drift before it ships.]
+
+#---: How to modify the language during the parallel window
+
+#ul:
+  [#*: Land the change in #-em "both" compilers in the same PR. New tests
+      must pass under both.]
+  [#*: If the change is large (e.g. a syntax addition), prefer a feature
+      gate: add the parse and check support without the compiler itself
+      using it. This keeps the bootstrap subset stable.]
+  [#*: Internal compiler refactors only need to land in zerolang once that
+      becomes the reference (after the freeze).]
+
+#---: Freeze policy at month 6
+
+#ul:
+  [#*: Tag #~"python-stage0-final" at the last successfully synchronized
+      commit. Stop updating the Python compiler.]
+  [#*: This tagged Python compiler remains the canonical
+      "bootstrap-from-scratch on a new platform" path. Anyone with Python
+      and a C compiler can produce a zerolang from #~"python-stage0-final"
+      plus the current source.]
+  [#*: Delete the Python source from #~"main" only after the tag is
+      well-publicized and any users have migrated. The tag itself stays in
+      history forever.]
+
+
+#--: Phase E: Post-sunset, modifying the language with only a self-hosted compiler
+
+Adopt the Rust and Go pattern.
+
+#---: Bootstrap chain after sunset
+
+#ul:
+  [#*: Each released compiler version N is built by the previous released
+      compiler N-1.]
+  [#*: The very base of the chain is #~"python-stage0-final" (frozen
+      forever).]
+  [#*: A "bootstrap version" file in the repo names the compiler version
+      that builds #~"main" today. Bump it on a defined cadence (for example,
+      every minor release).]
+
+#---: Two-step pattern for adding a language feature the compiler itself wants to use
+
+#ol:
+  [#*: #-strong "Release N": add the feature (parser, typechecker, emitter).
+      The compiler implements it but does not yet #-em "use" it. Release N is
+      built by N-1, which doesn't need the feature.]
+  [#*: #-strong "Release N+1": bump the bootstrap version to N. Now compiler
+      code in #~"main" may use the feature, because the compiler that builds
+      it (N) understands it.]
+
+This is the standard discipline. It costs one release-cycle of latency but
+eliminates "chicken-and-egg" hazards entirely.
+
+#---: Bootstrap subset enforcement
+
+The bootstrap-lint sibling from Phase B becomes load-bearing here. It pins
+the set of zerolang features the compiler in #~"main" is allowed to use.
+Updating that set is what bumping the bootstrap version means in practice.
+
+
+#--: Critical files and existing infrastructure to reuse
+
+#ul:
+  [#*: #~"Makefile" -- already enforces #~"make check" (ruff, lint, type
+      check, bootstrap-lint). The bootstrap-lint counts are the porting
+      punch list; extend this with the zerolang-side lint in Phase B.]
+  [#*: #~"src/zsqldump.py" -- the SQL dump is the natural differential-
+      testing oracle. Both compilers should emit identical SQL for the same
+      input; this is a stronger check than comparing C output because it
+      catches typecheck drift the emitter would smooth over.]
+  [#*: #~"src/zvfs.py" -- the VFS is the cleanest module boundary; port it
+      first inside the typechecker work since everything else depends on
+      file resolution.]
+  [#*: #~"doc/compiler.pdoc" -- already documents compiler internals; this
+      is the porting spec. Any modification to compiler shape during Phase A
+      must update this file.]
+  [#*: #~"examples/" (96 programs) and #~"tests/" (approximately 2,057
+      tests) -- the acceptance corpus. Treat them as immutable during the
+      port.]
+
+
+#--: What "proceeding" means, and what it does not
+
+This is a strategy document. Approving it does not start coding. It commits
+the project to the phasing and the policy decisions: port as forcing
+function, 6-month parallel maintenance, two-step bootstrap pattern post-
+sunset. The day-to-day work that follows is governed by per-item plans.
+
+#---: Phase A begins, item by item
+
+Each of the following gets its own detailed plan before any code is touched.
+None of them is a small change.
+
+#ul:
+  #*: Field-access locking for reftypes
+  #*: Stable iteration order for #~"Set"
+  #*: Inline definitions in #~"as" blocks
+
+All three are language-level items. Branch ownership flow for reftypes
+landed 2026-05-23. The compiler-shape items from the
+2026-04-28 review are already closed (see the "Compiler-shape: already
+closed" subsection of Phase A above). These five are independent enough to
+sequence by appetite rather than by dependency.
+
+#---: Phase B is gated
+
+Phase B (the port itself) is gated on Phase A completion and on tagging
+#~"python-stage0". Each port milestone (lexer, parser, AST, VFS, generator
+desugaring, typechecker, emitter, CLI) also gets its own plan. The
+typechecker port in particular will likely decompose further into sub-plans
+by method-cluster.
+
+#---: Phases C through E are policy phases
+
+The CI configuration and the bootstrap-version cadence each need a short
+setup plan when their phase begins, but most of the work is following the
+rules this strategy establishes.
+
+
+#--: Sanity checks
+
+Before kickoff:
+
+#ol:
+  [#*: Run #~"make check && make test" on a clean checkout to confirm the
+      Python baseline is green and the bootstrap-lint counts match those
+      quoted above.]
+  [#*: Audit #~"doc/roadmap.pdoc" for any deferred items not enumerated in
+      Phase A; add them or explicitly defer-past-port.]
+  [#*: Estimate Phase A in calendar weeks before committing to a Phase B
+      start date; the deferred-ownership work is the highest variance item.]
+
+Mid-port:
+
+#ol:
+  [#*: After lexer and parser are ported, the differential token-plus-AST
+      test should be green on 100% of #~"examples/*.z". If it isn't, the
+      port is already drifting and stops until reconciled.]
+
+Pre-verification:
+
+#ol:
+  [#*: The fixed-point check (stage1 to stage2 byte-identical) is non-
+      negotiable. If it fails, the port is incomplete regardless of how
+      green the test suite is.]
