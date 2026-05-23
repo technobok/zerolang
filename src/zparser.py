@@ -240,6 +240,11 @@ def _strip_string_whitespace(
     return result
 
 
+_AS_DISALLOWED_TYPEDEF_TOKENS = frozenset(
+    (TT.RECORD, TT.CLASS, TT.VARIANT, TT.UNION, TT.PROTOCOL, TT.FACET, TT.DATA)
+)
+
+
 class Parser:
     """
     Parser
@@ -1554,6 +1559,19 @@ class Parser:
                             items[label.tokstr] = unitx.node
                             # don't promote externs — unit references parent type members
                             # which are resolved by the type checker, not the parser
+                    elif lex.peek().toktype in _AS_DISALLOWED_TYPEDEF_TOKENS:
+                        # Inline type definitions (record / class / variant /
+                        # union / protocol / facet / data) are not allowed
+                        # inside an `is` or `as` body. The workaround is
+                        # to define them at unit level and reference them
+                        # by name from inside the body.
+                        kw = lex.acceptany().tokstr
+                        msg = (
+                            f"Inline '{kw}' definition for '{label.tokstr}' "
+                            f"is not allowed here. Define '{label.tokstr}' "
+                            f"at unit level and reference it by name."
+                        )
+                        return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                     else:
                         # path/typeref/typeref_or_num or constant expression
                         opx = self._accept_operation(lex)

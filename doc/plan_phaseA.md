@@ -11,7 +11,7 @@ The four items below are the genuinely-open Phase A items, in the order the user
 1. ~~Branch ownership flow tracking for reftypes~~ — CLOSED 2026-05-23
 2. ~~Field-access locking for reftypes~~ — CLOSED 2026-05-23 (already done via path-scoped locks)
 3. ~~Stable iteration order for `Set` (and `Map`)~~ — CLOSED 2026-05-23 (compact-dict rewrite)
-4. Inline definitions in `as` blocks
+4. ~~Inline definitions in `as` blocks~~ — CLOSED-AS-SCOPED 2026-05-23 (deferred by design; friendly parser diagnostic + unit-level workaround documented)
 
 ## Sequencing summary
 
@@ -229,7 +229,25 @@ These match CPython's mature dict implementation but are not required for the in
 
 ---
 
-## Item 4 — Inline definitions in `as` blocks
+## Item 4 — Inline definitions in `as` blocks — CLOSED-AS-SCOPED 2026-05-23
+
+Deferred by design after investigation found the explore agent's "30-50
+line parser change, typechecker requires zero changes" estimate was
+wrong. Full integration would need nested-type registration as a child
+of the parent ObjectDef plus a typechecker walk of `as_items` for
+ObjectDef-shaped entries (estimated 150-300 lines plus iteration). The
+workaround — define types at unit level and reference them by name from
+within `as` — is well-shipped (see `examples/borrowed_record.z`).
+
+What landed in this pass: a friendly parser diagnostic that catches the
+seven typedef keywords (record / class / variant / union / protocol /
+facet / data) inside `is` or `as` bodies and points users at the
+workaround. Eight tests in `tests/test_parser.py::TestInlineTypedefRejection`.
+
+The remaining sections below describe the originally-planned full
+implementation; kept for reference if a future port hits a concrete
+blocker that the workaround can't cover.
+
 
 ### Context
 

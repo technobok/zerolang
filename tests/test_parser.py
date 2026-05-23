@@ -590,6 +590,86 @@ class TestAsClause:
         assert "y" in u.as_items
 
 
+class TestInlineTypedefRejection:
+    """Inline type definitions (record / class / variant / union /
+    protocol / facet / data) inside an `is` or `as` body produce a
+    friendly diagnostic pointing the user at the unit-level workaround.
+    This case is deferred-by-design — the workaround is well-shipped
+    (see examples/borrowed_record.z)."""
+
+    def test_inline_record_rejected(self):
+        result = parse_unit(
+            "Outer: class { x: i64 } as {\n    Helper: record { a: i64 b: i64 }\n}"
+        )
+        assert isinstance(result, zast.Error)
+        assert "Inline 'record' definition" in result.msg
+        assert "'Helper'" in result.msg
+        assert "unit level" in result.msg
+
+    def test_inline_class_rejected(self):
+        result = parse_unit(
+            "Outer: class { x: i64 } as {\n    Helper: class { v: i64 }\n}"
+        )
+        assert isinstance(result, zast.Error)
+        assert "Inline 'class' definition" in result.msg
+
+    def test_inline_variant_rejected(self):
+        result = parse_unit(
+            "Outer: class { x: i64 } as {\n    Tag: variant { a: null b: null }\n}"
+        )
+        assert isinstance(result, zast.Error)
+        assert "Inline 'variant' definition" in result.msg
+
+    def test_inline_union_rejected(self):
+        result = parse_unit(
+            "Outer: class { x: i64 } as {\n    Slot: union { empty: null full: i64 }\n}"
+        )
+        assert isinstance(result, zast.Error)
+        assert "Inline 'union' definition" in result.msg
+
+    def test_inline_protocol_rejected(self):
+        result = parse_unit(
+            "Outer: class { x: i64 } as {\n"
+            "    Iface: protocol { do: function {:this} }\n"
+            "}"
+        )
+        assert isinstance(result, zast.Error)
+        assert "Inline 'protocol' definition" in result.msg
+
+    def test_inline_data_rejected(self):
+        result = parse_unit(
+            "Outer: class { x: i64 } as {\n    table: data { 1 2 3 }\n}"
+        )
+        assert isinstance(result, zast.Error)
+        assert "Inline 'data' definition" in result.msg
+
+    def test_inline_typedef_in_is_block_rejected(self):
+        """Same rule applies to `is` blocks — `_get_object_body` is
+        shared between `is` and `as`."""
+        result = parse_unit("Outer: class is {\n    Helper: record { a: i64 }\n}")
+        assert isinstance(result, zast.Error)
+        assert "Inline 'record' definition" in result.msg
+
+    def test_unit_level_record_referenced_from_as_works(self):
+        """The supported workaround: define the helper at unit level
+        and reference it by name from within the parent's `as`."""
+        result = parse_unit(
+            "Helper: record { a: i64 b: i64 }\n"
+            "Outer: class { x: i64 } as {\n"
+            "    public: unit { :use }\n"
+            "    use: function {:this} out i64 is {\n"
+            "        h: Helper a: this.x b: 0\n"
+            "        return h.a + h.b\n"
+            "    }\n"
+            "}"
+        )
+        body = get_unit_body(result)
+        assert "Helper" in body
+        assert "Outer" in body
+        assert body["Helper"].nodetype == zast.NodeType.RECORD
+        assert body["Outer"].nodetype == zast.NodeType.CLASS
+
+
 class TestDuplicateDefinitions:
     """Test duplicate definition error handling in 'is' and 'as' sections."""
 
