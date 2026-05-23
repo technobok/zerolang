@@ -4161,7 +4161,12 @@ class CEmitter:
         )
 
     def _emit_mono_map(self, mono_type: ZType) -> None:
-        """Emit a monomorphized map type (bucket struct, hash, create, destroy, methods)."""
+        """Emit a monomorphized map type using a CPython-style compact-dict
+        layout: a sparse `indices` array of int64 slots (EMPTY=-1,
+        DELETED=-2, else index into `entries`) plus a dense, insertion-
+        ordered `entries` array of (alive, hash, key, value) records.
+        Iteration walks entries in order; insertion order is preserved
+        across deletes and resizes."""
         self.needs_stdint = True
         self.needs_stdlib = True
         self.needs_stdio = True
@@ -4180,27 +4185,32 @@ class CEmitter:
         key_is_string = key_ctype == "z_String_t"
         val_is_string = val_ctype == "z_String_t"
         val_is_reftype = val_ctype.endswith("*")
-        bucket_type = f"z_{name}_bucket_t"
+        entry_type = f"z_{name}_entry_t"
+        # Kept alias for backward-compatible external references (e.g.
+        # mapitemiter emits mapentry as a typedef of the entry type).
+        bucket_type = entry_type
         lines: List[str] = []
 
-        # bucket state enum
-        lines.append(f"#define Z_{name.upper()}_EMPTY 0\n")
-        lines.append(f"#define Z_{name.upper()}_DELETED 1\n")
-        lines.append(f"#define Z_{name.upper()}_USED 2\n\n")
+        # indices sentinels
+        lines.append(f"#define Z_{name.upper()}_INDEX_EMPTY (-1)\n")
+        lines.append(f"#define Z_{name.upper()}_INDEX_DELETED (-2)\n\n")
 
-        # bucket struct
+        # entry struct (dense, insertion-ordered)
         lines.append("typedef struct {\n")
-        lines.append("    uint8_t state;\n")
+        lines.append("    uint8_t alive;\n")
         lines.append("    uint64_t hash;\n")
         lines.append(f"    {key_ctype} key;\n")
         lines.append(f"    {val_ctype} value;\n")
-        lines.append(f"}} {bucket_type};\n\n")
+        lines.append(f"}} {entry_type};\n\n")
 
         # map struct
         lines.append("typedef struct {\n")
         lines.append("    uint64_t capacity;\n")
         lines.append("    uint64_t length;\n")
-        lines.append(f"    {bucket_type}* buckets;\n")
+        lines.append("    uint64_t entries_len;\n")
+        lines.append("    uint64_t entries_cap;\n")
+        lines.append("    int64_t* indices;\n")
+        lines.append(f"    {entry_type}* entries;\n")
         lines.append(f"}} {ctype};\n\n")
 
         # hash function -- thin wrapper over the shared SipHash / splitmix64
@@ -4260,27 +4270,21 @@ class CEmitter:
                 return f"{indent}{value_type.destructor_name}({var});\n"
             return ""
 
-        # destroy — iterate buckets when the key or value carries a
-        # destructor. needs_destructor is the complete driver: the type
-        # system only sets it True when there's actual cleanup work
-        # (either heap-internal or the outer heap allocation itself),
-        # and clears it for self-contained valtypes. No extra pointer-
-        # suffix fallback is needed.
+        # destroy — walk dense entries[] and free live keys/values.
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
         key_needs_free = bool(key_type and (key_type.destructor_name is not None))
         val_needs_free = bool(value_type and (value_type.destructor_name is not None))
         if key_needs_free or val_needs_free:
-            lines.append("    for (uint64_t i = 0; i < p->capacity; i++) {\n")
-            lines.append(
-                f"        if (p->buckets[i].state == Z_{name.upper()}_USED) {{\n"
-            )
-            lines.append(emit_free_key("p->buckets[i].key", "            "))
-            lines.append(emit_free_val("p->buckets[i].value", "            "))
+            lines.append("    for (uint64_t i = 0; i < p->entries_len; i++) {\n")
+            lines.append("        if (p->entries[i].alive) {\n")
+            lines.append(emit_free_key("p->entries[i].key", "            "))
+            lines.append(emit_free_val("p->entries[i].value", "            "))
             lines.append("        }\n")
             lines.append("    }\n")
-        lines.append("    free(p->buckets);\n")
+        lines.append("    free(p->indices);\n")
+        lines.append("    free(p->entries);\n")
         lines.append("    free(p);\n")
         lines.append("}\n\n")
 
@@ -4291,67 +4295,99 @@ class CEmitter:
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         lines.append("    if (_capacity < 8) _capacity = 0;\n")
         lines.append("    _this->capacity = _capacity;\n")
+        lines.append("    _this->entries_cap = _capacity;\n")
         lines.append("    if (_capacity > 0) {\n")
         lines.append(
-            f"        _this->buckets = ({bucket_type}*)z_xcalloc(_capacity, sizeof({bucket_type}));\n"
+            "        _this->indices = (int64_t*)z_xmalloc(_capacity * sizeof(int64_t));\n"
+        )
+        lines.append("        for (uint64_t i = 0; i < _capacity; i++) {\n")
+        lines.append(f"            _this->indices[i] = Z_{name.upper()}_INDEX_EMPTY;\n")
+        lines.append("        }\n")
+        lines.append(
+            f"        _this->entries = ({entry_type}*)z_xcalloc(_capacity, sizeof({entry_type}));\n"
         )
         lines.append("    }\n")
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
-        # grow/resize
+        # grow/resize — rebuild indices (doubled) and compact entries
+        # (drop tombstones, preserve insertion order). After grow,
+        # entries_len == length and entries_cap == new capacity.
         grow_fn = f"z_{name}_grow"
         lines.append(f"static void {grow_fn}({ctype}* _this);\n")
         lines.append(f"static void {grow_fn}({ctype}* _this) {{\n")
         lines.append("    uint64_t old_cap = _this->capacity;\n")
         lines.append("    uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;\n")
-        lines.append(f"    {bucket_type}* old_buckets = _this->buckets;\n")
+        lines.append(f"    {entry_type}* old_entries = _this->entries;\n")
+        lines.append("    uint64_t old_entries_len = _this->entries_len;\n")
         lines.append(
-            f"    {bucket_type}* new_buckets = ({bucket_type}*)z_xcalloc(new_cap, sizeof({bucket_type}));\n"
+            "    int64_t* new_indices = (int64_t*)z_xmalloc(new_cap * sizeof(int64_t));\n"
         )
-        lines.append("    for (uint64_t i = 0; i < old_cap; i++) {\n")
-        lines.append(f"        if (old_buckets[i].state == Z_{name.upper()}_USED) {{\n")
-        lines.append(
-            "            uint64_t idx = old_buckets[i].hash & (new_cap - 1);\n"
-        )
-        lines.append(
-            f"            while (new_buckets[idx].state == Z_{name.upper()}_USED) {{\n"
-        )
-        lines.append("                idx = (idx + 1) & (new_cap - 1);\n")
-        lines.append("            }\n")
-        lines.append("            new_buckets[idx] = old_buckets[i];\n")
-        lines.append("        }\n")
+        lines.append("    for (uint64_t i = 0; i < new_cap; i++) {\n")
+        lines.append(f"        new_indices[i] = Z_{name.upper()}_INDEX_EMPTY;\n")
         lines.append("    }\n")
-        lines.append("    free(old_buckets);\n")
-        lines.append("    _this->buckets = new_buckets;\n")
+        lines.append(
+            f"    {entry_type}* new_entries = ({entry_type}*)z_xcalloc(new_cap, sizeof({entry_type}));\n"
+        )
+        lines.append("    uint64_t new_entries_len = 0;\n")
+        lines.append("    for (uint64_t i = 0; i < old_entries_len; i++) {\n")
+        lines.append("        if (!old_entries[i].alive) continue;\n")
+        lines.append("        new_entries[new_entries_len] = old_entries[i];\n")
+        lines.append("        uint64_t probe = old_entries[i].hash & (new_cap - 1);\n")
+        lines.append(
+            f"        while (new_indices[probe] != Z_{name.upper()}_INDEX_EMPTY) {{\n"
+        )
+        lines.append("            probe = (probe + 1) & (new_cap - 1);\n")
+        lines.append("        }\n")
+        lines.append("        new_indices[probe] = (int64_t)new_entries_len;\n")
+        lines.append("        new_entries_len++;\n")
+        lines.append("    }\n")
+        lines.append("    free(_this->indices);\n")
+        lines.append("    free(old_entries);\n")
+        lines.append("    _this->indices = new_indices;\n")
+        lines.append("    _this->entries = new_entries;\n")
         lines.append("    _this->capacity = new_cap;\n")
+        lines.append("    _this->entries_cap = new_cap;\n")
+        lines.append("    _this->entries_len = new_entries_len;\n")
         lines.append("}\n\n")
 
-        # find_bucket helper (internal)
+        # find helper — probe indices[]; returns entry index (>=0) or -1.
+        # Writes the indices-slot to *_slot_out (caller's reference)
+        # when non-NULL; used by delete to mark the slot DELETED.
         find_fn = f"z_{name}_find"
         lines.append(
-            f"static int64_t {find_fn}({ctype}* _this, {key_ctype} _key, uint64_t _hash);\n"
+            f"static int64_t {find_fn}({ctype}* _this, {key_ctype} _key, "
+            "uint64_t _hash, int64_t* _slot_out);\n"
         )
         lines.append(
-            f"static int64_t {find_fn}({ctype}* _this, {key_ctype} _key, uint64_t _hash) {{\n"
+            f"static int64_t {find_fn}({ctype}* _this, {key_ctype} _key, "
+            "uint64_t _hash, int64_t* _slot_out) {\n"
         )
         lines.append("    if (_this->capacity == 0) return -1;\n")
-        lines.append("    uint64_t idx = _hash & (_this->capacity - 1);\n")
+        lines.append("    uint64_t probe = _hash & (_this->capacity - 1);\n")
         lines.append("    for (uint64_t i = 0; i < _this->capacity; i++) {\n")
+        lines.append("        int64_t slot = _this->indices[probe];\n")
+        lines.append(f"        if (slot == Z_{name.upper()}_INDEX_EMPTY) {{\n")
+        lines.append("            if (_slot_out) *_slot_out = (int64_t)probe;\n")
+        lines.append("            return -1;\n")
+        lines.append("        }\n")
+        lines.append(f"        if (slot != Z_{name.upper()}_INDEX_DELETED) {{\n")
         lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_EMPTY) return -1;\n"
+            "            if (_this->entries[slot].hash == _hash "
+            f"&& {eq_fn}(_this->entries[slot].key, _key)) {{\n"
         )
-        lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_USED "
-            f"&& _this->buckets[idx].hash == _hash "
-            f"&& {eq_fn}(_this->buckets[idx].key, _key)) return (int64_t)idx;\n"
-        )
-        lines.append("        idx = (idx + 1) & (_this->capacity - 1);\n")
+        lines.append("                if (_slot_out) *_slot_out = (int64_t)probe;\n")
+        lines.append("                return slot;\n")
+        lines.append("            }\n")
+        lines.append("        }\n")
+        lines.append("        probe = (probe + 1) & (_this->capacity - 1);\n")
         lines.append("    }\n")
         lines.append("    return -1;\n")
         lines.append("}\n\n")
 
-        # set method
+        # set — replace value if key exists; else append a new entry and
+        # write its index into the first empty (or earliest deleted)
+        # indices slot encountered on the probe sequence.
         lines.append(
             f"static void z_{name}_set({ctype}* _this, {key_ctype} _key, {val_ctype} _val);\n"
         )
@@ -4359,50 +4395,60 @@ class CEmitter:
             f"static void z_{name}_set({ctype}* _this, {key_ctype} _key, {val_ctype} _val) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-        # check for existing key
-        lines.append(f"    int64_t existing = {find_fn}(_this, _key, h);\n")
+        lines.append(f"    int64_t existing = {find_fn}(_this, _key, h, NULL);\n")
         lines.append("    if (existing >= 0) {\n")
-        # replace: destroy old value, update, free old key if reftype
-        lines.append(emit_free_val("_this->buckets[existing].value", "        "))
-        lines.append("        _this->buckets[existing].value = _val;\n")
+        lines.append(emit_free_val("_this->entries[existing].value", "        "))
+        lines.append("        _this->entries[existing].value = _val;\n")
         lines.append(emit_free_key("_key", "        "))
         lines.append("        return;\n")
         lines.append("    }\n")
-        # check load factor — grow if length * 3 >= capacity * 2
         lines.append(
             "    if (_this->capacity == 0 || (_this->length + 1) * 3 >= _this->capacity * 2) {\n"
         )
         lines.append(f"        {grow_fn}(_this);\n")
         lines.append("    }\n")
-        # insert into new slot
-        lines.append("    uint64_t idx = h & (_this->capacity - 1);\n")
+        # probe for insertion slot; reuse earliest DELETED if before EMPTY.
+        lines.append("    uint64_t probe = h & (_this->capacity - 1);\n")
         lines.append("    int64_t first_deleted = -1;\n")
         lines.append("    for (uint64_t i = 0; i < _this->capacity; i++) {\n")
+        lines.append("        int64_t slot = _this->indices[probe];\n")
+        lines.append(f"        if (slot == Z_{name.upper()}_INDEX_EMPTY) {{\n")
         lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_EMPTY) {{\n"
-        )
-        lines.append(
-            "            if (first_deleted >= 0) idx = (uint64_t)first_deleted;\n"
+            "            if (first_deleted >= 0) probe = (uint64_t)first_deleted;\n"
         )
         lines.append("            break;\n")
         lines.append("        }\n")
         lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_DELETED "
+            f"        if (slot == Z_{name.upper()}_INDEX_DELETED "
             "&& first_deleted < 0) {\n"
         )
-        lines.append("            first_deleted = (int64_t)idx;\n")
+        lines.append("            first_deleted = (int64_t)probe;\n")
         lines.append("        }\n")
-        lines.append("        idx = (idx + 1) & (_this->capacity - 1);\n")
+        lines.append("        probe = (probe + 1) & (_this->capacity - 1);\n")
         lines.append("    }\n")
+        # append entry; grow entries[] if needed (defensive — should not fire
+        # because grow keeps entries_cap == capacity).
+        lines.append("    if (_this->entries_len >= _this->entries_cap) {\n")
         lines.append(
-            "    if (first_deleted >= 0 "
-            f"&& _this->buckets[idx].state != Z_{name.upper()}_EMPTY) "
-            "idx = (uint64_t)first_deleted;\n"
+            "        uint64_t new_ec = _this->entries_cap == 0 ? 8 : _this->entries_cap * 2;\n"
         )
-        lines.append(f"    _this->buckets[idx].state = Z_{name.upper()}_USED;\n")
-        lines.append("    _this->buckets[idx].hash = h;\n")
-        lines.append("    _this->buckets[idx].key = _key;\n")
-        lines.append("    _this->buckets[idx].value = _val;\n")
+        lines.append(
+            f"        _this->entries = ({entry_type}*)z_xrealloc(_this->entries, new_ec * sizeof({entry_type}));\n"
+        )
+        lines.append(
+            "        for (uint64_t i = _this->entries_cap; i < new_ec; i++) {\n"
+        )
+        lines.append(f"            _this->entries[i] = ({entry_type}){{0}};\n")
+        lines.append("        }\n")
+        lines.append("        _this->entries_cap = new_ec;\n")
+        lines.append("    }\n")
+        lines.append("    int64_t new_idx = (int64_t)_this->entries_len;\n")
+        lines.append("    _this->entries[new_idx].alive = 1;\n")
+        lines.append("    _this->entries[new_idx].hash = h;\n")
+        lines.append("    _this->entries[new_idx].key = _key;\n")
+        lines.append("    _this->entries[new_idx].value = _val;\n")
+        lines.append("    _this->entries_len++;\n")
+        lines.append("    _this->indices[probe] = new_idx;\n")
         lines.append("    _this->length++;\n")
         lines.append("}\n\n")
 
@@ -4424,24 +4470,24 @@ class CEmitter:
                     f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
                 )
                 lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h, NULL);\n")
                 lines.append("    if (idx >= 0) {\n")
                 if val_is_string:
                     lines.append("        z_String_t _copy = {0};\n")
                     lines.append(
-                        "        _copy.size = _this->buckets[idx].value.size;\n"
+                        "        _copy.size = _this->entries[idx].value.size;\n"
                     )
                     lines.append("        _copy.capacity = _copy.size + 1;\n")
                     lines.append(
                         "        _copy.data = (char*)z_xmalloc(_copy.capacity);\n"
                     )
                     lines.append(
-                        "        memcpy(_copy.data, _this->buckets[idx].value.data, _copy.size);\n"
+                        "        memcpy(_copy.data, _this->entries[idx].value.data, _copy.size);\n"
                     )
                     lines.append("        _copy.data[_copy.size] = '\\0';\n")
                     lines.append("        return _copy;\n")
                 else:
-                    lines.append("        return _this->buckets[idx].value;\n")
+                    lines.append("        return _this->entries[idx].value;\n")
                 lines.append("    }\n")
                 lines.append("    return NULL;\n")
                 lines.append("}\n\n")
@@ -4457,11 +4503,11 @@ class CEmitter:
                     f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
                 )
                 lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h, NULL);\n")
                 lines.append(f"    {opt_struct} _r;\n")
                 lines.append("    if (idx >= 0) {\n")
                 lines.append(f"        _r.tag = {some_tag};\n")
-                lines.append("        _r.data.some = _this->buckets[idx].value;\n")
+                lines.append("        _r.data.some = _this->entries[idx].value;\n")
                 lines.append("    } else {\n")
                 lines.append(f"        _r.tag = {none_tag};\n")
                 lines.append("    }\n")
@@ -4479,7 +4525,7 @@ class CEmitter:
                     f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
                 )
                 lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h, NULL);\n")
                 lines.append(f"    {opt_struct} _r = {{0}};\n")
                 lines.append("    if (idx >= 0) {\n")
                 lines.append(f"        _r.tag = {some_tag};\n")
@@ -4489,24 +4535,24 @@ class CEmitter:
                             "        z_String_t* _copy = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
                         )
                         lines.append(
-                            "        _copy->size = _this->buckets[idx].value.size;\n"
+                            "        _copy->size = _this->entries[idx].value.size;\n"
                         )
                         lines.append("        _copy->capacity = _copy->size + 1;\n")
                         lines.append(
                             "        _copy->data = (char*)z_xmalloc(_copy->capacity);\n"
                         )
                         lines.append(
-                            "        memcpy(_copy->data, _this->buckets[idx].value.data, _copy->size);\n"
+                            "        memcpy(_copy->data, _this->entries[idx].value.data, _copy->size);\n"
                         )
                         lines.append("        _copy->data[_copy->size] = '\\0';\n")
                         lines.append("        _r.data = _copy;\n")
                     else:
-                        lines.append("        _r.data = _this->buckets[idx].value;\n")
+                        lines.append("        _r.data = _this->entries[idx].value;\n")
                 else:
                     lines.append(
                         f"        {val_ctype}* _d = ({val_ctype}*)z_xmalloc(sizeof({val_ctype}));\n"
                     )
-                    lines.append("        *_d = _this->buckets[idx].value;\n")
+                    lines.append("        *_d = _this->entries[idx].value;\n")
                     lines.append("        _r.data = _d;\n")
                 lines.append("    } else {\n")
                 lines.append(f"        _r.tag = {none_tag};\n")
@@ -4515,26 +4561,29 @@ class CEmitter:
                 lines.append("    return _r;\n")
                 lines.append("}\n\n")
 
-        # delete method — returns bool
+        # delete — mark indices slot DELETED, tombstone entries[idx]
+        # (free key/value, alive=0). Compaction happens on next resize.
         lines.append(f"static int z_{name}_delete({ctype}* _this, {key_ctype} _key);\n")
         lines.append(
             f"static int z_{name}_delete({ctype}* _this, {key_ctype} _key) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-        lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+        lines.append("    int64_t slot = -1;\n")
+        lines.append(f"    int64_t idx = {find_fn}(_this, _key, h, &slot);\n")
         lines.append("    if (idx < 0) return 0;\n")
-        lines.append(emit_free_key("_this->buckets[idx].key", "    "))
-        lines.append(emit_free_val("_this->buckets[idx].value", "    "))
-        lines.append(f"    _this->buckets[idx].state = Z_{name.upper()}_DELETED;\n")
+        lines.append(emit_free_key("_this->entries[idx].key", "    "))
+        lines.append(emit_free_val("_this->entries[idx].value", "    "))
+        lines.append("    _this->entries[idx].alive = 0;\n")
+        lines.append(f"    _this->indices[slot] = Z_{name.upper()}_INDEX_DELETED;\n")
         lines.append("    _this->length--;\n")
         lines.append("    return 1;\n")
         lines.append("}\n\n")
 
-        # has method — returns bool
+        # has — returns bool
         lines.append(f"static int z_{name}_has({ctype}* _this, {key_ctype} _key);\n")
         lines.append(f"static int z_{name}_has({ctype}* _this, {key_ctype} _key) {{\n")
         lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-        lines.append(f"    return {find_fn}(_this, _key, h) >= 0;\n")
+        lines.append(f"    return {find_fn}(_this, _key, h, NULL) >= 0;\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -4567,10 +4616,12 @@ class CEmitter:
     ) -> None:
         """Emit the runtime implementation of a mapkeyiter monomorphization.
 
-        Layout: { source map pointer, current bucket index }. Each .call
-        scans forward through buckets, returning the next USED bucket's
-        key wrapped in optionview.some, or optionview.none when no more
-        USED buckets remain.
+        Layout: { source map pointer, current entries index }. Each .call
+        scans forward through `entries[]` (the dense, insertion-ordered
+        array), returning the next live entry's key wrapped in
+        optionview.some, or optionview.none when entries are exhausted.
+        Tombstoned entries (alive == 0) are skipped without altering
+        iteration order.
         """
         mki_name = mki_mono.name
         mki_ctype = f"z_{mki_name}_t"
@@ -4582,7 +4633,6 @@ class CEmitter:
         ov_ctype = f"z_{ov_name}_t"
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
-        used_macro = f"Z_{map_name.upper()}_USED"
 
         lines: List[str] = []
         lines.append(f"/* mapkeyiter<{key_ctype}> runtime layout */\n")
@@ -4593,12 +4643,10 @@ class CEmitter:
         lines.append(f"static {ov_ctype} z_{mki_name}_call({mki_ctype}* _it);\n")
         lines.append(f"static {ov_ctype} z_{mki_name}_call({mki_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
-        lines.append("    while (_it->idx < _it->m->capacity) {\n")
-        lines.append(
-            f"        if (_it->m->buckets[_it->idx].state == {used_macro}) {{\n"
-        )
+        lines.append("    while (_it->idx < _it->m->entries_len) {\n")
+        lines.append("        if (_it->m->entries[_it->idx].alive) {\n")
         lines.append(f"            _out.tag = {ov_some_tag};\n")
-        lines.append("            _out.data = &_it->m->buckets[_it->idx].key;\n")
+        lines.append("            _out.data = &_it->m->entries[_it->idx].key;\n")
         lines.append("            _it->idx++;\n")
         lines.append("            return _out;\n")
         lines.append("        }\n")
@@ -4628,14 +4676,14 @@ class CEmitter:
         """Emit the runtime implementation of a mapitemiter
         monomorphization plus the mapentry typedef.
 
-        mapitemiter layout: { source map pointer, current bucket index }.
-        Each .call scans forward through buckets, returning the next
-        USED bucket address wrapped in optionview.some, or
-        optionview.none when no more USED buckets remain.
+        mapitemiter layout: { source map pointer, current entries index }.
+        Each .call scans forward through `entries[]` (dense, insertion-
+        ordered), returning the next live entry address wrapped in
+        optionview.some, or optionview.none when entries are exhausted.
 
         mapentry is a borrow-only view: at the C level it is a typedef
-        alias for the bucket struct. .key / .value access compile to
-        field projections through the bucket pointer.
+        alias for the entry struct. .key / .value access compile to
+        field projections through the entry pointer.
         """
         mii_name = mii_mono.name
         mii_ctype = f"z_{mii_name}_t"
@@ -4647,7 +4695,6 @@ class CEmitter:
         ov_ctype = f"z_{ov_name}_t"
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
-        used_macro = f"Z_{map_name.upper()}_USED"
 
         # mapentry mono: pulled from the optionview's some payload type
         me_mono = self.typing.child_of(ov_mono, "some")
@@ -4667,12 +4714,10 @@ class CEmitter:
         lines.append(f"static {ov_ctype} z_{mii_name}_call({mii_ctype}* _it);\n")
         lines.append(f"static {ov_ctype} z_{mii_name}_call({mii_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
-        lines.append("    while (_it->idx < _it->m->capacity) {\n")
-        lines.append(
-            f"        if (_it->m->buckets[_it->idx].state == {used_macro}) {{\n"
-        )
+        lines.append("    while (_it->idx < _it->m->entries_len) {\n")
+        lines.append("        if (_it->m->entries[_it->idx].alive) {\n")
         lines.append(f"            _out.tag = {ov_some_tag};\n")
-        lines.append("            _out.data = &_it->m->buckets[_it->idx];\n")
+        lines.append("            _out.data = &_it->m->entries[_it->idx];\n")
         lines.append("            _it->idx++;\n")
         lines.append("            return _out;\n")
         lines.append("        }\n")
@@ -4714,9 +4759,10 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_set(self, mono_type: ZType) -> None:
-        """Emit a monomorphized set type. A set is a hash table without
-        the value column -- bucket = {state, hash, item}. Structure
-        mirrors `_emit_mono_map`."""
+        """Emit a monomorphized set type using a CPython-style
+        compact-dict layout: sparse `indices` array of int64 slots plus a
+        dense, insertion-ordered `entries` array of (alive, hash, item).
+        Structure mirrors `_emit_mono_map` without the value column."""
         self.needs_stdint = True
         self.needs_stdlib = True
         self.needs_stdio = True
@@ -4729,26 +4775,28 @@ class CEmitter:
             return
         elem_ctype = _ctype(self.typing, elem_type)
         elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
-        bucket_type = f"z_{name}_bucket_t"
+        entry_type = f"z_{name}_entry_t"
         lines: List[str] = []
 
-        # bucket state macros
-        lines.append(f"#define Z_{name.upper()}_EMPTY 0\n")
-        lines.append(f"#define Z_{name.upper()}_DELETED 1\n")
-        lines.append(f"#define Z_{name.upper()}_USED 2\n\n")
+        # indices sentinels
+        lines.append(f"#define Z_{name.upper()}_INDEX_EMPTY (-1)\n")
+        lines.append(f"#define Z_{name.upper()}_INDEX_DELETED (-2)\n\n")
 
-        # bucket struct (state, hash, item -- no value column)
+        # entry struct (dense, insertion-ordered, no value column)
         lines.append("typedef struct {\n")
-        lines.append("    uint8_t state;\n")
+        lines.append("    uint8_t alive;\n")
         lines.append("    uint64_t hash;\n")
         lines.append(f"    {elem_ctype} item;\n")
-        lines.append(f"}} {bucket_type};\n\n")
+        lines.append(f"}} {entry_type};\n\n")
 
         # set struct
         lines.append("typedef struct {\n")
         lines.append("    uint64_t capacity;\n")
         lines.append("    uint64_t length;\n")
-        lines.append(f"    {bucket_type}* buckets;\n")
+        lines.append("    uint64_t entries_len;\n")
+        lines.append("    uint64_t entries_cap;\n")
+        lines.append("    int64_t* indices;\n")
+        lines.append(f"    {entry_type}* entries;\n")
         lines.append(f"}} {ctype};\n\n")
 
         # hash function -- same dispatch as map; thin wrapper over the
@@ -4796,19 +4844,18 @@ class CEmitter:
 
         item_needs_free = bool(elem_type and (elem_type.destructor_name is not None))
 
-        # destroy
+        # destroy — walk dense entries[] and free live items.
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
         if item_needs_free:
-            lines.append("    for (uint64_t i = 0; i < p->capacity; i++) {\n")
-            lines.append(
-                f"        if (p->buckets[i].state == Z_{name.upper()}_USED) {{\n"
-            )
-            lines.append(emit_free_item("p->buckets[i].item", "            "))
+            lines.append("    for (uint64_t i = 0; i < p->entries_len; i++) {\n")
+            lines.append("        if (p->entries[i].alive) {\n")
+            lines.append(emit_free_item("p->entries[i].item", "            "))
             lines.append("        }\n")
             lines.append("    }\n")
-        lines.append("    free(p->buckets);\n")
+        lines.append("    free(p->indices);\n")
+        lines.append("    free(p->entries);\n")
         lines.append("    free(p);\n")
         lines.append("}\n\n")
 
@@ -4819,75 +4866,101 @@ class CEmitter:
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         lines.append("    if (_capacity < 8) _capacity = 0;\n")
         lines.append("    _this->capacity = _capacity;\n")
+        lines.append("    _this->entries_cap = _capacity;\n")
         lines.append("    if (_capacity > 0) {\n")
         lines.append(
-            f"        _this->buckets = ({bucket_type}*)z_xcalloc(_capacity, sizeof({bucket_type}));\n"
+            "        _this->indices = (int64_t*)z_xmalloc(_capacity * sizeof(int64_t));\n"
+        )
+        lines.append("        for (uint64_t i = 0; i < _capacity; i++) {\n")
+        lines.append(f"            _this->indices[i] = Z_{name.upper()}_INDEX_EMPTY;\n")
+        lines.append("        }\n")
+        lines.append(
+            f"        _this->entries = ({entry_type}*)z_xcalloc(_capacity, sizeof({entry_type}));\n"
         )
         lines.append("    }\n")
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
-        # grow/resize
+        # grow/resize — rebuild indices (doubled) and compact entries.
         grow_fn = f"z_{name}_grow"
         lines.append(f"static void {grow_fn}({ctype}* _this);\n")
         lines.append(f"static void {grow_fn}({ctype}* _this) {{\n")
         lines.append("    uint64_t old_cap = _this->capacity;\n")
         lines.append("    uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;\n")
-        lines.append(f"    {bucket_type}* old_buckets = _this->buckets;\n")
+        lines.append(f"    {entry_type}* old_entries = _this->entries;\n")
+        lines.append("    uint64_t old_entries_len = _this->entries_len;\n")
         lines.append(
-            f"    {bucket_type}* new_buckets = ({bucket_type}*)z_xcalloc(new_cap, sizeof({bucket_type}));\n"
+            "    int64_t* new_indices = (int64_t*)z_xmalloc(new_cap * sizeof(int64_t));\n"
         )
-        lines.append("    for (uint64_t i = 0; i < old_cap; i++) {\n")
-        lines.append(f"        if (old_buckets[i].state == Z_{name.upper()}_USED) {{\n")
-        lines.append(
-            "            uint64_t idx = old_buckets[i].hash & (new_cap - 1);\n"
-        )
-        lines.append(
-            f"            while (new_buckets[idx].state == Z_{name.upper()}_USED) {{\n"
-        )
-        lines.append("                idx = (idx + 1) & (new_cap - 1);\n")
-        lines.append("            }\n")
-        lines.append("            new_buckets[idx] = old_buckets[i];\n")
-        lines.append("        }\n")
+        lines.append("    for (uint64_t i = 0; i < new_cap; i++) {\n")
+        lines.append(f"        new_indices[i] = Z_{name.upper()}_INDEX_EMPTY;\n")
         lines.append("    }\n")
-        lines.append("    free(old_buckets);\n")
-        lines.append("    _this->buckets = new_buckets;\n")
+        lines.append(
+            f"    {entry_type}* new_entries = ({entry_type}*)z_xcalloc(new_cap, sizeof({entry_type}));\n"
+        )
+        lines.append("    uint64_t new_entries_len = 0;\n")
+        lines.append("    for (uint64_t i = 0; i < old_entries_len; i++) {\n")
+        lines.append("        if (!old_entries[i].alive) continue;\n")
+        lines.append("        new_entries[new_entries_len] = old_entries[i];\n")
+        lines.append("        uint64_t probe = old_entries[i].hash & (new_cap - 1);\n")
+        lines.append(
+            f"        while (new_indices[probe] != Z_{name.upper()}_INDEX_EMPTY) {{\n"
+        )
+        lines.append("            probe = (probe + 1) & (new_cap - 1);\n")
+        lines.append("        }\n")
+        lines.append("        new_indices[probe] = (int64_t)new_entries_len;\n")
+        lines.append("        new_entries_len++;\n")
+        lines.append("    }\n")
+        lines.append("    free(_this->indices);\n")
+        lines.append("    free(old_entries);\n")
+        lines.append("    _this->indices = new_indices;\n")
+        lines.append("    _this->entries = new_entries;\n")
         lines.append("    _this->capacity = new_cap;\n")
+        lines.append("    _this->entries_cap = new_cap;\n")
+        lines.append("    _this->entries_len = new_entries_len;\n")
         lines.append("}\n\n")
 
-        # find_bucket helper
+        # find — returns entry index (>=0) or -1; writes indices slot
+        # to *_slot_out when non-NULL (for delete).
         find_fn = f"z_{name}_find"
         lines.append(
-            f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, uint64_t _hash);\n"
+            f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, "
+            "uint64_t _hash, int64_t* _slot_out);\n"
         )
         lines.append(
-            f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, uint64_t _hash) {{\n"
+            f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, "
+            "uint64_t _hash, int64_t* _slot_out) {\n"
         )
         lines.append("    if (_this->capacity == 0) return -1;\n")
-        lines.append("    uint64_t idx = _hash & (_this->capacity - 1);\n")
+        lines.append("    uint64_t probe = _hash & (_this->capacity - 1);\n")
         lines.append("    for (uint64_t i = 0; i < _this->capacity; i++) {\n")
+        lines.append("        int64_t slot = _this->indices[probe];\n")
+        lines.append(f"        if (slot == Z_{name.upper()}_INDEX_EMPTY) {{\n")
+        lines.append("            if (_slot_out) *_slot_out = (int64_t)probe;\n")
+        lines.append("            return -1;\n")
+        lines.append("        }\n")
+        lines.append(f"        if (slot != Z_{name.upper()}_INDEX_DELETED) {{\n")
         lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_EMPTY) return -1;\n"
+            "            if (_this->entries[slot].hash == _hash "
+            f"&& {eq_fn}(_this->entries[slot].item, _item)) {{\n"
         )
-        lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_USED "
-            f"&& _this->buckets[idx].hash == _hash "
-            f"&& {eq_fn}(_this->buckets[idx].item, _item)) return (int64_t)idx;\n"
-        )
-        lines.append("        idx = (idx + 1) & (_this->capacity - 1);\n")
+        lines.append("                if (_slot_out) *_slot_out = (int64_t)probe;\n")
+        lines.append("                return slot;\n")
+        lines.append("            }\n")
+        lines.append("        }\n")
+        lines.append("        probe = (probe + 1) & (_this->capacity - 1);\n")
         lines.append("    }\n")
         lines.append("    return -1;\n")
         lines.append("}\n\n")
 
-        # add method -- returns true if a new element was inserted,
-        # false if the item was already present (caller's copy is freed
-        # in the false case to maintain the take-on-add contract).
+        # add — true if new, false if already present. Append to entries
+        # and write index to first empty / earliest deleted indices slot.
         lines.append(f"static int z_{name}_add({ctype}* _this, {elem_ctype} _item);\n")
         lines.append(
             f"static int z_{name}_add({ctype}* _this, {elem_ctype} _item) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
-        lines.append(f"    int64_t existing = {find_fn}(_this, _item, h);\n")
+        lines.append(f"    int64_t existing = {find_fn}(_this, _item, h, NULL);\n")
         lines.append("    if (existing >= 0) {\n")
         lines.append(emit_free_item("_item", "        "))
         lines.append("        return 0;\n")
@@ -4897,47 +4970,58 @@ class CEmitter:
         )
         lines.append(f"        {grow_fn}(_this);\n")
         lines.append("    }\n")
-        lines.append("    uint64_t idx = h & (_this->capacity - 1);\n")
+        lines.append("    uint64_t probe = h & (_this->capacity - 1);\n")
         lines.append("    int64_t first_deleted = -1;\n")
         lines.append("    for (uint64_t i = 0; i < _this->capacity; i++) {\n")
+        lines.append("        int64_t slot = _this->indices[probe];\n")
+        lines.append(f"        if (slot == Z_{name.upper()}_INDEX_EMPTY) {{\n")
         lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_EMPTY) {{\n"
-        )
-        lines.append(
-            "            if (first_deleted >= 0) idx = (uint64_t)first_deleted;\n"
+            "            if (first_deleted >= 0) probe = (uint64_t)first_deleted;\n"
         )
         lines.append("            break;\n")
         lines.append("        }\n")
         lines.append(
-            f"        if (_this->buckets[idx].state == Z_{name.upper()}_DELETED "
+            f"        if (slot == Z_{name.upper()}_INDEX_DELETED "
             "&& first_deleted < 0) {\n"
         )
-        lines.append("            first_deleted = (int64_t)idx;\n")
+        lines.append("            first_deleted = (int64_t)probe;\n")
         lines.append("        }\n")
-        lines.append("        idx = (idx + 1) & (_this->capacity - 1);\n")
+        lines.append("        probe = (probe + 1) & (_this->capacity - 1);\n")
         lines.append("    }\n")
+        lines.append("    if (_this->entries_len >= _this->entries_cap) {\n")
         lines.append(
-            "    if (first_deleted >= 0 "
-            f"&& _this->buckets[idx].state != Z_{name.upper()}_EMPTY) "
-            "idx = (uint64_t)first_deleted;\n"
+            "        uint64_t new_ec = _this->entries_cap == 0 ? 8 : _this->entries_cap * 2;\n"
         )
-        lines.append(f"    _this->buckets[idx].state = Z_{name.upper()}_USED;\n")
-        lines.append("    _this->buckets[idx].hash = h;\n")
-        lines.append("    _this->buckets[idx].item = _item;\n")
+        lines.append(
+            f"        _this->entries = ({entry_type}*)z_xrealloc(_this->entries, new_ec * sizeof({entry_type}));\n"
+        )
+        lines.append(
+            "        for (uint64_t i = _this->entries_cap; i < new_ec; i++) {\n"
+        )
+        lines.append(f"            _this->entries[i] = ({entry_type}){{0}};\n")
+        lines.append("        }\n")
+        lines.append("        _this->entries_cap = new_ec;\n")
+        lines.append("    }\n")
+        lines.append("    int64_t new_idx = (int64_t)_this->entries_len;\n")
+        lines.append("    _this->entries[new_idx].alive = 1;\n")
+        lines.append("    _this->entries[new_idx].hash = h;\n")
+        lines.append("    _this->entries[new_idx].item = _item;\n")
+        lines.append("    _this->entries_len++;\n")
+        lines.append("    _this->indices[probe] = new_idx;\n")
         lines.append("    _this->length++;\n")
         lines.append("    return 1;\n")
         lines.append("}\n\n")
 
-        # has method
+        # has
         lines.append(f"static int z_{name}_has({ctype}* _this, {elem_ctype} _item);\n")
         lines.append(
             f"static int z_{name}_has({ctype}* _this, {elem_ctype} _item) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
-        lines.append(f"    return {find_fn}(_this, _item, h) >= 0;\n")
+        lines.append(f"    return {find_fn}(_this, _item, h, NULL) >= 0;\n")
         lines.append("}\n\n")
 
-        # delete method
+        # delete — mark indices slot DELETED, tombstone entries[idx].
         lines.append(
             f"static int z_{name}_delete({ctype}* _this, {elem_ctype} _item);\n"
         )
@@ -4945,10 +5029,12 @@ class CEmitter:
             f"static int z_{name}_delete({ctype}* _this, {elem_ctype} _item) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
-        lines.append(f"    int64_t idx = {find_fn}(_this, _item, h);\n")
+        lines.append("    int64_t slot = -1;\n")
+        lines.append(f"    int64_t idx = {find_fn}(_this, _item, h, &slot);\n")
         lines.append("    if (idx < 0) return 0;\n")
-        lines.append(emit_free_item("_this->buckets[idx].item", "    "))
-        lines.append(f"    _this->buckets[idx].state = Z_{name.upper()}_DELETED;\n")
+        lines.append(emit_free_item("_this->entries[idx].item", "    "))
+        lines.append("    _this->entries[idx].alive = 0;\n")
+        lines.append(f"    _this->indices[slot] = Z_{name.upper()}_INDEX_DELETED;\n")
         lines.append("    _this->length--;\n")
         lines.append("    return 1;\n")
         lines.append("}\n\n")
@@ -4972,10 +5058,11 @@ class CEmitter:
     ) -> None:
         """Emit the runtime implementation of a setiter monomorphization.
 
-        Layout: { source set pointer, current bucket index }. Each .call
-        scans forward through buckets, returning the next USED bucket's
-        item wrapped in optionview.some, or optionview.none when no
-        more USED buckets remain.
+        Layout: { source set pointer, current entries index }. Each .call
+        scans forward through `entries[]` (dense, insertion-ordered),
+        returning the next live entry's item wrapped in optionview.some,
+        or optionview.none when entries are exhausted. Tombstoned
+        entries (alive == 0) are skipped.
         """
         si_name = si_mono.name
         si_ctype = f"z_{si_name}_t"
@@ -4987,7 +5074,6 @@ class CEmitter:
         ov_ctype = f"z_{ov_name}_t"
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
-        used_macro = f"Z_{set_name.upper()}_USED"
 
         lines: List[str] = []
         lines.append(f"/* setiter<{elem_ctype}> runtime layout */\n")
@@ -4998,12 +5084,10 @@ class CEmitter:
         lines.append(f"static {ov_ctype} z_{si_name}_call({si_ctype}* _it);\n")
         lines.append(f"static {ov_ctype} z_{si_name}_call({si_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
-        lines.append("    while (_it->idx < _it->s->capacity) {\n")
-        lines.append(
-            f"        if (_it->s->buckets[_it->idx].state == {used_macro}) {{\n"
-        )
+        lines.append("    while (_it->idx < _it->s->entries_len) {\n")
+        lines.append("        if (_it->s->entries[_it->idx].alive) {\n")
         lines.append(f"            _out.tag = {ov_some_tag};\n")
-        lines.append("            _out.data = &_it->s->buckets[_it->idx].item;\n")
+        lines.append("            _out.data = &_it->s->entries[_it->idx].item;\n")
         lines.append("            _it->idx++;\n")
         lines.append("            return _out;\n")
         lines.append("        }\n")

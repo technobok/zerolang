@@ -505,7 +505,8 @@ class TestEmitterBasic:
         assert "z_ListIter_i64_call" in csource
 
     def test_map_iterate_keys(self):
-        """Map.iterate yields borrowed views of each USED bucket's key."""
+        """Map.iterate yields borrowed views of each live entry's key in
+        insertion order."""
         csource = emit_source(
             "main: function is {\n"
             "  m: (Map key: i64 value: i64)\n"
@@ -518,9 +519,7 @@ class TestEmitterBasic:
             "}"
         )
         output = compile_and_run(csource)
-        # map iteration order is bucket-layout, not insertion; verify
-        # the multiset of keys, not the order
-        seen = sorted(line for line in output.strip().split("\n") if line)
+        seen = [line for line in output.strip().split("\n") if line]
         assert seen == ["k=1", "k=2", "k=3"]
 
     def test_map_iterate_emits_mapkeyiter(self):
@@ -537,8 +536,8 @@ class TestEmitterBasic:
         assert "z_MapKeyIter_i64_i64_call" in csource
 
     def test_map_iterate_items_basic(self):
-        """Map.iterateItems yields borrowed MapEntry views over USED
-        buckets; .key and .value project through the bucket pointer."""
+        """Map.iterateItems yields borrowed MapEntry views over live
+        entries; .key and .value project through the entry pointer."""
         csource = emit_source(
             "main: function is {\n"
             "  m: (Map key: i64 value: i64)\n"
@@ -551,8 +550,7 @@ class TestEmitterBasic:
             "}"
         )
         output = compile_and_run(csource)
-        # bucket-layout iteration order, not insertion — assert sorted
-        seen = sorted(line for line in output.strip().split("\n") if line)
+        seen = [line for line in output.strip().split("\n") if line]
         assert seen == ["k=1 v=100", "k=2 v=200", "k=3 v=300"]
 
     def test_map_iterate_items_emits_runtime(self):
@@ -568,8 +566,8 @@ class TestEmitterBasic:
         assert "z_MapItemIter_i64_i64_t" in csource
         assert "z_Map_i64_i64_iterateItems" in csource
         assert "z_MapItemIter_i64_i64_call" in csource
-        # mapentry is a typedef alias for the bucket type
-        assert "typedef z_Map_i64_i64_bucket_t z_MapEntry_i64_i64_t" in csource
+        # mapentry is a typedef alias for the entry type
+        assert "typedef z_Map_i64_i64_entry_t z_MapEntry_i64_i64_t" in csource
 
     def test_optionview_reftype_binds_by_pointer(self):
         """Reftype OptionView payload (String) emits a borrow pointer,
@@ -6107,12 +6105,15 @@ class TestMap:
     """Tests for Map type emission and runtime behavior."""
 
     def test_map_struct_emitted(self):
-        """Map struct has capacity, length, and buckets fields."""
+        """Map struct has capacity, length, entries_len/cap, and the
+        sparse indices + dense entries arrays."""
         csource = emit_source("main: function is { m: (Map key: i64 value: i64) }")
         assert "z_Map_i64_i64_t" in csource
-        assert "z_Map_i64_i64_bucket_t" in csource
+        assert "z_Map_i64_i64_entry_t" in csource
         assert "uint64_t capacity;" in csource
         assert "uint64_t length;" in csource
+        assert "uint64_t entries_len;" in csource
+        assert "int64_t* indices;" in csource
 
     def test_map_create_destroy_emitted(self):
         """Map create and destroy functions are emitted."""
@@ -6286,12 +6287,15 @@ class TestSet:
     """Tests for Set type emission and runtime behavior."""
 
     def test_set_struct_emitted(self):
-        """Set monomorphizes to a hash-table struct with bucket layout."""
+        """Set monomorphizes to a compact-dict struct: sparse indices +
+        dense entries arrays."""
         csource = emit_source("main: function is { s: (Set of: i64) }")
         assert "z_Set_i64_t" in csource
-        assert "z_Set_i64_bucket_t" in csource
+        assert "z_Set_i64_entry_t" in csource
         assert "uint64_t capacity;" in csource
         assert "uint64_t length;" in csource
+        assert "uint64_t entries_len;" in csource
+        assert "int64_t* indices;" in csource
 
     def test_set_create_destroy_emitted(self):
         csource = emit_source("main: function is { s: (Set of: i64) }")
@@ -6400,6 +6404,141 @@ class TestSet:
             "}"
         )
         assert compile_and_run(csource).strip() == "32"
+
+
+class TestSetMapInsertionOrder:
+    """Set and Map iterate in insertion order via the CPython-style
+    compact-dict layout: sparse `indices` array + dense `entries` array.
+    Delete tombstones the entry without disturbing earlier insertions;
+    later inserts append at the end. Resize preserves the order while
+    compacting tombstones."""
+
+    def test_set_iterates_in_insertion_order_strings(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: String)\n"
+            '    s.add item: "alpha".string\n'
+            '    s.add item: "bravo".string\n'
+            '    s.add item: "charlie".string\n'
+            '    s.add item: "delta".string\n'
+            "    with it: s.iterate do for x: it loop {\n"
+            '        print "\\{x}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "alpha\nbravo\ncharlie\ndelta\n"
+
+    def test_set_iterates_in_insertion_order_ints(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 100\n"
+            "    s.add item: 200\n"
+            "    s.add item: 300\n"
+            "    s.add item: 400\n"
+            "    s.add item: 500\n"
+            "    with it: s.iterate do for x: it loop {\n"
+            '        print "\\{x}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "100\n200\n300\n400\n500\n"
+
+    def test_set_delete_preserves_remaining_order(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 100\n"
+            "    s.add item: 200\n"
+            "    s.add item: 300\n"
+            "    s.delete item: 200\n"
+            "    with it: s.iterate do for x: it loop {\n"
+            '        print "\\{x}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "100\n300\n"
+
+    def test_set_reinsert_after_delete_appends_at_end(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 100\n"
+            "    s.add item: 200\n"
+            "    s.add item: 300\n"
+            "    s.delete item: 200\n"
+            "    s.add item: 400\n"
+            "    with it: s.iterate do for x: it loop {\n"
+            '        print "\\{x}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "100\n300\n400\n"
+
+    def test_set_resize_preserves_insertion_order(self):
+        """Insert past 2/3 load factor at default capacity to force at
+        least one resize, then verify iteration order is still
+        insertion order (resize compacts entries in original order)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    for i: 30.iterate loop {\n"
+            "        s.add item: i\n"
+            "    }\n"
+            "    with it: s.iterate do for x: it loop {\n"
+            '        print "\\{x}"\n'
+            "    }\n"
+            "}"
+        )
+        expected = "".join(f"{i}\n" for i in range(30))
+        assert compile_and_run(csource) == expected
+
+    def test_map_iterates_keys_in_insertion_order(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: Map key: String value: i64\n"
+            '    m.set key: "alpha".string value: 1\n'
+            '    m.set key: "bravo".string value: 2\n'
+            '    m.set key: "charlie".string value: 3\n'
+            '    m.set key: "delta".string value: 4\n'
+            "    with it: m.iterate do for k: it loop {\n"
+            '        print "\\{k}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "alpha\nbravo\ncharlie\ndelta\n"
+
+    def test_map_delete_then_reinsert_preserves_order(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: Map key: i64 value: i64\n"
+            "    m.set key: 100 value: 1\n"
+            "    m.set key: 200 value: 2\n"
+            "    m.set key: 300 value: 3\n"
+            "    m.delete key: 200\n"
+            "    m.set key: 400 value: 4\n"
+            "    with it: m.iterate do for k: it loop {\n"
+            '        print "k=\\{k}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "k=100\nk=300\nk=400\n"
+
+    def test_map_set_existing_key_does_not_reorder(self):
+        """Re-setting an existing key updates the value in place; the
+        key keeps its original insertion position."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: Map key: i64 value: i64\n"
+            "    m.set key: 100 value: 1\n"
+            "    m.set key: 200 value: 2\n"
+            "    m.set key: 100 value: 99\n"
+            "    with it: m.iterateItems do for e: it loop {\n"
+            '        print "k=\\{e.key} v=\\{e.value}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "k=100 v=99\nk=200 v=2\n"
 
 
 class TestConstantFolding:

@@ -8,9 +8,9 @@ The four items below are the genuinely-open Phase A items, in the order the user
 
 ## Items, in order
 
-1. Branch ownership flow tracking for reftypes
-2. Field-access locking for reftypes
-3. Stable iteration order for `Set` (and `Map`)
+1. ~~Branch ownership flow tracking for reftypes~~ — CLOSED 2026-05-23
+2. ~~Field-access locking for reftypes~~ — CLOSED 2026-05-23 (already done via path-scoped locks)
+3. ~~Stable iteration order for `Set` (and `Map`)~~ — CLOSED 2026-05-23 (compact-dict rewrite)
 4. Inline definitions in `as` blocks
 
 ## Sequencing summary
@@ -139,7 +139,13 @@ Existing test `test_class_factory_with_lock_field_arg_retains_source_lock` (`tes
 
 ---
 
-## Item 3 — Stable iteration order for `Set` (and `Map`)
+## Item 3 — Stable iteration order for `Set` (and `Map`) — CLOSED 2026-05-23
+
+Closed via the CPython compact-dict rewrite of `_emit_mono_map`,
+`_emit_mono_set`, and the three iterator runtimes in `src/zemitterc.py`.
+8 new tests in `TestSetMapInsertionOrder`. Full suite green. See
+`[[project-zerolang-compact-dict]]` memory entry. The remaining text in
+this section describes the plan as executed; kept for reference.
 
 ### Context
 
