@@ -45,10 +45,14 @@ def _emit_zlexer_c() -> str:
 
 
 def test_zlexer_stub_emits_eof_line():
-    """src/zlexer.z compiles end-to-end and prints a single EOF line."""
+    """src/zlexer.z compiles end-to-end and prints the canonical EOF line.
+
+    Matches what `ztokendump.dump_tokens("")` produces for an empty
+    source: `1:0 EOF ""` followed by the trailing newline from `print`.
+    """
     csource = _emit_zlexer_c()
     output = compile_and_run(csource)
-    assert output == "1:0 EOF\n", (
+    assert output == '1:0 EOF ""\n', (
         f"Unexpected stub output: {output!r}\n"
         "If this is an intentional format change, update the assertion "
         "and document the divergence in the canonical-format design notes."
