@@ -6668,6 +6668,11 @@ class CEmitter:
                     return (
                         f"{indent}z_String_append({recv}, {arg}.data, {arg}.length);\n"
                     )
+                if method_name == "appendByte" and call.arguments:
+                    arg = self._emit_operation_value(call.arguments[0].valtype)
+                    return (
+                        f"{indent}z_String_append_byte({recv}, (uint8_t)({arg}));\n"
+                    )
                 if method_name == "reserve" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
                     return f"{indent}z_String_reserve({recv}, (uint64_t){arg});\n"

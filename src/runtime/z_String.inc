@@ -78,6 +78,13 @@ static void z_String_append(z_String_t* s, const char* data, uint64_t len) {
     s->data[s->size] = '\0';
 }
 
+static void z_String_append_byte(z_String_t* s, uint8_t b) {
+    z_String_reserve(s, 1);
+    s->data[s->size] = (char)b;
+    s->size += 1;
+    s->data[s->size] = '\0';
+}
+
 static void z_String_shrink(z_String_t* s) {
     if (s->size == s->capacity) return;
     s->data = (char*)z_xrealloc(s->data, s->size + 1);
