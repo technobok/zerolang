@@ -668,6 +668,96 @@ class TestStringInterpolation:
         check_ok('main: function is {\n  x: 42\n  print "value = \\{x}"\n}')
 
 
+class TestStringLiteralTypes:
+    """Pins the typing rule for string literals. All non-interpolated
+    literals -- single- AND triple-quoted -- type as `StringView` (a
+    view over static program memory; zero allocation). Interpolated
+    literals type as `String` because the runtime must allocate to
+    assemble them. `.string` is the documented convert from view to
+    owned. See doc/spec.pdoc String Literals.
+
+    A complementary pin lives at
+    `test_generator_local_field_infers_string_literal` (the synth-
+    field-resolution path); this class covers the bare-binding path
+    that most user code actually hits.
+    """
+
+    @staticmethod
+    def _binding_type(program, typing, fn_name, var_name):
+        """Return the resolved ZType of `var_name`'s RHS in `fn_name`'s
+        body, or None if not found. Drills through Expression wrappers
+        so the resolution mirrors the user-visible RHS shape."""
+        fn = program.units["test"].body[fn_name]
+        assert fn.body is not None
+        for stmt in fn.body.statements:
+            sline = stmt.statementline
+            if sline.nodetype != NodeType.ASSIGNMENT:
+                continue
+            if getattr(sline, "name", None) != var_name:
+                continue
+            t = _node_ztype(typing, sline.value)
+            if t is not None:
+                return t
+            inner = getattr(sline.value, "expression", None)
+            if inner is not None:
+                return _node_ztype(typing, inner)
+        return None
+
+    def test_single_quoted_no_interp_is_stringview(self):
+        program, typing = check_ok('main: function is {\n  s: "hello"\n}')
+        t = self._binding_type(program, typing, "main", "s")
+        assert t is not None and t.name == "StringView", (
+            f"expected StringView, got {t!r}"
+        )
+
+    def test_triple_quoted_raw_is_stringview(self):
+        """Headline pin for lexer-port issue #6: raw strings follow
+        the same rule as regular non-interpolated strings -- StringView,
+        not String. `.string` is the documented convert."""
+        program, typing = check_ok('main: function is {\n  s: """hello"""\n}')
+        t = self._binding_type(program, typing, "main", "s")
+        assert t is not None and t.name == "StringView", (
+            f"expected StringView, got {t!r}"
+        )
+
+    def test_triple_quoted_multiline_is_stringview(self):
+        program, typing = check_ok(
+            'main: function is {\n  s: """first\n  second\n  """\n}'
+        )
+        t = self._binding_type(program, typing, "main", "s")
+        assert t is not None and t.name == "StringView", (
+            f"expected StringView, got {t!r}"
+        )
+
+    def test_interpolated_is_string(self):
+        """Interpolation forces String -- the runtime must allocate to
+        splice the interpolated values into the literal text."""
+        program, typing = check_ok(
+            'main: function is {\n  x: 42\n  s: "value = \\{x}"\n}'
+        )
+        t = self._binding_type(program, typing, "main", "s")
+        assert t is not None and t.name == "String", f"expected String, got {t!r}"
+
+    def test_string_projection_is_string(self):
+        """`.string` is the documented StringView -> String convert."""
+        program, typing = check_ok('main: function is {\n  s: "hello".string\n}')
+        t = self._binding_type(program, typing, "main", "s")
+        assert t is not None and t.name == "String", f"expected String, got {t!r}"
+
+    def test_raw_literal_at_string_typed_site_rejected(self):
+        """Empirical pin: a raw literal cannot satisfy a `String`-typed
+        field at construction. The user must append `.string` (matching
+        the established pattern across examples/). Confirms the typing
+        rule is enforced at typed boundaries, not just at the binding."""
+        errors = check_errors(
+            "Box: class { msg: String }\n"
+            'main: function is {\n  b: Box msg: """hello"""\n}'
+        )
+        assert any("String" in e.msg and "StringView" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+
 class TestDemandDriven:
     """Test demand-driven resolution behavior."""
 
