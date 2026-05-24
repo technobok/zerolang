@@ -1754,6 +1754,45 @@ class TestEmitterStringOwnership:
         output = compile_and_run(csource)
         assert output.strip() == "world"
 
+    def test_class_inline_construct_assigned_to_field_no_doublefree(self):
+        """Inline-constructed class assigned to a class-typed field
+        must not alias the source's heap pointers (the original
+        PR-4 trigger for the lookahead `nexttok: Token` field on
+        Tokenizer; observed as double-free at scope exit).
+        Reduced to its core: staging-and-draining with a
+        `String`-bearing inner class."""
+        csource = emit_source(
+            "Tok: class { val: String n: u32 }\n"
+            "Hold: class { hasnext: bool nexttok: Tok } as {\n"
+            "  stash: function {:this s: String.take n: u32} is {\n"
+            "    this.nexttok = Tok val: s n: n\n"
+            "    this.hasnext = true\n"
+            "  }\n"
+            "  drain: function {:this} out String is {\n"
+            "    this.hasnext = false\n"
+            "    return this.nexttok.val.copy\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            '  h: Hold hasnext: false nexttok: (Tok val: "init".string n: 0.u32)\n'
+            '  s1: "alpha".string\n'
+            "  h.stash s: s1 n: 1.u32\n"
+            "  a: h.drain\n"
+            '  s2: "beta".string\n'
+            "  h.stash s: s2 n: 2.u32\n"
+            "  b: h.drain\n"
+            '  print "a=\\{a} b=\\{b}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "a=alpha b=beta"
+        # ASAN must also be clean: the original symptom was a
+        # double-free of the contained String at scope exit.
+        output_asan = compile_and_run(
+            csource, extra_cflags=["-fsanitize=address", "-g"]
+        )
+        assert output_asan.strip() == "a=alpha b=beta"
+
     def test_inline_copy_in_field_reassignment(self):
         """Inline `.copy` in a reftype field reassignment must keep the
         source live (the copy is a fresh-owned value, not a transfer).

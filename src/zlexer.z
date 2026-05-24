@@ -181,18 +181,13 @@ Tokenizer: class {
     fsno: u32
     lineno: u32
     colno: u32
-    # Single-slot lookahead, inlined as fields. Storing a `Token` as
-    # a class-typed field works for typecheck, but the C emitter
-    # generates an unsound struct-copy at field assignment that
-    # double-frees the tokstr at scope exit. Inlining sidesteps it.
+    # Single-slot lookahead as a typed Token field (PR-4 friction
+    # workaround removed — to be re-derived for Item 3).
     hasnext: bool
-    nexttype: TT
-    nextstr: String
-    nextline: u32
-    nextcol: u32
+    nexttok: Token
 } as {
     create: function {source: String.take fsno: u32} out this is {
-        return meta.create source: source pos: 0.u64 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0.u32 hasnext: false nexttype: TT.EOF nextstr: "".string nextline: 0.u32 nextcol: 0.u32
+        return meta.create source: source pos: 0.u64 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0.u32 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0.u32 colno: 0.u32 tokenid: 0.u64)
     }
 
     # Advance one byte. Returns the byte just placed in .atchar
@@ -222,7 +217,7 @@ Tokenizer: class {
             # everything else gets cleared.
             is_eof: false
             match (
-                this.nexttype
+                this.nexttok.toktype
             ) case EOF then {
                 is_eof = true
             } else {
@@ -231,7 +226,7 @@ Tokenizer: class {
             if is_eof then {} else {
                 this.hasnext = false
             }
-            return Token toktype: this.nexttype tokstr: this.nextstr.copy fsno: this.fsno lineno: this.nextline colno: this.nextcol tokenid: 0.u64
+            return Token toktype: this.nexttok.toktype tokstr: this.nexttok.tokstr.copy fsno: this.fsno lineno: this.nexttok.lineno colno: this.nexttok.colno tokenid: 0.u64
         }
 
         # Prime the look-ahead on the first call (pos == 0 means
@@ -417,10 +412,7 @@ Tokenizer: class {
                 # types aligned (else branch ends with an assignment).
                 this.hasnext = this.hasnext
             } else {
-                this.nexttype = TT.DOT
-                this.nextstr = ".".string
-                this.nextline = dot_line
-                this.nextcol = dot_col
+                this.nexttok = Token toktype: TT.DOT tokstr: ".".string fsno: this.fsno lineno: dot_line colno: dot_col tokenid: 0.u64
                 this.hasnext = true
             }
         }
@@ -466,10 +458,7 @@ Tokenizer: class {
             if kwfound then stage_tt = TT.ERR
             if reservedfound then stage_tt = TT.ERR
             nstr: buf.copy
-            this.nexttype = stage_tt
-            this.nextstr = nstr
-            this.nextline = word_line
-            this.nextcol = word_col
+            this.nexttok = Token toktype: stage_tt tokstr: nstr fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
             this.hasnext = true
             colon_only: "".string
             colon_only.appendByte b: cColon.u8
@@ -489,10 +478,7 @@ Tokenizer: class {
             }
         }
         if labelpath then {
-            this.nexttype = TT.COLON
-            this.nextstr = ":".string
-            this.nextline = this.lineno
-            this.nextcol = this.colno
+            this.nexttok = Token toktype: TT.COLON tokstr: ":".string fsno: this.fsno lineno: this.lineno colno: this.colno tokenid: 0.u64
             this.hasnext = true
             this.accept
             labelbuf: buf.copy
