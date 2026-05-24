@@ -98,10 +98,17 @@ def _mono_name(ztype: Optional[ZType]) -> str:
 
 @dataclass
 class ScopeState:
-    """Per-function cleanup state, pushed/popped at function boundaries."""
+    """Per-function cleanup state, pushed/popped at function boundaries.
 
-    # (mangled_var_name, ZType) pairs in insertion order for scope-exit cleanup
-    cleanup_vars: list = field(default_factory=list)
+    `cleanup_stack` is a stack of block scopes. Each inner list collects
+    `(mangled_var_name, ZType)` pairs in insertion order for one block
+    body. The outermost frame (`cleanup_stack[0]`) is the function body
+    itself; subsequent frames push when entering a nested block (if/else/
+    for/do/with/match-arm) and pop at block close, emitting destructors
+    for the popped frame's entries in reverse declaration order.
+    """
+
+    cleanup_stack: list = field(default_factory=lambda: [[]])
     temp_counter: int = 0
     record_name: str = ""
     class_params: set = field(default_factory=set)
@@ -110,6 +117,16 @@ class ScopeState:
     # call result, or from a `.borrow`/`.lock` projection). Used by `.release`
     # emit to skip the destructor — freeing a borrow corrupts the source.
     borrowed_vars: set = field(default_factory=set)
+
+    @property
+    def cleanup_vars(self) -> list:
+        """Compatibility shim: the *current* (top) block-scope frame.
+
+        Existing `.append((name, type))` sites continue to work; reads
+        that need to see ALL active frames should iterate
+        `cleanup_stack` directly.
+        """
+        return self.cleanup_stack[-1]
 
 
 @dataclass
@@ -679,13 +696,20 @@ class CEmitter:
     def _emit_scope_cleanup(
         self, indent: str, exclude_var: Optional[str] = None
     ) -> str:
-        """Emit cleanup code for all tracked function-scope variables.
+        """Emit cleanup code for all tracked variables across every active
+        block scope (used at function exit and at `return`/`panic` sites).
 
-        Uses ZType.destructor_name for type-driven cleanup.
-        If exclude_var is set (return value), that variable is skipped.
+        Flattens `cleanup_stack`: outermost frame first, then any nested
+        block frames in push order. Reversed iteration gives reverse
+        declaration order across the entire function. If `exclude_var`
+        is set (return value), that variable is skipped.
         """
         result = ""
-        for var_name, var_type in reversed(self._scope.cleanup_vars):
+        all_vars: list = []
+        for frame in self._scope.cleanup_stack:
+            for v in frame:
+                all_vars.append(v)
+        for var_name, var_type in reversed(all_vars):
             if var_name != exclude_var:
                 result += self._emit_field_cleanup(var_name, var_type, indent)
         return result
@@ -6670,9 +6694,7 @@ class CEmitter:
                     )
                 if method_name == "appendByte" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
-                    return (
-                        f"{indent}z_String_append_byte({recv}, (uint8_t)({arg}));\n"
-                    )
+                    return f"{indent}z_String_append_byte({recv}, (uint8_t)({arg}));\n"
                 if method_name == "reserve" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
                     return f"{indent}z_String_reserve({recv}, (uint64_t){arg});\n"
@@ -9187,12 +9209,15 @@ class CEmitter:
                 grandparent_type, dp.child.name
             ):
                 return True
-        # local heap-allocated variable tracked for cleanup
+        # local heap-allocated variable tracked for cleanup — check every
+        # active block frame, not just the innermost, so a var declared
+        # in an outer scope is still recognised inside a nested body.
         if path.nodetype == NodeType.ATOMID:
             cname = _mangle_var(cast(zast.AtomId, path).name)
-            for vname, vtype in self._scope.cleanup_vars:
-                if vname == cname and vtype.is_heap_allocated:
-                    return True
+            for frame in self._scope.cleanup_stack:
+                for vname, vtype in frame:
+                    if vname == cname and vtype.is_heap_allocated:
+                        return True
             # method 'this' parameter (class) is a pointer
             if cname in self._scope.class_params:
                 return True
@@ -9287,20 +9312,26 @@ class CEmitter:
             return f"{indent}{var} = ({ct}){{0}};\n"
         return f"{indent}{var} = NULL;\n"
 
-    def _emit_arm_local_cleanup(self, saved_len: int) -> str:
-        """Emit cleanup for variables declared inside an arm, then truncate.
+    def _push_block_scope(self) -> None:
+        """Enter a new block body (if/else/for/do/with/match-arm).
 
-        Variables added to cleanup_vars during arm emission (indices saved_len..)
-        are local to the arm's C scope. We emit their destructors inside the arm
-        block and remove them from cleanup_vars so they are not double-freed at
-        function scope exit.
+        Subsequent `cleanup_vars.append(...)` lands on this frame.
+        Pair with `_pop_block_scope_and_emit()` at block close.
+        """
+        self._scope.cleanup_stack.append([])
+
+    def _pop_block_scope_and_emit(self) -> str:
+        """Close the topmost block scope; return destructors for its locals.
+
+        Vars are destroyed in reverse declaration order, then dropped
+        from the scope stack so they aren't double-freed at function
+        exit (which sees the outermost frame).
         """
         indent = self._indent()
+        frame = self._scope.cleanup_stack.pop()
         result = ""
-        arm_vars = self._scope.cleanup_vars[saved_len:]
-        for var_name, var_type in reversed(arm_vars):
+        for var_name, var_type in reversed(frame):
             result += self._emit_field_cleanup(var_name, var_type, indent)
-        del self._scope.cleanup_vars[saved_len:]
         return result
 
     def _emit_taken_vars_cleanup(
@@ -10039,9 +10070,9 @@ class CEmitter:
                     # emit just the branch body in a new scope
                     parts.append(f"{indent}{{\n")
                     self.indent_level += 1
-                    saved_len = len(self._scope.cleanup_vars)
+                    self._push_block_scope()
                     parts.append(self._emit_statement(clause.statement))
-                    parts.append(self._emit_arm_local_cleanup(saved_len))
+                    parts.append(self._pop_block_scope_and_emit())
                     self.indent_level -= 1
                     parts.append(f"{indent}}}\n")
                     emitted_true_branch = True
@@ -10065,17 +10096,17 @@ class CEmitter:
                     cond_str = " && ".join(conds)
                 parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
                 self.indent_level += 1
-                saved_len = len(self._scope.cleanup_vars)
+                self._push_block_scope()
                 parts.append(self._emit_statement(clause.statement))
-                parts.append(self._emit_arm_local_cleanup(saved_len))
+                parts.append(self._pop_block_scope_and_emit())
                 self.indent_level -= 1
 
             if ifnode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
-                saved_len = len(self._scope.cleanup_vars)
+                self._push_block_scope()
                 parts.append(self._emit_statement(ifnode.elseclause))
-                parts.append(self._emit_arm_local_cleanup(saved_len))
+                parts.append(self._pop_block_scope_and_emit())
                 self.indent_level -= 1
 
             parts.append(f"{indent}}}\n")
@@ -10083,9 +10114,9 @@ class CEmitter:
             # all clauses were constant-false, emit else branch in a scope
             parts.append(f"{indent}{{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(ifnode.elseclause))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
             parts.append(f"{indent}}}\n")
 
@@ -10611,25 +10642,34 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_for_body(self, fornode: zast.For) -> str:
-        """Emit for-loop body, with optional list comprehension append."""
+        """Emit for-loop body, with optional list comprehension append.
+
+        Wraps the body in a block scope so any class-typed locals
+        declared inside the loop get destroyed at iteration end (not
+        leaked to function exit, where their C-variable names are out
+        of scope).
+        """
         if not fornode.loop:
             return ""
+        self._push_block_scope()
         state = self._comprehension_state.get(fornode.nodeid)
         if state is None:
-            return self._emit_statement(fornode.loop)
-        list_var, list_name = state
-        parts: List[str] = []
-        stmts = fornode.loop.statements
-        for sl in stmts[:-1]:
-            parts.append(self._emit_statement_line(sl))
-        last = stmts[-1].statementline
-        if last.nodetype == NodeType.EXPRESSION:
-            val = self._emit_expression_value(cast(zast.Expression, last))
-            indent = self._indent()
-            parts.append(f"{indent}z_{list_name}_append(&{list_var}, {val});\n")
+            body = self._emit_statement(fornode.loop)
         else:
-            parts.append(self._emit_statement_line(stmts[-1]))
-        return "".join(parts)
+            list_var, list_name = state
+            parts: List[str] = []
+            stmts = fornode.loop.statements
+            for sl in stmts[:-1]:
+                parts.append(self._emit_statement_line(sl))
+            last = stmts[-1].statementline
+            if last.nodetype == NodeType.EXPRESSION:
+                val = self._emit_expression_value(cast(zast.Expression, last))
+                indent = self._indent()
+                parts.append(f"{indent}z_{list_name}_append(&{list_var}, {val});\n")
+            else:
+                parts.append(self._emit_statement_line(stmts[-1]))
+            body = "".join(parts)
+        return body + self._pop_block_scope_and_emit()
 
     def _emit_for_expression_value(self, fornode: zast.For) -> str:
         """Emit for-as-expression (list comprehension): returns a list."""
@@ -10774,25 +10814,18 @@ class CEmitter:
         # doexpr may reference the with variable, so its temps must be
         # declared inside the block (not prepended to the outer statement)
         self._temp_stack.append(TempState())
-        # Snapshot cleanup_vars so any user-visible bindings created
-        # inside the do-body (notably typecheck-hoisted synth temps
-        # `_tN`) get freed at *this* block's scope-exit rather than
-        # leaking to function-exit, where they'd reference an
-        # out-of-scope C local.
-        saved_cleanup_len = len(self._scope.cleanup_vars)
+        # Block-local user bindings (anything cleanup_stack grew during
+        # the doexpr — notably typecheck-hoisted synth temps `_tN`) are
+        # destroyed at *this* block's scope-exit rather than leaking to
+        # function-exit, where they'd reference out-of-scope C locals.
+        self._push_block_scope()
 
         doexpr_code = self._emit_expression_stmt(withnode.doexpr)
 
         # emit doexpr temps inside the with block
         parts.append("".join(self._temp.decls))
         parts.append(doexpr_code)
-        # Block-local user bindings (anything cleanup_vars grew during
-        # the doexpr) are destroyed here in reverse order, then
-        # removed from the function-level list.
-        block_local_vars = self._scope.cleanup_vars[saved_cleanup_len:]
-        for var_name, var_type in reversed(block_local_vars):
-            parts.append(self._emit_field_cleanup(var_name, var_type, inner_indent))
-        del self._scope.cleanup_vars[saved_cleanup_len:]
+        parts.append(self._pop_block_scope_and_emit())
         for t in self._temp.frees:
             if t in self._temp.string_set:
                 parts.append(f"{inner_indent}z_String_free(&{t});\n")
@@ -10868,17 +10901,17 @@ class CEmitter:
             keyword = "if" if i == 0 else "} else if"
             parts.append(f"{indent}{keyword} ({subject} == {match_val}) {{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
 
         if casenode.elseclause:
             parts.append(f"{indent}}} else {{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(casenode.elseclause))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
 
         parts.append(f"{indent}}}\n")
@@ -10918,9 +10951,9 @@ class CEmitter:
                 parts,
                 arm_indent,
             )
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             restore()
             parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
@@ -10929,9 +10962,9 @@ class CEmitter:
         if casenode.elseclause:
             parts.append(f"{indent}    default: {{\n")
             self.indent_level += 2
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(casenode.elseclause))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
@@ -10970,45 +11003,45 @@ class CEmitter:
         if some_clause and none_clause:
             parts.append(f"{indent}if ({subject} != NULL) {{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(some_clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
             parts.append(f"{indent}}} else {{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(none_clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
             parts.append(f"{indent}}}\n")
         elif some_clause:
             parts.append(f"{indent}if ({subject} != NULL) {{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(some_clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
             if casenode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
-                saved_len = len(self._scope.cleanup_vars)
+                self._push_block_scope()
                 parts.append(self._emit_statement(casenode.elseclause))
-                parts.append(self._emit_arm_local_cleanup(saved_len))
+                parts.append(self._pop_block_scope_and_emit())
                 self.indent_level -= 1
             parts.append(f"{indent}}}\n")
         elif none_clause:
             parts.append(f"{indent}if ({subject} == NULL) {{\n")
             self.indent_level += 1
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(none_clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
             if casenode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
-                saved_len = len(self._scope.cleanup_vars)
+                self._push_block_scope()
                 parts.append(self._emit_statement(casenode.elseclause))
-                parts.append(self._emit_arm_local_cleanup(saved_len))
+                parts.append(self._pop_block_scope_and_emit())
                 self.indent_level -= 1
             parts.append(f"{indent}}}\n")
 
@@ -11046,17 +11079,17 @@ class CEmitter:
                 keyword = "if" if i == 0 else "else if"
                 parts.append(f"{indent}{keyword} ({cond}) {{\n")
                 self.indent_level += 1
-                saved_len = len(self._scope.cleanup_vars)
+                self._push_block_scope()
                 parts.append(self._emit_statement(clause.statement))
-                parts.append(self._emit_arm_local_cleanup(saved_len))
+                parts.append(self._pop_block_scope_and_emit())
                 self.indent_level -= 1
                 parts.append(f"{indent}}}\n")
             if casenode.elseclause:
                 parts.append(f"{indent}else {{\n")
                 self.indent_level += 1
-                saved_len = len(self._scope.cleanup_vars)
+                self._push_block_scope()
                 parts.append(self._emit_statement(casenode.elseclause))
-                parts.append(self._emit_arm_local_cleanup(saved_len))
+                parts.append(self._pop_block_scope_and_emit())
                 self.indent_level -= 1
                 parts.append(f"{indent}}}\n")
             parts.append(self._emit_taken_vars_cleanup(_case_taken_vars, indent))
@@ -11080,9 +11113,9 @@ class CEmitter:
                 parts,
                 arm_indent,
             )
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(clause.statement))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             restore()
             parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
@@ -11091,9 +11124,9 @@ class CEmitter:
         if casenode.elseclause:
             parts.append(f"{indent}    default: {{\n")
             self.indent_level += 2
-            saved_len = len(self._scope.cleanup_vars)
+            self._push_block_scope()
             parts.append(self._emit_statement(casenode.elseclause))
-            parts.append(self._emit_arm_local_cleanup(saved_len))
+            parts.append(self._pop_block_scope_and_emit())
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")

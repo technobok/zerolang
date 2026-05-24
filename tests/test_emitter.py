@@ -154,6 +154,68 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
                 os.unlink(p)
 
 
+class TestForBodyClassCleanup:
+    """Regression coverage for the for-loop body destructor scope bug.
+
+    Class-typed locals declared inside a `for { … }` body must be
+    destroyed at iteration end, not deferred to function exit (where
+    their C names are out of scope and previous iterations leak).
+    """
+
+    _SRC_WHILE_FORM = (
+        "Token: class { v: String }\n"
+        "mk: function {n: i64} out Token is "
+        '{ return Token v: "hi".string }\n'
+        "main: function is {\n"
+        "    n: 0.u64\n"
+        "    for while n < 3.u64 loop {\n"
+        "        t: mk 1\n"
+        '        print "iter \\{n} v=\\{t.v}"\n'
+        "        n = n + 1.u64\n"
+        "    }\n"
+        "}"
+    )
+
+    _SRC_INIT_FORM = (
+        "Token: class { v: String }\n"
+        "mk: function {n: i64} out Token is "
+        '{ return Token v: "hi".string }\n'
+        "main: function is {\n"
+        "    for i: 0 while i < 3 loop {\n"
+        "        t: mk i\n"
+        '        print "iter \\{i} v=\\{t.v}"\n'
+        "        i = i + 1\n"
+        "    }\n"
+        "}"
+    )
+
+    _EXPECTED_OUTPUT = "iter 0 v=hi\niter 1 v=hi\niter 2 v=hi\n"
+
+    def test_for_while_body_class_local_compiles_and_runs(self):
+        csource = emit_source(self._SRC_WHILE_FORM)
+        assert compile_and_run(csource) == self._EXPECTED_OUTPUT
+
+    def test_for_init_while_body_class_local_compiles_and_runs(self):
+        csource = emit_source(self._SRC_INIT_FORM)
+        assert compile_and_run(csource) == self._EXPECTED_OUTPUT
+
+    def test_for_while_body_class_local_no_leak_under_asan(self):
+        csource = emit_source(self._SRC_WHILE_FORM)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == self._EXPECTED_OUTPUT
+
+    def test_for_init_while_body_class_local_no_leak_under_asan(self):
+        csource = emit_source(self._SRC_INIT_FORM)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == self._EXPECTED_OUTPUT
+
+
 class TestEscapeSequences:
     """End-to-end coverage of spec.pdoc:463-474 escape sequences.
 
