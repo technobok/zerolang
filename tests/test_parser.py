@@ -957,6 +957,60 @@ class TestNativeKeyword:
         assert rec.is_native is False
 
 
+class TestKeywordIdentifierRejection:
+    """Keywords (`TTKWMAP` in src/ztokentype.py) and reserved words
+    (`TTRESERVED` ibid.) cannot be used as identifiers -- binding
+    names, parameter names, type names. The rule keeps the grammar
+    context-free. The established rename pattern in the codebase is
+    `result`, `buf`, `output`, or another role-flavoured noun.
+
+    Companion pin: `TestNativeKeyword.test_native_as_label_errors`
+    above covers `native`. `TestEnumReserved.test_enum_is_reserved_word`
+    earlier in the file covers `enum`. This class generalises the
+    rule across both categories and across positions.
+
+    See doc/spec.pdoc Reserved Words.
+    """
+
+    @pytest.mark.parametrize("kw", ["out", "in", "is", "for", "function"])
+    def test_keyword_as_top_level_label_rejected(self, kw):
+        result = parse_unit(f"{kw}: i64")
+        assert isinstance(result, zast.Error), (
+            f"expected error for `{kw}: i64`, got {result!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "word", ["flag", "macro", "view", "goto", "cell", "switch"]
+    )
+    def test_reserved_word_as_top_level_label_rejected(self, word):
+        result = parse_unit(f"{word}: i64")
+        assert isinstance(result, zast.Error), (
+            f"expected error for `{word}: i64`, got {result!r}"
+        )
+
+    def test_keyword_in_function_body_rejected(self):
+        """The lexer-port's likely friction site: a local binding
+        inside a function body cannot shadow a keyword."""
+        result = parse_unit("f: function is { out: 42 }")
+        assert isinstance(result, zast.Error)
+
+    def test_reserved_word_in_function_body_rejected(self):
+        result = parse_unit("f: function is { flag: 42 }")
+        assert isinstance(result, zast.Error)
+
+    def test_return_as_binding_name_allowed(self):
+        """`return` is NOT a keyword -- it's a builtin function defined
+        in lib/system/system.z. Using it as a binding name is legal
+        (and merely shadows the builtin)."""
+        result = parse_unit("r: function is { return }")
+        # `return` here is a reference to the builtin function; the body
+        # parses as an expression statement referencing it. Parse must
+        # succeed.
+        assert isinstance(result, zast.Program), (
+            f"expected Program (return is not a keyword), got {result!r}"
+        )
+
+
 class TestGeneratorYieldParsing:
     """Phase G1: lexer + AST + parser for the `yield` keyword.
 
