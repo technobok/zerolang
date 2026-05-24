@@ -6878,6 +6878,7 @@ class TypeChecker:
                     zast.CallKind.BREAK,
                     zast.CallKind.CONTINUE,
                     zast.CallKind.ERROR,
+                    zast.CallKind.PANIC,
                 ):
                     self.symtab.mark_unreachable()
         self._call_preamble.pop()
@@ -10889,13 +10890,20 @@ class TypeChecker:
                 self._suppress_compile_error -= 1
             if all_const and not all_false and not const_true_taken:
                 const_true_taken = True
-            if not self.symtab.is_unreachable():
+            arm_diverges = self.symtab.is_unreachable()
+            if not arm_diverges:
                 all_branches_diverge = False
 
-            # detect variables taken in this arm and restore for next arm
+            # Detect variables taken in this arm and restore for next arm.
+            # Diverging arms (return/panic/error/break/continue) don't
+            # contribute to post-statement state — control can't reach
+            # fall-through through a diverging arm, so a take inside one
+            # doesn't propagate. Mirrors the result-type rule that
+            # filters non-completing branches via the NEVER type.
             for vname in live_before:
                 if self.symtab.lookup(vname) is None:
-                    taken_in_any_arm.add(vname)
+                    if not arm_diverges:
+                        taken_in_any_arm.add(vname)
                     sv, st = saved_vars[vname]
                     if sv is not None:
                         self.symtab.define_var(vname, sv)
@@ -10909,13 +10917,16 @@ class TypeChecker:
             self._check_statement(ifnode.elseclause)
             if const_true_taken:
                 self._suppress_compile_error -= 1
-            if not self.symtab.is_unreachable():
+            else_diverges = self.symtab.is_unreachable()
+            if not else_diverges:
                 all_branches_diverge = False
 
-            # detect variables taken in else arm
+            # detect variables taken in else arm — same divergence rule
+            # as for the clause arms above
             for vname in live_before:
                 if self.symtab.lookup(vname) is None:
-                    taken_in_any_arm.add(vname)
+                    if not else_diverges:
+                        taken_in_any_arm.add(vname)
 
             self.symtab.pop_to(branch_marker)
         else:
@@ -12019,12 +12030,17 @@ class TypeChecker:
                     # clear the taken record so the next arm starts fresh
                     self.symtab.clear_taken(subject_name)
 
-            # generalized take-in-arm tracking for all live owned variables
+            # Generalized take-in-arm tracking. Mirror the if/then rule:
+            # a take inside a diverging arm (return/panic/error/break/
+            # continue) doesn't propagate to post-match state — control
+            # can't flow through that arm into fall-through.
+            arm_diverges = self.symtab.is_unreachable()
             for vname in live_before_match:
                 if vname == subject_name:
                     continue  # subject handled above
                 if self.symtab.lookup(vname) is None:
-                    taken_in_any_match_arm.add(vname)
+                    if not arm_diverges:
+                        taken_in_any_match_arm.add(vname)
                     sv, st = saved_match_vars[vname]
                     if sv is not None:
                         self.symtab.define_var(vname, sv)
@@ -12058,12 +12074,15 @@ class TypeChecker:
                     self.symtab.define_var(subject_name, subject_var)
                     self.symtab.clear_taken(subject_name)
 
-            # generalized take-in-arm tracking for else clause
+            # generalized take-in-arm tracking for else clause —
+            # same divergence rule
+            else_arm_diverges = self.symtab.is_unreachable()
             for vname in live_before_match:
                 if vname == subject_name:
                     continue
                 if self.symtab.lookup(vname) is None:
-                    taken_in_any_match_arm.add(vname)
+                    if not else_arm_diverges:
+                        taken_in_any_match_arm.add(vname)
 
             # if else clause diverges, all remaining subtypes are excluded
             else_type = self._last_statement_type(casenode.elseclause)

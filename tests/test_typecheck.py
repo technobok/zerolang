@@ -13283,14 +13283,21 @@ class TestReturnConstructionTake:
     the shorthand through `_apply_take_to_arg` so the take is recorded.
     """
 
-    def test_take_invalidates_source(self):
-        """`return Type field: x` makes a subsequent use of x in another
-        path a typecheck error."""
+    def test_take_invalidates_source_in_same_path(self):
+        """`return Type field: x` records the take in the symtab — a
+        second use of x in the SAME control-flow path is rejected.
+
+        We can't use mutually-exclusive branches here: the precision
+        rule correctly allows that pattern (a take in a diverging arm
+        doesn't propagate to fall-through). Test the same-path
+        double-take instead — a take in a non-diverging earlier
+        statement followed by a return that also takes.
+        """
         errors = check_errors(
             "Token: class { v: String }\n"
-            "scan: function {pick: bool} out Token is {\n"
+            "mk: function {n: i64} out Token is {\n"
             '    wstr: "hi".string\n'
-            "    if pick then { return Token v: wstr }\n"
+            "    t1: Token v: wstr\n"
             "    return Token v: wstr\n"
             "}\n"
             "main: function is {}"
@@ -13322,3 +13329,69 @@ class TestReturnConstructionTake:
             "}\n"
             "main: function is {}"
         )
+
+
+class TestBranchOwnershipDivergingArms:
+    """Precision rule: a take in a branch that diverges
+    (return/panic/error/break/continue) doesn't propagate to
+    post-statement state — control can't reach fall-through through
+    a diverging branch, so the source variable is still owned there.
+    Mirrors the result-type rule that filters non-completing branches
+    via the NEVER type.
+    """
+
+    def test_if_then_return_take_does_not_propagate(self):
+        """Take in an if-then with `return` — fall-through still owns."""
+        check_ok(
+            "Token: class { v: String }\n"
+            "main: function is {\n"
+            '    wstr: "hi".string\n'
+            "    pick: bool.false\n"
+            "    if pick then { return Token v: wstr }\n"
+            '    print "fall: \\{wstr}"\n'
+            "}"
+        )
+
+    def test_if_then_panic_take_does_not_propagate(self):
+        """Same with `panic` — also a divergence."""
+        check_ok(
+            "Token: class { v: String }\n"
+            "main: function is {\n"
+            '    wstr: "hi".string\n'
+            "    pick: bool.false\n"
+            "    if pick then {\n"
+            "        t: Token v: wstr\n"
+            '        panic msg: "x".string\n'
+            "    }\n"
+            '    print "fall: \\{wstr}"\n'
+            "}"
+        )
+
+    def test_match_arm_return_take_does_not_propagate(self):
+        """Take in a match arm that returns — other arms still own."""
+        check_ok(
+            "Token: class { v: String }\n"
+            "Color: variant { red: null blue: null }\n"
+            "main: function is {\n"
+            '    wstr: "hi".string\n'
+            "    c: Color.blue\n"
+            "    match (c) case red then { return Token v: wstr } "
+            "case blue then {}\n"
+            '    print "fall: \\{wstr}"\n'
+            "}"
+        )
+
+    def test_completing_arm_take_still_propagates(self):
+        """Take in a non-diverging arm propagates as before."""
+        errors = check_errors(
+            "Token: class { v: String }\n"
+            "main: function is {\n"
+            '    wstr: "hi".string\n'
+            "    pick: bool.true\n"
+            "    if pick then { t: Token v: wstr }\n"
+            '    print "fall: \\{wstr}"\n'
+            "}"
+        )
+        assert any("wstr" in e.msg and "ownership" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
