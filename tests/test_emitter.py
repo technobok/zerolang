@@ -154,6 +154,89 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
                 os.unlink(p)
 
 
+class TestBareReturn:
+    """Regression coverage for bare `return` (no value) emission.
+
+    The parser models bare `return` as a plain AtomId reference to the
+    `return` function. Without a CallKind.RETURN branch in
+    `_emit_expression_stmt`, the bare AtomId fell through to generic
+    statement emission and was mangled to `z_return` — gcc rejected.
+    The fix emits scope cleanup + bare C `return;` whenever the
+    expression's CallKind is RETURN.
+    """
+
+    def test_top_level_bare_return(self):
+        # A function that ends with a bare `return` should compile and
+        # run cleanly — the C output must use the `return` keyword, not
+        # the mangled identifier `z_return`.
+        csource = emit_source('main: function is { print "ran"\n return }')
+        assert compile_and_run(csource) == "ran\n"
+
+    def test_bare_return_inside_if(self):
+        # Conditional early-return: when the guard fires, the
+        # post-if print is unreached at runtime.
+        csource = emit_source(
+            "main: function is {\n"
+            '    if 1 == 1 then { print "guard"\n return }\n'
+            '    print "fallthrough"\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "guard\n"
+
+    def test_bare_return_inside_match_case(self):
+        # Match arm that early-returns alongside an arm that doesn't.
+        csource = emit_source(
+            "Color: variant { red: null blue: null }\n"
+            "main: function is {\n"
+            "    c: Color.red\n"
+            "    match (c) case red then {\n"
+            '        print "red"\n'
+            "        return\n"
+            "    } case blue then {\n"
+            '        print "blue"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "red\n"
+
+    def test_bare_return_inside_for_loop(self):
+        # Exercises issue #1 (per-block scope) and issue #2 (bare return)
+        # together: the loop body declares a class local, then early-returns
+        # at the third iteration.
+        csource = emit_source(
+            "Token: class { v: i64 }\n"
+            "mk: function {n: i64} out Token is { return Token v: n }\n"
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 5.u64 loop {\n"
+            "        t: mk 1\n"
+            '        print "iter \\{n} v=\\{t.v}"\n'
+            "        if n == 2.u64 then { return }\n"
+            "        n = n + 1.u64\n"
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == ("iter 0 v=1\niter 1 v=1\niter 2 v=1\n")
+
+    def test_bare_return_no_leak_under_asan(self):
+        # Allocate a class local, then bare-return; the function-exit
+        # cleanup must run so ASan sees no leak.
+        csource = emit_source(
+            "Token: class { v: i64 }\n"
+            "mk: function {n: i64} out Token is { return Token v: n }\n"
+            "main: function is {\n"
+            "    t: mk 1\n"
+            '    print "got \\{t.v}"\n'
+            "    return\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "got 1\n"
+
+
 class TestForBodyClassCleanup:
     """Regression coverage for the for-loop body destructor scope bug.
 

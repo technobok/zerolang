@@ -6098,12 +6098,22 @@ class CEmitter:
             == "return"  # ztc-string-compare-ok: return keyword
         ):
             return f"{indent}goto L_done;\n"
-        # handle break/continue as standalone statements
+        # handle break/continue/return as standalone statements.
+        # Bare `return` (no value) is parsed as a plain AtomId reference
+        # to the `return` function (see comment above on the generator
+        # path); the typechecker tags the expression with
+        # CallKind.RETURN. Mirror the void-return path inside
+        # `_emit_return`: function-scope cleanup, then bare C `return;`.
         ck = self._expr_call_kind(expr)
         if ck == zast.CallKind.BREAK:
             return f"{indent}break;\n"
         if ck == zast.CallKind.CONTINUE:
             return f"{indent}continue;\n"
+        if ck == zast.CallKind.RETURN and inner.nodetype == zast.NodeType.ATOMID:
+            # Bare `return` only — `return X` is a Call and is routed to
+            # `_emit_call_stmt` → `_emit_return` further below, which
+            # handles the return value.
+            return self._emit_scope_cleanup(indent) + f"{indent}return;\n"
         # panic(msg): route through the shared z_panic helper in the runtime
         # preamble. msg is declared as `string`, but after type coercion
         # we may have a z_String_t or a z_StringView_t; both expose `.data`
