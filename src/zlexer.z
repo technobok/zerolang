@@ -1,26 +1,79 @@
-# zlexer.z -- self-host port of src/zlexer.py (Phase B PR 3).
+# zlexer.z -- self-host port of src/zlexer.py (Phase B PRs 3-4).
 #
-# Bedrock-layer scanner: file I/O, EOF/EOL/position tracking,
-# whitespace, comments, dot variants, and single-char structural
-# delimiters. Identifiers, keywords, numeric literals, and string
-# literals are deferred to PRs 4-7 -- any byte the dispatch below
-# does not recognise emits a one-byte TT.ERR token.
+# Current coverage:
+#   * BOF / EOF / EOL (LF, CR, CRLF) + line+column tracking         (PR 3)
+#   * Whitespace coalescing (space + tab)                            (PR 3)
+#   * Comments (# through end-of-line; UTF-8 passes through)         (PR 3)
+#   * Single-byte structural delimiters: ( ) { } ;                   (PR 3)
+#   * Dot variants: . (DOT) and ... (DOTDOTDOT); 2 dots = ERR        (PR 3)
+#   * Identifiers (REFID), labels (LABEL, LABELPRE),
+#     keywords (28 TTKWMAP entries), reserved words (TTRESERVED -> ERR),
+#     including the optional +/- prefix and dot-continuation in
+#     digit-starting words (so "1.5" tokenises as REFID "1.5", not
+#     three tokens).                                                 (PR 4)
 #
-# PR 8 wires this binary into the differential token-dump harness
-# (tests/test_lexer_differential.py) against the Python reference
-# (src/ztokendump.py).
+# Still deferred:
+#   * Interpreted string literals + interpolation (PR 5)
+#   * Raw triple-quoted strings (PR 6)
+#   * Wire into the 96-golden differential harness (PR 8)
 #
 # Canonical output line matches the Python printer:
 #
 #     <lineno>:<colno> <TTNAME> "<escaped-tokstr>"
 
+# Named u8 constants for byte comparisons. Spec describes `0c<char>`
+# literals (doc/spec.pdoc Character literals) but the current Python
+# lexer / parser / typechecker doesn't implement them, so bare
+# integer codepoints + named constants are the readable form today.
+# Mirrors src/zchar.py.
+
+# Per doc/styleguide.pdoc, constants are lowerCamelCase. The `c`
+# prefix marks "character byte" -- avoids keyword collisions
+# (`out`, `in`) and visual confusion with the TT arm names.
+#
+# Declared as bare-int (i64) rather than `name: 32.u8` -- the typed-
+# literal form currently emits no C declaration. The bare-int form
+# compiles to a `static const int64_t` and the cross-type compare
+# `b: u8 == cSpace: i64` typechecks (literal coercion treats the
+# const ref as if it were the underlying literal value).
+cNul:        0
+cHt:         9      # \t
+cLf:         10     # \n
+cCr:         13     # \r
+cSpace:      32
+cDquote:     34     # "
+cHash:       35     # #
+cParenOpen:  40     # (
+cParenClose: 41     # )
+cPlus:       43     # +
+cComma:      44     # ,
+cMinus:      45     # -
+cDot:        46     # .
+cZero:       48     # 0
+cNine:       57     # 9
+cColon:      58     # :
+cSemi:       59     # ;
+cBrackOpen:  91     # [
+cBslash:     92     # \
+cBrackClose: 93     # ]
+cBquote:     96     # `
+cLowerN:     110    # n
+cLowerR:     114    # r
+cLowerT:     116    # t
+cLowerX:     120    # x
+cBraceOpen:  123    # {
+cBraceClose: 125    # }
+cDel:        127
+
 TT: variant {
     BOF: null
     EOF: null
     ERR: null
+    NONE: null        # sentinel returned by kwlookup for "not a keyword"
     WS: null
     EOL: null
     COMMENT: null
+    COLON: null
     SEMICOLON: null
     PARENOPEN: null
     PARENCLOSE: null
@@ -28,7 +81,39 @@ TT: variant {
     BRACECLOSE: null
     DOT: null
     DOTDOTDOT: null
-}
+    REFID: null
+    LABEL: null
+    LABELPRE: null
+    EQUALS: null
+    FUNCTION: null
+    IF: null
+    WHEN: null
+    THEN: null
+    ELSE: null
+    FOR: null
+    LOOP: null
+    WHILE: null
+    DO: null
+    CASE: null
+    MATCH: null
+    ON: null
+    OUT: null
+    IN: null
+    SWAP: null
+    UNIT: null
+    RECORD: null
+    CLASS: null
+    UNION: null
+    VARIANT: null
+    PROTOCOL: null
+    DATA: null
+    IS: null
+    AS: null
+    WITH: null
+    FACET: null
+    NATIVE: null
+    YIELD: null
+} as { tag: u8.tag }
 
 Token: class {
     toktype: TT
@@ -42,21 +127,50 @@ Token: class {
 # Byte-class predicates used by the scanner dispatch.
 
 isws: function {b: u8} out bool is {
-    if b == 32 then return true
-    if b == 9 then return true
+    if b == cSpace then return true
+    if b == cHt then return true
     return false
 }
 
 iseol: function {b: u8} out bool is {
-    if b == 10 then return true
-    if b == 13 then return true
+    if b == cLf then return true
+    if b == cCr then return true
     return false
 }
 
 iscommentbody: function {b: u8} out bool is {
-    if b == 0 then return false
-    if b == 10 then return false
-    if b == 13 then return false
+    if b == cNul then return false
+    if b == cLf then return false
+    if b == cCr then return false
+    return true
+}
+
+# True for ASCII printable bytes (codes 33-126) other than the 13
+# delimiter bytes that separate tokens. Letters, digits, underscore,
+# and operators are all IDEN.
+
+isidchar: function {b: u8} out bool is {
+    if b < 33.u8 then return false      # space + below
+    if b > 126.u8 then return false     # cDel + above
+    if b == cDquote then return false
+    if b == cHash then return false
+    if b == cParenOpen then return false
+    if b == cParenClose then return false
+    if b == cComma then return false
+    if b == cDot then return false
+    if b == cColon then return false
+    if b == cSemi then return false
+    if b == cBrackOpen then return false
+    if b == cBrackClose then return false
+    if b == cBquote then return false
+    if b == cBraceOpen then return false
+    if b == cBraceClose then return false
+    return true
+}
+
+isdigit: function {b: u8} out bool is {
+    if b < cZero then return false
+    if b > cNine then return false
     return true
 }
 
@@ -67,13 +181,22 @@ Tokenizer: class {
     fsno: u32
     lineno: u32
     colno: u32
+    # Single-slot lookahead, inlined as fields. Storing a `Token` as
+    # a class-typed field works for typecheck, but the C emitter
+    # generates an unsound struct-copy at field assignment that
+    # double-frees the tokstr at scope exit. Inlining sidesteps it.
+    hasnext: bool
+    nexttype: TT
+    nextstr: String
+    nextline: u32
+    nextcol: u32
 } as {
     create: function {source: String.take fsno: u32} out this is {
-        return meta.create source: source pos: 0 atchar: 0 fsno: fsno lineno: 1 colno: 0
+        return meta.create source: source pos: 0.u64 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0.u32 hasnext: false nexttype: TT.EOF nextstr: "".string nextline: 0.u32 nextcol: 0.u32
     }
 
     # Advance one byte. Returns the byte just placed in .atchar
-    # (NUL if past end of source). Mirrors src/zlexer.py:130 _accept.
+    # (cNul if past end of source). Mirrors src/zlexer.py:130 _accept.
     accept: function {:this} out u8 is {
         sv: this.source.stringview
         b: sv.byteAt i: this.pos
@@ -81,133 +204,365 @@ Tokenizer: class {
             b
         ) case some then {
             this.atchar = b
-            this.pos = this.pos + 1
-            this.colno = this.colno + 1
+            this.pos = this.pos + 1.u64
+            this.colno = this.colno + 1.u32
             return b
         } case none then {
-            this.atchar = 0
-            return 0
+            this.atchar = 0.u8
+            return 0.u8
         }
     }
 
     token: function {:this} out Token is {
+        # Drain the lookahead slot first if a token is staged.
+        # Inlined fields make this straightforward: copy out the
+        # tokstr (cheap -- short strings) and construct a Token.
+        if this.hasnext then {
+            # EOF stays staged so subsequent calls keep returning it;
+            # everything else gets cleared.
+            is_eof: false
+            match (
+                this.nexttype
+            ) case EOF then {
+                is_eof = true
+            } else {
+                is_eof = false
+            }
+            if is_eof then {} else {
+                this.hasnext = false
+            }
+            return Token toktype: this.nexttype tokstr: this.nextstr.copy fsno: this.fsno lineno: this.nextline colno: this.nextcol tokenid: 0.u64
+        }
+
         # Prime the look-ahead on the first call (pos == 0 means
         # `accept` has never run). After this, .atchar holds the next
-        # byte to dispatch on (or NUL if the source is empty).
-        if this.pos == 0 then this.accept
+        # byte to dispatch on (or cNul if the source is empty).
+        if this.pos == 0.u64 then this.accept
         line: this.lineno
         col: this.colno
         c: this.atchar
 
-        if c == 0 then {
-            return Token toktype: TT.EOF tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0
+        if c == cNul then {
+            return Token toktype: TT.EOF tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
 
-        if c == 10 then {
+        if c == cLf then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            this.lineno = this.lineno + 1
-            this.colno = 1
-            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            this.lineno = this.lineno + 1.u32
+            this.colno = 1.u32
+            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
-        if c == 13 then {
+        if c == cCr then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            if this.atchar == 10 then {
+            if this.atchar == cLf then {
                 buf.appendByte b: this.atchar
                 this.accept
             }
-            this.lineno = this.lineno + 1
-            this.colno = 1
-            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            this.lineno = this.lineno + 1.u32
+            this.colno = 1.u32
+            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
 
         if (isws b: c) then {
             buf: "".string
             for loop {
                 cur: this.atchar
-                if cur == 32 then {} else if cur == 9 then {} else {
+                if cur == cSpace then {} else if cur == cHt then {} else {
                     break
                 }
                 buf.appendByte b: cur
                 this.accept
             }
-            return Token toktype: TT.WS tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.WS tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
 
-        if c == 35 then {
+        if c == cHash then {
             buf: "".string
             for loop {
                 cur: this.atchar
-                if cur == 0 then break
-                if cur == 10 then break
-                if cur == 13 then break
+                if cur == cNul then break
+                if cur == cLf then break
+                if cur == cCr then break
                 buf.appendByte b: cur
                 this.accept
             }
-            return Token toktype: TT.COMMENT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.COMMENT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
 
-        if c == 46 then {
+        if c == cDot then {
             buf: "".string
             n: 0.u64
             for loop {
                 cur: this.atchar
-                if cur == 46 then {} else break
+                if cur == cDot then {} else break
                 buf.appendByte b: cur
-                n = n + 1
+                n = n + 1.u64
                 this.accept
             }
-            if n == 1 then {
-                return Token toktype: TT.DOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            if n == 1.u64 then {
+                return Token toktype: TT.DOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
             }
-            if n == 3 then {
-                return Token toktype: TT.DOTDOTDOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            if n == 3.u64 then {
+                return Token toktype: TT.DOTDOTDOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
             }
-            return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
 
-        if c == 40 then {
+        if c == cParenOpen then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.PARENOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.PARENOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
-        if c == 41 then {
+        if c == cParenClose then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.PARENCLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.PARENCLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
-        if c == 123 then {
+        if c == cBraceOpen then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
-        if c == 125 then {
+        if c == cBraceClose then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.BRACECLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.BRACECLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
-        # Note: bare `:` falls through to TT.ERR. The Python reference
-        # only emits TT.COLON via the label-parsing path
-        # (identifier-followed-by-colon), which PR 4 will introduce.
-        if c == 59 then {
+        if c == cSemi then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.SEMICOLON tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            return Token toktype: TT.SEMICOLON tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
+
+        # Word branch: leading colon? +/- prefix? IDEN loop, plus
+        # dot-continuation when the word is number-shaped. Mirrors
+        # src/zlexer.py:271-355.
+
+        # Leading-colon case (LABELPRE candidate). Save the colon's
+        # position (for the returned COLON token) separately from
+        # word_line/word_col (which the staged LABELPRE / REFID
+        # tokens use -- they start one byte after the colon).
+        has_colonpre: false
+        colonpre_line: line
+        colonpre_col: col
+        if c == cColon then {
+            has_colonpre = true
+            colonpre_line = this.lineno
+            colonpre_col = this.colno
+            this.accept
+            c = this.atchar
+        }
+
+        word_line: this.lineno
+        word_col: this.colno
 
         buf: "".string
-        buf.appendByte b: c
-        this.accept
-        return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+
+        # Optional +/- prefix (consumed into the buf if present).
+        if c == cPlus then {
+            buf.appendByte b: c
+            this.accept
+            c = this.atchar
+        } else if c == cMinus then {
+            buf.appendByte b: c
+            this.accept
+            c = this.atchar
+        }
+
+        # Track whether the first IDEN char is a digit (for the
+        # dot-continuation rule).
+        numbershaped: false
+        if (isdigit b: c) then {
+            numbershaped = true
+        }
+
+        # IDEN body.
+        for loop {
+            cur: this.atchar
+            if (isidchar b: cur) then {} else break
+            buf.appendByte b: cur
+            this.accept
+        }
+
+        # Dot-continuation: if the word is number-shaped and the loop
+        # ended on `.`, consume the dot only if the *next* char is also
+        # a digit -- otherwise stash a cDot in the lookahead slot for
+        # the parser to consume next.
+        if numbershaped when this.atchar == cDot then {
+            # We need to peek the byte *after* the dot. accept then
+            # check; if the post-dot char is not a digit, stash a cDot
+            # (with the dot's pre-advance position) and don't append
+            # it to the word.
+            dot_line: this.lineno
+            dot_col: this.colno
+            this.accept
+            if (isdigit b: this.atchar) then {
+                buf.appendByte b: cDot.u8
+                for loop {
+                    cur: this.atchar
+                    if (isidchar b: cur) then {} else break
+                    buf.appendByte b: cur
+                    this.accept
+                }
+                # Tail-assignment to keep both if-branches' last-stmt
+                # types aligned (else branch ends with an assignment).
+                this.hasnext = this.hasnext
+            } else {
+                this.nexttype = TT.DOT
+                this.nextstr = ".".string
+                this.nextline = dot_line
+                this.nextcol = dot_col
+                this.hasnext = true
+            }
+        }
+
+        # Empty word? Means a lone `:` or a stray byte. Lone `:` after
+        # colonpre becomes ERR (matches Python lines 309-317); stray
+        # byte means we somehow consumed nothing -- emit ERR with the
+        # current byte and advance to make progress.
+        if buf.length == 0.u64 then {
+            if has_colonpre then {
+                # Lone colon: emit the colon as ERR.
+                err: "".string
+                err.appendByte b: cColon.u8
+                return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0.u64
+            }
+            err: "".string
+            err.appendByte b: c
+            this.accept
+            return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+        }
+
+        # Word is non-empty. Decide token type. To avoid the
+        # typechecker over-propagating the buf take through nested
+        # if/else chains, we structure as three mutually-exclusive
+        # early returns -- buf is taken in exactly one place per
+        # execution path.
+
+        kw_tt: kwlookup sv: buf.stringview
+        kwfound: false
+        match (
+            kw_tt
+        ) case NONE then {} else {
+            kwfound = true
+        }
+        reservedfound: islookup_reserved sv: buf.stringview
+
+        # Path 1: colonpre. Stash the word, return cColon-as-ERR.
+        # `.copy` rather than `take` -- the take's effect over-
+        # propagates through the typechecker into subsequent paths
+        # (issue #4-shape gap that wasn't closed for nested if).
+        if has_colonpre then {
+            stage_tt: TT.LABELPRE
+            if kwfound then stage_tt = TT.ERR
+            if reservedfound then stage_tt = TT.ERR
+            nstr: buf.copy
+            this.nexttype = stage_tt
+            this.nextstr = nstr
+            this.nextline = word_line
+            this.nextcol = word_col
+            this.hasnext = true
+            colon_only: "".string
+            colon_only.appendByte b: cColon.u8
+            return Token toktype: TT.COLON tokstr: colon_only fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0.u64
+        }
+
+        # Path 2: no colonpre, trailing colon, non-keyword non-reserved.
+        # Stash the colon, return LABEL. (Keyword + trailing colon
+        # leaves the colon for the next token() call to consume via
+        # path 1 -- mirrors Python lines 335-346.)
+        labelpath: false
+        if this.atchar == cColon then {
+            if kwfound then {} else {
+                if reservedfound then {} else {
+                    labelpath = true
+                }
+            }
+        }
+        if labelpath then {
+            this.nexttype = TT.COLON
+            this.nextstr = ":".string
+            this.nextline = this.lineno
+            this.nextcol = this.colno
+            this.hasnext = true
+            this.accept
+            labelbuf: buf.copy
+            return Token toktype: TT.LABEL tokstr: labelbuf fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
+        }
+
+        # Path 3: no colonpre, no trailing-colon-label. REFID, keyword,
+        # or reserved-as-ERR via a single computed `tt`.
+        ret_tt: TT.REFID
+        if kwfound then ret_tt = kw_tt
+        if reservedfound then ret_tt = TT.ERR
+        retbuf: buf.copy
+        return Token toktype: ret_tt tokstr: retbuf fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
     }
+}
+
+# Keyword and reserved-word lookups. Per-call StringView equality;
+# acceptable at this scale, can migrate to a Map later.
+#
+# Returns TT.NONE when the word isn't a keyword. (A record-of-(bool, TT)
+# return would trigger the emitter to generate a z_bool_eq helper
+# that the C runtime doesn't define -- the TT.NONE sentinel
+# sidesteps it.)
+
+kwlookup: function {sv: StringView} out TT is {
+    if sv == "=" then return TT.EQUALS
+    if sv == "function" then return TT.FUNCTION
+    if sv == "if" then return TT.IF
+    if sv == "when" then return TT.WHEN
+    if sv == "then" then return TT.THEN
+    if sv == "else" then return TT.ELSE
+    if sv == "for" then return TT.FOR
+    if sv == "loop" then return TT.LOOP
+    if sv == "while" then return TT.WHILE
+    if sv == "do" then return TT.DO
+    if sv == "case" then return TT.CASE
+    if sv == "match" then return TT.MATCH
+    if sv == "on" then return TT.ON
+    if sv == "out" then return TT.OUT
+    if sv == "in" then return TT.IN
+    if sv == "swap" then return TT.SWAP
+    if sv == "unit" then return TT.UNIT
+    if sv == "record" then return TT.RECORD
+    if sv == "class" then return TT.CLASS
+    if sv == "union" then return TT.UNION
+    if sv == "variant" then return TT.VARIANT
+    if sv == "protocol" then return TT.PROTOCOL
+    if sv == "data" then return TT.DATA
+    if sv == "is" then return TT.IS
+    if sv == "as" then return TT.AS
+    if sv == "with" then return TT.WITH
+    if sv == "facet" then return TT.FACET
+    if sv == "native" then return TT.NATIVE
+    if sv == "yield" then return TT.YIELD
+    return TT.NONE
+}
+
+islookup_reserved: function {sv: StringView} out bool is {
+    if sv == "enum" then return true
+    if sv == "macro" then return true
+    if sv == "flag" then return true
+    if sv == "view" then return true
+    if sv == "goto" then return true
+    if sv == "cell" then return true
+    if sv == "unsafe" then return true
+    if sv == "repeat" then return true
+    if sv == "pragma" then return true
+    if sv == "switch" then return true
+    if sv == "until" then return true
+    return false
 }
 
 ttname: function {t: TT} out String is {
@@ -219,12 +574,16 @@ ttname: function {t: TT} out String is {
         return "EOF".string
     } case ERR then {
         return "ERR".string
+    } case NONE then {
+        return "NONE".string
     } case WS then {
         return "WS".string
     } case EOL then {
         return "EOL".string
     } case COMMENT then {
         return "COMMENT".string
+    } case COLON then {
+        return "COLON".string
     } case SEMICOLON then {
         return "SEMICOLON".string
     } case PARENOPEN then {
@@ -239,6 +598,70 @@ ttname: function {t: TT} out String is {
         return "DOT".string
     } case DOTDOTDOT then {
         return "DOTDOTDOT".string
+    } case REFID then {
+        return "REFID".string
+    } case LABEL then {
+        return "LABEL".string
+    } case LABELPRE then {
+        return "LABELPRE".string
+    } case EQUALS then {
+        return "EQUALS".string
+    } case FUNCTION then {
+        return "FUNCTION".string
+    } case IF then {
+        return "IF".string
+    } case WHEN then {
+        return "WHEN".string
+    } case THEN then {
+        return "THEN".string
+    } case ELSE then {
+        return "ELSE".string
+    } case FOR then {
+        return "FOR".string
+    } case LOOP then {
+        return "LOOP".string
+    } case WHILE then {
+        return "WHILE".string
+    } case DO then {
+        return "DO".string
+    } case CASE then {
+        return "CASE".string
+    } case MATCH then {
+        return "MATCH".string
+    } case ON then {
+        return "ON".string
+    } case OUT then {
+        return "OUT".string
+    } case IN then {
+        return "IN".string
+    } case SWAP then {
+        return "SWAP".string
+    } case UNIT then {
+        return "UNIT".string
+    } case RECORD then {
+        return "RECORD".string
+    } case CLASS then {
+        return "CLASS".string
+    } case UNION then {
+        return "UNION".string
+    } case VARIANT then {
+        return "VARIANT".string
+    } case PROTOCOL then {
+        return "PROTOCOL".string
+    } case DATA then {
+        return "DATA".string
+    } case IS then {
+        return "IS".string
+    } case AS then {
+        return "AS".string
+    } case WITH then {
+        return "WITH".string
+    } case FACET then {
+        return "FACET".string
+    } case NATIVE then {
+        return "NATIVE".string
+    } case YIELD then {
+        return "YIELD".string
     }
 }
 
@@ -246,46 +669,46 @@ ttname: function {t: TT} out String is {
 # escape map in src/ztokendump.py:17-39.
 
 hexdigit: function {b: u8} out u8 is {
-    if b < 10 then return b + 48
-    return b - 10 + 97
+    if b < 10.u8 then return b + 48.u8
+    return b - 10.u8 + 97.u8
 }
 
 escape_append: function {b: u8 dst: String} is {
-    if b == 9 then {
-        dst.appendByte b: 92
-        dst.appendByte b: 116
+    if b == cHt then {
+        dst.appendByte b: cBslash.u8
+        dst.appendByte b: 116.u8  # 't'
         return
     }
-    if b == 10 then {
-        dst.appendByte b: 92
-        dst.appendByte b: 110
+    if b == cLf then {
+        dst.appendByte b: cBslash.u8
+        dst.appendByte b: 110.u8  # 'n'
         return
     }
-    if b == 13 then {
-        dst.appendByte b: 92
-        dst.appendByte b: 114
+    if b == cCr then {
+        dst.appendByte b: cBslash.u8
+        dst.appendByte b: 114.u8  # 'r'
         return
     }
-    if b == 34 then {
-        dst.appendByte b: 92
-        dst.appendByte b: 34
+    if b == cDquote then {
+        dst.appendByte b: cBslash.u8
+        dst.appendByte b: cDquote.u8
         return
     }
-    if b == 92 then {
-        dst.appendByte b: 92
-        dst.appendByte b: 92
+    if b == cBslash then {
+        dst.appendByte b: cBslash.u8
+        dst.appendByte b: cBslash.u8
         return
     }
-    if b >= 32 when b <= 126 then {
+    if b >= cSpace when b <= 126.u8 then {
         dst.appendByte b: b
         return
     }
-    h: b / 16
-    l: b - h * 16
+    h: b / 16.u8
+    l: b - h * 16.u8
     hi: hexdigit b: h
     lo: hexdigit b: l
-    dst.appendByte b: 92
-    dst.appendByte b: 120
+    dst.appendByte b: cBslash.u8
+    dst.appendByte b: cLowerX.u8
     dst.appendByte b: hi
     dst.appendByte b: lo
 }
@@ -303,34 +726,27 @@ escape_str: function {sv: StringView} out String is {
         } case none then {
             return buf
         }
-        i = i + 1
+        i = i + 1.u64
     }
     return buf
 }
 
 main: function is {
     argv: os.args
-    if argv.length < 2 then {
+    if argv.length < 2.u64 then {
         io.eprintln "usage: zlexer <file.z>"
-        os.exit code: 2
+        os.exit code: 2.i32
     }
     path: argv.get i: 1.u64
     r: io.readText path: path.stringview
     match (
         r
     ) case ok then {
-        # `.copy` works around an emitter bug where match-narrowed-
-        # subject + take into a String.take parameter generates a
-        # struct-copy (shallow) plus a destroy at scope exit on both
-        # source and destination -- a double-free on the heap data.
-        # `.copy` allocates a fresh String so the destroys don't
-        # collide. Replace with `r.take` (or bare `r`) when the
-        # take-from-narrowed-subject path is fixed.
-        tok: Tokenizer.create source: r.copy fsno: 0
+        tok: Tokenizer.create source: r.copy fsno: 0.u32
         dump tok: tok
     } case err then {
         io.eprintln "zlexer: could not read source file"
-        os.exit code: 1
+        os.exit code: 1.i32
     }
 }
 

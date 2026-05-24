@@ -74,16 +74,28 @@ def _run_zlexer(binary: str, source_path: str) -> str:
     return proc.stdout
 
 
-def test_structural_fixture_matches_golden(zlexer_binary):
-    """PR 3: bedrock scanner output must match the Python reference for
-    a fixture exercising whitespace, comments, EOL, dot variants, and
-    structural single-char delimiters."""
-    fixture = os.path.join(FIXTURE_DIR, "structural.z")
-    golden = os.path.join(FIXTURE_DIR, "structural.tokens")
+def _assert_matches_golden(zlexer_binary: str, name: str) -> None:
+    fixture = os.path.join(FIXTURE_DIR, f"{name}.z")
+    golden = os.path.join(FIXTURE_DIR, f"{name}.tokens")
     actual = _run_zlexer(zlexer_binary, fixture)
     with open(golden, "r", encoding="utf-8") as f:
         expected = f.read()
     assert actual == expected, (
-        f"zlexer output diverges from golden\n--- expected ---\n{expected}"
+        f"zlexer output diverges from {name} golden\n--- expected ---\n{expected}"
         f"--- actual ---\n{actual}"
     )
+
+
+def test_structural_fixture_matches_golden(zlexer_binary):
+    """PR 3: bedrock scanner output must match the Python reference for
+    a fixture exercising whitespace, comments, EOL, dot variants, and
+    structural single-char delimiters."""
+    _assert_matches_golden(zlexer_binary, "structural")
+
+
+def test_words_fixture_matches_golden(zlexer_binary):
+    """PR 4: identifiers (REFID), labels (LABEL, LABELPRE), all 28
+    keywords, reserved words rejected as ERR, operators-as-REFIDs,
+    and numeric-shaped REFIDs with dot continuation (e.g. `1.5` as
+    one REFID rather than three tokens)."""
+    _assert_matches_golden(zlexer_binary, "words")
