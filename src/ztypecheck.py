@@ -4267,13 +4267,23 @@ class TypeChecker:
                     resolved_child is not None
                     and resolved_child.typetype != ZTypeType.FUNCTION
                 ):
-                    _, _, err = parse_number(pname + child_name_local)
+                    _, value, err = parse_number(pname + child_name_local)
                     if err:
                         self._error(
                             f"Invalid numeric cast {pname}.{child_name_local}: {err}",
                             loc=path.start,
                         )
                         return None, True
+                    # Stamp node_type + node_const_value on the path so
+                    # downstream references (unit-level bindings, use
+                    # sites) can inline the typed literal. Without this,
+                    # `myU8: 32.u8` resolves type-only and use sites
+                    # emit the bare identifier with no backing decl.
+                    self.typing.node_type[path.nodeid] = resolved_child
+                    if type(value) is int:
+                        self.typing.node_const_value[path.nodeid] = value
+                    elif type(value) is float:
+                        self.typing.node_const_value[path.nodeid] = value
                     return resolved_child, True
             # File-level unit member lookup
             if pname in self.program.units:
@@ -7926,6 +7936,15 @@ class TypeChecker:
                     self.typing.node_type[parent_atom.nodeid] = parent_type
             else:
                 parent_type = self._resolve_name(parent_atom.name)
+                # Propagate const_value from a referenced named constant
+                # so the emitter can inline the value at this use site
+                # (unit-level numeric constants are macros — no backing
+                # decl, so the reference must carry the value).
+                defn = self._lookup_definition(parent_atom.name)
+                if defn is not None:
+                    defn_cv = self.typing.node_const_value.get(defn.nodeid)
+                    if defn_cv is not None:
+                        self.typing.node_const_value[parent_atom.nodeid] = defn_cv
             if parent_type:
                 self.typing.node_type[path.parent.nodeid] = parent_type
                 # Narrowing stamp: same as in _check_atomid, so the

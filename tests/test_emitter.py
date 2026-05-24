@@ -3514,11 +3514,13 @@ class TestInlineUnits:
         assert "z_m_f" in csource
 
     def test_inline_unit_constant(self):
-        """Inline unit constant accessible via dotted Path."""
+        """Inline unit constant accessible via dotted Path. Value
+        inlines as a macro at the use site (no backing decl)."""
         csource = emit_source(
             'm: unit { X: 42 }\nmain: function is { print "\\{m.X}" }'
         )
-        assert "z_m_X" in csource
+        # Macro semantics: no static decl for the constant.
+        assert "z_m_X" not in csource
         output = compile_and_run(csource)
         assert output.strip() == "42"
 
@@ -6887,13 +6889,15 @@ class TestConstantFolding:
         assert "+" in csource or "x" in csource
 
     def test_unit_level_constant_expression(self):
-        """Unit-level expression 2 + 3 should emit as static const."""
+        """Unit-level expression 2 + 3 inlines as a macro at use sites."""
         csource = emit_source(
             'result: 2 + 3\nmain: function is {\n  print "\\{result}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "5"
-        assert "static const" in csource
+        # Unit-level numeric constants are macros (value inlined at use);
+        # no static decl is emitted for them.
+        assert "static const int64_t z_result " not in csource
 
     def test_constant_fold_c_output_literal(self):
         """Verify folded value appears as literal in C output, not as expression."""
@@ -6961,14 +6965,29 @@ class TestConstantFolding:
         main_body = csource[csource.index("void z_main") :]
         assert "} else {" not in main_body
 
+    def test_unit_level_typed_numeric_literal_constant(self):
+        """Typed numeric literal as unit constant: `myU8: 32.u8` compiles
+        and runs without a backing static decl. Regression for the
+        PR 4 lexer-port friction case where `gcc` failed with
+        `myU8 undeclared`."""
+        csource = emit_source(
+            'myU8: 32.u8\nmain: function is {\n  b: myU8\n  print "u=\\{b}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "u=32"
+        # No backing decl: value inlined at the use site as a u8-cast literal.
+        assert "static const uint8_t z_myU8 " not in csource
+        assert "((uint8_t)32)" in csource
+
     def test_unit_level_f64_constant_expression(self):
-        """Unit-level f64 expression should emit as static const."""
+        """Unit-level f64 expression inlines as a macro at use sites."""
         csource = emit_source(
             'PI_APPROX: 3.0 + 0.14\nmain: function is {\n  print "\\{PI_APPROX}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "3.14"
-        assert "static const" in csource
+        # Macro semantics: no static decl emitted for the constant.
+        assert "static const" not in csource or "z_PI_APPROX " not in csource
 
 
 class TestIfExpression:
@@ -7063,7 +7082,8 @@ class TestUnitLevelIf:
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
-        assert "static const" in csource
+        # Macro semantics: no static decl for unit-level folded constants.
+        assert "static const int64_t z_x " not in csource
 
     def test_unit_level_if_false(self):
         """Unit-level if with false condition selects else branch."""

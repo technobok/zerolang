@@ -499,6 +499,65 @@ class CEmitter:
         t = self._resolved_type(name)
         return t.typetype if t else None
 
+    def _find_unit_def_by_name(self, name: str) -> Optional[zast.Node]:
+        """Look up a top-level unit definition by simple name. Used by
+        the macro-style inlining of unit-level numeric constants when
+        the use-site atom isn't stamped with a const_value."""
+        mainname = self.program.mainunitname
+        mainunit = self.program.units.get(mainname)
+        if mainunit is not None:
+            defn = mainunit.body.get(name)
+            if defn is not None:
+                return defn
+        for unitname, unit in self.program.units.items():
+            if unitname == mainname:
+                continue
+            defn = unit.body.get(name)
+            if defn is not None:
+                return defn
+        return None
+
+    def _find_inline_unit_member(
+        self, unit_name: str, member: str
+    ) -> Optional[zast.Node]:
+        """Look up a member of an inline unit by name. Used by macro-style
+        inlining of unit-level numeric constants accessed via a dotted
+        path (`m.X`)."""
+        unit_def = self._find_unit_def_by_name(unit_name)
+        if unit_def is None or unit_def.nodetype != NodeType.UNIT:
+            return None
+        return cast(zast.Unit, unit_def).body.get(member)
+
+    def _inline_const_lookup(self, atom: zast.AtomId, name: str) -> Optional[str]:
+        """Resolve a unit-level numeric constant reference to its literal
+        C value. Prefers the atom's stamped const_value (carries any
+        use-site coerced type); falls back to the defining node."""
+        if self._node_const_value(atom) is not None:
+            return self._emit_const_value(atom)
+        defn = self._find_unit_def_by_name(name)
+        if defn is None:
+            return None
+        return self._inline_const_via_defn(defn)
+
+    def _inline_const_via_defn(self, defn: zast.Node) -> Optional[str]:
+        """Inline a unit-level numeric constant from its definition node.
+        Reads the typechecker-stamped const_value when present,
+        otherwise parses the defn directly (covers patterns the
+        typechecker didn't demand-resolve, e.g. match-arm patterns
+        under non-const subjects)."""
+        if self._node_const_value(defn) is not None:
+            return self._emit_const_value(defn)
+        if defn.nodetype == NodeType.ATOMID and _is_numeric_id(
+            cast(zast.AtomId, defn).name
+        ):
+            _, value, err = parse_number(cast(zast.AtomId, defn).name)
+            if not err and type(value) is int:
+                self.needs_stdint = True
+                return str(value)
+            if not err and type(value) is float:
+                return repr(value)
+        return None
+
     def _build_source_map(self, output: str) -> None:
         """Build source_map: for each C output line, the AST node ID that produced it.
 
@@ -1110,13 +1169,12 @@ class CEmitter:
                     qname, cast(zast.Data, cast(zast.Expression, defn).expression)
                 )
             elif defn_type == NodeType.ATOMID and _is_numeric_id(defn.name):
-                self._emit_constant(qname, defn)
+                pass  # macro-style: value inlined at every use site
             elif type(self._node_const_value(defn)) in (
                 int,
                 float,
             ):
-                # unit-level expression that folded to a constant
-                self._emit_folded_constant(qname, defn)
+                pass  # macro-style: value inlined at every use site
 
     def _emit_folded_constant(self, name: str, node: zast.Node) -> None:
         """Emit a compile-time folded constant as a static const."""
@@ -8411,6 +8469,11 @@ class CEmitter:
         if tt in (ZTypeType.FUNCTION, ZTypeType.DATA):
             return _mangle_func(name)
         if name in self._const_names:
+            # Unit-level numeric constants are macros: inline the value
+            # at every reference site (no backing static decl exists).
+            inlined = self._inline_const_lookup(atom, name)
+            if inlined is not None:
+                return inlined
             return _mangle_func(name)
         # only match user-defined records (not numeric constant aliases like north: 0)
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
@@ -8632,6 +8695,14 @@ class CEmitter:
                 if self._typetype_of(qname) == ZTypeType.UNIT:
                     # will be resolved by further dotted path traversal
                     return _mangle_func(qname)
+                # Unit-level numeric constant referenced via the unit:
+                # inline the value (macro semantics; no backing decl).
+                if qname in self._const_names:
+                    child_defn = self._find_inline_unit_member(pname, child)
+                    if child_defn is not None:
+                        inlined = self._inline_const_via_defn(child_defn)
+                        if inlined is not None:
+                            return inlined
                 return _mangle_func(qname)
             # record_name.method or class_name.method — method call with no
             # extra args. Only fire when `pname` resolves to the type itself
