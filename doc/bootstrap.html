@@ -121,6 +121,20 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
+<li><a href="#cross-compiler-testing-mechanics">Cross-compiler testing mechanics</a>
+<ul>
+<li><a href="#per-stage-differential">Per-stage differential</a>
+</li>
+<li><a href="#end-to-end-cli-parity">End-to-end CLI parity</a>
+</li>
+<li><a href="#what-stays-python-only">What stays Python-only</a>
+</li>
+<li><a href="#fixed-point-check">Fixed-point check</a>
+</li>
+<li><a href="#existing-helpers-to-reuse-when-wiring-this-up">Existing helpers to reuse when wiring this up</a>
+</li>
+</ul>
+</li>
 <li><a href="#phase-e-post-sunset-modifying-the-language-with-only-a-self-hosted-compiler">Phase E: Post-sunset, modifying the language with only a self-hosted compiler</a>
 <ul>
 <li><a href="#bootstrap-chain-after-sunset">Bootstrap chain after sunset</a>
@@ -365,9 +379,112 @@ compilers; both must accept the same source.</p>
       well-publicized and any users have migrated. The tag itself stays in
       history forever.</li>
 </ul>
-<h2 id="phase-e-post-sunset-modifying-the-language-with-only-a-self-hosted-compiler"><a href="#phase-e-post-sunset-modifying-the-language-with-only-a-self-hosted-compiler">6. Phase E: Post-sunset, modifying the language with only a self-hosted compiler</a></h2>
+<h2 id="cross-compiler-testing-mechanics"><a href="#cross-compiler-testing-mechanics">6. Cross-compiler testing mechanics</a></h2>
+<p>Phase C's "differential parity" gate and Phase D's CI policy both rest
+on per-stage differential tests that compare the Python compiler's
+output against the zerolang compiler's output for the same source.
+This section covers the mechanics one layer below those policies:
+which test file to extend or create for each compiler stage, what
+oracle to diff, what stays Python-only, and which existing prototype
+patterns to mirror.</p>
+<p>Three layers of comparison live here. Two -- per-stage differential
+(below) and the fixed-point check -- gate Phase C onward. The third,
+end-to-end CLI parity, opens up only once <code>zc.z</code> exists.</p>
+<h3 id="per-stage-differential"><a href="#per-stage-differential">6.1. Per-stage differential</a></h3>
+<p>Each compiler stage gets its own <code>tests/test_*_differential.py</code>.
+Each file is roughly 60 lines mirroring the shape of the existing
+<code>tests/test_lexer_differential.py</code>: parametrize over
+<code>examples/*.z</code> plus any per-stage extra fixtures, run both
+compilers, diff their stage outputs.</p>
+<p>Add each file only when the zerolang side of that stage ships. The
+acceptance corpus stays frozen; the harnesses are what grow.</p>
+<table>
+<colgroup>
+<col style="width: 12%">
+<col style="width: 12%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Stage</th><th style="text-align: left">Input</th><th style="text-align: left">Oracle to diff</th><th style="text-align: left">Test file</th><th style="text-align: left">Reuse</th></tr>
+</thead>
+<tbody>
+<tr><td>Lexer</td><td><code>.z</code> file</td><td>Token-stream dump (canonical printer)</td><td><code>tests/test_lexer_differential.py</code> (already multi-compiler ready)</td><td>96 goldens at <code>tests/fixtures/lexer_golden/</code></td></tr>
+<tr><td>Parser</td><td><code>.z</code> file</td><td><code>zc --dump-sql</code> AST subset</td><td><code>tests/test_parser_differential.py</code> (new)</td><td>subprocess pattern from <code>tests/test_cli.py</code></td></tr>
+<tr><td>Typecheck</td><td><code>.z</code> file</td><td><code>zc --dump-sql</code> typing subset</td><td><code>tests/test_typecheck_differential.py</code> (new)</td><td>as above</td></tr>
+<tr><td>Emitter</td><td><code>.z</code> file</td><td>Byte-identical (or whitespace-normalized) C output</td><td><code>tests/test_emitter_differential.py</code> (new)</td><td>as above</td></tr>
+<tr><td>Runtime</td><td><code>.z</code> file</td><td>Compiled-program stdout + stderr + exit code</td><td><code>tests/test_runtime_differential.py</code> (new)</td><td><code>compile_and_run</code> in <code>tests/test_emitter.py</code></td></tr>
+</tbody>
+</table>
+<p>SQL dump is the recommended oracle for parser and typecheck because
+the dump is structurally canonical -- both compilers must emit
+identical rows for the same input -- and because it catches
+typechecker drift that the emitter would smooth over downstream.
+This rationale is the same one stated under "Critical files and
+existing infrastructure to reuse" below.</p>
+<h3 id="end-to-end-cli-parity"><a href="#end-to-end-cli-parity">6.2. End-to-end CLI parity</a></h3>
+<p>Once <code>zc.z</code> can compile the existing acceptance corpus, parametrize
+each subprocess-based test over <code>{python_zc, zerolang_zc}</code>. The
+template is <code>tests/test_cli.py</code> (19 existing tests that invoke
+<code>zc.py</code> via subprocess and assert on exit codes, error format,
+output routing); add a <code>compiler</code> pytest fixture that yields the
+binary path, and a <code>@pytest.mark.both_compilers</code> gate so the
+parametrization is opt-in. The matrix doubles total test time when
+both compilers participate; the marker keeps day-to-day inner-loop
+work cheap.</p>
+<p>This layer covers external behaviour: exit codes, diagnostics,
+output routing, runtime behaviour of compiled programs. It does not
+test internals.</p>
+<h3 id="what-stays-python-only"><a href="#what-stays-python-only">6.3. What stays Python-only</a></h3>
+<p>The 13K-line <code>tests/test_typecheck.py</code> (and the smaller
+<code>tests/test_parser.py</code>, <code>tests/test_lexer.py</code>,
+<code>tests/test_vfs.py</code>, and friends) import the compiler modules
+directly and assert on Python data-structure shapes -- <code>ZType</code>,
+<code>ZTyping</code>, <code>ZEntry</code>, <code>ZSymbolTable</code>, AST node fields, and so
+on. These tests are Python-internal. They test the reference
+implementation's surface, not its observable behaviour, and have no
+portable analogue.</p>
+<p>Do not try to dual-target them. When the zerolang typechecker is
+ported, it gets its own (zerolang-written) internal tests. The
+per-stage differential test above catches behavioural drift between
+the two implementations; the internal tests on each side police
+their own implementation's invariants.</p>
+<h3 id="fixed-point-check"><a href="#fixed-point-check">6.4. Fixed-point check</a></h3>
+<p>The ultimate gate, owned by a single test <code>tests/test_fixedpoint.py</code>:
+build zerolang-from-Python (call this <code>stage1</code>), use <code>stage1</code> to
+build itself (<code>stage2</code>), assert <code>stage1</code> and <code>stage2</code> are
+byte-identical. This restates Phase C gate 2 as an executable test.</p>
+<p>Opt-in marker -- it is slow and only meaningful once zerolang has
+fully ported. Lives outside the inner-loop test suite. Required to
+pass before tagging <code>selfhost-ok</code>.</p>
+<h3 id="existing-helpers-to-reuse-when-wiring-this-up"><a href="#existing-helpers-to-reuse-when-wiring-this-up">6.5. Existing helpers to reuse when wiring this up</a></h3>
+<ul>
+<li><code>tests/conftest.py::make_parser</code> -- pickled stdlib cache,
+saves about 75 ms per test that needs the system library.
+Reuse for any per-stage harness that constructs a parser
+in-process to drive the Python side.</li>
+<li><code>tests/test_emitter.py::emit_source / compile_and_run /
+      compile_and_capture</code> -- already implement the parse +
+typecheck + emit + gcc + run pipeline with <code>Z_TEST_CC</code>
+override. Reuse for the runtime-stage differential and for
+the fixed-point test.</li>
+<li><code>tests/test_cli.py</code> -- the canonical subprocess pattern
+for invoking <code>zc.py</code> with arbitrary flags and capturing
+exit codes plus stdout plus stderr. Mirror this when wiring
+the CLI-parity layer.</li>
+<li><code>tests/test_zlexer_z.py</code> -- the prototype for "build an
+#~".z"-derived binary once per session then run it against
+checked-in fixtures." The session-scoped <code>zlexer_binary</code>
+fixture and <code>_run_zlexer</code> helper generalise directly to the
+eventual <code>zc.z</code> binary.</li>
+<li><code>src/zsqldump.py</code> plus the <code>--dump-sql</code> flag on
+<code>src/zc.py</code> -- the structural oracle for the parser and
+typecheck stages.</li>
+</ul>
+<h2 id="phase-e-post-sunset-modifying-the-language-with-only-a-self-hosted-compiler"><a href="#phase-e-post-sunset-modifying-the-language-with-only-a-self-hosted-compiler">7. Phase E: Post-sunset, modifying the language with only a self-hosted compiler</a></h2>
 <p>Adopt the Rust and Go pattern.</p>
-<h3 id="bootstrap-chain-after-sunset"><a href="#bootstrap-chain-after-sunset">6.1. Bootstrap chain after sunset</a></h3>
+<h3 id="bootstrap-chain-after-sunset"><a href="#bootstrap-chain-after-sunset">7.1. Bootstrap chain after sunset</a></h3>
 <ul>
 <li>Each released compiler version N is built by the previous released
       compiler N-1.</li>
@@ -377,7 +494,7 @@ compilers; both must accept the same source.</p>
       that builds <code>main</code> today. Bump it on a defined cadence (for example,
       every minor release).</li>
 </ul>
-<h3 id="two-step-pattern-for-adding-a-language-feature-the-compiler-itself-wants-to-use"><a href="#two-step-pattern-for-adding-a-language-feature-the-compiler-itself-wants-to-use">6.2. Two-step pattern for adding a language feature the compiler itself wants to use</a></h3>
+<h3 id="two-step-pattern-for-adding-a-language-feature-the-compiler-itself-wants-to-use"><a href="#two-step-pattern-for-adding-a-language-feature-the-compiler-itself-wants-to-use">7.2. Two-step pattern for adding a language feature the compiler itself wants to use</a></h3>
 <ol>
 <li>Release N: add the feature (parser, typechecker, emitter).
 The compiler implements it but does not yet use it. Release N is
@@ -388,11 +505,11 @@ it (N) understands it.</li>
 </ol>
 <p>This is the standard discipline. It costs one release-cycle of latency but
 eliminates "chicken-and-egg" hazards entirely.</p>
-<h3 id="bootstrap-subset-enforcement"><a href="#bootstrap-subset-enforcement">6.3. Bootstrap subset enforcement</a></h3>
+<h3 id="bootstrap-subset-enforcement"><a href="#bootstrap-subset-enforcement">7.3. Bootstrap subset enforcement</a></h3>
 <p>The bootstrap-lint sibling from Phase B becomes load-bearing here. It pins
 the set of zerolang features the compiler in <code>main</code> is allowed to use.
 Updating that set is what bumping the bootstrap version means in practice.</p>
-<h2 id="critical-files-and-existing-infrastructure-to-reuse"><a href="#critical-files-and-existing-infrastructure-to-reuse">7. Critical files and existing infrastructure to reuse</a></h2>
+<h2 id="critical-files-and-existing-infrastructure-to-reuse"><a href="#critical-files-and-existing-infrastructure-to-reuse">8. Critical files and existing infrastructure to reuse</a></h2>
 <ul>
 <li><code>Makefile</code> -- already enforces <code>make check</code> (ruff, lint, type
 check, bootstrap-lint). The bootstrap-lint counts are the porting
@@ -411,12 +528,12 @@ must update this file.</li>
 tests) -- the acceptance corpus. Treat them as immutable during the
 port.</li>
 </ul>
-<h2 id="what-proceeding-means-and-what-it-does-not"><a href="#what-proceeding-means-and-what-it-does-not">8. What "proceeding" means, and what it does not</a></h2>
+<h2 id="what-proceeding-means-and-what-it-does-not"><a href="#what-proceeding-means-and-what-it-does-not">9. What "proceeding" means, and what it does not</a></h2>
 <p>This is a strategy document. Approving it does not start coding. It commits
 the project to the phasing and the policy decisions: port as forcing
 function, 6-month parallel maintenance, two-step bootstrap pattern post-
 sunset. The day-to-day work that follows is governed by per-item plans.</p>
-<h3 id="phase-a-begins-item-by-item"><a href="#phase-a-begins-item-by-item">8.1. Phase A begins, item by item</a></h3>
+<h3 id="phase-a-begins-item-by-item"><a href="#phase-a-begins-item-by-item">9.1. Phase A begins, item by item</a></h3>
 <p>Each of the following gets its own detailed plan before any code is touched.
 None of them is a small change.</p>
 <p>All four Phase A items closed 2026-05-23. Phase A is complete; the
@@ -425,17 +542,17 @@ language is frozen for the port. See the closure summary in the
 2026-04-28 review are already closed (see the "Compiler-shape: already
 closed" subsection of Phase A above). These five are independent enough to
 sequence by appetite rather than by dependency.</p>
-<h3 id="phase-b-is-gated"><a href="#phase-b-is-gated">8.2. Phase B is gated</a></h3>
+<h3 id="phase-b-is-gated"><a href="#phase-b-is-gated">9.2. Phase B is gated</a></h3>
 <p>Phase B (the port itself) is gated on Phase A completion and on tagging
 <code>python-stage0</code>. Each port milestone (lexer, parser, AST, VFS, generator
 desugaring, typechecker, emitter, CLI) also gets its own plan. The
 typechecker port in particular will likely decompose further into sub-plans
 by method-cluster.</p>
-<h3 id="phases-c-through-e-are-policy-phases"><a href="#phases-c-through-e-are-policy-phases">8.3. Phases C through E are policy phases</a></h3>
+<h3 id="phases-c-through-e-are-policy-phases"><a href="#phases-c-through-e-are-policy-phases">9.3. Phases C through E are policy phases</a></h3>
 <p>The CI configuration and the bootstrap-version cadence each need a short
 setup plan when their phase begins, but most of the work is following the
 rules this strategy establishes.</p>
-<h2 id="sanity-checks"><a href="#sanity-checks">9. Sanity checks</a></h2>
+<h2 id="sanity-checks"><a href="#sanity-checks">10. Sanity checks</a></h2>
 <p>Before kickoff:</p>
 <ol>
 <li>Run <code>make check &amp;&amp; make test</code> on a clean checkout to confirm the

@@ -286,6 +286,116 @@ compilers; both must accept the same source.
       history forever.]
 
 
+#--: Cross-compiler testing mechanics
+
+Phase C's "differential parity" gate and Phase D's CI policy both rest
+on per-stage differential tests that compare the Python compiler's
+output against the zerolang compiler's output for the same source.
+This section covers the mechanics one layer below those policies:
+which test file to extend or create for each compiler stage, what
+oracle to diff, what stays Python-only, and which existing prototype
+patterns to mirror.
+
+Three layers of comparison live here. Two -- per-stage differential
+(below) and the fixed-point check -- gate Phase C onward. The third,
+end-to-end CLI parity, opens up only once #~"zc.z" exists.
+
+#---: Per-stage differential
+
+Each compiler stage gets its own #~"tests/test_*_differential.py".
+Each file is roughly 60 lines mirroring the shape of the existing
+#~"tests/test_lexer_differential.py": parametrize over
+#~"examples/*.z" plus any per-stage extra fixtures, run both
+compilers, diff their stage outputs.
+
+Add each file only when the zerolang side of that stage ships. The
+acceptance corpus stays frozen; the harnesses are what grow.
+
+#table cols="2 2 4 4 4":
+  Stage       | Input        | Oracle to diff                                            | Test file                                   | Reuse
+  Lexer       | #~".z" file  | Token-stream dump (canonical printer)                     | #~"tests/test_lexer_differential.py" (already multi-compiler ready) | 96 goldens at #~"tests/fixtures/lexer_golden/"
+  Parser      | #~".z" file  | #~"zc --dump-sql" AST subset                              | #~"tests/test_parser_differential.py" (new)  | subprocess pattern from #~"tests/test_cli.py"
+  Typecheck   | #~".z" file  | #~"zc --dump-sql" typing subset                           | #~"tests/test_typecheck_differential.py" (new) | as above
+  Emitter     | #~".z" file  | Byte-identical (or whitespace-normalized) C output        | #~"tests/test_emitter_differential.py" (new) | as above
+  Runtime     | #~".z" file  | Compiled-program stdout + stderr + exit code              | #~"tests/test_runtime_differential.py" (new) | #~"compile_and_run" in #~"tests/test_emitter.py"
+
+SQL dump is the recommended oracle for parser and typecheck because
+the dump is structurally canonical -- both compilers must emit
+identical rows for the same input -- and because it catches
+typechecker drift that the emitter would smooth over downstream.
+This rationale is the same one stated under "Critical files and
+existing infrastructure to reuse" below.
+
+#---: End-to-end CLI parity
+
+Once #~"zc.z" can compile the existing acceptance corpus, parametrize
+each subprocess-based test over #~"{python_zc, zerolang_zc}". The
+template is #~"tests/test_cli.py" (19 existing tests that invoke
+#~"zc.py" via subprocess and assert on exit codes, error format,
+output routing); add a #~"compiler" pytest fixture that yields the
+binary path, and a #~"@pytest.mark.both_compilers" gate so the
+parametrization is opt-in. The matrix doubles total test time when
+both compilers participate; the marker keeps day-to-day inner-loop
+work cheap.
+
+This layer covers external behaviour: exit codes, diagnostics,
+output routing, runtime behaviour of compiled programs. It does not
+test internals.
+
+#---: What stays Python-only
+
+The 13K-line #~"tests/test_typecheck.py" (and the smaller
+#~"tests/test_parser.py", #~"tests/test_lexer.py",
+#~"tests/test_vfs.py", and friends) import the compiler modules
+directly and assert on Python data-structure shapes -- #~"ZType",
+#~"ZTyping", #~"ZEntry", #~"ZSymbolTable", AST node fields, and so
+on. These tests are Python-internal. They test the reference
+implementation's surface, not its observable behaviour, and have no
+portable analogue.
+
+Do not try to dual-target them. When the zerolang typechecker is
+ported, it gets its own (zerolang-written) internal tests. The
+per-stage differential test above catches behavioural drift between
+the two implementations; the internal tests on each side police
+their own implementation's invariants.
+
+#---: Fixed-point check
+
+The ultimate gate, owned by a single test #~"tests/test_fixedpoint.py":
+build zerolang-from-Python (call this #~"stage1"), use #~"stage1" to
+build itself (#~"stage2"), assert #~"stage1" and #~"stage2" are
+byte-identical. This restates Phase C gate 2 as an executable test.
+
+Opt-in marker -- it is slow and only meaningful once zerolang has
+fully ported. Lives outside the inner-loop test suite. Required to
+pass before tagging #~"selfhost-ok".
+
+#---: Existing helpers to reuse when wiring this up
+
+#ul:
+  [#*: #~"tests/conftest.py::make_parser" -- pickled stdlib cache,
+      saves about 75 ms per test that needs the system library.
+      Reuse for any per-stage harness that constructs a parser
+      in-process to drive the Python side.]
+  [#*: #~"tests/test_emitter.py::emit_source / compile_and_run /
+      compile_and_capture" -- already implement the parse +
+      typecheck + emit + gcc + run pipeline with #~"Z_TEST_CC"
+      override. Reuse for the runtime-stage differential and for
+      the fixed-point test.]
+  [#*: #~"tests/test_cli.py" -- the canonical subprocess pattern
+      for invoking #~"zc.py" with arbitrary flags and capturing
+      exit codes plus stdout plus stderr. Mirror this when wiring
+      the CLI-parity layer.]
+  [#*: #~"tests/test_zlexer_z.py" -- the prototype for "build an
+      #~".z"-derived binary once per session then run it against
+      checked-in fixtures." The session-scoped #~"zlexer_binary"
+      fixture and #~"_run_zlexer" helper generalise directly to the
+      eventual #~"zc.z" binary.]
+  [#*: #~"src/zsqldump.py" plus the #~"--dump-sql" flag on
+      #~"src/zc.py" -- the structural oracle for the parser and
+      typecheck stages.]
+
+
 #--: Phase E: Post-sunset, modifying the language with only a self-hosted compiler
 
 Adopt the Rust and Go pattern.
