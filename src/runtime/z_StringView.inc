@@ -25,8 +25,8 @@ static int32_t z_StringView_cmp(z_StringView_t a, z_StringView_t b) {
 static z_String_t z_String_from_view(z_StringView_t sv) {
     z_String_t z = {0};
     z.size = sv.length;
-    z.capacity = sv.length + 1;
-    z.data = (char*)z_xmalloc(z.capacity);
+    z.capacity = sv.length;
+    z.data = (char*)z_xmalloc(sv.length + 1);
     memcpy(z.data, sv.data, sv.length);
     z.data[sv.length] = '\0';
     return z;

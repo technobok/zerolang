@@ -1729,6 +1729,22 @@ class TestEmitterStringOwnership:
         output = compile_and_run(csource)
         assert output.strip() == "Hello 42!"
 
+    def test_string_from_view_empty_then_append_no_overflow(self):
+        """Round-trip from an empty StringView (`.string` of `""`)
+        followed by `.appendByte` must not heap-overflow the
+        single-byte allocation. Was caught by ASAN on the lexer
+        port; `z_String_from_view` was setting capacity to
+        sv.length+1 (off-by-one against the nul terminator)."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  s: "".string\n'
+            "  s.appendByte b: 65.u8\n"
+            '  print "\\{s}"\n'
+            "}"
+        )
+        output = compile_and_run(csource, extra_cflags=["-fsanitize=address", "-g"])
+        assert output.strip() == "A"
+
     def test_string_reassignment(self):
         """Old value freed via z_String_free, new value assigned correctly."""
         csource = emit_source(
