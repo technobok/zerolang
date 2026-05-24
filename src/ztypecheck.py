@@ -7267,11 +7267,23 @@ class TypeChecker:
             return
         conflict = self.symtab.find_exclusive_lock(path)
         if conflict:
-            _, holder = conflict
+            held_path, holder = conflict
+            holder_name = self.symtab.format_lock_holder(holder)
+            held_str = ""
+            if len(held_path) > 1:
+                held_str = f" on '{'.'.join(held_path)}'"
+            hint: Optional[str] = None
+            if holder.kind == ZLockHolderKind.VAR:
+                hint = (
+                    f"read through '{holder_name}' instead, or end "
+                    f"'{holder_name}'s scope first to release the lock"
+                )
             self._error(
-                f"{context}: '{path[0]}' has exclusive lock held by '{holder}'",
+                f"{context}: '{path[0]}' has exclusive lock{held_str} held by "
+                f"'{holder_name}'",
                 loc=loc,
                 err=ERR.OWNERERROR,
+                hint=hint,
             )
 
     def _check_swap_ownership(self, path: zast.Path, side: str, loc: Token) -> None:

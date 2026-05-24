@@ -2735,6 +2735,75 @@ class TestLockEnforcement:
             "}"
         )
 
+    def test_read_only_method_on_locked_source_rejected(self):
+        """Reads on the locked source overlap the exclusive lock and are
+        rejected -- see doc/ownership.pdoc, Lock Enforcement
+        ("both reads and writes"). The documented pattern is to read
+        through the view (`v.length`). The error must name the holding
+        variable, not its raw Holder repr, and include a hint."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.stringview\n"
+            "  n: s.length\n"
+            "}"
+        )
+        assert any(
+            "exclusive lock" in e.msg.lower()
+            and "'s'" in e.msg
+            and "'v'" in e.msg
+            and "ZLockHolder" not in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+        # The hint should point the user at the view variable.
+        assert any(
+            e.hint is not None and "'v'" in e.hint
+            for e in errors
+            if "exclusive lock" in e.msg.lower()
+        ), [(e.msg, e.hint) for e in errors]
+
+    def test_read_through_view_allowed(self):
+        """Reading the same data via the view (`v.length`) is the
+        documented workaround and must type-check cleanly."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.stringview\n"
+            "  n: v.length\n"
+            "}"
+        )
+
+    def test_read_source_after_view_scope_exit_allowed(self):
+        """Once the view's scope ends, the source's exclusive lock is
+        released and reads of the source resume."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  {\n"
+            "    v: s.stringview\n"
+            "    a: v.length\n"
+            "  }\n"
+            "  b: s.length\n"
+            "}"
+        )
+
+    def test_field_leaf_lock_error_reports_full_path(self):
+        """When the lock is on a field leaf (e.g. `(p, name)`), the
+        error message must include the held Path so the user can
+        distinguish leaf-locked from root-locked cases."""
+        errors = check_errors(
+            "namePair: record { name: String other: String }\n"
+            "main: function is {\n"
+            '  p: namePair name: "a".string other: "b".string\n'
+            "  v: p.name.stringview\n"
+            "  s: p.name\n"
+            "}"
+        )
+        assert any(
+            "exclusive lock" in e.msg.lower() and "p.name" in e.msg and "'v'" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
     def test_method_call_with_arg_derived_from_receiver_allowed(self):
         """Call-identity stack (Phase C step 1): a method call whose
         argument borrows from the same receiver Path should not
