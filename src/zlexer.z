@@ -21,21 +21,20 @@
 #
 #     <lineno>:<colno> <TTNAME> "<escaped-tokstr>"
 
-# Named u8 constants for byte comparisons. Spec describes `0c<char>`
-# literals (doc/spec.pdoc Character literals) but the current Python
-# lexer / parser / typechecker doesn't implement them, so bare
-# integer codepoints + named constants are the readable form today.
-# Mirrors src/zchar.py.
-
+# Named u8 constants for byte comparisons. Mirrors src/zchar.py.
+#
 # Per doc/styleguide.pdoc, constants are lowerCamelCase. The `c`
 # prefix marks "character byte" -- avoids keyword collisions
 # (`out`, `in`) and visual confusion with the TT arm names.
 #
-# Declared as bare-int (i64) rather than `name: 32.u8` -- the typed-
-# literal form currently emits no C declaration. The bare-int form
-# compiles to a `static const int64_t` and the cross-type compare
-# `b: u8 == cSpace: i64` typechecks (literal coercion treats the
-# const ref as if it were the underlying literal value).
+# `0c<id-char>` shorthand (e.g. `0cA`) works for identifier chars
+# but escape sequences (`0c\n`, `0c\xHH`) and non-identifier
+# delimiters (`0c#`, `0c\\`) are still deferred, so most of the
+# entries below — control chars + delimiter chars — would need
+# the deferred forms. Keeping the table intact until the deferred
+# forms land so it can be retired in one shot. The const form is
+# now macro-style (no `static const` decl; value inlined at every
+# use site).
 cNul:        0
 cHt:         9      # \t
 cLf:         10     # \n
@@ -69,7 +68,6 @@ TT: variant {
     BOF: null
     EOF: null
     ERR: null
-    NONE: null        # sentinel returned by kwlookup for "not a keyword"
     WS: null
     EOL: null
     COMMENT: null
@@ -123,6 +121,10 @@ Token: class {
     colno: u32
     tokenid: u64
 }
+
+# kwlookup result: a token type plus a "found" flag. Returned by
+# `kwlookup` instead of routing through a `TT` sentinel arm.
+kwresult: record { found: bool tt: TT }
 
 # Byte-class predicates used by the scanner dispatch.
 
@@ -181,8 +183,7 @@ Tokenizer: class {
     fsno: u32
     lineno: u32
     colno: u32
-    # Single-slot lookahead as a typed Token field (PR-4 friction
-    # workaround removed — to be re-derived for Item 3).
+    # Single-slot lookahead as a typed Token field.
     hasnext: bool
     nexttok: Token
 } as {
@@ -434,31 +435,22 @@ Tokenizer: class {
             return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0.u64
         }
 
-        # Word is non-empty. Decide token type. To avoid the
-        # typechecker over-propagating the buf take through nested
-        # if/else chains, we structure as three mutually-exclusive
-        # early returns -- buf is taken in exactly one place per
-        # execution path.
+        # Word is non-empty. Decide token type. Three mutually-
+        # exclusive early returns -- buf is consumed via `.copy`
+        # in exactly one place per execution path.
 
-        kw_tt: kwlookup sv: buf.stringview
-        kwfound: false
-        match (
-            kw_tt
-        ) case NONE then {} else {
-            kwfound = true
-        }
+        kw_res: kwlookup sv: buf.stringview
+        kwfound: kw_res.found
         reservedfound: islookup_reserved sv: buf.stringview
 
         # Path 1: colonpre. Stash the word, return cColon-as-ERR.
-        # `.copy` rather than `take` -- the take's effect over-
-        # propagates through the typechecker into subsequent paths
-        # (issue #4-shape gap that wasn't closed for nested if).
+        # `.copy` here so `buf` survives for the path-3 fallthrough
+        # caller (a take would consume it on the conditional branch).
         if has_colonpre then {
             stage_tt: TT.LABELPRE
             if kwfound then stage_tt = TT.ERR
             if reservedfound then stage_tt = TT.ERR
-            nstr: buf.copy
-            this.nexttok = Token toktype: stage_tt tokstr: nstr fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
+            this.nexttok = Token toktype: stage_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
             this.hasnext = true
             colon_only: "".string
             colon_only.appendByte b: cColon.u8
@@ -481,6 +473,12 @@ Tokenizer: class {
             this.nexttok = Token toktype: TT.COLON tokstr: ":".string fsno: this.fsno lineno: this.lineno colno: this.colno tokenid: 0.u64
             this.hasnext = true
             this.accept
+            # Inline `tokstr: buf.copy` here over-propagates the take
+            # through the conditional to the path-3 fallthrough below.
+            # The Item-2 compiler fix exempted `.copy` for field
+            # reassignments but not yet for class-construction call
+            # args in conditional branches; keep the local binding
+            # until that gap closes.
             labelbuf: buf.copy
             return Token toktype: TT.LABEL tokstr: labelbuf fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
         }
@@ -488,52 +486,46 @@ Tokenizer: class {
         # Path 3: no colonpre, no trailing-colon-label. REFID, keyword,
         # or reserved-as-ERR via a single computed `tt`.
         ret_tt: TT.REFID
-        if kwfound then ret_tt = kw_tt
+        if kwfound then ret_tt = kw_res.tt
         if reservedfound then ret_tt = TT.ERR
-        retbuf: buf.copy
-        return Token toktype: ret_tt tokstr: retbuf fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
+        return Token toktype: ret_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
     }
 }
 
 # Keyword and reserved-word lookups. Per-call StringView equality;
 # acceptable at this scale, can migrate to a Map later.
-#
-# Returns TT.NONE when the word isn't a keyword. (A record-of-(bool, TT)
-# return would trigger the emitter to generate a z_bool_eq helper
-# that the C runtime doesn't define -- the TT.NONE sentinel
-# sidesteps it.)
 
-kwlookup: function {sv: StringView} out TT is {
-    if sv == "=" then return TT.EQUALS
-    if sv == "function" then return TT.FUNCTION
-    if sv == "if" then return TT.IF
-    if sv == "when" then return TT.WHEN
-    if sv == "then" then return TT.THEN
-    if sv == "else" then return TT.ELSE
-    if sv == "for" then return TT.FOR
-    if sv == "loop" then return TT.LOOP
-    if sv == "while" then return TT.WHILE
-    if sv == "do" then return TT.DO
-    if sv == "case" then return TT.CASE
-    if sv == "match" then return TT.MATCH
-    if sv == "on" then return TT.ON
-    if sv == "out" then return TT.OUT
-    if sv == "in" then return TT.IN
-    if sv == "swap" then return TT.SWAP
-    if sv == "unit" then return TT.UNIT
-    if sv == "record" then return TT.RECORD
-    if sv == "class" then return TT.CLASS
-    if sv == "union" then return TT.UNION
-    if sv == "variant" then return TT.VARIANT
-    if sv == "protocol" then return TT.PROTOCOL
-    if sv == "data" then return TT.DATA
-    if sv == "is" then return TT.IS
-    if sv == "as" then return TT.AS
-    if sv == "with" then return TT.WITH
-    if sv == "facet" then return TT.FACET
-    if sv == "native" then return TT.NATIVE
-    if sv == "yield" then return TT.YIELD
-    return TT.NONE
+kwlookup: function {sv: StringView} out kwresult is {
+    if sv == "=" then return kwresult found: true tt: TT.EQUALS
+    if sv == "function" then return kwresult found: true tt: TT.FUNCTION
+    if sv == "if" then return kwresult found: true tt: TT.IF
+    if sv == "when" then return kwresult found: true tt: TT.WHEN
+    if sv == "then" then return kwresult found: true tt: TT.THEN
+    if sv == "else" then return kwresult found: true tt: TT.ELSE
+    if sv == "for" then return kwresult found: true tt: TT.FOR
+    if sv == "loop" then return kwresult found: true tt: TT.LOOP
+    if sv == "while" then return kwresult found: true tt: TT.WHILE
+    if sv == "do" then return kwresult found: true tt: TT.DO
+    if sv == "case" then return kwresult found: true tt: TT.CASE
+    if sv == "match" then return kwresult found: true tt: TT.MATCH
+    if sv == "on" then return kwresult found: true tt: TT.ON
+    if sv == "out" then return kwresult found: true tt: TT.OUT
+    if sv == "in" then return kwresult found: true tt: TT.IN
+    if sv == "swap" then return kwresult found: true tt: TT.SWAP
+    if sv == "unit" then return kwresult found: true tt: TT.UNIT
+    if sv == "record" then return kwresult found: true tt: TT.RECORD
+    if sv == "class" then return kwresult found: true tt: TT.CLASS
+    if sv == "union" then return kwresult found: true tt: TT.UNION
+    if sv == "variant" then return kwresult found: true tt: TT.VARIANT
+    if sv == "protocol" then return kwresult found: true tt: TT.PROTOCOL
+    if sv == "data" then return kwresult found: true tt: TT.DATA
+    if sv == "is" then return kwresult found: true tt: TT.IS
+    if sv == "as" then return kwresult found: true tt: TT.AS
+    if sv == "with" then return kwresult found: true tt: TT.WITH
+    if sv == "facet" then return kwresult found: true tt: TT.FACET
+    if sv == "native" then return kwresult found: true tt: TT.NATIVE
+    if sv == "yield" then return kwresult found: true tt: TT.YIELD
+    return kwresult found: false tt: TT.EOF
 }
 
 islookup_reserved: function {sv: StringView} out bool is {
@@ -560,8 +552,6 @@ ttname: function {t: TT} out String is {
         return "EOF".string
     } case ERR then {
         return "ERR".string
-    } case NONE then {
-        return "NONE".string
     } case WS then {
         return "WS".string
     } case EOL then {
