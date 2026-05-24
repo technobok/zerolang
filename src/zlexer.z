@@ -1,18 +1,33 @@
-# Skeleton lexer for the self-hosting port (Phase B PR 2 / 3).
+# zlexer.z -- self-host port of src/zlexer.py (Phase B PR 3).
 #
-# Always returns EOF. PRs 3-7 progressively fill in the scanner; PR 8
-# wires this unit into the differential token-dump harness against the
-# Python reference (src/ztokendump.py).
+# Bedrock-layer scanner: file I/O, EOF/EOL/position tracking,
+# whitespace, comments, dot variants, and single-char structural
+# delimiters. Identifiers, keywords, numeric literals, and string
+# literals are deferred to PRs 4-7 -- any byte the dispatch below
+# does not recognise emits a one-byte TT.ERR token.
+#
+# PR 8 wires this binary into the differential token-dump harness
+# (tests/test_lexer_differential.py) against the Python reference
+# (src/ztokendump.py).
 #
 # Canonical output line matches the Python printer:
 #
 #     <lineno>:<colno> <TTNAME> "<escaped-tokstr>"
-#
-# For an empty input the printer's expected output is `1:0 EOF ""`.
 
 TT: variant {
     BOF: null
     EOF: null
+    ERR: null
+    WS: null
+    EOL: null
+    COMMENT: null
+    SEMICOLON: null
+    PARENOPEN: null
+    PARENCLOSE: null
+    BRACEOPEN: null
+    BRACECLOSE: null
+    DOT: null
+    DOTDOTDOT: null
 }
 
 Token: class {
@@ -24,13 +39,174 @@ Token: class {
     tokenid: u64
 }
 
+# Byte-class predicates used by the scanner dispatch.
+
+isws: function {b: u8} out bool is {
+    if b == 32 then return true
+    if b == 9 then return true
+    return false
+}
+
+iseol: function {b: u8} out bool is {
+    if b == 10 then return true
+    if b == 13 then return true
+    return false
+}
+
+iscommentbody: function {b: u8} out bool is {
+    if b == 0 then return false
+    if b == 10 then return false
+    if b == 13 then return false
+    return true
+}
+
 Tokenizer: class {
+    source: String
+    pos: u64
+    atchar: u8
     fsno: u32
     lineno: u32
     colno: u32
 } as {
-    token: function {self: this} out Token is {
-        return Token toktype: TT.EOF tokstr: "".string fsno: self.fsno lineno: self.lineno colno: self.colno tokenid: 0
+    create: function {source: String.take fsno: u32} out this is {
+        return meta.create source: source pos: 0 atchar: 0 fsno: fsno lineno: 1 colno: 0
+    }
+
+    # Advance one byte. Returns the byte just placed in .atchar
+    # (NUL if past end of source). Mirrors src/zlexer.py:130 _accept.
+    accept: function {:this} out u8 is {
+        sv: this.source.stringview
+        b: sv.byteAt i: this.pos
+        match (
+            b
+        ) case some then {
+            this.atchar = b
+            this.pos = this.pos + 1
+            this.colno = this.colno + 1
+            return b
+        } case none then {
+            this.atchar = 0
+            return 0
+        }
+    }
+
+    token: function {:this} out Token is {
+        # Prime the look-ahead on the first call (pos == 0 means
+        # `accept` has never run). After this, .atchar holds the next
+        # byte to dispatch on (or NUL if the source is empty).
+        if this.pos == 0 then this.accept
+        line: this.lineno
+        col: this.colno
+        c: this.atchar
+
+        if c == 0 then {
+            return Token toktype: TT.EOF tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        if c == 10 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            this.lineno = this.lineno + 1
+            this.colno = 1
+            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        if c == 13 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            if this.atchar == 10 then {
+                buf.appendByte b: this.atchar
+                this.accept
+            }
+            this.lineno = this.lineno + 1
+            this.colno = 1
+            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        if (isws b: c) then {
+            buf: "".string
+            for loop {
+                cur: this.atchar
+                if cur == 32 then {} else if cur == 9 then {} else {
+                    break
+                }
+                buf.appendByte b: cur
+                this.accept
+            }
+            return Token toktype: TT.WS tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        if c == 35 then {
+            buf: "".string
+            for loop {
+                cur: this.atchar
+                if cur == 0 then break
+                if cur == 10 then break
+                if cur == 13 then break
+                buf.appendByte b: cur
+                this.accept
+            }
+            return Token toktype: TT.COMMENT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        if c == 46 then {
+            buf: "".string
+            n: 0.u64
+            for loop {
+                cur: this.atchar
+                if cur == 46 then {} else break
+                buf.appendByte b: cur
+                n = n + 1
+                this.accept
+            }
+            if n == 1 then {
+                return Token toktype: TT.DOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            if n == 3 then {
+                return Token toktype: TT.DOTDOTDOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        if c == 40 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            return Token toktype: TT.PARENOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        if c == 41 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            return Token toktype: TT.PARENCLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        if c == 123 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        if c == 125 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            return Token toktype: TT.BRACECLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        # Note: bare `:` falls through to TT.ERR. The Python reference
+        # only emits TT.COLON via the label-parsing path
+        # (identifier-followed-by-colon), which PR 4 will introduce.
+        if c == 59 then {
+            buf: "".string
+            buf.appendByte b: c
+            this.accept
+            return Token toktype: TT.SEMICOLON tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        buf: "".string
+        buf.appendByte b: c
+        this.accept
+        return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 }
 
@@ -41,11 +217,137 @@ ttname: function {t: TT} out String is {
         return "BOF".string
     } case EOF then {
         return "EOF".string
+    } case ERR then {
+        return "ERR".string
+    } case WS then {
+        return "WS".string
+    } case EOL then {
+        return "EOL".string
+    } case COMMENT then {
+        return "COMMENT".string
+    } case SEMICOLON then {
+        return "SEMICOLON".string
+    } case PARENOPEN then {
+        return "PARENOPEN".string
+    } case PARENCLOSE then {
+        return "PARENCLOSE".string
+    } case BRACEOPEN then {
+        return "BRACEOPEN".string
+    } case BRACECLOSE then {
+        return "BRACECLOSE".string
+    } case DOT then {
+        return "DOT".string
+    } case DOTDOTDOT then {
+        return "DOTDOTDOT".string
     }
 }
 
+# Append the canonical-escape form of byte `b` to `dst`. Mirrors the
+# escape map in src/ztokendump.py:17-39.
+
+hexdigit: function {b: u8} out u8 is {
+    if b < 10 then return b + 48
+    return b - 10 + 97
+}
+
+escape_append: function {b: u8 dst: String} is {
+    if b == 9 then {
+        dst.appendByte b: 92
+        dst.appendByte b: 116
+        return
+    }
+    if b == 10 then {
+        dst.appendByte b: 92
+        dst.appendByte b: 110
+        return
+    }
+    if b == 13 then {
+        dst.appendByte b: 92
+        dst.appendByte b: 114
+        return
+    }
+    if b == 34 then {
+        dst.appendByte b: 92
+        dst.appendByte b: 34
+        return
+    }
+    if b == 92 then {
+        dst.appendByte b: 92
+        dst.appendByte b: 92
+        return
+    }
+    if b >= 32 when b <= 126 then {
+        dst.appendByte b: b
+        return
+    }
+    h: b / 16
+    l: b - h * 16
+    hi: hexdigit b: h
+    lo: hexdigit b: l
+    dst.appendByte b: 92
+    dst.appendByte b: 120
+    dst.appendByte b: hi
+    dst.appendByte b: lo
+}
+
+escape_str: function {sv: StringView} out String is {
+    buf: "".string
+    n: sv.length
+    i: 0.u64
+    for while i < n loop {
+        bopt: sv.byteAt i: i
+        match (
+            bopt
+        ) case some then {
+            escape_append b: bopt dst: buf
+        } case none then {
+            return buf
+        }
+        i = i + 1
+    }
+    return buf
+}
+
 main: function is {
-    tok: Tokenizer fsno: 0 lineno: 1 colno: 0
-    t: tok.token
-    print "\{t.lineno}:\{t.colno} \{ttname t.toktype} \"\{t.tokstr}\""
+    argv: os.args
+    if argv.length < 2 then {
+        io.eprintln "usage: zlexer <file.z>"
+        os.exit code: 2
+    }
+    path: argv.get i: 1.u64
+    r: io.readText path: path.stringview
+    match (
+        r
+    ) case ok then {
+        # `.copy` works around an emitter bug where match-narrowed-
+        # subject + take into a String.take parameter generates a
+        # struct-copy (shallow) plus a destroy at scope exit on both
+        # source and destination -- a double-free on the heap data.
+        # `.copy` allocates a fresh String so the destroys don't
+        # collide. Replace with `r.take` (or bare `r`) when the
+        # take-from-narrowed-subject path is fixed.
+        tok: Tokenizer.create source: r.copy fsno: 0
+        dump tok: tok
+    } case err then {
+        io.eprintln "zlexer: could not read source file"
+        os.exit code: 1
+    }
+}
+
+dump: function {tok: Tokenizer} is {
+    for while true loop {
+        t: tok.token
+        esc: escape_str sv: t.tokstr.stringview
+        name: ttname t: t.toktype
+        print "\{t.lineno}:\{t.colno} \{name} \"\{esc}\""
+        eof: false
+        match (
+            t.toktype
+        ) case EOF then {
+            eof = true
+        } else {
+            eof = false
+        }
+        if eof then return
+    }
 }
