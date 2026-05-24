@@ -391,6 +391,30 @@ class TestEscapeSequences:
         assert compile_and_run(csource) == "x=5\n\n"
 
 
+class TestCharLiterals:
+    """End-to-end coverage of `0c<char>` character literals (spec.pdoc:228+).
+
+    Shorthand form (`0c<id-char>`) only; escape sequences (`0c\\n`,
+    `0c\\xHH`, etc.) and non-identifier chars (`0c#`) remain deferred."""
+
+    def test_char_literal_evaluates_to_codepoint(self):
+        csource = emit_source('main: function is {\n  c: 0cA\n  print "\\{c}"\n}')
+        assert compile_and_run(csource) == "65\n"
+
+    def test_char_literal_with_u8_suffix(self):
+        csource = emit_source('main: function is {\n  c: 0cA.u8\n  print "\\{c}"\n}')
+        assert compile_and_run(csource) == "65\n"
+
+    def test_char_literal_coerces_against_u8(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "  b: 65.u8\n"
+            '  if b == 0cA then print "match" else print "no match"\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "match\n"
+
+
 class TestEmitterBasic:
     def test_hello_world(self):
         csource = emit_source('main: function is { print "Hello, World!" }')

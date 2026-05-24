@@ -152,6 +152,25 @@ class TestNumericLiterals:
             for e in errors
         ), [e.msg for e in errors]
 
+    def test_char_literal_identifier_form(self):
+        check_ok("main: function is { x: 0cA }")
+
+    def test_char_literal_coerces_to_u8(self):
+        check_ok("main: function is { b: 65.u8\n  if b == 0cA then b }")
+
+    def test_char_literal_with_u8_suffix(self):
+        check_ok("main: function is { x: 0cA.u8 }")
+
+    def test_char_literal_with_u32_suffix(self):
+        check_ok("main: function is { x: 0cA.u32 }")
+
+    def test_char_literal_multi_char_rejected(self):
+        # Spec: `0c<char>` is single-character only — `0caa` is an error.
+        errors = check_errors("main: function is { x: 0caa }")
+        assert any("exactly one character" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
+
 
 class TestFunctionParameters:
     def test_function_with_params(self):

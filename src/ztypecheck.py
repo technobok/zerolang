@@ -8137,6 +8137,17 @@ class TypeChecker:
             value = parse_literal_value(name)
             if value is not None:
                 self.typing.node_const_value[atom.nodeid] = value
+            elif name[:2] == "0c":
+                # Char literals are structurally validated here (length
+                # / encoding); a None result means malformed, surface
+                # the diagnostic now so it doesn't slip through to a
+                # silent zero. parse_literal_value swallows
+                # `parse_number`'s error string, so re-run to get it.
+                _, _, err = parse_number(name)
+                if err is not None:
+                    self._error(
+                        f"Invalid character literal: {name}: {err}", loc=atom.start
+                    )
             return t
 
         t = self._resolve_name(name)

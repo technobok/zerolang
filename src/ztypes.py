@@ -674,7 +674,12 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
                 "Numeric type specifier must be float for literals with decimal points",
             )
     elif not numtype:
-        numtype = "i64"
+        # Default type by prefix: char literals (`0c<char>`) default to
+        # c32 (Unicode codepoint), everything else defaults to i64.
+        if rest[:2] == "0c":
+            numtype = "c32"
+        else:
+            numtype = "i64"
 
     rest = rest.replace("_", "")
     prefix = rest[:2]
@@ -688,6 +693,33 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
     elif prefix == "0x":
         base = 16
         rest = rest[2:]
+    elif prefix == "0c":
+        # Character literal: the body is the character(s) whose codepoint
+        # is the value. Spec restricts the shorthand to a single
+        # identifier character (other forms — `0c\n`, `0c\xHH`, `0c#`,
+        # `0c\u{...}` — go through the dedicated lexer path which is
+        # not yet wired in; only the single-identifier-char shorthand
+        # is supported here today). Default type is c32; c8 can be
+        # selected via the `.c8` suffix.
+        body = rest[2:]
+        if numtype is None:
+            numtype = "c32"
+        if len(body) != 1:
+            return (
+                numtype,
+                0,
+                f"Character literal must be exactly one character: {numstr}",
+            )
+        i = ord(body)
+        if numtype in NUMERIC_RANGES:
+            lo, hi = NUMERIC_RANGES[numtype]
+            if i < lo or i > hi:
+                return (
+                    numtype,
+                    i,
+                    f"Value {i} out of range for {numtype} ({lo}..{hi})",
+                )
+        return numtype, i, None
 
     if numtype[0] == "f":
         if base != 10:
