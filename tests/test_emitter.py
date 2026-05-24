@@ -1738,6 +1738,29 @@ class TestEmitterStringOwnership:
         output = compile_and_run(csource)
         assert output.strip() == "world"
 
+    def test_inline_copy_in_field_reassignment(self):
+        """Inline `.copy` in a reftype field reassignment must keep the
+        source live (the copy is a fresh-owned value, not a transfer).
+        Was PR 4 friction item 2."""
+        csource = emit_source(
+            "Holder: class { s: String n: u32 }\n"
+            "fn: function {cond: bool} out Holder is {\n"
+            '  src: "hello".string\n'
+            '  h: Holder s: "".string n: 0.u32\n'
+            "  if cond then {\n"
+            "    h.s = src.copy\n"
+            "  }\n"
+            "  h.s = src.copy\n"
+            "  return h\n"
+            "}\n"
+            "main: function is {\n"
+            "  h: fn cond: true\n"
+            '  print "\\{h.s}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
     def test_string_swap(self):
         """Two strings swapped, both usable after swap."""
         csource = emit_source(

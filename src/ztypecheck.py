@@ -7124,9 +7124,13 @@ class TypeChecker:
         # on the transferred storage. `swap` remains available when
         # both sides need to stay live (keeps two initialised slots
         # without a move).
+        # Exemption: a `.copy` projection produces a fresh owned value
+        # that doesn't alias the source, so the source neither needs
+        # invalidation nor gets rejected when borrowed.
         if existing and not _is_valtype(existing):
             rhs_root = self._get_arg_root_name(reassign.value)
-            if rhs_root:
+            rhs_is_copy = self._rhs_is_copy_projection(reassign.value)
+            if rhs_root and not rhs_is_copy:
                 rhs_var = self.symtab.lookup_var(rhs_root)
                 if rhs_var and rhs_var.ownership == ZOwnership.BORROWED:
                     self._error(
@@ -9653,6 +9657,22 @@ class TypeChecker:
             ):
                 return self._get_arg_root_name(cast(zast.Operation, inner))
         return None
+
+    def _rhs_is_copy_projection(self, op: zast.Operation) -> bool:
+        """True iff the operation is a `<expr>.copy` projection (possibly
+        wrapped in Expression nodes). `.copy` produces a fresh owned value
+        that doesn't alias its source, so transfer-style code paths
+        (field reassignment, call args under TAKE) must skip the
+        source-invalidation step for `.copy` arguments."""
+        target = op
+        while target.nodetype == NodeType.EXPRESSION:
+            target = cast(zast.Expression, target).expression
+        if target.nodetype != NodeType.DOTTEDPATH:
+            return False
+        return (
+            cast(zast.DottedPath, target).child.name
+            == "copy"  # ztc-string-compare-ok: borrow-only projection intrinsic
+        )
 
     def _get_dotted_path_tuple(self, op: zast.Operation) -> Optional[Tuple[str, ...]]:
         """Build the addressable path tuple from an operation source.

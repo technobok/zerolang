@@ -256,6 +256,56 @@ class TestAssignment:
         )
         assert any("borrow" in e.msg.lower() for e in errors), [e.msg for e in errors]
 
+    def test_reftype_field_reassign_with_inline_copy_keeps_source_live(self):
+        """A `.copy` projection on the RHS produces a fresh owned value;
+        the source stays live so subsequent uses must succeed. Was
+        PR 4 friction item 2 — inline `.copy` over-propagated take."""
+        check_ok(
+            "h: class { msg: String } as {\n"
+            "  set: function {x: this v: String.take} is { x.msg = v }\n"
+            "}\n"
+            "main: function is {\n"
+            '  src: "hello".string\n'
+            '  a: h msg: "init".string\n'
+            "  a.msg = src.copy\n"
+            "  a.msg = src.copy\n"
+            "}\n"
+        )
+
+    def test_reftype_field_reassign_with_inline_copy_inside_if(self):
+        """Same case from inside a branch: the inline `.copy` in the
+        if-body must not invalidate the source for code following
+        the branch."""
+        check_ok(
+            "h: class { msg: String }\n"
+            "fn: function {cond: bool} out h is {\n"
+            '  src: "hello".string\n'
+            '  a: h msg: "init".string\n'
+            "  if cond then {\n"
+            "    a.msg = src.copy\n"
+            "  }\n"
+            "  a.msg = src.copy\n"
+            "  return a\n"
+            "}\n"
+            "main: function is { x: fn cond: true }\n"
+        )
+
+    def test_reftype_field_reassign_with_borrowed_source_dot_copy(self):
+        """A borrowed param can be reassigned into a reftype field via
+        `.copy` (the copy is fresh-owned, breaks the borrow chain)."""
+        check_ok(
+            "h: class { msg: String }\n"
+            "fn: function {borrowed: String} out h is {\n"
+            '  a: h msg: "init".string\n'
+            "  a.msg = borrowed.copy\n"
+            "  return a\n"
+            "}\n"
+            "main: function is {\n"
+            '  src: "hi".string\n'
+            "  x: fn borrowed: src\n"
+            "}\n"
+        )
+
     def test_protocol_autoproject_record(self):
         """A concrete record that conforms to a protocol may be passed
         directly to a parameter of that protocol type — the compiler
