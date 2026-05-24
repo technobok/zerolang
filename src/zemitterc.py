@@ -6870,6 +6870,20 @@ class CEmitter:
             if val in self._temp.frees:
                 self._temp.frees.remove(val)
 
+            # Flush implicit-take zero-inits (from _transfer_implicit_take)
+            # NOW — they must run after the construction reads its args but
+            # BEFORE the function-scope cleanup, otherwise the cleanup
+            # frees a buffer the returned aggregate has just taken
+            # ownership of (UAF). For non-return statements, post_code
+            # fires at end-of-statement after any cleanup, which is fine
+            # because no scope cleanup runs there; for return-with-value
+            # the scope cleanup is inlined here, so the order must be
+            # decls -> construction -> implicit-take zero-init ->
+            # intermediate frees -> scope cleanup -> return.
+            if self._temp.post_code:
+                result += "".join(self._temp.post_code)
+                self._temp.post_code.clear()
+
             # free remaining temps (intermediates) before return
             for t in self._temp.frees:
                 if t in self._temp.string_set:

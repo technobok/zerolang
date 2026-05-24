@@ -237,6 +237,56 @@ class TestBareReturn:
         assert result.stdout == "got 1\n"
 
 
+class TestReturnConstructionTakeSoundness:
+    """Regression coverage for the return-construction-shorthand take bug.
+
+    `return Type field: localvar` for a class with a take-bound field used
+    to silently double-free at runtime: the construction took ownership of
+    `localvar`'s heap bytes, but the function-exit cleanup also freed
+    them. The typechecker fix records the take in the symtab; the
+    emitter fix flushes implicit-take zero-inits before the scope
+    cleanup so the cleanup is a no-op for taken vars.
+    """
+
+    def test_single_take_in_return_shorthand_asan_clean(self):
+        # Minimal repro: mk allocates wstr, returns Token taking it.
+        # Before the fix, this UAFed under ASan in the caller's `t.v` read.
+        csource = emit_source(
+            "Token: class { v: String }\n"
+            "mk: function {n: i64} out Token is "
+            '{ return Token v: "hi".string }\n'
+            "main: function is {\n"
+            "    t: mk 1\n"
+            '    print "v=\\{t.v}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "v=hi\n"
+
+    def test_local_var_take_in_return_shorthand_asan_clean(self):
+        # Variant with a named local being taken in the return shorthand
+        # — the exact shape from the lexer port that surfaced the bug.
+        csource = emit_source(
+            "Token: class { v: String }\n"
+            "mk: function {n: i64} out Token is {\n"
+            '    wstr: "hi".string\n'
+            "    return Token v: wstr\n"
+            "}\n"
+            "main: function is {\n"
+            "    t: mk 1\n"
+            '    print "v=\\{t.v}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "v=hi\n"
+
+
 class TestForBodyClassCleanup:
     """Regression coverage for the for-loop body destructor scope bug.
 

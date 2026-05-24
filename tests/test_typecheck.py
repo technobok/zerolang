@@ -13271,3 +13271,54 @@ class TestDataBlockElementTypeUnification:
         assert any("data element type mismatch" in e.msg for e in errors), [
             e.msg for e in errors
         ]
+
+
+class TestReturnConstructionTake:
+    """Take semantics inside `return Type field: val` shorthand.
+
+    Before the fix, the shorthand path skipped take invalidation entirely
+    — a class field declared as reftype-taking would silently leave the
+    source variable as 'owned' in the symtab, so a second take elsewhere
+    typechecked and produced a runtime double-free / UAF. The fix routes
+    the shorthand through `_apply_take_to_arg` so the take is recorded.
+    """
+
+    def test_take_invalidates_source(self):
+        """`return Type field: x` makes a subsequent use of x in another
+        path a typecheck error."""
+        errors = check_errors(
+            "Token: class { v: String }\n"
+            "scan: function {pick: bool} out Token is {\n"
+            '    wstr: "hi".string\n'
+            "    if pick then { return Token v: wstr }\n"
+            "    return Token v: wstr\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any("wstr" in e.msg and "ownership" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_copy_breaks_borrow_chain(self):
+        """`.copy` produces a fresh owned value; the source variable
+        (even a borrowed param) is not invalidated. Mirrors the
+        regular-call pipeline behavior."""
+        check_ok(
+            "MyBox: class { label: String }\n"
+            "mk: function {s: String} out MyBox is {\n"
+            "  return MyBox label: s.copy\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_valtype_field_no_invalidation(self):
+        """Fields with valtype don't have TAKE semantics, so the source
+        is not invalidated."""
+        check_ok(
+            "Point: record { x: i64 y: i64 }\n"
+            "mk: function out Point is {\n"
+            "    n: 5\n"
+            "    return Point x: n y: n\n"
+            "}\n"
+            "main: function is {}"
+        )

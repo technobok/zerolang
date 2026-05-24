@@ -10323,8 +10323,54 @@ class TypeChecker:
                 and call.arguments[0].valtype.nodetype == NodeType.ATOMID
                 and any(a.name is not None for a in call.arguments[1:])
             ):
+                # Resolve the type's constructor so we can apply TAKE
+                # semantics to each field arg. The standard call
+                # pipeline (`_dispatch_call_construction` for a bare
+                # Type as callable) routes through `_check_call_arguments`
+                # which calls `_apply_take_to_arg`; the return-construction
+                # shorthand handled here bypasses that pipeline, so we
+                # must do the take invalidation explicitly — otherwise
+                # the source variable stays "owned" in the symtab and
+                # the function-exit cleanup double-frees it (the
+                # returned aggregate already owns its bytes).
+                type_name = cast(zast.AtomId, call.arguments[0].valtype).name
+                type_ref = self._resolve_name(type_name)
+                shorthand_create = (
+                    self.typing.child_of(type_ref, "create")
+                    if type_ref is not None
+                    else None
+                )
                 for a in call.arguments[1:]:
                     self._check_operation(a.valtype)
+                    if shorthand_create is not None and a.name:
+                        param_own = self.typing.child_ownership(
+                            shorthand_create, a.name
+                        )
+                        effective_own = (
+                            param_own
+                            if param_own is not None
+                            else ZParamOwnership.BORROW
+                        )
+                        if effective_own == ZParamOwnership.TAKE:
+                            # Skip invalidation when the arg's root is a
+                            # borrowed variable. The regular call pipeline
+                            # uses _hoist_arg to stash non-trivial args
+                            # (like `s.copy`) into a fresh owned temp
+                            # before applying take; we don't hoist here,
+                            # so the arg root may still be the borrowed
+                            # source. Letting _apply_take_to_arg run
+                            # would reject every `.copy` of a borrowed
+                            # param. The downstream
+                            # _check_aggregate_lock_escape catches
+                            # genuine borrowed-storage attempts.
+                            arg_root = self._get_arg_root_name(a.valtype)
+                            arg_var = (
+                                self.symtab.lookup_var(arg_root) if arg_root else None
+                            )
+                            if not (
+                                arg_var and arg_var.ownership == ZOwnership.BORROWED
+                            ):
+                                self._apply_take_to_arg(a, a.name)
                 # Run the aggregate lock-escape check so storing a
                 # borrowed param into an owned field is rejected here,
                 # not later as a gcc signature mismatch. The check
