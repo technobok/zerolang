@@ -2651,10 +2651,10 @@ class CEmitter:
         eq = self.typing.child_of(ztype, "==")
         if eq is None:
             return False
-        if eq.is_autogen_eq:
-            return True
-        # Native/user-defined ==. Primitives (ints, floats, bool) use
-        # C ==; everything else is a struct and needs the named function.
+        # Primitives (numeric types, bool, floats) map to C primitives and
+        # always use C `==` directly, regardless of how their `==` is
+        # classified at the type level. `bool` is a variant at the
+        # zerolang level with autogen `==`, but compiles to C `bool`.
         if ztype.name in NUMERIC_RANGES or ztype.name in (
             "bool",
             "f32",
@@ -2662,6 +2662,11 @@ class CEmitter:
             "f128",
         ):
             return False
+        if eq.is_autogen_eq:
+            return True
+        # Native/user-defined ==. Non-primitive types have a struct C-level
+        # representation and `==` on structs is not valid C, so a named
+        # function call is required.
         return True
 
     def _use_memcmp_eq(self, name: str, eq_method: ZType) -> bool:
