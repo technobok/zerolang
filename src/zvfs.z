@@ -1,0 +1,133 @@
+# zvfs.z -- self-host port of src/zvfs.py (Phase B slice 2, PR 1).
+#
+# PR 1 lays down the foundation types: the directory-entry discriminated
+# union and its registry table. No providers, no engine, no real
+# operations yet -- a stub `main` constructs one of each entry arm,
+# appends to the table, then walks the table emitting "<id>: <arm>"
+# lines so the smoke harness can confirm the union + table + case
+# dispatch all round-trip through a built binary.
+#
+# Idiomatic simplifications vs. src/zvfs.py applied here (see the
+# slice plan + feedback-zerolang-port-idiomatic.md):
+#
+#   * `DEntryType` enum dropped -- a real `variant` discriminant
+#     replaces it, narrowed automatically by `case`.
+#   * `parentid: Optional[DEntryID]` dropped -- the only None case
+#     is the root entry, which gets its own `root` arm carrying
+#     nothing.
+#   * Factory methods on DEntryTable (Python `none/file/directory/
+#     union`) dropped -- callers construct variants directly via
+#     `DEntry.<arm> (<RecordData> ...)` and push via a single
+#     `append`.
+
+ProviderNodeType: variant {
+    dir: null
+    file: null
+    notfound: null
+}
+
+BindType: variant {
+    instead: null
+    before: null
+    after: null
+}
+
+# Each variant arm carries only the fields it actually uses; the
+# Python ref's redundant `entrytype` field is gone since the arm IS
+# the discriminant. Records are valtypes, so payload fields are
+# primitives only (u32 IDs).
+
+NotFoundData: record {
+    parentid: u32
+    providerid: u32
+    nodeid: u32
+}
+
+FileData: record {
+    parentid: u32
+    providerid: u32
+    nodeid: u32
+}
+
+DirData: record {
+    parentid: u32
+    providerid: u32
+    nodeid: u32
+}
+
+MountData: record {
+    parentid: u32
+    first: u32
+    second: u32
+    has_second: bool
+}
+
+DEntry: variant {
+    root: null
+    notfound: NotFoundData
+    file: FileData
+    directory: DirData
+    mount: MountData
+}
+
+# Registry-style storage. `entries.length` is the next id; ids are
+# stable across the table's lifetime since the list only grows. PR 2
+# will add the side-table for path/cache fields the Python ref
+# inlines into each entry.
+
+DEntryTable: class {
+    entries: (List of: DEntry)
+} as {
+    append: function {:this entry: DEntry.take} out u32 is {
+        idx: this.entries.length.u32
+        this.entries.append from: entry
+        return idx
+    }
+}
+
+# Print "<id>: <arm-name>" for a single entry. Dispatch lives here so
+# the smoke harness in `main` is a flat iteration without nested
+# match expressions. Mirrors the lexer dumper's ttname pattern.
+
+print_entry: function {id: u32 e: DEntry} is {
+    match (
+        e
+    ) case root then {
+        print "\{id}: root"
+    } case notfound then {
+        print "\{id}: notfound"
+    } case file then {
+        print "\{id}: file"
+    } case directory then {
+        print "\{id}: directory"
+    } case mount then {
+        print "\{id}: mount"
+    }
+}
+
+main: function is {
+    table: DEntryTable entries: (List of: DEntry)
+
+    e0: DEntry.root
+    table.append entry: e0
+
+    e1: DEntry.notfound (NotFoundData parentid: 0.u32 providerid: 0.u32 nodeid: 0.u32)
+    table.append entry: e1
+
+    e2: DEntry.file (FileData parentid: 0.u32 providerid: 0.u32 nodeid: 1.u32)
+    table.append entry: e2
+
+    e3: DEntry.directory (DirData parentid: 0.u32 providerid: 0.u32 nodeid: 2.u32)
+    table.append entry: e3
+
+    e4: DEntry.mount (MountData parentid: 0.u32 first: 0.u32 second: 0.u32 has_second: false)
+    table.append entry: e4
+
+    n: table.entries.length
+    i: 0.u64
+    for while i < n loop {
+        e: table.entries.get i: i
+        print_entry id: i.u32 e: e
+        i = i + 1.u64
+    }
+}

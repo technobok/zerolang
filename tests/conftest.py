@@ -34,25 +34,25 @@ _CFLAGS = [
 ]
 
 
-@pytest.fixture(scope="session")
-def zlexer_binary(tmp_path_factory):
-    """Build the self-hosted lexer (src/zlexer.z -> C -> binary) once
-    per pytest session. Skips when the C compiler is missing. Build
-    output lives in a per-session tmp dir so xdist workers don't race
-    on the same `out/zlexer.c` path."""
+def _build_zerolang_unit(unitname: str, tmp_path_factory) -> str:
+    """Build a self-hosted compiler unit (src/<unitname>.z -> C -> binary)
+    into a per-session tmp dir so xdist workers don't race on shared
+    output paths. Returns the binary path. Skips the whole test module
+    when the C compiler is missing."""
     if shutil.which(_CC) is None:
-        pytest.skip(f"{_CC} not on PATH; cannot build zlexer binary")
-    builddir = tmp_path_factory.mktemp("zlexer")
-    c_path = str(builddir / "zlexer.c")
-    bin_path = str(builddir / "zlexer")
+        pytest.skip(f"{_CC} not on PATH; cannot build {unitname} binary")
+    builddir = tmp_path_factory.mktemp(unitname)
+    c_path = str(builddir / f"{unitname}.c")
+    bin_path = str(builddir / unitname)
     zc_proc = subprocess.run(
-        _ZC + ["zlexer", "--src", _SRC_DIR, "-o", c_path],
+        _ZC + [unitname, "--src", _SRC_DIR, "-o", c_path],
         capture_output=True,
         text=True,
         cwd=_REPO_ROOT,
     )
     assert zc_proc.returncode == 0, (
-        f"zc.py failed:\nstdout:\n{zc_proc.stdout}\nstderr:\n{zc_proc.stderr}"
+        f"zc.py {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
+        f"stderr:\n{zc_proc.stderr}"
     )
     cc_proc = subprocess.run(
         [_CC, *_CFLAGS, "-o", bin_path, c_path],
@@ -60,9 +60,22 @@ def zlexer_binary(tmp_path_factory):
         text=True,
     )
     assert cc_proc.returncode == 0, (
-        f"{_CC} failed:\nstdout:\n{cc_proc.stdout}\nstderr:\n{cc_proc.stderr}"
+        f"{_CC} {unitname} failed:\nstdout:\n{cc_proc.stdout}\n"
+        f"stderr:\n{cc_proc.stderr}"
     )
     return bin_path
+
+
+@pytest.fixture(scope="session")
+def zlexer_binary(tmp_path_factory):
+    """Build the self-hosted lexer (src/zlexer.z) once per session."""
+    return _build_zerolang_unit("zlexer", tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
+def zvfs_binary(tmp_path_factory):
+    """Build the self-hosted VFS skeleton (src/zvfs.z) once per session."""
+    return _build_zerolang_unit("zvfs", tmp_path_factory)
 
 
 def make_tokenizer(source: str) -> Tokenizer:
