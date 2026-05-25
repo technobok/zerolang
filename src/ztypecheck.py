@@ -11416,7 +11416,23 @@ class TypeChecker:
         )
 
         for name, cond_op in fornode.conditions.items():
+            # While-form cond (`for while EXPR loop ...`): push a fresh
+            # preamble layer so any synth Assignments `_hoist_arg`
+            # creates for the cond's args land HERE rather than the
+            # parent statement's preamble. The emitter consumes
+            # `for_cond_preamble[fornode.nodeid]` and rebuilds the loop
+            # as `while (1) { decls; if (!cond) break; body }` so the
+            # cond re-evaluates each iteration. (The parent-preamble
+            # drain would otherwise hoist `_t0 = source.expr` once
+            # before the loop and the cond would spin on a stale temp.)
+            is_while_form = name[:1] == " "  # ztc-string-compare-ok: while-form marker
+            if is_while_form:
+                self._call_preamble.append([])
             t = self._check_operation(cond_op).ztype
+            if is_while_form:
+                cond_preamble = self._call_preamble.pop()
+                if cond_preamble:
+                    self.typing.for_cond_preamble[fornode.nodeid] = list(cond_preamble)
             if t and not name.startswith(" "):
                 # iterator binding: check if operation type is or returns
                 # one of the iterator wrappers (option/optionval/optionview).

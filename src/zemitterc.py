@@ -10738,18 +10738,41 @@ class CEmitter:
                 cond_str = _unwrap_outer_parens(cond_exprs[0])
             else:
                 cond_str = " && ".join(cond_exprs)
-            parts.append(f"{indent}while ({cond_str}) {{\n")
-            if fornode.loop:
+            # `for_cond_preamble` carries synth Assignments hoisted out
+            # of the while-form cond's arg processing. They must
+            # re-evaluate each iteration; emit them inside the loop
+            # body alongside an early-break check so the cond is
+            # re-tested against fresh per-iteration values. Without
+            # this, the parent statement's preamble drains the synth
+            # once before the loop and the cond spins on a stale temp.
+            cond_preamble_stmts = self.typing.for_cond_preamble.get(fornode.nodeid, [])
+            if cond_preamble_stmts:
+                parts.append(f"{indent}while (1) {{\n")
                 self.indent_level += 1
-                parts.append(self._emit_for_body(fornode))
-                self.indent_level -= 1
-            if has_post:
-                self.indent_level += 1
+                for sl in cond_preamble_stmts:
+                    parts.append(self._emit_statement_line(sl))
                 inner = self._indent()
+                parts.append(f"{inner}if (!({cond_str})) break;\n")
+                if fornode.loop:
+                    parts.append(self._emit_for_body(fornode))
+                if has_post:
+                    post_str = " && ".join(post_exprs)
+                    parts.append(f"{inner}if (!({post_str})) break;\n")
                 self.indent_level -= 1
-                post_str = " && ".join(post_exprs)
-                parts.append(f"{inner}if (!({post_str})) break;\n")
-            parts.append(f"{indent}}}\n")
+                parts.append(f"{indent}}}\n")
+            else:
+                parts.append(f"{indent}while ({cond_str}) {{\n")
+                if fornode.loop:
+                    self.indent_level += 1
+                    parts.append(self._emit_for_body(fornode))
+                    self.indent_level -= 1
+                if has_post:
+                    self.indent_level += 1
+                    inner = self._indent()
+                    self.indent_level -= 1
+                    post_str = " && ".join(post_exprs)
+                    parts.append(f"{inner}if (!({post_str})) break;\n")
+                parts.append(f"{indent}}}\n")
 
         return "".join(parts)
 

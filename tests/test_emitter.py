@@ -349,6 +349,47 @@ class TestForBodyClassCleanup:
         assert result.stdout == self._EXPECTED_OUTPUT
 
 
+class TestForWhileCallCondReEvaluates:
+    """Pin: a for-loop's `while` condition that wraps a function call
+    on per-iteration mutable state must re-evaluate each iteration.
+
+    Was the PR-3 friction item where the typechecker's `_hoist_arg`
+    lifted the call's args into a synth temp ahead of the loop and
+    the parent statement's preamble drained the temp init *once*
+    before the loop — so the cond kept reading the stale initial
+    value and the loop never made progress.
+
+    Fix shape: the typechecker captures the cond's preamble entries
+    into `ZTyping.for_cond_preamble`; the emitter rewrites the loop
+    into `while (1) { decls; if (!cond) break; body }` so the synth
+    temps re-init each iteration.
+    """
+
+    def test_call_in_for_while_cond_re_evaluates_each_iteration(self):
+        csource = emit_source(
+            "notZero: function {b: u8} out bool is { return b > 0.u8 }\n"
+            "Probe: class { atchar: u8 count: u32 } as {\n"
+            "  advance: function {:this} is {\n"
+            "    if this.atchar > 0.u8 then this.atchar = this.atchar - 1.u8\n"
+            "    this.count = this.count + 1.u32\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  p: Probe atchar: 5.u8 count: 0.u32\n"
+            "  for while (notZero b: p.atchar) loop {\n"
+            "    p.advance\n"
+            "  }\n"
+            '  print "count=\\{p.count}"\n'
+            "}"
+        )
+        # Loop body re-inits the call's args (`_tN = p.atchar`) and
+        # breaks on the cond's negation, instead of testing a stale
+        # pre-loop temp.
+        assert "while (1) {" in csource
+        assert "if (!(z_notZero(" in csource
+        assert compile_and_run(csource).strip() == "count=5"
+
+
 class TestAutoCallNoOutClause:
     """Pin: a dotted-path method call on a method declared without
     an explicit `out` clause auto-calls in value position (and in

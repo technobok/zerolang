@@ -148,6 +148,12 @@ class ZTyping:
     case_subject_taken: Dict[int, bool] = field(default_factory=dict, init=False)
     # Per-For iterator-binding names.
     for_iter_bindings: Dict[int, "set[str]"] = field(default_factory=dict, init=False)
+    # Per-For while-cond preamble: synth Assignment statements hoisted
+    # out of the while-form cond's arg processing. The emitter prepends
+    # these to the loop body and rewrites the loop into the `while (1) {
+    # decls; if (!cond) break; body }` shape so the cond re-evaluates
+    # each iteration. Empty for trivial conds (no hoist needed).
+    for_cond_preamble: Dict[int, "list"] = field(default_factory=dict, init=False)
     # Per-If / per-Case post-block ownership cleanup.
     if_taken_vars: Dict[int, "list[tuple[str, Optional[ZType]]]"] = field(
         default_factory=dict, init=False
