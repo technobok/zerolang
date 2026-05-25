@@ -12081,6 +12081,33 @@ class TestTakeInLoopBody:
         )
         assert any("loop body" in e.msg.lower() for e in errors)
 
+    def test_take_in_match_arm_with_diverging_inner_if_ok(self):
+        """3-level nesting: for -> match -> if-then-arm -> take + return.
+        The discard at the inner if-arm prevents propagation through
+        both enclosing arms (match-arm and for-body); the typecheck
+        accepts."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "Sig: variant { A: null  B: null } as { tag: u8.tag }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  s: Sig.A\n"
+            "  for i: 3.iterate loop {\n"
+            "    match (\n"
+            "      s\n"
+            "    ) case A then {\n"
+            "      if i > 0.i64 then {\n"
+            "        b: a.take\n"
+            "        return\n"
+            "      }\n"
+            "      tail: 0\n"
+            "    } case B then {\n"
+            "      tail: 0\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
 
 class TestUnionLockedArm:
     """Locked union arms (W-C) — arms declared `name: t.lock` hold a

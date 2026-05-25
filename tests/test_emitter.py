@@ -8708,6 +8708,41 @@ class TestTakeInArmMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_take_in_match_arm_with_diverging_inner_if_runs_clean(self):
+        """3-level nesting (for -> match -> if-then-arm) with take +
+        return inside the innermost if-arm. Runtime pin for the
+        typechecker relax landed in `eea6e9a`: the `.take`n value's
+        heap is freed exactly once via the receiver's destructor;
+        every non-taken local along the diverging path is destroyed
+        by the scope-walk in `_emit_scope_cleanup` (and the post-arm
+        `_emit_taken_vars_cleanup` zeros the taken slot so the walk
+        skips it). ASAN-clean exit + correct stdout."""
+        csource = emit_source(
+            "Named: class { label: String }\n"
+            "Sig: variant { A: null  B: null } as { tag: u8.tag }\n"
+            "main: function is {\n"
+            '    a: Named label: "hi".string\n'
+            "    s: Sig.A\n"
+            "    for i: 1.iterate loop {\n"
+            "        match (\n"
+            "            s\n"
+            "        ) case A then {\n"
+            "            if i == 0.i64 then {\n"
+            "                b: a.take\n"
+            '                print "\\{b.label}"\n'
+            "                return\n"
+            "            }\n"
+            "            tail: 0\n"
+            "        } case B then {\n"
+            "            tail: 0\n"
+            "        }\n"
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip() == "hi"
+
 
 class TestWithBlockScopeCleanup:
     """Pins the scope-tracking fix for `with`-block bodies.
