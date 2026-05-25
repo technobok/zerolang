@@ -12108,6 +12108,72 @@ class TestTakeInLoopBody:
             "}"
         )
 
+    def test_take_inner_scoped_local_in_if_body_inside_for_ok(self):
+        """A variable declared inside a conditional block nested in the
+        for-body is a fresh local per iteration's if-execution. Taking
+        it should be fine; the take-overlay must not bubble up to the
+        for-scope as a spurious outer-scope take. Counterpart to
+        test_take_outer_in_conditional_inside_for_errors above (which
+        pins that OUTER-scope takes are still rejected)."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then {\n"
+            "      b: Box value: 1\n"
+            "      c: b.take\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_inner_scoped_local_in_match_arm_inside_for_ok(self):
+        """Same as above but the inner conditional is a match arm
+        instead of an if-then. Both arms end with a no-op `tail: 0`
+        so the match's branch-type unification is satisfied (the take
+        happens in the middle of the A arm, not as the last
+        expression)."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "Sig: variant { A: null  B: null } as { tag: u8.tag }\n"
+            "main: function is {\n"
+            "  s: Sig.A\n"
+            "  for i: 3.iterate loop {\n"
+            "    match (\n"
+            "      s\n"
+            "    ) case A then {\n"
+            "      b: Box value: 1\n"
+            "      c: b.take\n"
+            "      tail: 0\n"
+            "    } case B then {\n"
+            "      tail: 0\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_inner_scoped_local_appended_to_outer_list_in_for_ok(self):
+        """The Bug 1 minimal repro: a fresh per-iteration String taken
+        into an outer-scope List inside a conditional inside a for. The
+        take happens via List.append from:, which records the take as
+        an overlay on the if-scope; the pop-merge must skip that
+        overlay because the variable was defined in the same popped
+        scope."""
+        check_ok(
+            "main: function is {\n"
+            "  buf: (List of: String)\n"
+            "  i: 0.u64\n"
+            "  n: 5.u64\n"
+            "  for while i < n loop {\n"
+            "    if i > 0.u64 then {\n"
+            '      tok: "hello".string\n'
+            "      buf.append from: tok\n"
+            "    }\n"
+            "    i = i + 1\n"
+            "  }\n"
+            "}"
+        )
+
 
 class TestUnionLockedArm:
     """Locked union arms (W-C) — arms declared `name: t.lock` hold a

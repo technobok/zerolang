@@ -212,13 +212,29 @@ class ZSymbolTable:
 
     def pop(self) -> ZScope:
         """Pop the topmost scope. Lock entries vanish naturally with the scope.
-        Taken entries are merged into the parent so errors persist."""
+        Taken entries are merged into the parent so errors persist -- except
+        when the taken name was DEFINED in the popped scope itself (so the
+        binding doesn't exist in the parent and the take state has nothing
+        to persist against). This is the symmetric counterpart to
+        discard_taken_in_current_scope (which handles takes on diverging
+        paths); the filter here handles takes on inner-scope-local
+        definitions. Takes are recorded as `is_definition=False` overlays
+        by apply_take, so we cross-reference the popped scope's definitions
+        by name."""
         top = self._scopes[-1]
         self._scopes.pop()
+        # Collect names that were definitions in the popped scope -- those
+        # bindings don't exist in the parent. Take overlays for those names
+        # must not propagate; they would surface as spurious "outer-scope
+        # take" rejections (e.g. in _check_for_inner) when in fact the
+        # variable was a fresh inner-block local.
+        local_defs = {e.name for e in top.entries if e.is_definition}
         # merge taken entries into parent scope
         if self._scopes:
             for entry in top.entries:
                 if entry.is_taken and entry.taken_at is not None:
+                    if entry.name in local_defs:
+                        continue
                     if not self._is_taken(entry.name):
                         taken_entry = ZEntry(
                             name=entry.name,
