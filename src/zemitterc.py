@@ -9079,7 +9079,19 @@ class CEmitter:
             if (
                 cand is not None
                 and cand.typetype == ZTypeType.FUNCTION
-                and cand.return_type is _pt_ztype
+                and (
+                    cand.return_type is _pt_ztype
+                    # Methods with no explicit `out` clause have
+                    # `return_type == None`; the typechecker's
+                    # auto-call coercion stamps `_pt_ztype` to the
+                    # null singleton in that case. Treat both shapes
+                    # the same so the path lowers as a method call.
+                    or (
+                        cand.return_type is None
+                        and _pt_ztype is not None
+                        and _pt_ztype.typetype == ZTypeType.NULL
+                    )
+                )
             ):
                 method_type = cand
         if method_type is not None:

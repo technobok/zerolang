@@ -8043,12 +8043,22 @@ class TypeChecker:
             # lock there. Receiver lock-install replaces the earlier
             # in-`_resolve_dotted_path` shortcut and unifies behavior
             # between native and user-defined methods.
+            #
+            # Methods declared without an `out` clause have
+            # `return_type == None` (kept distinct from explicit `null`
+            # for `_validate_function_ownership`'s lock-needs-return
+            # check). For auto-call purposes the implicit return is
+            # `null` — treat both shapes the same here so a bare
+            # `s.bump` in statement position auto-calls instead of
+            # leaving a function reference in `node_type`.
             if (
                 coerce_method_to_return
                 and t.typetype == ZTypeType.FUNCTION
-                and t.return_type is not None
                 and self._method_has_no_user_args(t)
             ):
+                call_return = (
+                    t.return_type if t.return_type is not None else self.t_null
+                )
                 if t.return_ownership == ZParamOwnership.BORROW:
                     src_path = self._get_dotted_path_tuple(path.parent)
                     if src_path:
@@ -8060,8 +8070,8 @@ class TypeChecker:
                             loc=path.start,
                             err=ERR.OWNERERROR,
                         )
-                self.typing.node_type[path.nodeid] = t.return_type
-                return t.return_type
+                self.typing.node_type[path.nodeid] = call_return
+                return call_return
             # protocol/facet borrow: lock the source path
             if t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                 src_path = self._get_dotted_path_tuple(path.parent)

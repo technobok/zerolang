@@ -349,6 +349,57 @@ class TestForBodyClassCleanup:
         assert result.stdout == self._EXPECTED_OUTPUT
 
 
+class TestAutoCallNoOutClause:
+    """Pin: a dotted-path method call on a method declared without
+    an explicit `out` clause auto-calls in value position (and in
+    statement position like a for-loop body's last statement),
+    rather than leaving the dotted path typed as a function
+    reference.
+
+    Was the PR-3 friction item where `for ... loop { s.bump }`
+    (with `bump: function {:this} is { ... }` — no `out`)
+    mis-classified `s.bump` as a function reference and the
+    typechecker tried to monomorphize `List of: Sink.bump`,
+    generating C identifiers containing a literal `.`.
+    """
+
+    def test_void_method_as_for_body_tail_auto_calls(self):
+        csource = emit_source(
+            "Sink: class { n: u32 } as {\n"
+            "  bump: function {:this} is { this.n = this.n + 1.u32 }\n"
+            "}\n"
+            "main: function is {\n"
+            "  s: Sink n: 0.u32\n"
+            "  for while s.n < 3.u32 loop {\n"
+            "    s.bump\n"
+            "  }\n"
+            '  print "n=\\{s.n}"\n'
+            "}"
+        )
+        # No spurious List-of-method monomorphization.
+        assert "Sink.bump" not in csource
+        assert "ListView_Sink" not in csource
+        # The body call lowers as a method invocation, not a
+        # struct-field read.
+        assert "z_Sink_bump(&s)" in csource
+        assert compile_and_run(csource).strip() == "n=3"
+
+    def test_void_method_as_statement_auto_calls(self):
+        csource = emit_source(
+            "Sink: class { n: u32 } as {\n"
+            "  bump: function {:this} is { this.n = this.n + 1.u32 }\n"
+            "}\n"
+            "main: function is {\n"
+            "  s: Sink n: 0.u32\n"
+            "  s.bump\n"
+            "  s.bump\n"
+            '  print "n=\\{s.n}"\n'
+            "}"
+        )
+        assert "z_Sink_bump(&s)" in csource
+        assert compile_and_run(csource).strip() == "n=2"
+
+
 class TestEscapeSequences:
     """End-to-end coverage of spec.pdoc:463-474 escape sequences.
 
