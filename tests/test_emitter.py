@@ -1657,6 +1657,62 @@ class TestUserMethodStringTake:
         assert result.stdout.strip() == "hello"
 
 
+class TestClassParamThreading:
+    """Regression test for the Bug 2b call-site fix: when a method
+    receives a class-typed param (already a `z_T_t*` pointer at the
+    C level) and forwards it to another method, the call site must
+    NOT prepend `&` -- that would produce `z_T_t**` and the callee
+    would read garbage. The fix adds a `val not in
+    self._scope.class_params` guard at the `&val` emission site to
+    mirror the sibling guard in `_build_meta_create_args`.
+
+    Pre-fix this surfaced as a runtime "numeric cast overflow:
+    u64 to u32" panic during the VFS port's PR 2 work because
+    `entries.length` was being read through a pointer-to-pointer."""
+
+    def test_class_arg_forwarded_through_methods_no_double_pointer(self):
+        from zvfs import ZVfs, FSProvider, StringProvider, BindType
+
+        # Box has two methods: inner reads `other.n`, outer forwards
+        # `other` to inner. Without the fix, z_Box_outer emits
+        # `z_Box_inner(this, &other)` against a `z_Box_t*` param,
+        # producing pointer-to-pointer and runtime garbage.
+        src = (
+            "Box: class {\n"
+            "    n: u32\n"
+            "} as {\n"
+            "    inner: function {:this other: Box} is {\n"
+            '        print "\\{other.n}"\n'
+            "    }\n"
+            "    outer: function {:this other: Box} is {\n"
+            "        this.inner other: other\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    a: Box n: 7.u32\n"
+            "    b: Box n: 11.u32\n"
+            "    a.outer other: b\n"
+            "}\n"
+        )
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        vfs = ZVfs()
+        systemdir = os.path.join(lib_dir, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(StringProvider(files={"bug2b.z": src}))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = make_parser_with_vfs(vfs, "bug2b")
+        program = p.parse()
+        typing = typecheck(program)
+        errors = typing.errors
+        assert errors == []
+        csource = zemitterc.emit(typing)
+        assert compile_and_run(csource).strip() == "11"
+
+
 class TestPrintStackClassDispatch:
     """Regression test for the print-through-projection emission path:
     when a stack-allocated class conforms to `Text`, the `.stringview`

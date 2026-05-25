@@ -7290,7 +7290,20 @@ class CEmitter:
                 is_take_string = (
                     own == ZParamOwnership.TAKE and arg_type.subtype == ZSubType.STRING
                 )
-                if (is_this_param or is_borrow_lock) and not is_take_string:
+                # `val not in self._scope.class_params` guards against
+                # double-indirection when val is already a pointer-
+                # typed param of the enclosing function (e.g. a class
+                # borrow forwarded into a nested call). Without this
+                # check, an arg like `table` where the enclosing fn
+                # already received `z_DentryTable_t*` becomes `&table`
+                # = `z_DentryTable_t**` and the callee reads garbage.
+                # Mirrors the sibling guard in
+                # _build_meta_create_args:7445.
+                if (
+                    (is_this_param or is_borrow_lock)
+                    and not is_take_string
+                    and val not in self._scope.class_params
+                ):
                     val = f"&{val}"
             parts.append(val)
             self._last_emitted_arg_vals.append(val)
