@@ -1,24 +1,21 @@
-# zvfs.z -- self-host port of src/zvfs.py (Phase B slice 2, PR 1).
+# zvfs.z -- self-host port of src/zvfs.py (Phase B slice 2).
 #
-# PR 1 lays down the foundation types: the directory-entry discriminated
-# union and its registry table. No providers, no engine, no real
-# operations yet -- a stub `main` constructs one of each entry arm,
-# appends to the table, then walks the table emitting "<id>: <arm>"
-# lines so the smoke harness can confirm the union + table + case
-# dispatch all round-trip through a built binary.
+# PR 1: foundation types (dentry variant + DentryTable registry).
+# PR 2: script-driven dispatcher (Driver class). Reads a script
+#       file (one operation per line, '#' comments, whitespace-
+#       separated tokens), parses each line into a verb + args,
+#       dispatches to a method on the driver. The verb set is the
+#       floor PR 1's types can support; subsequent PRs add
+#       `provider` / `walk` / `bind` / `open` verbs as the VFS
+#       gains real operations. PR 7 will diff the same scripts
+#       against the Python ref running through the same DSL.
 #
-# Idiomatic simplifications vs. src/zvfs.py applied here (see the
-# slice plan + feedback-zerolang-port-idiomatic.md):
-#
-#   * `DEntryType` enum dropped -- a real `variant` discriminant
-#     replaces it, narrowed automatically by `case`.
-#   * `parentid: Optional[DEntryID]` dropped -- the only None case
-#     is the root entry, which gets its own `root` arm carrying
-#     nothing.
-#   * Factory methods on DentryTable (Python `none/file/directory/
-#     union`) dropped -- callers construct variants directly via
-#     `dentry.<arm> (<RecordData> ...)` and push via a single
-#     `append`.
+# All dispatch logic lives as methods on the Driver class so
+# inter-method calls thread through `:this` (the emitter handles
+# the receiver correctly) and only primitives travel as additional
+# args. Standalone helpers taking class-typed params trigger an
+# emitter bug where the inner call passes `&param` of an already-
+# indirected param.
 
 nodekind: variant {
     dir: null
@@ -31,11 +28,6 @@ bindkind: variant {
     before: null
     after: null
 }
-
-# Each variant arm carries only the fields it actually uses; the
-# Python ref's redundant `entrytype` field is gone since the arm IS
-# the discriminant. Records are valtypes, so payload fields are
-# primitives only (u32 IDs).
 
 notfounddata: record {
     parentid: u32
@@ -70,24 +62,16 @@ dentry: variant {
     mount: mountdata
 }
 
-# Registry-style storage. `entries.length` is the next id; ids are
-# stable across the table's lifetime since the list only grows. PR 2
-# will add the side-table for path/cache fields the Python ref
-# inlines into each entry.
+# Byte index range over `this.line`. Half-open: [start, end).
 
-DentryTable: class {
-    entries: (List of: dentry)
-} as {
-    append: function {:this entry: dentry.take} out u32 is {
-        idx: this.entries.length.u32
-        this.entries.append from: entry
-        return idx
-    }
+tokrange: record {
+    start: u64
+    end: u64
 }
 
-# Print "<id>: <arm-name>" for a single entry. Dispatch lives here so
-# the smoke harness in `main` is a flat iteration without nested
-# match expressions. Mirrors the lexer dumper's ttname pattern.
+# Print "<id>: <arm-name>" for a single entry. Mirrors the lexer
+# dumper's `ttname` pattern. Free function because it takes a
+# variant by value -- no class-typed arg to trigger the emitter bug.
 
 printEntry: function {id: u32 e: dentry} is {
     match (
@@ -105,29 +89,230 @@ printEntry: function {id: u32 e: dentry} is {
     }
 }
 
+# Driver: bundles the DentryTable storage with the current
+# script line so every dispatch method threads via `:this` and
+# never passes a class-typed local across function boundaries.
+
+Driver: class {
+    entries: (List of: dentry)
+    line: String
+} as {
+    appendEntry: function {:this e: dentry.take} out u32 is {
+        idx: this.entries.length.u32
+        this.entries.append from: e
+        return idx
+    }
+
+    # Inner helper: unwrap a u8-option safely; the impossible none
+    # case returns 0 so the match arms agree on a u8 return type.
+    safeByte: function {:this i: u64} out u8 is {
+        sv: this.line.stringview
+        opt: sv.byteAt i: i
+        match (
+            opt
+        ) case some then {
+            return opt
+        } case none then {
+            return 0.u8
+        }
+    }
+
+    iswsByte: function {:this b: u8} out bool is {
+        if b == 32 then return true
+        if b == 9 then return true
+        return false
+    }
+
+    # Locate the next whitespace-delimited token starting at `from`.
+    # Returns the half-open [start, end) range; empty range means no
+    # token at the scan position. Uses `this.line.length` directly
+    # (no long-lived StringView borrow) so the loop body can call
+    # `this.safeByte` without a lock conflict on this.line.
+    nextTokenRange: function {:this from: u64} out tokrange is {
+        n: this.line.length
+        pos: from
+        skipping: true
+        for while skipping while pos < n loop {
+            b: this.safeByte i: pos
+            if (this.iswsByte b: b) then {
+                pos = pos + 1
+            } else {
+                skipping = false
+            }
+        }
+        start: pos
+        collecting: true
+        for while collecting while pos < n loop {
+            b: this.safeByte i: pos
+            if (this.iswsByte b: b) then {
+                collecting = false
+            } else {
+                pos = pos + 1
+            }
+        }
+        return tokrange start: start end: pos
+    }
+
+    # Materialise bytes [start, end) of this.line as an owned String.
+    buildToken: function {:this start: u64 end: u64} out String is {
+        tok: "".string
+        j: start
+        for while j < end loop {
+            b: this.safeByte i: j
+            tok.appendByte b: b
+            j = j + 1
+        }
+        return tok
+    }
+
+    # Parse digits in [start, end) as a u32. Non-digit bytes yield 0.
+    parseU32atRange: function {:this start: u64 end: u64} out u32 is {
+        if start == end then return 0
+        val: 0.u32
+        i: start
+        for while i < end loop {
+            b: this.safeByte i: i
+            if b < 48 then return 0
+            if b > 57 then return 0
+            d: (b - 48).u32
+            val = val * 10 + d
+            i = i + 1
+        }
+        return val
+    }
+
+    dispatchEntry: function {:this from: u64} is {
+        armR: this.nextTokenRange from: from
+        if armR.start == armR.end then panic msg: "entry verb expects an arm name"
+        arm_str: this.buildToken start: armR.start end: armR.end
+        arm: arm_str.stringview
+        if arm == "root" then {
+            idx: this.appendEntry e: dentry.root
+            print "\{idx}"
+            return
+        }
+        if arm == "notfound" then {
+            pidR: this.nextTokenRange from: armR.end
+            prvR: this.nextTokenRange from: pidR.end
+            nidR: this.nextTokenRange from: prvR.end
+            pid: this.parseU32atRange start: pidR.start end: pidR.end
+            prv: this.parseU32atRange start: prvR.start end: prvR.end
+            nid: this.parseU32atRange start: nidR.start end: nidR.end
+            e: dentry.notfound (notfounddata parentid: pid providerid: prv nodeid: nid)
+            idx: this.appendEntry e: e
+            print "\{idx}"
+            return
+        }
+        if arm == "file" then {
+            pidR: this.nextTokenRange from: armR.end
+            prvR: this.nextTokenRange from: pidR.end
+            nidR: this.nextTokenRange from: prvR.end
+            pid: this.parseU32atRange start: pidR.start end: pidR.end
+            prv: this.parseU32atRange start: prvR.start end: prvR.end
+            nid: this.parseU32atRange start: nidR.start end: nidR.end
+            e: dentry.file (filedata parentid: pid providerid: prv nodeid: nid)
+            idx: this.appendEntry e: e
+            print "\{idx}"
+            return
+        }
+        if arm == "directory" then {
+            pidR: this.nextTokenRange from: armR.end
+            prvR: this.nextTokenRange from: pidR.end
+            nidR: this.nextTokenRange from: prvR.end
+            pid: this.parseU32atRange start: pidR.start end: pidR.end
+            prv: this.parseU32atRange start: prvR.start end: prvR.end
+            nid: this.parseU32atRange start: nidR.start end: nidR.end
+            e: dentry.directory (dirdata parentid: pid providerid: prv nodeid: nid)
+            idx: this.appendEntry e: e
+            print "\{idx}"
+            return
+        }
+        if arm == "mount" then {
+            pidR: this.nextTokenRange from: armR.end
+            firstR: this.nextTokenRange from: pidR.end
+            secondR: this.nextTokenRange from: firstR.end
+            hassecR: this.nextTokenRange from: secondR.end
+            pid: this.parseU32atRange start: pidR.start end: pidR.end
+            first: this.parseU32atRange start: firstR.start end: firstR.end
+            second: this.parseU32atRange start: secondR.start end: secondR.end
+            hassec_str: this.buildToken start: hassecR.start end: hassecR.end
+            hassec_sv: hassec_str.stringview
+            hassec: false
+            if hassec_sv == "true" then hassec = true
+            e: dentry.mount (mountdata parentid: pid first: first second: second has_second: hassec)
+            idx: this.appendEntry e: e
+            print "\{idx}"
+            return
+        }
+        panic msg: "unknown entry arm"
+    }
+
+    dispatchDump: function {:this from: u64} is {
+        idR: this.nextTokenRange from: from
+        if idR.start == idR.end then panic msg: "dump expects 1 arg"
+        id: this.parseU32atRange start: idR.start end: idR.end
+        e: this.entries.get i: id.u64
+        printEntry id: id e: e
+    }
+
+    dispatchLine: function {:this} is {
+        verbR: this.nextTokenRange from: 0
+        if verbR.start == verbR.end then return
+        verb_str: this.buildToken start: verbR.start end: verbR.end
+        verb: verb_str.stringview
+        if verb == "entry" then {
+            this.dispatchEntry from: verbR.end
+            return
+        }
+        if verb == "dump" then {
+            this.dispatchDump from: verbR.end
+            return
+        }
+        panic msg: "unknown verb"
+    }
+
+    # Iterate the script's lines and dispatch each non-comment,
+    # non-blank one. The current line is copied into `this.line`
+    # so dispatch methods can read it via `this.line.stringview`
+    # without crossing function boundaries with a class-typed arg.
+    runScript: function {:this text: String} is {
+        sv: text.stringview
+        with li: sv.lines do for line: li loop {
+            trimmed: line.trim
+            if trimmed.length == 0 then {} else {
+                fbsv: trimmed.byteAt i: 0
+                isHash: false
+                match (
+                    fbsv
+                ) case some then {
+                    if fbsv == 35 then isHash = true
+                } case none then {
+                    isHash = false
+                }
+                if isHash then {} else {
+                    this.line = trimmed.string
+                    this.dispatchLine
+                }
+            }
+        }
+    }
+}
+
 main: function is {
-    table: DentryTable entries: (List of: dentry)
-
-    e0: dentry.root
-    table.append entry: e0
-
-    e1: dentry.notfound (notfounddata parentid: 0.u32 providerid: 0.u32 nodeid: 0.u32)
-    table.append entry: e1
-
-    e2: dentry.file (filedata parentid: 0.u32 providerid: 0.u32 nodeid: 1.u32)
-    table.append entry: e2
-
-    e3: dentry.directory (dirdata parentid: 0.u32 providerid: 0.u32 nodeid: 2.u32)
-    table.append entry: e3
-
-    e4: dentry.mount (mountdata parentid: 0.u32 first: 0.u32 second: 0.u32 has_second: false)
-    table.append entry: e4
-
-    n: table.entries.length
-    i: 0.u64
-    for while i < n loop {
-        e: table.entries.get i: i
-        printEntry id: i.u32 e: e
-        i = i + 1.u64
+    argv: os.args
+    if argv.length < 2 then {
+        io.eprintln "usage: zvfs <script.script>"
+        os.exit code: 2.i32
+    }
+    path: argv.get i: 1
+    r: io.readText path: path.stringview
+    match (
+        r
+    ) case ok then {
+        driver: Driver entries: (List of: dentry) line: "".string
+        driver.runScript text: r.take
+    } case err then {
+        io.eprintln "zvfs: could not read script file"
+        os.exit code: 1.i32
     }
 }

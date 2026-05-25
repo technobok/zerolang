@@ -1,17 +1,20 @@
-"""End-to-end smoke test for the self-hosted VFS (src/zvfs.z).
+"""End-to-end tests for the self-hosted VFS (src/zvfs.z).
 
-PR 1 lays down the foundation types -- DEntry union with five arms,
-DEntryTable registry, no providers or engine yet. This test confirms
-the union + table + case-dispatch all round-trip through a built
-binary by running `out/zvfs` no-args and asserting it emits exactly
-the expected header lines.
+PR 2 turned the binary into a script-driven dispatcher: it reads a
+script file (one operation per line, '#' comments, whitespace-
+separated tokens) and emits one line per verb to stdout. The test
+parametrises over every `.script` fixture under
+tests/fixtures/zvfs_ops/, asserting byte-for-byte equality with the
+matching `.expected` golden.
 
-Subsequent PRs grow the binary's smoke output and eventually replace
-this with the differential harness that diffs against the Python ref.
+PR 3+ will add new verbs (`provider`, `walk`, `bind`, `open`,
+`getline`) and new fixtures. PR 7 will wire the same fixtures
+against the Python ref running through an equivalent dispatcher.
 
 The `zvfs_binary` fixture lives in tests/conftest.py.
 """
 
+import os
 import subprocess
 
 import pytest
@@ -20,20 +23,33 @@ import pytest
 pytestmark = pytest.mark.emitter
 
 
-EXPECTED_OUTPUT = """0: root
-1: notfound
-2: file
-3: directory
-4: mount
-"""
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "zvfs_ops")
 
 
-def test_zvfs_smoke_matches_expected(zvfs_binary):
-    """Running the PR-1 binary prints one line per DEntry arm in the
-    order they were appended to the table -- pins the variant +
-    table + case dispatch all the way through a compiled binary."""
-    proc = subprocess.run([zvfs_binary], capture_output=True, text=True)
-    assert proc.returncode == 0, (
-        f"zvfs exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    )
-    assert proc.stdout == EXPECTED_OUTPUT
+def _list_script_names():
+    names = []
+    for name in sorted(os.listdir(FIXTURE_DIR)):
+        if name.endswith(".script"):
+            names.append(name)
+    return names
+
+
+@pytest.mark.parametrize("script_name", _list_script_names())
+def test_zvfs_script_matches_golden(script_name, zvfs_binary):
+    """The dispatcher's stdout must match the checked-in golden for
+    each fixture script byte-for-byte."""
+    script_path = os.path.join(FIXTURE_DIR, script_name)
+    expected_path = os.path.join(FIXTURE_DIR, script_name[:-7] + ".expected")
+    proc = subprocess.run([zvfs_binary, script_path], capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.fail(
+            f"zvfs exited {proc.returncode} on {script_name}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    with open(expected_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+    if proc.stdout != expected:
+        pytest.fail(
+            f"zvfs output diverged from golden for {script_name}.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
+        )
