@@ -404,7 +404,6 @@ class Tokenizer(ITokenizer):
 
         # UTF8 is allowed in strings...
         stringparts: List[str] = []
-        delimparts: List[str] = []
         while True:
             # RAWC does not include double quote or eol
             while c > zchar.DEL or (CHARFLAGS[c] & Charflag.RAWC != 0):
@@ -415,6 +414,11 @@ class Tokenizer(ITokenizer):
             if c != zchar.DOUBLEQUOTE:
                 break
 
+            # Reset delimparts each outer iteration. A previous short
+            # run leaked into stringparts already; the next attempt has
+            # to start from a fresh accumulator so it can grow up to
+            # delimlength again without inheriting leftover bytes.
+            delimparts: List[str] = []
             dline = self.lineno
             dcol = self.colno
             while c == zchar.DOUBLEQUOTE and len(delimparts) < delimlength:

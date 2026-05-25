@@ -372,67 +372,55 @@ Tokenizer: class {
     # popped. EOL/EOF are NOT consumed here; the outer dispatcher
     # routes them to the EOF / EOL branches in `token` on the next
     # call, which re-enters this method afterwards.
-    #
-    # The Python algorithm uses a single `delimparts` list declared
-    # OUTSIDE the outer loop, so a short delim attempt leaves its
-    # quotes in `delimparts` when the loop iterates. This causes a
-    # subsequent close to under-consume the source by the leftover
-    # count -- ported byte-for-byte for differential parity.
     acceptstringrawtoken: function {:this delim_len: u8} out Token is {
         line: this.lineno
         col: this.colno
         stringparts: "".string
-        delimparts: "".string
-        dline: this.lineno
-        dcol: this.colno
-        matched: false
-        # Outer alternation: RAWC bytes then optional delim attempt.
-        # Inverted-condition loop so we can exit by setting `running`
-        # to false; the take of stringparts / delimparts happens AFTER
-        # the loop where the compiler can see the single transfer.
-        running: true
-        for while running loop {
+        for while true loop {
             for while (israwc b: this.atchar) loop {
                 stringparts.appendByte b: this.atchar
                 this.accept
             }
             if this.atchar != cDquote then {
-                running = false
+                # EOL / EOF / other non-RAWC byte: stop here and let
+                # the outer dispatcher resume in the same STRINGRAW
+                # state on the next call.
+                if stringparts.length > 0 then {
+                    return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
+                }
+                err: "".string
+                err.appendByte b: this.atchar
+                this.accept
+                return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            dline: this.lineno
+            dcol: this.colno
+            # Fresh delimparts per outer iteration. Mirrors Python's
+            # fix for the bug where the un-reset accumulator caused
+            # a short `"` run inside the body to under-consume the
+            # eventual close by the leftover count.
+            delimparts: "".string
+            for while this.atchar == cDquote while delimparts.length < delim_len.u64 loop {
+                delimparts.appendByte b: this.atchar
+                this.accept
+            }
+            if (delimparts.length.u8) < delim_len then {
+                # short run -- literal content
+                extendraw stringparts: stringparts delim_view: delimparts.stringview
             } else {
-                dline = this.lineno
-                dcol = this.colno
-                for while this.atchar == cDquote while delimparts.length < delim_len.u64 loop {
-                    delimparts.appendByte b: this.atchar
-                    this.accept
+                # close matched. Pop state, emit STRMID + stash STREND
+                # (or STREND directly when there is no preceding content).
+                this.statepop
+                if stringparts.length > 0 then {
+                    this.nexttok = Token toktype: TT.STREND tokstr: delimparts fsno: this.fsno lineno: dline colno: dcol tokenid: 0
+                    this.hasnext = true
+                    return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
                 }
-                if (delimparts.length.u8) < delim_len then {
-                    # short run -- treat as literal. Mirrors Python's
-                    # `stringparts.extend(delimparts)` (delimparts NOT
-                    # cleared; subsequent iterations carry over).
-                    extendraw stringparts: stringparts delim_view: delimparts.stringview
-                } else {
-                    matched = true
-                    running = false
-                }
+                return Token toktype: TT.STREND tokstr: delimparts fsno: this.fsno lineno: dline colno: dcol tokenid: 0
             }
         }
-        if matched then {
-            this.statepop
-            if stringparts.length > 0 then {
-                this.nexttok = Token toktype: TT.STREND tokstr: delimparts fsno: this.fsno lineno: dline colno: dcol tokenid: 0
-                this.hasnext = true
-                return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
-            }
-            return Token toktype: TT.STREND tokstr: delimparts fsno: this.fsno lineno: dline colno: dcol tokenid: 0
-        }
-        if stringparts.length > 0 then {
-            return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
-        }
-        # No advance -- ERR on the current byte and force progress.
-        err: "".string
-        err.appendByte b: this.atchar
-        this.accept
-        return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+        # unreachable -- the for-while-true loop only exits via return
+        return Token toktype: TT.ERR tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
     # Mirrors src/zlexer.py:440 acceptcharescape. Consumes the leading

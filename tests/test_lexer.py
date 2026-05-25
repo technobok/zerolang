@@ -132,6 +132,45 @@ class TestTokenizerStrings:
         mid = [t for t in tokens if t.toktype == TT.STRMID]
         assert mid[0].tokstr == "raw Text"
 
+    def test_raw_string_one_embedded_quote(self):
+        """A single `"` inside the body is shorter than the 3-quote
+        delim run so it counts as literal content; the close is the
+        first 3-quote run that follows."""
+        tokens = collect_tokens('"""a"b"""')
+        mid = [t for t in tokens if t.toktype == TT.STRMID]
+        end = [t for t in tokens if t.toktype == TT.STREND]
+        assert len(mid) == 1
+        assert mid[0].tokstr == 'a"b'
+        assert len(end) == 1
+        assert end[0].tokstr == '"""'
+
+    def test_raw_string_two_embedded_quotes(self):
+        """A `""` run is still shorter than the 3-quote delim; both
+        quotes go into the body. Pinning this case prevents the
+        previous delimparts-not-cleared bug from regressing -- the
+        close used to under-consume the source by the leftover count
+        from the short run."""
+        tokens = collect_tokens('"""one"two""three"""')
+        mid = [t for t in tokens if t.toktype == TT.STRMID]
+        end = [t for t in tokens if t.toktype == TT.STREND]
+        assert len(mid) == 1
+        assert mid[0].tokstr == 'one"two""three'
+        assert len(end) == 1
+        assert end[0].tokstr == '"""'
+
+    def test_raw_string_short_run_at_end(self):
+        """A short `"` run that appears as the LAST content before EOF
+        was the source of the prior under-consumption; the close
+        accumulator's stale state would emit a phantom STREND. After
+        the fix the close consumes exactly the matching delim length."""
+        tokens = collect_tokens('"""ab""cd"""')
+        mid = [t for t in tokens if t.toktype == TT.STRMID]
+        end = [t for t in tokens if t.toktype == TT.STREND]
+        assert len(mid) == 1
+        assert mid[0].tokstr == 'ab""cd'
+        assert len(end) == 1
+        assert end[0].tokstr == '"""'
+
     def test_string_interpolation(self):
         # Zero uses \{ for string interpolation expressions
         source = '"x=\\{x}"'
