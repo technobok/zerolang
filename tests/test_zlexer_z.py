@@ -107,3 +107,12 @@ def test_strings_fixture_matches_golden(zlexer_binary):
     escapes (\\xHH, \\uHHHHHH at codepoints <= 0xFF), and `\\{...}`
     interpolation with the nested-brace state stack covered."""
     _assert_matches_golden(zlexer_binary, "strings")
+
+
+def test_raws_fixture_matches_golden(zlexer_binary):
+    """PR 6: raw triple-quoted string literals -- STRBEG / STRMID /
+    STREND with arbitrary delim length (3 and 5), literal backslash
+    (no escape processing), and multi-line content with EOL emitted
+    between STRMID chunks. STRINGRAW carries the delim length as a
+    u8 payload on the TokStateType variant arm."""
+    _assert_matches_golden(zlexer_binary, "raws")

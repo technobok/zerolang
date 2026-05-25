@@ -1,4 +1,4 @@
-# zlexer.z -- self-host port of src/zlexer.py (Phase B PRs 3-5).
+# zlexer.z -- self-host port of src/zlexer.py (Phase B PRs 3-6).
 #
 # Current coverage:
 #   * BOF / EOF / EOL (LF, CR, CRLF) + line+column tracking         (PR 3)
@@ -18,9 +18,16 @@
 #     STRINGEXPRBRACE (mirrors the Python Tokenizer.statestack).
 #     Codepoints > 0xFF from \uHHHHHH are truncated to the low
 #     byte; proper UTF-8 emission is PR 7.                         (PR 5)
+#   * Raw triple-quoted string literals: """...""" with arbitrary
+#     opening / closing delim length (n >= 3 matched runs of `"`).
+#     Backslash is literal; no escape processing or interpolation.
+#     TokStateType.STRINGRAW carries the delim length (u8 payload)
+#     so the inner scanner can match the closer.  Mirrors the Python
+#     reference faithfully, including the non-cleared delim
+#     accumulator's under-consumption quirk when a shorter `"` run
+#     precedes the closing run.                                    (PR 6)
 #
 # Still deferred:
-#   * Raw triple-quoted strings (PR 6)
 #   * Wire into the 96-golden differential harness (PR 8)
 #
 # Canonical output line matches the Python printer:
@@ -132,14 +139,17 @@ TT: variant {
 } as { tag: u8.tag }
 
 # Tokenizer mode stack arms. Mirrors src/zlexer.py:74-86 TokStateType.
-# STRINGRAW is deferred to PR 6. "Implicit FILE state when the stack
-# is empty" -- statecurrent returns FILE for an empty stack so
-# Tokenizer.create can skip an init push.
+# "Implicit FILE state when the stack is empty" -- statecurrent
+# returns FILE for an empty stack so Tokenizer.create can skip an
+# init push.  STRINGRAW carries the opening delim length as its u8
+# payload so the inner scanner can match the closer (Python recovers
+# the same value via len(openingtoken.tokstr)).
 TokStateType: variant {
     FILE: null
     STRING: null
     STRINGEXPR: null
     STRINGEXPRBRACE: null
+    STRINGRAW: u8
 } as { tag: u8.tag }
 
 Token: class {
@@ -218,6 +228,53 @@ isstrc: function {b: u8} out bool is {
     if b == cCr then return false
     if b == cBslash then return false
     return true
+}
+
+# RAWC: any byte legal inside a raw-string STRMID payload. Mirrors
+# Charflag.RAWC from src/zcharclass.py:85-88. Same predicate as STRC
+# but WITHOUT the backslash exclusion -- raw strings suppress escape
+# processing, so `\` is literal content.
+
+israwc: function {b: u8} out bool is {
+    if b > cDel then return true
+    if b == cNul then return false
+    if b == cDquote then return false
+    if b == cLf then return false
+    if b == cCr then return false
+    return true
+}
+
+# Compound predicate for the raw-string closing-delim loop. True
+# while we should keep appending `"`s to delimparts: the byte must
+# still be `"` AND we must not yet have matched the full opening
+# delim length. `for while` does not accept `when`-chained
+# conditions, so the compound check has to live in a function call
+# the loop can re-evaluate each iteration.
+
+candelimextend: function {b: u8 cur: u64 max: u8} out bool is {
+    if b != cDquote then return false
+    if cur >= max.u64 then return false
+    return true
+}
+
+# Append every byte of `delim_view` to `stringparts`. Used by the
+# raw-string scanner when a short `"` run was consumed into the
+# delim accumulator and must be treated as literal content. Mirrors
+# Python's `stringparts.extend(delimparts)` (line 425).
+extendraw: function {stringparts: String delim_view: StringView} is {
+    j: 0.u64
+    dlen: delim_view.length
+    for while j < dlen loop {
+        b: delim_view.byteAt i: j
+        match (
+            b
+        ) case some then {
+            stringparts.appendByte b: b
+        } case none then {
+            j = dlen
+        }
+        j = j + 1
+    }
 }
 
 ishexdigit: function {b: u8} out bool is {
@@ -313,6 +370,78 @@ Tokenizer: class {
         if buf.length > 0 then {
             return Token toktype: TT.STRMID tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
+        err: "".string
+        err.appendByte b: this.atchar
+        this.accept
+        return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+    }
+
+    # Inside a STRINGRAW state. Mirrors src/zlexer.py:388-438
+    # acceptstringrawtoken. RAWC bytes accumulate into the content
+    # buffer; a `"` run is matched against `delim_len` -- equal-length
+    # run closes the string, shorter run is literal content. On close,
+    # the STREND is stashed in `this.nexttok` (or returned directly if
+    # there is no preceding content) and the STRINGRAW state is
+    # popped. EOL/EOF are NOT consumed here; the outer dispatcher
+    # routes them to the EOF / EOL branches in `token` on the next
+    # call, which re-enters this method afterwards.
+    #
+    # The Python algorithm uses a single `delimparts` list declared
+    # OUTSIDE the outer loop, so a short delim attempt leaves its
+    # quotes in `delimparts` when the loop iterates. This causes a
+    # subsequent close to under-consume the source by the leftover
+    # count -- ported byte-for-byte for differential parity.
+    acceptstringrawtoken: function {:this delim_len: u8} out Token is {
+        line: this.lineno
+        col: this.colno
+        stringparts: "".string
+        delimparts: "".string
+        dline: this.lineno
+        dcol: this.colno
+        matched: false
+        # Outer alternation: RAWC bytes then optional delim attempt.
+        # Inverted-condition loop so we can exit by setting `running`
+        # to false; the take of stringparts / delimparts happens AFTER
+        # the loop where the compiler can see the single transfer.
+        running: true
+        for while running loop {
+            for while (israwc b: this.atchar) loop {
+                stringparts.appendByte b: this.atchar
+                this.accept
+            }
+            if this.atchar != cDquote then {
+                running = false
+            } else {
+                dline = this.lineno
+                dcol = this.colno
+                for while (candelimextend b: this.atchar cur: delimparts.length max: delim_len) loop {
+                    delimparts.appendByte b: this.atchar
+                    this.accept
+                }
+                if (delimparts.length.u8) < delim_len then {
+                    # short run -- treat as literal. Mirrors Python's
+                    # `stringparts.extend(delimparts)` (delimparts NOT
+                    # cleared; subsequent iterations carry over).
+                    extendraw stringparts: stringparts delim_view: delimparts.stringview
+                } else {
+                    matched = true
+                    running = false
+                }
+            }
+        }
+        if matched then {
+            this.statepop
+            if stringparts.length > 0 then {
+                this.nexttok = Token toktype: TT.STREND tokstr: delimparts fsno: this.fsno lineno: dline colno: dcol tokenid: 0
+                this.hasnext = true
+                return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            return Token toktype: TT.STREND tokstr: delimparts fsno: this.fsno lineno: dline colno: dcol tokenid: 0
+        }
+        if stringparts.length > 0 then {
+            return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        # No advance -- ERR on the current byte and force progress.
         err: "".string
         err.appendByte b: this.atchar
         this.accept
@@ -508,14 +637,22 @@ Tokenizer: class {
 
         # State-aware dispatch: when the top of the state stack is
         # STRING, the doublequote ends the string (pop + STREND) and
-        # everything else routes to acceptstringtoken. EOL/EOF were
-        # handled above so the string-token path doesn't need to think
-        # about either. Mirrors src/zlexer.py:184-189.
+        # everything else routes to acceptstringtoken. For STRINGRAW,
+        # the close-vs-content decision lives inside
+        # acceptstringrawtoken because it depends on a multi-byte run
+        # match. EOL/EOF were handled above so the string-token paths
+        # don't need to think about either. Mirrors
+        # src/zlexer.py:184-196.
+        kind: this.statecurrent
         in_string: false
+        raw_delim: 0.u8
         match (
-            this.statecurrent
+            kind
         ) case STRING then {
             in_string = true
+        } case STRINGRAW then {
+            # narrowed -- `kind` becomes the u8 payload value
+            raw_delim = kind
         } else {
             in_string = false
         }
@@ -528,6 +665,9 @@ Tokenizer: class {
                 return Token toktype: TT.STREND tokstr: end fsno: this.fsno lineno: line colno: col tokenid: 0
             }
             return this.acceptstringtoken
+        }
+        if raw_delim > 0.u8 then {
+            return (this.acceptstringrawtoken delim_len: raw_delim)
         }
 
         if (isws b: c) then {
@@ -550,10 +690,9 @@ Tokenizer: class {
 
         # String open. Counts the consecutive `"` run. 1 -> push STRING
         # state. 2 -> empty string (STRBEG + stashed STREND, no push).
-        # 3+ -> raw string territory (PR 6); for now emit a STRBEG that
-        # carries the whole run and do not push state. The PR 5 fixture
-        # never produces a 3+ run so behaviour beyond that is the
-        # subsequent scanner's problem. Mirrors src/zlexer.py:222-238.
+        # 3+ -> raw string: emit STRBEG with the full run and push
+        # STRINGRAW carrying the run length so the inner scanner can
+        # match the closer. Mirrors src/zlexer.py:222-238.
         if c == cDquote then {
             buf: "".string
             n: 0.u64
@@ -578,6 +717,10 @@ Tokenizer: class {
                 this.statepush s: TokStateType.STRING
                 return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
             }
+            # n >= 3: raw string. Push STRINGRAW with the delim length
+            # so acceptstringrawtoken can match a closer of the same
+            # size.
+            this.statepush s: TokStateType.STRINGRAW n.u8
             return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
