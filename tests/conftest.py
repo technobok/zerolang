@@ -5,6 +5,9 @@ Shared test fixtures and helpers for zerolang tests
 import io
 import os
 import pickle
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -12,6 +15,54 @@ from zvfs import ZVfsOpenFile, DEntryID, ZVfs, FSProvider, StringProvider, BindT
 from zlexer import Tokenizer, Lexer
 from ztokentype import TT
 from zparser import Parser
+
+
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+_SRC_DIR = os.path.join(_REPO_ROOT, "src")
+_ZC = [sys.executable, os.path.join(_SRC_DIR, "zc.py")]
+_CC = os.environ.get("Z_TEST_CC", "gcc")
+_CFLAGS = [
+    "-std=c17",
+    "-Wall",
+    "-Wextra",
+    "-Wno-unused-function",
+    "-Wno-unused-parameter",
+    "-Werror=implicit-function-declaration",
+    "-Werror=implicit-int",
+    "-Werror=int-conversion",
+    "-Werror=incompatible-pointer-types",
+]
+
+
+@pytest.fixture(scope="session")
+def zlexer_binary(tmp_path_factory):
+    """Build the self-hosted lexer (src/zlexer.z -> C -> binary) once
+    per pytest session. Skips when the C compiler is missing. Build
+    output lives in a per-session tmp dir so xdist workers don't race
+    on the same `out/zlexer.c` path."""
+    if shutil.which(_CC) is None:
+        pytest.skip(f"{_CC} not on PATH; cannot build zlexer binary")
+    builddir = tmp_path_factory.mktemp("zlexer")
+    c_path = str(builddir / "zlexer.c")
+    bin_path = str(builddir / "zlexer")
+    zc_proc = subprocess.run(
+        _ZC + ["zlexer", "--src", _SRC_DIR, "-o", c_path],
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    assert zc_proc.returncode == 0, (
+        f"zc.py failed:\nstdout:\n{zc_proc.stdout}\nstderr:\n{zc_proc.stderr}"
+    )
+    cc_proc = subprocess.run(
+        [_CC, *_CFLAGS, "-o", bin_path, c_path],
+        capture_output=True,
+        text=True,
+    )
+    assert cc_proc.returncode == 0, (
+        f"{_CC} failed:\nstdout:\n{cc_proc.stdout}\nstderr:\n{cc_proc.stderr}"
+    )
+    return bin_path
 
 
 def make_tokenizer(source: str) -> Tokenizer:
