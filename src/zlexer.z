@@ -1,4 +1,4 @@
-# zlexer.z -- self-host port of src/zlexer.py (Phase B PRs 3-4).
+# zlexer.z -- self-host port of src/zlexer.py (Phase B PRs 3-5).
 #
 # Current coverage:
 #   * BOF / EOF / EOL (LF, CR, CRLF) + line+column tracking         (PR 3)
@@ -11,9 +11,14 @@
 #     including the optional +/- prefix and dot-continuation in
 #     digit-starting words (so "1.5" tokenises as REFID "1.5", not
 #     three tokens).                                                 (PR 4)
+#   * Interpreted string literals: STRBEG / STRMID / STRCHR /
+#     STREND. Named (\n \t \b \\ \") and hex (\xHH, \uHHHHHH)
+#     escapes. Interpolation via STREXPRBEG + a state stack tracking
+#     STRING / STRINGEXPR / STRINGEXPRBRACE (mirrors the Python
+#     Tokenizer.statestack). Codepoints > 0xFF from \uHHHHHH are
+#     truncated to the low byte; proper UTF-8 emission is PR 7.    (PR 5)
 #
 # Still deferred:
-#   * Interpreted string literals + interpolation (PR 5)
 #   * Raw triple-quoted strings (PR 6)
 #   * Wire into the 96-golden differential harness (PR 8)
 #
@@ -36,6 +41,7 @@
 # now macro-style (no `static const` decl; value inlined at every
 # use site).
 cNul:        0
+cBspace:     8      # \b (backspace)
 cHt:         9      # \t
 cLf:         10     # \n
 cCr:         13     # \r
@@ -52,13 +58,19 @@ cZero:       48     # 0
 cNine:       57     # 9
 cColon:      58     # :
 cSemi:       59     # ;
+cUpperA:     65     # A
+cUpperF:     70     # F
 cBrackOpen:  91     # [
 cBslash:     92     # \
 cBrackClose: 93     # ]
 cBquote:     96     # `
+cLowerA:     97     # a
+cLowerB:     98     # b
+cLowerF:     102    # f
 cLowerN:     110    # n
 cLowerR:     114    # r
 cLowerT:     116    # t
+cLowerU:     117    # u
 cLowerX:     120    # x
 cBraceOpen:  123    # {
 cBraceClose: 125    # }
@@ -111,7 +123,22 @@ TT: variant {
     FACET: null
     NATIVE: null
     YIELD: null
+    STRBEG: null
+    STRMID: null
+    STRCHR: null
+    STREND: null
+    STREXPRBEG: null
 } as { tag: u8.tag }
+
+# Tokenizer mode stack tags. Mirrors src/zlexer.py:74-86
+# TokStateType. STRINGRAW is deferred to PR 6. Stored as a u8 byte
+# per stack level in `Tokenizer.statestack` (a String used as a
+# byte stack -- see the field comment for why a real
+# `List of: TokStateType` isn't usable yet).
+tagFile:            0.u8
+tagString:          1.u8
+tagStringExpr:      2.u8
+tagStringExprBrace: 3.u8
 
 Token: class {
     toktype: TT
@@ -152,8 +179,8 @@ iscommentbody: function {b: u8} out bool is {
 # and operators are all IDEN.
 
 isidchar: function {b: u8} out bool is {
-    if b < 33.u8 then return false      # space + below
-    if b > 126.u8 then return false     # cDel + above
+    if b < 33 then return false      # space + below
+    if b > 126 then return false     # cDel + above
     if b == cDquote then return false
     if b == cHash then return false
     if b == cParenOpen then return false
@@ -176,6 +203,57 @@ isdigit: function {b: u8} out bool is {
     return true
 }
 
+# STRC: any byte legal inside an interpreted string literal token's
+# STRMID payload. Mirrors Charflag.STRC plus the >DEL UTF-8 pass-through
+# from src/zlexer.py:375. The five excluded bytes (NUL, ", LF, CR, \)
+# each route to their own token kind in the surrounding dispatch.
+
+isstrc: function {b: u8} out bool is {
+    if b > cDel then return true
+    if b == cNul then return false
+    if b == cDquote then return false
+    if b == cLf then return false
+    if b == cCr then return false
+    if b == cBslash then return false
+    return true
+}
+
+ishexdigit: function {b: u8} out bool is {
+    if b >= cZero when b <= cNine then return true
+    if b >= cUpperA when b <= cUpperF then return true
+    if b >= cLowerA when b <= cLowerF then return true
+    return false
+}
+
+# Decode a single hex digit byte into its numeric value (0-15).
+# Caller must have already checked `ishexdigit`.
+
+hexvalue: function {b: u8} out u8 is {
+    if b <= cNine then return b - cZero.u8
+    if b <= cUpperF then return b - cUpperA.u8 + 10.u8
+    return b - cLowerA.u8 + 10.u8
+}
+
+# Copy the first `len` bytes of `sv` into a fresh owned String. Used
+# by Tokenizer.statepop -- a separate function so the source view's
+# lock is released before the caller reassigns the source field.
+stringSliceLeft: function {sv: StringView len: u64} out String is {
+    buf: "".string
+    i: 0.u64
+    for while i < len loop {
+        b: sv.byteAt i: i
+        match (
+            b
+        ) case some then {
+            buf.appendByte b: b
+        } case none then {
+            return buf
+        }
+        i = i + 1
+    }
+    return buf
+}
+
 Tokenizer: class {
     source: String
     pos: u64
@@ -186,9 +264,56 @@ Tokenizer: class {
     # Single-slot lookahead as a typed Token field.
     hasnext: bool
     nexttok: Token
+    # Mode stack for string + interpolation contexts encoded as one
+    # u8 byte per level (tag values defined above). Empty stack means
+    # the implicit FILE state (`statecurrent` returns tagFile).
+    #
+    # A `(List of: TokStateType)` would be the natural fit, but the
+    # current C emitter emits each user class struct BEFORE the
+    # `(List of: <userType>)` monomorphization it references, leading
+    # to "unknown type name `z_List_TokStateType_t`" at gcc.
+    # Encoding the stack as String bytes lets the field reference a
+    # type the emitter already orders correctly. Pop is implemented
+    # by rebuilding the String one byte shorter (we never have stale
+    # bytes that way; field reassignment is the existing
+    # class-inline-construct + drop-and-transfer path).
+    statestack: String
 } as {
     create: function {source: String.take fsno: u32} out this is {
-        return meta.create source: source pos: 0.u64 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0.u32 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0.u32 colno: 0.u32 tokenid: 0.u64)
+        return meta.create source: source pos: 0 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0 colno: 0 tokenid: 0) statestack: "".string
+    }
+
+    # State-stack helpers. Empty stack -> implicit FILE. Mirrors
+    # src/zlexer.py:500-521 (_statecurrent / _statepush / _statepop)
+    # except the FILE entry is implicit instead of pushed at init.
+    statepush: function {:this kind: u8} is {
+        this.statestack.appendByte b: kind
+    }
+
+    statepop: function {:this} is {
+        n: this.statestack.length
+        if n == 0 then return
+        # Bind newbuf via a helper so the borrowed StringView's lock on
+        # this.statestack is released before the field reassignment.
+        # Field reassignment drops the old String and moves the new one
+        # in; the temp's buffer is zeroed so it doesn't double-free at
+        # scope exit.
+        newbuf: stringSliceLeft sv: this.statestack.stringview len: n - 1
+        this.statestack = newbuf
+    }
+
+    statecurrent: function {:this} out u8 is {
+        n: this.statestack.length
+        if n == 0 then return tagFile
+        sv: this.statestack.stringview
+        b: sv.byteAt i: n - 1
+        match (
+            b
+        ) case some then {
+            return b
+        } case none then {
+            return tagFile
+        }
     }
 
     # Advance one byte. Returns the byte just placed in .atchar
@@ -201,13 +326,172 @@ Tokenizer: class {
             b
         ) case some then {
             this.atchar = b
-            this.pos = this.pos + 1.u64
-            this.colno = this.colno + 1.u32
+            this.pos = this.pos + 1
+            this.colno = this.colno + 1
             return b
         } case none then {
             this.atchar = 0.u8
             return 0.u8
         }
+    }
+
+    # Inside a STRING state at a non-doublequote, non-EOL byte. Mirrors
+    # src/zlexer.py:357 acceptstringtoken. Backslash routes to
+    # acceptcharescape; otherwise gather STRC bytes into a STRMID. If
+    # the very first byte is not STRC (and not backslash), emit an ERR
+    # with that single byte to guarantee scanner forward progress.
+    acceptstringtoken: function {:this} out Token is {
+        line: this.lineno
+        col: this.colno
+        c: this.atchar
+        if c == cBslash then {
+            return this.acceptcharescape
+        }
+        buf: "".string
+        for while (isstrc b: this.atchar) loop {
+            buf.appendByte b: this.atchar
+            this.accept
+        }
+        if buf.length > 0 then {
+            return Token toktype: TT.STRMID tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        err: "".string
+        err.appendByte b: this.atchar
+        this.accept
+        return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+    }
+
+    # Mirrors src/zlexer.py:440 acceptcharescape. Consumes the leading
+    # backslash, then dispatches:
+    #   \n \t \b \\ \"  -> STRCHR with the interpreted byte
+    #   \xHH            -> STRCHR with the decoded byte (2 hex digits)
+    #   \uHHHHHH        -> STRCHR with the decoded codepoint, truncated
+    #                       to the low byte (PR 5 limit; PR 7 will
+    #                       widen to full UTF-8 emission)
+    #   \{              -> STREXPRBEG, push STRINGEXPR (the `{` itself
+    #                       becomes the next token and pushes
+    #                       STRINGEXPRBRACE on top)
+    # Any other byte after the backslash is an ERR with tokstr "\<c>".
+    acceptcharescape: function {:this} out Token is {
+        line: this.lineno
+        col: this.colno
+        c: this.atchar
+        if c != cBslash then {
+            err: "".string
+            err.appendByte b: c
+            return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+        this.accept
+        c = this.atchar
+
+        named_byte: 0.u8
+        named_found: false
+        if c == cLowerN then {
+            named_byte = cLf.u8
+            named_found = true
+        }
+        if c == cLowerT then {
+            named_byte = cHt.u8
+            named_found = true
+        }
+        if c == cLowerB then {
+            named_byte = cBspace.u8
+            named_found = true
+        }
+        if c == cBslash then {
+            named_byte = cBslash.u8
+            named_found = true
+        }
+        if c == cDquote then {
+            named_byte = cDquote.u8
+            named_found = true
+        }
+        if named_found then {
+            this.accept
+            sc: "".string
+            sc.appendByte b: named_byte
+            return Token toktype: TT.STRCHR tokstr: sc fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        if c == cLowerX then {
+            return (this.accepthexescape n: 2 specifier: cLowerX.u8 line: line col: col)
+        }
+        if c == cLowerU then {
+            return (this.accepthexescape n: 6 specifier: cLowerU.u8 line: line col: col)
+        }
+
+        if c == cBraceOpen then {
+            bs: "".string
+            bs.appendByte b: cBslash.u8
+            this.statepush kind: tagStringExpr
+            return Token toktype: TT.STREXPRBEG tokstr: bs fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        err: "".string
+        err.appendByte b: cBslash.u8
+        err.appendByte b: c
+        return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+    }
+
+    # Consume `n` hex digits and produce a STRCHR with the decoded byte.
+    # `specifier` is the `x` or `u` that follows the backslash; used to
+    # rebuild the ERR tokstr ("\<specifier><digits-seen>") on malformed
+    # input. Caller has already consumed the backslash but NOT the
+    # specifier itself. Multi-byte UTF-8 emission for codepoints > 0xFF
+    # is deferred to PR 7; for now the value is truncated to its low
+    # byte (matches Python's `\xHH` dump form for cp <= 0xFF).
+    accepthexescape: function {:this n: u32 specifier: u8 line: u32 col: u32} out Token is {
+        this.accept
+        digits: "".string
+        consumed: 0.u32
+        for while consumed < n loop {
+            c: this.atchar
+            if (ishexdigit b: c) then {
+                digits.appendByte b: c
+                this.accept
+                consumed = consumed + 1
+            } else {
+                err: "".string
+                err.appendByte b: cBslash.u8
+                err.appendByte b: specifier
+                dsv: digits.stringview
+                j: 0.u64
+                dlen: dsv.length
+                for while j < dlen loop {
+                    db: dsv.byteAt i: j
+                    match (
+                        db
+                    ) case some then {
+                        err.appendByte b: db
+                    } case none then {
+                        return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+                    }
+                    j = j + 1
+                }
+                return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+        }
+
+        val: 0.u64
+        dsv: digits.stringview
+        j: 0.u64
+        dlen: dsv.length
+        for while j < dlen loop {
+            db: dsv.byteAt i: j
+            match (
+                db
+            ) case some then {
+                hv: hexvalue b: db
+                val = val * 16 + hv.u64
+            } case none then {
+                j = dlen
+            }
+            j = j + 1
+        }
+        byte: val.u8
+        sc: "".string
+        sc.appendByte b: byte
+        return Token toktype: TT.STRCHR tokstr: sc fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
     token: function {:this} out Token is {
@@ -228,28 +512,28 @@ Tokenizer: class {
             if is_eof then {} else {
                 this.hasnext = false
             }
-            return Token toktype: this.nexttok.toktype tokstr: this.nexttok.tokstr.copy fsno: this.fsno lineno: this.nexttok.lineno colno: this.nexttok.colno tokenid: 0.u64
+            return Token toktype: this.nexttok.toktype tokstr: this.nexttok.tokstr.copy fsno: this.fsno lineno: this.nexttok.lineno colno: this.nexttok.colno tokenid: 0
         }
 
         # Prime the look-ahead on the first call (pos == 0 means
         # `accept` has never run). After this, .atchar holds the next
         # byte to dispatch on (or cNul if the source is empty).
-        if this.pos == 0.u64 then this.accept
+        if this.pos == 0 then this.accept
         line: this.lineno
         col: this.colno
         c: this.atchar
 
         if c == cNul then {
-            return Token toktype: TT.EOF tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.EOF tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         if c == cLf then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            this.lineno = this.lineno + 1.u32
-            this.colno = 1.u32
-            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            this.lineno = this.lineno + 1
+            this.colno = 1
+            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cCr then {
             buf: "".string
@@ -259,9 +543,25 @@ Tokenizer: class {
                 buf.appendByte b: this.atchar
                 this.accept
             }
-            this.lineno = this.lineno + 1.u32
-            this.colno = 1.u32
-            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            this.lineno = this.lineno + 1
+            this.colno = 1
+            return Token toktype: TT.EOL tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        # State-aware dispatch: when the top of the state stack is
+        # STRING, the doublequote ends the string (pop + STREND) and
+        # everything else routes to acceptstringtoken. EOL/EOF were
+        # handled above so the string-token path doesn't need to think
+        # about either. Mirrors src/zlexer.py:184-189.
+        if this.statecurrent == tagString then {
+            if c == cDquote then {
+                end: "".string
+                end.appendByte b: c
+                this.accept
+                this.statepop
+                return Token toktype: TT.STREND tokstr: end fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            return this.acceptstringtoken
         }
 
         if (isws b: c) then {
@@ -270,7 +570,7 @@ Tokenizer: class {
                 buf.appendByte b: this.atchar
                 this.accept
             }
-            return Token toktype: TT.WS tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.WS tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         if c == cHash then {
@@ -279,7 +579,40 @@ Tokenizer: class {
                 buf.appendByte b: this.atchar
                 this.accept
             }
-            return Token toktype: TT.COMMENT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.COMMENT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
+        # String open. Counts the consecutive `"` run. 1 -> push STRING
+        # state. 2 -> empty string (STRBEG + stashed STREND, no push).
+        # 3+ -> raw string territory (PR 6); for now emit a STRBEG that
+        # carries the whole run and do not push state. The PR 5 fixture
+        # never produces a 3+ run so behaviour beyond that is the
+        # subsequent scanner's problem. Mirrors src/zlexer.py:222-238.
+        if c == cDquote then {
+            buf: "".string
+            n: 0.u64
+            for while this.atchar == cDquote loop {
+                buf.appendByte b: this.atchar
+                n = n + 1
+                this.accept
+            }
+            if n == 2 then {
+                # Empty string: emit STRBEG with a single `"` (matching
+                # the open-quote token) and stash a STREND for the next
+                # call. buf holds both consumed quotes, so build fresh.
+                beg: "".string
+                beg.appendByte b: cDquote.u8
+                end: "".string
+                end.appendByte b: cDquote.u8
+                this.nexttok = Token toktype: TT.STREND tokstr: end fsno: this.fsno lineno: line colno: col + 1 tokenid: 0
+                this.hasnext = true
+                return Token toktype: TT.STRBEG tokstr: beg fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            if n == 1 then {
+                this.statepush kind: tagString
+                return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         if c == cDot then {
@@ -287,47 +620,66 @@ Tokenizer: class {
             n: 0.u64
             for while this.atchar == cDot loop {
                 buf.appendByte b: this.atchar
-                n = n + 1.u64
+                n = n + 1
                 this.accept
             }
-            if n == 1.u64 then {
-                return Token toktype: TT.DOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            if n == 1 then {
+                return Token toktype: TT.DOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
             }
-            if n == 3.u64 then {
-                return Token toktype: TT.DOTDOTDOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            if n == 3 then {
+                return Token toktype: TT.DOTDOTDOT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
             }
-            return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.ERR tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         if c == cParenOpen then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.PARENOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.PARENOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cParenClose then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.PARENCLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.PARENCLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cBraceOpen then {
             buf: "".string
             buf.appendByte b: c
+            # If we are already inside an interpolation context, the `{`
+            # opens a nested brace scope that must be tracked so the
+            # matching `}` returns us to STRING (rather than ending the
+            # interpolation). Mirrors src/zlexer.py:240-248.
+            kind: this.statecurrent
+            push_brace: false
+            if kind == tagStringExpr then push_brace = true
+            if kind == tagStringExprBrace then push_brace = true
             this.accept
-            return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            if push_brace then this.statepush kind: tagStringExprBrace
+            return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cBraceClose then {
             buf: "".string
             buf.appendByte b: c
+            # If the matching `{` was inside an interpolation, pop one
+            # STRINGEXPRBRACE; if that was the last brace under
+            # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
+            # into STRING. Mirrors src/zlexer.py:250-257.
+            pop_brace: false
+            if this.statecurrent == tagStringExprBrace then pop_brace = true
             this.accept
-            return Token toktype: TT.BRACECLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            if pop_brace then {
+                this.statepop
+                if this.statecurrent == tagStringExpr then this.statepop
+            }
+            return Token toktype: TT.BRACECLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cSemi then {
             buf: "".string
             buf.appendByte b: c
             this.accept
-            return Token toktype: TT.SEMICOLON tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.SEMICOLON tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         # Word branch: leading colon? +/- prefix? IDEN loop, plus
@@ -400,7 +752,7 @@ Tokenizer: class {
                 # types aligned (else branch ends with an assignment).
                 this.hasnext = this.hasnext
             } else {
-                this.nexttok = Token toktype: TT.DOT tokstr: ".".string fsno: this.fsno lineno: dot_line colno: dot_col tokenid: 0.u64
+                this.nexttok = Token toktype: TT.DOT tokstr: ".".string fsno: this.fsno lineno: dot_line colno: dot_col tokenid: 0
                 this.hasnext = true
             }
         }
@@ -409,17 +761,17 @@ Tokenizer: class {
         # colonpre becomes ERR (matches Python lines 309-317); stray
         # byte means we somehow consumed nothing -- emit ERR with the
         # current byte and advance to make progress.
-        if buf.length == 0.u64 then {
+        if buf.length == 0 then {
             if has_colonpre then {
                 # Lone colon: emit the colon as ERR.
                 err: "".string
                 err.appendByte b: cColon.u8
-                return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0.u64
+                return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0
             }
             err: "".string
             err.appendByte b: c
             this.accept
-            return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0.u64
+            return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         # Word is non-empty. Decide token type. Three mutually-
@@ -437,11 +789,11 @@ Tokenizer: class {
             stage_tt: TT.LABELPRE
             if kwfound then stage_tt = TT.ERR
             if reservedfound then stage_tt = TT.ERR
-            this.nexttok = Token toktype: stage_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
+            this.nexttok = Token toktype: stage_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0
             this.hasnext = true
             colon_only: "".string
             colon_only.appendByte b: cColon.u8
-            return Token toktype: TT.COLON tokstr: colon_only fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0.u64
+            return Token toktype: TT.COLON tokstr: colon_only fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0
         }
 
         # Path 2: no colonpre, trailing colon, non-keyword non-reserved.
@@ -457,7 +809,7 @@ Tokenizer: class {
             }
         }
         if labelpath then {
-            this.nexttok = Token toktype: TT.COLON tokstr: ":".string fsno: this.fsno lineno: this.lineno colno: this.colno tokenid: 0.u64
+            this.nexttok = Token toktype: TT.COLON tokstr: ":".string fsno: this.fsno lineno: this.lineno colno: this.colno tokenid: 0
             this.hasnext = true
             this.accept
             # Inline `tokstr: buf.copy` here over-propagates the take
@@ -467,7 +819,7 @@ Tokenizer: class {
             # args in conditional branches; keep the local binding
             # until that gap closes.
             labelbuf: buf.copy
-            return Token toktype: TT.LABEL tokstr: labelbuf fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
+            return Token toktype: TT.LABEL tokstr: labelbuf fsno: this.fsno lineno: word_line colno: word_col tokenid: 0
         }
 
         # Path 3: no colonpre, no trailing-colon-label. REFID, keyword,
@@ -475,7 +827,7 @@ Tokenizer: class {
         ret_tt: TT.REFID
         if kwfound then ret_tt = kw_res.tt
         if reservedfound then ret_tt = TT.ERR
-        return Token toktype: ret_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0.u64
+        return Token toktype: ret_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0
     }
 }
 
@@ -625,6 +977,16 @@ ttname: function {t: TT} out String is {
         return "NATIVE".string
     } case YIELD then {
         return "YIELD".string
+    } case STRBEG then {
+        return "STRBEG".string
+    } case STRMID then {
+        return "STRMID".string
+    } case STRCHR then {
+        return "STRCHR".string
+    } case STREND then {
+        return "STREND".string
+    } case STREXPRBEG then {
+        return "STREXPRBEG".string
     }
 }
 
@@ -667,7 +1029,9 @@ escape_append: function {b: u8 dst: String} is {
         return
     }
     h: b / 16.u8
-    l: b - h * 16.u8
+    # Operators are identifiers with no precedence ladder; the
+    # subtraction must explicitly bracket the multiplication.
+    l: b - (h * 16.u8)
     hi: hexdigit b: h
     lo: hexdigit b: l
     dst.appendByte b: cBslash.u8

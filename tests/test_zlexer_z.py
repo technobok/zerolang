@@ -99,3 +99,11 @@ def test_words_fixture_matches_golden(zlexer_binary):
     and numeric-shaped REFIDs with dot continuation (e.g. `1.5` as
     one REFID rather than three tokens)."""
     _assert_matches_golden(zlexer_binary, "words")
+
+
+def test_strings_fixture_matches_golden(zlexer_binary):
+    """PR 5: interpreted string literals -- STRBEG, STRMID, STRCHR,
+    STREND, STREXPRBEG. Named escapes (\\n \\t \\b \\\\ \\"), hex
+    escapes (\\xHH, \\uHHHHHH at codepoints <= 0xFF), and `\\{...}`
+    interpolation with the nested-brace state stack covered."""
+    _assert_matches_golden(zlexer_binary, "strings")
