@@ -239,6 +239,82 @@ class TestTokenizerEscapeSequences:
         assert len(escaped) == 1
         assert escaped[0].tokstr == "\b"
 
+    def test_unicode_escape_boundary_7f(self):
+        # cp 0x7F: \xHH dump form (0x20..0x7E are printable; 0x7F is not).
+        from ztokendump import _escape
+
+        tokens = collect_tokens('"\\u00007f"')
+        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
+        assert len(escaped) == 1
+        assert escaped[0].tokstr == "\x7f"
+        assert _escape(escaped[0].tokstr) == "\\x7f"
+
+    def test_unicode_escape_boundary_80(self):
+        # cp 0x80: still \xHH dump form (cp <= 0xFF stays single-byte).
+        from ztokendump import _escape
+
+        tokens = collect_tokens('"\\u000080"')
+        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
+        assert len(escaped) == 1
+        assert escaped[0].tokstr == "\x80"
+        assert _escape(escaped[0].tokstr) == "\\x80"
+
+    def test_unicode_escape_above_ff(self):
+        # cp 0x100: first codepoint that crosses into \u{cp:x} dump form.
+        from ztokendump import _escape
+
+        tokens = collect_tokens('"\\u000100"')
+        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
+        assert len(escaped) == 1
+        assert escaped[0].tokstr == "Ā"
+        assert _escape(escaped[0].tokstr) == "\\u{100}"
+
+    def test_unicode_escape_4byte(self):
+        # Beyond the BMP -- emoji codepoint, 4-byte UTF-8 on the
+        # zerolang side, single Python codepoint here.
+        from ztokendump import _escape
+
+        tokens = collect_tokens('"\\u01f600"')
+        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
+        assert len(escaped) == 1
+        assert escaped[0].tokstr == "\U0001f600"
+        assert _escape(escaped[0].tokstr) == "\\u{1f600}"
+
+    def test_unicode_escape_max_valid(self):
+        # U+10FFFF is the last valid Unicode codepoint.
+        from ztokendump import _escape
+
+        tokens = collect_tokens('"\\u10ffff"')
+        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
+        assert len(escaped) == 1
+        assert escaped[0].tokstr == "\U0010ffff"
+        assert _escape(escaped[0].tokstr) == "\\u{10ffff}"
+
+    def test_unicode_escape_above_max_rejected(self):
+        # cp > 0x10FFFF cannot be UTF-8 encoded in 1-4 bytes; both
+        # compilers reject as ERR with the source-form tokstr.
+        tokens = collect_tokens('"\\u110000"')
+        errs = [t for t in tokens if t.toktype == TT.ERR]
+        assert len(errs) == 1
+        assert errs[0].tokstr == "\\u110000"
+
+    def test_unicode_escape_far_above_max_rejected(self):
+        tokens = collect_tokens('"\\uffffff"')
+        errs = [t for t in tokens if t.toktype == TT.ERR]
+        assert len(errs) == 1
+        assert errs[0].tokstr == "\\uffffff"
+
+    def test_hex_escape_keeps_single_byte(self):
+        # \xHH is a byte escape, not a codepoint escape -- the tokstr
+        # is the raw byte even at the 0x80..0xFF range.
+        from ztokendump import _escape
+
+        tokens = collect_tokens('"\\x80"')
+        escaped = [t for t in tokens if t.toktype == TT.STRCHR]
+        assert len(escaped) == 1
+        assert escaped[0].tokstr == "\x80"
+        assert _escape(escaped[0].tokstr) == "\\x80"
+
 
 class TestTokenizerComments:
     def test_comment(self):

@@ -280,6 +280,49 @@ hexvalue: function {b: u8} out u8 is {
     return b - cLowerA.u8 + 10.u8
 }
 
+# Encode a Unicode codepoint as 1-4 UTF-8 bytes appended to `dst`.
+# Caller is responsible for ensuring cp <= 0x10FFFF -- the \uHHHHHH
+# decoder rejects out-of-range values before invoking this helper.
+# Division and modulo stand in for the usual >>6 / &0x3F bit ops since
+# zerolang has no shift / bitwise operators.
+
+utf8_encode_append: function {cp: u64 dst: String} is {
+    if cp < 128.u64 then {
+        dst.appendByte b: cp.u8
+        return
+    }
+    if cp < 2048.u64 then {
+        # 110xxxxx 10xxxxxx  (5 + 6 payload bits)
+        hi: cp / 64.u64
+        lo: cp - (hi * 64.u64)
+        dst.appendByte b: (hi + 192.u64).u8
+        dst.appendByte b: (lo + 128.u64).u8
+        return
+    }
+    if cp < 65536.u64 then {
+        # 1110xxxx 10xxxxxx 10xxxxxx  (4 + 6 + 6 payload bits)
+        hi: cp / 4096.u64
+        rest1: cp - (hi * 4096.u64)
+        mid: rest1 / 64.u64
+        lo: rest1 - (mid * 64.u64)
+        dst.appendByte b: (hi + 224.u64).u8
+        dst.appendByte b: (mid + 128.u64).u8
+        dst.appendByte b: (lo + 128.u64).u8
+        return
+    }
+    # 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx  (3 + 6 + 6 + 6 payload bits)
+    hi: cp / 262144.u64
+    rest1: cp - (hi * 262144.u64)
+    mid2: rest1 / 4096.u64
+    rest2: rest1 - (mid2 * 4096.u64)
+    mid1: rest2 / 64.u64
+    lo: rest2 - (mid1 * 64.u64)
+    dst.appendByte b: (hi + 240.u64).u8
+    dst.appendByte b: (mid2 + 128.u64).u8
+    dst.appendByte b: (mid1 + 128.u64).u8
+    dst.appendByte b: (lo + 128.u64).u8
+}
+
 Tokenizer: class {
     source: String
     pos: u64
@@ -495,13 +538,16 @@ Tokenizer: class {
         return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
-    # Consume `n` hex digits and produce a STRCHR with the decoded byte.
-    # `specifier` is the `x` or `u` that follows the backslash; used to
-    # rebuild the ERR tokstr ("\<specifier><digits-seen>") on malformed
-    # input. Caller has already consumed the backslash but NOT the
-    # specifier itself. Multi-byte UTF-8 emission for codepoints > 0xFF
-    # is deferred to PR 7; for now the value is truncated to its low
-    # byte (matches Python's `\xHH` dump form for cp <= 0xFF).
+    # Consume `n` hex digits and produce a STRCHR with the decoded
+    # value. `specifier` is the `x` or `u` that follows the backslash;
+    # used to rebuild the ERR tokstr ("\<specifier><digits-seen>") on
+    # malformed input. Caller has already consumed the backslash but
+    # NOT the specifier itself.
+    #
+    # \xHH is a raw byte escape: tokstr is the single byte (cp <= 0xFF).
+    # \uHHHHHH is a codepoint escape: tokstr is the UTF-8 encoding of
+    # the codepoint (1-4 bytes). Codepoints above U+10FFFF cannot be
+    # represented in 1-4 byte UTF-8 and are rejected as ERR.
     accepthexescape: function {:this n: u32 specifier: u8 line: u32 col: u32} out Token is {
         this.accept
         digits: "".string
@@ -534,7 +580,14 @@ Tokenizer: class {
             }
         }
 
+        # Walk the collected digits once: rebuild the source-form ERR
+        # tokstr alongside the parsed codepoint value. The ERR variant
+        # is only returned for \u escapes whose value exceeds U+10FFFF;
+        # in every other path `err` falls out of scope unused.
         val: 0.u64
+        err: "".string
+        err.appendByte b: cBslash.u8
+        err.appendByte b: specifier
         dsv: digits.stringview
         j: 0.u64
         dlen: dsv.length
@@ -543,6 +596,7 @@ Tokenizer: class {
             match (
                 db
             ) case some then {
+                err.appendByte b: db
                 hv: hexvalue b: db
                 val = val * 16 + hv.u64
             } case none then {
@@ -550,6 +604,16 @@ Tokenizer: class {
             }
             j = j + 1
         }
+
+        if specifier == cLowerU.u8 then {
+            if val > 1114111.u64 then {
+                return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
+            }
+            sc: "".string
+            utf8_encode_append cp: val dst: sc
+            return Token toktype: TT.STRCHR tokstr: sc fsno: this.fsno lineno: line colno: col tokenid: 0
+        }
+
         byte: val.u8
         sc: "".string
         sc.appendByte b: byte
@@ -1144,20 +1208,186 @@ escape_append: function {b: u8 dst: String} is {
     dst.appendByte b: lo
 }
 
+# Try to decode a UTF-8 multi-byte sequence starting at offset `i`.
+# Returns optionval.some <cp> when the bytes form a well-formed
+# 2/3/4-byte sequence (lead in 0xC2..0xF7, all continuations in
+# 0x80..0xBF, sequence fits within `sv`); optionval.none otherwise.
+# ASCII bytes (b < 0x80) are NOT decoded here -- they fall through
+# to the single-byte path in escape_str.
+
+utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
+    n: sv.length
+    if i >= n then return (optionval.none u32)
+    leadopt: sv.byteAt i: i
+    lead: 0.u8
+    match (
+        leadopt
+    ) case some then {
+        lead = leadopt
+    } case none then {
+        return (optionval.none u32)
+    }
+
+    seqlen: 0.u8
+    if lead >= 194.u8 when lead <= 223.u8 then seqlen = 2.u8
+    if lead >= 224.u8 when lead <= 239.u8 then seqlen = 3.u8
+    if lead >= 240.u8 when lead <= 247.u8 then seqlen = 4.u8
+    if seqlen == 0.u8 then return (optionval.none u32)
+    if (i + seqlen.u64) > n then return (optionval.none u32)
+
+    if seqlen == 2.u8 then {
+        b1opt: sv.byteAt i: (i + 1.u64)
+        b1: 0.u8
+        match (
+            b1opt
+        ) case some then {
+            b1 = b1opt
+        } case none then {
+            return (optionval.none u32)
+        }
+        if b1 < 128.u8 then return (optionval.none u32)
+        if b1 > 191.u8 then return (optionval.none u32)
+        cp: ((lead - 192.u8).u32 * 64.u32) + (b1 - 128.u8).u32
+        return (optionval.some cp)
+    }
+    if seqlen == 3.u8 then {
+        b1opt: sv.byteAt i: (i + 1.u64)
+        b2opt: sv.byteAt i: (i + 2.u64)
+        b1: 0.u8
+        b2: 0.u8
+        match (
+            b1opt
+        ) case some then {
+            b1 = b1opt
+        } case none then {
+            return (optionval.none u32)
+        }
+        match (
+            b2opt
+        ) case some then {
+            b2 = b2opt
+        } case none then {
+            return (optionval.none u32)
+        }
+        if b1 < 128.u8 then return (optionval.none u32)
+        if b1 > 191.u8 then return (optionval.none u32)
+        if b2 < 128.u8 then return (optionval.none u32)
+        if b2 > 191.u8 then return (optionval.none u32)
+        cp: ((lead - 224.u8).u32 * 4096.u32) + ((b1 - 128.u8).u32 * 64.u32) + (b2 - 128.u8).u32
+        return (optionval.some cp)
+    }
+    b1opt: sv.byteAt i: (i + 1.u64)
+    b2opt: sv.byteAt i: (i + 2.u64)
+    b3opt: sv.byteAt i: (i + 3.u64)
+    b1: 0.u8
+    b2: 0.u8
+    b3: 0.u8
+    match (
+        b1opt
+    ) case some then {
+        b1 = b1opt
+    } case none then {
+        return (optionval.none u32)
+    }
+    match (
+        b2opt
+    ) case some then {
+        b2 = b2opt
+    } case none then {
+        return (optionval.none u32)
+    }
+    match (
+        b3opt
+    ) case some then {
+        b3 = b3opt
+    } case none then {
+        return (optionval.none u32)
+    }
+    if b1 < 128.u8 then return (optionval.none u32)
+    if b1 > 191.u8 then return (optionval.none u32)
+    if b2 < 128.u8 then return (optionval.none u32)
+    if b2 > 191.u8 then return (optionval.none u32)
+    if b3 < 128.u8 then return (optionval.none u32)
+    if b3 > 191.u8 then return (optionval.none u32)
+    cp: ((lead - 240.u8).u32 * 262144.u32) + ((b1 - 128.u8).u32 * 4096.u32) + ((b2 - 128.u8).u32 * 64.u32) + (b3 - 128.u8).u32
+    return (optionval.some cp)
+}
+
+# Append the codepoint as `\u{cp:x}` (lowercase, no leading zeros).
+# Used when the dumper has decoded a UTF-8 sequence whose codepoint
+# exceeds 0xFF. Mirrors the `else` branch of src/ztokendump.py:_escape.
+
+escape_append_cp: function {cp: u32 dst: String} is {
+    dst.appendByte b: cBslash.u8
+    dst.appendByte b: cLowerU.u8
+    dst.appendByte b: cBraceOpen.u8
+
+    if cp == 0.u32 then {
+        dst.appendByte b: cZero.u8
+        dst.appendByte b: cBraceClose.u8
+        return
+    }
+
+    # Collect hex digits least-significant first, then emit in reverse.
+    # cp fits in 21 bits (cp <= 0x10FFFF at the decoder boundary) so
+    # the buffer is at most 6 bytes.
+    rev: "".string
+    v: cp
+    for while v > 0.u32 loop {
+        q: v / 16.u32
+        nibble: v - (q * 16.u32)
+        rev.appendByte b: (hexdigit b: nibble.u8)
+        v = q
+    }
+    rsv: rev.stringview
+    rlen: rsv.length
+    k: rlen
+    for while k > 0.u64 loop {
+        k = k - 1.u64
+        bopt: rsv.byteAt i: k
+        match (
+            bopt
+        ) case some then {
+            dst.appendByte b: bopt
+        } case none then {
+            return
+        }
+    }
+    dst.appendByte b: cBraceClose.u8
+}
+
 escape_str: function {sv: StringView} out String is {
     buf: "".string
     n: sv.length
     i: 0.u64
     for while i < n loop {
-        bopt: sv.byteAt i: i
+        cpopt: utf8_decode_at sv: sv i: i
         match (
-            bopt
+            cpopt
         ) case some then {
-            escape_append b: bopt dst: buf
+            if cpopt > 255.u32 then {
+                escape_append_cp cp: cpopt dst: buf
+            } else {
+                escape_append b: cpopt.u8 dst: buf
+            }
+            if cpopt < 2048.u32 then {
+                i = i + 2.u64
+            } else if cpopt < 65536.u32 then {
+                i = i + 3.u64
+            } else {
+                i = i + 4.u64
+            }
         } case none then {
-            return buf
+            bopt: sv.byteAt i: i
+            match (
+                bopt
+            ) case some then {
+                escape_append b: bopt dst: buf
+            } case none then {
+                return buf
+            }
+            i = i + 1.u64
         }
-        i = i + 1.u64
     }
     return buf
 }

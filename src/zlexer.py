@@ -465,7 +465,7 @@ class Tokenizer(ITokenizer):
             self._accept()
             return Token(TT.STRCHR, named, self.fsno, lineno, colno)
 
-        # \xHH (8-bit raw byte) / \uHHHHHH (24-bit codepoint, UTF-8 bytes)
+        # \xHH (raw byte, cp <= 0xFF) / \uHHHHHH (codepoint)
         if c == zchar.LC_X or c == zchar.LC_U:
             hexdigits = 2 if c == zchar.LC_X else 6
             specifier = chr(c)  # for error-form tokstr only
@@ -484,9 +484,23 @@ class Tokenizer(ITokenizer):
                         lineno,
                         colno,
                     )
+            cp = int("".join(digits), 16)
+            # \uHHHHHH above U+10FFFF cannot be UTF-8 encoded in 1-4
+            # bytes and Python's chr() rejects it; surface as ERR with
+            # the source-form tokstr to match the zerolang lexer.
+            # `hexdigits == 6` distinguishes \u from \x without a new
+            # string compare (\x uses 2, \u uses 6).
+            if hexdigits == 6 and cp > 0x10FFFF:
+                return Token(
+                    TT.ERR,
+                    "\\" + specifier + "".join(digits),
+                    self.fsno,
+                    lineno,
+                    colno,
+                )
             return Token(
                 TT.STRCHR,
-                chr(int("".join(digits), 16)),
+                chr(cp),
                 self.fsno,
                 lineno,
                 colno,
