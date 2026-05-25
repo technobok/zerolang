@@ -21,7 +21,7 @@
 #   * Raw triple-quoted string literals: """...""" with arbitrary
 #     opening / closing delim length (n >= 3 matched runs of `"`).
 #     Backslash is literal; no escape processing or interpolation.
-#     TokStateType.STRINGRAW carries the delim length (u8 payload)
+#     tokstatetype.stringraw carries the delim length (u8 payload)
 #     so the inner scanner can match the closer.  Mirrors the Python
 #     reference faithfully, including the non-cleared delim
 #     accumulator's under-consumption quirk when a shorter `"` run
@@ -84,6 +84,15 @@ cBraceOpen:  123    # {
 cBraceClose: 125    # }
 cDel:        127
 
+# Token type variant. Arm names are UPPERCASE rather than lowercase
+# as the styleguide prescribes for variant arms (doc/styleguide.pdoc
+# Variant Tags section): 28 of these arms name language keywords
+# (IF, WHEN, FUNCTION, RECORD, CLASS, UNION, VARIANT, PROTOCOL, ...)
+# and zerolang rejects keywords as identifiers. Uppercase is the
+# only spelling that compiles. The variant TYPE name stays uppercase
+# (TT) for consistency with its arms; renaming just the type name
+# would split casing within a single declaration.
+
 TT: variant {
     BOF: null
     EOF: null
@@ -144,12 +153,12 @@ TT: variant {
 # init push.  STRINGRAW carries the opening delim length as its u8
 # payload so the inner scanner can match the closer (Python recovers
 # the same value via len(openingtoken.tokstr)).
-TokStateType: variant {
-    FILE: null
-    STRING: null
-    STRINGEXPR: null
-    STRINGEXPRBRACE: null
-    STRINGRAW: u8
+tokstatetype: variant {
+    file: null
+    string: null
+    stringexpr: null
+    stringexprbrace: null
+    stringraw: u8
 } as { tag: u8.tag }
 
 Token: class {
@@ -336,16 +345,16 @@ Tokenizer: class {
     # Mode stack for string + interpolation contexts. Empty means the
     # implicit FILE state (see `statecurrent`). PR 5 pushes STRING,
     # STRINGEXPR, STRINGEXPRBRACE only.
-    statestack: (List of: TokStateType)
+    statestack: (List of: tokstatetype)
 } as {
     create: function {source: String.take fsno: u32} out this is {
-        return meta.create source: source pos: 0 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0 colno: 0 tokenid: 0) statestack: (List of: TokStateType)
+        return meta.create source: source pos: 0 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0 colno: 0 tokenid: 0) statestack: (List of: tokstatetype)
     }
 
     # State-stack helpers. Empty stack -> implicit FILE. Mirrors
     # src/zlexer.py:500-521 (_statecurrent / _statepush / _statepop)
     # except the FILE entry is implicit instead of pushed at init.
-    statepush: function {:this s: TokStateType.take} is {
+    statepush: function {:this s: tokstatetype.take} is {
         this.statestack.append from: s
     }
 
@@ -355,9 +364,9 @@ Tokenizer: class {
         }
     }
 
-    statecurrent: function {:this} out TokStateType is {
+    statecurrent: function {:this} out tokstatetype is {
         n: this.statestack.length
-        if n == 0 then return TokStateType.FILE
+        if n == 0 then return tokstatetype.file
         return (this.statestack.get i: n - 1)
     }
 
@@ -537,7 +546,7 @@ Tokenizer: class {
         if c == cBraceOpen then {
             bs: "".string
             bs.appendByte b: cBslash.u8
-            this.statepush s: TokStateType.STRINGEXPR
+            this.statepush s: tokstatetype.stringexpr
             return Token toktype: TT.STREXPRBEG tokstr: bs fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
@@ -696,9 +705,9 @@ Tokenizer: class {
         raw_delim: 0.u8
         match (
             kind
-        ) case STRING then {
+        ) case string then {
             in_string = true
-        } case STRINGRAW then {
+        } case stringraw then {
             # narrowed -- `kind` becomes the u8 payload value
             raw_delim = kind
         } else {
@@ -762,13 +771,13 @@ Tokenizer: class {
                 return Token toktype: TT.STRBEG tokstr: beg fsno: this.fsno lineno: line colno: col tokenid: 0
             }
             if n == 1 then {
-                this.statepush s: TokStateType.STRING
+                this.statepush s: tokstatetype.string
                 return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
             }
             # n >= 3: raw string. Push STRINGRAW with the delim length
             # so acceptstringrawtoken can match a closer of the same
             # size.
-            this.statepush s: TokStateType.STRINGRAW n.u8
+            this.statepush s: tokstatetype.stringraw n.u8
             return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
@@ -811,15 +820,15 @@ Tokenizer: class {
             push_brace: false
             match (
                 this.statecurrent
-            ) case STRINGEXPR then {
+            ) case stringexpr then {
                 push_brace = true
-            } case STRINGEXPRBRACE then {
+            } case stringexprbrace then {
                 push_brace = true
             } else {
                 push_brace = false
             }
             this.accept
-            if push_brace then this.statepush s: TokStateType.STRINGEXPRBRACE
+            if push_brace then this.statepush s: tokstatetype.stringexprbrace
             return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cBraceClose then {
@@ -832,7 +841,7 @@ Tokenizer: class {
             pop_brace: false
             match (
                 this.statecurrent
-            ) case STRINGEXPRBRACE then {
+            ) case stringexprbrace then {
                 pop_brace = true
             } else {
                 pop_brace = false
@@ -843,7 +852,7 @@ Tokenizer: class {
                 pop_expr: false
                 match (
                     this.statecurrent
-                ) case STRINGEXPR then {
+                ) case stringexpr then {
                     pop_expr = true
                 } else {
                     pop_expr = false
@@ -957,7 +966,7 @@ Tokenizer: class {
 
         kw_res: kwlookup sv: buf.stringview
         kwfound: kw_res.found
-        reservedfound: islookup_reserved sv: buf.stringview
+        reservedfound: islookupReserved sv: buf.stringview
 
         # Path 1: colonpre. Stash the word, return cColon-as-ERR.
         # `.copy` here so `buf` survives for the path-3 fallthrough
@@ -1044,7 +1053,7 @@ kwlookup: function {sv: StringView} out kwresult is {
     return kwresult found: false tt: TT.EOF
 }
 
-islookup_reserved: function {sv: StringView} out bool is {
+islookupReserved: function {sv: StringView} out bool is {
     if sv == "enum" then return true
     if sv == "macro" then return true
     if sv == "flag" then return true
@@ -1175,7 +1184,7 @@ hexdigit: function {b: u8} out u8 is {
     return b - 10.u8 + 97.u8
 }
 
-escape_append: function {b: u8 dst: String} is {
+escapeAppend: function {b: u8 dst: String} is {
     if b == cHt then {
         dst.appendByte b: cBslash.u8
         dst.appendByte b: 116.u8  # 't'
@@ -1222,7 +1231,7 @@ escape_append: function {b: u8 dst: String} is {
 # 2/3/4-byte sequence (lead in 0xC2..0xF7, all continuations in
 # 0x80..0xBF, sequence fits within `sv`); optionval.none otherwise.
 # ASCII bytes (b < 0x80) are NOT decoded here -- they fall through
-# to the single-byte path in escape_str.
+# to the single-byte path in escapeStr.
 
 utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
     n: sv.length
@@ -1326,7 +1335,7 @@ utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
 # Used when the dumper has decoded a UTF-8 sequence whose codepoint
 # exceeds 0xFF. Mirrors the `else` branch of src/ztokendump.py:_escape.
 
-escape_append_cp: function {cp: u32 dst: String} is {
+escapeAppendCp: function {cp: u32 dst: String} is {
     dst.appendByte b: cBslash.u8
     dst.appendByte b: cLowerU.u8
     dst.appendByte b: cBraceOpen.u8
@@ -1365,7 +1374,7 @@ escape_append_cp: function {cp: u32 dst: String} is {
     dst.appendByte b: cBraceClose.u8
 }
 
-escape_str: function {sv: StringView} out String is {
+escapeStr: function {sv: StringView} out String is {
     buf: "".string
     n: sv.length
     i: 0.u64
@@ -1375,9 +1384,9 @@ escape_str: function {sv: StringView} out String is {
             cpopt
         ) case some then {
             if cpopt > 255.u32 then {
-                escape_append_cp cp: cpopt dst: buf
+                escapeAppendCp cp: cpopt dst: buf
             } else {
-                escape_append b: cpopt.u8 dst: buf
+                escapeAppend b: cpopt.u8 dst: buf
             }
             if cpopt < 2048.u32 then {
                 i = i + 2.u64
@@ -1391,7 +1400,7 @@ escape_str: function {sv: StringView} out String is {
             match (
                 bopt
             ) case some then {
-                escape_append b: bopt dst: buf
+                escapeAppend b: bopt dst: buf
             } case none then {
                 return buf
             }
@@ -1423,7 +1432,7 @@ main: function is {
 dump: function {tok: Tokenizer} is {
     for while true loop {
         t: tok.token
-        esc: escape_str sv: t.tokstr.stringview
+        esc: escapeStr sv: t.tokstr.stringview
         name: ttname t: t.toktype
         print "\{t.lineno}:\{t.colno} \{name} \"\{esc}\""
         eof: false
