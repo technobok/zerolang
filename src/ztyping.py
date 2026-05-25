@@ -146,6 +146,14 @@ class ZTyping:
     do_has_break: Dict[int, bool] = field(default_factory=dict, init=False)
     # Per-Case subject-taken flag.
     case_subject_taken: Dict[int, bool] = field(default_factory=dict, init=False)
+    # Per-Case set of arm match names that consumed the subject via
+    # `.take`. The emitter zeroes the subject at the end of these
+    # arms so the post-switch destroy doesn't double-free the heap
+    # that the take already moved into another owner. Empty for cases
+    # whose arms only read or borrow the subject.
+    case_subject_taken_arms: Dict[int, "set[str]"] = field(
+        default_factory=dict, init=False
+    )
     # Per-For iterator-binding names.
     for_iter_bindings: Dict[int, "set[str]"] = field(default_factory=dict, init=False)
     # Per-For while-cond preamble: synth Assignment statements hoisted

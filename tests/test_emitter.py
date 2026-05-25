@@ -349,6 +349,61 @@ class TestForBodyClassCleanup:
         assert result.stdout == self._EXPECTED_OUTPUT
 
 
+class TestUnionTakeInArmNoDoubleFree:
+    """Pin: `.take` of a match-narrowed union arm whose payload moves
+    into another owner (class field, here) must not double-free the
+    heap shared between the union's wrapper and the new owner.
+
+    Was PR-3 friction item 2: the typechecker stamped
+    `case_subject_taken` but the post-switch
+    `z_<union>_destroy(&subject)` re-freed the heap pointer that the
+    take had moved into `h.src`. Fix: typechecker also records the
+    set of arm names that took the subject
+    (`case_subject_taken_arms`); the emitter zeroes the inner payload
+    at the end of each such arm so the post-switch destroy walks a
+    zeroed payload (free(NULL) no-op) while still freeing the union
+    wrapper.
+    """
+
+    _SRC = (
+        "StrRes: union { ok: String  err: String }\n"
+        "Hold: class { src: String } as {\n"
+        '  show: function {:this} is { print "src=\\{this.src}" }\n'
+        "}\n"
+        "read: function {ok: bool} out StrRes is {\n"
+        "  if ok then {\n"
+        '    r: StrRes.ok "loaded".string\n'
+        "    return r\n"
+        "  }\n"
+        '  r: StrRes.err "failed".string\n'
+        "  return r\n"
+        "}\n"
+        "main: function is {\n"
+        "  r: read ok: true\n"
+        "  match (\n"
+        "    r\n"
+        "  ) case ok then {\n"
+        "    h: Hold src: r.take\n"
+        "    h.show\n"
+        '    print "ok"\n'
+        "  } case err then {\n"
+        '    print "err-arm"\n'
+        "  }\n"
+        "}"
+    )
+
+    def test_ok_arm_takes_no_doublefree(self):
+        csource = emit_source(self._SRC)
+        # Per-arm inner-payload zero shows up.
+        assert "*(z_String_t*)r.data = (z_String_t){0};" in csource
+        # ASAN driver is clean and prints both arm and outer messages.
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "src=loaded\nok\n"
+
+
 class TestForWhileCallCondReEvaluates:
     """Pin: a for-loop's `while` condition that wraps a function call
     on per-iteration mutable state must re-evaluate each iteration.

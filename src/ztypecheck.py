@@ -12113,6 +12113,13 @@ class TypeChecker:
                     # subject was taken in this arm — record and restore
                     if subject_taken_in_arm is None:
                         subject_taken_in_arm = clause.match.name
+                    # record the specific arm name; the emitter zeroes
+                    # the subject at the end of each such arm so the
+                    # post-switch destroy doesn't double-free heap data
+                    # the take already moved out.
+                    self.typing.case_subject_taken_arms.setdefault(
+                        casenode.nodeid, set()
+                    ).add(clause.match.name)
                     # restore the variable so the next arm can reference it
                     self.symtab.define_var(subject_name, subject_var)
                     # clear the taken record so the next arm starts fresh
@@ -12159,6 +12166,9 @@ class TypeChecker:
                 if self.symtab.lookup(subject_name) is None:
                     if subject_taken_in_arm is None:
                         subject_taken_in_arm = "else"
+                    self.typing.case_subject_taken_arms.setdefault(
+                        casenode.nodeid, set()
+                    ).add("else")
                     self.symtab.define_var(subject_name, subject_var)
                     self.symtab.clear_taken(subject_name)
 

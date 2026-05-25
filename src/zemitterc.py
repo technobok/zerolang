@@ -11059,6 +11059,9 @@ class CEmitter:
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
         _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
         _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
+        _case_subject_taken_arms = self.typing.case_subject_taken_arms.get(
+            casenode.nodeid, set()
+        )
         # nullable-ptr option: if (ptr != NULL) / else
         if union_type.is_nullable_ptr:
             return self._emit_nullable_ptr_case(casenode, union_type)
@@ -11090,6 +11093,24 @@ class CEmitter:
             parts.append(self._emit_statement(clause.statement))
             parts.append(self._pop_block_scope_and_emit())
             restore()
+            # Per-arm subject-take cleanup: when the arm took the
+            # subject, the heap payload has been moved into another
+            # owner. Zero the inner payload so the post-switch
+            # `z_<union>_destroy` calls the payload's destructor on a
+            # zeroed struct (free(NULL) no-op) while still freeing the
+            # `void* data` wrapper allocation. Non-taking arms leave
+            # the subject untouched and the post-switch destroy frees
+            # the full chain normally.
+            if sname in _case_subject_taken_arms:
+                payload_type = self.typing.child_by_id(
+                    union_type, self._case_clause_match_child_id(clause)
+                )
+                if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
+                    payload_ctype = _ctype(self.typing, payload_type)
+                    parts.append(
+                        f"{arm_indent}*({payload_ctype}*){subject}.data = "
+                        f"({payload_ctype}){{0}};\n"
+                    )
             parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
@@ -11100,6 +11121,12 @@ class CEmitter:
             self._push_block_scope()
             parts.append(self._emit_statement(casenode.elseclause))
             parts.append(self._pop_block_scope_and_emit())
+            if "else" in _case_subject_taken_arms:
+                # Else-arm narrowing keeps the full union type, so
+                # there's no per-arm payload to zero — only the union
+                # wrapper. Zero the whole union; post-switch destroy
+                # will no-op on the zeroed value.
+                parts.append(f"{self._indent()}{subject} = (z_{union_name}_t){{0}};\n")
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
