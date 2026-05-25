@@ -4608,6 +4608,23 @@ class TestNumericCasting:
         assert lines[0] == "42"
         assert lines[1] == "10"
 
+    def test_return_numeric_cast_keeps_stmt_expr_parens(self):
+        """`return x.u32` must wrap the GCC stmt-expr in `({ ... })`.
+
+        Regression: `_unwrap_outer_parens` used to strip the outer
+        parens unconditionally at every `return` site, leaving the
+        bare brace block `{ ... }` which is not a valid C expression.
+        """
+        csource = emit_source(
+            "toU32: function {x: u64} out u32 is {\n"
+            "  return x.u32\n"
+            "}\n"
+            'main: function is { print "\\{toU32 x: 42.u64}" }\n'
+        )
+        assert "return ({" in csource
+        assert "return {" not in csource
+        assert compile_and_run(csource).strip() == "42"
+
 
 class TestStringWhitespace:
     def test_leading_blank_line_stripped(self):

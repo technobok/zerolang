@@ -315,9 +315,14 @@ def _unwrap_outer_parens(s: str) -> str:
     surrounding syntax already supplies grouping, so binop expressions
     that defensively wrap themselves in parens produce noisy double-
     parenthesization. Safe on any C expression string: returns input
-    unchanged when the outer parens do not match a full-width pair.
+    unchanged when the outer parens do not match a full-width pair, or
+    when the inside is a GCC statement-expression `({ ... })` whose
+    outer parens are load-bearing (without them the brace becomes a
+    bare block, which is not an expression).
     """
     if len(s) < 2 or s[0] != "(" or s[-1] != ")":
+        return s
+    if len(s) >= 4 and s[1] == "{" and s[-2] == "}":
         return s
     depth = 0
     for i, c in enumerate(s):
