@@ -383,6 +383,22 @@ class ZSymbolTable:
                 j -= 1
             i -= 1
 
+    def discard_taken_in_current_scope(self) -> None:
+        """Drop every is_taken overlay from the innermost scope.
+
+        Called from `_check_if_inner` / `_check_case_inner` /
+        `_check_for_inner` at the end of a diverging arm or
+        diverging for-body so the take does not bubble up to the
+        parent via `pop()` (which would otherwise propagate it into
+        a sibling arm / next iteration / for-rejection check).
+        """
+        scope = self._scopes[-1]
+        new_entries = []
+        for entry in scope.entries:
+            if not entry.is_taken:
+                new_entries.append(entry)
+        scope.entries = new_entries
+
     def set_taken_location(self, name: str, loc: Tuple[int, int, int]) -> None:
         """Override the taken location for a name (used by match/case for
         better error reporting)."""

@@ -11958,6 +11958,129 @@ class TestTakeInLoopBody:
         )
         assert any("loop body" in e.msg.lower() for e in errors)
 
+    def test_take_at_top_level_then_return_ok(self):
+        """Take at the for-body's top level immediately followed by an
+        unconditional return: the body's last reachable statement
+        diverges, so there is no iteration N+1 to be unsafe for."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    b: a.take\n"
+            "    return\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_in_diverging_then_arm_ok(self):
+        """Take inside a then-arm that ends with `return` — only fires
+        on the iteration that returns out of the function, so the
+        take's path cannot reach a next iteration. The fall-through
+        path (then-arm not taken) doesn't take."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then {\n"
+            "      b: a.take\n"
+            "      return\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_in_both_diverging_if_arms_ok(self):
+        """Both arms diverge so the if as a whole is unreachable on
+        fall-through; either take path exits the function."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then {\n"
+            "      b: a.take\n"
+            "      return\n"
+            "    } else {\n"
+            "      return\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_in_diverging_match_arm_ok(self):
+        """Take inside a diverging case-arm — same shape as the
+        diverging if-arm case above."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "Sig: variant { A: null  B: null } as { tag: u8.tag }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  s: Sig.A\n"
+            "  for i: 3.iterate loop {\n"
+            "    match (s) case A then {\n"
+            "      b: a.take\n"
+            "      return\n"
+            "    } case B then {\n"
+            "      return\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_in_panicking_arm_ok(self):
+        """Panic counts as divergence the same way return does."""
+        check_ok(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then {\n"
+            "      b: a.take\n"
+            '      panic msg: "bye"\n'
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_take_in_non_diverging_then_arm_errors(self):
+        """The then-arm takes but doesn't diverge — control falls
+        through to a possible next iteration where `a` is gone."""
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then {\n"
+            "      b: a.take\n"
+            "    } else {\n"
+            "      return\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
+    def test_take_in_both_arms_one_diverging_errors(self):
+        """Even with a diverging else-arm, the non-diverging then-arm
+        still propagates its take to the loop fall-through."""
+        errors = check_errors(
+            "Box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: Box value: 1\n"
+            "  for i: 3.iterate loop {\n"
+            "    if i > 0.i64 then {\n"
+            "      b: a.take\n"
+            "    } else {\n"
+            "      c: a.take\n"
+            "      return\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+        assert any("loop body" in e.msg.lower() for e in errors)
+
 
 class TestUnionLockedArm:
     """Locked union arms (W-C) — arms declared `name: t.lock` hold a

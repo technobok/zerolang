@@ -10981,6 +10981,18 @@ class TypeChecker:
                         self.symtab.define_var(vname, sv)
                         self.symtab.clear_taken(vname)
 
+            # Diverging arms transfer ownership on a path that never
+            # reaches fall-through. Drop any is_taken overlays from
+            # this arm's scope BEFORE pop so the take doesn't bubble
+            # up into the parent scope (where it would otherwise trip
+            # for-body checks or follow-on uses). The `live_before`
+            # loop above only restores variables whose type has a
+            # destructor; this catches the remaining cases (e.g. a
+            # class with no heap fields, where `get_live_owned_vars`
+            # filters it out).
+            if arm_diverges:
+                self.symtab.discard_taken_in_current_scope()
+
             self.symtab.pop_to(branch_marker)
         if ifnode.elseclause:
             branch_marker = self.symtab.push_block("if_else")
@@ -10999,6 +11011,11 @@ class TypeChecker:
                 if self.symtab.lookup(vname) is None:
                     if not else_diverges:
                         taken_in_any_arm.add(vname)
+
+            # same drop-on-divergence rule as the clause arms — see
+            # comment above.
+            if else_diverges:
+                self.symtab.discard_taken_in_current_scope()
 
             self.symtab.pop_to(branch_marker)
         else:
@@ -11561,7 +11578,20 @@ class TypeChecker:
             # variable would already be consumed. Taken overlays in the
             # for-scope whose name is not locally defined here came from an
             # outer scope.
+            # If the loop body's last reachable statement unconditionally
+            # diverges (return / panic / break / continue), the body
+            # cannot reach a next iteration — top-level takes here are
+            # safe even though the standard arm-end rollback (which
+            # handles takes nested in diverging if/match arms) does not
+            # cover statements at the body's own scope. Drop those
+            # is_taken overlays before the rejection check.
             for_scope = self.symtab._scopes[-1]
+            last_t = self._last_statement_type(fornode.loop) if fornode.loop else None
+            for_body_diverges = (
+                last_t is not None and last_t.typetype == ZTypeType.NEVER
+            )
+            if for_body_diverges:
+                self.symtab.discard_taken_in_current_scope()
             local_names = {e.name for e in for_scope.entries if e.is_definition}
             reported: set = set()
             for entry in for_scope.entries:
@@ -12141,6 +12171,13 @@ class TypeChecker:
                         self.symtab.define_var(vname, sv)
                         self.symtab.clear_taken(vname)
 
+            # Drop is_taken overlays from a diverging arm so they
+            # don't bubble up via pop. Catches takes of variables
+            # outside `live_before_match` (e.g. classes whose type
+            # has no destructor). Mirror of the rule in if/clause arms.
+            if arm_diverges:
+                self.symtab.discard_taken_in_current_scope()
+
             # track diverging arms for post-match exclusion
             if target_name and subject_type:
                 arm_type = self._last_statement_type(clause.statement)
@@ -12181,6 +12218,11 @@ class TypeChecker:
                 if self.symtab.lookup(vname) is None:
                     if not else_arm_diverges:
                         taken_in_any_match_arm.add(vname)
+
+            # Drop is_taken overlays from a diverging else clause —
+            # same drop-on-divergence rule as the case arms above.
+            if else_arm_diverges:
+                self.symtab.discard_taken_in_current_scope()
 
             # if else clause diverges, all remaining subtypes are excluded
             else_type = self._last_statement_type(casenode.elseclause)
