@@ -7278,10 +7278,22 @@ class CEmitter:
             ):
                 param_name = self.typing.child_names_of(ftype)[param_idx]
                 param_type = self.typing.child_of(ftype, param_name)
-                # 'this' receiver: param type matches enclosing class
-                # and the function is a method (dotted name origin)
+                # Native instance methods (StringView.replace,
+                # BufWriter.write, TextWriter.write, ...) hard-code
+                # pointer-typed signatures for non-self class args of
+                # the same type as the receiver, so we need to take
+                # the address of those args at the call site to
+                # match. The C ABI of user-defined methods follows
+                # the typecheck-declared ownership (TAKE → value,
+                # BORROW/LOCK → pointer), so this fixup only fires
+                # for natives. Free natives without a :this receiver
+                # — io.readText, os.env, ... — take StringView by
+                # value in the runtime and are skipped by the
+                # this_param_name guard.
                 is_this_param = ftype.this_param_name == param_name or (
-                    param_type is arg_type and ftype.name and "." in ftype.name
+                    ftype.is_native
+                    and ftype.this_param_name is not None
+                    and param_type is arg_type
                 )
                 # borrow/lock class params also need &. .take on a
                 # string param means the callee owns by value — no

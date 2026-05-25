@@ -1712,6 +1712,31 @@ class TestClassParamThreading:
         csource = zemitterc.emit(typing)
         assert compile_and_run(csource).strip() == "11"
 
+    def test_user_method_threading_stringview_no_unwanted_amp(self):
+        """Regression for Bug 2a: a user-defined method that forwards
+        a non-self class arg whose type matches the receiver class
+        must NOT prepend `&` at the call site. Pre-fix the second
+        clause in `_emit_call_args` fired for any function with a
+        dotted name and matching param/arg types, mistakenly adding
+        `&sv` to `this.inner sv: sv` and producing a gcc rejection
+        (`z_StringView_t*` vs `z_StringView_t`)."""
+        csource = emit_source(
+            "Box: class { n: u32 } as {\n"
+            "    inner: function {:this sv: StringView} is { print sv }\n"
+            "    outer: function {:this sv: StringView} is {\n"
+            "        this.inner sv: sv\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    b: Box n: 1.u32\n"
+            '    s: "hello".string\n'
+            "    b.outer sv: s.stringview\n"
+            "}\n"
+        )
+        assert "z_Box_inner(this, sv)" in csource
+        assert "z_Box_inner(this, &sv)" not in csource
+        assert compile_and_run(csource).strip() == "hello"
+
 
 class TestPrintStackClassDispatch:
     """Regression test for the print-through-projection emission path:
