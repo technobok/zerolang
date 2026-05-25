@@ -13,10 +13,11 @@
 #     three tokens).                                                 (PR 4)
 #   * Interpreted string literals: STRBEG / STRMID / STRCHR /
 #     STREND. Named (\n \t \b \\ \") and hex (\xHH, \uHHHHHH)
-#     escapes. Interpolation via STREXPRBEG + a state stack tracking
-#     STRING / STRINGEXPR / STRINGEXPRBRACE (mirrors the Python
-#     Tokenizer.statestack). Codepoints > 0xFF from \uHHHHHH are
-#     truncated to the low byte; proper UTF-8 emission is PR 7.    (PR 5)
+#     escapes. Interpolation via STREXPRBEG + a `(List of:
+#     TokStateType)` state stack tracking STRING / STRINGEXPR /
+#     STRINGEXPRBRACE (mirrors the Python Tokenizer.statestack).
+#     Codepoints > 0xFF from \uHHHHHH are truncated to the low
+#     byte; proper UTF-8 emission is PR 7.                         (PR 5)
 #
 # Still deferred:
 #   * Raw triple-quoted strings (PR 6)
@@ -130,15 +131,16 @@ TT: variant {
     STREXPRBEG: null
 } as { tag: u8.tag }
 
-# Tokenizer mode stack tags. Mirrors src/zlexer.py:74-86
-# TokStateType. STRINGRAW is deferred to PR 6. Stored as a u8 byte
-# per stack level in `Tokenizer.statestack` (a String used as a
-# byte stack -- see the field comment for why a real
-# `List of: TokStateType` isn't usable yet).
-tagFile:            0.u8
-tagString:          1.u8
-tagStringExpr:      2.u8
-tagStringExprBrace: 3.u8
+# Tokenizer mode stack arms. Mirrors src/zlexer.py:74-86 TokStateType.
+# STRINGRAW is deferred to PR 6. "Implicit FILE state when the stack
+# is empty" -- statecurrent returns FILE for an empty stack so
+# Tokenizer.create can skip an init push.
+TokStateType: variant {
+    FILE: null
+    STRING: null
+    STRINGEXPR: null
+    STRINGEXPRBRACE: null
+} as { tag: u8.tag }
 
 Token: class {
     toktype: TT
@@ -234,26 +236,6 @@ hexvalue: function {b: u8} out u8 is {
     return b - cLowerA.u8 + 10.u8
 }
 
-# Copy the first `len` bytes of `sv` into a fresh owned String. Used
-# by Tokenizer.statepop -- a separate function so the source view's
-# lock is released before the caller reassigns the source field.
-stringSliceLeft: function {sv: StringView len: u64} out String is {
-    buf: "".string
-    i: 0.u64
-    for while i < len loop {
-        b: sv.byteAt i: i
-        match (
-            b
-        ) case some then {
-            buf.appendByte b: b
-        } case none then {
-            return buf
-        }
-        i = i + 1
-    }
-    return buf
-}
-
 Tokenizer: class {
     source: String
     pos: u64
@@ -264,56 +246,32 @@ Tokenizer: class {
     # Single-slot lookahead as a typed Token field.
     hasnext: bool
     nexttok: Token
-    # Mode stack for string + interpolation contexts encoded as one
-    # u8 byte per level (tag values defined above). Empty stack means
-    # the implicit FILE state (`statecurrent` returns tagFile).
-    #
-    # A `(List of: TokStateType)` would be the natural fit, but the
-    # current C emitter emits each user class struct BEFORE the
-    # `(List of: <userType>)` monomorphization it references, leading
-    # to "unknown type name `z_List_TokStateType_t`" at gcc.
-    # Encoding the stack as String bytes lets the field reference a
-    # type the emitter already orders correctly. Pop is implemented
-    # by rebuilding the String one byte shorter (we never have stale
-    # bytes that way; field reassignment is the existing
-    # class-inline-construct + drop-and-transfer path).
-    statestack: String
+    # Mode stack for string + interpolation contexts. Empty means the
+    # implicit FILE state (see `statecurrent`). PR 5 pushes STRING,
+    # STRINGEXPR, STRINGEXPRBRACE only.
+    statestack: (List of: TokStateType)
 } as {
     create: function {source: String.take fsno: u32} out this is {
-        return meta.create source: source pos: 0 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0 colno: 0 tokenid: 0) statestack: "".string
+        return meta.create source: source pos: 0 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0 colno: 0 tokenid: 0) statestack: (List of: TokStateType)
     }
 
     # State-stack helpers. Empty stack -> implicit FILE. Mirrors
     # src/zlexer.py:500-521 (_statecurrent / _statepush / _statepop)
     # except the FILE entry is implicit instead of pushed at init.
-    statepush: function {:this kind: u8} is {
-        this.statestack.appendByte b: kind
+    statepush: function {:this s: TokStateType.take} is {
+        this.statestack.append from: s
     }
 
     statepop: function {:this} is {
-        n: this.statestack.length
-        if n == 0 then return
-        # Bind newbuf via a helper so the borrowed StringView's lock on
-        # this.statestack is released before the field reassignment.
-        # Field reassignment drops the old String and moves the new one
-        # in; the temp's buffer is zeroed so it doesn't double-free at
-        # scope exit.
-        newbuf: stringSliceLeft sv: this.statestack.stringview len: n - 1
-        this.statestack = newbuf
+        if this.statestack.length > 0 then {
+            this.statestack.pop
+        }
     }
 
-    statecurrent: function {:this} out u8 is {
+    statecurrent: function {:this} out TokStateType is {
         n: this.statestack.length
-        if n == 0 then return tagFile
-        sv: this.statestack.stringview
-        b: sv.byteAt i: n - 1
-        match (
-            b
-        ) case some then {
-            return b
-        } case none then {
-            return tagFile
-        }
+        if n == 0 then return TokStateType.FILE
+        return (this.statestack.get i: n - 1)
     }
 
     # Advance one byte. Returns the byte just placed in .atchar
@@ -423,7 +381,7 @@ Tokenizer: class {
         if c == cBraceOpen then {
             bs: "".string
             bs.appendByte b: cBslash.u8
-            this.statepush kind: tagStringExpr
+            this.statepush s: TokStateType.STRINGEXPR
             return Token toktype: TT.STREXPRBEG tokstr: bs fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
@@ -553,7 +511,15 @@ Tokenizer: class {
         # everything else routes to acceptstringtoken. EOL/EOF were
         # handled above so the string-token path doesn't need to think
         # about either. Mirrors src/zlexer.py:184-189.
-        if this.statecurrent == tagString then {
+        in_string: false
+        match (
+            this.statecurrent
+        ) case STRING then {
+            in_string = true
+        } else {
+            in_string = false
+        }
+        if in_string then {
             if c == cDquote then {
                 end: "".string
                 end.appendByte b: c
@@ -609,7 +575,7 @@ Tokenizer: class {
                 return Token toktype: TT.STRBEG tokstr: beg fsno: this.fsno lineno: line colno: col tokenid: 0
             }
             if n == 1 then {
-                this.statepush kind: tagString
+                this.statepush s: TokStateType.STRING
                 return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
             }
             return Token toktype: TT.STRBEG tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
@@ -651,12 +617,18 @@ Tokenizer: class {
             # opens a nested brace scope that must be tracked so the
             # matching `}` returns us to STRING (rather than ending the
             # interpolation). Mirrors src/zlexer.py:240-248.
-            kind: this.statecurrent
             push_brace: false
-            if kind == tagStringExpr then push_brace = true
-            if kind == tagStringExprBrace then push_brace = true
+            match (
+                this.statecurrent
+            ) case STRINGEXPR then {
+                push_brace = true
+            } case STRINGEXPRBRACE then {
+                push_brace = true
+            } else {
+                push_brace = false
+            }
             this.accept
-            if push_brace then this.statepush kind: tagStringExprBrace
+            if push_brace then this.statepush s: TokStateType.STRINGEXPRBRACE
             return Token toktype: TT.BRACEOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cBraceClose then {
@@ -667,11 +639,25 @@ Tokenizer: class {
             # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
             # into STRING. Mirrors src/zlexer.py:250-257.
             pop_brace: false
-            if this.statecurrent == tagStringExprBrace then pop_brace = true
+            match (
+                this.statecurrent
+            ) case STRINGEXPRBRACE then {
+                pop_brace = true
+            } else {
+                pop_brace = false
+            }
             this.accept
             if pop_brace then {
                 this.statepop
-                if this.statecurrent == tagStringExpr then this.statepop
+                pop_expr: false
+                match (
+                    this.statecurrent
+                ) case STRINGEXPR then {
+                    pop_expr = true
+                } else {
+                    pop_expr = false
+                }
+                if pop_expr then this.statepop
             }
             return Token toktype: TT.BRACECLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }

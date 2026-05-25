@@ -1130,8 +1130,15 @@ class CEmitter:
                         qname, defn.is_items, defn.functions()
                     )
 
-    def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
-        """Recursively emit definitions from a unit body."""
+    def _emit_unit_definitions(self, prefix: str, body: dict, defn_filter=None) -> None:
+        """Recursively emit definitions from a unit body.
+
+        When `defn_filter` is given, only emit defs for which the
+        callable returns True. Inline units are always recursed into;
+        the filter is applied to each leaf def. Used by the
+        late-mono-aware split: emit user defs that don't reference any
+        late mono first, then late monos, then user defs that do.
+        """
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
             if self._is_generic_template(defn):
@@ -1140,8 +1147,12 @@ class CEmitter:
             self._current_node_id = defn.nodeid if hasattr(defn, "nodeid") else None
             defn_type = defn.nodetype
             if defn_type == NodeType.UNIT:
-                self._emit_unit_definitions(qname, defn.body)
-            elif defn_type == NodeType.RECORD:
+                # always recurse into units; filter applies per-leaf
+                self._emit_unit_definitions(qname, defn.body, defn_filter)
+                continue
+            if defn_filter is not None and not defn_filter(name, defn):
+                continue
+            if defn_type == NodeType.RECORD:
                 self._emit_record(qname, defn)
             elif defn_type == NodeType.CLASS:
                 self._emit_class(qname, defn)
@@ -1665,6 +1676,39 @@ class CEmitter:
                 return True
         return False
 
+    def _user_defn_references_type(
+        self, defn_name: str, defn: "zast.Node", type_names: "set[str]"
+    ) -> bool:
+        """True when any of the type def named `defn_name`'s field
+        types is named in `type_names`. Used to split user defs into
+        "no late-mono deps" (emit before late monos) and "has late-mono
+        deps" (emit after). Walks fields shallowly: a field of
+        `(List of: T)` is named `List_T` after monomorphization and
+        will match if `List_T` is in `type_names`. We don't recurse
+        into the field's children because the question is whether THIS
+        user def's emitted struct references the late mono by name --
+        which is exactly the case a field type captures.
+
+        The binding name is taken from the unit-body dict key (passed
+        in by the caller) because ObjectDef has no `.name` attribute.
+        """
+        if defn.nodetype not in (
+            NodeType.RECORD,
+            NodeType.CLASS,
+            NodeType.UNION,
+            NodeType.VARIANT,
+        ):
+            return False
+        ztype = self._resolved_type(defn_name)
+        if ztype is None:
+            return False
+        for _fn, ft in self.typing.children_of(ztype):
+            if ft.typetype == ZTypeType.FUNCTION:
+                continue
+            if ft.name in type_names:
+                return True
+        return False
+
     def _io_record_referenced(self, name: str) -> bool:
         """True when a system io record is used by the program (e.g.
         as the ok-arm payload of a monomorphized result). Avoids
@@ -1979,16 +2023,44 @@ class CEmitter:
             include_cli=True, only_cli=True, cli_classes_only=True
         )
 
-        # second pass: emit definitions (recursing into inline units)
-        self._emit_unit_definitions("", mainunit.body)
+        # Resolve the bidirectional case the early/late split alone
+        # misses:
+        #
+        #   class C { xs: (List of: UserT) }   # user class field
+        #
+        # `List<UserT>` is a late mono (its layout references UserT),
+        # so its full definition can only come after UserT is emitted.
+        # But the user class `C` embeds the `List<UserT>` struct in
+        # its field, so C needs the full layout of `List<UserT>` too.
+        #
+        # Split user defs into:
+        #   - early-user: defs whose fields do NOT reference any late
+        #     mono. These can be emitted before late monos.
+        #   - late-user: defs whose fields reference one or more late
+        #     mono types. Emitted AFTER late monos so the field
+        #     references resolve.
+        late_mono_names = {m.name for m, _ in late_monos}
 
-        # third pass: emit facets (must come after all conforming types are defined)
-        self._emit_deferred_facets("", mainunit.body)
+        def _is_early_user(name, defn) -> bool:
+            return not self._user_defn_references_type(name, defn, late_mono_names)
 
-        # late mono types (depend on user structs emitted above)
+        def _is_late_user(name, defn) -> bool:
+            return self._user_defn_references_type(name, defn, late_mono_names)
+
+        # second pass (a): early-user defs (no late-mono field refs)
+        self._emit_unit_definitions("", mainunit.body, defn_filter=_is_early_user)
+
+        # late mono types (their layouts reference early-user types,
+        # which are now emitted)
         for mono_type, template_defn in late_monos:
             self._current_node_id = template_defn.nodeid
             self._emit_mono_type(mono_type, template_defn)
+
+        # second pass (b): late-user defs (reference late monos in fields)
+        self._emit_unit_definitions("", mainunit.body, defn_filter=_is_late_user)
+
+        # third pass: emit facets (must come after all conforming types are defined)
+        self._emit_deferred_facets("", mainunit.body)
 
         # emit monomorphized generic functions
         for mono_ftype, cloned_func in self.typing.mono_functions:
@@ -4290,8 +4362,9 @@ class CEmitter:
         lines.append(f"    {val_ctype} value;\n")
         lines.append(f"}} {entry_type};\n\n")
 
-        # map struct
-        lines.append("typedef struct {\n")
+        # map struct -- tagged so the forward-typedef pass for late
+        # monos can name it before user defs that reference it
+        lines.append(f"typedef struct {ctype} {{\n")
         lines.append("    uint64_t capacity;\n")
         lines.append("    uint64_t length;\n")
         lines.append("    uint64_t entries_len;\n")
@@ -4876,8 +4949,9 @@ class CEmitter:
         lines.append(f"    {elem_ctype} item;\n")
         lines.append(f"}} {entry_type};\n\n")
 
-        # set struct
-        lines.append("typedef struct {\n")
+        # set struct -- tagged so the forward-typedef pass for late
+        # monos can name it before user defs that reference it
+        lines.append(f"typedef struct {ctype} {{\n")
         lines.append("    uint64_t capacity;\n")
         lines.append("    uint64_t length;\n")
         lines.append("    uint64_t entries_len;\n")
@@ -5208,8 +5282,9 @@ class CEmitter:
             if ft.typetype != ZTypeType.FUNCTION
         ]
 
-        # struct typedef
-        lines.append("typedef struct {\n")
+        # struct typedef -- tagged so the forward-typedef pass for late
+        # monos can name it before user defs that reference it
+        lines.append(f"typedef struct z_{name}_t {{\n")
         for fname, ftype in field_items:
             ct = _ctype(self.typing, ftype)
             # .lock fields of stack-allocated class type: store as pointer

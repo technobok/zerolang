@@ -6246,6 +6246,100 @@ class TestStr:
         )  # fwd decl + def
 
 
+class TestLateMonoUserOrdering:
+    """User classes with fields of monomorphisations over user types
+    used to emit BEFORE the monomorphisation typedef (the C compiler
+    then rejected the field declaration). The fix splits user-def
+    emission into "no late-mono dep" and "has late-mono dep" passes,
+    interleaved with the late-mono pass."""
+
+    def test_class_field_of_list_of_user_variant_compiles(self):
+        """`(List of: V)` where V is a user variant. The user class's
+        struct embeds the List struct by value, so the List typedef
+        must precede the user class struct, and the List's element
+        slot type (the variant) must precede the List."""
+        csource = emit_source(
+            "V: variant { A: null B: null } as { tag: u8.tag }\n"
+            "C: class {\n"
+            "    xs: (List of: V)\n"
+            "}\n"
+            "main: function is {\n"
+            "    c: C xs: (List of: V)\n"
+            "    c.xs.append from: V.A\n"
+            "    c.xs.append from: V.B\n"
+            '    print "\\{c.xs.length}"\n'
+            "}"
+        )
+        # The variant struct, the List<V> struct, and the user class
+        # struct must appear in that order so each later struct sees
+        # the typedefs it embeds.
+        v_pos = csource.find("} z_V_t;")
+        list_pos = csource.find("} z_List_V_t;")
+        c_pos = csource.find("} z_C_t;")
+        assert v_pos != -1 and list_pos != -1 and c_pos != -1, (
+            "expected V, List_V, and C struct typedefs in the output"
+        )
+        assert v_pos < list_pos < c_pos, (
+            f"expected emit order V({v_pos}) < List<V>({list_pos}) < "
+            f"C({c_pos}) so each struct's typedef precedes its uses"
+        )
+        # End-to-end: program runs and prints "2".
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_class_field_of_list_of_user_record_compiles(self):
+        """Same ordering rule, with a record element instead of a
+        variant. Records are also value-embedded inside the List's
+        data buffer."""
+        csource = emit_source(
+            "Pt: record { x: i64  y: i64 }\n"
+            "Path: class {\n"
+            "    pts: (List of: Pt)\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: Path pts: (List of: Pt)\n"
+            "    p.pts.append from: (Pt x: 1 y: 2)\n"
+            "    p.pts.append from: (Pt x: 3 y: 4)\n"
+            '    print "\\{p.pts.length}"\n'
+            "}"
+        )
+        pt_pos = csource.find("} z_Pt_t;")
+        list_pos = csource.find("} z_List_Pt_t;")
+        path_pos = csource.find("} z_Path_t;")
+        assert pt_pos != -1 and list_pos != -1 and path_pos != -1
+        assert pt_pos < list_pos < path_pos
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_nested_class_with_list_field_of_unrelated_user_variant(self):
+        """Two user types and a List spanning them: confirm the split
+        identifies only the class that actually references the late
+        mono, leaving the variant in the early-user pass."""
+        csource = emit_source(
+            "V: variant { A: null B: null } as { tag: u8.tag }\n"
+            "Other: record { n: i64 }\n"
+            "C: class {\n"
+            "    xs: (List of: V)\n"
+            "    extra: Other\n"
+            "}\n"
+            "main: function is {\n"
+            "    c: C xs: (List of: V) extra: (Other n: 7)\n"
+            "    c.xs.append from: V.B\n"
+            '    print "\\{c.xs.length} \\{c.extra.n}"\n'
+            "}"
+        )
+        v_pos = csource.find("} z_V_t;")
+        other_pos = csource.find("} z_Other_t;")
+        list_pos = csource.find("} z_List_V_t;")
+        c_pos = csource.find("} z_C_t;")
+        # Both V and Other must be emitted before the late mono;
+        # C is the only late-user def.
+        assert v_pos < list_pos < c_pos
+        assert other_pos < c_pos
+        output = compile_and_run(csource)
+        assert output.strip() == "1 7"
+
+
 class TestList:
     """Tests for List type emission and runtime behavior."""
 
@@ -8425,10 +8519,14 @@ class TestListView:
     def test_listview_struct_layout(self):
         """ListView struct has {length, data*} matching List's first two fields."""
         csource = emit_source("main: function is { l: (List of: i64)\nv: l.listview }")
-        # listview struct matches first two fields of list for zero-cost cast
+        # listview struct matches first two fields of list for zero-cost cast.
+        # The struct uses a named tag so a forward typedef can refer to it
+        # when a user class field holds a List-of-user-variant.
         assert (
-            "typedef struct {\n    uint64_t length;\n    int64_t* data;\n} z_ListView_i64_t;"
-            in csource
+            "typedef struct z_ListView_i64_t {\n"
+            "    uint64_t length;\n"
+            "    int64_t* data;\n"
+            "} z_ListView_i64_t;" in csource
         )
 
     def test_listview_listview_is_cast(self):
