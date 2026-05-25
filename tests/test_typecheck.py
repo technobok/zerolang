@@ -673,6 +673,30 @@ class TestImplicitReturn:
             "}\nmain: function is {}"
         )
 
+    def test_match_arm_panic_subtypes_never(self):
+        """`panic msg: ...` in a match arm contributes `never` to the
+        match-expression result type, so an arm mixing `return X` with
+        `panic msg: ...` does not surface as an implicit-return-type
+        mismatch on the outer function.
+
+        Regression: `_last_statement_type` listed RETURN/BREAK/
+        CONTINUE/ERROR as no-return call kinds but missed PANIC, so
+        the panic arm's type was the `panic` function itself instead
+        of `never`, polluting the match-expression value type.
+        """
+        check_ok(
+            "f: function {sv: StringView} out u32 is {\n"
+            "  r: sv.parseU64\n"
+            "  match (\n"
+            "    r\n"
+            "  ) case ok then {\n"
+            "    return r.u32\n"
+            "  } case err then {\n"
+            '    panic msg: "bad numeric argument"\n'
+            "  }\n"
+            "}\nmain: function is {}"
+        )
+
 
 class TestMatchExpression:
     def test_match_as_expression_simple(self):

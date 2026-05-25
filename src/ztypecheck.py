@@ -10824,8 +10824,8 @@ class TypeChecker:
         """Get the type of the last expression in a statement block.
 
         Returns the resolved `never` ZType for branches that don't
-        complete (return/break/continue/error), a regular ZType for
-        value-producing branches, or None if no value produced.
+        complete (return/break/continue/error/panic), a regular ZType
+        for value-producing branches, or None if no value produced.
         """
         if not stmt.statements:
             return None
@@ -10833,7 +10833,7 @@ class TypeChecker:
         if last.nodetype == NodeType.EXPRESSION:
             last_expr = cast(zast.Expression, last)
             inner = last_expr.expression
-            # check for non-completing expressions (return/break/continue/error)
+            # check for non-completing expressions (return/break/continue/error/panic)
             if self.typing.expr_call_kind.get(
                 last_expr.nodeid, zast.CallKind.UNKNOWN
             ) in (
@@ -10841,6 +10841,7 @@ class TypeChecker:
                 zast.CallKind.BREAK,
                 zast.CallKind.CONTINUE,
                 zast.CallKind.ERROR,
+                zast.CallKind.PANIC,
             ):
                 return self._resolve_name("never")
             # get type from the inner expression node (Expression wrapper .type may be None)
