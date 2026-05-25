@@ -11059,26 +11059,30 @@ class TypeChecker:
                     result_type = never
                     self.typing.node_type[ifnode.nodeid] = never
             elif completing:
-                first = completing[0]
-                if first is not None:
-                    all_ok = all(
-                        t is not None and self._types_compatible(first, t)
-                        for t in completing[1:]
-                    )
-                    if all_ok:
-                        result_type = first
-                        self.typing.node_type[ifnode.nodeid] = first
-                    else:
-                        # find first incompatible type for error message
-                        for t in completing[1:]:
-                            if t is None or not self._types_compatible(first, t):
-                                tname = t.name if t is not None else "null"
-                                self._error(
-                                    f"incompatible branch types in if-expression: "
-                                    f"'{first.name}' and '{tname}'",
-                                    loc=ifnode.start,
-                                )
-                                break
+                # A branch that contributes no value (empty body /
+                # non-value tail) is treated as `null` for the unifier
+                # — in expression context it produces null, the same
+                # as an `if` with no `else`.
+                first = completing[0] if completing[0] is not None else self.t_null
+                all_ok = True
+                for t in completing[1:]:
+                    t_resolved = t if t is not None else self.t_null
+                    if not self._types_compatible(first, t_resolved):
+                        all_ok = False
+                        break
+                if all_ok:
+                    result_type = first
+                    self.typing.node_type[ifnode.nodeid] = first
+                else:
+                    for t in completing[1:]:
+                        t_resolved = t if t is not None else self.t_null
+                        if not self._types_compatible(first, t_resolved):
+                            self._error(
+                                f"incompatible branch types in if-expression: "
+                                f"'{first.name}' and '{t_resolved.name}'",
+                                loc=ifnode.start,
+                            )
+                            break
 
         self.symtab.pop_to(if_marker)
 
@@ -11904,21 +11908,27 @@ class TypeChecker:
             return self.t_null
         if not completing:
             return self.t_null
-        first = completing[0]
-        if first is None:
-            return self.t_null
-        all_ok = all(
-            t is not None and self._types_compatible(first, t) for t in completing[1:]
-        )
+        # A branch that contributes no value (empty body, non-value-
+        # producing tail statement) is treated as `null` for the
+        # unifier — in expression context an empty arm produces null,
+        # so it should unify cleanly with a sibling whose tail is
+        # itself null (e.g. an `if` with no `else`).
+        first = completing[0] if completing[0] is not None else self.t_null
+        all_ok = True
+        for t in completing[1:]:
+            t_resolved = t if t is not None else self.t_null
+            if not self._types_compatible(first, t_resolved):
+                all_ok = False
+                break
         if all_ok:
             self.typing.node_type[casenode.nodeid] = first
             return first
         for t in completing[1:]:
-            if t is None or not self._types_compatible(first, t):
-                tname = t.name if t is not None else "null"
+            t_resolved = t if t is not None else self.t_null
+            if not self._types_compatible(first, t_resolved):
                 self._error(
                     f"incompatible branch types in match-expression: "
-                    f"'{first.name}' and '{tname}'",
+                    f"'{first.name}' and '{t_resolved.name}'",
                     loc=casenode.start,
                 )
                 break

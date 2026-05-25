@@ -727,6 +727,28 @@ class TestMatchExpression:
         )
         assert any("incompatible branch types" in e.msg for e in errors)
 
+    def test_match_empty_arm_body_unifies_with_null_sibling(self):
+        """An arm with an empty body `{}` unifies cleanly with an
+        arm whose tail is itself null (e.g. an `if` with no `else`).
+
+        Regression: the unifier treated `_last_statement_type == None`
+        (empty body, no value) as an incompatibility with a concrete
+        null sibling, producing the confusing "incompatible branch
+        types in match-expression: 'null' and 'null'".
+        """
+        check_ok(
+            "main: function is {\n"
+            "  o: optionval.some 42.u8\n"
+            "  match (\n"
+            "    o\n"
+            "  ) case some then {\n"
+            "    if o == 42.u8 then {\n"
+            '      print "match"\n'
+            "    }\n"
+            "  } case none then {}\n"
+            "}"
+        )
+
     def test_match_non_exhaustive_no_value(self):
         """Non-exhaustive match without else does not produce a value type."""
         check_ok(
