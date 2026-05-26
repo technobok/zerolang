@@ -15,6 +15,7 @@ The `zvfs_binary` fixture lives in tests/conftest.py.
 """
 
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -35,11 +36,31 @@ def _list_script_names():
 
 
 @pytest.mark.parametrize("script_name", _list_script_names())
-def test_zvfs_script_matches_golden(script_name, zvfs_binary):
+def test_zvfs_script_matches_golden(script_name, zvfs_binary, tmp_path):
     """The dispatcher's stdout must match the checked-in golden for
-    each fixture script byte-for-byte."""
+    each fixture script byte-for-byte.
+
+    FSProvider-style fixtures opt in by checking in a sibling
+    `<base>.tree/` directory. When present, the runner copies the
+    tree into `tmp_path/root/`, substitutes `{ROOT}` in the script
+    text with that path, and writes the substituted script back to
+    tmp_path before invoking the binary. The .expected golden uses
+    paths relative to the provider's parentpath (stable across runs)
+    so the {ROOT} substitution does not leak into stdout.
+    """
+    base = script_name[:-7]
     script_path = os.path.join(FIXTURE_DIR, script_name)
-    expected_path = os.path.join(FIXTURE_DIR, script_name[:-7] + ".expected")
+    expected_path = os.path.join(FIXTURE_DIR, base + ".expected")
+    tree_dir = os.path.join(FIXTURE_DIR, base + ".tree")
+    if os.path.isdir(tree_dir):
+        root = tmp_path / "root"
+        shutil.copytree(tree_dir, root)
+        with open(script_path, "r", encoding="utf-8") as f:
+            script_text = f.read()
+        script_text = script_text.replace("{ROOT}", str(root))
+        script_path = str(tmp_path / "ops.script")
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_text)
     proc = subprocess.run([zvfs_binary, script_path], capture_output=True, text=True)
     if proc.returncode != 0:
         pytest.fail(

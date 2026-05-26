@@ -161,6 +161,38 @@ ProviderTable: class {
         this.providers.append from: box.take
         return idx
     }
+    # registerFS -- construct an FSProvider rooted at <rootpath>/<parentpath>,
+    # validating that the joined path is actually a directory. Panics if it
+    # isn't (mirrors Python's IOError at zvfs.py:629). Root node 0 carries
+    # `parentpath` literally, so all walked paths share that prefix.
+    registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
+        full: joinPath parent: rootpath.stringview name: parentpath.stringview
+        sr: io.stat full.stringview
+        match (
+            sr
+        ) case ok then {
+            match (
+                sr.kind
+            ) case dir then {
+            } case file then {
+                panic msg: "FSProvider root is not a directory"
+            } case symlink then {
+                panic msg: "FSProvider root is not a directory"
+            } case other then {
+                panic msg: "FSProvider root is not a directory"
+            }
+        } case err then {
+            panic msg: "FSProvider root is not a directory (stat failed)"
+        }
+        fp: FSProvider rootpath: rootpath.take pathtable: (List of: FSNode) pathcache: (Map key: String value: u32)
+        root: FSNode path: parentpath.take kind: nodekind.dir
+        fp.pathtable.append from: root.take
+        prov: ZVfsProvider.create from: fp.take
+        box: ProviderBox p: prov
+        idx: this.providers.length.u32
+        this.providers.append from: box.take
+        return idx
+    }
 }
 
 # StringNode -- one node in StringProvider's in-memory tree.
@@ -294,6 +326,126 @@ StringProvider: class {
     }
 }
 
+# FSNode -- one node in FSProvider's path table. `path` is the
+# relative-to-rootpath path (with parentpath as prefix); `kind`
+# discriminates file / dir / notfound. Mirrors Python's `(path, type)`
+# tuple at zvfs.py:624.
+
+FSNode: class {
+    path: String
+    kind: nodekind
+}
+
+# FSProvider -- a provider that wraps a real filesystem. Walks issue
+# `io.stat` on the joined rootpath/relpath; opens read the file via
+# `io.readText`. `pathtable` indexes nodes by NodeID (= list index);
+# `pathcache` maps the relative path back to its assigned NodeID so
+# repeat walks are O(1). Mirrors src/zvfs.py:616-707.
+#
+# addFile panics: FSProvider is read-only from the VFS view (Python
+# ref exposes no public addFile either; `_appendpath` is internal).
+
+FSProvider: class {
+    rootpath:  String
+    pathtable: (List of: FSNode)
+    pathcache: (Map key: String value: u32)
+} as {
+    :ZVfsProvider
+
+    # Internal: append a node, return its assigned id.
+    appendPath: function {:this fpath: String.take k: nodekind} out u32 is {
+        idx: this.pathtable.length.u32
+        n: FSNode path: fpath.take kind: k
+        this.pathtable.append from: n.take
+        return idx
+    }
+
+    walk: function {:this name: StringView parent: u32} out u32 is {
+        pn: this.pathtable.get i: parent.u64
+        rel: joinPath parent: pn.path.stringview name: name
+        # Cache lookup first; repeat walks short-circuit here.
+        cached: this.pathcache.get key: rel.copy
+        match (
+            cached
+        ) case some then {
+            return cached
+        } case none then {
+            # Stat the full path on disk and translate filekind ->
+            # nodekind. Any io.stat error collapses to NOTFOUND --
+            # matches Python's `os.path.exists` false branch at
+            # zvfs.py:660.
+            full: joinPath parent: this.rootpath.stringview name: rel.stringview
+            k: nodekind.notfound
+            sr: io.stat full.stringview
+            match (
+                sr
+            ) case ok then {
+                match (
+                    sr.kind
+                ) case file then {
+                    k = nodekind.file
+                } case dir then {
+                    k = nodekind.dir
+                } case symlink then {
+                    k = nodekind.file
+                } case other then {
+                    k = nodekind.notfound
+                }
+            } case err then {}
+            newid: this.appendPath fpath: rel.copy k: k
+            this.pathcache.set key: rel.take value: newid.u32
+            return newid
+        }
+    }
+
+    open: function {:this item: u32} out OpenResult is {
+        n: this.pathtable.get i: item.u64
+        match (
+            n.kind
+        ) case file then {
+            full: joinPath parent: this.rootpath.stringview name: n.path.stringview
+            rr: io.readText full.stringview
+            # Workaround: the direct `(OpenResult.ok rr.take)` form
+            # mis-emits a `rr = (z_String_t){0}` against the outer
+            # Result-typed variable; binding to a fresh local via
+            # `.take` produces alias-only locals that gcc rejects as
+            # undeclared. `.copy` materialises a real owned String
+            # and unblocks the OK arm; the err arm loses arm-fidelity
+            # (always reports `other`) until the emitter is fixed to
+            # handle union-construction-from-narrowed-take cleanly.
+            match (
+                rr
+            ) case ok then {
+                s: rr.copy
+                return (OpenResult.ok s.take)
+            } case err then {
+                e: IoError.other "io.readText failed".string
+                return (OpenResult.err e.take)
+            }
+        } case dir then {
+            e: IoError.other "is a directory".string
+            return (OpenResult.err e.take)
+        } case notfound then {
+            e: IoError.notfound
+            return (OpenResult.err e.take)
+        }
+    }
+
+    stat: function {:this item: u32} out nodekind is {
+        n: this.pathtable.get i: item.u64
+        return n.kind
+    }
+
+    path: function {:this item: u32} out String is {
+        n: this.pathtable.get i: item.u64
+        return n.path.copy
+    }
+
+    addFile: function {:this fpath: String.take content: String.take} is {
+        panic msg: "FSProvider is read-only"
+    }
+}
+
 # Print "<id>: <arm-name>" for a single entry. Used by the `dump`
 # verb; mirrors the lexer dumper's `ttname` pattern.
 
@@ -311,6 +463,19 @@ printEntry: function {id: u32 e: dentry} is {
     } case mount then {
         print "\{id}: mount"
     }
+}
+
+# joinPath -- glue two path components with a single "/", handling
+# the empty-parent case so a "" root doesn't produce a leading-slash
+# child. Mirrors Python's os.path.join("", x) == x for the leading
+# case; the trailing case is delegated to callers (we don't produce
+# a trailing "/" on `parent` ourselves).
+
+joinPath: function {parent: StringView name: StringView} out String is {
+    if parent.length == 0.u64 then {
+        return name.string
+    }
+    return "\{parent}/\{name}".string
 }
 
 # Tokenize a line into owned strings, skipping empty pieces that
@@ -426,16 +591,28 @@ dispatchDump: function {tokens: (List of: String) table: DentryTable} is {
 
 dispatchProvider: function {tokens: (List of: String) providers: ProviderTable} is {
     n: tokens.length
-    if n != 2 then panic msg: "provider verb expects a kind name"
+    if n < 2 then panic msg: "provider verb expects a kind name"
     kind_str: tokens.get i: 1
     kind: kind_str.stringview
     if kind == "null" then {
+        if n != 2 then panic msg: "provider null takes no args"
         idx: providers.registerNull
         print "\{idx}"
         return
     }
     if kind == "string" then {
+        if n != 2 then panic msg: "provider string takes no args"
         idx: providers.registerString
+        print "\{idx}"
+        return
+    }
+    if kind == "fs" then {
+        if n != 4 then panic msg: "provider fs expects 2 args (rootpath parentpath)"
+        rp_str: tokens.get i: 2
+        pp_str: tokens.get i: 3
+        rp: rp_str.copy
+        pp: pp_str.copy
+        idx: providers.registerFS rootpath: rp.take parentpath: pp.take
         print "\{idx}"
         return
     }
