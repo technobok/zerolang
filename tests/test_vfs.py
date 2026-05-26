@@ -244,8 +244,10 @@ class TestVfsOpen:
             rootid = vfs.bind(parentid=rootid, name=None, newid=fsid)
 
             entryid = vfs.walk(["test.z"])
-            line = vfs.getline(entryid, 2)
-            assert line == "line2\n"
+            # getline is 0-based, returns the line with any trailing
+            # "\n" stripped (matches the zerolang port's sv.lines).
+            line = vfs.getline(entryid, 1)
+            assert line == "line2"
 
 
 class TestStringProvider:

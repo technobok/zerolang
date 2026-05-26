@@ -17,6 +17,20 @@ ProviderID = NewType("ProviderID", int)
 NodeID = NewType("NodeID", int)
 
 
+class VfsIOError(IOError):
+    """Structured I/O error matching the zerolang port's `IoError` union.
+
+    Carries an `arm` field tagging the error category (notfound, isdir,
+    other, ...) so callers can dispatch on it without parsing the
+    message string. Subclasses IOError so existing `except IOError`
+    handlers still catch it.
+    """
+
+    def __init__(self, arm: str, message: str):
+        self.arm = arm
+        super().__init__(message)
+
+
 class DEntryType(IntEnum):
     """
     DEntryType - simple stat for an entry in the VFS
@@ -257,13 +271,27 @@ class ZVfs:
     ZVfsProviders
     """
 
-    def __init__(self) -> None:
+    def __init__(self, auto_register_null: bool = True) -> None:
+        """Initialise an empty ZVfs.
+
+        When `auto_register_null` is True (default, backward-compatible
+        with `tests/test_vfs.py`), a NullProvider is registered
+        automatically and `rootid` points at it. When False, the
+        engine starts fully empty (no providers, no dentries, rootid=0
+        as a placeholder); the caller MUST register a provider before
+        any walk / open / bind makes sense. The False variant matches
+        the zerolang port's empty-init shape and is used by the
+        differential dispatcher in `tests/zvfs_script.py`.
+        """
         self.entrytable = DEntryTable()
         self._providertable: List[ZVfsProvider] = []
         # file_id → name mapping, populated during walk
         self._file_names: Dict[DEntryID, str] = {}
 
-        self.rootid: DEntryID = self.register(NullProvider())
+        if auto_register_null:
+            self.rootid: DEntryID = self.register(NullProvider())
+        else:
+            self.rootid = DEntryID(0)
 
     def stat(self, entryid: DEntryID) -> DEntry:
         """
@@ -412,7 +440,9 @@ class ZVfs:
         if name is None:
             # replacing root
             if parentid != self.rootid:
-                raise IOError("name must be supplied to bind() (unless replacing root)")
+                raise VfsIOError(
+                    "other", "name must be supplied to bind() (unless replacing root)"
+                )
             if bindtype == BindType.INSTEAD:
                 newentryid = self.entrytable.union(
                     parentid=parentid, first=newid, second=None
@@ -427,7 +457,7 @@ class ZVfs:
                 )
             else:
                 # bad bindtype. Cannot happen, all handled above
-                raise IOError("Error during Bind()")
+                raise VfsIOError("other", "Error during Bind()")
 
             self.rootid = newentryid
             return newentryid
@@ -439,7 +469,9 @@ class ZVfs:
         else:
             oldid = parent.cache.get(name, None)
             if not oldid:
-                raise IOError("Valid name must be supplied to bind() for BEFORE/AFTER")
+                raise VfsIOError(
+                    "other", "Valid name must be supplied to bind() for BEFORE/AFTER"
+                )
             oldentryid = oldid
 
             # no stat is done for oldentryid or newid. They may be NONE or
@@ -456,7 +488,7 @@ class ZVfs:
                 )
             else:
                 # bad bindtype. Cannot happen, all handled above
-                raise IOError("Error during Bind()")
+                raise VfsIOError("other", "Error during Bind()")
 
         parent.cache[name] = newentryid  # create/replace cache entry
         return newentryid
@@ -491,8 +523,11 @@ class ZVfs:
             eid = parentid
             entry = parententry
 
-        result = "/".join(reversed(pathlist))
-        return result
+        # The zerolang port prepends a leading "/" (or returns "/" for
+        # an empty path). Align by doing the same.
+        if not pathlist:
+            return "/"
+        return "/" + "/".join(reversed(pathlist))
 
     def pathfromprovider(self, entryid: DEntryID) -> Optional[str]:
         """
@@ -515,12 +550,21 @@ class ZVfs:
         open - open a file id for reading
 
         Returns a file like object
-        Can throw IOError if there are issues opening file
+        Can throw VfsIOError if there are issues opening file. Mirrors
+        the zerolang port's `ZVfs.open` dentry-arm dispatch:
+        notfound -> notfound; dir -> other "is a directory";
+        union -> other ("[UNION]"); file -> delegate to provider.
         """
         entry = self.entrytable[entryid]
 
+        if entry.entrytype == DEntryType.NOTFOUND:
+            raise VfsIOError("notfound", "entry not found")
+        if entry.entrytype == DEntryType.DIR:
+            raise VfsIOError("other", "is a directory")
+        if entry.entrytype == DEntryType.UNION:
+            raise VfsIOError("other", "[UNION]")
         if entry.entrytype != DEntryType.FILE:
-            raise IOError("Not a file")
+            raise VfsIOError("other", "Not a file")
 
         fentry = cast(DEntryFile, entry)
         provider = self._providertable[fentry.providerid]
@@ -532,27 +576,28 @@ class ZVfs:
         getline - return a line from a file id. Convenience method.
 
         entryid: a entryid previously returned from walk
-        lineno: line number (1 based) to retrieve.
+        lineno: 0-based line index to retrieve (matches the zerolang
+            port's `ZVfs.getline` which iterates via `sv.lines` — a
+            0-indexed split-on-\\n iterator).
 
-        Return None if the line cannot be found. May throw IO errors.
+        Returns the line with any trailing "\\n" stripped (matches the
+        port's `sv.lines` semantics), or None if the line index is
+        out of range or open fails.
         """
         try:
             f = self.open(entryid)
         except IOError:
             return None
-        filehandle = f.filehandle
-        result: Optional[str] = None
-        currline = 0
-        while True:
-            currline += 1
-            line = filehandle.readline()
-            if not line:
-                break
-            if currline == lineno:
-                result = line
-                break
+        content = f.filehandle.read()
         f.close()
-        return result
+        # Split on "\n"; trailing newline produces an empty final piece
+        # which we drop (matches zerolang's `sv.lines` behaviour).
+        lines = content.split("\n")
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+        if 0 <= lineno < len(lines):
+            return lines[lineno]
+        return None
 
 
 class NullProvider(ZVfsProvider):
@@ -586,7 +631,7 @@ class NullProvider(ZVfsProvider):
         May throw IO errors (file doesn't exist, permission errors)
         """
         del item
-        raise IOError("NullProvider cannot open for read")
+        raise VfsIOError("other", "NullProvider cannot open for read")
 
     def stat(self, item: NodeID) -> ProviderNodeType:
         """
@@ -626,7 +671,7 @@ class FSProvider(ZVfsProvider):
 
         path = os.path.join(rootpath, parentpath)
         if not os.path.isdir(path):
-            raise IOError(f"Root [{path}] is not a directory")
+            raise VfsIOError("other", f"Root [{path}] is not a directory")
 
         self._appendpath(parentpath, nodetype=ProviderNodeType.DIR)
 
@@ -678,8 +723,12 @@ class FSProvider(ZVfsProvider):
         May throw IO errors (file doesn't exist, permission errors)
         """
         path, nodetype = self._pathtable[item]
+        if nodetype == ProviderNodeType.NOTFOUND:
+            raise VfsIOError("notfound", f"file not found: {path}")
+        if nodetype == ProviderNodeType.DIR:
+            raise VfsIOError("isdir", "is a directory")
         if nodetype != ProviderNodeType.FILE:
-            raise IOError("This is not a file")
+            raise VfsIOError("other", "This is not a file")
         pathfull = os.path.join(self._rootpath, path)
         # newline="" to pass through newline characters without conversion
         return open(pathfull, mode="r", encoding="utf8", newline="")
@@ -724,23 +773,46 @@ class StringProvider(ZVfsProvider):
 
         # Build nodes for all files and intermediate directories
         for filepath, content in files.items():
-            parts = filepath.split("/")
-            parent = NodeID(0)
-            for i, part in enumerate(parts):
-                key = (int(parent), part)
-                if key in self._children:
-                    parent = self._children[key]
+            self.addFile(filepath, content)
+
+    def addFile(self, filepath: str, content: str) -> None:
+        """
+        addFile - add a file to the in-memory tree, creating intermediate
+        directory nodes as needed. Mirrors the zerolang port's
+        `StringProvider.addFile` at src/zvfs.z; lets callers populate
+        an initially-empty StringProvider incrementally instead of
+        passing everything to __init__.
+
+        A leading "/" produces an empty leading piece which is ignored
+        (so "/a/b.txt" and "a/b.txt" land in the same place).
+        """
+        parts: List[str] = []
+        for piece in filepath.split("/"):
+            if piece:
+                parts.append(piece)
+        if not parts:
+            raise VfsIOError("invalidpath", "addFile: empty path")
+        parent = NodeID(0)
+        for i, part in enumerate(parts):
+            key = (int(parent), part)
+            if key in self._children:
+                parent = self._children[key]
+            else:
+                is_last = i == len(parts) - 1
+                parentpath, _, _ = self._nodes[parent]
+                # Mirror zerolang's child-path build: always
+                # `"<parent>/<part>"` even when parent is root (path="").
+                # For root, that yields "/a" (leading slash). Deeper
+                # walks compose normally.
+                childpath = f"{parentpath}/{part}"
+                if is_last:
+                    nid = NodeID(len(self._nodes))
+                    self._nodes.append((childpath, ProviderNodeType.FILE, content))
                 else:
-                    is_last = i == len(parts) - 1
-                    if is_last:
-                        nid = NodeID(len(self._nodes))
-                        self._nodes.append((filepath, ProviderNodeType.FILE, content))
-                    else:
-                        dirpath = "/".join(parts[: i + 1])
-                        nid = NodeID(len(self._nodes))
-                        self._nodes.append((dirpath, ProviderNodeType.DIR, None))
-                    self._children[key] = nid
-                    parent = nid
+                    nid = NodeID(len(self._nodes))
+                    self._nodes.append((childpath, ProviderNodeType.DIR, None))
+                self._children[key] = nid
+                parent = nid
 
     def walk(self, name: str, parent: NodeID = NodeID(0)) -> NodeID:
         key = (int(parent), name)
@@ -757,8 +829,12 @@ class StringProvider(ZVfsProvider):
         import io
 
         path, nodetype, content = self._nodes[item]
+        if nodetype == ProviderNodeType.NOTFOUND:
+            raise VfsIOError("notfound", f"file not found: {path}")
+        if nodetype == ProviderNodeType.DIR:
+            raise VfsIOError("other", "is a directory")
         if nodetype != ProviderNodeType.FILE:
-            raise IOError(f"Not a file: {path}")
+            raise VfsIOError("other", f"Not a file: {path}")
         return io.StringIO(content)
 
     def stat(self, item: NodeID) -> ProviderNodeType:
