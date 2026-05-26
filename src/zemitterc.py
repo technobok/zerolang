@@ -6464,12 +6464,26 @@ class CEmitter:
         self._temp.frees.append(tmp)
         self._temp.proto_set[tmp] = proto_name
 
-        # handle .take invalidation for class (reftype) arguments
+        # Ownership of the impl transfers into the protocol. Invalidate
+        # the source so scope-exit cleanup doesn't double-destroy the
+        # impl's contents (the protocol's destructor already calls the
+        # impl's destructor on the wrapped pointer).
+        #
+        # Two layered cases:
+        #   1) Explicit `.take` on a bare AtomId (`sp.take`) —
+        #      `_get_take_var` returns the var name; zero-init it.
+        #   2) Implicit take via an aliased synth temp (`_tN`) — the
+        #      typechecker hoisted `from: sp.take` into a synth
+        #      assignment, leaving `from_arg.valtype` as the AtomId
+        #      `_tN`. `_transfer_implicit_take` resolves the alias via
+        #      `_get_implicit_take_var` and zeros the underlying source.
         if arg_type and arg_type.typetype == ZTypeType.CLASS:
             take_var = self._get_take_var(from_arg.valtype)
             if take_var:
                 ct = _ctype(self.typing, arg_type)
                 self._temp.decls.append(f"{indent}{take_var} = ({ct}){{0}};\n")
+            else:
+                self._transfer_implicit_take(arg_val, from_arg.valtype, indent)
 
         return tmp
 
@@ -6619,6 +6633,9 @@ class CEmitter:
             else []
         )
         args = [f"{parent_val}{acc}data"]
+        # Populate _last_emitted_arg_vals so `_apply_call_implicit_takes`
+        # can find the per-arg emitted C exprs after the dispatch.
+        self._last_emitted_arg_vals = []
         for i, arg in enumerate(call.arguments):
             val = self._emit_operation_value(arg.valtype)
             if i < len(spec_params):
@@ -6626,6 +6643,7 @@ class CEmitter:
                 if _is_collection_param_type(spec_ptype) and not val.startswith("&"):
                     val = f"&{val}"
             args.append(val)
+            self._last_emitted_arg_vals.append(val)
         return f"{parent_val}{acc}vtable->{method}({', '.join(args)})"
 
     def _emit_callable_dispatch(self, call: zast.Call) -> str:
@@ -6679,12 +6697,16 @@ class CEmitter:
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
         if proto_expr is not None:
-            return f"{indent}{proto_expr};\n"
+            result = f"{indent}{proto_expr};\n"
+            self._apply_call_implicit_takes(call, indent)
+            return result
 
         # facet method dispatch
         facet_expr = self._emit_facet_dispatch(call)
         if facet_expr is not None:
-            return f"{indent}{facet_expr};\n"
+            result = f"{indent}{facet_expr};\n"
+            self._apply_call_implicit_takes(call, indent)
+            return result
 
         callable_name = self._get_callable_name(call.callable)
 
@@ -7666,11 +7688,13 @@ class CEmitter:
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
         if proto_expr is not None:
+            self._apply_call_implicit_takes(call, self._indent())
             return proto_expr
 
         # facet method dispatch
         facet_expr = self._emit_facet_dispatch(call)
         if facet_expr is not None:
+            self._apply_call_implicit_takes(call, self._indent())
             return facet_expr
 
         # data.index call -> array access
