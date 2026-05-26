@@ -1,28 +1,35 @@
-# zast.z -- self-host port of src/zast.py (Phase B slice 3, PR 1).
+# zast.z -- self-host port of src/zast.py (Phase B slice 3, PRs 1-2).
 #
-# PR 1 ports the foundation types and ships a smoke binary. The
-# binary takes no arguments; it constructs one instance of every
+# The binary takes no arguments; it constructs one instance of every
 # variant arm declared here, walks the discriminants via `case`,
 # and prints a deterministic line per item. The harness compares
 # stdout byte-for-byte against tests/fixtures/zast_z/smoke.expected.
 #
-# Scope:
+# Scope through PR 2:
 #   * ERR variant (parser/type/ownership/call/generic error codes).
 #   * NodeType variant (AST node-type tag).
 #   * CallKind variant (Call-node classification, set by typecheck).
-#   * Node variant with four leaf-only arms (error / atomid /
-#     labelvalue / stringchunk) -- no recursive Node fields, no
-#     Optional[Node]. The arm IS the discriminant; there is no
-#     separate `nodetype` field on the carrier records. Mirrors
-#     `dentry` in src/zvfs.z:64.
+#   * Node union: four leaf-only arms (error / atomid / labelvalue /
+#     stringchunk) plus two recursive arms added in PR 2 (binop with
+#     three Node children, atomstring with (List of: Node)). The arm
+#     IS the discriminant; no separate nodetype field on the carrier
+#     classes. Union (not variant) because the carriers hold String /
+#     Node / List, all reftypes.
 #
-# Out of scope for PR 1:
-#   * Recursive Node arms (Unit, Function, ObjectDef, If, For, ...).
+# Out of scope:
+#   * Optional<Node> -- deferred to PR 3; needs a sentinel-arm vs
+#     wrapper-option design call. Blocks If / Function / Statement
+#     ports.
+#   * Other recursive arms (Unit, Function, ObjectDef, If, For,
+#     Case, ...).
 #   * clone_function / _clone_node / node_children helpers.
 #   * Cross-unit Token / TT reference (deferred; using u32
 #     lineno+colno + u8 chunk_kind placeholders).
 #   * SQL-dump differential (needs a parser; per
 #     doc/bootstrap.pdoc:317-330).
+#   * Recursive descent in printNode for binop / atomstring -- a
+#     by-value Node parameter would double-destroy children at the
+#     inner and outer call sites; waits on .lock-on-union-arg.
 
 # ERR -- error codes. Arm names UPPERCASE to match the Python
 # enum at src/zast.py:20-77. Numeric E0xxx mapping is preserved
@@ -135,11 +142,29 @@ CallKind: variant {
     PANIC:            null
 } as { tag: u8.tag }
 
+# Node -- top-level union (reftype tagged sum). The arm IS the
+# discriminant; no separate nodetype field. Mirrors the OpenResult
+# union pattern at src/zvfs.z:85. Declared before the carrier
+# classes so the carriers can hold Node fields by value: the
+# union's struct must be fully visible at the field-declaration
+# site. PR 1 shipped four leaf-only arms; PR 2 adds the first two
+# recursive arms (binop / atomstring).
+
+Node: union {
+    error:       errordata
+    atomid:      atomiddata
+    labelvalue:  labelvaluedata
+    stringchunk: stringchunkdata
+    binop:       binopdata
+    atomstring:  atomstringdata
+}
+
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
 # plus source position. Token / TT integration is deferred; PR 1
 # uses u32 lineno + u32 colno + u8 chunk_kind as placeholders.
-# These are classes (reftypes) because they hold String, which is
-# a reftype -- records (valtypes) cannot hold reftypes.
+# These are classes (reftypes) because they hold String / Node /
+# (List of: Node), all of which are reftypes -- records (valtypes)
+# cannot hold reftypes.
 
 errordata: class {
     nodeid: u32
@@ -171,18 +196,31 @@ stringchunkdata: class {
     chunk_kind: u8
 }
 
-# Node -- top-level union (reftype tagged sum). The arm IS the
-# discriminant; no separate nodetype field. Mirrors the OpenResult
-# union pattern at src/zvfs.z:85. Union (not variant) because the
-# leaf payload classes hold String fields, which a variant cannot
-# carry transitively. PR 1 ships only the four leaf-only arms;
-# recursive arms (Unit, Function, If, ...) land in PR 2+.
+# binopdata -- first recursive Node arm payload. Three Node children
+# stored by value, validating the union-with-self-referential-arm
+# shape unlocked by the emitter named-struct + arm forward-decl
+# change. The Python reference constrains operator to AtomId and
+# rhs to Path; the port loosens both to Node here and defers arm-
+# specific child-type enforcement to the typechecker port.
 
-Node: union {
-    error:       errordata
-    atomid:      atomiddata
-    labelvalue:  labelvaluedata
-    stringchunk: stringchunkdata
+binopdata: class {
+    nodeid:   u32
+    lineno:   u32
+    colno:    u32
+    lhs:      Node
+    operator: Node
+    rhs:      Node
+}
+
+# atomstringdata -- ordered list of Node children (literal text
+# chunks + embedded interpolations). Validates (List of: Node) where
+# the element type is the enclosing union.
+
+atomstringdata: class {
+    nodeid:      u32
+    lineno:      u32
+    colno:       u32
+    stringparts: (List of: Node)
 }
 
 # errname / nodetypename / callkindname -- arm-name dumpers. Mirror
@@ -421,6 +459,14 @@ printNode: function {n: Node} is {
         print "\{n.nodeid}: labelvalue @\{n.lineno}:\{n.colno} name=\{n.name}"
     } case stringchunk then {
         print "\{n.nodeid}: stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunk_kind=\{n.chunk_kind}"
+    } case binop then {
+        # Top-level summary only; the recursive walk needs a borrowed
+        # Node parameter to avoid double-destruction of children at
+        # both the inner and outer call sites. Deferred to a follow-up
+        # PR once .lock-on-union-arg semantics land.
+        print "\{n.nodeid}: binop @\{n.lineno}:\{n.colno} (3 children)"
+    } case atomstring then {
+        print "\{n.nodeid}: atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
     }
 }
 
@@ -533,4 +579,19 @@ main: function is {
     printNode n: n3
     n4: Node.stringchunk (stringchunkdata nodeid: 4.u32 lineno: 13.u32 colno: 9.u32 text: "hello".string chunk_kind: 0.u8)
     printNode n: n4
+
+    # Recursive: an atomstring containing two child nodes (list of Node).
+    parts: (List of: Node)
+    parts.append from: (Node.stringchunk (stringchunkdata nodeid: 5.u32 lineno: 14.u32 colno: 1.u32 text: "hello ".string chunk_kind: 0.u8))
+    parts.append from: (Node.atomid (atomiddata nodeid: 6.u32 lineno: 14.u32 colno: 8.u32 name: "name".string))
+    n5: Node.atomstring (atomstringdata nodeid: 7.u32 lineno: 14.u32 colno: 1.u32 stringparts: parts)
+    printNode n: n5
+
+    # Recursive: a binop "x + y" with three Node children stored
+    # by value on the carrier class.
+    lhs: Node.atomid (atomiddata nodeid: 8.u32 lineno: 15.u32 colno: 1.u32 name: "x".string)
+    op:  Node.atomid (atomiddata nodeid: 9.u32 lineno: 15.u32 colno: 3.u32 name: "+".string)
+    rhs: Node.atomid (atomiddata nodeid: 10.u32 lineno: 15.u32 colno: 5.u32 name: "y".string)
+    n6: Node.binop (binopdata nodeid: 11.u32 lineno: 15.u32 colno: 3.u32 lhs: lhs operator: op rhs: rhs)
+    printNode n: n6
 }
