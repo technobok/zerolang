@@ -4827,25 +4827,35 @@ class CEmitter:
                 lines.append(f"    {opt_struct} _r = {{0}};\n")
                 lines.append("    if (idx >= 0) {\n")
                 lines.append(f"        _r.tag = {some_tag};\n")
-                if val_is_reftype:
-                    if val_is_string:
-                        lines.append(
-                            "        z_String_t* _copy = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
-                        )
-                        lines.append(
-                            "        _copy->size = _this->entries[idx].value.size;\n"
-                        )
-                        lines.append("        _copy->capacity = _copy->size + 1;\n")
-                        lines.append(
-                            "        _copy->data = (char*)z_xmalloc(_copy->capacity);\n"
-                        )
-                        lines.append(
-                            "        memcpy(_copy->data, _this->entries[idx].value.data, _copy->size);\n"
-                        )
-                        lines.append("        _copy->data[_copy->size] = '\\0';\n")
-                        lines.append("        _r.data = _copy;\n")
-                    else:
-                        lines.append("        _r.data = _this->entries[idx].value;\n")
+                if val_is_string:
+                    # String values are stack structs that own a heap data
+                    # buffer. A shallow struct copy aliases the buffer and
+                    # double-frees when both the Map's storage AND the
+                    # returned Option's box are destroyed. Deep-copy: malloc
+                    # a fresh String + memcpy the buffer.
+                    lines.append(
+                        "        z_String_t* _copy = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
+                    )
+                    lines.append(
+                        "        _copy->size = _this->entries[idx].value.size;\n"
+                    )
+                    lines.append("        _copy->capacity = _copy->size + 1;\n")
+                    lines.append(
+                        "        _copy->data = (char*)z_xmalloc(_copy->capacity);\n"
+                    )
+                    lines.append(
+                        "        memcpy(_copy->data, _this->entries[idx].value.data, _copy->size);\n"
+                    )
+                    lines.append("        _copy->data[_copy->size] = '\\0';\n")
+                    lines.append("        _r.data = _copy;\n")
+                elif val_is_reftype:
+                    # Heap-allocated reftype: the stored value IS a pointer;
+                    # alias it into the Option's data slot. (Note: this is
+                    # a borrowed pattern — destroying both Map and Option
+                    # will double-free. Revisit when Map.get's ownership
+                    # model is settled; for now Map<reftype-other-than-
+                    # String> remains untested in the tree.)
+                    lines.append("        _r.data = _this->entries[idx].value;\n")
                 else:
                     lines.append(
                         f"        {val_ctype}* _d = ({val_ctype}*)z_xmalloc(sizeof({val_ctype}));\n"
@@ -8354,12 +8364,19 @@ class CEmitter:
                         # optionval variant: no temp tracking needed (value type)
                         return result
                     if ret_type and ret_type.typetype == ZTypeType.UNION:
-                        # regular union pointer: track as temp
+                        # Value-returned union: must match the function's
+                        # declared return type (e.g. `z_Option_String_t`
+                        # for `Map<u32, String>.get`). Heap-allocated
+                        # payloads route through the nullable_ptr branch
+                        # above; anything reaching here is a value-returned
+                        # union whose inner ownership is tracked via frees
+                        # + scope-exit destroy. Use _ctype so the struct
+                        # type resolves correctly instead of hand-spelling
+                        # a pointer that disagrees with the signature.
                         tmp = self._temp_name("c")
                         indent = self._indent()
-                        self._temp.decls.append(
-                            f"{indent}z_{ret_type.name}_t* {tmp} = {result};\n"
-                        )
+                        ctype = _ctype(self.typing, ret_type)
+                        self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
                         self._temp.frees.append(tmp)
                         return tmp
                     return result

@@ -3656,6 +3656,60 @@ class TestEmitterUnionMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_map_get_option_string_value_return(self):
+        """Regression for two coupled bugs surfaced by PR 6a.
+
+        Codegen bug: `Map<u32, String>.get` had its call-result temp
+        typed as `z_Option_String_t*` (pointer) but the function
+        returns `z_Option_String_t` by value -- gcc rejected with
+        `incompatible types when initializing`.
+
+        Runtime bug: even after the C compiled, the Map.get template
+        for String values did a shallow struct copy (the deep-copy
+        path was dead code, gated on `val_is_reftype` which is False
+        for String). Result: double-free when both the Map and the
+        returned Option were destroyed.
+
+        Both fixes together make Map<u32, String>.get round-trip
+        cleanly under ASan.
+        """
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (Map key: u32 value: String)\n"
+            '    m.set key: 0.u32 value: "hello".string\n'
+            '    m.set key: 1.u32 value: "world".string\n'
+            "    r0: m.get key: 0.u32\n"
+            "    match (\n"
+            "        r0\n"
+            "    ) case some then {\n"
+            '        print "0: \\{r0}"\n'
+            "    } case none then {\n"
+            '        print "0: none"\n'
+            "    }\n"
+            "    r1: m.get key: 1.u32\n"
+            "    match (\n"
+            "        r1\n"
+            "    ) case some then {\n"
+            '        print "1: \\{r1}"\n'
+            "    } case none then {\n"
+            '        print "1: none"\n'
+            "    }\n"
+            "    r2: m.get key: 99.u32\n"
+            "    match (\n"
+            "        r2\n"
+            "    ) case some then {\n"
+            '        print "99: \\{r2}"\n'
+            "    } case none then {\n"
+            '        print "99: none"\n'
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "0: hello" in result.stdout, result.stdout
+        assert "1: world" in result.stdout, result.stdout
+        assert "99: none" in result.stdout, result.stdout
+
     def test_example_unions_asan(self):
         from zvfs import ZVfs, FSProvider, BindType
 

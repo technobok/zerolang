@@ -973,6 +973,62 @@ class TestReturnTypeChecking:
             "}"
         )
 
+    def test_return_with_named_args_diagnoses(self):
+        """`return X arg: val` (no parens) is reserved for the
+        return statement's argument shape (type-construction
+        shorthand today, named return args tomorrow). Trying to
+        call a method/function in return position without parens
+        must surface a targeted "return doesn't accept named
+        argument X" message and suggest the paren form -- not
+        the confusing pre-fix "return type mismatch: function
+        expects u32, got X.foo" cascade.
+        """
+        errors = check_errors(
+            "P: protocol { foo: function {:this x: u32} out u32 }\n"
+            "F: class { _u: bool } as {\n"
+            "    :P\n"
+            "    foo: function {:this x: u32} out u32 is { return x + 1.u32 }\n"
+            "}\n"
+            "wrap: function {p: P x: u32} out u32 is {\n"
+            "    return p.foo x: x\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+        assert any("return doesn't accept named argument" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+        assert any("'x'" in e.msg for e in errors), [e.msg for e in errors]
+
+    def test_return_method_call_with_parens_typechecks(self):
+        """The documented fix for the diagnostic above: wrap the
+        call in parens so it parses as a single Call expression.
+        """
+        check_ok(
+            "P: protocol { foo: function {:this x: u32} out u32 }\n"
+            "F: class { _u: bool } as {\n"
+            "    :P\n"
+            "    foo: function {:this x: u32} out u32 is { return x + 1.u32 }\n"
+            "}\n"
+            "wrap: function {p: P x: u32} out u32 is {\n"
+            "    return (p.foo x: x)\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
+    def test_return_type_construction_shorthand_still_works(self):
+        """Regression guard: `return Type field: val` (the
+        type-construction shorthand) must continue to work --
+        its handler runs BEFORE the new 'no named arg'
+        diagnostic and consumes the shape.
+        """
+        check_ok(
+            "Counter: record { value: u32 }\n"
+            "make: function {start: u32} out Counter is {\n"
+            "    return Counter value: start\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
 
 class TestNamedArguments:
     def test_named_arg_correct_type(self):

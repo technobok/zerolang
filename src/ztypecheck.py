@@ -10372,6 +10372,48 @@ class TypeChecker:
                 )
                 return self.typing.node_type.get(call.nodeid)
 
+        # Diagnostic: `return` (modelled as a control-flow call) has no
+        # user-declared parameters. The flat `return X args:` shape is
+        # reserved for return-statement argument shapes the typechecker
+        # explicitly recognises: type-construction shorthand
+        # (`return Counter value: start`) for Record/Class/Variant types,
+        # and the `Type.create` / `meta.create` dotted-path forms above.
+        # Anything else with trailing named args is the user trying to
+        # make a call in return position without parens. Reject with a
+        # targeted message and suggest the paren form -- same idiom as
+        # union construction (`return (OpenResult.ok rr.take)`
+        # in src/zvfs.z).
+        if call.arguments and any(a.name is not None for a in call.arguments[1:]):
+            arg0 = call.arguments[0].valtype
+            is_type_construction = False
+            if arg0.nodetype == NodeType.ATOMID:
+                type_ref = self._resolve_name(cast(zast.AtomId, arg0).name)
+                if type_ref is not None and type_ref.typetype in (
+                    ZTypeType.RECORD,
+                    ZTypeType.CLASS,
+                    ZTypeType.VARIANT,
+                ):
+                    is_type_construction = True
+            elif arg0.nodetype == NodeType.DOTTEDPATH:
+                dp = cast(zast.DottedPath, arg0)
+                # `<X>.create` (Type.create or meta.create) shorthand;
+                # mirrors the existing checks at lines 10315 + 10348.
+                # fmt: off
+                if dp.child.name == "create" and dp.parent.nodetype == NodeType.ATOMID:  # noqa: E501  ztc-string-compare-ok: see lines 10315 + 10348
+                    is_type_construction = True
+                # fmt: on
+            if not is_type_construction:
+                first_named = next(a for a in call.arguments[1:] if a.name is not None)
+                self._error(
+                    f"return doesn't accept named argument "
+                    f"'{first_named.name}'. To pass arguments to a call "
+                    f"in return position, wrap the call in parens: "
+                    f"`return (X arg: val ...)`.",
+                    loc=first_named.start,
+                    err=ERR.CALLERROR,
+                )
+                return self._resolve_name("never") or self.t_null
+
         # type-check the return expression (first argument)
         ret_type = None
         inline_borrow_src: Optional[Tuple[str, ...]] = None
