@@ -85,10 +85,11 @@ OpenResult: union {
 # sentinel returned by walk when no walk is possible.
 
 ZVfsProvider: protocol {
-    walk: function {:this name: StringView parent: u32} out u32
-    open: function {:this item: u32} out OpenResult
-    stat: function {:this item: u32} out nodekind
-    path: function {:this item: u32} out String
+    walk:    function {:this name: StringView parent: u32} out u32
+    open:    function {:this item: u32} out OpenResult
+    stat:    function {:this item: u32} out nodekind
+    path:    function {:this item: u32} out String
+    addFile: function {:this fpath: String.take content: String.take}
 }
 
 # NullProvider -- the stateless default. walk always returns
@@ -120,6 +121,9 @@ NullProvider: class {
     path: function {:this item: u32} out String is {
         return "[NULL]".string
     }
+    addFile: function {:this fpath: String.take content: String.take} is {
+        panic msg: "NullProvider has no file storage"
+    }
 }
 
 # ProviderBox -- one-field wrapper around an owned ZVfsProvider.
@@ -146,6 +150,147 @@ ProviderTable: class {
         idx: this.providers.length.u32
         this.providers.append from: box.take
         return idx
+    }
+    registerString: function {:this} out u32 is {
+        sp: StringProvider nodes: (List of: StringNode) children: (Map key: String value: u32)
+        root: StringNode path: "".string kind: nodekind.dir content: "".string
+        sp.nodes.append from: root.take
+        prov: ZVfsProvider.create from: sp.take
+        box: ProviderBox p: prov
+        idx: this.providers.length.u32
+        this.providers.append from: box.take
+        return idx
+    }
+}
+
+# StringNode -- one node in StringProvider's in-memory tree.
+# `path` is the full path (e.g. "/a/b.txt"); `kind` discriminates
+# file / dir / notfound; `content` is empty for dir / notfound.
+# Mirrors Python's `(path, type, content)` tuple at zvfs.py:719.
+
+StringNode: class {
+    path:    String
+    kind:    nodekind
+    content: String
+}
+
+# StringProvider -- in-memory file store. `nodes` is the flat node
+# table (NodeID = list index); `children` maps "<parentid>:<name>"
+# to the child NodeID (zerolang has no tuple type, so the composite
+# key is encoded as a string). Mirrors src/zvfs.py:710-770.
+
+StringProvider: class {
+    nodes:    (List of: StringNode)
+    children: (Map key: String value: u32)
+} as {
+    :ZVfsProvider
+
+    # Internal: append a node, return its assigned id.
+    appendNode: function {:this fpath: String.take k: nodekind c: String.take} out u32 is {
+        idx: this.nodes.length.u32
+        n: StringNode path: fpath.take kind: k content: c.take
+        this.nodes.append from: n.take
+        return idx
+    }
+
+    # Internal: record a parent->child edge in the children map.
+    # Builds the composite "<parentid>:<name>" key directly.
+    addChild: function {:this parentid: u32 name: StringView childid: u32.take} is {
+        key: "\{parentid}:\{name}".string
+        this.children.set key: key.take value: childid
+    }
+
+    walk: function {:this name: StringView parent: u32} out u32 is {
+        key: "\{parent}:\{name}".string
+        r: this.children.get key: key.copy
+        match (
+            r
+        ) case some then {
+            return r
+        } case none then {
+            # mirror Python: append a NOTFOUND node, record the
+            # edge, return the new id.
+            parent_node: this.nodes.get i: parent.u64
+            childpath: "\{parent_node.path}/\{name}".string
+            empty: "".string
+            newid: this.appendNode fpath: childpath.take k: nodekind.notfound c: empty.take
+            this.addChild parentid: parent name: name childid: newid.u32
+            return newid
+        }
+    }
+
+    open: function {:this item: u32} out OpenResult is {
+        n: this.nodes.get i: item.u64
+        match (
+            n.kind
+        ) case file then {
+            c: n.content.copy
+            return (OpenResult.ok c.take)
+        } case dir then {
+            e: IoError.other "is a directory".string
+            return (OpenResult.err e.take)
+        } case notfound then {
+            e: IoError.notfound
+            return (OpenResult.err e.take)
+        }
+    }
+
+    stat: function {:this item: u32} out nodekind is {
+        n: this.nodes.get i: item.u64
+        return n.kind
+    }
+
+    path: function {:this item: u32} out String is {
+        n: this.nodes.get i: item.u64
+        return n.path.copy
+    }
+
+    # addFile -- walk the path components, creating intermediate
+    # DIR nodes as needed, then create a FILE leaf with the
+    # content. Mirrors Python's StringProvider.__init__ loop.
+    # `fpath` shapes accepted: "/a/b.txt" splits to ["a", "b.txt"]
+    # (leading "/" produces an empty leading piece, ignored). A
+    # path of "/" or "" is rejected (no file to attach to).
+    addFile: function {:this fpath: String.take content: String.take} is {
+        sv: fpath.stringview
+        currentid: 0.u32
+        # iterate by re-splitting and counting non-empty pieces
+        # so we know which one is the last (file vs intermediate).
+        total: 0.u64
+        with it: (sv.split sep: "/") do for piece: it loop {
+            if piece.length > 0 then {
+                total = total + 1.u64
+            }
+        }
+        if total == 0.u64 then panic msg: "addFile: empty path"
+        seen: 0.u64
+        with it2: (sv.split sep: "/") do for piece: it2 loop {
+            if piece.length > 0 then {
+                seen = seen + 1.u64
+                pname: piece.string
+                key: "\{currentid}:\{piece}".string
+                r: this.children.get key: key.copy
+                match (
+                    r
+                ) case some then {
+                    currentid = r
+                } case none then {
+                    parent_node: this.nodes.get i: currentid.u64
+                    childpath: "\{parent_node.path}/\{piece}".string
+                    if seen == total then {
+                        c: content.copy
+                        newid: this.appendNode fpath: childpath.take k: nodekind.file c: c.take
+                        this.addChild parentid: currentid name: piece childid: newid.u32
+                        currentid = newid
+                    } else {
+                        empty: "".string
+                        newid: this.appendNode fpath: childpath.take k: nodekind.dir c: empty.take
+                        this.addChild parentid: currentid name: piece childid: newid.u32
+                        currentid = newid
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -289,6 +434,11 @@ dispatchProvider: function {tokens: (List of: String) providers: ProviderTable} 
         print "\{idx}"
         return
     }
+    if kind == "string" then {
+        idx: providers.registerString
+        print "\{idx}"
+        return
+    }
     panic msg: "unknown provider kind"
 }
 
@@ -341,6 +491,69 @@ dispatchPath: function {tokens: (List of: String) providers: ProviderTable} is {
     print s
 }
 
+# Verb: addFile <providerid> <path> <content>. Calls provider.addFile.
+# Path may include "/" for tree-building (StringProvider only).
+# NullProvider panics on addFile.
+
+dispatchAddFile: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 4 then panic msg: "addFile expects 3 args"
+    pid: parseU32at tokens: tokens i: 1
+    fpath_str: tokens.get i: 2
+    content_str: tokens.get i: 3
+    box: providers.providers.get i: pid.u64
+    # `.copy` to materialise a fresh owned String -- `tokens.get`
+    # returns a borrowed view aliasing the list's heap buffer, so a
+    # `.take` straight from there would alias-then-free the list's
+    # entry. addFile takes ownership of fresh Strings.
+    fpath: fpath_str.copy
+    content: content_str.copy
+    box.p.addFile fpath: fpath.take content: content.take
+}
+
+# Verb: open <providerid> <itemid>. Calls provider.open and prints
+# either "ok: <content>" or "err: <ioerror-tag>".
+
+dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic msg: "open expects 2 args"
+    pid: parseU32at tokens: tokens i: 1
+    item: parseU32at tokens: tokens i: 2
+    box: providers.providers.get i: pid.u64
+    r: box.p.open item: item
+    match (
+        r
+    ) case ok then {
+        print "ok: \{r}"
+    } case err then {
+        match (
+            r
+        ) case notfound then {
+            print "err: notfound"
+        } case permissiondenied then {
+            print "err: permissiondenied"
+        } case interrupted then {
+            print "err: interrupted"
+        } case invalidpath then {
+            print "err: invalidpath"
+        } case eof then {
+            print "err: eof"
+        } case badencoding then {
+            print "err: badencoding"
+        } case exists then {
+            print "err: exists"
+        } case isdir then {
+            print "err: isdir"
+        } case notdir then {
+            print "err: notdir"
+        } case nospace then {
+            print "err: nospace"
+        } case other then {
+            print "err: other"
+        }
+    }
+}
+
 dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable} is {
     tokens: tokenizeLine line: line
     if tokens.length == 0 then return
@@ -368,6 +581,14 @@ dispatchLine: function {line: StringView table: DentryTable providers: ProviderT
     }
     if verb == "path" then {
         dispatchPath tokens: tokens providers: providers
+        return
+    }
+    if verb == "addFile" then {
+        dispatchAddFile tokens: tokens providers: providers
+        return
+    }
+    if verb == "open" then {
+        dispatchOpen tokens: tokens providers: providers
         return
     }
     panic msg: "unknown verb"
