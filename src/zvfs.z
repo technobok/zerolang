@@ -65,6 +65,90 @@ DentryTable: class {
     }
 }
 
+# Open() result. Domain-specific non-generic union; the generic
+# (Result t: TextReader e: IoError) declared in a user protocol
+# is unprecedented in the tree and was deliberately sidestepped
+# in PR 3 to minimise compiler surface. Promote to generic Result
+# if a later slice surfaces a real need.
+
+OpenResult: union {
+    # `ok` is `String` as a placeholder for PR 3.
+    # PR 4 may promote to `TextReader` once the Provider
+    # implementations need an actual stream type.
+    ok:  String
+    err: IoError
+}
+
+# ZVfsProvider -- the four-method abstract protocol every provider
+# implementation satisfies. Mirrors `class ZVfsProvider(ABC)` at
+# src/zvfs.py:180-226. NodeID(1) is the conventional "NOTFOUND"
+# sentinel returned by walk when no walk is possible.
+
+ZVfsProvider: protocol {
+    walk: function {:this name: StringView parent: u32} out u32
+    open: function {:this item: u32} out OpenResult
+    stat: function {:this item: u32} out nodekind
+    path: function {:this item: u32} out String
+}
+
+# NullProvider -- the stateless default. walk always returns
+# NOTFOUND, open always errors, stat returns dir for the root
+# item / notfound elsewhere, path returns the static [NULL]
+# marker. Mirrors src/zvfs.py:558-613.
+#
+# `_unused: bool` is a placeholder field. Zero-field non-generic
+# classes are untested in the tree; the dummy keeps the shape
+# in known-good territory.
+
+NullProvider: class {
+    _unused: bool
+} as {
+    :ZVfsProvider
+    walk: function {:this name: StringView parent: u32} out u32 is {
+        return 1.u32
+    }
+    open: function {:this item: u32} out OpenResult is {
+        e: IoError.other "NullProvider cannot open for read".string
+        return (OpenResult.err e.take)
+    }
+    stat: function {:this item: u32} out nodekind is {
+        if item == 0.u32 then {
+            return nodekind.dir
+        }
+        return nodekind.notfound
+    }
+    path: function {:this item: u32} out String is {
+        return "[NULL]".string
+    }
+}
+
+# ProviderBox -- one-field wrapper around an owned ZVfsProvider.
+# Indirection lets us store providers in a list -- (List of:
+# <Protocol>) directly is untested in the tree; (List of:
+# <Class>) is known-good. ~5 LOC of overhead, lossless.
+
+ProviderBox: class {
+    p: ZVfsProvider
+}
+
+# ProviderTable -- registry of all live providers, indexed by u32.
+# registerNull constructs + appends a NullProvider, returns its
+# assigned id. get returns a borrow of the provider at id, scoped
+# to the caller's expression.
+
+ProviderTable: class {
+    providers: (List of: ProviderBox)
+} as {
+    registerNull: function {:this} out u32 is {
+        np: NullProvider _unused: false
+        prov: ZVfsProvider.create from: np.take
+        box: ProviderBox p: prov
+        idx: this.providers.length.u32
+        this.providers.append from: box.take
+        return idx
+    }
+}
+
 # Print "<id>: <arm-name>" for a single entry. Used by the `dump`
 # verb; mirrors the lexer dumper's `ttname` pattern.
 
@@ -191,7 +275,73 @@ dispatchDump: function {tokens: (List of: String) table: DentryTable} is {
     printEntry id: id e: e
 }
 
-dispatchLine: function {line: StringView table: DentryTable} is {
+# Verb: provider <kind>. Constructs a provider of the named kind,
+# registers it in the provider table, prints the assigned id. PR 3
+# supports `null` only; PR 4/5 add `string` / `fs`.
+
+dispatchProvider: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 2 then panic msg: "provider verb expects a kind name"
+    kind_str: tokens.get i: 1
+    kind: kind_str.stringview
+    if kind == "null" then {
+        idx: providers.registerNull
+        print "\{idx}"
+        return
+    }
+    panic msg: "unknown provider kind"
+}
+
+# Verb: walk <providerid> <name> <parentid>. Looks up provider,
+# calls its walk method, prints the returned NodeID.
+
+dispatchWalk: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 4 then panic msg: "walk expects 3 args"
+    pid: parseU32at tokens: tokens i: 1
+    name_str: tokens.get i: 2
+    name_sv: name_str.stringview
+    parent: parseU32at tokens: tokens i: 3
+    box: providers.providers.get i: pid.u64
+    nid: box.p.walk name: name_sv parent: parent
+    print "\{nid}"
+}
+
+# Verb: stat <providerid> <itemid>. Looks up provider, calls stat,
+# prints the arm name (dir / file / notfound).
+
+dispatchStat: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic msg: "stat expects 2 args"
+    pid: parseU32at tokens: tokens i: 1
+    item: parseU32at tokens: tokens i: 2
+    box: providers.providers.get i: pid.u64
+    k: box.p.stat item: item
+    match (
+        k
+    ) case dir then {
+        print "dir"
+    } case file then {
+        print "file"
+    } case notfound then {
+        print "notfound"
+    }
+}
+
+# Verb: path <providerid> <itemid>. Looks up provider, calls path,
+# prints the returned String.
+
+dispatchPath: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic msg: "path expects 2 args"
+    pid: parseU32at tokens: tokens i: 1
+    item: parseU32at tokens: tokens i: 2
+    box: providers.providers.get i: pid.u64
+    s: box.p.path item: item
+    print s
+}
+
+dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable} is {
     tokens: tokenizeLine line: line
     if tokens.length == 0 then return
     verb_str: tokens.get i: 0
@@ -204,10 +354,26 @@ dispatchLine: function {line: StringView table: DentryTable} is {
         dispatchDump tokens: tokens table: table
         return
     }
+    if verb == "provider" then {
+        dispatchProvider tokens: tokens providers: providers
+        return
+    }
+    if verb == "walk" then {
+        dispatchWalk tokens: tokens providers: providers
+        return
+    }
+    if verb == "stat" then {
+        dispatchStat tokens: tokens providers: providers
+        return
+    }
+    if verb == "path" then {
+        dispatchPath tokens: tokens providers: providers
+        return
+    }
     panic msg: "unknown verb"
 }
 
-runScript: function {text: String table: DentryTable} is {
+runScript: function {text: String table: DentryTable providers: ProviderTable} is {
     sv: text.stringview
     with li: sv.lines do for line: li loop {
         trimmed: line.trim
@@ -217,7 +383,7 @@ runScript: function {text: String table: DentryTable} is {
                 fb_opt
             ) case some then {
                 if fb_opt != 35.u8 then {
-                    dispatchLine line: trimmed table: table
+                    dispatchLine line: trimmed table: table providers: providers
                 }
             } case none then {}
         }
@@ -236,7 +402,8 @@ main: function is {
         r
     ) case ok then {
         table: DentryTable entries: (List of: dentry)
-        runScript text: r.take table: table
+        providers: ProviderTable providers: (List of: ProviderBox)
+        runScript text: r.take table: table providers: providers
     } case err then {
         io.eprintln "zvfs: could not read script file"
         os.exit code: 1.i32
