@@ -47,6 +47,17 @@ mountdata: record {
     has_second: bool
 }
 
+# mountinfo -- value-type carrier used by ZVfs.walk to drop the
+# entrytable borrow before recursing into the mount's first/second
+# arms. `is_mount` distinguishes the mount-vs-non-mount case at the
+# helper boundary; the rest mirrors mountdata.
+mountinfo: record {
+    is_mount:   bool
+    first:      u32
+    second:     u32
+    has_second: bool
+}
+
 dentry: variant {
     root: null
     notfound: notfounddata
@@ -554,6 +565,26 @@ ZVfs: class {
             hit: cached
             return hit
         } case none then {}
+        # Mount-arm fast path: if parent is a UNION-mount dentry,
+        # recurse into `first`, then `second` if first returned a
+        # notfound dentry AND has_second is true. Extracted via
+        # `_extractMount` so the entrytable borrow is released
+        # before we recurse (recursive `this.walk` will WRITE to
+        # entrytable on a cache miss).
+        mi: this._extractMount dentryid: parent
+        if mi.is_mount then {
+            r1: this.walk parent: mi.first name: name
+            if mi.has_second then {
+                r1_nf: this._dentryIsNotFound dentryid: r1
+                if r1_nf then {
+                    r2: this.walk parent: mi.second name: name
+                    this.walk_cache.set key: cachekey.take value: r2.u32
+                    return r2
+                }
+            }
+            this.walk_cache.set key: cachekey.take value: r1.u32
+            return r1
+        }
         # extract parent's provider+nodeid
         pe: this.entrytable.entries.get i: parent.u64
         ppid: 0.u32
@@ -572,7 +603,7 @@ ZVfs: class {
             ppid = pe.providerid
             pnid = pe.nodeid
         } case mount then {
-            panic msg: "ZVfs.walk: mount arms not yet supported (PR 6c)"
+            panic msg: "ZVfs.walk: unreachable (mount handled above)"
         }
         # ask provider
         box: this.providers.get i: ppid.u64
@@ -707,6 +738,41 @@ ZVfs: class {
         }
     }
 
+    # _extractMount -- read the dentry at `dentryid`, return a value-type
+    # mountinfo carrier. For mount arms: is_mount=true + first/second/
+    # has_second fields. For other arms: is_mount=false. Used by walk to
+    # release the entrytable borrow before recursing into the mount arms.
+    _extractMount: function {:this dentryid: u32} out mountinfo is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        match (
+            e
+        ) case mount then {
+            return mountinfo is_mount: true first: e.first second: e.second has_second: e.has_second
+        } case root then {
+        } case notfound then {
+        } case file then {
+        } case directory then {
+        }
+        return mountinfo is_mount: false first: 0.u32 second: 0.u32 has_second: false
+    }
+
+    # _dentryIsNotFound -- true iff the dentry at `dentryid` is the
+    # notfound arm. Used by walk to decide whether to fall through from
+    # the first union arm to the second on a mount.
+    _dentryIsNotFound: function {:this dentryid: u32} out bool is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        match (
+            e
+        ) case notfound then {
+            return true
+        } case root then {
+        } case file then {
+        } case directory then {
+        } case mount then {
+        }
+        return false
+    }
+
     # open -- match on the dentry arm; file delegates to the underlying
     # provider's open. Non-file arms construct the appropriate IoError
     # (directory -> isdir, notfound -> notfound, root -> "[NULL]", mount
@@ -763,6 +829,55 @@ ZVfs: class {
         } case err then {
             return (Option.none String)
         }
+    }
+
+    # bindRoot -- replace this.rootid with a fresh mount dentry over
+    # the old root. INSTEAD overlays exclusively (no second arm); BEFORE
+    # / AFTER preserve the old root as the union's second / first arm
+    # respectively. Mirrors zvfs.py:412-433 (the name=None bind path).
+    bindRoot: function {:this newid: u32 kind: bindkind} out u32 is {
+        old: this.rootid
+        md: mountdata parentid: old first: 0.u32 second: 0.u32 has_second: false
+        match (
+            kind
+        ) case instead then {
+            md = mountdata parentid: old first: newid second: 0.u32 has_second: false
+        } case before then {
+            md = mountdata parentid: old first: newid second: old has_second: true
+        } case after then {
+            md = mountdata parentid: old first: old second: newid has_second: true
+        }
+        new_dentry: dentry.mount md
+        new_id: this.entrytable.append entry: new_dentry
+        this.file_names.append from: "".string
+        this.rootid = new_id
+        return new_id
+    }
+
+    # bind -- mount `newid` at parent/name, replacing whatever was
+    # walked there. INSTEAD discards the old entry; BEFORE / AFTER
+    # layer the new mount as the union's first / second arm
+    # respectively. The walk_cache entry for `<parentid>:<name>` is
+    # overwritten so future walks route to the new mount (mirrors
+    # Python's `parent.cache[name] = newunionid` at zvfs.py:461).
+    bind: function {:this parentid: u32 name: StringView newid: u32 kind: bindkind} out u32 is {
+        old: this.walk parent: parentid name: name
+        md: mountdata parentid: parentid first: 0.u32 second: 0.u32 has_second: false
+        match (
+            kind
+        ) case instead then {
+            md = mountdata parentid: parentid first: newid second: 0.u32 has_second: false
+        } case before then {
+            md = mountdata parentid: parentid first: newid second: old has_second: true
+        } case after then {
+            md = mountdata parentid: parentid first: old second: newid has_second: true
+        }
+        new_dentry: dentry.mount md
+        new_id: this.entrytable.append entry: new_dentry
+        this.file_names.append from: name.string
+        cachekey: "\{parentid}:\{name}".string
+        this.walk_cache.set key: cachekey.take value: new_id.u32
+        return new_id
     }
 }
 
@@ -1165,6 +1280,47 @@ dispatchVfs: function {tokens: (List of: String) vfs: ZVfs} is {
         } case none then {
             print "none"
         }
+        return
+    }
+    if sub == "bindroot" then {
+        if n != 4 then panic msg: "vfs bindroot expects 2 args (newid kind)"
+        newid: parseU32at tokens: tokens i: 2
+        kind_str: tokens.get i: 3
+        kind_sv: kind_str.stringview
+        kind: bindkind.instead
+        if kind_sv == "instead" then {
+            kind = bindkind.instead
+        } else if kind_sv == "before" then {
+            kind = bindkind.before
+        } else if kind_sv == "after" then {
+            kind = bindkind.after
+        } else {
+            panic msg: "vfs bindroot: unknown kind (instead/before/after)"
+        }
+        did: vfs.bindRoot newid: newid kind: kind
+        print "\{did}"
+        return
+    }
+    if sub == "bind" then {
+        if n != 6 then panic msg: "vfs bind expects 4 args (parentid name newid kind)"
+        pid: parseU32at tokens: tokens i: 2
+        name_str: tokens.get i: 3
+        name_sv: name_str.stringview
+        newid: parseU32at tokens: tokens i: 4
+        kind_str: tokens.get i: 5
+        kind_sv: kind_str.stringview
+        kind: bindkind.instead
+        if kind_sv == "instead" then {
+            kind = bindkind.instead
+        } else if kind_sv == "before" then {
+            kind = bindkind.before
+        } else if kind_sv == "after" then {
+            kind = bindkind.after
+        } else {
+            panic msg: "vfs bind: unknown kind (instead/before/after)"
+        }
+        did: vfs.bind parentid: pid name: name_sv newid: newid kind: kind
+        print "\{did}"
         return
     }
     panic msg: "vfs: unknown subverb"
