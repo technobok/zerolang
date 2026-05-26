@@ -1286,7 +1286,14 @@ def node_children(node: "Node") -> "typing.List[Node]":
     if nt == NodeType.ATOMSTRING:
         out.extend(cast(AtomString, node).stringparts)
         return out
-    # ATOMID / LABELVALUE / STRINGCHUNK / ERROR have no Node children
+    if nt in (
+        NodeType.ATOMID,
+        NodeType.LABELVALUE,
+        NodeType.STRINGCHUNK,
+        NodeType.ERROR,
+    ):
+        # leaf nodes — no Node children
+        return out
     return out
 
 
