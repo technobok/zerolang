@@ -8731,6 +8731,21 @@ class CEmitter:
         if child == "private":
             return self._emit_path_value(path.parent)
 
+        # Null-arm union/variant construction (no-args form like
+        # `io.IoError.notfound` or `io.openmode.read`). The
+        # typechecker stamps `dp_parent_tagged_type` on any dotted
+        # path whose parent resolves to a tagged type, regardless of
+        # whether the parent itself is an ATOMID (2-segment) or a
+        # DOTTEDPATH (3-segment cross-unit). Trusting the stamp here
+        # is the analogue of the UNION_CREATE early-return in
+        # `_is_union_construction` for the call-with-args path.
+        parent_tagged = self.typing.dp_parent_tagged_type.get(path.nodeid)
+        if parent_tagged is not None:
+            if parent_tagged.typetype == ZTypeType.UNION:
+                return self._emit_union_null_construction(parent_tagged.name, child)
+            if parent_tagged.typetype == ZTypeType.VARIANT:
+                return self._emit_variant_null_construction(parent_tagged.name, child)
+
         if path.parent.nodetype == NodeType.ATOMID:
             pname = cast(zast.AtomId, path.parent).name
             # numeric dotted path: 0.u32, 42.i8, 0xff.u16
@@ -9684,6 +9699,19 @@ class CEmitter:
         # union construction; defer to the standard call emission path.
         if _call_kind == zast.CallKind.REGULAR:
             return False
+        # Trust the typechecker's UNION_CREATE stamp, but only when the
+        # call's stamped type IS a union — UNION_CREATE is also set on
+        # VARIANT subtype construction (typecheck shares the dispatch
+        # branch at ztypecheck.py:8390-8416). The fallback detection
+        # below only handles 2-segment (ATOMID-parented) dotted paths;
+        # 3-segment paths like `io.IoError.other` rely on this stamp
+        # because their parent is itself a DOTTEDPATH.
+        if (
+            _call_kind == zast.CallKind.UNION_CREATE
+            and _call_ztype is not None
+            and _call_ztype.typetype == ZTypeType.UNION
+        ):
+            return True
         # check type annotation for monomorphized union types
         call_type = _call_ztype
         if (
@@ -9725,21 +9753,21 @@ class CEmitter:
         indent = self._indent()
         tmp = self._temp_name("c")
 
-        if (
-            call.callable.nodetype == NodeType.DOTTEDPATH
-            and cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
-        ):
+        # subtype name comes from the last segment of the dotted path
+        # — same whether the callable is 2-segment (`U.arm`) or
+        # 3-segment (`unit.U.arm`).
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
             subtype_name = cast(zast.DottedPath, call.callable).child.name
         else:
             # bare union name — shouldn't happen for construction but handle gracefully
             return "NULL"
 
-        # check for monomorphized union type (from type annotation)
-        if (
-            call_type
-            and call_type.typetype == ZTypeType.UNION
-            and call_type.generic_origin
-        ):
+        # Prefer the typechecker's stamped union type for the union
+        # name (works for monomorphized generics AND for 3-segment
+        # cross-unit construction like `io.IoError.other`). Fall back
+        # to walking the AST for legacy / synth call paths where the
+        # type annotation may be missing.
+        if call_type and call_type.typetype == ZTypeType.UNION:
             union_name = call_type.name
         elif cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
             union_name = cast(
@@ -9998,6 +10026,17 @@ class CEmitter:
         # emission path (same guard as _is_union_construction).
         if _call_kind == zast.CallKind.REGULAR:
             return False
+        # Trust the typechecker's UNION_CREATE stamp, gated on the
+        # call's stamped type being a variant (UNION_CREATE is shared
+        # between union and variant subtype construction). Handles
+        # 3-segment cross-unit construction like `io.openmode.read`
+        # when called with payload args.
+        if (
+            _call_kind == zast.CallKind.UNION_CREATE
+            and _call_ztype is not None
+            and _call_ztype.typetype == ZTypeType.VARIANT
+        ):
+            return True
         # check type annotation for monomorphized variant types
         call_type = _call_ztype
         if (

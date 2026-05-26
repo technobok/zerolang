@@ -3159,6 +3159,68 @@ class TestEmitterUnions:
         assert "free(u);" not in csource
 
 
+class TestEmitterCrossUnitUnionConstruction:
+    """Regression for the qualified-construction emit bug surfaced
+    during VFS PR 3. Calling `io.IoError.other "msg".string` used to
+    typecheck cleanly but emit `z_io_IoError_other(...)` — an
+    undeclared symbol — because the emitter's `_is_union_construction`
+    and `_emit_union_construction` only handled 2-segment dotted paths
+    (`U.arm`), missing 3-segment paths (`unit.U.arm`). The fix trusts
+    the typechecker's UNION_CREATE stamp + reads the union name from
+    the call's stamped ZType."""
+
+    def test_qualified_union_construction_emits_struct_init(self):
+        csource = emit_source(
+            'main: function is {\n  e: io.IoError.other "msg".string\n  print "done"\n}'
+        )
+        # No bogus function call.
+        assert "z_io_IoError_other(" not in csource
+        # Proper struct-init: tag + payload data assignment.
+        assert "Z_IOERROR_TAG_OTHER" in csource
+        assert ".tag = Z_IOERROR_TAG_OTHER" in csource
+        # End-to-end: gcc accepts and runtime is clean.
+        assert compile_and_run(csource).strip() == "done"
+
+    def test_unqualified_union_construction_still_works(self):
+        """Regression: the 2-segment form (`IoError.other`) keeps
+        working post-fix. IoError is re-exported through core.z so
+        bare access resolves; the fix must not break this path."""
+        csource = emit_source(
+            'main: function is {\n  e: IoError.other "msg".string\n  print "done"\n}'
+        )
+        assert "z_io_IoError_other(" not in csource
+        assert ".tag = Z_IOERROR_TAG_OTHER" in csource
+        assert compile_and_run(csource).strip() == "done"
+
+    def test_qualified_variant_construction_emits_struct_init(self):
+        """Variants share the construction code path with unions; the
+        same fix should resolve `io.openmode.read` etc. openmode is
+        a null-arm-only variant so this also exercises the no-payload
+        branch."""
+        csource = emit_source(
+            'main: function is {\n  m: io.openmode.read\n  print "ok"\n}'
+        )
+        assert "z_io_openmode_read(" not in csource
+        assert "Z_OPENMODE_TAG_READ" in csource
+        assert compile_and_run(csource).strip() == "ok"
+
+    def test_qualified_null_arm_union_construction_emits_struct_init(self):
+        """3-segment null-arm union construction (no payload, no
+        args). Goes through `_emit_dotted_path_value` (not the call
+        path that the other tests exercise), so it's a separate fix
+        site that needs the same `dp_parent_tagged_type` stamp
+        trust."""
+        csource = emit_source(
+            'main: function is {\n  e: io.IoError.notfound\n  print "done"\n}'
+        )
+        # No bogus dotted-path reference and no bogus function call.
+        assert "io.IoError" not in csource.replace("/*", "")
+        assert "z_io_IoError" not in csource
+        assert "Z_IOERROR_TAG_NOTFOUND" in csource
+        assert ".tag = Z_IOERROR_TAG_NOTFOUND" in csource
+        assert compile_and_run(csource).strip() == "done"
+
+
 class TestEmitterUnionCustomTag:
     """Tests for union custom tag C emission (Phase 18)."""
 
