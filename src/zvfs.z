@@ -706,6 +706,64 @@ ZVfs: class {
             return s
         }
     }
+
+    # open -- match on the dentry arm; file delegates to the underlying
+    # provider's open. Non-file arms construct the appropriate IoError
+    # (directory -> isdir, notfound -> notfound, root -> "[NULL]", mount
+    # -> panic until PR 6c lands UNION-aware walk). Mirrors zvfs.py:513-528
+    # but returns OpenResult directly rather than wrapping in a
+    # ZVfsOpenFile (the wrapper is needless in zerolang: OpenResult is
+    # the value-returned result type, no with-block context manager).
+    open: function {:this dentryid: u32} out OpenResult is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        match (
+            e
+        ) case root then {
+            ie: IoError.other "[NULL]".string
+            return (OpenResult.err ie.take)
+        } case notfound then {
+            ie: IoError.notfound
+            return (OpenResult.err ie.take)
+        } case directory then {
+            ie: IoError.other "is a directory".string
+            return (OpenResult.err ie.take)
+        } case mount then {
+            panic msg: "ZVfs.open: mount arms not yet supported (PR 6c)"
+        } case file then {
+            pid: e.providerid
+            nid: e.nodeid
+            box: this.providers.get i: pid.u64
+            return (box.p.open item: nid)
+        }
+    }
+
+    # getline -- open the file, collect its lines into a List<String>,
+    # return the one at `lineno` as Option.some. Out-of-range index or
+    # open-failure returns Option.none. Mirrors zvfs.py:530-555.
+    # Whole-file read is intentional for the bootstrap port (VFS-mapped
+    # files are tiny); streaming readline awaits the io stdlib's
+    # TextReader.
+    getline: function {:this dentryid: u32 lineno: u64} out (Option t: String) is {
+        r: this.open dentryid: dentryid
+        match (
+            r
+        ) case ok then {
+            s: r.copy
+            sv: s.stringview
+            all_lines: (List of: String)
+            with li: sv.lines do for line: li loop {
+                all_lines.append from: line.string
+            }
+            if lineno < all_lines.length then {
+                ln: all_lines.get i: lineno
+                result: ln.copy
+                return (Option.some result.take)
+            }
+            return (Option.none String)
+        } case err then {
+            return (Option.none String)
+        }
+    }
 }
 
 
@@ -951,16 +1009,13 @@ dispatchAddFile: function {tokens: (List of: String) providers: ProviderTable} i
     box.p.addFile fpath: fpath.take content: content.take
 }
 
-# Verb: open <providerid> <itemid>. Calls provider.open and prints
-# either "ok: <content>" or "err: <ioerror-tag>".
+# printOpenResult -- format an OpenResult as one line on stdout:
+#   "ok: <content>"    for the ok arm (content interpolated)
+#   "err: <arm-name>"  for the err arm (13 IoError arms enumerated)
+# Used by both the provider-level `dispatchOpen` and the engine-level
+# `vfs open` subverb in dispatchVfs. Consumes `r`.
 
-dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
-    n: tokens.length
-    if n != 3 then panic msg: "open expects 2 args"
-    pid: parseU32at tokens: tokens i: 1
-    item: parseU32at tokens: tokens i: 2
-    box: providers.providers.get i: pid.u64
-    r: box.p.open item: item
+printOpenResult: function {r: OpenResult.take} is {
     match (
         r
     ) case ok then {
@@ -992,6 +1047,19 @@ dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
             print "err: other"
         }
     }
+}
+
+# Verb: open <providerid> <itemid>. Calls provider.open and prints
+# either "ok: <content>" or "err: <ioerror-tag>".
+
+dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
+    n: tokens.length
+    if n != 3 then panic msg: "open expects 2 args"
+    pid: parseU32at tokens: tokens i: 1
+    item: parseU32at tokens: tokens i: 2
+    box: providers.providers.get i: pid.u64
+    r: box.p.open item: item
+    printOpenResult r: r.take
 }
 
 # Verb: vfs <subverb> [args...]. PR 6a subverbs:
@@ -1075,6 +1143,28 @@ dispatchVfs: function {tokens: (List of: String) vfs: ZVfs} is {
         did: parseU32at tokens: tokens i: 2
         s: vfs.pathfromprovider dentryid: did
         print s
+        return
+    }
+    if sub == "open" then {
+        if n != 3 then panic msg: "vfs open expects 1 arg (dentryid)"
+        did: parseU32at tokens: tokens i: 2
+        r: vfs.open dentryid: did
+        printOpenResult r: r.take
+        return
+    }
+    if sub == "getline" then {
+        if n != 4 then panic msg: "vfs getline expects 2 args (dentryid lineno)"
+        did: parseU32at tokens: tokens i: 2
+        ln_u32: parseU32at tokens: tokens i: 3
+        ln: ln_u32.u64
+        opt: vfs.getline dentryid: did lineno: ln
+        match (
+            opt
+        ) case some then {
+            print "some: \{opt}"
+        } case none then {
+            print "none"
+        }
         return
     }
     panic msg: "vfs: unknown subverb"
