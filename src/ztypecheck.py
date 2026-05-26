@@ -2437,23 +2437,8 @@ class TypeChecker:
                 st.is_valtype = True
             else:
                 st = self._resolve_typeref(cast(zast.Path, stripped_spath))
-                # reject non-valtypes (skip for generic params — checked at instantiation)
-                if st and st.typetype != ZTypeType.GENERIC_PARAM:
-                    if st.is_valtype is not None and not st.is_valtype:
-                        self._error(
-                            f"Variant '{name}' subtype '{sname}' must be a value type",
-                            loc=variant_defn.start,
-                        )
-                    elif st.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                        self._error(
-                            f"Variant '{name}' subtype '{sname}' must be a value type",
-                            loc=variant_defn.start,
-                        )
-                    elif st.subtype == ZSubType.STRING:
-                        self._error(
-                            f"Variant '{name}' subtype '{sname}' must be a value type",
-                            loc=variant_defn.start,
-                        )
+                # Reftype arms are rejected once, with the right caret, by
+                # _reject_valtype_reftype_fields at the end of this routine.
             if st:
                 self._set_child(vtype, sname, st)
             # variants are valtype-only; locked arms hold an external pointer
@@ -2506,9 +2491,11 @@ class TypeChecker:
             self._reject_valtype_reftype_fields(
                 name,
                 vtype,
-                set(variant_defn.is_paths().keys()),
+                {
+                    fname: fpath.start
+                    for fname, fpath in variant_defn.is_paths().items()
+                },
                 "variant",
-                variant_defn.start,
             )
             self._resolving.pop()
             return vtype
@@ -2566,9 +2553,8 @@ class TypeChecker:
         self._reject_valtype_reftype_fields(
             name,
             vtype,
-            set(variant_defn.is_paths().keys()),
+            {fname: fpath.start for fname, fpath in variant_defn.is_paths().items()},
             "variant",
-            variant_defn.start,
         )
         self._resolving.pop()
         return vtype
@@ -2914,7 +2900,10 @@ class TypeChecker:
             self._error("'private' cannot be redefined", loc=priv.start)
         _set_field_cleanup_metadata(self.typing, rtype)
         self._reject_valtype_reftype_fields(
-            name, rtype, set(rec.is_paths().keys()), "record", rec.start
+            name,
+            rtype,
+            {fname: fpath.start for fname, fpath in rec.is_paths().items()},
+            "record",
         )
         self._resolving.pop()
         return rtype
@@ -3029,27 +3018,32 @@ class TypeChecker:
         # CLASS — handled above).
         return None
 
+    _VALTYPE_REFTYPE_COUNTERPART = {
+        "record": "class",
+        "variant": "union",
+        "facet": "protocol",
+    }
+
     def _reject_valtype_reftype_fields(
         self,
         name: str,
         ztype: ZType,
-        is_field_names: "set[str]",
+        is_fields: "dict[str, Token]",
         kind: str,
-        start: Token,
     ) -> None:
         """Reject reftype IS-section fields on valtype aggregates
         (record / variant / facet). AS-section slots (protocol
         conformance projections, constants) are not part of the
         struct's owned storage and are excluded.
 
-        `is_field_names` is the set of child keys that correspond to
-        data fields (not function methods, not as-items). For records
-        this is `rec.is_paths().keys()`; for variants,
-        `variant_defn.is_paths().keys()`.
+        `is_fields` maps each field name to its source token, so the
+        diagnostic caret lands on the offending field instead of the
+        aggregate's start.
         """
         if ztype.is_native:
             return  # native system records (bool, i64, ...) opt out
-        for fname in is_field_names:
+        counterpart = self._VALTYPE_REFTYPE_COUNTERPART[kind]
+        for fname, ftoken in is_fields.items():
             ftype = self.typing.child_of(ztype, fname)
             if ftype is None:
                 continue
@@ -3060,11 +3054,12 @@ class TypeChecker:
                 self._error(
                     f"valtype {kind} '{name}' cannot hold a reftype field "
                     f"'{fname}': {reason}",
-                    loc=start,
+                    loc=ftoken,
                     err=ERR.TYPEERROR,
                     hint=(
-                        f"change '{name}' to a class, or use '(str to: N)' / "
-                        "'(array of: T to: N)' for a bounded-length valtype buffer"
+                        f"change '{name}' to a {counterpart}, or use "
+                        "'(str to: N)' / '(array of: T to: N)' for a "
+                        "bounded-length valtype buffer"
                     ),
                 )
 
@@ -3576,7 +3571,7 @@ class TypeChecker:
         _set_field_cleanup_metadata(self.typing, ftype)
         # Facets have specs (functions), not data fields — the reftype
         # check is a no-op but run it for parity.
-        self._reject_valtype_reftype_fields(name, ftype, set(), "facet", facet.start)
+        self._reject_valtype_reftype_fields(name, ftype, {}, "facet")
         self._resolving.pop()
         return ftype
 
@@ -6575,11 +6570,21 @@ class TypeChecker:
                                 + ", ".join(proto_members)
                             )
                         detail = f" ({'; '.join(parts)})" if parts else ""
+                        is_function = concrete_type.typetype == ZTypeType.FUNCTION
+                        kind_word = "Function" if is_function else "Type"
+                        hint = None
+                        if is_function:
+                            hint = (
+                                f"'{concrete_type.name}' is being passed as a "
+                                f"value, not invoked. Wrap the call in parens "
+                                f"to invoke it: `({concrete_type.name} <args>)`"
+                            )
                         self._error(
-                            f"Type '{concrete_type.name}' does not satisfy constraint "
-                            f"'{constraint.name}' for generic parameter "
-                            f"'{param_name}'{detail}",
+                            f"{kind_word} '{concrete_type.name}' does not "
+                            f"satisfy constraint '{constraint.name}' for "
+                            f"generic parameter '{param_name}'{detail}",
                             loc=call.start,
+                            hint=hint,
                         )
 
         # build mangled name

@@ -122,8 +122,9 @@ def errortomessage(err: "Error", vfs: zvfs.ZVfs, color: bool = False) -> str:
         # location line
         result.append(f" {blue}-->{reset} {path}:{loc.lineno}:{loc.colno}")
 
-        # source line with gutter
-        line = vfs.getline(loc.fsno, loc.lineno)
+        # source line with gutter. Tokens are 1-indexed (zlexer starts
+        # lineno at 1); vfs.getline takes a 0-indexed line offset.
+        line = vfs.getline(loc.fsno, loc.lineno - 1)
         if line:
             gutter = f"{blue}{loc.lineno:>4} |{reset}"
             empty_gutter = f"{blue}     |{reset}"

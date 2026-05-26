@@ -4528,6 +4528,57 @@ class TestValtypeReftypeEnforcement:
         )
         assert any("reftype" in e.msg for e in errors)
 
+    def test_record_reftype_caret_at_field(self):
+        """The diagnostic caret must point at the offending field, not
+        the first field of the record."""
+        # Field `s` lives on line 4 (1-indexed). Earlier fields are valid.
+        source = (
+            "r: record {\n"
+            "    a: i64\n"
+            "    b: i64\n"
+            "    s: String\n"
+            "}\n"
+            'main: function is { p: r a: 1 b: 2 s: "hi".string }'
+        )
+        errors = check_errors(source)
+        reftype_errors = [e for e in errors if "reftype" in e.msg and "'s'" in e.msg]
+        assert reftype_errors, (
+            f"Expected reftype error on 's'; got {[e.msg for e in errors]}"
+        )
+        assert reftype_errors[0].start.lineno == 4, (
+            f"Expected caret on line 4 (the 's: String' field); "
+            f"got line {reftype_errors[0].start.lineno}"
+        )
+
+    def test_variant_reftype_hint_says_union(self):
+        """For a variant holding a reftype arm, the hint should
+        suggest changing to a union — variant's reftype counterpart —
+        not a class."""
+        errors = check_errors(
+            "n: variant { a: (List of: i64) b: null }\n"
+            "main: function is { x: n.a (List of: i64) }"
+        )
+        reftype_errors = [e for e in errors if "reftype" in e.msg]
+        assert reftype_errors, f"Expected reftype error; got {[e.msg for e in errors]}"
+        hints = [e.hint for e in reftype_errors if e.hint]
+        assert any("to a union" in h for h in hints), (
+            f"Expected hint containing 'to a union'; got hints: {hints}"
+        )
+
+    def test_variant_no_duplicate_errors_for_reftype_arm(self):
+        """A variant holding a single reftype arm should fire exactly
+        one diagnostic, not the earlier 2-4 duplicates ('must be a
+        value type' + 'cannot hold a reftype field')."""
+        errors = check_errors(
+            "n: variant { a: (List of: i64) b: null }\n"
+            "main: function is { x: n.a (List of: i64) }"
+        )
+        reftype_errors = [e for e in errors if "reftype" in e.msg and "'a'" in e.msg]
+        assert len(reftype_errors) == 1, (
+            f"Expected exactly one reftype-arm error for arm 'a'; "
+            f"got {len(reftype_errors)}: {[e.msg for e in reftype_errors]}"
+        )
+
     def test_record_allows_primitive_fields(self):
         check_ok(
             "r: record { x: i64 y: f64 b: bool }\n"
@@ -5759,7 +5810,7 @@ class TestVariantTypeResolution:
         errors = check_errors(
             "myvar: variant { a: String\n b: null }\nmain: function is { x: myvar.b }"
         )
-        assert any("value type" in e.msg.lower() for e in errors)
+        assert any("reftype" in e.msg and "'a'" in e.msg for e in errors)
 
     def test_variant_rejects_union(self):
         """Variant subtypes that are unions (reftype) should be rejected."""
@@ -5768,7 +5819,7 @@ class TestVariantTypeResolution:
             "myvar: variant { a: MyUnion\n b: null }\n"
             "main: function is { x: myvar.b }"
         )
-        assert any("value type" in e.msg.lower() for e in errors)
+        assert any("reftype" in e.msg and "'a'" in e.msg for e in errors)
 
     def test_variant_allows_record(self):
         """Variant subtypes that are records (valtype) should be allowed."""
@@ -8162,6 +8213,29 @@ class TestGenerics:
             "main: function is { x: id 42 }"
         )
         assert any("does not satisfy constraint 'StringLike'" in e.msg for e in errors)
+
+    def test_generic_constraint_function_value_suggests_parens(self):
+        """Passing a bare function name where a StringLike is required
+        should be diagnosed as 'Function' (not 'Type') and the hint
+        should suggest wrapping the invocation in parens."""
+        errors = check_errors(
+            "greet: function {n: i64} out String is "
+            '{ return "hi".string }\n'
+            "main: function is { print greet n: 1 }"
+        )
+        constraint_errors = [
+            e for e in errors if "does not satisfy constraint" in e.msg
+        ]
+        assert constraint_errors, (
+            f"Expected a constraint-failure error; got {[e.msg for e in errors]}"
+        )
+        e = constraint_errors[0]
+        assert e.msg.startswith("Function "), (
+            f"Expected wording to start with 'Function '; got {e.msg!r}"
+        )
+        assert e.hint and "parens" in e.hint, (
+            f"Expected hint mentioning parens; got hint={e.hint!r}"
+        )
 
     def test_generic_function_stringlike_accepts_str_via_text(self):
         """StringLike union includes `Text` protocol; str conforms via :Text."""
