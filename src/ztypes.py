@@ -130,6 +130,19 @@ def _alloc_type_id() -> int:
     return tid
 
 
+# global registry of ZType objects, keyed by type_id. Populated by
+# ZType.__post_init__ so every constructed ZType is reachable by its
+# integer key. Used by cross-type ID refs (parent_id today; intended to
+# generalise to return_type, generic_origin, etc.) so the in-memory type
+# graph mirrors the SQL-friendly id-only form the bootstrap-lint enforces.
+_types_by_id: "dict[int, ZType]" = {}
+
+
+def _type_by_id(tid: int) -> "Optional[ZType]":
+    """Look up a ZType by its type_id, or None if unknown."""
+    return _types_by_id.get(tid)
+
+
 # monotonic counter for child-name identities on ZType. Globally unique
 _next_child_id: int = 0
 
@@ -168,8 +181,17 @@ class ZType:
 
     name: str
     typetype: ZTypeType
-    parent: "Optional[ZType]"
     subtype: ZSubType = ZSubType.NONE
+
+    # Upper bound on a synthetic GENERIC_PARAM marker. Carries one of:
+    #   - generic-param constraint (the bound in `<T: SomeConstraint>`)
+    #   - typedef wrapper marker's base type
+    #   - as-block custom tag-data type
+    bound_id: Optional[int] = field(default=None, init=False)
+
+    # Set on tag RECORDs (typetype=RECORD, is_tag_generic_origin or name
+    # starts with "tag__"): the DATA type this tag RECORD belongs to.
+    data_owner_id: Optional[int] = field(default=None, init=False)
 
     # parallel name→id map for children. Lazily populated by child_id_for;
     # never pre-seeded. Globally-unique ids consumed by `ZTyping.type_child`
@@ -297,6 +319,21 @@ class ZType:
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.
     cname: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        _types_by_id[self.type_id] = self
+
+    def bound_type(self) -> "Optional[ZType]":
+        """Resolve the bound_id cross-ref to a ZType, or None if unset."""
+        if self.bound_id is None:
+            return None
+        return _types_by_id.get(self.bound_id)
+
+    def data_owner_type(self) -> "Optional[ZType]":
+        """Resolve the data_owner_id cross-ref to a ZType, or None if unset."""
+        if self.data_owner_id is None:
+            return None
+        return _types_by_id.get(self.data_owner_id)
 
     def child_id_for(self, name: str) -> int:
         """Return the monotonic id for this child name on this type, minting
@@ -531,7 +568,7 @@ LITERAL_DEFAULT_BY_BASE: Dict[str, str] = {
 
 def _make_literal_ztype(name: str) -> ZType:
     """Construct one of the compiler-internal LITERAL_* singletons."""
-    t = ZType(name=name, typetype=ZTypeType.RECORD, parent=None)
+    t = ZType(name=name, typetype=ZTypeType.RECORD)
     t.is_literal = True
     return t
 

@@ -30,7 +30,7 @@ LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def _make_ztype(name: str, tt: ZTypeType = ZTypeType.RECORD) -> ZType:
-    return ZType(name=name, typetype=tt, parent=None)
+    return ZType(name=name, typetype=tt)
 
 
 def _parse_check(src: str, unitname: str = "test"):

@@ -324,8 +324,12 @@ def dump_sql(
             _register_type(ctype)
         if zt.return_type:
             _register_type(zt.return_type)
-        if zt.parent is not None:
-            _register_type(zt.parent)
+        zt_bound = zt.bound_type()
+        if zt_bound is not None:
+            _register_type(zt_bound)
+        zt_owner = zt.data_owner_type()
+        if zt_owner is not None:
+            _register_type(zt_owner)
         if zt.typedef_base:
             _register_type(zt.typedef_base)
         if zt.generic_origin is not None:
@@ -342,7 +346,15 @@ def dump_sql(
             _register_type(n_ztype)
 
     for ztype in all_types.values():
-        parent_id = _sql_int(ztype.parent.type_id) if ztype.parent else "NULL"
+        # bound_id (GENERIC_PARAM markers) and data_owner_id (tag RECORDs)
+        # are mutually exclusive by typetype; emit whichever is set under
+        # the existing parent_type_id column.
+        if ztype.bound_id is not None:
+            parent_id = _sql_int(ztype.bound_id)
+        elif ztype.data_owner_id is not None:
+            parent_id = _sql_int(ztype.data_owner_id)
+        else:
+            parent_id = "NULL"
         typedef_id = (
             _sql_int(ztype.typedef_base.type_id) if ztype.typedef_base else "NULL"
         )

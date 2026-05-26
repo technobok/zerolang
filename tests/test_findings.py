@@ -764,7 +764,7 @@ class TestFinding11ScopeState:
         from ztypes import ZType, ZTypeType
 
         # verify that a ZType with destructor_name set gets correct cleanup
-        t = ZType(name="Box", typetype=ZTypeType.CLASS, parent=None)
+        t = ZType(name="Box", typetype=ZTypeType.CLASS)
         t.destructor_name = "z_Box_destroy"
         s = ScopeState()
         s.cleanup_vars.append(("myvar", t))
@@ -784,8 +784,8 @@ class TestFinding12SelfHostingPatterns:
         """ZType.type_id should auto-increment via _alloc_type_id."""
         from ztypes import ZType, ZTypeType
 
-        t1 = ZType(name="a", typetype=ZTypeType.RECORD, parent=None)
-        t2 = ZType(name="b", typetype=ZTypeType.RECORD, parent=None)
+        t1 = ZType(name="a", typetype=ZTypeType.RECORD)
+        t2 = ZType(name="b", typetype=ZTypeType.RECORD)
         assert isinstance(t1.type_id, int)
         assert isinstance(t2.type_id, int)
         assert t2.type_id > t1.type_id
@@ -794,7 +794,7 @@ class TestFinding12SelfHostingPatterns:
         """ZVariable.variable_id should auto-increment via _alloc_variable_id."""
         from ztypes import ZVariable, ZType, ZTypeType, ZOwnership
 
-        t = ZType(name="x", typetype=ZTypeType.RECORD, parent=None)
+        t = ZType(name="x", typetype=ZTypeType.RECORD)
         v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
         v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
         assert isinstance(v1.variable_id, int)
@@ -807,7 +807,7 @@ class TestFinding12SelfHostingPatterns:
         survives as a per-ZType dict."""
         from ztypes import ZType, ZTypeType
 
-        t = ZType(name="test", typetype=ZTypeType.RECORD, parent=None)
+        t = ZType(name="test", typetype=ZTypeType.RECORD)
         assert type(t.generic_params) is dict
 
     def test_children_table_preserves_order(self):
@@ -821,10 +821,10 @@ class TestFinding12SelfHostingPatterns:
         import zast
 
         typing = ZTyping(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
-        parent = ZType(name="rec", typetype=ZTypeType.RECORD, parent=None)
-        c1 = ZType(name="x", typetype=ZTypeType.RECORD, parent=parent)
-        c2 = ZType(name="y", typetype=ZTypeType.RECORD, parent=parent)
-        c3 = ZType(name="z", typetype=ZTypeType.RECORD, parent=parent)
+        parent = ZType(name="rec", typetype=ZTypeType.RECORD)
+        c1 = ZType(name="x", typetype=ZTypeType.RECORD)
+        c2 = ZType(name="y", typetype=ZTypeType.RECORD)
+        c3 = ZType(name="z", typetype=ZTypeType.RECORD)
         typing.set_child(parent, "x", c1)
         typing.set_child(parent, "y", c2)
         typing.set_child(parent, "z", c3)

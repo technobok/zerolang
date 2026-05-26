@@ -175,8 +175,13 @@ def _suggest_similar(name: str, candidates, max_distance: int = 2) -> Optional[s
     return None
 
 
-def _make_type(name: str, typetype: ZTypeType, parent: Optional[ZType] = None) -> ZType:
-    return ZType(name=name, typetype=typetype, parent=parent)
+def _make_type(
+    name: str, typetype: ZTypeType, data_owner: Optional[ZType] = None
+) -> ZType:
+    t = ZType(name=name, typetype=typetype)
+    if data_owner is not None:
+        t.data_owner_id = data_owner.type_id
+    return t
 
 
 def _is_valtype(ztype: ZType) -> bool:
@@ -1410,7 +1415,7 @@ class TypeChecker:
                 and pt.typetype == ZTypeType.GENERIC_PARAM
                 and pt.name == "__generic_param"
             ):
-                constraint = pt.parent if pt.parent else self.t_null
+                constraint = pt.bound_type() or self.t_null
                 ftype.generic_params[pname] = constraint
                 ftype.isgeneric = True
                 generic_ctx[pname] = constraint
@@ -1778,7 +1783,7 @@ class TypeChecker:
                 and ft.typetype == ZTypeType.GENERIC_PARAM
                 and ft.name == "__generic_param"
             ):
-                constraint = ft.parent if ft.parent else self.t_null
+                constraint = ft.bound_type() or self.t_null
                 ctype.generic_params[fname] = constraint
                 ctype.isgeneric = True
                 generic_ctx[fname] = constraint
@@ -2040,8 +2045,9 @@ class TypeChecker:
                         loc=loc,
                     )
                     break
-                if as_type.parent:
-                    custom_tag_data = as_type.parent
+                as_type_bound = as_type.bound_type()
+                if as_type_bound:
+                    custom_tag_data = as_type_bound
                 elif as_path.nodetype == NodeType.DOTTEDPATH and cast(
                     zast.DottedPath, as_path
                 ).parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
@@ -2106,7 +2112,7 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 self._set_child(gen_data, sname, _make_type(str(i), ZTypeType.RECORD))
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, data_owner=gen_data)
             gen_tag.is_valtype = True
             gen_tag.is_tag_generic_origin = True
             self._set_child(gen_data, "tag", gen_tag)
@@ -2126,7 +2132,7 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 self._set_child(gen_data, sname, _make_type(str(i), ZTypeType.RECORD))
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, data_owner=gen_data)
             gen_tag.is_valtype = True
             gen_tag.is_tag_generic_origin = True
             self._set_child(gen_data, "tag", gen_tag)
@@ -2153,7 +2159,7 @@ class TypeChecker:
                 and st.typetype == ZTypeType.GENERIC_PARAM
                 and st.name == "__generic_param"
             ):
-                constraint = st.parent if st.parent else self.t_null
+                constraint = st.bound_type() or self.t_null
                 utype.generic_params[sname] = constraint
                 utype.isgeneric = True
                 generic_ctx[sname] = constraint
@@ -2385,7 +2391,7 @@ class TypeChecker:
                 and st.typetype == ZTypeType.GENERIC_PARAM
                 and st.name == "__generic_param"
             ):
-                constraint = st.parent if st.parent else self.t_null
+                constraint = st.bound_type() or self.t_null
                 vtype.generic_params[sname] = constraint
                 vtype.isgeneric = True
                 generic_ctx[sname] = constraint
@@ -2669,7 +2675,7 @@ class TypeChecker:
         # above; the `else "i64"` branch is defensive against partial recovery
         # from an earlier error.
         et_name = element_type.name if element_type else "i64"
-        tag_type = _make_type(f"tag__{et_name}", ZTypeType.RECORD, parent=dtype)
+        tag_type = _make_type(f"tag__{et_name}", ZTypeType.RECORD, data_owner=dtype)
         tag_type.is_valtype = True
         tag_type.is_tag_generic_origin = True
         self._set_child(dtype, "tag", tag_type)
@@ -2704,7 +2710,7 @@ class TypeChecker:
                 and ft.typetype == ZTypeType.GENERIC_PARAM
                 and ft.name == "__generic_param"
             ):
-                constraint = ft.parent if ft.parent else self.t_null
+                constraint = ft.bound_type() or self.t_null
                 rtype.generic_params[fname] = constraint
                 rtype.isgeneric = True
                 generic_ctx[fname] = constraint
@@ -3152,7 +3158,7 @@ class TypeChecker:
                 and ft.typetype == ZTypeType.GENERIC_PARAM
                 and ft.name == "__typedef_marker"
             ):
-                typedef_base = ft.parent
+                typedef_base = ft.bound_type()
                 typedef_field = fname
         if typedef_base is not None and len(items) > 1:
             self._error("Additional fields on typedef objects are forbidden", loc=start)
@@ -3473,7 +3479,7 @@ class TypeChecker:
                 and pt.typetype == ZTypeType.GENERIC_PARAM
                 and pt.name == "__generic_param"
             ):
-                constraint = pt.parent if pt.parent else self.t_null
+                constraint = pt.bound_type() or self.t_null
                 ptype.generic_params[pname] = constraint
                 ptype.isgeneric = True
                 generic_ctx[pname] = constraint
@@ -3532,7 +3538,7 @@ class TypeChecker:
                 and pt.typetype == ZTypeType.GENERIC_PARAM
                 and pt.name == "__generic_param"
             ):
-                constraint = pt.parent if pt.parent else self.t_null
+                constraint = pt.bound_type() or self.t_null
                 ftype.generic_params[pname] = constraint
                 ftype.isgeneric = True
                 generic_ctx[pname] = constraint
@@ -3692,7 +3698,7 @@ class TypeChecker:
                     and ft.typetype == ZTypeType.GENERIC_PARAM
                     and ft.name == "__generic_param"
                 ):
-                    constraint = ft.parent if ft.parent else self.t_null
+                    constraint = ft.bound_type() or self.t_null
                     utype.generic_params[dname] = constraint
                     utype.isgeneric = True
                     generic_ctx[dname] = constraint
@@ -3828,7 +3834,7 @@ class TypeChecker:
             for ctx in reversed(self.mono.generic_context):
                 if path_atom.name in ctx:
                     gp_ref = _make_type(path_atom.name, ZTypeType.GENERIC_PARAM)
-                    gp_ref.parent = ctx[path_atom.name]  # constraint
+                    gp_ref.bound_id = ctx[path_atom.name].type_id  # constraint
                     self.typing.node_type[path.nodeid] = gp_ref
                     return gp_ref
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
@@ -4383,7 +4389,7 @@ class TypeChecker:
         child_name = path.child.name
         if child_name == "typedef":
             marker = _make_type("__typedef_marker", ZTypeType.GENERIC_PARAM)
-            marker.parent = parent_type  # the base type being wrapped
+            marker.bound_id = parent_type.type_id  # the base type being wrapped
             self.typing.node_type[path.nodeid] = marker
             return marker
         # Explicit `Type.create` when create is disabled (either via
@@ -4431,7 +4437,7 @@ class TypeChecker:
                     f"{parent_type.name}.{child_name}", parent_type.typetype
                 )
             gp = _make_type("__generic_param", ZTypeType.GENERIC_PARAM)
-            gp.parent = constraint
+            gp.bound_id = constraint.type_id
             self.typing.node_type[path.nodeid] = gp
             return gp
         if child_name == "take" and parent_type.typetype not in (
@@ -5616,7 +5622,7 @@ class TypeChecker:
                 if arg_type.typetype != ZTypeType.GENERIC_PARAM:
                     continue
                 mono.generic_params[arg_type.name] = (
-                    arg_type.parent if arg_type.parent else self.t_null
+                    arg_type.bound_type() or self.t_null
                 )
                 if param_name in template_type.numeric_generic_params:
                     mono.numeric_generic_params.add(arg_type.name)
@@ -5862,7 +5868,7 @@ class TypeChecker:
         gen_data.is_valtype = False
         for i, sname in enumerate(subtype_names):
             self._set_child(gen_data, sname, _make_type(str(i), ZTypeType.RECORD))
-        gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+        gen_tag = _make_type("tag__i64", ZTypeType.RECORD, data_owner=gen_data)
         gen_tag.is_valtype = True
         gen_tag.is_tag_generic_origin = True
         self._set_child(gen_data, "tag", gen_tag)
@@ -6647,10 +6653,12 @@ class TypeChecker:
                 elif (
                     ppath_t
                     and ppath_t.typetype == ZTypeType.GENERIC_PARAM
-                    and ppath_t.parent
+                    and ppath_t.bound_id is not None
                 ):
-                    # GENERIC_PARAM's parent is the concrete type in generic context
-                    self.typing.node_type[ppath.nodeid] = ppath_t.parent
+                    # GENERIC_PARAM's parent_id resolves to the concrete type in generic context
+                    ppath_t_bound = ppath_t.bound_type()
+                    if ppath_t_bound is not None:
+                        self.typing.node_type[ppath.nodeid] = ppath_t_bound
             # fix up return type
             rt = (
                 self.typing.node_type.get(cloned.returntype.nodeid)
@@ -6662,8 +6670,10 @@ class TypeChecker:
                     self.typing.node_type[cloned.returntype.nodeid] = generic_args[
                         rt.name
                     ]
-                elif rt.parent:
-                    self.typing.node_type[cloned.returntype.nodeid] = rt.parent
+                else:
+                    rt_bound = rt.bound_type()
+                    if rt_bound is not None:
+                        self.typing.node_type[cloned.returntype.nodeid] = rt_bound
 
             # hash and dedup
             func_hash = zasthash.hash_function(cloned, self.typing.node_type)

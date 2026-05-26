@@ -101,6 +101,14 @@ bootstrap-lint:
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' src/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
 	fi; \
+	count=$$(grep -nE 'Optional.*ZType.*= field' src/ztypes.py | wc -l); \
+	if [ $$count -gt 5 ]; then \
+		echo "ERROR: Optional[ZType] field declarations on ZType increased ($$count > 5 baseline)"; \
+		echo "  Use id-form cross-refs (parent_id / type_id) and resolve via _type_by_id()."; \
+		echo "  This mirrors the Phase 7 ZScope/Entry/Unit pattern and keeps the type graph SQL-friendly."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -nE 'Optional.*ZType.*= field' src/ztypes.py | tail -5; fail=1; \
+	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail
 

@@ -1079,14 +1079,14 @@ class TestOwnershipEnums:
     def test_zvariable_defaults(self):
         from ztypes import ZType
 
-        t = ZType(name="i64", typetype=ZTypeType.RECORD, parent=None)
+        t = ZType(name="i64", typetype=ZTypeType.RECORD)
         v = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
         assert v.ownership == ZOwnership.OWNED
 
     def test_zvariable_borrowed(self):
         from ztypes import ZType
 
-        t = ZType(name="point", typetype=ZTypeType.RECORD, parent=None)
+        t = ZType(name="point", typetype=ZTypeType.RECORD)
         v = ZVariable(
             ztype=t,
             ownership=ZOwnership.BORROWED,
@@ -2718,7 +2718,7 @@ class TestZSymbolTableLocking:
 
         st = ZSymbolTable()
         st.push("test")
-        t = ZType(name="MyClass", typetype=ZTypeType.UNION, parent=None)
+        t = ZType(name="MyClass", typetype=ZTypeType.UNION)
         t.is_valtype = False
         for name in names:
             var = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
@@ -5324,7 +5324,7 @@ class TestDataTypeResolution:
         tc.check()
         dt = tc._resolved.get("test.mydata")
         tag = tc.typing.child_of(dt, "tag")
-        assert tag.parent is dt
+        assert tag.data_owner_type() is dt
 
     def test_data_mixed_named_unnamed(self):
         """Data with mixed named and unnamed elements."""
@@ -5512,7 +5512,7 @@ class TestUnionCustomTag:
         tag = tc.typing.child_of(dt, "tag")
         assert tag.is_tag_generic_origin
         assert tag.name == "tag__i64"
-        assert tag.parent is dt
+        assert tag.data_owner_type() is dt
 
     def test_u16_tag_resolves_for_union(self):
         """u16.tag resolves and works in union as block."""
