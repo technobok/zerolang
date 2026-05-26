@@ -2902,6 +2902,30 @@ class TestEmitterClassMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_class_with_heap_collection_field_no_double_free(self):
+        """Regression for the implicit-take gap on heap-allocated
+        collection fields. When a class has a field whose type is a
+        heap-allocated stdlib collection (Map, List, Set, ...) and
+        the instance is constructed via bare field-init at the call
+        site, the temp holding the collection must be invalidated so
+        scope-exit cleanup doesn't double-free it (once via the
+        class destructor and once directly).
+
+        Pre-fix: `_needs_implicit_take` excluded heap-allocated
+        types, so `_transfer_implicit_take` no-op'd. The temp stayed
+        in the frees list and got freed twice.
+        """
+        csource = emit_source(
+            "Holder: class { m: (Map key: String value: u32) }\n"
+            "main: function is {\n"
+            "  h: Holder m: (Map key: String value: u32)\n"
+            '  h.m.set key: "alice".string value: 30.u32\n'
+            '  print "len: \\{h.m.length}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
     def test_example_classes_asan(self):
         from zvfs import ZVfs, FSProvider, BindType
 
@@ -3512,6 +3536,31 @@ class TestEmitterUnionMemorySafety:
             "  y: MyUnion.b\n"
             "  x swap y\n"
             '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_union_string_arm_from_function_param_no_double_free(self):
+        """Regression for the implicit-take gap in union construction.
+        When a String comes from a `.take` function parameter and is
+        moved into a String-payload union arm, the union-construction
+        emit must invalidate the source-side parameter so the
+        function-exit cleanup doesn't double-free the heap buffer.
+
+        Pre-fix: emitter dropped the temp from frees but never
+        zero-init'd the source parameter — function-exit
+        `z_String_free(&s)` ran on a buffer the boxed union arm now
+        owned, double-freeing.
+        """
+        csource = emit_source(
+            "Wrap: union { ok: String\n err: null }\n"
+            "makeOk: function {s: String.take} out Wrap is {\n"
+            "  return (Wrap.ok s.take)\n"
+            "}\n"
+            "main: function is {\n"
+            '  r: makeOk s: "hello".string\n'
+            '  print "made"\n'
             "}"
         )
         result = compile_and_run_asan(csource)

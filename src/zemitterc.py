@@ -9594,15 +9594,23 @@ class CEmitter:
         return "".join(parts)
 
     def _needs_implicit_take(self, ztype: Optional[ZType]) -> bool:
-        """True if ztype is a stack struct that owns heap data (e.g. string).
+        """True if ztype owns heap data and so requires source-side
+        invalidation at an ownership-transfer site.
 
-        Passing such a value by value copies the outer struct but aliases the
-        inner heap pointer, so ownership MUST be transferred at the call site
-        to avoid double-free / leak / use-after-free.
+        Two shapes both need this:
+        - Stack structs that own heap data (e.g. string): pass-by-value
+          copies the outer struct but aliases the inner heap pointer.
+        - Heap-allocated reftypes (class, union, map, list): pass-by-
+          pointer copies the pointer; both sides hold it. Either freeing
+          the source independently of the destination double-frees the
+          underlying data.
+
+        In both cases the source-side variable must be invalidated at
+        the transfer site so scope-exit cleanup is a safe no-op.
         """
         if ztype is None:
             return False
-        return bool((ztype.destructor_name is not None)) and not ztype.is_heap_allocated
+        return bool(ztype.destructor_name is not None)
 
     def _apply_call_implicit_takes(self, call: zast.Call, indent: str) -> None:
         """Apply implicit TAKE to ownership-transferring args of a function call.
@@ -9871,9 +9879,18 @@ class CEmitter:
                     subtype_ctype.startswith("z_") and subtype_ctype.endswith("_t*")
                 ):
                     # reftype: store pointer directly
-                    if val in self._temp.frees:
-                        self._temp.frees.remove(val)
                     self._temp.decls.append(f"{indent}{tmp}.data = {val};\n")
+                    # ownership transferred into the union — drop the temp
+                    # from frees AND invalidate the source-side variable
+                    # (e.g. zero-init the local that held the value) so
+                    # scope-exit cleanup doesn't double-free.
+                    self._transfer_implicit_take(val, value_arg.valtype, indent)
+                    take_var = self._get_take_var(value_arg.valtype)
+                    if take_var:
+                        val_type = self._get_operation_type(value_arg.valtype)
+                        self._temp.decls.append(
+                            self._emit_take_invalidation(take_var, val_type, indent)
+                        )
                 else:
                     # valtype: box it (malloc + copy)
                     box_ctype = subtype_ctype or "int64_t"
@@ -9883,9 +9900,16 @@ class CEmitter:
                     )
                     self._temp.decls.append(f"{indent}*{box_tmp} = {val};\n")
                     self._temp.decls.append(f"{indent}{tmp}.data = {box_tmp};\n")
-                    # ownership transferred to boxed copy — don't free original
-                    if val in self._temp.frees:
-                        self._temp.frees.remove(val)
+                    # ownership transferred to boxed copy — drop from
+                    # frees AND invalidate the source-side variable.
+                    # Mirrors `_emit_box_create` (line ~9965).
+                    self._transfer_implicit_take(val, value_arg.valtype, indent)
+                    take_var = self._get_take_var(value_arg.valtype)
+                    if take_var:
+                        val_type = self._get_operation_type(value_arg.valtype)
+                        self._temp.decls.append(
+                            self._emit_take_invalidation(take_var, val_type, indent)
+                        )
 
         self._temp.frees.append(tmp)
         self._temp.class_set[tmp] = union_name
