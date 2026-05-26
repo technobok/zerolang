@@ -175,29 +175,50 @@ Python-specific dispatch idioms, and the test suite is green. Tag this commit
 Ascending complexity, descending isolation.
 
 #ol:
-  [#*: #-strong "Lexer" (approximately 700 LOC in Python). Smallest, most
-      isolated, well-defined IO contract. Validates the toolchain end-to-end.
-      Differential test: run both lexers on every #~"examples/*.z", compare
-      token streams.]
-  [#*: #-strong "VFS and symbol table" (approximately 1.6K LOC). Self-
-      contained -- no upstream port-order dependency. Porting it next means
-      the AST+parser and typechecker slices that follow consume the ported
-      VFS from day one, exercising it through real compile inputs rather
-      than synthetic harnesses.]
-  [#*: #-strong "AST plus Parser" (approximately 4K LOC combined).
-      Discriminated unions with pattern matching are exactly the use case
-      zerolang's #~"union" and #~"variant" were designed for. This is where
-      the language proves itself on its own compiler.]
-  [#*: #-strong "Generator desugaring" (approximately 1.8K LOC). Pure AST
-      to AST transform; easy to differentially test.]
-  [#*: #-strong "Typechecker" (approximately 12K LOC, the hard one). Port
-      method-by-method, keep the Python version as oracle. Each ported method
-      gets a differential test that drives the same AST through both
-      implementations and compares the #~"ZTyping" output.]
-  [#*: #-strong "Emitter" (approximately 14K LOC including runtime
-      templates). The acceptance test is byte-identical (or
+  [#*: #-strong "[COMPLETE] Lexer" (approximately 700 LOC in Python).
+      Smallest, most isolated, well-defined IO contract. Validates the
+      toolchain end-to-end. Differential test: run both lexers on every
+      #~"examples/*.z", compare token streams. Phase B PRs 1-8 shipped;
+      #~"out/zlexer" matches Python's #~"dump_tokens" on all 96 example
+      goldens (commit #~"871d9f6", tag #~"python-stage0" at #~"978a458").]
+  [#*: #-strong "[COMPLETE] VFS" (approximately 1.4K LOC). Self-
+      contained -- no upstream port-order dependency. Porting it next
+      meant the AST+parser and typechecker slices that follow consume
+      the ported VFS from day one, exercising it through real compile
+      inputs rather than synthetic harnesses. Phase B slice 2 PRs 1-7
+      shipped (commit #~"4fc7137"); 8 fixtures byte-equivalent between
+      #~"out/zvfs" and the Python reference. Symbol table moved into
+      the typechecker slice -- see note below.]
+  [#*: #-strong "[NEXT -- AST PR 1 in planning] AST plus Parser"
+      (approximately 4K LOC combined). Discriminated unions with pattern
+      matching are exactly the use case zerolang's #~"union" and
+      #~"variant" were designed for. This is where the language proves
+      itself on its own compiler.]
+  [#*: #-strong "[PLANNED] Generator desugaring" (approximately 1.8K
+      LOC). Pure AST to AST transform; easy to differentially test.]
+  [#*: #-strong "[PLANNED] Typechecker plus symbol table plus ztypes
+      core" (approximately 13K LOC: 12K from #~"ztypecheck.py" plus the
+      ~850-LOC #~"zenv.py" symbol table and the foundational portions
+      of #~"ztypes.py" -- ZType, ZVariable, and the lock, scope, and
+      entry IDs). These three are tightly coupled and port together.
+      Port method-by-method, keep the Python version as oracle. Each
+      ported method gets a differential test that drives the same AST
+      through both implementations and compares the #~"ZTyping" output.]
+  [#*: #-strong "[PLANNED] Emitter" (approximately 14K LOC including
+      runtime templates). The acceptance test is byte-identical (or
       whitespace-normalized) C output versus Python.]
-  [#*: #-strong "CLI driver" (approximately 200 LOC). Trivial; do last.]
+  [#*: #-strong "[PLANNED] CLI driver" (approximately 200 LOC). Trivial;
+      do last.]
+
+The original strategy paired VFS with the symbol table as a single
+~1.6K-LOC slice. In practice the symbol table (#~"src/zenv.py") imports
+#~"ZType", #~"ZVariable", and the lock, scope, and entry primitives from
+#~"src/ztypes.py", which is the foundation of the typechecker. Porting
+symtab in isolation would force a partial port of #~"ztypes.py"; porting
+#~"ztypes.py" in isolation would have no consumer. The cleaner cut is to
+move symtab plus the required #~"ztypes.py" core into the head of the
+typechecker slice, where they have an immediate consumer. VFS shipped on
+its own and the AST+parser slice does not need symtab.
 
 #---: The bootstrap chain
 
@@ -445,9 +466,9 @@ Updating that set is what bumping the bootstrap version means in practice.
       input; this is a stronger check than comparing C output because it
       catches typecheck drift the emitter would smooth over.]
   [#*: #~"src/zvfs.py" -- the VFS is the cleanest module boundary; ported
-      as slice 2 (immediately after the lexer) so the AST+parser slice that
-      follows consumes it from day one. Everything downstream depends on
-      file resolution.]
+      as slice 2 (complete 2026-05-26, commit #~"4fc7137") so the AST+parser
+      slice that follows consumes it from day one. Everything downstream
+      depends on file resolution.]
   [#*: #~"doc/compiler.pdoc" -- already documents compiler internals; this
       is the porting spec. Any modification to compiler shape during Phase A
       must update this file.]
@@ -478,10 +499,10 @@ sequence by appetite rather than by dependency.
 #---: Phase B is gated
 
 Phase B (the port itself) is gated on Phase A completion and on tagging
-#~"python-stage0". Each port milestone (lexer, parser, AST, VFS, generator
-desugaring, typechecker, emitter, CLI) also gets its own plan. The
-typechecker port in particular will likely decompose further into sub-plans
-by method-cluster.
+#~"python-stage0". Each port milestone (lexer, VFS, AST + parser, generator
+desugaring, typechecker + symtab + ztypes core, emitter, CLI) also gets
+its own plan. The typechecker port in particular will likely decompose
+further into sub-plans by method-cluster.
 
 #---: Phases C through E are policy phases
 
