@@ -436,6 +436,279 @@ FSProvider: class {
     }
 }
 
+# ZVfs -- the engine layer. Owns its own provider list (parallel to
+# `ProviderTable`, which the older provider-level verbs still use)
+# plus a dentry table, a per-id name side-table indexed by dentry id,
+# and a walk cache keyed by "<parentid>:<name>". Ports `class ZVfs`
+# at zvfs.py:252-557 in three sub-PRs:
+#   PR 6a (this): register* / walk / arm / path / pathfromprovider.
+#   PR 6b: open / getline.
+#   PR 6c: bind + UNION-aware walk.
+#
+# Idiomatic deltas vs. zvfs.py:
+#   - `_file_names: Dict[DEntryID, str]` -> `(List of: String)`
+#     indexed by dentryid (entryids are dense u32). Map<u32, String>
+#     surfaces an emitter codegen bug at this slice's timestamp;
+#     List<String> is more idiomatic anyway and works today.
+#   - per-entry `cache: Dict[str, DEntryID]` -> ZVfs-level
+#     `walk_cache: Map<String, u32>` keyed by composite
+#     "<parentid>:<name>" (same trick StringProvider.children uses).
+#   - cast(DEntryFile, entry) (4 sites) -> implicit narrowing inside
+#     `case file/directory/notfound then { ... }`.
+
+ZVfs: class {
+    providers:  (List of: ProviderBox)
+    entrytable: DentryTable
+    file_names: (List of: String)
+    walk_cache: (Map key: String value: u32)
+    rootid:     u32
+} as {
+    # registerNull -- append a NullProvider to the provider list and
+    # create its root directory dentry. Returns the new dentryid.
+    # Mirrors zvfs.py:280-300 with NullProvider as the body.
+    registerNull: function {:this} out u32 is {
+        np: NullProvider _unused: false
+        prov: ZVfsProvider.create from: np.take
+        box: ProviderBox p: prov
+        pid: this.providers.length.u32
+        this.providers.append from: box.take
+        d: dentry.directory (dirdata parentid: 0.u32 providerid: pid nodeid: 0.u32)
+        did: this.entrytable.append entry: d
+        this.file_names.append from: "".string
+        return did
+    }
+    # registerString -- append a fresh StringProvider (empty) and
+    # create its root directory dentry. Mirrors registerNull's shape;
+    # caller populates the provider's content via `addFile` against
+    # the underlying provider (PR 4 dispatcher verb). The provider
+    # is reachable via this.providers; the dispatcher's `addFile`
+    # currently goes through ProviderTable, not ZVfs.providers, so
+    # PR 6a populates ZVfs with empty providers and tests with
+    # NullProvider + FSProvider. PR 6b/c may add a `vfs addFile`
+    # convenience or rewire ProviderTable to ZVfs.providers.
+    registerString: function {:this} out u32 is {
+        sp: StringProvider nodes: (List of: StringNode) children: (Map key: String value: u32)
+        root: StringNode path: "".string kind: nodekind.dir content: "".string
+        sp.nodes.append from: root.take
+        prov: ZVfsProvider.create from: sp.take
+        box: ProviderBox p: prov
+        pid: this.providers.length.u32
+        this.providers.append from: box.take
+        d: dentry.directory (dirdata parentid: 0.u32 providerid: pid nodeid: 0.u32)
+        did: this.entrytable.append entry: d
+        this.file_names.append from: "".string
+        return did
+    }
+    # registerFS -- append an FSProvider rooted at <rootpath>/<parentpath>,
+    # validating the joined path is a directory (panics otherwise), and
+    # create its root directory dentry. Mirrors ProviderTable.registerFS
+    # closely; the only differences are the dentry construction at the
+    # end and the use of ZVfs's own providers/entrytable/file_names.
+    registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
+        full: joinPath parent: rootpath.stringview name: parentpath.stringview
+        sr: io.stat full.stringview
+        match (
+            sr
+        ) case ok then {
+            match (
+                sr.kind
+            ) case dir then {
+            } case file then {
+                panic msg: "ZVfs.registerFS: root is not a directory"
+            } case symlink then {
+                panic msg: "ZVfs.registerFS: root is not a directory"
+            } case other then {
+                panic msg: "ZVfs.registerFS: root is not a directory"
+            }
+        } case err then {
+            panic msg: "ZVfs.registerFS: root is not a directory (stat failed)"
+        }
+        fp: FSProvider rootpath: rootpath.take pathtable: (List of: FSNode) pathcache: (Map key: String value: u32)
+        root: FSNode path: parentpath.take kind: nodekind.dir
+        fp.pathtable.append from: root.take
+        prov: ZVfsProvider.create from: fp.take
+        box: ProviderBox p: prov
+        pid: this.providers.length.u32
+        this.providers.append from: box.take
+        d: dentry.directory (dirdata parentid: 0.u32 providerid: pid nodeid: 0.u32)
+        did: this.entrytable.append entry: d
+        this.file_names.append from: "".string
+        return did
+    }
+    # walk -- single-step VFS walk. Composite cache key avoids
+    # re-querying the provider for the same parent/name pair.
+    # Parent narrowing extracts (providerid, nodeid) -- only file /
+    # directory / notfound arms carry these. root and mount arms
+    # panic in PR 6a (root means no provider registered; mount is
+    # PR 6c). On cache miss: ask provider.walk + provider.stat,
+    # translate to a file/directory/notfound dentry, append to the
+    # entry table, record name + cache. Mirrors zvfs.py:303-360.
+    walk: function {:this parent: u32 name: StringView} out u32 is {
+        # cache lookup
+        cachekey: "\{parent}:\{name}".string
+        cklookup: cachekey.copy
+        cached: this.walk_cache.get key: cklookup
+        match (
+            cached
+        ) case some then {
+            hit: cached
+            return hit
+        } case none then {}
+        # extract parent's provider+nodeid
+        pe: this.entrytable.entries.get i: parent.u64
+        ppid: 0.u32
+        pnid: 0.u32
+        match (
+            pe
+        ) case root then {
+            panic msg: "ZVfs.walk: parent is bare root arm (provider not registered)"
+        } case file then {
+            ppid = pe.providerid
+            pnid = pe.nodeid
+        } case directory then {
+            ppid = pe.providerid
+            pnid = pe.nodeid
+        } case notfound then {
+            ppid = pe.providerid
+            pnid = pe.nodeid
+        } case mount then {
+            panic msg: "ZVfs.walk: mount arms not yet supported (PR 6c)"
+        }
+        # ask provider
+        box: this.providers.get i: ppid.u64
+        newnid: box.p.walk name: name parent: pnid
+        kind: box.p.stat item: newnid
+        # construct new dentry
+        newd: dentry.notfound (notfounddata parentid: parent providerid: ppid nodeid: newnid)
+        match (
+            kind
+        ) case file then {
+            newd = dentry.file (filedata parentid: parent providerid: ppid nodeid: newnid)
+        } case dir then {
+            newd = dentry.directory (dirdata parentid: parent providerid: ppid nodeid: newnid)
+        } case notfound then {}
+        newdid: this.entrytable.append entry: newd
+        this.file_names.append from: name.string
+        this.walk_cache.set key: cachekey.take value: newdid.u32
+        return newdid
+    }
+    # arm -- coarse-grained "what kind of thing is this VFS entry"
+    # answer for the dispatcher. mount/root collapse to dir (mount
+    # is a UNION over directories; root is the unregistered sentinel
+    # which we treat as a directory for printing purposes). file /
+    # directory / notfound map directly. PR 6c will revisit the
+    # mount arm once UNION-aware walk lands.
+    arm: function {:this dentryid: u32} out nodekind is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        match (
+            e
+        ) case root then {
+            return nodekind.dir
+        } case notfound then {
+            return nodekind.notfound
+        } case file then {
+            return nodekind.file
+        } case directory then {
+            return nodekind.dir
+        } case mount then {
+            return nodekind.dir
+        }
+    }
+    # path -- reconstruct a "/"-separated path by following parentid
+    # pointers back to root, gathering names from file_names. The
+    # root dentry's name is empty; the dispatcher's "/" prefix comes
+    # from the join itself. If the chain hits a root arm we stop;
+    # anything else (notfound, file, dir, mount) keeps going. Up to
+    # 1024 ancestors before we bail (defensive cap; trees in
+    # practice stay shallow). Mirrors zvfs.py:464-495.
+    path: function {:this dentryid: u32} out String is {
+        # Collect names walking upward, then assemble in reverse.
+        # Cap at 1024 ancestors (defensive; trees stay shallow).
+        names: (List of: String)
+        curid: dentryid
+        steps: 0.u32
+        cap: 1024.u32
+        active: true
+        for while active loop {
+            e: this.entrytable.entries.get i: curid.u64
+            at_root: false
+            par: 0.u32
+            match (
+                e
+            ) case root then {
+                at_root = true
+            } case notfound then {
+                par = e.parentid
+            } case file then {
+                par = e.parentid
+            } case directory then {
+                par = e.parentid
+            } case mount then {
+                par = e.parentid
+            }
+            # Skip name-append when we're AT the root (bare root arm
+            # or self-pointing synthetic root from registerNull etc.) --
+            # the root carries no name. The leading "/" comes from the
+            # assembly loop below.
+            if at_root then {
+                active = false
+            } else if curid == par then {
+                active = false
+            } else {
+                nm: this.file_names.get i: curid.u64
+                names.append from: nm.copy
+                curid = par
+                steps = steps + 1.u32
+                if steps >= cap then {
+                    active = false
+                }
+            }
+        }
+        # Assemble: reversed names joined by "/", with a leading "/"
+        out_str: "".string
+        i: names.length
+        for while i > 0.u64 loop {
+            i = i - 1.u64
+            nm: names.get i: i
+            out_str.append s: "/"
+            out_str.append s: nm.stringview
+        }
+        if out_str.length == 0.u64 then {
+            return "/".string
+        }
+        return out_str
+    }
+    # pathfromprovider -- ask the dentry's provider for its native
+    # path representation. For mount arms returns "[UNION]" (no
+    # underlying path); for root/notfound returns "[NULL]"/
+    # "[NOT FOUND]". Mirrors zvfs.py:497-511.
+    pathfromprovider: function {:this dentryid: u32} out String is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        match (
+            e
+        ) case root then {
+            return "[NULL]".string
+        } case notfound then {
+            return "[NOT FOUND]".string
+        } case mount then {
+            return "[UNION]".string
+        } case file then {
+            pid: e.providerid
+            nid: e.nodeid
+            box: this.providers.get i: pid.u64
+            s: box.p.path item: nid
+            return s
+        } case directory then {
+            pid: e.providerid
+            nid: e.nodeid
+            box: this.providers.get i: pid.u64
+            s: box.p.path item: nid
+            return s
+        }
+    }
+}
+
+
 # Print "<id>: <arm-name>" for a single entry. Used by the `dump`
 # verb; mirrors the lexer dumper's `ttname` pattern.
 
@@ -721,7 +994,93 @@ dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
     }
 }
 
-dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable} is {
+# Verb: vfs <subverb> [args...]. PR 6a subverbs:
+#   register null
+#   register string
+#   register fs <rootpath> <parentpath>
+#   walk <parentid> <name>
+#   stat <dentryid>
+#   path <dentryid>
+#   pathfromprovider <dentryid>
+# Each prints one line: the returned dentryid, the arm name, or
+# the path string. PR 6b adds `open` and `getline`; PR 6c adds
+# `bind`.
+
+dispatchVfs: function {tokens: (List of: String) vfs: ZVfs} is {
+    n: tokens.length
+    if n < 2 then panic msg: "vfs verb expects a subverb"
+    sub_str: tokens.get i: 1
+    sub: sub_str.stringview
+    if sub == "register" then {
+        if n < 3 then panic msg: "vfs register expects a kind"
+        kind_str: tokens.get i: 2
+        kind: kind_str.stringview
+        if kind == "null" then {
+            if n != 3 then panic msg: "vfs register null takes no args"
+            did: vfs.registerNull
+            print "\{did}"
+            return
+        }
+        if kind == "string" then {
+            if n != 3 then panic msg: "vfs register string takes no args"
+            did: vfs.registerString
+            print "\{did}"
+            return
+        }
+        if kind == "fs" then {
+            if n != 5 then panic msg: "vfs register fs expects 2 args (rootpath parentpath)"
+            rp_str: tokens.get i: 3
+            pp_str: tokens.get i: 4
+            rp: rp_str.copy
+            pp: pp_str.copy
+            did: vfs.registerFS rootpath: rp.take parentpath: pp.take
+            print "\{did}"
+            return
+        }
+        panic msg: "vfs register: unknown kind"
+    }
+    if sub == "walk" then {
+        if n != 4 then panic msg: "vfs walk expects 2 args (parentid name)"
+        pid: parseU32at tokens: tokens i: 2
+        name_str: tokens.get i: 3
+        name_sv: name_str.stringview
+        did: vfs.walk parent: pid name: name_sv
+        print "\{did}"
+        return
+    }
+    if sub == "stat" then {
+        if n != 3 then panic msg: "vfs stat expects 1 arg (dentryid)"
+        did: parseU32at tokens: tokens i: 2
+        k: vfs.arm dentryid: did
+        match (
+            k
+        ) case dir then {
+            print "dir"
+        } case file then {
+            print "file"
+        } case notfound then {
+            print "notfound"
+        }
+        return
+    }
+    if sub == "path" then {
+        if n != 3 then panic msg: "vfs path expects 1 arg (dentryid)"
+        did: parseU32at tokens: tokens i: 2
+        s: vfs.path dentryid: did
+        print s
+        return
+    }
+    if sub == "pathfromprovider" then {
+        if n != 3 then panic msg: "vfs pathfromprovider expects 1 arg (dentryid)"
+        did: parseU32at tokens: tokens i: 2
+        s: vfs.pathfromprovider dentryid: did
+        print s
+        return
+    }
+    panic msg: "vfs: unknown subverb"
+}
+
+dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable vfs: ZVfs} is {
     tokens: tokenizeLine line: line
     if tokens.length == 0 then return
     verb_str: tokens.get i: 0
@@ -758,10 +1117,14 @@ dispatchLine: function {line: StringView table: DentryTable providers: ProviderT
         dispatchOpen tokens: tokens providers: providers
         return
     }
+    if verb == "vfs" then {
+        dispatchVfs tokens: tokens vfs: vfs
+        return
+    }
     panic msg: "unknown verb"
 }
 
-runScript: function {text: String table: DentryTable providers: ProviderTable} is {
+runScript: function {text: String table: DentryTable providers: ProviderTable vfs: ZVfs} is {
     sv: text.stringview
     with li: sv.lines do for line: li loop {
         trimmed: line.trim
@@ -771,7 +1134,7 @@ runScript: function {text: String table: DentryTable providers: ProviderTable} i
                 fb_opt
             ) case some then {
                 if fb_opt != 35.u8 then {
-                    dispatchLine line: trimmed table: table providers: providers
+                    dispatchLine line: trimmed table: table providers: providers vfs: vfs
                 }
             } case none then {}
         }
@@ -791,7 +1154,9 @@ main: function is {
     ) case ok then {
         table: DentryTable entries: (List of: dentry)
         providers: ProviderTable providers: (List of: ProviderBox)
-        runScript text: r.take table: table providers: providers
+        vtable: DentryTable entries: (List of: dentry)
+        vfs: ZVfs providers: (List of: ProviderBox) entrytable: vtable file_names: (List of: String) walk_cache: (Map key: String value: u32) rootid: 0.u32
+        runScript text: r.take table: table providers: providers vfs: vfs
     } case err then {
         io.eprintln "zvfs: could not read script file"
         os.exit code: 1.i32
