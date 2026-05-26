@@ -17,30 +17,41 @@ go through zemitterc_runtime's `_load_runtime_fragment` instead.
 
 Templated today (`src/runtime/*.c.tmpl`):
 
-| Template                   | Caller in `zemitterc.py`     | Subsystem                       |
-|----------------------------|------------------------------|---------------------------------|
-| `z_array.c.tmpl`           | `_emit_mono_array`           | fixed-size array                |
-| `z_str.c.tmpl`             | `_emit_mono_str`             | bounded string                  |
-| `z_List.c.tmpl`            | `_emit_mono_list`            | dynamic list                    |
-| `z_ListView.c.tmpl`        | `_emit_mono_listview`        | borrowed list view              |
-| `z_protocol_vtable.c.tmpl` | `_emit_protocol` /           | protocol vtable struct +        |
-|                            | `_emit_mono_protocol`        | instance wrapper + destroy      |
+| Template                       | Caller in `zemitterc.py`     | Subsystem                       |
+|--------------------------------|------------------------------|---------------------------------|
+| `z_array.c.tmpl`               | `_emit_mono_array`           | fixed-size array                |
+| `z_str.c.tmpl`                 | `_emit_mono_str`             | bounded string                  |
+| `z_List.c.tmpl`                | `_emit_mono_list`            | dynamic list                    |
+| `z_ListView.c.tmpl`            | `_emit_mono_listview`        | borrowed list view              |
+| `z_protocol_vtable.c.tmpl`     | `_emit_protocol` /           | protocol vtable struct +        |
+|                                | `_emit_mono_protocol`        | instance wrapper + destroy      |
+| `z_meta_create_heap.c.tmpl`    | `_emit_create_functions`     | meta.create body (heap path)    |
+| `z_meta_create_stack.c.tmpl`   | `_emit_create_functions`     | meta.create body (stack path)   |
+
+# When to reach for a template
+
+Use this engine when **(a)** the emitted C shell is mostly literal with
+a small number of name/ctype/field-list placeholders, **and (b)** any
+conditional logic can be expressed by choosing between a finite number
+of distinct templates rather than branching inside one (the engine
+deliberately has no `@@IF@@` construct so half-substituted output stays
+gcc-rejectable). F-string emission stays the default for everything
+else — particularly emit functions whose body is a loop over per-item
+conditionals or where per-call assembly logic dominates the literal C
+shell.
 
 Not yet templated (ad-hoc f-string emission in `zemitterc.py`):
 
 - **Protocol implementation wrappers + static vtable init**
-  (`_emit_protocol_impl`, `:2158-2242+`). Natural next target — same
-  per-method-mechanical shape as the vtable struct but more
-  bookkeeping (per-method wrapper functions plus the static init
-  block). Defer until a concrete need (e.g. ABI change requires
-  centralised audit).
+  (`_emit_protocol_impl`). Same per-method-mechanical shape as the
+  vtable struct but more bookkeeping (per-method wrapper functions
+  plus the static init block). Defer until a concrete need (e.g.
+  ABI change requires centralised audit).
 - **Map containers** (`_emit_mono_map`). Has key/value branching
   on string vs reftype that doesn't fit the
   pure-placeholder model; would need either conditional sections
   in the template format (new feature) or multiple variant
   templates.
-- **`meta.create` + user constructors** (`_emit_create_functions`).
-  Tightly integrated with caller; not a standalone subsystem.
 
 Adding a new template is just:
   1. Write `src/runtime/<name>.c.tmpl` using `@@PLACEHOLDER@@`.

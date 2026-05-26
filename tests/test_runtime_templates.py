@@ -203,6 +203,51 @@ def test_protocol_vtable_template_compiles():
     assert rc == 0, err
 
 
+def test_meta_create_stack_template_compiles():
+    body = apply(
+        "z_meta_create_stack",
+        {
+            "CTYPE": "z_point_t",
+            "FUNC_NAME": "z_point_meta_create",
+            "PARAM_STR": "int64_t x, int64_t y",
+            "FIELD_INITS": "    _this.x = x;\n    _this.y = y;\n",
+        },
+    )
+    stub = "typedef struct { int64_t x; int64_t y; } z_point_t;\n\n"
+    rc, err = _gcc_compile(stub + body)
+    assert rc == 0, err
+
+
+def test_meta_create_heap_template_compiles():
+    body = apply(
+        "z_meta_create_heap",
+        {
+            "CTYPE": "z_node_t",
+            "FUNC_NAME": "z_node_meta_create",
+            "PARAM_STR": "int64_t v",
+            "FIELD_INITS": "    _this->v = v;\n",
+        },
+    )
+    stub = "typedef struct { int64_t v; } z_node_t;\n\n"
+    rc, err = _gcc_compile(stub + body)
+    assert rc == 0, err
+
+
+def test_meta_create_stack_template_with_no_fields():
+    body = apply(
+        "z_meta_create_stack",
+        {
+            "CTYPE": "z_empty_t",
+            "FUNC_NAME": "z_empty_meta_create",
+            "PARAM_STR": "void",
+            "FIELD_INITS": "",
+        },
+    )
+    stub = "typedef struct { int _unused; } z_empty_t;\n\n"
+    rc, err = _gcc_compile(stub + body)
+    assert rc == 0, err
+
+
 def test_list_template_compiles_with_listview_methods():
     listview_methods = (
         "static z_ListView_i64_t z_List_i64_listview(z_List_i64_t* _this);\n"

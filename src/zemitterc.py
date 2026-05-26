@@ -3225,21 +3225,22 @@ class CEmitter:
         """Emit meta.create and optional create forwarding functions."""
         param_str = ", ".join(params) if params else "void"
         func_name = f"z_{name}_meta_create"
-        ret_type = f"{ctype}*" if is_heap else ctype
-        lines.append(f"static {ret_type} {func_name}({param_str}) {{\n")
-        if is_heap:
-            lines.append(
-                f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n"
-            )
-            lines.append(f"    *_this = ({ctype}){{0}};\n")
-            accessor = "->"
-        else:
-            lines.append(f"    {ctype} _this = {{0}};\n")
-            accessor = "."
+        accessor = "->" if is_heap else "."
+        field_init_parts: List[str] = []
         for fname in field_names:
-            lines.append(f"    _this{accessor}{fname} = {fname};\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
+            field_init_parts.append(f"    _this{accessor}{fname} = {fname};\n")
+        template_name = "z_meta_create_heap" if is_heap else "z_meta_create_stack"
+        lines.append(
+            ztmpl.apply(
+                template_name,
+                {
+                    "CTYPE": ctype,
+                    "FUNC_NAME": func_name,
+                    "PARAM_STR": param_str,
+                    "FIELD_INITS": "".join(field_init_parts),
+                },
+            )
+        )
         if not has_user_create:
             # Trivial delegate: `z_X_create` just forwards to meta_create
             # with the same signature and arguments. A preprocessor alias
