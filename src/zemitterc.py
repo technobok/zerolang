@@ -3292,63 +3292,38 @@ class CEmitter:
 
     def _arm_type_supports_forward_typedef(self, ztype: "ZType") -> bool:
         """Whether a forward typedef + destructor decl for `ztype` is
-        safe to emit at a union-arm site. Currently restricted to
-        io-wrapper classes, which `_class_needs_forward_typedef`
-        forces to the named-struct emission form. Anonymous-struct
-        typedefs can't be forward-declared; expanding this to user
-        classes would require also forcing named-struct emission for
-        them (currently only triggered by self-referencing function
-        fields)."""
+        safe to emit at a union-arm site. User-defined classes qualify:
+        they always use the named-struct emission form (see
+        `_class_needs_forward_typedef`), so `typedef struct z_X_t z_X_t;`
+        matches the eventual full definition. Native runtime classes
+        keep their anonymous-struct emission and can only be forward-
+        declared from the named-struct opt-in list (currently the
+        io-wrapper set)."""
         if ztype.typetype != ZTypeType.CLASS:
             return False
-        if ztype.name in self._IO_WRAPPER_NAMES:
-            return True
-        return False
+        if ztype.is_native:
+            return ztype.name in self._IO_WRAPPER_NAMES
+        return True
 
     def _class_needs_forward_typedef(
         self, name: str, cls: zast.ObjectDef, ztype: "Optional[ZType]"
     ) -> bool:
-        """A type needs a forward typedef whenever any of its struct
-        fields are function pointers whose signature references the
-        type's typedef name. Class methods reference the type as
-        `<parent>*` (true self-reference); record methods reference
-        the type by value -- still requires the typedef to be in
-        scope at field declaration time, otherwise the C parser
-        treats the bare typedef name as an unnamed parameter.
+        """User-defined classes and records emit in the named-struct
+        form. Native runtime types (String, List, Map, io wrappers,
+        ...) keep their anonymous-struct emission to match the runtime
+        templates; only the named-form io wrappers opt in via the
+        explicit name set so their forward declarations match.
 
-        Also true for io-wrapper classes (TextReader, BufReader,
-        TextWriter, BufWriter). User-unit code can put one of these
-        in a union arm — the union's auto-emit destroy then refers
-        to the wrapper struct via a forward declaration, which
-        requires the wrapper to use the named-struct form so the
-        forward typedef matches the actual definition. C11 6.7p3
-        allows duplicate typedefs when each redefinition is the
-        same."""
+        The named form `typedef struct z_X_t { ... } z_X_t;` is
+        functionally identical to anonymous `typedef struct { ... }
+        z_X_t;` but lets the type be forward-declared from any earlier
+        emit site (union arms, recursive references). C11 6.7p3 permits
+        the redundant typedef when both spellings are identical."""
         if ztype is None:
             return False
-        # io-wrapper classes: emit in named form so a union arm
-        # referencing one can forward-declare it cleanly.
-        if name in self._IO_WRAPPER_NAMES:
-            return True
-        # case C: `instancemethod: method1` -- the field is FUNCTION-
-        # typed and the referenced method has a `this` receiver.
-        for fname, fpath in cls.is_paths().items():
-            field_ztype = self._node_ztype(fpath)
-            if (
-                field_ztype is not None
-                and field_ztype.typetype == ZTypeType.FUNCTION
-                and field_ztype.this_param_name is not None
-            ):
-                return True
-        # `is`-section methods with a `this` receiver -- the struct
-        # holds them as inline function pointers and they reference
-        # the parent type via the `this` param.
-        for mname, mfunc in cls.functions().items():
-            for pname, ppath in mfunc.parameters.items():
-                ptype = self._node_ztype(ppath)
-                if ptype is ztype:
-                    return True
-        return False
+        if ztype.is_native:
+            return name in self._IO_WRAPPER_NAMES
+        return True
 
     def _emit_class(
         self, name: str, cls: zast.ObjectDef, skip_protocol_impls: bool = False
@@ -3554,8 +3529,9 @@ class CEmitter:
                 lines.append(f"    {tag},\n")
         lines.append(f"}} z_{name}_tag_t;\n\n")
 
-        # emit union struct: always {tag, void*}
-        lines.append("typedef struct {\n")
+        # emit union struct: always {tag, void*}. Named-struct form so a
+        # forward typedef stays compatible with the full definition.
+        lines.append(f"typedef struct z_{name}_t {{\n")
         lines.append(f"    z_{name}_tag_t tag;\n")
         lines.append("    void* data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
