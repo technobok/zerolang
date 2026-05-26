@@ -3541,6 +3541,34 @@ class TestEmitterUnionMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_union_with_native_class_arm_compiles(self):
+        """Regression for PR-3 Quirk 1: a union arm typed as an
+        io-wrapper class (`class is native`) must trigger the arm
+        type's struct + destructor to be pulled into the emit set
+        even when no other site in the program references the class
+        directly. Pre-fix the emitter generated the union's destroy
+        function with `z_TextReader_destroy(z_TextReader_t*)` while
+        the wrapper class's struct was never emitted, so gcc
+        rejected with `'z_TextReader_t' undeclared`."""
+        csource = emit_source(
+            "X: union { ok: io.TextReader\n err: io.IoError }\n"
+            "main: function is {\n"
+            "  e: IoError.notfound\n"
+            "  r: X.err e.take\n"
+            '  print "done"\n'
+            "}"
+        )
+        # Forward declaration in the union destroy block + actual
+        # named-struct emission later.
+        assert "typedef struct z_TextReader_t z_TextReader_t;" in csource
+        assert "struct z_TextReader_t {" in csource
+        assert "z_TextReader_destroy" in csource
+        # BufReader is pulled transitively (TextReader's `source`
+        # field is BufReader.lock).
+        assert "struct z_BufReader_t {" in csource
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
     def test_union_string_arm_from_function_param_no_double_free(self):
         """Regression for the implicit-take gap in union construction.
         When a String comes from a `.take` function parameter and is
@@ -9824,10 +9852,10 @@ class TestIOFileStreaming:
         # them. Check positional ordering.
         assert "} z_List_u8_t;" in csource
         assert "} z_Writer_t;" in csource
-        assert "} z_BufWriter_t;" in csource
+        assert "struct z_BufWriter_t {" in csource
         list_pos = csource.index("} z_List_u8_t;")
         writer_pos = csource.index("} z_Writer_t;")
-        wrapper_pos = csource.index("} z_BufWriter_t;")
+        wrapper_pos = csource.index("struct z_BufWriter_t {")
         runtime_pos = csource.index("z_BufWriter_write(\n")
         assert list_pos < wrapper_pos, (
             "z_List_u8_t must be declared before z_BufWriter_t struct"
@@ -9885,10 +9913,10 @@ class TestIOFileStreaming:
         # holds a bufwriter.lock field). Textwriter runtime bodies
         # must land after bufwriter runtime bodies (write_line
         # forwards to bufwriter_write).
-        assert "} z_BufWriter_t;" in csource
-        assert "} z_TextWriter_t;" in csource
-        bufwriter_struct_pos = csource.index("} z_BufWriter_t;")
-        textwriter_struct_pos = csource.index("} z_TextWriter_t;")
+        assert "struct z_BufWriter_t {" in csource
+        assert "struct z_TextWriter_t {" in csource
+        bufwriter_struct_pos = csource.index("struct z_BufWriter_t {")
+        textwriter_struct_pos = csource.index("struct z_TextWriter_t {")
         assert bufwriter_struct_pos < textwriter_struct_pos, (
             "z_BufWriter_t struct must be declared before z_TextWriter_t"
         )
@@ -9948,10 +9976,10 @@ class TestIOFileStreaming:
             "}"
         )
         # textreader struct + runtime body must follow bufreader
-        assert "} z_BufReader_t;" in csource
-        assert "} z_TextReader_t;" in csource
-        bufreader_struct_pos = csource.index("} z_BufReader_t;")
-        textreader_struct_pos = csource.index("} z_TextReader_t;")
+        assert "struct z_BufReader_t {" in csource
+        assert "struct z_TextReader_t {" in csource
+        bufreader_struct_pos = csource.index("struct z_BufReader_t {")
+        textreader_struct_pos = csource.index("struct z_TextReader_t {")
         assert bufreader_struct_pos < textreader_struct_pos, (
             "z_BufReader_t struct must be declared before z_TextReader_t"
         )

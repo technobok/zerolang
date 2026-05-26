@@ -3013,6 +3013,12 @@ def emit_runtime_io(
         "file_seek",
         "readlink",
         "symlink",
+        # bufreader_read / bufwriter_write propagate underlying
+        # source/sink errors via `z_io_errno_to_IoError`, so the
+        # helper must be in scope when either is used standalone
+        # (without a file op already pulling it in).
+        "bufreader_read",
+        "bufwriter_write",
     }
     if os_needs_errno:
         fallible = fallible | {"_os_set_env"}  # non-empty sentinel
