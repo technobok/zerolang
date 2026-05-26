@@ -78,6 +78,12 @@ def zvfs_binary(tmp_path_factory):
     return _build_zerolang_unit("zvfs", tmp_path_factory)
 
 
+@pytest.fixture(scope="session")
+def zast_binary(tmp_path_factory):
+    """Build the self-hosted AST skeleton (src/zast.z) once per session."""
+    return _build_zerolang_unit("zast", tmp_path_factory)
+
+
 def make_tokenizer(source: str) -> Tokenizer:
     """Create a Tokenizer from a source String."""
     fh = io.StringIO(source)

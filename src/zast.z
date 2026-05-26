@@ -1,0 +1,536 @@
+# zast.z -- self-host port of src/zast.py (Phase B slice 3, PR 1).
+#
+# PR 1 ports the foundation types and ships a smoke binary. The
+# binary takes no arguments; it constructs one instance of every
+# variant arm declared here, walks the discriminants via `case`,
+# and prints a deterministic line per item. The harness compares
+# stdout byte-for-byte against tests/fixtures/zast_z/smoke.expected.
+#
+# Scope:
+#   * ERR variant (parser/type/ownership/call/generic error codes).
+#   * NodeType variant (AST node-type tag).
+#   * CallKind variant (Call-node classification, set by typecheck).
+#   * Node variant with four leaf-only arms (error / atomid /
+#     labelvalue / stringchunk) -- no recursive Node fields, no
+#     Optional[Node]. The arm IS the discriminant; there is no
+#     separate `nodetype` field on the carrier records. Mirrors
+#     `dentry` in src/zvfs.z:64.
+#
+# Out of scope for PR 1:
+#   * Recursive Node arms (Unit, Function, ObjectDef, If, For, ...).
+#   * clone_function / _clone_node / node_children helpers.
+#   * Cross-unit Token / TT reference (deferred; using u32
+#     lineno+colno + u8 chunk_kind placeholders).
+#   * SQL-dump differential (needs a parser; per
+#     doc/bootstrap.pdoc:317-330).
+
+# ERR -- error codes. Arm names UPPERCASE to match the Python
+# enum at src/zast.py:20-77. Numeric E0xxx mapping is preserved
+# implicitly by arm order in source; the typecheck/error layer
+# will assign the canonical number when it lands in a later slice.
+
+ERR: variant {
+    FILENOTFOUND:      null
+    DUPLICATEDEF:      null
+    BADUNITNAME:       null
+    BADUNIT:           null
+    BADFUNCTION:       null
+    IOERROR:           null
+    EXPECTEDDEF:       null
+    EXPECTEDEXP:       null
+    EXPECTEDOP:        null
+    EXPECTEDTYPEDEF:   null
+    EXPECTEDSTATEMENT: null
+    BADARGUMENT:       null
+    BADARGUMENTBLOCK:  null
+    BADEXPRESSION:     null
+    BADOPERATION:      null
+    BADSTRING:         null
+    BADPATH:           null
+    BADREFERENCE:      null
+    BADCALL:           null
+    BADPARAMETER:      null
+    BADPARAMETERBLOCK: null
+    BADOBJECTBLOCK:    null
+    BADITEM:           null
+    BADTHEN:           null
+    BADELSE:           null
+    BADCASE:           null
+    BADFOR:            null
+    BADDATA:           null
+    BADSTATEMENT:      null
+    TYPEERROR:         null
+    REFNOTFOUND:       null
+    OWNERERROR:        null
+    CALLERROR:         null
+    GENERICERROR:      null
+    COMPILERERROR:     null
+} as { tag: u8.tag }
+
+# NodeType -- AST node-type marker. Mirrors src/zast.py:152-233.
+# Arm names UPPERCASE: many (UNIT, FUNCTION, RECORD, CLASS, UNION,
+# VARIANT, FACET, WITH, EXPRESSION, IF, FOR, DO, CASE, YIELD, DATA)
+# name language keywords and lowercase would collide.
+
+NodeType: variant {
+    UNIT:           null
+    FUNCTION:       null
+    PROTOCOL:       null
+    RECORD:         null
+    CLASS:          null
+    UNION:          null
+    VARIANT:        null
+    ENUM:           null
+    FACET:          null
+    WITH:           null
+    EXPRESSION:     null
+    IF:             null
+    IFCLAUSE:       null
+    FOR:            null
+    DO:             null
+    CASE:           null
+    CASECLAUSE:     null
+    CALL:           null
+    DATA:           null
+    YIELD:          null
+    NAMEDOPERATION: null
+    STATEMENT:      null
+    STATEMENTLINE:  null
+    ASSIGNMENT:     null
+    REASSIGNMENT:   null
+    SWAP:           null
+    DOTTEDPATH:     null
+    BINOP:          null
+    TYPEOFEXPR:     null
+    ATOMID:         null
+    LABELVALUE:     null
+    ATOMSTRING:     null
+    STRINGCHUNK:    null
+    ERROR:          null
+} as { tag: u8.tag }
+
+# CallKind -- Call-node classification, set by the type checker.
+# Mirrors src/zast.py:930-953.
+
+CallKind: variant {
+    UNKNOWN:          null
+    REGULAR:          null
+    RETURN:           null
+    RECORD_CREATE:    null
+    CLASS_CREATE:     null
+    UNION_CREATE:     null
+    PROTOCOL_CREATE:  null
+    PROTOCOL_BORROW:  null
+    FACET_CREATE:     null
+    FACET_BORROW:     null
+    TYPEDEF_CREATE:   null
+    TYPEDEF_BORROW:   null
+    CALLABLE:         null
+    UNIT_INSTANTIATE: null
+    BOX_CREATE:       null
+    BOX_PASSTHROUGH:  null
+    BREAK:            null
+    CONTINUE:         null
+    ERROR:            null
+    PANIC:            null
+} as { tag: u8.tag }
+
+# Per-arm Node payload carriers. Each carries a synthetic nodeid
+# plus source position. Token / TT integration is deferred; PR 1
+# uses u32 lineno + u32 colno + u8 chunk_kind as placeholders.
+# These are classes (reftypes) because they hold String, which is
+# a reftype -- records (valtypes) cannot hold reftypes.
+
+errordata: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    err:    ERR
+    msg:    String
+}
+
+atomiddata: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    name:   String
+}
+
+labelvaluedata: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    name:   String
+}
+
+stringchunkdata: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    text:       String
+    chunk_kind: u8
+}
+
+# Node -- top-level union (reftype tagged sum). The arm IS the
+# discriminant; no separate nodetype field. Mirrors the OpenResult
+# union pattern at src/zvfs.z:85. Union (not variant) because the
+# leaf payload classes hold String fields, which a variant cannot
+# carry transitively. PR 1 ships only the four leaf-only arms;
+# recursive arms (Unit, Function, If, ...) land in PR 2+.
+
+Node: union {
+    error:       errordata
+    atomid:      atomiddata
+    labelvalue:  labelvaluedata
+    stringchunk: stringchunkdata
+}
+
+# errname / nodetypename / callkindname -- arm-name dumpers. Mirror
+# the `ttname` pattern at src/zlexer.z:1071. Each exhaustive case
+# arm returns the canonical UPPERCASE label used by the Python
+# enum, so a future SQL-dump differential can compare directly.
+
+errname: function {e: ERR} out String is {
+    match (
+        e
+    ) case FILENOTFOUND then {
+        return "FILENOTFOUND".string
+    } case DUPLICATEDEF then {
+        return "DUPLICATEDEF".string
+    } case BADUNITNAME then {
+        return "BADUNITNAME".string
+    } case BADUNIT then {
+        return "BADUNIT".string
+    } case BADFUNCTION then {
+        return "BADFUNCTION".string
+    } case IOERROR then {
+        return "IOERROR".string
+    } case EXPECTEDDEF then {
+        return "EXPECTEDDEF".string
+    } case EXPECTEDEXP then {
+        return "EXPECTEDEXP".string
+    } case EXPECTEDOP then {
+        return "EXPECTEDOP".string
+    } case EXPECTEDTYPEDEF then {
+        return "EXPECTEDTYPEDEF".string
+    } case EXPECTEDSTATEMENT then {
+        return "EXPECTEDSTATEMENT".string
+    } case BADARGUMENT then {
+        return "BADARGUMENT".string
+    } case BADARGUMENTBLOCK then {
+        return "BADARGUMENTBLOCK".string
+    } case BADEXPRESSION then {
+        return "BADEXPRESSION".string
+    } case BADOPERATION then {
+        return "BADOPERATION".string
+    } case BADSTRING then {
+        return "BADSTRING".string
+    } case BADPATH then {
+        return "BADPATH".string
+    } case BADREFERENCE then {
+        return "BADREFERENCE".string
+    } case BADCALL then {
+        return "BADCALL".string
+    } case BADPARAMETER then {
+        return "BADPARAMETER".string
+    } case BADPARAMETERBLOCK then {
+        return "BADPARAMETERBLOCK".string
+    } case BADOBJECTBLOCK then {
+        return "BADOBJECTBLOCK".string
+    } case BADITEM then {
+        return "BADITEM".string
+    } case BADTHEN then {
+        return "BADTHEN".string
+    } case BADELSE then {
+        return "BADELSE".string
+    } case BADCASE then {
+        return "BADCASE".string
+    } case BADFOR then {
+        return "BADFOR".string
+    } case BADDATA then {
+        return "BADDATA".string
+    } case BADSTATEMENT then {
+        return "BADSTATEMENT".string
+    } case TYPEERROR then {
+        return "TYPEERROR".string
+    } case REFNOTFOUND then {
+        return "REFNOTFOUND".string
+    } case OWNERERROR then {
+        return "OWNERERROR".string
+    } case CALLERROR then {
+        return "CALLERROR".string
+    } case GENERICERROR then {
+        return "GENERICERROR".string
+    } case COMPILERERROR then {
+        return "COMPILERERROR".string
+    }
+}
+
+nodetypename: function {nt: NodeType} out String is {
+    match (
+        nt
+    ) case UNIT then {
+        return "UNIT".string
+    } case FUNCTION then {
+        return "FUNCTION".string
+    } case PROTOCOL then {
+        return "PROTOCOL".string
+    } case RECORD then {
+        return "RECORD".string
+    } case CLASS then {
+        return "CLASS".string
+    } case UNION then {
+        return "UNION".string
+    } case VARIANT then {
+        return "VARIANT".string
+    } case ENUM then {
+        return "ENUM".string
+    } case FACET then {
+        return "FACET".string
+    } case WITH then {
+        return "WITH".string
+    } case EXPRESSION then {
+        return "EXPRESSION".string
+    } case IF then {
+        return "IF".string
+    } case IFCLAUSE then {
+        return "IFCLAUSE".string
+    } case FOR then {
+        return "FOR".string
+    } case DO then {
+        return "DO".string
+    } case CASE then {
+        return "CASE".string
+    } case CASECLAUSE then {
+        return "CASECLAUSE".string
+    } case CALL then {
+        return "CALL".string
+    } case DATA then {
+        return "DATA".string
+    } case YIELD then {
+        return "YIELD".string
+    } case NAMEDOPERATION then {
+        return "NAMEDOPERATION".string
+    } case STATEMENT then {
+        return "STATEMENT".string
+    } case STATEMENTLINE then {
+        return "STATEMENTLINE".string
+    } case ASSIGNMENT then {
+        return "ASSIGNMENT".string
+    } case REASSIGNMENT then {
+        return "REASSIGNMENT".string
+    } case SWAP then {
+        return "SWAP".string
+    } case DOTTEDPATH then {
+        return "DOTTEDPATH".string
+    } case BINOP then {
+        return "BINOP".string
+    } case TYPEOFEXPR then {
+        return "TYPEOFEXPR".string
+    } case ATOMID then {
+        return "ATOMID".string
+    } case LABELVALUE then {
+        return "LABELVALUE".string
+    } case ATOMSTRING then {
+        return "ATOMSTRING".string
+    } case STRINGCHUNK then {
+        return "STRINGCHUNK".string
+    } case ERROR then {
+        return "ERROR".string
+    }
+}
+
+callkindname: function {ck: CallKind} out String is {
+    match (
+        ck
+    ) case UNKNOWN then {
+        return "UNKNOWN".string
+    } case REGULAR then {
+        return "REGULAR".string
+    } case RETURN then {
+        return "RETURN".string
+    } case RECORD_CREATE then {
+        return "RECORD_CREATE".string
+    } case CLASS_CREATE then {
+        return "CLASS_CREATE".string
+    } case UNION_CREATE then {
+        return "UNION_CREATE".string
+    } case PROTOCOL_CREATE then {
+        return "PROTOCOL_CREATE".string
+    } case PROTOCOL_BORROW then {
+        return "PROTOCOL_BORROW".string
+    } case FACET_CREATE then {
+        return "FACET_CREATE".string
+    } case FACET_BORROW then {
+        return "FACET_BORROW".string
+    } case TYPEDEF_CREATE then {
+        return "TYPEDEF_CREATE".string
+    } case TYPEDEF_BORROW then {
+        return "TYPEDEF_BORROW".string
+    } case CALLABLE then {
+        return "CALLABLE".string
+    } case UNIT_INSTANTIATE then {
+        return "UNIT_INSTANTIATE".string
+    } case BOX_CREATE then {
+        return "BOX_CREATE".string
+    } case BOX_PASSTHROUGH then {
+        return "BOX_PASSTHROUGH".string
+    } case BREAK then {
+        return "BREAK".string
+    } case CONTINUE then {
+        return "CONTINUE".string
+    } case ERROR then {
+        return "ERROR".string
+    } case PANIC then {
+        return "PANIC".string
+    }
+}
+
+# Thin one-arg wrappers that dump the arm name to stdout. Exist
+# because `print` is generic over StringLike and rejects a bare
+# function call in argument position; binding to a temp first
+# keeps the smoke main one-line-per-arm.
+
+printErr: function {e: ERR} is {
+    s: errname e: e
+    print s
+}
+
+printNodeType: function {nt: NodeType} is {
+    s: nodetypename nt: nt
+    print s
+}
+
+printCallKind: function {ck: CallKind} is {
+    s: callkindname ck: ck
+    print s
+}
+
+# printNode -- emit one line per Node in the form
+# "<nodeid>: <ARM> @<lineno>:<colno>"
+# Mirrors printEntry at src/zvfs.z:888.
+
+printNode: function {n: Node} is {
+    match (
+        n
+    ) case error then {
+        print "\{n.nodeid}: error @\{n.lineno}:\{n.colno} err=\{errname e: n.err} msg=\{n.msg}"
+    } case atomid then {
+        print "\{n.nodeid}: atomid @\{n.lineno}:\{n.colno} name=\{n.name}"
+    } case labelvalue then {
+        print "\{n.nodeid}: labelvalue @\{n.lineno}:\{n.colno} name=\{n.name}"
+    } case stringchunk then {
+        print "\{n.nodeid}: stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunk_kind=\{n.chunk_kind}"
+    }
+}
+
+# Smoke main. Constructs one instance of every variant arm declared
+# above and prints a deterministic dump. PR 2 will replace this
+# with an argv-driven dispatcher once recursive Node arms exist.
+
+main: function is {
+    print "=== ERR ==="
+    printErr e: ERR.FILENOTFOUND
+    printErr e: ERR.DUPLICATEDEF
+    printErr e: ERR.BADUNITNAME
+    printErr e: ERR.BADUNIT
+    printErr e: ERR.BADFUNCTION
+    printErr e: ERR.IOERROR
+    printErr e: ERR.EXPECTEDDEF
+    printErr e: ERR.EXPECTEDEXP
+    printErr e: ERR.EXPECTEDOP
+    printErr e: ERR.EXPECTEDTYPEDEF
+    printErr e: ERR.EXPECTEDSTATEMENT
+    printErr e: ERR.BADARGUMENT
+    printErr e: ERR.BADARGUMENTBLOCK
+    printErr e: ERR.BADEXPRESSION
+    printErr e: ERR.BADOPERATION
+    printErr e: ERR.BADSTRING
+    printErr e: ERR.BADPATH
+    printErr e: ERR.BADREFERENCE
+    printErr e: ERR.BADCALL
+    printErr e: ERR.BADPARAMETER
+    printErr e: ERR.BADPARAMETERBLOCK
+    printErr e: ERR.BADOBJECTBLOCK
+    printErr e: ERR.BADITEM
+    printErr e: ERR.BADTHEN
+    printErr e: ERR.BADELSE
+    printErr e: ERR.BADCASE
+    printErr e: ERR.BADFOR
+    printErr e: ERR.BADDATA
+    printErr e: ERR.BADSTATEMENT
+    printErr e: ERR.TYPEERROR
+    printErr e: ERR.REFNOTFOUND
+    printErr e: ERR.OWNERERROR
+    printErr e: ERR.CALLERROR
+    printErr e: ERR.GENERICERROR
+    printErr e: ERR.COMPILERERROR
+
+    print "=== NodeType ==="
+    printNodeType nt: NodeType.UNIT
+    printNodeType nt: NodeType.FUNCTION
+    printNodeType nt: NodeType.PROTOCOL
+    printNodeType nt: NodeType.RECORD
+    printNodeType nt: NodeType.CLASS
+    printNodeType nt: NodeType.UNION
+    printNodeType nt: NodeType.VARIANT
+    printNodeType nt: NodeType.ENUM
+    printNodeType nt: NodeType.FACET
+    printNodeType nt: NodeType.WITH
+    printNodeType nt: NodeType.EXPRESSION
+    printNodeType nt: NodeType.IF
+    printNodeType nt: NodeType.IFCLAUSE
+    printNodeType nt: NodeType.FOR
+    printNodeType nt: NodeType.DO
+    printNodeType nt: NodeType.CASE
+    printNodeType nt: NodeType.CASECLAUSE
+    printNodeType nt: NodeType.CALL
+    printNodeType nt: NodeType.DATA
+    printNodeType nt: NodeType.YIELD
+    printNodeType nt: NodeType.NAMEDOPERATION
+    printNodeType nt: NodeType.STATEMENT
+    printNodeType nt: NodeType.STATEMENTLINE
+    printNodeType nt: NodeType.ASSIGNMENT
+    printNodeType nt: NodeType.REASSIGNMENT
+    printNodeType nt: NodeType.SWAP
+    printNodeType nt: NodeType.DOTTEDPATH
+    printNodeType nt: NodeType.BINOP
+    printNodeType nt: NodeType.TYPEOFEXPR
+    printNodeType nt: NodeType.ATOMID
+    printNodeType nt: NodeType.LABELVALUE
+    printNodeType nt: NodeType.ATOMSTRING
+    printNodeType nt: NodeType.STRINGCHUNK
+    printNodeType nt: NodeType.ERROR
+
+    print "=== CallKind ==="
+    printCallKind ck: CallKind.UNKNOWN
+    printCallKind ck: CallKind.REGULAR
+    printCallKind ck: CallKind.RETURN
+    printCallKind ck: CallKind.RECORD_CREATE
+    printCallKind ck: CallKind.CLASS_CREATE
+    printCallKind ck: CallKind.UNION_CREATE
+    printCallKind ck: CallKind.PROTOCOL_CREATE
+    printCallKind ck: CallKind.PROTOCOL_BORROW
+    printCallKind ck: CallKind.FACET_CREATE
+    printCallKind ck: CallKind.FACET_BORROW
+    printCallKind ck: CallKind.TYPEDEF_CREATE
+    printCallKind ck: CallKind.TYPEDEF_BORROW
+    printCallKind ck: CallKind.CALLABLE
+    printCallKind ck: CallKind.UNIT_INSTANTIATE
+    printCallKind ck: CallKind.BOX_CREATE
+    printCallKind ck: CallKind.BOX_PASSTHROUGH
+    printCallKind ck: CallKind.BREAK
+    printCallKind ck: CallKind.CONTINUE
+    printCallKind ck: CallKind.ERROR
+    printCallKind ck: CallKind.PANIC
+
+    print "=== Node ==="
+    n1: Node.error (errordata nodeid: 1.u32 lineno: 10.u32 colno: 5.u32 err: ERR.BADUNIT msg: "bad unit".string)
+    printNode n: n1
+    n2: Node.atomid (atomiddata nodeid: 2.u32 lineno: 11.u32 colno: 3.u32 name: "myvar".string)
+    printNode n: n2
+    n3: Node.labelvalue (labelvaluedata nodeid: 3.u32 lineno: 12.u32 colno: 7.u32 name: "x".string)
+    printNode n: n3
+    n4: Node.stringchunk (stringchunkdata nodeid: 4.u32 lineno: 13.u32 colno: 9.u32 text: "hello".string chunk_kind: 0.u8)
+    printNode n: n4
+}
