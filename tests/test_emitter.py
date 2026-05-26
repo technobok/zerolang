@@ -3594,6 +3594,68 @@ class TestEmitterUnionMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_return_union_arm_from_narrowed_result_take_compiles(self):
+        """Regression: returning a union arm whose payload comes from
+        the `.take` of a narrowed match-arm binding must invalidate the
+        inner boxed payload, not zero the outer subject-typed binding.
+
+        Pre-fix: `(Wrap.ok s.take)` inside `case ok then { return ... }`
+        emitted `s = (z_String_t){0}` against a `z_Source_t` binding —
+        gcc rejected with `incompatible types when assigning`. Fix made
+        `_get_take_var` alias-aware so it returns the alias target
+        (`(*(z_String_t*)s.data)`) and `_emit_take_invalidation`
+        produces the well-typed deref-zero.
+        """
+        csource = emit_source(
+            "Wrap: union { ok: String  bad: null }\n"
+            "Err: union { boom: null  other: String }\n"
+            "Source: union { ok: String  err: Err }\n"
+            "extract: function {s: Source.take} out Wrap is {\n"
+            "  match (\n"
+            "    s\n"
+            "  ) case ok then {\n"
+            "    return (Wrap.ok s.take)\n"
+            "  } case err then {\n"
+            "    return (Wrap.bad)\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            '  src: Source.ok "hello".string\n'
+            "  w: extract s: src.take\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_return_union_arm_from_narrowed_result_take_err_arm_compiles(self):
+        """Symmetric coverage for the same `_get_take_var` fix: an
+        err-arm `.take` of a union-typed inner payload (heap-allocated
+        reftype) must produce a well-typed deref-zero, not a wrong-
+        typed outer-binding zero.
+        """
+        csource = emit_source(
+            "Err: union { boom: null  other: String }\n"
+            "Source: union { ok: String  err: Err }\n"
+            "Wrap: union { ok: String  err: Err }\n"
+            "passthrough: function {s: Source.take} out Wrap is {\n"
+            "  match (\n"
+            "    s\n"
+            "  ) case ok then {\n"
+            "    return (Wrap.ok s.take)\n"
+            "  } case err then {\n"
+            "    return (Wrap.err s.take)\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            '  src: Source.err (Err.other "x".string)\n'
+            "  w: passthrough s: src.take\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
     def test_example_unions_asan(self):
         from zvfs import ZVfs, FSProvider, BindType
 

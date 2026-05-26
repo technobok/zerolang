@@ -7218,7 +7218,16 @@ class CEmitter:
         return None
 
     def _get_take_var(self, op: zast.Operation) -> Optional[str]:
-        """If op is a var.take expression, return the mangled variable name."""
+        """If op is a var.take expression, return the C-level storage to
+        invalidate after the take.
+
+        For a plain local, returns the mangled variable name. For a
+        narrowed match-arm binding (alias for `(*(T*)X.data)`), returns
+        the alias target so downstream invalidation emits a deref-zero
+        against the boxed inner — not a wrong-typed zero against the
+        outer subject. Matches the alias-aware path that
+        `_get_implicit_take_var` already takes.
+        """
         if op.nodetype == NodeType.DOTTEDPATH:
             if (
                 cast(zast.DottedPath, op).child.name == "take"
@@ -7229,6 +7238,8 @@ class CEmitter:
                     # don't nullify function/spec definitions (immutable program text)
                     if _is_definition_name(name, self):
                         return None
+                    if name in self._alias_map:
+                        return self._alias_map[name]
                     return _mangle_var(name)
         return None
 
