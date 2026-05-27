@@ -963,6 +963,22 @@ class CEmitter:
         ):
             return _mangle_func(ftype.name)
 
+        # `meta.create` inside a type's method body resolves to that
+        # type's raw allocator. The typechecker stamps the callable's
+        # node_type as `<EnclosingType>.meta.create`; the emitter must
+        # spell that as `z_<type>_meta_create(...)` regardless of
+        # whether the call is paren-wrapped or not.
+        if (
+            call.callable.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
+            and cast(zast.AtomId, cast(zast.DottedPath, call.callable).parent).name
+            == "meta"  # ztc-string-compare-ok: meta.create dispatch
+            and cast(zast.DottedPath, call.callable).child.name
+            == "create"  # ztc-string-compare-ok: meta.create dispatch
+            and self._current_enclosing_type_name
+        ):
+            return f"z_{self._current_enclosing_type_name}_meta_create"
+
         # check if this is a function pointer field call (e.g. c.op)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             ftype = self._node_ztype(call.callable)
