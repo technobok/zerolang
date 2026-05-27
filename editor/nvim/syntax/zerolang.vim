@@ -48,7 +48,10 @@ syn match zerolangKeyword /\<\%(function\|in\|out\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
 syn match zerolangKeyword /\<\%(match\|case\|swap\)\>/
-syn match zerolangKeyword /\<=/
+" Operator-class identifiers: runs of non-alphanumeric WORD chars
+" (=, ==, !=, <, <=, >, >=, +, -, *, /, &, |, ?, etc.) highlight
+" as a single token instead of splitting per character.
+syn match zerolangOperator /\<[-!$%&'*+\/<=>?@\\^|~]\+\>/
 
 " Reserved words (highlighted as errors)
 syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
@@ -87,6 +90,7 @@ hi def link zerolangEscapeError Error
 hi def link zerolangInterpolation Normal
 hi def link zerolangInterpolationDelim Delimiter
 hi def link zerolangKeyword    Keyword
+hi def link zerolangOperator   Operator
 hi def link zerolangReserved   Error
 hi def link zerolangBuiltin    Type
 hi def link zerolangLabel      Identifier
