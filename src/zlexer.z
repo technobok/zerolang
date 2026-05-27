@@ -216,11 +216,11 @@ extendraw: function {stringparts: String delim_view: StringView} is {
     j: 0.u64
     dlen: delim_view.length
     for while j < dlen loop {
-        b: delim_view.byteAt i: j
+        b: delim_view.byteAt j
         match (
             b
         ) case some then {
-            stringparts.appendByte b: b
+            stringparts.appendByte b
         } case none then {
             j = dlen
         }
@@ -252,15 +252,15 @@ hexvalue: function {b: u8} out u8 is {
 
 utf8_encode_append: function {cp: u64 dst: String} is {
     if cp < 128.u64 then {
-        dst.appendByte b: cp.u8
+        dst.appendByte cp.u8
         return
     }
     if cp < 2048.u64 then {
         # 110xxxxx 10xxxxxx  (5 + 6 payload bits)
         hi: cp / 64.u64
         lo: cp - (hi * 64.u64)
-        dst.appendByte b: (hi + 192.u64).u8
-        dst.appendByte b: (lo + 128.u64).u8
+        dst.appendByte (hi + 192.u64).u8
+        dst.appendByte (lo + 128.u64).u8
         return
     }
     if cp < 65536.u64 then {
@@ -269,9 +269,9 @@ utf8_encode_append: function {cp: u64 dst: String} is {
         rest1: cp - (hi * 4096.u64)
         mid: rest1 / 64.u64
         lo: rest1 - (mid * 64.u64)
-        dst.appendByte b: (hi + 224.u64).u8
-        dst.appendByte b: (mid + 128.u64).u8
-        dst.appendByte b: (lo + 128.u64).u8
+        dst.appendByte (hi + 224.u64).u8
+        dst.appendByte (mid + 128.u64).u8
+        dst.appendByte (lo + 128.u64).u8
         return
     }
     # 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx  (3 + 6 + 6 + 6 payload bits)
@@ -281,10 +281,10 @@ utf8_encode_append: function {cp: u64 dst: String} is {
     rest2: rest1 - (mid2 * 4096.u64)
     mid1: rest2 / 64.u64
     lo: rest2 - (mid1 * 64.u64)
-    dst.appendByte b: (hi + 240.u64).u8
-    dst.appendByte b: (mid2 + 128.u64).u8
-    dst.appendByte b: (mid1 + 128.u64).u8
-    dst.appendByte b: (lo + 128.u64).u8
+    dst.appendByte (hi + 240.u64).u8
+    dst.appendByte (mid2 + 128.u64).u8
+    dst.appendByte (mid1 + 128.u64).u8
+    dst.appendByte (lo + 128.u64).u8
 }
 
 Tokenizer: class {
@@ -310,7 +310,7 @@ Tokenizer: class {
     #
     # except the FILE entry is implicit instead of pushed at init.
     statepush: function {:this s: tokstatetype.take} is {
-        this.statestack.append from: s
+        this.statestack.append s
     }
 
     statepop: function {:this} is {
@@ -330,7 +330,7 @@ Tokenizer: class {
     # which returns the byte so call sites can write `c = self._accept()`.
     accept: function {:this} out u8 is {
         sv: this.source.stringview
-        b: sv.byteAt i: this.pos
+        b: sv.byteAt this.pos
         match (
             b
         ) case some then {
@@ -366,15 +366,15 @@ Tokenizer: class {
             return this.acceptcharescape
         }
         buf: "".string
-        for while (isstrc b: this.atchar) loop {
-            buf.appendByte b: this.atchar
+        for while (isstrc this.atchar) loop {
+            buf.appendByte this.atchar
             this.accept
         }
         if buf.length > 0 then {
             return Token toktype: TT.STRMID tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         err: "".string
-        err.appendByte b: this.atchar
+        err.appendByte this.atchar
         this.accept
         return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
     }
@@ -393,8 +393,8 @@ Tokenizer: class {
         col: this.colno
         stringparts: "".string
         for while true loop {
-            for while (israwc b: this.atchar) loop {
-                stringparts.appendByte b: this.atchar
+            for while (israwc this.atchar) loop {
+                stringparts.appendByte this.atchar
                 this.accept
             }
             if this.atchar != cDquote then {
@@ -405,7 +405,7 @@ Tokenizer: class {
                     return Token toktype: TT.STRMID tokstr: stringparts fsno: this.fsno lineno: line colno: col tokenid: 0
                 }
                 err: "".string
-                err.appendByte b: this.atchar
+                err.appendByte this.atchar
                 this.accept
                 return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
             }
@@ -416,7 +416,7 @@ Tokenizer: class {
             # under-consume the eventual close by the leftover count.
             delimparts: "".string
             for while this.atchar == cDquote while delimparts.length < delim_len.u64 loop {
-                delimparts.appendByte b: this.atchar
+                delimparts.appendByte this.atchar
                 this.accept
             }
             if (delimparts.length.u8) < delim_len then {
@@ -455,7 +455,7 @@ Tokenizer: class {
         c: this.atchar
         if c != cBslash then {
             err: "".string
-            err.appendByte b: c
+            err.appendByte c
             return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         this.accept
@@ -486,7 +486,7 @@ Tokenizer: class {
         if named_found then {
             this.accept
             sc: "".string
-            sc.appendByte b: named_byte
+            sc.appendByte named_byte
             return Token toktype: TT.STRCHR tokstr: sc fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
@@ -499,14 +499,14 @@ Tokenizer: class {
 
         if c == cBraceOpen then {
             bs: "".string
-            bs.appendByte b: cBslash.u8
+            bs.appendByte cBslash.u8
             this.statepush s: tokstatetype.stringexpr
             return Token toktype: TT.STREXPRBEG tokstr: bs fsno: this.fsno lineno: line colno: col tokenid: 0
         }
 
         err: "".string
-        err.appendByte b: cBslash.u8
-        err.appendByte b: c
+        err.appendByte cBslash.u8
+        err.appendByte c
         return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
@@ -527,22 +527,22 @@ Tokenizer: class {
         for while consumed < n loop {
             c: this.atchar
             if (ishexdigit b: c) then {
-                digits.appendByte b: c
+                digits.appendByte c
                 this.accept
                 consumed = consumed + 1
             } else {
                 err: "".string
-                err.appendByte b: cBslash.u8
-                err.appendByte b: specifier
+                err.appendByte cBslash.u8
+                err.appendByte specifier
                 dsv: digits.stringview
                 j: 0.u64
                 dlen: dsv.length
                 for while j < dlen loop {
-                    db: dsv.byteAt i: j
+                    db: dsv.byteAt j
                     match (
                         db
                     ) case some then {
-                        err.appendByte b: db
+                        err.appendByte db
                     } case none then {
                         return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
                     }
@@ -558,17 +558,17 @@ Tokenizer: class {
         # in every other path `err` falls out of scope unused.
         val: 0.u64
         err: "".string
-        err.appendByte b: cBslash.u8
-        err.appendByte b: specifier
+        err.appendByte cBslash.u8
+        err.appendByte specifier
         dsv: digits.stringview
         j: 0.u64
         dlen: dsv.length
         for while j < dlen loop {
-            db: dsv.byteAt i: j
+            db: dsv.byteAt j
             match (
                 db
             ) case some then {
-                err.appendByte b: db
+                err.appendByte db
                 hv: hexvalue b: db
                 val = val * 16 + hv.u64
             } case none then {
@@ -588,7 +588,7 @@ Tokenizer: class {
 
         byte: val.u8
         sc: "".string
-        sc.appendByte b: byte
+        sc.appendByte byte
         return Token toktype: TT.STRCHR tokstr: sc fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
@@ -627,7 +627,7 @@ Tokenizer: class {
 
         if c == cLf then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             this.lineno = this.lineno + 1
             this.colno = 1
@@ -635,10 +635,10 @@ Tokenizer: class {
         }
         if c == cCr then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             if this.atchar == cLf then {
-                buf.appendByte b: this.atchar
+                buf.appendByte this.atchar
                 this.accept
             }
             this.lineno = this.lineno + 1
@@ -670,7 +670,7 @@ Tokenizer: class {
         if in_string then {
             if c == cDquote then {
                 end: "".string
-                end.appendByte b: c
+                end.appendByte c
                 this.accept
                 this.statepop
                 return Token toktype: TT.STREND tokstr: end fsno: this.fsno lineno: line colno: col tokenid: 0
@@ -684,7 +684,7 @@ Tokenizer: class {
         if (isws b: c) then {
             buf: "".string
             for while (isws b: this.atchar) loop {
-                buf.appendByte b: this.atchar
+                buf.appendByte this.atchar
                 this.accept
             }
             return Token toktype: TT.WS tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
@@ -693,7 +693,7 @@ Tokenizer: class {
         if c == cHash then {
             buf: "".string
             for while (iscommentbody b: this.atchar) loop {
-                buf.appendByte b: this.atchar
+                buf.appendByte this.atchar
                 this.accept
             }
             return Token toktype: TT.COMMENT tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
@@ -708,7 +708,7 @@ Tokenizer: class {
             buf: "".string
             n: 0.u64
             for while this.atchar == cDquote loop {
-                buf.appendByte b: this.atchar
+                buf.appendByte this.atchar
                 n = n + 1
                 this.accept
             }
@@ -717,9 +717,9 @@ Tokenizer: class {
                 # the open-quote token) and stash a STREND for the next
                 # call. buf holds both consumed quotes, so build fresh.
                 beg: "".string
-                beg.appendByte b: cDquote.u8
+                beg.appendByte cDquote.u8
                 end: "".string
-                end.appendByte b: cDquote.u8
+                end.appendByte cDquote.u8
                 this.nexttok = Token toktype: TT.STREND tokstr: end fsno: this.fsno lineno: line colno: col + 1 tokenid: 0
                 this.hasnext = true
                 return Token toktype: TT.STRBEG tokstr: beg fsno: this.fsno lineno: line colno: col tokenid: 0
@@ -739,7 +739,7 @@ Tokenizer: class {
             buf: "".string
             n: 0.u64
             for while this.atchar == cDot loop {
-                buf.appendByte b: this.atchar
+                buf.appendByte this.atchar
                 n = n + 1
                 this.accept
             }
@@ -754,19 +754,19 @@ Tokenizer: class {
 
         if c == cParenOpen then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             return Token toktype: TT.PARENOPEN tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cParenClose then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             return Token toktype: TT.PARENCLOSE tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
         if c == cBraceOpen then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             # If we are already inside an interpolation context, the `{`
             # opens a nested brace scope that must be tracked so the
             # matching `}` returns us to STRING (rather than ending the
@@ -787,7 +787,7 @@ Tokenizer: class {
         }
         if c == cBraceClose then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             # If the matching `{` was inside an interpolation, pop one
             # STRINGEXPRBRACE; if that was the last brace under
             # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
@@ -817,7 +817,7 @@ Tokenizer: class {
         }
         if c == cSemi then {
             buf: "".string
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             return Token toktype: TT.SEMICOLON tokstr: buf fsno: this.fsno lineno: line colno: col tokenid: 0
         }
@@ -848,11 +848,11 @@ Tokenizer: class {
 
         # Optional +/- prefix (consumed into the buf if present).
         if c == cPlus then {
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             c = this.atchar
         } else if c == cMinus then {
-            buf.appendByte b: c
+            buf.appendByte c
             this.accept
             c = this.atchar
         }
@@ -860,13 +860,13 @@ Tokenizer: class {
         # Track whether the first IDEN char is a digit (for the
         # dot-continuation rule).
         numbershaped: false
-        if (isdigit b: c) then {
+        if (isdigit c) then {
             numbershaped = true
         }
 
         # IDEN body.
-        for while (isidchar b: this.atchar) loop {
-            buf.appendByte b: this.atchar
+        for while (isidchar this.atchar) loop {
+            buf.appendByte this.atchar
             this.accept
         }
 
@@ -882,10 +882,10 @@ Tokenizer: class {
             dot_line: this.lineno
             dot_col: this.colno
             this.accept
-            if (isdigit b: this.atchar) then {
-                buf.appendByte b: cDot.u8
-                for while (isidchar b: this.atchar) loop {
-                    buf.appendByte b: this.atchar
+            if (isdigit this.atchar) then {
+                buf.appendByte cDot.u8
+                for while (isidchar this.atchar) loop {
+                    buf.appendByte this.atchar
                     this.accept
                 }
                 # Tail-assignment to keep both if-branches' last-stmt
@@ -904,11 +904,11 @@ Tokenizer: class {
             if has_colonpre then {
                 # Lone colon: emit the colon as ERR.
                 err: "".string
-                err.appendByte b: cColon.u8
+                err.appendByte cColon.u8
                 return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0
             }
             err: "".string
-            err.appendByte b: c
+            err.appendByte c
             this.accept
             return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
         }
@@ -917,7 +917,7 @@ Tokenizer: class {
         # exclusive early returns -- buf is consumed via `.copy`
         # in exactly one place per execution path.
 
-        kw_res: kwlookup sv: buf.stringview
+        kw_res: kwlookup buf.stringview
         kwfound: kw_res.found
         reservedfound: islookupReserved sv: buf.stringview
 
@@ -931,7 +931,7 @@ Tokenizer: class {
             this.nexttok = Token toktype: stage_tt tokstr: buf.copy fsno: this.fsno lineno: word_line colno: word_col tokenid: 0
             this.hasnext = true
             colon_only: "".string
-            colon_only.appendByte b: cColon.u8
+            colon_only.appendByte cColon.u8
             return Token toktype: TT.COLON tokstr: colon_only fsno: this.fsno lineno: colonpre_line colno: colonpre_col tokenid: 0
         }
 
@@ -1138,44 +1138,44 @@ hexdigit: function {b: u8} out u8 is {
 
 escapeAppend: function {b: u8 dst: String} is {
     if b == cHt then {
-        dst.appendByte b: cBslash.u8
-        dst.appendByte b: 116.u8  # 't'
+        dst.appendByte cBslash.u8
+        dst.appendByte 116.u8  # 't'
         return
     }
     if b == cLf then {
-        dst.appendByte b: cBslash.u8
-        dst.appendByte b: 110.u8  # 'n'
+        dst.appendByte cBslash.u8
+        dst.appendByte 110.u8  # 'n'
         return
     }
     if b == cCr then {
-        dst.appendByte b: cBslash.u8
-        dst.appendByte b: 114.u8  # 'r'
+        dst.appendByte cBslash.u8
+        dst.appendByte 114.u8  # 'r'
         return
     }
     if b == cDquote then {
-        dst.appendByte b: cBslash.u8
-        dst.appendByte b: cDquote.u8
+        dst.appendByte cBslash.u8
+        dst.appendByte cDquote.u8
         return
     }
     if b == cBslash then {
-        dst.appendByte b: cBslash.u8
-        dst.appendByte b: cBslash.u8
+        dst.appendByte cBslash.u8
+        dst.appendByte cBslash.u8
         return
     }
     if b >= cSpace when b <= 126.u8 then {
-        dst.appendByte b: b
+        dst.appendByte b
         return
     }
     h: b / 16.u8
     # Operators are identifiers with no precedence ladder; the
     # subtraction must explicitly bracket the multiplication.
     l: b - (h * 16.u8)
-    hi: hexdigit b: h
-    lo: hexdigit b: l
-    dst.appendByte b: cBslash.u8
-    dst.appendByte b: cLowerX.u8
-    dst.appendByte b: hi
-    dst.appendByte b: lo
+    hi: hexdigit h
+    lo: hexdigit l
+    dst.appendByte cBslash.u8
+    dst.appendByte cLowerX.u8
+    dst.appendByte hi
+    dst.appendByte lo
 }
 
 # Try to decode a UTF-8 multi-byte sequence starting at offset `i`.
@@ -1188,7 +1188,7 @@ escapeAppend: function {b: u8 dst: String} is {
 utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
     n: sv.length
     if i >= n then return (optionval.none u32)
-    leadopt: sv.byteAt i: i
+    leadopt: sv.byteAt i
     lead: 0.u8
     match (
         leadopt
@@ -1206,7 +1206,7 @@ utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
     if (i + seqlen.u64) > n then return (optionval.none u32)
 
     if seqlen == 2.u8 then {
-        b1opt: sv.byteAt i: (i + 1.u64)
+        b1opt: sv.byteAt (i + 1.u64)
         b1: 0.u8
         match (
             b1opt
@@ -1221,8 +1221,8 @@ utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
         return (optionval.some cp)
     }
     if seqlen == 3.u8 then {
-        b1opt: sv.byteAt i: (i + 1.u64)
-        b2opt: sv.byteAt i: (i + 2.u64)
+        b1opt: sv.byteAt (i + 1.u64)
+        b2opt: sv.byteAt (i + 2.u64)
         b1: 0.u8
         b2: 0.u8
         match (
@@ -1246,9 +1246,9 @@ utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
         cp: ((lead - 224.u8).u32 * 4096.u32) + ((b1 - 128.u8).u32 * 64.u32) + (b2 - 128.u8).u32
         return (optionval.some cp)
     }
-    b1opt: sv.byteAt i: (i + 1.u64)
-    b2opt: sv.byteAt i: (i + 2.u64)
-    b3opt: sv.byteAt i: (i + 3.u64)
+    b1opt: sv.byteAt (i + 1.u64)
+    b2opt: sv.byteAt (i + 2.u64)
+    b3opt: sv.byteAt (i + 3.u64)
     b1: 0.u8
     b2: 0.u8
     b3: 0.u8
@@ -1288,13 +1288,13 @@ utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
 # exceeds 0xFF.py:_escape.
 
 escapeAppendCp: function {cp: u32 dst: String} is {
-    dst.appendByte b: cBslash.u8
-    dst.appendByte b: cLowerU.u8
-    dst.appendByte b: cBraceOpen.u8
+    dst.appendByte cBslash.u8
+    dst.appendByte cLowerU.u8
+    dst.appendByte cBraceOpen.u8
 
     if cp == 0.u32 then {
-        dst.appendByte b: cZero.u8
-        dst.appendByte b: cBraceClose.u8
+        dst.appendByte cZero.u8
+        dst.appendByte cBraceClose.u8
         return
     }
 
@@ -1306,7 +1306,7 @@ escapeAppendCp: function {cp: u32 dst: String} is {
     for while v > 0.u32 loop {
         q: v / 16.u32
         nibble: v - (q * 16.u32)
-        rev.appendByte b: (hexdigit b: nibble.u8)
+        rev.appendByte (hexdigit nibble.u8)
         v = q
     }
     rsv: rev.stringview
@@ -1314,16 +1314,16 @@ escapeAppendCp: function {cp: u32 dst: String} is {
     k: rlen
     for while k > 0.u64 loop {
         k = k - 1.u64
-        bopt: rsv.byteAt i: k
+        bopt: rsv.byteAt k
         match (
             bopt
         ) case some then {
-            dst.appendByte b: bopt
+            dst.appendByte bopt
         } case none then {
             return
         }
     }
-    dst.appendByte b: cBraceClose.u8
+    dst.appendByte cBraceClose.u8
 }
 
 escapeStr: function {sv: StringView} out String is {
@@ -1348,7 +1348,7 @@ escapeStr: function {sv: StringView} out String is {
                 i = i + 4.u64
             }
         } case none then {
-            bopt: sv.byteAt i: i
+            bopt: sv.byteAt i
             match (
                 bopt
             ) case some then {
