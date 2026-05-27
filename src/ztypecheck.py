@@ -2086,8 +2086,7 @@ class TypeChecker:
             # validate: data values must be unique
             seen_values: dict = {}
             for dl in data_labels:
-                child = self.typing.child_of(custom_tag_data, dl)
-                val = child.name if child else None
+                val = custom_tag_data.data_values.get(dl)
                 if val in seen_values:
                     self._error(
                         f"{type_kind} '{name}' tag data has duplicate value "
@@ -2626,13 +2625,17 @@ class TypeChecker:
                             f"'{element_type.name}', got '{item_type.name}'",
                             loc=item_valtype_atom.start,
                         )
-                # parse the actual numeric value for storage
+                # Register the child with the resolved element type
+                # (i64 / u8 / f64 / ...) so downstream consumers can
+                # use the access expression as a value of that type.
+                # The literal value lives in dtype.data_values keyed
+                # by label, for the custom-tag duplicate-detect layer
+                # and the emitter's compile-time substitution.
                 _, val, err = parse_number(item_valtype_atom.name)
-                if not err:
+                if not err and item_type is not None:
                     val_str = str(int(val)) if type(val) is not float else str(val)
-                    vt = _make_type(val_str, ZTypeType.RECORD)
-                    vt.is_valtype = True
-                    self._set_child(dtype, ename, vt)
+                    dtype.data_values[ename] = val_str
+                    self._set_child(dtype, ename, item_type)
             elif item.valtype.nodetype in (
                 NodeType.ATOMID,
                 NodeType.DOTTEDPATH,

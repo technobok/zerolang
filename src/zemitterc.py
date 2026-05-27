@@ -211,6 +211,16 @@ def _ctype(typing: ztyping.ZTyping, ztype: Optional[ZType]) -> str:
         return "void"
     if ztype.typedef_base is not None:
         return _ctype(typing, ztype.typedef_base)
+    # Data-element synthetic types: the typechecker stores each data
+    # block element as a synthetic record whose name is the literal
+    # value (so the custom-tag layer can detect duplicate tag values).
+    # The underlying C type is the data block's element type — recover
+    # it via the data_owner cross-ref. Tag types (also data_owner-
+    # linked) are excluded; they have their own C representation.
+    if ztype.data_owner_id is not None and not ztype.is_tag_generic_origin:
+        data_owner = ztype.data_owner_type()
+        if data_owner is not None and data_owner.element_type is not None:
+            return _ctype(typing, data_owner.element_type)
     # nullable-ptr option: C type is the inner reftype's ctype (already a pointer)
     if ztype.is_nullable_ptr:
         some_type = typing.child_of(ztype, "some")
@@ -403,6 +413,10 @@ class CEmitter:
         self.needs_cli: bool = False
         self.needs_cli_natives: set[str] = set()
         self.forward_decls: List[str] = []
+        # data-block name -> { label -> literal value }. Populated by
+        # _emit_data for named-label items so that `<dataname>.LABEL`
+        # access sites can lower to the literal constant at emit time.
+        self._data_label_values: Dict[str, Dict[str, str]] = {}
         self.struct_defs: "TrackedList" = TrackedList(self)
         self.func_defs: "TrackedList" = TrackedList(self)
         self.data_defs: "TrackedList" = TrackedList(self)
@@ -5638,6 +5652,7 @@ class CEmitter:
     def _emit_data(self, name: str, data: zast.Data) -> None:
         self.needs_stdint = True
         values: List[str] = []
+        label_values: Dict[str, str] = {}
         for item in data.data:
             op = item.valtype
             if op.nodetype == NodeType.ATOMID and _is_numeric_id(
@@ -5646,15 +5661,25 @@ class CEmitter:
                 _, val, err = parse_number(cast(zast.AtomId, op).name)
                 if not err:
                     if type(val) is float:
-                        values.append(str(val))
+                        val_str = str(val)
                     else:
-                        values.append(str(int(val)))
+                        val_str = str(int(val))
+                    values.append(val_str)
+                    # Record name→value for compile-time substitution at
+                    # `<name>.<label>` access sites. Numeric labels (the
+                    # bare-positional form) are already covered by `.index N`
+                    # and `.N` lookups; only the named-label form needs this
+                    # side table.
+                    if item.name:
+                        label_values[item.name] = val_str
         cname = _mangle_func(name)
         if values:
             self.data_defs.append(
                 f"static const int64_t {cname}[] = {{{', '.join(values)}}};\n"
                 f"static const int64_t {cname}_len = {len(values)};\n\n"
             )
+        if label_values:
+            self._data_label_values[name] = label_values
 
     def _return_ctype(self, func: zast.Function) -> str:
         if not func.returntype:
@@ -9033,6 +9058,14 @@ class CEmitter:
             # data.index call
             if ptt == ZTypeType.DATA and child == "index":
                 return _mangle_func(pname)
+            # data.LABEL — compile-time substitution for named items.
+            # data.N — array index access for ordinal lookups.
+            if ptt == ZTypeType.DATA:
+                labels = self._data_label_values.get(pname)
+                if labels is not None and child in labels:
+                    return labels[child]
+                if child.isdigit():
+                    return f"{_mangle_func(pname)}[{child}]"
 
         # check if parent resolves to a nested inline unit path
         unit_path = self._extract_unit_path(path.parent)

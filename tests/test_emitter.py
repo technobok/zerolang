@@ -6703,6 +6703,49 @@ class TestLateMonoUserOrdering:
         assert output.strip() == "1 7"
 
 
+class TestNamedData:
+    """Tests for `data` block field access — both named labels
+    (compile-time constant substitution) and ordinal numeric
+    access (array indexing into the emitted static const)."""
+
+    def test_named_label_access_compiles_and_runs(self):
+        """`data.LABEL` lowers to the literal value at the call site."""
+        csource = emit_source(
+            "mydata: data { LOW: 0 HIGH: 10 }\n"
+            "main: function is {\n"
+            "    a: mydata.LOW\n"
+            "    b: mydata.HIGH\n"
+            '    print "\\{a} \\{b}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "0 10"
+
+    def test_ordinal_access_compiles_and_runs(self):
+        """`data.N` lowers to `z_<name>[N]` for ordinal numeric access."""
+        csource = emit_source(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "    a: primes.0\n"
+            "    b: primes.4\n"
+            '    print "\\{a} \\{b}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "2 11"
+
+    def test_data_with_iterate(self):
+        """Named labels and `.index` runtime access can coexist on one
+        data block — the named labels lower to constants, the runtime
+        loop hits the static array."""
+        csource = emit_source(
+            "items: data { A: 10 B: 20 C: 30 }\n"
+            "main: function is {\n"
+            "    sum: items.A + items.B + items.C\n"
+            '    print "\\{sum}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "60"
+
+
 class TestList:
     """Tests for List type emission and runtime behavior."""
 

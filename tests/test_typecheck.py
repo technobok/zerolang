@@ -5419,8 +5419,8 @@ class TestUnionCustomTag:
         tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         # check that the discriminator values match the data
-        assert tc.typing.child_of(tag, "A").name == "10"
-        assert tc.typing.child_of(tag, "B").name == "20"
+        assert tag.data_values["A"] == "10"
+        assert tag.data_values["B"] == "20"
 
     def test_custom_tag_mismatched_labels_error(self):
         """Data labels not matching union subtypes should error."""
@@ -5458,7 +5458,7 @@ class TestUnionCustomTag:
         tc.check()
         ut = tc._resolved.get("test.Priority")
         tag = tc.typing.child_of(ut, "tag")
-        assert tc.typing.child_of(tag, "CRITICAL").name == "10"
+        assert tag.data_values["CRITICAL"] == "10"
 
     def test_multiple_tag_items_error(self):
         """Multiple .tag items in as block should error."""

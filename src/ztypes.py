@@ -315,6 +315,12 @@ class ZType:
     # only authoritative pointer to the underlying numeric ZType.
     element_type: Optional["ZType"] = field(default=None, init=False)
 
+    # For DATA-typed ZTypes: label -> literal value string. Carries the
+    # per-element value so the custom-tag layer can detect duplicates
+    # without relying on child names (children are now typed as the
+    # element type, so their names no longer carry the literal value).
+    data_values: "Dict[str, str]" = field(default_factory=dict, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.
