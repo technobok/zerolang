@@ -341,7 +341,7 @@ class TestAssignment:
             "  cap: u64\n"
             "} as {\n"
             "  create: function {from: p.lock} out this is {\n"
-            "    return meta.create source: from buf: Bytes cap: 16.u64\n"
+            "    return (meta.create source: from buf: Bytes cap: 16.u64)\n"
             "  }\n"
             "  fill: function {:this}"
             " out (Result t: u64 e: IoError) is {\n"
@@ -1015,19 +1015,91 @@ class TestReturnTypeChecking:
             "main: function is {}\n"
         )
 
-    def test_return_type_construction_shorthand_still_works(self):
-        """Regression guard: `return Type field: val` (the
-        type-construction shorthand) must continue to work --
-        its handler runs BEFORE the new 'no named arg'
-        diagnostic and consumes the shape.
+    def test_return_type_construction_with_parens_typechecks(self):
+        """`return (Type field: val)` — the paren-wrapped construction
+        form routes through the regular call pipeline and reaches
+        `.create` dispatch uniformly.
         """
         check_ok(
+            "Counter: record { value: u32 }\n"
+            "make: function {start: u32} out Counter is {\n"
+            "    return (Counter value: start)\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
+
+class TestReturnRequiresParens:
+    """Every `return X arg: val ...` flat form is rejected — the
+    `return` statement reserves its own arg shape, so calls in
+    return position must be paren-wrapped. The diagnostic fires
+    universally: type-construction shorthand and `Type.create` /
+    `meta.create` flat dispatch are not special-cased."""
+
+    def test_bare_type_construction_flat_rejected(self):
+        errors = check_errors(
             "Counter: record { value: u32 }\n"
             "make: function {start: u32} out Counter is {\n"
             "    return Counter value: start\n"
             "}\n"
             "main: function is {}\n"
         )
+        assert any("return doesn't accept named argument" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_type_dot_create_flat_rejected(self):
+        errors = check_errors(
+            "Counter: record { value: u32 }\n"
+            "make: function {start: u32} out Counter is {\n"
+            "    return Counter.create value: start\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+        assert any("return doesn't accept named argument" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_meta_create_flat_rejected(self):
+        errors = check_errors(
+            "Counter: record { value: u32 } as {\n"
+            "    create: function {value: u32} out this is {\n"
+            "        return meta.create value: value\n"
+            "    }\n"
+            "}\n"
+            "main: function is { c: Counter.create value: 5.u32 }\n"
+        )
+        assert any("return doesn't accept named argument" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_meta_create_paren_typechecks(self):
+        """The paren form is the supported spelling and reaches the
+        enclosing type's raw allocator via the regular dispatch."""
+        check_ok(
+            "Counter: record { value: u32 } as {\n"
+            "    create: function {value: u32} out this is {\n"
+            "        return (meta.create value: value)\n"
+            "    }\n"
+            "}\n"
+            "main: function is { c: Counter.create value: 5.u32 }\n"
+        )
+
+    def test_synth_default_create_signature(self):
+        """A type without a user-defined `.create` carries a
+        synthesised default whose param list is the type's fields."""
+        program, _typing = check_ok(
+            "Counter: record { value: u32 name: u8 }\n"
+            "main: function is { c: (Counter value: 5.u32 name: 1.u8) }\n"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        counter = tc._resolve_unit_name("test", "Counter")
+        assert counter is not None
+        create = tc.typing.child_of(counter, "create")
+        assert create is not None
+        param_names = [n for n, _ in tc.typing.children_of(create)]
+        assert param_names == ["value", "name"]
 
 
 class TestNamedArguments:
@@ -1358,34 +1430,27 @@ class TestOwnershipReturnChecking:
         )
 
     def test_return_construction_field_args_typechecked(self):
-        """Regression: return-construction shorthand `return Type field: val`
-        must type-check the field args, otherwise nested paths never get
-        their `.type` stamped and the emitter silently falls through to
-        field access. The smoking gun is a Path like `s.copy` in a field
-        slot — verify type resolution propagates to the Path's parent."""
+        """`return (Type field: val)` routes through the regular call
+        pipeline, which type-checks every field-arg. Nested paths like
+        `s.copy` must get their `.type` stamped on the parent so the
+        emitter dispatches the method correctly."""
         program, typing = check_ok(
             "MyBox: class { label: String }\n"
             "mk: function {s: String.take} out MyBox is {\n"
-            "  return MyBox label: s.copy\n"
+            "  return (MyBox label: s.copy)\n"
             "}\n"
             "main: function is {}"
         )
-        # locate the `s.copy` DOTTEDPATH inside mk's body and confirm the
-        # parent (`s`) has its `.type` stamped.
+        # ANF hoists `s.copy` into a fresh temp; the first statement
+        # is the Assignment whose value is the `s.copy` DottedPath.
         mk = program.units["test"].body["mk"]
-        statement_line = mk.body.statements[0].statementline
-        # statementline is an Expression wrapping the return Call
-        inner = statement_line.expression
-        if hasattr(inner, "expression"):
-            inner = inner.expression
-        return_call = inner
-        # return is a Call whose arguments[1].valtype is `s.copy`
-        s_copy = return_call.arguments[1].valtype
+        assignment = mk.body.statements[0].statementline
+        s_copy = assignment.value.expression
         assert s_copy.nodetype == zast.NodeType.DOTTEDPATH, s_copy.nodetype
         s_copy_parent_t = _node_ztype(typing, s_copy.parent)
         assert s_copy_parent_t is not None, (
-            "s.copy parent.type unstamped — _check_return_call's "
-            "field-arg visit is missing"
+            "s.copy parent.type unstamped — regular call pipeline "
+            "missed the field-arg visit"
         )
         assert s_copy_parent_t.subtype == ZSubType.STRING
 
@@ -1396,7 +1461,7 @@ class TestOwnershipReturnChecking:
         errors = check_errors(
             "MyBox: class { label: String }\n"
             "mk: function {s: String} out MyBox is {\n"
-            "  return MyBox label: s\n"
+            "  return (MyBox label: s)\n"
             "}\n"
             "main: function is {}"
         )
@@ -1410,7 +1475,7 @@ class TestOwnershipReturnChecking:
         check_ok(
             "MyBox: class { label: String }\n"
             "mk: function {s: String} out MyBox is {\n"
-            "  return MyBox label: s.copy\n"
+            "  return (MyBox label: s.copy)\n"
             "}\n"
             "main: function is {}"
         )
@@ -1421,7 +1486,7 @@ class TestOwnershipReturnChecking:
         check_ok(
             "MyBox: class { label: String }\n"
             "mk: function {s: String.take} out MyBox is {\n"
-            "  return MyBox label: s\n"
+            "  return (MyBox label: s)\n"
             "}\n"
             "main: function is {}"
         )
@@ -1434,14 +1499,14 @@ class TestOwnershipReturnChecking:
         check_ok(
             "Container: class { x: i64 } as { public: unit { :slice }\n"
             "  slice: function {c: this.lock} out Cview is {\n"
-            "    return Cview source: c.private\n"
+            "    return (Cview source: c.private)\n"
             "  }\n"
             "}\n"
             "Cview: class {\n"
             "  source: Container.private.lock\n"
             "} as {\n"
             "  create: function {source: Container.private.lock} out this is {\n"
-            "    return meta.create source: source\n"
+            "    return (meta.create source: source)\n"
             "  }\n"
             "}\n"
             "main: function is {}"
@@ -1684,14 +1749,14 @@ class TestReturnLockPropagation:
         program, typing = check_ok(
             "Container: class { x: i64 } as { public: unit { :slice }\n"
             "  slice: function {c: this.lock} out Cview is {\n"
-            "    return Cview source: c.private\n"
+            "    return (Cview source: c.private)\n"
             "  }\n"
             "}\n"
             "Cview: class {\n"
             "  source: Container.private.lock\n"
             "} as {\n"
             "  create: function {source: Container.private.lock} out this is {\n"
-            "    return meta.create source: source\n"
+            "    return (meta.create source: source)\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
@@ -1752,7 +1817,7 @@ class TestClassConstructionLockEscape:
             "Bag: class { x: i64 }\n"
             "BagIter: class { target: Bag.lock } as {\n"
             "  create: function {target: Bag.lock} out this is "
-            "{ return meta.create :target }\n"
+            "{ return (meta.create :target) }\n"
             "}\n"
             "main: function is {\n"
             "  b: Bag x: 10\n"
@@ -1772,11 +1837,11 @@ class TestClassConstructionLockEscape:
         errors = check_errors(
             "Bag: class { x: i64 } as {\n"
             "  iterate: function {b: this.lock} out BagIter is "
-            "{ return BagIter target: b }\n"
+            "{ return (BagIter target: b) }\n"
             "}\n"
             "BagIter: class { target: Bag.lock } as {\n"
             "  create: function {target: Bag.lock} out this is "
-            "{ return meta.create :target }\n"
+            "{ return (meta.create :target) }\n"
             "}\n"
             "main: function is {\n"
             "  b: Bag x: 10\n"
@@ -1796,7 +1861,7 @@ class TestClassConstructionLockEscape:
             "Bag: class { x: i64 }\n"
             "BagIter: class { target: Bag.lock } as {\n"
             "  create: function {target: Bag.lock} out this is "
-            "{ return meta.create :target }\n"
+            "{ return (meta.create :target) }\n"
             "}\n"
             "main: function is {\n"
             "  b: Bag x: 10\n"
@@ -1815,7 +1880,7 @@ class TestClassConstructionLockEscape:
             "Bag: class { x: i64 }\n"
             "BagIter: class { target: Bag.lock } as {\n"
             "  create: function {target: Bag.lock} out this is "
-            "{ return meta.create :target }\n"
+            "{ return (meta.create :target) }\n"
             "}\n"
             "main: function is {\n"
             "  b: Bag x: 10\n"
@@ -1836,7 +1901,7 @@ class TestClassConstructionLockEscape:
             "Bag: class { x: i64 }\n"
             "BagIter: class { target: Bag.lock count: u8 } as {\n"
             "  create: function {target: Bag.lock count: u8} out this is "
-            "{ return meta.create :target :count }\n"
+            "{ return (meta.create :target :count) }\n"
             "}\n"
             "main: function is {\n"
             "  b: Bag x: 10\n"
@@ -2479,7 +2544,7 @@ class TestLockFieldsAndBornBorrowedRemoved:
             "Bag: class { a: i64 }\n"
             "badrec: record { target: Bag.private.lock } as {\n"
             "  create: function {target: Bag.private.lock} out this is {\n"
-            "    return meta.create target: target\n"
+            "    return (meta.create target: target)\n"
             "  }\n"
             "}\n"
             "main: function is { b: Bag a: 1; r: badrec target: b.private }"
@@ -2491,7 +2556,7 @@ class TestLockFieldsAndBornBorrowedRemoved:
         # accepted. Use a class with .lock fields instead.
         errors = check_errors(
             "v: record { x: i64 } as {\n"
-            "  create: function out this.borrow is { return meta.create x: 0 }\n"
+            "  create: function out this.borrow is { return (meta.create x: 0) }\n"
             "}\n"
             "main: function is { r: v.create }"
         )
@@ -2503,7 +2568,7 @@ class TestLockFieldsAndBornBorrowedRemoved:
             "Bag: class { a: i64 }\n"
             "BagView: class { target: Bag.lock } as {\n"
             "  create: function {target: Bag.lock} out this is {\n"
-            "    return meta.create target: target\n"
+            "    return (meta.create target: target)\n"
             "  }\n"
             "}\n"
             "main: function is { b: Bag a: 1\nv: BagView target: b }"
@@ -2541,7 +2606,7 @@ class TestImplicitConstruction:
         check_ok(
             "myrec: record { x: i64 y: i64 } as {\n"
             "  create: function {seed: i64} out this is {\n"
-            "    return meta.create x: seed y: seed\n"
+            "    return (meta.create x: seed y: seed)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec seed: 5 }"
@@ -2552,7 +2617,7 @@ class TestImplicitConstruction:
         errors = check_errors(
             "myrec: record { x: i64 y: i64 } as {\n"
             "  create: function {seed: i64} out this is {\n"
-            "    return meta.create x: seed y: seed\n"
+            "    return (meta.create x: seed y: seed)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec.create wrong: 5 }"
@@ -2564,7 +2629,7 @@ class TestImplicitConstruction:
         check_ok(
             "Thing: class { val: i64 } as {\n"
             "  create: function {seed: i64} out this is {\n"
-            "    return meta.create val: seed\n"
+            "    return (meta.create val: seed)\n"
             "  }\n"
             "}\n"
             "main: function is { t: Thing seed: 5 }"
@@ -2605,7 +2670,7 @@ class TestImplicitConstruction:
             "myrec: record { x: i64 } as {\n"
             "  create: null\n"
             "  build: function {v: i64} out this is {\n"
-            "    return meta.create x: v\n"
+            "    return (meta.create x: v)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec.create x: 1 }"
@@ -2618,7 +2683,7 @@ class TestImplicitConstruction:
             "myrec: record { x: i64 } as {\n"
             "  create: null\n"
             "  build: function {v: i64} out this is {\n"
-            "    return meta.create x: v\n"
+            "    return (meta.create x: v)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec.build v: 5 }"
@@ -2629,7 +2694,7 @@ class TestImplicitConstruction:
         errors = check_errors(
             "myrec: record { x: i64 } as {\n"
             "  create: function {v: i64} out this is {\n"
-            "    return myrec.create v: v\n"
+            "    return (myrec.create v: v)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec.create v: 1 }"
@@ -2644,7 +2709,7 @@ class TestImplicitConstruction:
         errors = check_errors(
             "myrec: record { x: i64 } as {\n"
             "  create: function {v: i64} out this is {\n"
-            "    return myrec x: v\n"
+            "    return (myrec x: v)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec.create v: 1 }"
@@ -2659,7 +2724,7 @@ class TestImplicitConstruction:
         check_ok(
             "myrec: record { x: i64 y: i64 } as {\n"
             "  create: function {seed: i64} out this is {\n"
-            "    return meta.create x: seed y: seed + 1\n"
+            "    return (meta.create x: seed y: seed + 1)\n"
             "  }\n"
             "}\n"
             "main: function is { r: myrec seed: 5 }"
@@ -3688,7 +3753,7 @@ class TestWithOwnership:
             "Bag: class { x: i64 } as {\n"
             "  public: unit { :x }\n"
             "  create: function { x: i64 } out this is {\n"
-            "    return meta.create x: x\n"
+            "    return (meta.create x: x)\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
@@ -6118,10 +6183,13 @@ class TestDefaults:
         t = tc._resolve_unit_name("test", "myrec")
         assert t is not None
         assert tc.typing.child_defaults_of(t) == {"y": "0"}
-        # defaults propagate to constructor
+        # Field defaults propagate to the meta.create signature. Every
+        # field-param gets a default (the emitter zero-inits missing
+        # fields); fields with an explicit default carry that value,
+        # the rest carry a sentinel empty string.
         create_t = t.meta_create
         assert create_t is not None
-        assert tc.typing.child_defaults_of(create_t) == {"y": "0"}
+        assert tc.typing.child_defaults_of(create_t) == {"x": "", "y": "0"}
 
     def test_type_name_no_default(self):
         """A type name like 'i64' does NOT produce a default."""
@@ -7226,7 +7294,7 @@ class TestBorrowedProtocolEscape:
         """Borrowed protocol cannot flow into a TAKE parameter."""
         errors = check_errors(
             self._reader_and_myfile() + "store: function {r: Reader.take} out i64 is "
-            "{ return r.read b: 0 }\n"
+            "{ return (r.read b: 0) }\n"
             "main: function is {\n"
             "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
@@ -11120,7 +11188,7 @@ class TestPrivateFriendAccess:
             "Bag: class { val: i64 } as {\n"
             "  public: unit { :get }\n"
             "  get: function {self: this} out Holder is {\n"
-            "    return Holder src: self.private\n"
+            "    return (Holder src: self.private)\n"
             "  }\n"
             "}\n"
             "Holder: class { src: Bag.private } as {\n"
@@ -13641,7 +13709,7 @@ class TestConstructionFieldCoercion:
         check_ok(
             "Foo: record { count: u8 } as {\n"
             "  create: function {count: u8} out this is "
-            "{ return meta.create :count }\n"
+            "{ return (meta.create :count) }\n"
             "}\n"
             "main: function is { f: Foo count: 100 }"
         )
@@ -13650,7 +13718,7 @@ class TestConstructionFieldCoercion:
         errors = check_errors(
             "Foo: record { count: u8 } as {\n"
             "  create: function {count: u8} out this is "
-            "{ return meta.create :count }\n"
+            "{ return (meta.create :count) }\n"
             "}\n"
             "main: function is { f: Foo count: 1000 }"
         )
@@ -13674,7 +13742,7 @@ class TestConstructionFieldCoercion:
         check_ok(
             "Foo: record { count: u8 } as {\n"
             "  create: function {count: u8} out this is "
-            "{ return meta.create :count }\n"
+            "{ return (meta.create :count) }\n"
             "}\n"
             "main: function is { f: Foo.create count: 100 }"
         )
@@ -13706,7 +13774,7 @@ class TestConstructionFieldCoercion:
         check_ok(
             "Foo: class { count: u8 } as {\n"
             "  create: function {count: u8} out this is "
-            "{ return meta.create :count }\n"
+            "{ return (meta.create :count) }\n"
             "}\n"
             "main: function is { f: Foo count: 100 }"
         )
@@ -13715,7 +13783,7 @@ class TestConstructionFieldCoercion:
         errors = check_errors(
             "Foo: class { count: u8 } as {\n"
             "  create: function {count: u8} out this is "
-            "{ return meta.create :count }\n"
+            "{ return (meta.create :count) }\n"
             "}\n"
             "main: function is { f: Foo count: 1000 }"
         )
@@ -13955,7 +14023,7 @@ class TestReturnConstructionTake:
             "mk: function {n: i64} out Token is {\n"
             '    wstr: "hi".string\n'
             "    t1: Token v: wstr\n"
-            "    return Token v: wstr\n"
+            "    return (Token v: wstr)\n"
             "}\n"
             "main: function is {}"
         )
@@ -13970,7 +14038,7 @@ class TestReturnConstructionTake:
         check_ok(
             "MyBox: class { label: String }\n"
             "mk: function {s: String} out MyBox is {\n"
-            "  return MyBox label: s.copy\n"
+            "  return (MyBox label: s.copy)\n"
             "}\n"
             "main: function is {}"
         )
@@ -13982,7 +14050,7 @@ class TestReturnConstructionTake:
             "Point: record { x: i64 y: i64 }\n"
             "mk: function out Point is {\n"
             "    n: 5\n"
-            "    return Point x: n y: n\n"
+            "    return (Point x: n y: n)\n"
             "}\n"
             "main: function is {}"
         )
@@ -14004,7 +14072,7 @@ class TestBranchOwnershipDivergingArms:
             "main: function is {\n"
             '    wstr: "hi".string\n'
             "    pick: bool.false\n"
-            "    if pick then { return Token v: wstr }\n"
+            "    if pick then { return (Token v: wstr) }\n"
             '    print "fall: \\{wstr}"\n'
             "}"
         )
@@ -14032,7 +14100,7 @@ class TestBranchOwnershipDivergingArms:
             "main: function is {\n"
             '    wstr: "hi".string\n'
             "    c: Color.blue\n"
-            "    match (c) case red then { return Token v: wstr } "
+            "    match (c) case red then { return (Token v: wstr) } "
             "case blue then {}\n"
             '    print "fall: \\{wstr}"\n'
             "}"

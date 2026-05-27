@@ -3667,12 +3667,25 @@ class TypeChecker:
                         self.typing.set_child_default(ftype, fname, parent_default)
                 continue
             self._set_child(ftype, fname, ft)
-            # propagate field defaults to constructor
+            # propagate field defaults to constructor; meta.create is
+            # the raw allocator and the emitter zero-inits any missing
+            # field, so synthesise a sentinel default for every field
+            # without an explicit one. The string value is irrelevant
+            # — the emitter has its own field-default table; only the
+            # presence of a default is read at typecheck time, to
+            # gate the missing-required-arg check.
             parent_default = self.typing.child_default(parent_type, fname)
             if parent_default is not None:
                 self.typing.set_child_default(ftype, fname, parent_default)
-            # reftype fields need .take ownership
-            if not _is_valtype(ft):
+            else:
+                self.typing.set_child_default(ftype, fname, "")
+            # Field ownership flows to the meta.create param:
+            # `.lock` field => LOCK param (caller's lock transfers in);
+            # any other reftype field => TAKE param (caller transfers
+            # ownership into the field).
+            if self.typing.is_child_lock_field(parent_type, fname):
+                self.typing.set_child_ownership(ftype, fname, ZParamOwnership.LOCK)
+            elif not _is_valtype(ft):
                 self.typing.set_child_ownership(ftype, fname, ZParamOwnership.TAKE)
         return ftype
 
@@ -9371,7 +9384,7 @@ class TypeChecker:
             # of a *different* type (z_StringView_t / z_ListView_T_t)
             # so they can't be elided into a name substitution — emit
             # the real assignment instead.
-            if child_name in ("take", "borrow", "lock"):
+            if child_name in ("take", "borrow", "lock", "private"):
                 alias_target = self._alias_target_inner(
                     cast(
                         zast.Operation,
@@ -10286,151 +10299,23 @@ class TypeChecker:
 
     def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
         """Check a return statement: verify return value matches function return type."""
-        # Detect return-construction shorthand: `return Type field1: x ...`
-        # parses with Type as args[0] (a bare AtomId path) and the fields as
-        # remaining args. The emitter folds this into meta.create. Under the
-        # unified dispatch rule this must route through children["create"]:
-        # if we're inside the type's own 'create' body, it is recursion and
-        # the user must use `return meta.create field1: x ...` instead.
-        if (
-            len(call.arguments) >= 1
-            and call.arguments[0].name is None
-            and call.arguments[0].valtype.nodetype == NodeType.ATOMID
-            and any(a.name is not None for a in call.arguments[1:])
-            and self.func_ctx.body
-        ):
-            first = cast(zast.AtomId, call.arguments[0].valtype)
-            # only do the recursion check when the first arg refers to a
-            # user-defined type (has a resolved children["create"]).
-            type_ref = self._resolve_name(first.name)
-            if (
-                type_ref is not None
-                and type_ref.typetype
-                in (ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.VARIANT)
-                and self.typing.child_of(type_ref, "create") is self.func_ctx.body[-1]
-            ):
-                self._error(
-                    f"cannot construct '{first.name}' inside '{first.name}.create' "
-                    f"via the return shorthand — this would call the constructor "
-                    f"recursively. Use 'return meta.create {{fields}}' for the "
-                    f"raw allocator.",
-                    loc=call.start,
-                    err=ERR.CALLERROR,
-                )
-                return self._resolve_name("never") or self.t_null
-
-        # Detect `return Type.create field1: x ...` — args[0] is a DottedPath
-        # pointing at the type's create function, and if we're inside that
-        # very function this is explicit recursion.
-        if (
-            len(call.arguments) >= 1
-            and call.arguments[0].name is None
-            and call.arguments[0].valtype.nodetype == NodeType.DOTTEDPATH
-            and self.func_ctx.body
-        ):
-            dp_first = cast(zast.DottedPath, call.arguments[0].valtype)
-            if (
-                dp_first.child.name == "create"
-                and dp_first.parent.nodetype == NodeType.ATOMID
-            ):
-                type_name = cast(zast.AtomId, dp_first.parent).name
-                type_ref = self._resolve_name(type_name)
-                if (
-                    type_ref is not None
-                    and self.typing.child_of(type_ref, "create")
-                    is self.func_ctx.body[-1]
-                ):
-                    self._error(
-                        f"cannot call '{type_name}.create' recursively (directly "
-                        f"or via bare-name). Use 'meta.create' for the raw "
-                        f"allocator.",
-                        loc=call.start,
-                        err=ERR.CALLERROR,
-                    )
-                    return self._resolve_name("never") or self.t_null
-
-        # Detect return-construction shorthand with meta.create:
-        # `return meta.create field1: x ...` inside a type's method body
-        # resolves to the enclosing type's :meta.create raw allocator. The
-        # compiler-internal meta.create returns the enclosing type, so the
-        # return-type check must see that type rather than the function type.
-        if (
-            len(call.arguments) >= 1
-            and call.arguments[0].name is None
-            and call.arguments[0].valtype.nodetype == NodeType.DOTTEDPATH
-        ):
-            dp = cast(zast.DottedPath, call.arguments[0].valtype)
-            if (
-                dp.parent.nodetype == NodeType.ATOMID
-                and cast(zast.AtomId, dp.parent).name == "meta"
-                and dp.child.name == "create"
-                and self.func_ctx.enclosing_type
-            ):
-                enclosing = self.func_ctx.enclosing_type[-1]
-                # validate the field args by type (missing-field check
-                # is handled via the meta-create signature).
-                for a in call.arguments[1:]:
-                    self._check_operation(a.valtype)
-                self.typing.node_type[call.arguments[0].valtype.nodeid] = enclosing
-                ret_type_meta: Optional[ZType] = enclosing
-                if self.func_ctx.return_type and ret_type_meta:
-                    if not self._types_compatible(
-                        ret_type_meta, self.func_ctx.return_type
-                    ):
-                        self._error(
-                            f"return type mismatch: function expects "
-                            f"{self.func_ctx.return_type.name}, got "
-                            f"{ret_type_meta.name}",
-                            loc=call.start,
-                            err=ERR.TYPEERROR,
-                        )
-                never_meta = self._resolve_name("never")
-                self.typing.node_type[call.nodeid] = (
-                    never_meta if never_meta else self.t_null
-                )
-                return self.typing.node_type.get(call.nodeid)
-
-        # Diagnostic: `return` (modelled as a control-flow call) has no
-        # user-declared parameters. The flat `return X args:` shape is
-        # reserved for return-statement argument shapes the typechecker
-        # explicitly recognises: type-construction shorthand
-        # (`return Counter value: start`) for Record/Class/Variant types,
-        # and the `Type.create` / `meta.create` dotted-path forms above.
-        # Anything else with trailing named args is the user trying to
-        # make a call in return position without parens. Reject with a
-        # targeted message and suggest the paren form -- same idiom as
-        # union construction (`return (OpenResult.ok rr.take)`
-        # in src/zvfs.z).
+        # `return` has no user-declared parameters. A flat
+        # `return X arg: val ...` is the user trying to make a call
+        # in return position without parens — reject with a targeted
+        # message and suggest the paren form. Once wrapped, the inner
+        # Call routes through the regular call pipeline and gets
+        # uniform `.create` / `meta.create` dispatch.
         if call.arguments and any(a.name is not None for a in call.arguments[1:]):
-            arg0 = call.arguments[0].valtype
-            is_type_construction = False
-            if arg0.nodetype == NodeType.ATOMID:
-                type_ref = self._resolve_name(cast(zast.AtomId, arg0).name)
-                if type_ref is not None and type_ref.typetype in (
-                    ZTypeType.RECORD,
-                    ZTypeType.CLASS,
-                    ZTypeType.VARIANT,
-                ):
-                    is_type_construction = True
-            elif arg0.nodetype == NodeType.DOTTEDPATH:
-                dp = cast(zast.DottedPath, arg0)
-                # `<X>.create` (Type.create or meta.create) shorthand;
-                # mirrors the existing checks at lines 10315 + 10348.
-                # fmt: off
-                if dp.child.name == "create" and dp.parent.nodetype == NodeType.ATOMID:  # noqa: E501  ztc-string-compare-ok: see lines 10315 + 10348
-                    is_type_construction = True
-                # fmt: on
-            if not is_type_construction:
-                first_named = next(a for a in call.arguments[1:] if a.name is not None)
-                self._error(
-                    f"return doesn't accept named argument "
-                    f"'{first_named.name}'. To pass arguments to a call "
-                    f"in return position, wrap the call in parens: "
-                    f"`return (X arg: val ...)`.",
-                    loc=first_named.start,
-                    err=ERR.CALLERROR,
-                )
-                return self._resolve_name("never") or self.t_null
+            first_named = next(a for a in call.arguments[1:] if a.name is not None)
+            self._error(
+                f"return doesn't accept named argument "
+                f"'{first_named.name}'. To pass arguments to a call "
+                f"in return position, wrap the call in parens: "
+                f"`return (X arg: val ...)`.",
+                loc=first_named.start,
+                err=ERR.CALLERROR,
+            )
+            return self._resolve_name("never") or self.t_null
 
         # type-check the return expression (first argument)
         ret_type = None
@@ -10441,79 +10326,6 @@ class TypeChecker:
             # G2: capture any lock source installed by an inline projection
             # (.stringview / .listview / .borrow) in the return expression.
             inline_borrow_src = ret_result.borrow_target
-            # Return-construction shorthand: `return Type field: val ...`
-            # parses as a Call with the type as args[0] (no name) and the
-            # fields as named args[1:]. The emitter folds these via
-            # _build_create_args. Without visiting them here, nested paths
-            # (e.g. `n.copy`) never get their `.type` stamped, so per-method
-            # emit dispatches gated on `parent.type` silently fall through.
-            # Also runs the aggregate lock-escape check so storing a
-            # borrowed param into an owned field is rejected here, not
-            # later as a gcc signature mismatch.
-            if (
-                len(call.arguments) >= 2
-                and call.arguments[0].name is None
-                and call.arguments[0].valtype.nodetype == NodeType.ATOMID
-                and any(a.name is not None for a in call.arguments[1:])
-            ):
-                # Resolve the type's constructor so we can apply TAKE
-                # semantics to each field arg. The standard call
-                # pipeline (`_dispatch_call_construction` for a bare
-                # Type as callable) routes through `_check_call_arguments`
-                # which calls `_apply_take_to_arg`; the return-construction
-                # shorthand handled here bypasses that pipeline, so we
-                # must do the take invalidation explicitly — otherwise
-                # the source variable stays "owned" in the symtab and
-                # the function-exit cleanup double-frees it (the
-                # returned aggregate already owns its bytes).
-                type_name = cast(zast.AtomId, call.arguments[0].valtype).name
-                type_ref = self._resolve_name(type_name)
-                shorthand_create = (
-                    self.typing.child_of(type_ref, "create")
-                    if type_ref is not None
-                    else None
-                )
-                for a in call.arguments[1:]:
-                    self._check_operation(a.valtype)
-                    if shorthand_create is not None and a.name:
-                        param_own = self.typing.child_ownership(
-                            shorthand_create, a.name
-                        )
-                        effective_own = (
-                            param_own
-                            if param_own is not None
-                            else ZParamOwnership.BORROW
-                        )
-                        if effective_own == ZParamOwnership.TAKE:
-                            # Skip invalidation when the arg's root is a
-                            # borrowed variable. The regular call pipeline
-                            # uses _hoist_arg to stash non-trivial args
-                            # (like `s.copy`) into a fresh owned temp
-                            # before applying take; we don't hoist here,
-                            # so the arg root may still be the borrowed
-                            # source. Letting _apply_take_to_arg run
-                            # would reject every `.copy` of a borrowed
-                            # param. The downstream
-                            # _check_aggregate_lock_escape catches
-                            # genuine borrowed-storage attempts.
-                            arg_root = self._get_arg_root_name(a.valtype)
-                            arg_var = (
-                                self.symtab.lookup_var(arg_root) if arg_root else None
-                            )
-                            if not (
-                                arg_var and arg_var.ownership == ZOwnership.BORROWED
-                            ):
-                                self._apply_take_to_arg(a, a.name)
-                # Run the aggregate lock-escape check so storing a
-                # borrowed param into an owned field is rejected here,
-                # not later as a gcc signature mismatch. The check
-                # iterates `call.arguments`; args[0] is the bare type
-                # name (no name, no symtab var) so all cases skip it.
-                if ret_type is not None and ret_type.typetype in (
-                    ZTypeType.CLASS,
-                    ZTypeType.RECORD,
-                ):
-                    self._check_aggregate_lock_escape(call, ret_type)
 
         if self.func_ctx.return_type and ret_type:
             if not self._types_compatible(ret_type, self.func_ctx.return_type):

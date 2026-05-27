@@ -205,7 +205,7 @@ class TestBareReturn:
         # at the third iteration.
         csource = emit_source(
             "Token: class { v: i64 }\n"
-            "mk: function {n: i64} out Token is { return Token v: n }\n"
+            "mk: function {n: i64} out Token is { return (Token v: n) }\n"
             "main: function is {\n"
             "    n: 0.u64\n"
             "    for while n < 5.u64 loop {\n"
@@ -223,7 +223,7 @@ class TestBareReturn:
         # cleanup must run so ASan sees no leak.
         csource = emit_source(
             "Token: class { v: i64 }\n"
-            "mk: function {n: i64} out Token is { return Token v: n }\n"
+            "mk: function {n: i64} out Token is { return (Token v: n) }\n"
             "main: function is {\n"
             "    t: mk 1\n"
             '    print "got \\{t.v}"\n'
@@ -254,7 +254,7 @@ class TestReturnConstructionTakeSoundness:
         csource = emit_source(
             "Token: class { v: String }\n"
             "mk: function {n: i64} out Token is "
-            '{ return Token v: "hi".string }\n'
+            '{ return (Token v: "hi".string) }\n'
             "main: function is {\n"
             "    t: mk 1\n"
             '    print "v=\\{t.v}"\n'
@@ -273,7 +273,7 @@ class TestReturnConstructionTakeSoundness:
             "Token: class { v: String }\n"
             "mk: function {n: i64} out Token is {\n"
             '    wstr: "hi".string\n'
-            "    return Token v: wstr\n"
+            "    return (Token v: wstr)\n"
             "}\n"
             "main: function is {\n"
             "    t: mk 1\n"
@@ -298,7 +298,7 @@ class TestForBodyClassCleanup:
     _SRC_WHILE_FORM = (
         "Token: class { v: String }\n"
         "mk: function {n: i64} out Token is "
-        '{ return Token v: "hi".string }\n'
+        '{ return (Token v: "hi".string) }\n'
         "main: function is {\n"
         "    n: 0.u64\n"
         "    for while n < 3.u64 loop {\n"
@@ -312,7 +312,7 @@ class TestForBodyClassCleanup:
     _SRC_INIT_FORM = (
         "Token: class { v: String }\n"
         "mk: function {n: i64} out Token is "
-        '{ return Token v: "hi".string }\n'
+        '{ return (Token v: "hi".string) }\n'
         "main: function is {\n"
         "    for i: 0 while i < 3 loop {\n"
         "        t: mk i\n"
@@ -2799,7 +2799,7 @@ class TestEmitterClassIntegration:
     def test_class_function_return(self):
         csource = emit_source(
             "MyClass: class { x: i64 }\n"
-            "make: function {v: i64} out MyClass is { return MyClass x: v }\n"
+            "make: function {v: i64} out MyClass is { return (MyClass x: v) }\n"
             'main: function is { c: make 99\n print "\\{c.x}" }'
         )
         output = compile_and_run(csource)
@@ -2896,7 +2896,7 @@ class TestEmitterClassMemorySafety:
     def test_class_function_return_no_leak(self):
         csource = emit_source(
             "MyClass: class { x: i64 }\n"
-            "make: function {v: i64} out MyClass is { return MyClass x: v }\n"
+            "make: function {v: i64} out MyClass is { return (MyClass x: v) }\n"
             'main: function is { c: make 99\n print "\\{c.x}" }'
         )
         result = compile_and_run_asan(csource)
@@ -3893,7 +3893,7 @@ class TestReturnPathTake:
         csource = emit_source(
             "MyClass: class { name: String }\n"
             "wrap: function {s: String.take} out MyClass is {\n"
-            "  return MyClass name: s.take\n"
+            "  return (MyClass name: s.take)\n"
             "}\n"
             "main: function is {\n"
             '  c: wrap "hello".string\n'
@@ -3953,7 +3953,7 @@ class TestEmitterConstructors:
         """Return with class construction should call .create."""
         csource = emit_source(
             "MyClass: class { x: i64 }\n"
-            "make: function {v: i64} out MyClass is { return MyClass x: v }\n"
+            "make: function {v: i64} out MyClass is { return (MyClass x: v) }\n"
             "main: function is { c: make 99 }"
         )
         assert "z_MyClass_create(v)" in csource
@@ -3976,7 +3976,7 @@ class TestEmitterConstructors:
         """Method with 'out this' return type should resolve correctly."""
         csource = emit_source(
             "MyClass: class { x: 0 } as {\n"
-            "  make: function {v: i64} out this is { return MyClass x: v }\n"
+            "  make: function {v: i64} out this is { return (MyClass x: v) }\n"
             "}\n"
             "main: function is { c: MyClass }"
         )
@@ -8974,7 +8974,7 @@ class TestClassLockFields:
             "Bag: class { a: i64 }\n"
             "BagView: class { target: Bag.lock } as {\n"
             "  create: function {target: Bag.lock} out this is {\n"
-            "    return meta.create target: target\n"
+            "    return (meta.create target: target)\n"
             "  }\n"
             "}\n"
             "main: function is { b: Bag a: 1\nv: BagView target: b }"
@@ -8988,7 +8988,7 @@ class TestClassLockFields:
             "Bag: class { a: i64 b: i64 }\n"
             "BagView: class { target: Bag.private.lock } as {\n"
             "  create: function {target: Bag.lock} out this is {\n"
-            "    return meta.create target: target\n"
+            "    return (meta.create target: target)\n"
             "  }\n"
             "  getval: function {v: this} out i64 is { return v.target.a }\n"
             "}\n"
@@ -9243,7 +9243,7 @@ class TestAliasBinding:
             "Bag: class { x: i64 } as {\n"
             "  public: unit { :x }\n"
             "  create: function { x: i64 } out this is {\n"
-            "    return meta.create x: x\n"
+            "    return (meta.create x: x)\n"
             "  }\n"
             "}\n"
             "main: function is {\n"

@@ -1582,23 +1582,25 @@ def _build_create_method(
                 name=pname, valtype=lv, start=loc, synth_origin=_SYNTH_ORIGIN
             )
         )
-    # Parser flattens `return meta.create x: 1 y: 2` into one Call:
-    #   callable = "return"
-    #   arguments = [meta.create (positional), x: 1, y: 2, ...]
-    # The emitter's `_emit_return` special-case keys off this shape
-    # (DottedPath first arg). Match it exactly.
-    flattened_args: List[NamedOperation] = [
-        NamedOperation(
-            name=None,
-            valtype=meta_create,
-            start=loc,
-            synth_origin=_SYNTH_ORIGIN,
-        )
-    ]
-    flattened_args.extend(args)
+    # Build `return (meta.create x: 1 y: 2)` — the inner Call routes
+    # through the regular call pipeline, which dispatches meta.create
+    # to the enclosing type's raw allocator.
+    inner_call = Call(
+        callable=meta_create,
+        arguments=list(args),
+        start=loc,
+        synth_origin=_SYNTH_ORIGIN,
+    )
     return_call = Call(
         callable=AtomId(name="return", start=loc, synth_origin=_SYNTH_ORIGIN),
-        arguments=flattened_args,
+        arguments=[
+            NamedOperation(
+                name=None,
+                valtype=inner_call,
+                start=loc,
+                synth_origin=_SYNTH_ORIGIN,
+            )
+        ],
         start=loc,
         synth_origin=_SYNTH_ORIGIN,
     )
@@ -1751,20 +1753,25 @@ def _build_factory(
                 synth_origin=_SYNTH_ORIGIN,
             )
         )
-    # The parser flattens `return TypeName field: val` into one Call
-    # (`callable = return`, `arguments = [TypeName, field: val, ...]`).
-    return_args: List[NamedOperation] = [
-        NamedOperation(
-            name=None,
-            valtype=synth_atom,
-            start=loc,
-            synth_origin=_SYNTH_ORIGIN,
-        )
-    ]
-    return_args.extend(forwarded)
+    # Build `return (TypeName field: val ...)` — the inner Call
+    # routes through the regular call pipeline so the synth class's
+    # `.create` is dispatched uniformly.
+    inner_call = Call(
+        callable=synth_atom,
+        arguments=list(forwarded),
+        start=loc,
+        synth_origin=_SYNTH_ORIGIN,
+    )
     return_call = Call(
         callable=AtomId(name="return", start=loc, synth_origin=_SYNTH_ORIGIN),
-        arguments=return_args,
+        arguments=[
+            NamedOperation(
+                name=None,
+                valtype=inner_call,
+                start=loc,
+                synth_origin=_SYNTH_ORIGIN,
+            )
+        ],
         start=loc,
         synth_origin=_SYNTH_ORIGIN,
     )

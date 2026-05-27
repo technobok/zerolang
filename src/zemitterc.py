@@ -7132,91 +7132,7 @@ class CEmitter:
     def _emit_return(self, call: zast.Call, indent: str) -> str:
         """Emit a return statement with proper string cleanup."""
         if call.arguments:
-            # check for inline construction shorthand:
-            #   return Type field: val ...
-            # for both classes (heap-allocated, returns pointer) and records
-            # (stack-allocated, returns by value).
-            first_arg = call.arguments[0].valtype
-            # `return meta.create field: val ...` — raw allocator of the
-            # lexically enclosing type. Emits z_<type>_meta_create(...).
-            if (
-                first_arg.nodetype == NodeType.DOTTEDPATH
-                and cast(zast.DottedPath, first_arg).parent.nodetype == NodeType.ATOMID
-                and cast(zast.AtomId, cast(zast.DottedPath, first_arg).parent).name
-                == "meta"
-                and cast(zast.DottedPath, first_arg).child.name == "create"
-                and self._current_enclosing_type_name
-            ):
-                fa_name = self._current_enclosing_type_name
-                args_str, take_vars = self._build_meta_create_args(
-                    fa_name, call.arguments, skip_first=1
-                )
-                enclosing_t = self._resolved_type(fa_name)
-                result_expr = f"z_{fa_name}_meta_create({args_str})"
-                ctype = f"z_{fa_name}_t"
-                tmp = self._temp_name("c")
-                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
-                for fname, tv in take_vars.items():
-                    if tv:
-                        ft = (
-                            self.typing.child_of(enclosing_t, fname)
-                            if enclosing_t
-                            else None
-                        )
-                        self._temp.decls.append(
-                            self._emit_take_invalidation(tv, ft, indent)
-                        )
-                val = tmp
-            elif (
-                first_arg.nodetype == NodeType.ATOMID
-                and self._node_ztype(first_arg)
-                and cast(ZType, self._node_ztype(first_arg)).typetype == ZTypeType.CLASS
-                and len(call.arguments) > 1
-            ):
-                # emit as create call
-                self.needs_stdlib = True
-                fa_name = cast(zast.AtomId, first_arg).name
-                # use _build_create_args to respect user-defined create param order
-                args_str, take_vars = self._build_create_args(
-                    fa_name, self._node_ztype(first_arg), call.arguments, skip_first=1
-                )
-                result_expr = f"z_{fa_name}_create({args_str})"
-                ctype = f"z_{fa_name}_t"
-                tmp = self._temp_name("c")
-                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
-                for fname, tv in take_vars.items():
-                    if tv:
-                        cls_t = self._resolved_type(fa_name)
-                        ft = self.typing.child_of(cls_t, fname) if cls_t else None
-                        self._temp.decls.append(
-                            self._emit_take_invalidation(tv, ft, indent)
-                        )
-                val = tmp
-            elif (
-                first_arg.nodetype == NodeType.ATOMID
-                and self._node_ztype(first_arg)
-                and cast(ZType, self._node_ztype(first_arg)).typetype
-                == ZTypeType.RECORD
-                and len(call.arguments) > 1
-            ):
-                # emit as `z_<type>_create(args)` using the order of the
-                # type's children["create"] parameters (which is either
-                # user-defined or the default meta-create wrapper).
-                fa_name = cast(zast.AtomId, first_arg).name
-                rec_t = self._node_ztype(first_arg)
-                args_str, take_vars = self._build_create_args(
-                    fa_name, rec_t, call.arguments, skip_first=1
-                )
-                result_expr = f"z_{fa_name}_create({args_str})"
-                ctype = f"z_{fa_name}_t"
-                tmp = self._temp_name("c")
-                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
-                for fname, tv in take_vars.items():
-                    if tv:
-                        self._temp.decls.append(f"{indent}{tv} = NULL;\n")
-                val = tmp
-            else:
-                val = self._emit_operation_value(call.arguments[0].valtype)
+            val = self._emit_operation_value(call.arguments[0].valtype)
             result = ""
 
             # remove return value from temp frees (caller owns it)
@@ -7669,7 +7585,12 @@ class CEmitter:
                 arg_map[arg.name] = val
                 arg_types[arg.name] = self._get_operation_type(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
-                self._transfer_implicit_take(val, arg.valtype, indent)
+                param_own = self.typing.child_ownership(create_fn, arg.name)
+                if (
+                    param_own != ZParamOwnership.LOCK
+                    and param_own != ZParamOwnership.BORROW
+                ):
+                    self._transfer_implicit_take(val, arg.valtype, indent)
 
         parts: List[str] = []
         for pname in param_names:
@@ -7711,6 +7632,14 @@ class CEmitter:
         field_ctypes = self._type_field_ctypes.get(type_name, [])
         field_defaults = self._type_field_defaults.get(type_name, {})
 
+        # The meta.create function holds per-field param ownership
+        # (TAKE for owning reftypes, LOCK for `.lock` lock-fields).
+        # Implicit-take must only fire for TAKE params — invalidating
+        # the source of a LOCK/BORROW param at the C level emits
+        # `h = (z_T){0}` against a pointer variable.
+        type_obj = self._resolved_type(type_name)
+        meta_fn = type_obj.meta_create if type_obj is not None else None
+
         # build dict from call arguments
         arg_map: Dict[str, str] = {}
         arg_types: Dict[str, Optional[ZType]] = {}
@@ -7722,7 +7651,16 @@ class CEmitter:
                 arg_map[arg.name] = val
                 arg_types[arg.name] = self._get_operation_type(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
-                self._transfer_implicit_take(val, arg.valtype, indent)
+                param_own = (
+                    self.typing.child_ownership(meta_fn, arg.name)
+                    if meta_fn is not None
+                    else None
+                )
+                if (
+                    param_own != ZParamOwnership.LOCK
+                    and param_own != ZParamOwnership.BORROW
+                ):
+                    self._transfer_implicit_take(val, arg.valtype, indent)
 
         # build ordered args
         parts: List[str] = []
@@ -8489,6 +8427,44 @@ class CEmitter:
         if self._is_variant_construction(call):
             return self._emit_variant_construction(call)
 
+        # meta.create: route through `_build_meta_create_args` so
+        # missing fields get zero-init defaults (the synth class
+        # `.create` only passes explicit args; locals / `_resume_input`
+        # / etc. fall through to the field-default machinery).
+        if (
+            call.callable.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
+            and cast(zast.AtomId, cast(zast.DottedPath, call.callable).parent).name
+            == "meta"  # ztc-string-compare-ok: meta.create dispatch
+            and cast(zast.DottedPath, call.callable).child.name
+            == "create"  # ztc-string-compare-ok: meta.create dispatch
+            and self._current_enclosing_type_name
+        ):
+            type_name = self._current_enclosing_type_name
+            args_str, take_vars = self._build_meta_create_args(
+                type_name, call.arguments
+            )
+            result = f"z_{type_name}_meta_create({args_str})"
+            enclosing_t = self._resolved_type(type_name)
+            ctype = f"z_{type_name}_t"
+            tmp = self._temp_name("c")
+            indent = self._indent()
+            self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
+            for fname, tv in take_vars.items():
+                if tv:
+                    ft = (
+                        self.typing.child_of(enclosing_t, fname)
+                        if enclosing_t
+                        else None
+                    )
+                    self._temp.decls.append(
+                        self._emit_take_invalidation(tv, ft, indent)
+                    )
+            if _call_ztype and _call_ztype.destructor_name is not None:
+                self._temp.frees.append(tmp)
+                self._temp.class_set[tmp] = type_name
+            return tmp
+
         if (
             self._node_ztype(call.callable)
             and cast(ZType, self._node_ztype(call.callable)).typetype == ZTypeType.CLASS
@@ -8601,6 +8577,8 @@ class CEmitter:
             return self._emit_const_value(op)
         if op.nodetype == NodeType.BINOP:
             return self._emit_binop_value(cast(zast.BinOp, op))
+        if op.nodetype == NodeType.CALL:
+            return self._emit_call_value(cast(zast.Call, op))
         if op.nodetype in (
             NodeType.ATOMID,
             NodeType.LABELVALUE,
