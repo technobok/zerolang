@@ -13998,6 +13998,116 @@ class TestDataBlockElementTypeUnification:
         ]
 
 
+class TestDataBlockTyping:
+    """Typed-element data blocks via `data { ... } out T` plus literal
+    coercion through bare-element access.
+
+    Each fixture references its `data` from `main` to trigger
+    resolution (data blocks are resolved on demand)."""
+
+    # ---- typed via `out T` ----
+
+    def test_out_pins_element_type(self):
+        check_ok(
+            "cBytes: data { LOW: 0 HIGH: 250 } out u8\nmain: function is { x: cBytes }"
+        )
+
+    def test_out_u8_named_access_coerces(self):
+        """Named-label access through `out u8` carries u8 directly —
+        no coercion needed; the call-arg slot just sees a u8 value."""
+        check_ok(
+            "cBytes: data { LOW: 0 HIGH: 250 } out u8\n"
+            "take_u8: function {b: u8} out u8 is { return b }\n"
+            "main: function is { x: take_u8 b: cBytes.LOW }"
+        )
+
+    def test_out_u8_value_out_of_range_rejected(self):
+        errors = check_errors(
+            "cBytes: data { LOW: 0 BIG: 1000 } out u8\nmain: function is { x: cBytes }"
+        )
+        assert any("data element type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_out_conflict_with_element_tag(self):
+        errors = check_errors(
+            "bad: data { A: 0.u8 B: 1 } out u16\nmain: function is { x: bad }"
+        )
+        assert any("data element type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    # ---- per-element type tags + unification ----
+
+    def test_element_typed_pins_block(self):
+        """A single typed element (`A: 0.u8`) unifies the block to u8."""
+        check_ok("bytes: data { A: 0.u8 B: 1 C: 250 }\nmain: function is { x: bytes }")
+
+    def test_element_typed_conflict(self):
+        errors = check_errors(
+            "bad: data { A: 0.u8 B: 0.u16 }\nmain: function is { x: bad }"
+        )
+        assert any("data element type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_typed_element_no_widen(self):
+        """A typed element (`0.u8`) does NOT silently widen to a
+        larger slot. The element type is u8; calling a u16 sink
+        with cBytes.X must error."""
+        errors = check_errors(
+            "bytes: data { X: 0.u8 Y: 1 } out u8\n"
+            "take_u16: function {b: u16} out u16 is { return b }\n"
+            "main: function is { x: take_u16 b: bytes.X }"
+        )
+        assert any("mismatch" in e.msg.lower() for e in errors), [e.msg for e in errors]
+
+    # ---- bare-element literal coercion at access sites ----
+
+    def test_bare_element_coerces_to_u8(self):
+        check_ok(
+            "mydata: data { X: 100 Y: 200 }\n"
+            "take_u8: function {b: u8} out u8 is { return b }\n"
+            "main: function is { x: take_u8 b: mydata.X }"
+        )
+
+    def test_bare_element_coerces_to_i32(self):
+        check_ok(
+            "mydata: data { X: 100 }\n"
+            "take_i32: function {b: i32} out i32 is { return b }\n"
+            "main: function is { x: take_i32 b: mydata.X }"
+        )
+
+    def test_bare_element_out_of_range_in_typed_slot(self):
+        """The element is untyped; at the call-arg site the literal-
+        coercion gate range-checks against u8 and rejects 1000."""
+        errors = check_errors(
+            "mydata: data { X: 1000 }\n"
+            "take_u8: function {b: u8} out u8 is { return b }\n"
+            "main: function is { x: take_u8 b: mydata.X }"
+        )
+        assert any(
+            "mismatch" in e.msg.lower() or "range" in e.msg.lower() for e in errors
+        ), [e.msg for e in errors]
+
+    def test_bare_element_coerces_in_return_position(self):
+        check_ok(
+            "mydata: data { X: 100 }\n"
+            "get_u8: function out u8 is { return mydata.X }\n"
+            "main: function is { x: get_u8 }"
+        )
+
+    # ---- `is`-labelled body parity ----
+
+    def test_is_labelled_body_parses(self):
+        check_ok("mydata: data is { X: 100 Y: 200 }\nmain: function is { x: mydata }")
+
+    def test_is_labelled_body_with_out(self):
+        check_ok(
+            "mydata: data is { X: 0 Y: 1 } out u8\nmain: function is { x: mydata }"
+        )
+
+
 class TestReturnConstructionTake:
     """Take semantics inside `return Type field: val` shorthand.
 

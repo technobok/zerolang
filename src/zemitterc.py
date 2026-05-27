@@ -5671,27 +5671,46 @@ class CEmitter:
         label_values: Dict[str, str] = {}
         for item in data.data:
             op = item.valtype
+            val_str: Optional[str] = None
             if op.nodetype == NodeType.ATOMID and _is_numeric_id(
                 cast(zast.AtomId, op).name
             ):
                 _, val, err = parse_number(cast(zast.AtomId, op).name)
                 if not err:
-                    if type(val) is float:
-                        val_str = str(val)
-                    else:
-                        val_str = str(int(val))
-                    values.append(val_str)
-                    # Record name→value for compile-time substitution at
-                    # `<name>.<label>` access sites. Numeric labels (the
-                    # bare-positional form) are already covered by `.index N`
-                    # and `.N` lookups; only the named-label form needs this
-                    # side table.
-                    if item.name:
-                        label_values[item.name] = val_str
+                    val_str = str(val) if type(val) is float else str(int(val))
+            elif op.nodetype == NodeType.DOTTEDPATH:
+                # Typed numeric literal, e.g. `0.u8` — combine the
+                # parent's numeric atom with the suffix to parse the
+                # full value.
+                dp = cast(zast.DottedPath, op)
+                if dp.parent.nodetype == NodeType.ATOMID and _is_numeric_id(
+                    cast(zast.AtomId, dp.parent).name
+                ):
+                    combined = cast(zast.AtomId, dp.parent).name + dp.child.name
+                    _, val, err = parse_number(combined)
+                    if not err:
+                        val_str = str(val) if type(val) is float else str(int(val))
+            if val_str is not None:
+                values.append(val_str)
+                # Record name->value for compile-time substitution at
+                # `<name>.<label>` access sites. Numeric labels (the
+                # bare-positional form) are already covered by `.index N`
+                # and `.N` lookups; only the named-label form needs this
+                # side table.
+                if item.name:
+                    label_values[item.name] = val_str
         cname = _mangle_func(name)
+        # Pick the C element type from the data block's resolved
+        # element_type. Falls back to int64_t when unresolved (defensive
+        # against early-error recovery).
+        data_ztype = self._resolved_type(name)
+        elem_ctype = "int64_t"
+        if data_ztype is not None and data_ztype.element_type is not None:
+            elem_ctype = _ctype(self.typing, data_ztype.element_type)
         if values:
             self.data_defs.append(
-                f"static const int64_t {cname}[] = {{{', '.join(values)}}};\n"
+                f"static const {elem_ctype} {cname}[] = "
+                f"{{{', '.join(values)}}};\n"
                 f"static const int64_t {cname}_len = {len(values)};\n\n"
             )
         if label_values:

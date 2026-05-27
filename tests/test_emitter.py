@@ -6745,6 +6745,34 @@ class TestNamedData:
         )
         assert compile_and_run(csource).strip() == "60"
 
+    def test_out_u8_emits_uint8_array(self):
+        """`data { ... } out u8` emits a `uint8_t[]` static array;
+        named-label access still inlines the literal at the use site."""
+        csource = emit_source(
+            "bytes: data { LOW: 0 MID: 64 HIGH: 250 } out u8\n"
+            "take_u8: function {b: u8} out u8 is { return b + 1.u8 }\n"
+            "main: function is {\n"
+            "    a: take_u8 b: bytes.LOW\n"
+            "    b: take_u8 b: bytes.HIGH\n"
+            '    print "\\{a} \\{b}"\n'
+            "}"
+        )
+        assert "static const uint8_t z_bytes[]" in csource, csource
+        assert compile_and_run(csource).strip() == "1 251"
+
+    def test_out_u8_runtime_index(self):
+        """Runtime `.index` against an `out u8` data block reads the
+        u8-typed array and returns u8."""
+        csource = emit_source(
+            "bytes: data { 10 20 30 40 50 } out u8\n"
+            "main: function is {\n"
+            "    i: 2\n"
+            '    print "\\{bytes.index i}"\n'
+            "}"
+        )
+        assert "static const uint8_t z_bytes[]" in csource, csource
+        assert compile_and_run(csource).strip() == "30"
+
 
 class TestList:
     """Tests for List type emission and runtime behavior."""

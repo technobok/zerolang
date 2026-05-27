@@ -184,6 +184,15 @@ def _make_type(
     return t
 
 
+# Data-element classification kinds. Integer constants so equality
+# checks at usage sites avoid the bootstrap-lint string-compare
+# ratchet — see `_classify_data_element`.
+_DK_UNTYPED_INT = 0
+_DK_UNTYPED_FLOAT = 1
+_DK_TYPED = 2
+_DK_OTHER = 3
+
+
 def _is_valtype(ztype: ZType) -> bool:
     """Check if a type is a value type (copied, always owned)."""
     if ztype.is_valtype is not None:
@@ -2558,21 +2567,62 @@ class TypeChecker:
         self._resolving.pop()
         return vtype
 
+    def _classify_data_element(
+        self, valtype: zast.Operation
+    ) -> Tuple[int, Optional[float], Optional[ZType]]:
+        """Classify a data-element value AST node.
+
+        Returns (kind, value, declared_type) where kind is one of:
+        - `_DK_UNTYPED_INT` — bare integer literal; value is the
+          parsed int, declared_type is None.
+        - `_DK_UNTYPED_FLOAT` — bare float literal; value is the
+          parsed float, declared_type is None.
+        - `_DK_TYPED` — typed numeric literal (`0.u8`, `1.5.f32`);
+          value is the parsed int/float, declared_type is the
+          suffix type.
+        - `_DK_OTHER` — reference / typeref / expression element;
+          caller falls back to `_resolve_typeref`.
+        """
+        if valtype.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            atom_name = cast(zast.AtomId, valtype).name
+            if _is_numeric_id(atom_name):
+                _, val, err = parse_number(atom_name)
+                if err is None and val is not None:
+                    if type(val) is float:
+                        return (_DK_UNTYPED_FLOAT, val, None)
+                    return (_DK_UNTYPED_INT, val, None)
+        elif valtype.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, valtype)
+            if dp.parent.nodetype == NodeType.ATOMID and _is_numeric_id(
+                cast(zast.AtomId, dp.parent).name
+            ):
+                pname = cast(zast.AtomId, dp.parent).name
+                child_name = dp.child.name
+                resolved = self._resolve_name(child_name)
+                if resolved is not None and _is_numeric_type(resolved):
+                    _, val, err = parse_number(pname + child_name)
+                    if err is None and val is not None:
+                        return (_DK_TYPED, val, resolved)
+        return (_DK_OTHER, None, None)
+
     def _resolve_data_type(
         self, unitname: str, name: str, data_defn: zast.Data
     ) -> ZType:
         """Resolve a data definition into a DATA ZType with children for each element.
 
         Children are keyed by element name (text label or ordinal identifier).
-        Each child ZType's name stores the literal value (e.g. "10", "0")
-        and its type is the resolved numeric type (stored as parent).
+        Element values live in `dtype.data_values[ename]`. Each child
+        ZType is either:
+          - LITERAL_INT / LITERAL_FLOAT for bare untyped numeric
+            literals (coerce per use site, default to i64/f64 if never
+            forced); or
+          - the declared concrete type for typed elements (`0.u8`); or
+          - the resolved typeref for reference/expression elements.
 
-        First-element-sets-type rule: subsequent elements must share
-        a type with the first. For numeric literals, a bare element
-        whose value fits the first element's concrete numeric type
-        is accepted (e.g. `data { 1.u8 2 3 }` — `2` and `3` fit
-        u8). Mismatches emit a diagnostic naming the expected vs.
-        actual element type.
+        Element-type unification: every explicit type tag — the
+        optional `out T` argument plus every typed-literal element —
+        must agree. The unified type becomes the block's
+        `element_type`. With no explicit tags, the default is i64.
         """
         key = f"{unitname}.{name}"
         dtype = _make_type(name, ZTypeType.DATA)
@@ -2581,8 +2631,12 @@ class TypeChecker:
 
         dtype.is_valtype = False  # data is a reference type (constant array)
 
-        # Resolve each data element, assigning ordinal identifiers to unnamed elements
-        element_type: Optional[ZType] = None  # inferred from first element
+        # --- Pass 1: classify each element ---
+        # element_infos: list of (ename, kind, value, declared_type, item)
+        # kind: "untyped_int" | "untyped_float" | "typed" | "other"
+        element_infos: List[
+            Tuple[str, int, Optional[float], Optional[ZType], zast.NamedOperation]
+        ] = []
         ordinal = 0
         for item in data_defn.data:
             if item.name is not None:
@@ -2590,67 +2644,101 @@ class TypeChecker:
             else:
                 ename = str(ordinal)
             ordinal += 1
+            kind, value, declared_type = self._classify_data_element(item.valtype)
+            element_infos.append((ename, kind, value, declared_type, item))
 
-            # Resolve the value — store as a type with the value as name
-            if item.valtype.nodetype in (
-                NodeType.ATOMID,
-                NodeType.LABELVALUE,
-            ) and _is_numeric_id(cast(zast.AtomId, item.valtype).name):
-                item_valtype_atom = cast(zast.AtomId, item.valtype)
-                item_type = self._resolve_numeric(
-                    item_valtype_atom.name, loc=item_valtype_atom.start
+        # --- Resolve `out T` if present ---
+        out_type: Optional[ZType] = None
+        if data_defn.out_type is not None:
+            out_type = self._resolve_typeref(data_defn.out_type)
+
+        # --- Unify all explicit type tags ---
+        unified: Optional[ZType] = out_type
+        unified_source: str = "'out'"
+        for ename, kind, _value, declared_type, item in element_infos:
+            if kind == _DK_TYPED and declared_type is not None:
+                if unified is None:
+                    unified = declared_type
+                    unified_source = f"element '{ename}'"
+                elif not self._types_compatible(unified, declared_type):
+                    self._error(
+                        f"data element type mismatch: {unified_source} "
+                        f"declares '{unified.name}' but element '{ename}' "
+                        f"declares '{declared_type.name}'",
+                        loc=item.valtype.start,
+                    )
+
+        # Detect untyped int/float family mixing — if no explicit tag
+        # has pinned the type, untyped int + untyped float in the
+        # same block is incompatible.
+        if unified is None:
+            has_int = any(k == _DK_UNTYPED_INT for _e, k, _v, _d, _i in element_infos)
+            has_float = any(
+                k == _DK_UNTYPED_FLOAT for _e, k, _v, _d, _i in element_infos
+            )
+            if has_int and has_float:
+                first_float = next(
+                    i for _e, k, _v, _d, i in element_infos if k == _DK_UNTYPED_FLOAT
                 )
-                if element_type is None:
-                    element_type = item_type
-                elif item_type is not None and not self._types_compatible(
-                    element_type, item_type
-                ):
-                    # Element-type unification: if both are numeric and
-                    # the literal value fits the first element's range,
-                    # accept it (e.g. `data { 1.u8 2 3 }` — `2`/`3`
-                    # default to i64 here but their values fit u8).
-                    # Otherwise emit a mismatch diagnostic.
-                    coerces = False
-                    if _is_numeric_type(element_type) and _is_numeric_type(item_type):
-                        _, val_check, err_check = parse_number(item_valtype_atom.name)
-                        if not err_check and type(val_check) is int:
-                            lo_hi = NUMERIC_RANGES.get(element_type.name)
-                            if lo_hi is not None:
-                                lo, hi = lo_hi
-                                if lo <= val_check <= hi:
-                                    coerces = True
-                    if not coerces:
-                        self._error(
-                            f"data element type mismatch: expected "
-                            f"'{element_type.name}', got '{item_type.name}'",
-                            loc=item_valtype_atom.start,
-                        )
-                # Register the child with the resolved element type
-                # (i64 / u8 / f64 / ...) so downstream consumers can
-                # use the access expression as a value of that type.
-                # The literal value lives in dtype.data_values keyed
-                # by label, for the custom-tag duplicate-detect layer
-                # and the emitter's compile-time substitution.
-                _, val, err = parse_number(item_valtype_atom.name)
-                if not err and item_type is not None:
-                    val_str = str(int(val)) if type(val) is not float else str(val)
+                self._error(
+                    "data element type mismatch: mixed integer and "
+                    "float literals in the same data block",
+                    loc=first_float.valtype.start,
+                )
+
+        # Default: i64 when no explicit tag anywhere, or f64 when
+        # only untyped floats. Mirrors bare-literal late-pass defaults.
+        if unified is not None:
+            element_type = unified
+        else:
+            only_float = all(
+                k != _DK_UNTYPED_INT for _e, k, _v, _d, _i in element_infos
+            ) and any(k == _DK_UNTYPED_FLOAT for _e, k, _v, _d, _i in element_infos)
+            element_type = self._resolve_name("f64" if only_float else "i64")
+
+        # --- Pass 2: register children + range-check untyped literals ---
+        for ename, kind, value, declared_type, item in element_infos:
+            if kind == _DK_TYPED and declared_type is not None:
+                self._set_child(dtype, ename, declared_type)
+                if value is not None:
+                    val_str = (
+                        str(int(value)) if type(value) is not float else str(value)
+                    )
                     dtype.data_values[ename] = val_str
-                    self._set_child(dtype, ename, item_type)
-            elif item.valtype.nodetype in (
-                NodeType.ATOMID,
-                NodeType.DOTTEDPATH,
-                NodeType.ATOMSTRING,
-                NodeType.EXPRESSION,
-                NodeType.LABELVALUE,
-            ):
+            elif kind == _DK_UNTYPED_INT:
+                # Range-check against the block element type, when it
+                # is a concrete numeric. Surfaces the error at the
+                # element's source location.
+                if (
+                    element_type is not None
+                    and _is_numeric_type(element_type)
+                    and not element_type.is_literal
+                ):
+                    lo_hi = NUMERIC_RANGES.get(element_type.name)
+                    if lo_hi is not None and value is not None:
+                        lo, hi = lo_hi
+                        if not (lo <= value <= hi):
+                            self._error(
+                                f"data element type mismatch: '{ename}' "
+                                f"value {int(value)} does not fit in "
+                                f"'{element_type.name}'",
+                                loc=item.valtype.start,
+                            )
+                self._set_child(dtype, ename, LITERAL_INT)
+                if value is not None:
+                    dtype.data_values[ename] = str(int(value))
+            elif kind == _DK_UNTYPED_FLOAT:
+                self._set_child(dtype, ename, LITERAL_FLOAT)
+                if value is not None:
+                    dtype.data_values[ename] = str(value)
+            elif kind == _DK_OTHER:
+                # reference / expression element — resolve as a typeref
                 et = self._resolve_typeref(cast(zast.Path, item.valtype))
-                if et:
-                    if element_type is None:
-                        element_type = et
-                    elif not self._types_compatible(element_type, et):
+                if et is not None:
+                    if unified is not None and not self._types_compatible(unified, et):
                         self._error(
                             f"data element type mismatch: expected "
-                            f"'{element_type.name}', got '{et.name}'",
+                            f"'{unified.name}', got '{et.name}'",
                             loc=item.valtype.start,
                         )
                     self._set_child(dtype, ename, et)
@@ -8050,6 +8138,18 @@ class TypeChecker:
                 garg = self.typing.generic_arg_of(parent_type, child_name)
                 if garg and garg.const_value is not None:
                     self.typing.node_const_value[path.nodeid] = garg.const_value
+            # Data-block element access: stamp the literal value on
+            # the DottedPath so the coercion machinery sees an
+            # untyped-literal source. Mirrors `_check_atomid`'s
+            # `node_const_value` stamp for bare numeric atoms.
+            if (
+                parent_type is not None
+                and parent_type.typetype == ZTypeType.DATA
+                and child_name in parent_type.data_values
+            ):
+                _, _val, _err = parse_number(parent_type.data_values[child_name])
+                if _err is None and _val is not None:
+                    self.typing.node_const_value[path.nodeid] = _val
             # Stamp child_id against parent's ZType so the emitter can
             # dispatch by id on hot paths (union/variant arm access,
             # record field, method dispatch). Falls back to name lookup

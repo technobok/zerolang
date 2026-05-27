@@ -2722,16 +2722,34 @@ the data range will have a zero value. The indexes always range from 0 to the
 largest index specified/calculated.</p>
 <p>Named <code>data</code> elements can be reference directly elsewhere in the source and
 this is similar to refrencing a constant.</p>
-<p>The type of each element is determined from the type of the first element in
-the body. All remaining elements must be able to be coerced into this type.</p>
+<p>The element type for the whole block is determined by unifying every
+explicit type tag &#x2014; the optional <code>out T</code> argument plus any per-element
+type tag (<code>name: 0.T</code>). All explicit tags must agree; conflicts are a
+type error. When no explicit tag appears anywhere, the block defaults to
+<code>i64</code> (or <code>f64</code> if every element is a bare float literal).</p>
+<p>A bare numeric element (<code>cNul: 0</code>) is treated as an untyped numeric
+literal at compile-time access (<code>mydata.cNul</code>) &#x2014; it has no specific
+type until forced by location, then coerces to whatever the target slot
+expects (with range-checking). This mirrors the behaviour of top-level
+untyped literals. A typed element (<code>cNul: 0.u8</code>) carries that specific
+type at every access; coercion to a different numeric type is rejected
+(same as a typed numeric literal anywhere else).</p>
+<p>The block's element type also determines the C-level array element
+type when the data block is emitted as a runtime array (variable
+indexing, iteration). With <code>out u8</code> the array becomes
+<code>static const uint8_t[]</code>; with no <code>out</code> and no typed elements, it
+defaults to <code>static const int64_t[]</code>.</p>
 <p>String literal fragments are built on top of a u8 data sequence.</p>
 <p>The data when used at runtime has exactly the same API as <code>collections.list</code>
 except that it is readonly.</p>
-<pre><code class="language-zerolang"># array of i64
+<pre><code class="language-zerolang"># array of i64 (default &#x2014; no explicit type tag)
 mydata_i64: data { 1 2 0x07 }
 
-# array of u8
-mydata_u8: data { 1.u8 2 0x07 }
+# array of u8 via `out T` &#x2014; every element is u8, no per-element tag
+mydata_u8: data { 0 64 250 } out u8
+
+# array of u8 via a per-element type tag &#x2014; same result as `out u8`
+mydata_u8b: data { 1.u8 2 0x07 }
 
 # a sparsely defined array of length 5 (1, 2, 0, 3, 4)
 mydata_sparse: data { 1 2 4: 4 }
@@ -2745,6 +2763,11 @@ myvariant: variant {
 } as {
     tag: mydata_key.tag
 }
+
+# bare elements are untyped literals: coerce to whatever the
+# destination expects (with range-checking)
+take_u8: function {b: u8} out u8 is { return b }
+result: take_u8 b: mydata_key.FIRST   # FIRST is 1, coerces to u8
 
 # can also use elements as constants in top level or in code:
 One: mydata_key.FIRST   # same as..

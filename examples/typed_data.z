@@ -1,0 +1,35 @@
+# typed_data.z -- data blocks with explicit element type via `out T`.
+#
+# Two forms exist for declaring data blocks:
+#   - Untyped:  `data { ... }`            element type defaults to i64
+#   - Typed:    `data { ... } out T`      every element pinned to T
+#
+# When the block is a constant lookup table of bytes / small ints,
+# `out u8` keeps the C-level array narrow (one byte per slot
+# instead of eight) without forcing per-element `.u8` suffixes.
+
+# Typed: every element pinned to u8. The C emitter lays this out
+# as `static const uint8_t[]`.
+bytemask: data {
+    LOW:  0
+    MID:  64
+    HIGH: 250
+} out u8
+
+# Untyped: element type defaults to i64. Literals coerce at use
+# sites — `primes.0` flows into whatever numeric slot the caller
+# expects.
+primes: data { 2 3 5 7 11 }
+
+take_u8: function {b: u8} out u8 is { return b + 1.u8 }
+
+main: function is {
+    # Named-label access on a typed block: the literal is inlined
+    # and arrives at `take_u8` already as u8.
+    print "low: \{take_u8 b: bytemask.LOW}"
+    print "high: \{take_u8 b: bytemask.HIGH}"
+
+    # Untyped block + literal coercion: the i64 default value
+    # coerces at the call-site boundary.
+    print "first prime: \{primes.0}"
+}

@@ -2315,13 +2315,29 @@ class Parser:
             msg = "Expected closing brace '}' for data body"
             return zast.Error(start=lex.acceptany(), err=ERR.BADDATA, msg=msg)
 
+        # Optional `out <type-ref>` after the body. Pins the element
+        # type for the whole block — the typechecker unifies it with
+        # any per-element type tags.
+        out_type: Optional[zast.Path] = None
+        if lex.accept(TT.OUT):
+            typeref = self._accept_path(lex)
+            if typeref is None:
+                msg = "Expected type reference after 'out'"
+                return zast.Error(start=lex.acceptany(), err=ERR.BADDATA, msg=msg)
+            if typeref.is_error:
+                return cast(zast.Error, typeref)
+            typeref = cast(NodeX[zast.Path], typeref)
+            out_type = typeref.node
+            promoteexterns(addto=extern, addfrom=typeref.extern)
+
         if not data:
             # Grammar: data body requires at least one element. The
-            # element type is inferred from the first element.
+            # element type is inferred from the first element when
+            # `out` is absent, or pinned by `out` otherwise.
             msg = "data definition must have at least one element"
             return zast.Error(start=start, err=ERR.BADDATA, msg=msg)
 
-        datanode = zast.Data(data=data, start=start)
+        datanode = zast.Data(data=data, out_type=out_type, start=start)
         return NodeX(datanode, extern=extern)
 
     def _accept_operation(

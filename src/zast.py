@@ -465,6 +465,9 @@ def _clone_node(node: "Node") -> "Node":
         dn = cast(Data, node)
         return Data(
             data=cast("typing.List[NamedOperation]", _clone_list(dn.data)),
+            out_type=cast(typing.Optional[Path], _clone_node(dn.out_type))
+            if dn.out_type
+            else None,
             start=dn.start,
             synth_origin=so,
         )
@@ -980,6 +983,10 @@ class Data(Node):
 
     nodetype: NodeType = field(default=NodeType.DATA, init=False)
     data: typing.List["NamedOperation"]  # data, change to dict?
+    # Optional `out <type-ref>` annotation. When present, pins the
+    # element type for the whole block; the typechecker unifies it
+    # with any per-element type tags.
+    out_type: typing.Optional["Path"] = None
 
 
 @dataclass(frozen=True)
