@@ -5798,6 +5798,26 @@ class CEmitter:
                     (_mangle_var(pname), self._node_ztype(ppath))
                 )
 
+        # Register borrow/lock union params in borrowed_vars so any
+        # synth-hoisted projection assignment from them (e.g. the
+        # typechecker's `_t: n.field` for a call-arg expression) can
+        # propagate the borrow to its destination — skipping destructor
+        # registration for the projection temp. Classes use pointer-
+        # pass + class_params tracking for the same purpose; unions stay
+        # value-passed (the union struct is small + value-stable; only
+        # its `data` pointer is shared with the source), so the
+        # borrowed_vars route is the union-specific channel.
+        for pname, ppath in func.parameters.items():
+            ptype = self._node_ztype(ppath)
+            if (
+                ptype is not None
+                and ptype.typetype == ZTypeType.UNION
+                and ftype
+                and self.typing.child_ownership(ftype, pname)
+                in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
+            ):
+                self._scope.borrowed_vars.add(_mangle_var(pname))
+
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
         self.indent_level = 1
@@ -6260,7 +6280,14 @@ class CEmitter:
             # If the RHS is a call to a function declared `out T.borrow`, the
             # caller does NOT own the return value. Skip cleanup registration
             # so scope exit doesn't double-free the borrowed heap buffer.
-            if self._is_borrow_return_call(assign.value):
+            # Same rule applies when the RHS is a field projection from a
+            # borrowed local (typically a borrow-by-default union param):
+            # the projection aliases the source's heap-owned `data`
+            # pointer, so destroying the LHS would free memory still
+            # owned by the borrowed source.
+            if self._is_borrow_return_call(
+                assign.value
+            ) or self._rhs_is_borrowed_projection(assign.value):
                 self._scope.borrowed_vars.add(cname)
             else:
                 self._scope.cleanup_vars.append((cname, _assign_ztype))
@@ -9818,6 +9845,30 @@ class CEmitter:
         call = cast(zast.Call, inner)
         ftype = self._node_ztype(call.callable)
         return bool(ftype and ftype.return_ownership == ZParamOwnership.BORROW)
+
+    def _rhs_is_borrowed_projection(self, expr: zast.Expression) -> bool:
+        """True if ``expr`` is a dotted-path projection whose root variable
+        is a borrowed local (registered in ``self._scope.borrowed_vars``).
+
+        Borrow-by-default union params live in ``borrowed_vars`` (see
+        ``_emit_function``), so a synth-hoisted call-arg temp like
+        ``_t: n.lhs`` (where ``n`` is the borrowed union param)
+        resolves here. The destination temp aliases ``n``'s
+        heap-owned payload — destroying it would corrupt the borrowed
+        source. Marking the temp as borrowed routes it past the
+        cleanup-vars register so block-scope cleanup is skipped.
+        """
+        inner = expr.expression
+        if inner.nodetype != NodeType.DOTTEDPATH:
+            return False
+        # Walk to the root AtomId of the dotted path.
+        node: zast.Path = cast(zast.Path, inner)
+        while node.nodetype == NodeType.DOTTEDPATH:
+            node = cast(zast.DottedPath, node).parent
+        if node.nodetype != NodeType.ATOMID:
+            return False
+        root_name = _mangle_var(cast(zast.AtomId, node).name)
+        return root_name in self._scope.borrowed_vars
 
     def _call_has_string_arg(self, call: zast.Call) -> bool:
         """True if any arg to ``call`` is a string (needs post-call ordering)."""

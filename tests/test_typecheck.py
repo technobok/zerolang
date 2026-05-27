@@ -12446,6 +12446,43 @@ class TestUnionLockedArm:
         assert (ut.destructor_name is not None) is False
 
 
+class TestUnionBorrowABI:
+    """Union parameters default to BORROW ownership, matching the
+    long-standing class-param convention. Closes the AST-PR-2 deferred
+    item: recursive walks over self-referential unions (e.g. `Node`)
+    require the function parameter to be borrowed so the projection
+    temp doesn't double-destroy the source's heap data."""
+
+    def test_unannotated_union_param_defaults_to_borrow(self):
+        """An unannotated `n: SomeUnion` parameter resolves to
+        ZParamOwnership.BORROW after typecheck."""
+        program, typing = check_ok(
+            "MyU: union { a: i64\n b: null }\n"
+            "f: function {n: MyU} is {}\n"
+            "main: function is { x: MyU.b\n f n: x }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ftype = tc._resolved.get("test.f")
+        assert ftype is not None
+        assert tc.typing.child_ownership(ftype, "n") == ZParamOwnership.BORROW, (
+            "union param without annotation should default to BORROW"
+        )
+
+    def test_take_annotation_still_overrides(self):
+        """Explicit `.take` opts the union param into ownership transfer."""
+        program, typing = check_ok(
+            "MyU: union { a: i64\n b: null }\n"
+            "f: function {n: MyU.take} is {}\n"
+            "main: function is { x: MyU.b\n f n: x.take }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ftype = tc._resolved.get("test.f")
+        assert ftype is not None
+        assert tc.typing.child_ownership(ftype, "n") == ZParamOwnership.TAKE
+
+
 class TestOptionview:
     """The stdlib `OptionView` type — built on locked union arms.
     Container iterators use it to yield non-owning views into their

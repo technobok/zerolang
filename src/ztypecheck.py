@@ -1601,7 +1601,7 @@ class TypeChecker:
             pt = self.typing.child_of(ftype, pname)
             if (
                 pt is not None
-                and pt.typetype == ZTypeType.CLASS
+                and pt.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
                 and not pt.is_heap_allocated
                 and (pt.destructor_name is not None)
             ):

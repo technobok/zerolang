@@ -6625,10 +6625,13 @@ class TestLateMonoUserOrdering:
         )
         # The variant struct, the List<V> struct, and the user class
         # struct must appear in that order so each later struct sees
-        # the typedefs it embeds.
+        # the typedefs it embeds. Variants and lists still emit in
+        # the anonymous-typedef form (`typedef struct { ... } z_X_t;`);
+        # user classes/records emit in the named form (`struct z_X_t
+        # { ... };`) so we anchor on the body opener for `C`.
         v_pos = csource.find("} z_V_t;")
         list_pos = csource.find("} z_List_V_t;")
-        c_pos = csource.find("} z_C_t;")
+        c_pos = csource.find("struct z_C_t {")
         assert v_pos != -1 and list_pos != -1 and c_pos != -1, (
             "expected V, List_V, and C struct typedefs in the output"
         )
@@ -6656,9 +6659,12 @@ class TestLateMonoUserOrdering:
             '    print "\\{p.pts.length}"\n'
             "}"
         )
-        pt_pos = csource.find("} z_Pt_t;")
+        # Records and classes emit in named-struct form
+        # (`struct z_X_t { ... };`); anchor on the body opener.
+        # Lists keep the anonymous form.
+        pt_pos = csource.find("struct z_Pt_t {")
         list_pos = csource.find("} z_List_Pt_t;")
-        path_pos = csource.find("} z_Path_t;")
+        path_pos = csource.find("struct z_Path_t {")
         assert pt_pos != -1 and list_pos != -1 and path_pos != -1
         assert pt_pos < list_pos < path_pos
         output = compile_and_run(csource)
@@ -6681,12 +6687,16 @@ class TestLateMonoUserOrdering:
             '    print "\\{c.xs.length} \\{c.extra.n}"\n'
             "}"
         )
+        # V is a variant (anonymous typedef); Other is a record and
+        # C is a class, both in named-struct form (anchor on the
+        # body opener); List_V is template-emitted in anonymous form.
         v_pos = csource.find("} z_V_t;")
-        other_pos = csource.find("} z_Other_t;")
+        other_pos = csource.find("struct z_Other_t {")
         list_pos = csource.find("} z_List_V_t;")
-        c_pos = csource.find("} z_C_t;")
+        c_pos = csource.find("struct z_C_t {")
         # Both V and Other must be emitted before the late mono;
         # C is the only late-user def.
+        assert v_pos != -1 and other_pos != -1 and list_pos != -1 and c_pos != -1
         assert v_pos < list_pos < c_pos
         assert other_pos < c_pos
         output = compile_and_run(csource)
