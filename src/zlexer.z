@@ -1,53 +1,14 @@
-# zlexer.z -- self-host port of src/zlexer.py (Phase B PRs 3-6).
-#
-# Current coverage:
-#   * BOF / EOF / EOL (LF, CR, CRLF) + line+column tracking         (PR 3)
-#   * Whitespace coalescing (space + tab)                            (PR 3)
-#   * Comments (# through end-of-line; UTF-8 passes through)         (PR 3)
-#   * Single-byte structural delimiters: ( ) { } ;                   (PR 3)
-#   * Dot variants: . (DOT) and ... (DOTDOTDOT); 2 dots = ERR        (PR 3)
-#   * Identifiers (REFID), labels (LABEL, LABELPRE),
-#     keywords (28 TTKWMAP entries), reserved words (TTRESERVED -> ERR),
-#     including the optional +/- prefix and dot-continuation in
-#     digit-starting words (so "1.5" tokenises as REFID "1.5", not
-#     three tokens).                                                 (PR 4)
-#   * Interpreted string literals: STRBEG / STRMID / STRCHR /
-#     STREND. Named (\n \t \b \\ \") and hex (\xHH, \uHHHHHH)
-#     escapes. Interpolation via STREXPRBEG + a `(List of:
-#     TokStateType)` state stack tracking STRING / STRINGEXPR /
-#     STRINGEXPRBRACE (mirrors the Python Tokenizer.statestack).
-#     Codepoints > 0xFF from \uHHHHHH are truncated to the low
-#     byte; proper UTF-8 emission is PR 7.                         (PR 5)
-#   * Raw triple-quoted string literals: """...""" with arbitrary
-#     opening / closing delim length (n >= 3 matched runs of `"`).
-#     Backslash is literal; no escape processing or interpolation.
-#     tokstatetype.stringraw carries the delim length (u8 payload)
-#     so the inner scanner can match the closer.  Mirrors the Python
-#     reference faithfully, including the non-cleared delim
-#     accumulator's under-consumption quirk when a shorter `"` run
-#     precedes the closing run.                                    (PR 6)
-#
-# Still deferred:
-#   * Wire into the 96-golden differential harness (PR 8)
-#
-# Canonical output line matches the Python printer:
-#
-#     <lineno>:<colno> <TTNAME> "<escaped-tokstr>"
+# Lexer for the zerolang language. Splits a source file into a
+# stream of tokens (TT) consumed by the parser. The Tokenizer
+# scans bytes, tracks line and column, manages a state stack for
+# nested string interpolation, and emits one token per call to
+# `token`. The binary built from this file is a token-dump CLI:
+# given a source file it prints `<lineno>:<colno> <TT> "<tokstr>"`
+# per token, exercised by tests/fixtures/lexer_golden/.
 
-# Named u8 constants for byte comparisons. Mirrors src/zchar.py.
-#
-# Per doc/styleguide.pdoc, constants are lowerCamelCase. The `c`
-# prefix marks "character byte" -- avoids keyword collisions
-# (`out`, `in`) and visual confusion with the TT arm names.
-#
-# `0c<id-char>` shorthand (e.g. `0cA`) works for identifier chars
-# but escape sequences (`0c\n`, `0c\xHH`) and non-identifier
-# delimiters (`0c#`, `0c\\`) are still deferred, so most of the
-# entries below — control chars + delimiter chars — would need
-# the deferred forms. Keeping the table intact until the deferred
-# forms land so it can be retired in one shot. The const form is
-# now macro-style (no `static const` decl; value inlined at every
-# use site).
+# Named byte constants used by the scanner. The `c` prefix marks
+# "character byte" and avoids identifier collisions with keywords
+# such as `in` and `out`.
 cNul:        0
 cBspace:     8      # \b (backspace)
 cHt:         9      # \t
@@ -84,14 +45,9 @@ cBraceOpen:  123    # {
 cBraceClose: 125    # }
 cDel:        127
 
-# Token type variant. Arm names are UPPERCASE rather than lowercase
-# as the styleguide prescribes for variant arms (doc/styleguide.pdoc
-# Variant Tags section): 28 of these arms name language keywords
-# (IF, WHEN, FUNCTION, RECORD, CLASS, UNION, VARIANT, PROTOCOL, ...)
-# and zerolang rejects keywords as identifiers. Uppercase is the
-# only spelling that compiles. The variant TYPE name stays uppercase
-# (TT) for consistency with its arms; renaming just the type name
-# would split casing within a single declaration.
+# Token type, used by Tokenizer + Lexer to classify each emitted
+# token. Uppercase member names to prevent collision with the
+# language keywords most arm names share.
 
 TT: variant {
     BOF: null
@@ -147,12 +103,11 @@ TT: variant {
     STREXPRBEG: null
 } as { tag: u8.tag }
 
-# Tokenizer mode stack arms. Mirrors src/zlexer.py:74-86 TokStateType.
+# Tokenizer mode stack arms.
 # "Implicit FILE state when the stack is empty" -- statecurrent
 # returns FILE for an empty stack so Tokenizer.create can skip an
 # init push.  STRINGRAW carries the opening delim length as its u8
-# payload so the inner scanner can match the closer (Python recovers
-# the same value via len(openingtoken.tokstr)).
+# payload so the inner scanner can match the closer.
 tokstatetype: variant {
     file: null
     string: null
@@ -225,8 +180,8 @@ isdigit: function {b: u8} out bool is {
 }
 
 # STRC: any byte legal inside an interpreted string literal token's
-# STRMID payload. Mirrors Charflag.STRC plus the >DEL UTF-8 pass-through
-# from src/zlexer.py:375. The five excluded bytes (NUL, ", LF, CR, \)
+# STRMID payload.STRC plus the >DEL UTF-8 pass-through
+#. The five excluded bytes (NUL, ", LF, CR, \)
 # each route to their own token kind in the surrounding dispatch.
 
 isstrc: function {b: u8} out bool is {
@@ -239,8 +194,8 @@ isstrc: function {b: u8} out bool is {
     return true
 }
 
-# RAWC: any byte legal inside a raw-string STRMID payload. Mirrors
-# Charflag.RAWC from src/zcharclass.py:85-88. Same predicate as STRC
+# RAWC: any byte legal inside a raw-string STRMID payload.
+# Charflag.RAWC. Same predicate as STRC
 # but WITHOUT the backslash exclusion -- raw strings suppress escape
 # processing, so `\` is literal content.
 
@@ -255,7 +210,7 @@ israwc: function {b: u8} out bool is {
 
 # Append every byte of `delim_view` to `stringparts`. Used by the
 # raw-string scanner when a short `"` run was consumed into the
-# delim accumulator and must be treated as literal content. Mirrors
+# delim accumulator and must be treated as literal content.
 # Python's `stringparts.extend(delimparts)` (line 425).
 extendraw: function {stringparts: String delim_view: StringView} is {
     j: 0.u64
@@ -351,8 +306,8 @@ Tokenizer: class {
         return meta.create source: source pos: 0 atchar: cNul fsno: fsno lineno: 1.u32 colno: 0 hasnext: false nexttok: (Token toktype: TT.EOF tokstr: "".string fsno: fsno lineno: 0 colno: 0 tokenid: 0) statestack: (List of: tokstatetype)
     }
 
-    # State-stack helpers. Empty stack -> implicit FILE. Mirrors
-    # src/zlexer.py:500-521 (_statecurrent / _statepush / _statepop)
+    # State-stack helpers. Empty stack -> implicit FILE.
+    #
     # except the FILE entry is implicit instead of pushed at init.
     statepush: function {:this s: tokstatetype.take} is {
         this.statestack.append from: s
@@ -371,7 +326,7 @@ Tokenizer: class {
     }
 
     # Advance one byte. Returns the byte just placed in .atchar
-    # (cNul if past end of source). Mirrors src/zlexer.py:130 _accept,
+    # (cNul if past end of source).
     # which returns the byte so call sites can write `c = self._accept()`.
     accept: function {:this} out u8 is {
         sv: this.source.stringview
@@ -384,7 +339,7 @@ Tokenizer: class {
             # Bump colno once per Unicode codepoint, not once per byte:
             # UTF-8 continuation bytes (0x80..0xBF) are part of a
             # multi-byte sequence the lead byte already counted.
-            # Mirrors src/zlexer.py:130-141 which reads via
+            #
             # filehandle.read(1) and advances per codepoint.
             if b < 128.u8 then {
                 this.colno = this.colno + 1
@@ -398,8 +353,8 @@ Tokenizer: class {
         }
     }
 
-    # Inside a STRING state at a non-doublequote, non-EOL byte. Mirrors
-    # src/zlexer.py:357 acceptstringtoken. Backslash routes to
+    # Inside a STRING state at a non-doublequote, non-EOL byte.
+    #
     # acceptcharescape; otherwise gather STRC bytes into a STRMID. If
     # the very first byte is not STRC (and not backslash), emit an ERR
     # with that single byte to guarantee scanner forward progress.
@@ -424,7 +379,7 @@ Tokenizer: class {
         return Token toktype: TT.ERR tokstr: err fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
-    # Inside a STRINGRAW state. Mirrors src/zlexer.py:388-438
+    # Inside a STRINGRAW state.
     # acceptstringrawtoken. RAWC bytes accumulate into the content
     # buffer; a `"` run is matched against `delim_len` -- equal-length
     # run closes the string, shorter run is literal content. On close,
@@ -456,10 +411,9 @@ Tokenizer: class {
             }
             dline: this.lineno
             dcol: this.colno
-            # Fresh delimparts per outer iteration. Mirrors Python's
-            # fix for the bug where the un-reset accumulator caused
-            # a short `"` run inside the body to under-consume the
-            # eventual close by the leftover count.
+            # Fresh delimparts per outer iteration: an un-reset
+            # accumulator would let a short `"` run inside the body
+            # under-consume the eventual close by the leftover count.
             delimparts: "".string
             for while this.atchar == cDquote while delimparts.length < delim_len.u64 loop {
                 delimparts.appendByte b: this.atchar
@@ -484,7 +438,7 @@ Tokenizer: class {
         return Token toktype: TT.ERR tokstr: "".string fsno: this.fsno lineno: line colno: col tokenid: 0
     }
 
-    # Mirrors src/zlexer.py:440 acceptcharescape. Consumes the leading
+    # Consumes the leading
     # backslash, then dispatches:
     #   \n \t \b \\ \"  -> STRCHR with the interpreted byte
     #   \xHH            -> STRCHR with the decoded byte (2 hex digits)
@@ -698,8 +652,8 @@ Tokenizer: class {
         # the close-vs-content decision lives inside
         # acceptstringrawtoken because it depends on a multi-byte run
         # match. EOL/EOF were handled above so the string-token paths
-        # don't need to think about either. Mirrors
-        # src/zlexer.py:184-196.
+        # don't need to think about either.
+        #
         kind: this.statecurrent
         in_string: false
         raw_delim: 0.u8
@@ -749,7 +703,7 @@ Tokenizer: class {
         # state. 2 -> empty string (STRBEG + stashed STREND, no push).
         # 3+ -> raw string: emit STRBEG with the full run and push
         # STRINGRAW carrying the run length so the inner scanner can
-        # match the closer. Mirrors src/zlexer.py:222-238.
+        # match the closer.
         if c == cDquote then {
             buf: "".string
             n: 0.u64
@@ -816,7 +770,7 @@ Tokenizer: class {
             # If we are already inside an interpolation context, the `{`
             # opens a nested brace scope that must be tracked so the
             # matching `}` returns us to STRING (rather than ending the
-            # interpolation). Mirrors src/zlexer.py:240-248.
+            # interpolation).
             push_brace: false
             match (
                 this.statecurrent
@@ -837,7 +791,7 @@ Tokenizer: class {
             # If the matching `{` was inside an interpolation, pop one
             # STRINGEXPRBRACE; if that was the last brace under
             # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
-            # into STRING. Mirrors src/zlexer.py:250-257.
+            # into STRING.
             pop_brace: false
             match (
                 this.statecurrent
@@ -869,8 +823,8 @@ Tokenizer: class {
         }
 
         # Word branch: leading colon? +/- prefix? IDEN loop, plus
-        # dot-continuation when the word is number-shaped. Mirrors
-        # src/zlexer.py:271-355.
+        # dot-continuation when the word is number-shaped.
+        #
 
         # Leading-colon case (LABELPRE candidate). Save the colon's
         # position (for the returned COLON token) separately from
@@ -943,10 +897,9 @@ Tokenizer: class {
             }
         }
 
-        # Empty word? Means a lone `:` or a stray byte. Lone `:` after
-        # colonpre becomes ERR (matches Python lines 309-317); stray
-        # byte means we somehow consumed nothing -- emit ERR with the
-        # current byte and advance to make progress.
+        # Empty word: lone `:` after colonpre becomes ERR, stray
+        # byte (we consumed nothing) emits ERR with the current
+        # byte and advances to make progress.
         if buf.length == 0 then {
             if has_colonpre then {
                 # Lone colon: emit the colon as ERR.
@@ -985,7 +938,7 @@ Tokenizer: class {
         # Path 2: no colonpre, trailing colon, non-keyword non-reserved.
         # Stash the colon, return LABEL. (Keyword + trailing colon
         # leaves the colon for the next token() call to consume via
-        # path 1 -- mirrors Python lines 335-346.)
+        # path 1.)
         labelpath: false
         if this.atchar == cColon then {
             if kwfound then {} else {
@@ -1176,8 +1129,7 @@ ttname: function {t: TT} out String is {
     }
 }
 
-# Append the canonical-escape form of byte `b` to `dst`. Mirrors the
-# escape map in src/ztokendump.py:17-39.
+# Append the canonical-escape form of byte `b` to `dst`.
 
 hexdigit: function {b: u8} out u8 is {
     if b < 10.u8 then return b + 48.u8
@@ -1333,7 +1285,7 @@ utf8_decode_at: function {sv: StringView i: u64} out (optionval t: u32) is {
 
 # Append the codepoint as `\u{cp:x}` (lowercase, no leading zeros).
 # Used when the dumper has decoded a UTF-8 sequence whose codepoint
-# exceeds 0xFF. Mirrors the `else` branch of src/ztokendump.py:_escape.
+# exceeds 0xFF.py:_escape.
 
 escapeAppendCp: function {cp: u32 dst: String} is {
     dst.appendByte b: cBslash.u8

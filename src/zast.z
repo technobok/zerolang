@@ -1,43 +1,15 @@
-# zast.z -- self-host port of src/zast.py (Phase B slice 3, PRs 1-2).
-#
-# The binary takes no arguments; it constructs one instance of every
-# variant arm declared here, walks the discriminants via `case`,
-# and prints a deterministic line per item. The harness compares
-# stdout byte-for-byte against tests/fixtures/zast_z/smoke.expected.
-#
-# Scope through PR 2:
-#   * ERR variant (parser/type/ownership/call/generic error codes).
-#   * NodeType variant (AST node-type tag).
-#   * CallKind variant (Call-node classification, set by typecheck).
-#   * Node union: four leaf-only arms (error / atomid / labelvalue /
-#     stringchunk) plus two recursive arms added in PR 2 (binop with
-#     three Node children, atomstring with (List of: Node)). The arm
-#     IS the discriminant; no separate nodetype field on the carrier
-#     classes. Union (not variant) because the carriers hold String /
-#     Node / List, all reftypes.
-#
-# Out of scope:
-#   * Optional<Node> -- deferred to PR 3; needs a sentinel-arm vs
-#     wrapper-option design call. Blocks If / Function / Statement
-#     ports.
-#   * Other recursive arms (Unit, Function, ObjectDef, If, For,
-#     Case, ...).
-#   * clone_function / _clone_node / node_children helpers.
-#   * Cross-unit Token / TT reference (deferred; using u32
-#     lineno+colno + u8 chunk_kind placeholders).
-#   * SQL-dump differential (needs a parser; per
-#     doc/bootstrap.pdoc:317-330).
-# Recursive descent in printNode for binop / atomstring is now
-# wired up; this works because union parameters default to BORROW
-# (matching classes) and field projections from a borrowed union
-# inherit the borrow rather than registering a destructor on the
-# projection temp. See  in
-# src/zemitterc.py.
+# Parsed-AST surface for the zerolang compiler. Defines the AST
+# node-type tag (NodeType), error codes (ERR), Call-node
+# classification (CallKind), and the Node union of all node
+# kinds. The binary built from this file is the AST-slice smoke
+# harness: it constructs one instance of each variant arm and
+# prints a deterministic dump, compared against
+# tests/fixtures/zast_z/smoke.expected.
 
-# ERR -- error codes. Arm names UPPERCASE to match the Python
-# enum at src/zast.py:20-77. Numeric E0xxx mapping is preserved
-# implicitly by arm order in source; the typecheck/error layer
-# will assign the canonical number when it lands in a later slice.
+# Error codes. Uppercase arm names to avoid keyword collisions
+# in places where the code mentions specific errors. Numeric
+# E0xxx values aren't stored here; the diagnostics layer assigns
+# them based on arm position.
 
 ERR: variant {
     FILENOTFOUND:      null
@@ -77,10 +49,9 @@ ERR: variant {
     COMPILERERROR:     null
 } as { tag: u8.tag }
 
-# NodeType -- AST node-type marker. Mirrors src/zast.py:152-233.
-# Arm names UPPERCASE: many (UNIT, FUNCTION, RECORD, CLASS, UNION,
-# VARIANT, FACET, WITH, EXPRESSION, IF, FOR, DO, CASE, YIELD, DATA)
-# name language keywords and lowercase would collide.
+# AST node-type marker. Uppercase arm names because many
+# (UNIT, FUNCTION, RECORD, CLASS, UNION, ...) are language
+# keywords and the lowercase spelling would not compile.
 
 NodeType: variant {
     UNIT:           null
@@ -119,8 +90,8 @@ NodeType: variant {
     ERROR:          null
 } as { tag: u8.tag }
 
-# CallKind -- Call-node classification, set by the type checker.
-# Mirrors src/zast.py:930-953.
+# Classification of a Call node, set by the type checker. The
+# emitter dispatches on this to choose the right call shape.
 
 CallKind: variant {
     UNKNOWN:          null
@@ -145,13 +116,11 @@ CallKind: variant {
     PANIC:            null
 } as { tag: u8.tag }
 
-# Node -- top-level union (reftype tagged sum). The arm IS the
-# discriminant; no separate nodetype field. Mirrors the OpenResult
-# union pattern at src/zvfs.z:85. Declared before the carrier
-# classes so the carriers can hold Node fields by value: the
-# union's struct must be fully visible at the field-declaration
-# site. PR 1 shipped four leaf-only arms; PR 2 adds the first two
-# recursive arms (binop / atomstring).
+# The AST node, as a reftype tagged sum. The arm is the
+# discriminant; arm-payload carrier classes (declared below)
+# hold the per-arm data. Node is declared before the carriers
+# because carriers store Node fields by value, so the union's
+# struct must be fully visible at each carrier's field site.
 
 Node: union {
     error:       errordata
@@ -163,10 +132,8 @@ Node: union {
 }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
-# plus source position. Token / TT integration is deferred; PR 1
-# uses u32 lineno + u32 colno + u8 chunk_kind as placeholders.
-# These are classes (reftypes) because they hold String / Node /
-# (List of: Node), all of which are reftypes -- records (valtypes)
+# plus source position (line + column). The carriers are classes
+# because they hold reftype fields (String, Node, List); records
 # cannot hold reftypes.
 
 errordata: class {
@@ -199,12 +166,10 @@ stringchunkdata: class {
     chunk_kind: u8
 }
 
-# binopdata -- first recursive Node arm payload. Three Node children
-# stored by value, validating the union-with-self-referential-arm
-# shape unlocked by the emitter named-struct + arm forward-decl
-# change. The Python reference constrains operator to AtomId and
-# rhs to Path; the port loosens both to Node here and defers arm-
-# specific child-type enforcement to the typechecker port.
+# Binary-operation node payload: three Node children for the
+# left-hand operand, operator, and right-hand operand. Arm-
+# specific child-type constraints (e.g. operator must be an
+# AtomId) live in the typechecker.
 
 binopdata: class {
     nodeid:   u32
@@ -215,9 +180,9 @@ binopdata: class {
     rhs:      Node
 }
 
-# atomstringdata -- ordered list of Node children (literal text
-# chunks + embedded interpolations). Validates (List of: Node) where
-# the element type is the enclosing union.
+# Interpolated-string-literal payload: an ordered list of Node
+# children representing the literal text chunks and embedded
+# interpolation expressions.
 
 atomstringdata: class {
     nodeid:      u32
@@ -226,10 +191,8 @@ atomstringdata: class {
     stringparts: (List of: Node)
 }
 
-# errname / nodetypename / callkindname -- arm-name dumpers. Mirror
-# the `ttname` pattern at src/zlexer.z:1071. Each exhaustive case
-# arm returns the canonical UPPERCASE label used by the Python
-# enum, so a future SQL-dump differential can compare directly.
+# Arm-name dumpers: return the canonical uppercase label for an
+# enum arm. Used by printNode and the smoke harness.
 
 errname: function {e: ERR} out String is {
     match (
@@ -427,10 +390,9 @@ callkindname: function {ck: CallKind} out String is {
     }
 }
 
-# Thin one-arg wrappers that dump the arm name to stdout. Exist
-# because `print` is generic over StringLike and rejects a bare
-# function call in argument position; binding to a temp first
-# keeps the smoke main one-line-per-arm.
+# One-arg wrappers that look up the arm name and print it. Used
+# by the smoke main; bare nested function calls cannot be passed
+# directly to `print` because of its StringLike constraint.
 
 printErr: function {e: ERR} is {
     s: errname e: e
@@ -447,9 +409,9 @@ printCallKind: function {ck: CallKind} is {
     print s
 }
 
-# printNode -- emit one line per Node in the form
-# "<nodeid>: <ARM> @<lineno>:<colno>"
-# Mirrors printEntry at src/zvfs.z:888.
+# Print one line per Node in the form
+#   "<nodeid>: <arm> @<lineno>:<colno>"
+# Recursive arms (binop, atomstring) descend into their children.
 
 printNode: function {n: Node} is {
     match (
@@ -476,9 +438,9 @@ printNode: function {n: Node} is {
     }
 }
 
-# Smoke main. Constructs one instance of every variant arm declared
-# above and prints a deterministic dump. PR 2 will replace this
-# with an argv-driven dispatcher once recursive Node arms exist.
+# Smoke main: construct one instance of every variant arm and
+# print a deterministic dump for the harness to compare against
+# tests/fixtures/zast_z/smoke.expected.
 
 main: function is {
     print "=== ERR ==="

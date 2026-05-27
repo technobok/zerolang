@@ -1,14 +1,11 @@
-# zvfs.z -- self-host port of src/zvfs.py (Phase B slice 2).
-#
-# PR 1: foundation types (dentry variant + DentryTable registry).
-# PR 2: script-driven dispatcher. Reads a script file (one operation
-#       per line, '#' comments, whitespace-separated tokens), parses
-#       each line into a verb + args, and dispatches to a free
-#       function. The verb set is the floor PR 1's types can support;
-#       subsequent PRs add `provider`/`walk`/`bind`/`open`/`getline`
-#       verbs as the VFS gains real operations. PR 7 will diff the
-#       same scripts against the Python ref running through the same
-#       DSL.
+# Virtual filesystem used by the compiler for source resolution.
+# Providers (null, in-memory, real-filesystem) register with a
+# ZVfs, which keeps a dentry table indexed by entry id and resolves
+# walk/stat/open against the appropriate provider. The binary built
+# from this file is a script-driven dispatcher: it reads a script
+# file (one verb per line) and prints one line per verb to stdout,
+# exercising every public verb against the goldens under
+# tests/fixtures/zvfs_ops/.
 
 nodekind: variant {
     dir: null
@@ -79,20 +76,20 @@ DentryTable: class {
 # Open() result. Domain-specific non-generic union; the generic
 # (Result t: TextReader e: IoError) declared in a user protocol
 # is unprecedented in the tree and was deliberately sidestepped
-# in PR 3 to minimise compiler surface. Promote to generic Result
+# in Promote to generic Result
 # if a later slice surfaces a real need.
 
 OpenResult: union {
-    # `ok` is `String` as a placeholder for PR 3.
-    # PR 4 may promote to `TextReader` once the Provider
-    # implementations need an actual stream type.
+    # `ok` carries the opened file's contents as String. May
+    # become a TextReader once a Provider implementation needs
+    # stream semantics.
     ok:  String
     err: IoError
 }
 
 # ZVfsProvider -- the four-method abstract protocol every provider
-# implementation satisfies. Mirrors `class ZVfsProvider(ABC)` at
-# src/zvfs.py:180-226. NodeID(1) is the conventional "NOTFOUND"
+# implementation satisfies.
+# is the conventional "NOTFOUND"
 # sentinel returned by walk when no walk is possible.
 
 ZVfsProvider: protocol {
@@ -106,7 +103,7 @@ ZVfsProvider: protocol {
 # NullProvider -- the stateless default. walk always returns
 # NOTFOUND, open always errors, stat returns dir for the root
 # item / notfound elsewhere, path returns the static [NULL]
-# marker. Mirrors src/zvfs.py:558-613.
+# marker.py:558-613.
 #
 # `_unused: bool` is a placeholder field. Zero-field non-generic
 # classes are untested in the tree; the dummy keeps the shape
@@ -174,7 +171,7 @@ ProviderTable: class {
     }
     # registerFS -- construct an FSProvider rooted at <rootpath>/<parentpath>,
     # validating that the joined path is actually a directory. Panics if it
-    # isn't (mirrors Python's IOError at zvfs.py:629). Root node 0 carries
+    # isn't (mirrors Python's IOError. Root node 0 carries
     # `parentpath` literally, so all walked paths share that prefix.
     registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
         full: joinPath parent: rootpath.stringview name: parentpath.stringview
@@ -209,7 +206,7 @@ ProviderTable: class {
 # StringNode -- one node in StringProvider's in-memory tree.
 # `path` is the full path (e.g. "/a/b.txt"); `kind` discriminates
 # file / dir / notfound; `content` is empty for dir / notfound.
-# Mirrors Python's `(path, type, content)` tuple at zvfs.py:719.
+#py:719.
 
 StringNode: class {
     path:    String
@@ -220,7 +217,7 @@ StringNode: class {
 # StringProvider -- in-memory file store. `nodes` is the flat node
 # table (NodeID = list index); `children` maps "<parentid>:<name>"
 # to the child NodeID (zerolang has no tuple type, so the composite
-# key is encoded as a string). Mirrors src/zvfs.py:710-770.
+# key is encoded as a string).py:710-770.
 
 StringProvider: class {
     nodes:    (List of: StringNode)
@@ -290,7 +287,7 @@ StringProvider: class {
 
     # addFile -- walk the path components, creating intermediate
     # DIR nodes as needed, then create a FILE leaf with the
-    # content. Mirrors Python's StringProvider.__init__ loop.
+    # content.__init__ loop.
     # `fpath` shapes accepted: "/a/b.txt" splits to ["a", "b.txt"]
     # (leading "/" produces an empty leading piece, ignored). A
     # path of "/" or "" is rejected (no file to attach to).
@@ -339,8 +336,8 @@ StringProvider: class {
 
 # FSNode -- one node in FSProvider's path table. `path` is the
 # relative-to-rootpath path (with parentpath as prefix); `kind`
-# discriminates file / dir / notfound. Mirrors Python's `(path, type)`
-# tuple at zvfs.py:624.
+# discriminates file / dir / notfound.
+# tuple.
 
 FSNode: class {
     path: String
@@ -351,7 +348,7 @@ FSNode: class {
 # `io.stat` on the joined rootpath/relpath; opens read the file via
 # `io.readText`. `pathtable` indexes nodes by NodeID (= list index);
 # `pathcache` maps the relative path back to its assigned NodeID so
-# repeat walks are O(1). Mirrors src/zvfs.py:616-707.
+# repeat walks are O(1).py:616-707.
 #
 # addFile panics: FSProvider is read-only from the VFS view (Python
 # ref exposes no public addFile either; `_appendpath` is internal).
@@ -384,7 +381,7 @@ FSProvider: class {
             # Stat the full path on disk and translate filekind ->
             # nodekind. Any io.stat error collapses to NOTFOUND --
             # matches Python's `os.path.exists` false branch at
-            # zvfs.py:660.
+            #.
             full: joinPath parent: this.rootpath.stringview name: rel.stringview
             k: nodekind.notfound
             sr: io.stat full.stringview
@@ -450,13 +447,9 @@ FSProvider: class {
 # ZVfs -- the engine layer. Owns its own provider list (parallel to
 # `ProviderTable`, which the older provider-level verbs still use)
 # plus a dentry table, a per-id name side-table indexed by dentry id,
-# and a walk cache keyed by "<parentid>:<name>". Ports `class ZVfs`
-# at zvfs.py:252-557 in three sub-PRs:
-#   PR 6a (this): register* / walk / arm / path / pathfromprovider.
-#   PR 6b: open / getline.
-#   PR 6c: bind + UNION-aware walk.
+# and a walk cache keyed by "<parentid>:<name>".
 #
-# Idiomatic deltas vs. zvfs.py:
+# Notes on the type:
 #   - `_file_names: Dict[DEntryID, str]` -> `(List of: String)`
 #     indexed by dentryid (entryids are dense u32). Map<u32, String>
 #     surfaces an emitter codegen bug at this slice's timestamp;
@@ -476,7 +469,7 @@ ZVfs: class {
 } as {
     # registerNull -- append a NullProvider to the provider list and
     # create its root directory dentry. Returns the new dentryid.
-    # Mirrors zvfs.py:280-300 with NullProvider as the body.
+    #py:280-300 with NullProvider as the body.
     registerNull: function {:this} out u32 is {
         np: NullProvider _unused: false
         prov: ZVfsProvider.create from: np.take
@@ -489,14 +482,11 @@ ZVfs: class {
         return did
     }
     # registerString -- append a fresh StringProvider (empty) and
-    # create its root directory dentry. Mirrors registerNull's shape;
+    # create its root directory dentry.
     # caller populates the provider's content via `addFile` against
-    # the underlying provider (PR 4 dispatcher verb). The provider
+    # the underlying provider ( The provider
     # is reachable via this.providers; the dispatcher's `addFile`
-    # currently goes through ProviderTable, not ZVfs.providers, so
-    # PR 6a populates ZVfs with empty providers and tests with
-    # NullProvider + FSProvider. PR 6b/c may add a `vfs addFile`
-    # convenience or rewire ProviderTable to ZVfs.providers.
+    # currently goes through ProviderTable, not ZVfs.providers.
     registerString: function {:this} out u32 is {
         sp: StringProvider nodes: (List of: StringNode) children: (Map key: String value: u32)
         root: StringNode path: "".string kind: nodekind.dir content: "".string
@@ -512,7 +502,7 @@ ZVfs: class {
     }
     # registerFS -- append an FSProvider rooted at <rootpath>/<parentpath>,
     # validating the joined path is a directory (panics otherwise), and
-    # create its root directory dentry. Mirrors ProviderTable.registerFS
+    # create its root directory dentry.registerFS
     # closely; the only differences are the dentry construction at the
     # end and the use of ZVfs's own providers/entrytable/file_names.
     registerFS: function {:this rootpath: String.take parentpath: String.take} out u32 is {
@@ -548,12 +538,11 @@ ZVfs: class {
     }
     # walk -- single-step VFS walk. Composite cache key avoids
     # re-querying the provider for the same parent/name pair.
-    # Parent narrowing extracts (providerid, nodeid) -- only file /
-    # directory / notfound arms carry these. root and mount arms
-    # panic in PR 6a (root means no provider registered; mount is
-    # PR 6c). On cache miss: ask provider.walk + provider.stat,
-    # translate to a file/directory/notfound dentry, append to the
-    # entry table, record name + cache. Mirrors zvfs.py:303-360.
+    # Parent narrowing extracts (providerid, nodeid) -- only the
+    # file / directory / notfound arms carry these. root and mount
+    # arms panic. On a cache miss: ask provider.walk +
+    # provider.stat, translate to a file/directory/notfound dentry,
+    # append to the entry table, record the name + cache.
     walk: function {:this parent: u32 name: StringView} out u32 is {
         # cache lookup
         cachekey: "\{parent}:\{name}".string
@@ -627,7 +616,7 @@ ZVfs: class {
     # answer for the dispatcher. mount/root collapse to dir (mount
     # is a UNION over directories; root is the unregistered sentinel
     # which we treat as a directory for printing purposes). file /
-    # directory / notfound map directly. PR 6c will revisit the
+    # directory / notfound map directly. The mount case will be
     # mount arm once UNION-aware walk lands.
     arm: function {:this dentryid: u32} out nodekind is {
         e: this.entrytable.entries.get i: dentryid.u64
@@ -651,7 +640,7 @@ ZVfs: class {
     # from the join itself. If the chain hits a root arm we stop;
     # anything else (notfound, file, dir, mount) keeps going. Up to
     # 1024 ancestors before we bail (defensive cap; trees in
-    # practice stay shallow). Mirrors zvfs.py:464-495.
+    # practice stay shallow).py:464-495.
     path: function {:this dentryid: u32} out String is {
         # Collect names walking upward, then assemble in reverse.
         # Cap at 1024 ancestors (defensive; trees stay shallow).
@@ -712,7 +701,7 @@ ZVfs: class {
     # pathfromprovider -- ask the dentry's provider for its native
     # path representation. For mount arms returns "[UNION]" (no
     # underlying path); for root/notfound returns "[NULL]"/
-    # "[NOT FOUND]". Mirrors zvfs.py:497-511.
+    # "[NOT FOUND]".py:497-511.
     pathfromprovider: function {:this dentryid: u32} out String is {
         e: this.entrytable.entries.get i: dentryid.u64
         match (
@@ -776,7 +765,7 @@ ZVfs: class {
     # open -- match on the dentry arm; file delegates to the underlying
     # provider's open. Non-file arms construct the appropriate IoError
     # (directory -> isdir, notfound -> notfound, root -> "[NULL]", mount
-    # -> panic until PR 6c lands UNION-aware walk). Mirrors zvfs.py:513-528
+    # -> panic untilpy:513-528
     # but returns OpenResult directly rather than wrapping in a
     # ZVfsOpenFile (the wrapper is needless in zerolang: OpenResult is
     # the value-returned result type, no with-block context manager).
@@ -794,7 +783,7 @@ ZVfs: class {
             ie: IoError.other "is a directory".string
             return (OpenResult.err ie.take)
         } case mount then {
-            panic msg: "ZVfs.open: mount arms not yet supported (PR 6c)"
+            panic msg: "ZVfs.open: mount arms not yet supported"
         } case file then {
             pid: e.providerid
             nid: e.nodeid
@@ -805,7 +794,7 @@ ZVfs: class {
 
     # getline -- open the file, collect its lines into a List<String>,
     # return the one at `lineno` as Option.some. Out-of-range index or
-    # open-failure returns Option.none. Mirrors zvfs.py:530-555.
+    # open-failure returns Option.none.py:530-555.
     # Whole-file read is intentional for the bootstrap port (VFS-mapped
     # files are tiny); streaming readline awaits the io stdlib's
     # TextReader.
@@ -834,7 +823,7 @@ ZVfs: class {
     # bindRoot -- replace this.rootid with a fresh mount dentry over
     # the old root. INSTEAD overlays exclusively (no second arm); BEFORE
     # / AFTER preserve the old root as the union's second / first arm
-    # respectively. Mirrors zvfs.py:412-433 (the name=None bind path).
+    # respectively.py:412-433 (the name=None bind path).
     bindRoot: function {:this newid: u32 kind: bindkind} out u32 is {
         old: this.rootid
         md: mountdata parentid: old first: 0.u32 second: 0.u32 has_second: false
@@ -859,7 +848,7 @@ ZVfs: class {
     # layer the new mount as the union's first / second arm
     # respectively. The walk_cache entry for `<parentid>:<name>` is
     # overwritten so future walks route to the new mount (mirrors
-    # Python's `parent.cache[name] = newunionid` at zvfs.py:461).
+    # Python's `parent.cache[name] = newunionid`.
     bind: function {:this parentid: u32 name: StringView newid: u32 kind: bindkind} out u32 is {
         old: this.walk parent: parentid name: name
         md: mountdata parentid: parentid first: 0.u32 second: 0.u32 has_second: false
@@ -903,7 +892,7 @@ printEntry: function {id: u32 e: dentry} is {
 
 # joinPath -- glue two path components with a single "/", handling
 # the empty-parent case so a "" root doesn't produce a leading-slash
-# child. Mirrors Python's os.path.join("", x) == x for the leading
+# child.path.join("", x) == x for the leading
 # case; the trailing case is delegated to callers (we don't produce
 # a trailing "/" on `parent` ourselves).
 
@@ -1021,9 +1010,9 @@ dispatchDump: function {tokens: (List of: String) table: DentryTable} is {
     printEntry id: id e: e
 }
 
-# Verb: provider <kind>. Constructs a provider of the named kind,
-# registers it in the provider table, prints the assigned id. PR 3
-# supports `null` only; PR 4/5 add `string` / `fs`.
+# Verb: provider <kind>. Constructs a provider of the named
+# kind (`null` / `string` / `fs`), registers it in the provider
+# table, prints the assigned id.
 
 dispatchProvider: function {tokens: (List of: String) providers: ProviderTable} is {
     n: tokens.length
@@ -1177,7 +1166,7 @@ dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
     printOpenResult r: r.take
 }
 
-# Verb: vfs <subverb> [args...]. PR 6a subverbs:
+# Verb: vfs <subverb> [args...]. Subverbs:
 #   register null
 #   register string
 #   register fs <rootpath> <parentpath>
@@ -1185,9 +1174,11 @@ dispatchOpen: function {tokens: (List of: String) providers: ProviderTable} is {
 #   stat <dentryid>
 #   path <dentryid>
 #   pathfromprovider <dentryid>
-# Each prints one line: the returned dentryid, the arm name, or
-# the path string. PR 6b adds `open` and `getline`; PR 6c adds
-# `bind`.
+#   open <dentryid>
+#   getline <fileid> <lineno>
+#   bind <name> <providerid>
+# Each prints one line: the returned id, the arm name, or the
+# path string.
 
 dispatchVfs: function {tokens: (List of: String) vfs: ZVfs} is {
     n: tokens.length
