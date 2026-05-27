@@ -152,62 +152,59 @@ iscommentbody: function {b: u8} out bool is {
     return true
 }
 
-# True for ASCII printable bytes (codes 33-126) other than the 13
-# delimiter bytes that separate tokens. Letters, digits, underscore,
-# and operators are all IDEN.
+# Bitmask flags for the 128-element charflags table below. Each
+# byte 0..127 maps to a u8 mask whose bits identify the character
+# classes the byte belongs to. The scanner predicates lower to a
+# single table lookup + mask test.
+
+charflag: data {
+    IDEN:  1     # identifier char (letters, digits, operators, excludes delimiters)
+    DIGIT: 2     # ASCII digit 0-9
+    STRC:  4     # legal in an interpreted-string body (not NUL, ", LF, CR, \\)
+    RAWC:  8     # legal in a raw-string body (not NUL, ", LF, CR)
+}
+
+charflags: data {
+     0 12 12 12 12 12 12 12   #   0..  7
+    12 12  0 12 12  0 12 12   #   8.. 15  (LF / CR drop STRC and RAWC)
+    12 12 12 12 12 12 12 12   #  16.. 23
+    12 12 12 12 12 12 12 12   #  24.. 31
+    12 13  0 12 13 13 13 13   #  32.. 39  (space=12, ! IDEN, " all-off, # not IDEN)
+    12 12 13 13 12 13 12 13   #  40.. 47  (parens/comma/dot drop IDEN; * + - / keep it)
+    15 15 15 15 15 15 15 15   #  48.. 55  digits: IDEN | DIGIT | STRC | RAWC
+    15 15 12 12 13 13 13 13   #  56.. 63  digits + ; : (drop IDEN), < = > ?
+    13 13 13 13 13 13 13 13   #  64.. 71  @ A..G
+    13 13 13 13 13 13 13 13   #  72.. 79  H..O
+    13 13 13 13 13 13 13 13   #  80.. 87  P..W
+    13 13 13 12  9 12 13 13   #  88.. 95  X Y Z [ \\ ] ^ _   (\\ drops STRC)
+    12 13 13 13 13 13 13 13   #  96..103  ` a..g  (` drops IDEN)
+    13 13 13 13 13 13 13 13   # 104..111
+    13 13 13 13 13 13 13 13   # 112..119
+    13 13 13 12 13 12 13 12   # 120..127  x y z { | } ~ DEL
+}
 
 isidchar: function {b: u8} out bool is {
-    if b < 33 then return false      # space + below
-    if b > 126 then return false     # cBytes.cDel + above
-    if b == cBytes.cDquote then return false
-    if b == cBytes.cHash then return false
-    if b == cBytes.cParenOpen then return false
-    if b == cBytes.cParenClose then return false
-    if b == cBytes.cComma then return false
-    if b == cBytes.cDot then return false
-    if b == cBytes.cColon then return false
-    if b == cBytes.cSemi then return false
-    if b == cBytes.cBrackOpen then return false
-    if b == cBytes.cBrackClose then return false
-    if b == cBytes.cBquote then return false
-    if b == cBytes.cBraceOpen then return false
-    if b == cBytes.cBraceClose then return false
-    return true
+    if b > 127.u8 then return false
+    idx: b.u64
+    return (charflags.index idx) & charflag.IDEN != 0
 }
 
 isdigit: function {b: u8} out bool is {
-    if b < cBytes.cZero then return false
-    if b > cBytes.cNine then return false
-    return true
+    if b > 127.u8 then return false
+    idx: b.u64
+    return (charflags.index idx) & charflag.DIGIT != 0
 }
-
-# STRC: any byte legal inside an interpreted string literal token's
-# STRMID payload.STRC plus the >DEL UTF-8 pass-through
-#. The five excluded bytes (NUL, ", LF, CR, \)
-# each route to their own token kind in the surrounding dispatch.
 
 isstrc: function {b: u8} out bool is {
-    if b > cBytes.cDel then return true
-    if b == cBytes.cNul then return false
-    if b == cBytes.cDquote then return false
-    if b == cBytes.cLf then return false
-    if b == cBytes.cCr then return false
-    if b == cBytes.cBslash then return false
-    return true
+    if b > 127.u8 then return true
+    idx: b.u64
+    return (charflags.index idx) & charflag.STRC != 0
 }
 
-# RAWC: any byte legal inside a raw-string STRMID payload.
-# Charflag.RAWC. Same predicate as STRC
-# but WITHOUT the backslash exclusion -- raw strings suppress escape
-# processing, so `\` is literal content.
-
 israwc: function {b: u8} out bool is {
-    if b > cBytes.cDel then return true
-    if b == cBytes.cNul then return false
-    if b == cBytes.cDquote then return false
-    if b == cBytes.cLf then return false
-    if b == cBytes.cCr then return false
-    return true
+    if b > 127.u8 then return true
+    idx: b.u64
+    return (charflags.index idx) & charflag.RAWC != 0
 }
 
 # Append every byte of `delim_view` to `stringparts`. Used by the
