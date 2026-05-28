@@ -1786,7 +1786,7 @@ class CEmitter:
             NodeType.VARIANT,
         ):
             return False
-        ztype = self._resolved_type(defn_name)
+        ztype = self._node_ztype(defn)
         if ztype is None:
             return False
         for _fn, ft in self.typing.children_of(ztype):
@@ -6088,7 +6088,7 @@ class CEmitter:
             value_zt = self._node_ztype(value_path) if value_path is not None else None
             value_own: Optional[ZParamOwnership] = None
             if ftype_name:
-                fn_ztype = self._resolved_type(ftype_name)
+                fn_ztype = self._node_ztype(func)
                 if fn_ztype is not None:
                     value_own = self.typing.child_ownership(fn_ztype, "value")
             if value_zt is not None and value_own == ZParamOwnership.LOCK:
