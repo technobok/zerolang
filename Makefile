@@ -29,7 +29,7 @@ check:
 # name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
 # startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
 # name-literal-compare:270 (F3/F4 — buckets A/B/C done, D deferred)
-# emitter-name-resolution:15 (typed-AST-authoritative — emitter reads stamps, not names; drive to 0)
+# emitter-name-resolution:13 (typed-AST-authoritative — emitter reads stamps, not names; drive to 0)
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
@@ -111,8 +111,8 @@ bootstrap-lint:
 		grep -nE 'Optional.*ZType.*= field' src/ztypes.py | tail -5; fail=1; \
 	fi; \
 	count=$$(grep -cE '_(resolved_type|typetype_of)\(' src/zemitterc.py); \
-	if [ $$count -gt 15 ]; then \
-		echo "ERROR: emitter name-resolution calls increased ($$count > 15 baseline)"; \
+	if [ $$count -gt 13 ]; then \
+		echo "ERROR: emitter name-resolution calls increased ($$count > 13 baseline)"; \
 		echo "  The typed AST is authoritative: read the typecheck stamp"; \
 		echo "  (node_type / *_type_id) instead of re-resolving by name with"; \
 		echo "  _resolved_type / _typetype_of. Drive this baseline to 0."; \

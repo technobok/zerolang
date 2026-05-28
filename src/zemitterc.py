@@ -433,6 +433,7 @@ class CEmitter:
         # current enclosing type name (set in _emit_function when record_name
         # is non-empty). Used to resolve `meta.create` at emission time.
         self._current_enclosing_type_name: str = ""
+        self._current_enclosing_type: Optional[ZType] = None
         # final source map: C output line (1-based) → AST node ID
         self.source_map: List[Optional[int]] = []
         # track numeric constant names (no distinct ZTypeType for these)
@@ -5855,8 +5856,10 @@ class CEmitter:
         self._alias_map = {}
         # track enclosing type for meta.create resolution in the body
         prev_enclosing = self._current_enclosing_type_name
+        prev_enclosing_type = self._current_enclosing_type
         if record_name:
             self._current_enclosing_type_name = record_name
+            self._current_enclosing_type = record_type
         # track all pointer parameters for -> field access dispatch
         for pp in pointer_params:
             self._scope.class_params.add(pp)
@@ -5936,6 +5939,7 @@ class CEmitter:
         # pop function scope
         self._scope_stack.pop()
         self._current_enclosing_type_name = prev_enclosing
+        self._current_enclosing_type = prev_enclosing_type
         self._alias_map = prev_alias_map
         if is_generator_call:
             self._generator_ctx = None
@@ -7598,7 +7602,9 @@ class CEmitter:
             or create_fn.typetype != ZTypeType.FUNCTION
             or create_fn is meta_fn
         ):
-            return self._build_meta_create_args(type_name, arguments, skip_first)
+            return self._build_meta_create_args(
+                type_name, type_obj, arguments, skip_first
+            )
 
         # User-defined create: use its parameter order. Include function-typed
         # params (function-pointer field params) since the user's signature is
@@ -7668,7 +7674,11 @@ class CEmitter:
         return ", ".join(parts), take_vars
 
     def _build_meta_create_args(
-        self, type_name: str, arguments: list, skip_first: int = 0
+        self,
+        type_name: str,
+        type_obj: "Optional[ZType]",
+        arguments: list,
+        skip_first: int = 0,
     ) -> tuple:
         """Build ordered argument list for meta.create call.
 
@@ -7683,8 +7693,8 @@ class CEmitter:
         # (TAKE for owning reftypes, LOCK for `.lock` lock-fields).
         # Implicit-take must only fire for TAKE params — invalidating
         # the source of a LOCK/BORROW param at the C level emits
-        # `h = (z_T){0}` against a pointer variable.
-        type_obj = self._resolved_type(type_name)
+        # `h = (z_T){0}` against a pointer variable. `type_obj` is supplied
+        # by the caller (the type being constructed).
         meta_fn = type_obj.meta_create if type_obj is not None else None
 
         # build dict from call arguments
@@ -8491,11 +8501,11 @@ class CEmitter:
             and self._current_enclosing_type_name
         ):
             type_name = self._current_enclosing_type_name
+            enclosing_t = self._current_enclosing_type
             args_str, take_vars = self._build_meta_create_args(
-                type_name, call.arguments
+                type_name, enclosing_t, call.arguments
             )
             result = f"z_{type_name}_meta_create({args_str})"
-            enclosing_t = self._resolved_type(type_name)
             ctype = f"z_{type_name}_t"
             tmp = self._temp_name("c")
             indent = self._indent()
