@@ -6746,19 +6746,24 @@ class TestNamedData:
         assert compile_and_run(csource).strip() == "60"
 
     def test_out_u8_emits_uint8_array(self):
-        """`data { ... } out u8` emits a `uint8_t[]` static array;
-        named-label access still inlines the literal at the use site."""
+        """`data { ... } out u8` emits a `uint8_t[]` static array when
+        runtime access requires it; named-label access still inlines
+        the literal at the use site."""
+        # Include a runtime `.index` access so the array is emitted —
+        # the named-label-only fixture in `test_compile_time_only_skips_array`
+        # exercises the elision path.
         csource = emit_source(
             "bytes: data { LOW: 0 MID: 64 HIGH: 250 } out u8\n"
             "take_u8: function {b: u8} out u8 is { return b + 1.u8 }\n"
             "main: function is {\n"
             "    a: take_u8 b: bytes.LOW\n"
             "    b: take_u8 b: bytes.HIGH\n"
-            '    print "\\{a} \\{b}"\n'
+            "    i: 1\n"
+            '    print "\\{a} \\{b} \\{bytes.index i}"\n'
             "}"
         )
         assert "static const uint8_t z_bytes[]" in csource, csource
-        assert compile_and_run(csource).strip() == "1 251"
+        assert compile_and_run(csource).strip() == "1 251 64"
 
     def test_out_u8_runtime_index(self):
         """Runtime `.index` against an `out u8` data block reads the
@@ -6772,6 +6777,77 @@ class TestNamedData:
         )
         assert "static const uint8_t z_bytes[]" in csource, csource
         assert compile_and_run(csource).strip() == "30"
+
+    # ---- runtime_indexed elision: skip the static array when no
+    # access requires it. Every foldable access stamps node_const_value
+    # at typecheck; the emitter inlines via the const-value short-
+    # circuit and never reads the array body.
+
+    def test_compile_time_only_skips_array(self):
+        """Named-label only — no `static const z_mydata[]` emitted,
+        every access inlines the literal value."""
+        csource = emit_source(
+            "mydata: data { LOW: 0 HIGH: 10 }\n"
+            "main: function is {\n"
+            "    a: mydata.LOW\n"
+            "    b: mydata.HIGH\n"
+            '    print "\\{a} \\{b}"\n'
+            "}"
+        )
+        assert "static const int64_t z_mydata[]" not in csource, csource
+        assert "z_mydata" not in csource, csource
+        assert compile_and_run(csource).strip() == "0 10"
+
+    def test_ordinal_access_inlines_not_indexes(self):
+        """`primes.0` / `primes.4` fold to the literal at compile time;
+        the array body is not emitted."""
+        csource = emit_source(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "    a: primes.0\n"
+            "    b: primes.4\n"
+            '    print "\\{a} \\{b}"\n'
+            "}"
+        )
+        assert "static const int64_t z_primes[]" not in csource, csource
+        assert compile_and_run(csource).strip() == "2 11"
+
+    def test_length_inlines(self):
+        """`.length` folds to the literal element count."""
+        csource = emit_source(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "    n: primes.length\n"
+            '    print "\\{n}"\n'
+            "}"
+        )
+        assert "static const int64_t z_primes[]" not in csource, csource
+        assert compile_and_run(csource).strip() == "5"
+
+    def test_runtime_index_keeps_array(self):
+        """`.index <var>` requires the array; it must be emitted."""
+        csource = emit_source(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "    i: 2\n"
+            '    print "\\{primes.index i}"\n'
+            "}"
+        )
+        assert "static const int64_t z_primes[]" in csource, csource
+        assert compile_and_run(csource).strip() == "5"
+
+    def test_array_call_keeps_array(self):
+        """`.array` materialises a value-array; the static block must
+        be emitted as the copy source."""
+        csource = emit_source(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "    arr: primes.array\n"
+            '    print "\\{arr.0}"\n'
+            "}"
+        )
+        assert "static const int64_t z_primes[]" in csource, csource
+        assert compile_and_run(csource).strip() == "2"
 
 
 class TestList:

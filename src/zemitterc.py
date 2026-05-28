@@ -5707,7 +5707,13 @@ class CEmitter:
         elem_ctype = "int64_t"
         if data_ztype is not None and data_ztype.element_type is not None:
             elem_ctype = _ctype(self.typing, data_ztype.element_type)
-        if values:
+        # Skip the static array when typecheck found no runtime access —
+        # every use site already carries `node_const_value` and inlines
+        # via `_emit_operation_value`'s const-value short-circuit.
+        # `label_values` still populated below for the legacy named-
+        # label substitution path (kept as a safety net).
+        emit_array = values and (data_ztype is None or data_ztype.runtime_indexed)
+        if emit_array:
             self.data_defs.append(
                 f"static const {elem_ctype} {cname}[] = "
                 f"{{{', '.join(values)}}};\n"

@@ -14107,6 +14107,98 @@ class TestDataBlockTyping:
             "mydata: data is { X: 0 Y: 1 } out u8\nmain: function is { x: mydata }"
         )
 
+    # ---- runtime_indexed marker (data-array elision) ----
+
+    def _data_type(self, program, name):
+        tc = TypeChecker(program)
+        tc.check()
+        return tc._resolve_unit_name("test", name)
+
+    def test_runtime_indexed_false_for_named_label_only(self):
+        program, _ = check_ok(
+            "mydata: data { X: 5 Y: 7 }\n"
+            "main: function is {\n"
+            "  a: mydata.X\n"
+            "  b: mydata.Y\n"
+            '  print "\\{a} \\{b}"\n'
+            "}"
+        )
+        dt = self._data_type(program, "mydata")
+        assert dt is not None and dt.runtime_indexed is False
+
+    def test_runtime_indexed_false_for_ordinal_constant(self):
+        program, _ = check_ok(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "  a: primes.0\n"
+            "  b: primes.4\n"
+            '  print "\\{a} \\{b}"\n'
+            "}"
+        )
+        dt = self._data_type(program, "primes")
+        assert dt is not None and dt.runtime_indexed is False
+
+    def test_runtime_indexed_false_for_length_only(self):
+        program, _ = check_ok(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "  n: primes.length\n"
+            '  print "\\{n}"\n'
+            "}"
+        )
+        dt = self._data_type(program, "primes")
+        assert dt is not None and dt.runtime_indexed is False
+
+    def test_runtime_indexed_true_for_index_var(self):
+        program, _ = check_ok(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "  i: 0\n"
+            '  print "\\{primes.index i}"\n'
+            "}"
+        )
+        dt = self._data_type(program, "primes")
+        assert dt is not None and dt.runtime_indexed is True
+
+    def test_runtime_indexed_true_for_array_call(self):
+        program, _ = check_ok(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "  arr: primes.array\n"
+            '  print "\\{arr.0}"\n'
+            "}"
+        )
+        dt = self._data_type(program, "primes")
+        assert dt is not None and dt.runtime_indexed is True
+
+    def test_ordinal_access_carries_const_value(self):
+        program, typing = check_ok(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "  a: primes.0\n"
+            '  print "\\{a}"\n'
+            "}"
+        )
+        main = program.units["test"].body["main"]
+        assignment = main.body.statements[0].statementline
+        dp = assignment.value.expression
+        assert dp.nodetype == zast.NodeType.DOTTEDPATH
+        assert typing.node_const_value.get(dp.nodeid) == 2
+
+    def test_length_access_folds(self):
+        program, typing = check_ok(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "  n: primes.length\n"
+            '  print "\\{n}"\n'
+            "}"
+        )
+        main = program.units["test"].body["main"]
+        assignment = main.body.statements[0].statementline
+        dp = assignment.value.expression
+        assert dp.nodetype == zast.NodeType.DOTTEDPATH
+        assert typing.node_const_value.get(dp.nodeid) == 5
+
 
 class TestReturnConstructionTake:
     """Take semantics inside `return Type field: val` shorthand.

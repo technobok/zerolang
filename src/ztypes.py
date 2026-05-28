@@ -321,6 +321,15 @@ class ZType:
     # element type, so their names no longer carry the literal value).
     data_values: "Dict[str, str]" = field(default_factory=dict, init=False)
 
+    # For DATA-typed ZTypes: set True by the typechecker when any access
+    # to the block requires the runtime static array — variable
+    # indexing (`.index <var>`), iteration, `.array` materialisation,
+    # passing the block as a value. Foldable accesses (named label,
+    # numeric ordinal, `.length`, `.tag`) leave this False. The emitter
+    # skips `static const T[]` emission when False — every access
+    # carries node_const_value already.
+    runtime_indexed: bool = field(default=False, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.

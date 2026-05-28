@@ -4687,6 +4687,13 @@ class TypeChecker:
         # for stringview: .length returns u64 directly
         if _is_stringview_type(parent_type) and child_name == "length":
             return self._resolve_name("u64")
+        # for data: .length returns u64 (element count, folded to a
+        # compile-time constant by `_check_dotted_path_inner`).
+        if (
+            parent_type.typetype == ZTypeType.DATA
+            and child_name == "length"  # ztc-string-compare-ok: data builtin
+        ):
+            return self._resolve_name("u64")
         # .str conversion method on string, str, and stringview types
         # returns a marker function type; actual resolution happens in _check_call
         if child_name == "str" and (
@@ -8130,6 +8137,38 @@ class TypeChecker:
         elif path.parent.nodetype == NodeType.EXPRESSION:
             self._check_expression(cast(zast.Expression, path.parent))
         t = self._resolve_dotted_path(path)
+        # Data-block access: fold compile-time-resolvable accesses by
+        # stamping `node_const_value`, and mark `runtime_indexed` on
+        # the parent type for everything else. This runs whether or
+        # not `_resolve_dotted_path` returned a child type — `.index`
+        # in particular silently returns None today but the call site
+        # detects it via `_is_data_index_call` in the emitter, so the
+        # mark must fire regardless. Foldable:
+        #   - named label or ordinal (child in data_values),
+        #   - `.length` (element count).
+        # `.tag` is a type reference (no value emit, no marking).
+        # `.array` / `.index` / unknown children mark — they need the
+        # runtime static array.
+        parent_type_for_data = self.typing.node_type.get(path.parent.nodeid)
+        if (
+            parent_type_for_data is not None
+            and parent_type_for_data.typetype == ZTypeType.DATA
+        ):
+            if child_name in parent_type_for_data.data_values:
+                _, _val, _err = parse_number(
+                    parent_type_for_data.data_values[child_name]
+                )
+                if _err is None and _val is not None:
+                    self.typing.node_const_value[path.nodeid] = _val
+            elif child_name == "length":  # ztc-string-compare-ok: data builtin
+                n = sum(
+                    1
+                    for k in self.typing.child_names_of(parent_type_for_data)
+                    if k != "tag"  # ztc-string-compare-ok: data builtin
+                )
+                self.typing.node_const_value[path.nodeid] = n
+            elif child_name != "tag":  # ztc-string-compare-ok: data builtin
+                parent_type_for_data.runtime_indexed = True
         if t:
             self.typing.node_type[path.nodeid] = t
             # propagate const_value for numeric generic param fields
@@ -8138,18 +8177,6 @@ class TypeChecker:
                 garg = self.typing.generic_arg_of(parent_type, child_name)
                 if garg and garg.const_value is not None:
                     self.typing.node_const_value[path.nodeid] = garg.const_value
-            # Data-block element access: stamp the literal value on
-            # the DottedPath so the coercion machinery sees an
-            # untyped-literal source. Mirrors `_check_atomid`'s
-            # `node_const_value` stamp for bare numeric atoms.
-            if (
-                parent_type is not None
-                and parent_type.typetype == ZTypeType.DATA
-                and child_name in parent_type.data_values
-            ):
-                _, _val, _err = parse_number(parent_type.data_values[child_name])
-                if _err is None and _val is not None:
-                    self.typing.node_const_value[path.nodeid] = _val
             # Stamp child_id against parent's ZType so the emitter can
             # dispatch by id on hot paths (union/variant arm access,
             # record field, method dispatch). Falls back to name lookup
