@@ -5712,7 +5712,7 @@ class CEmitter:
         # Pick the C element type from the data block's resolved
         # element_type. Falls back to int64_t when unresolved (defensive
         # against early-error recovery).
-        data_ztype = self._resolved_type(name)
+        data_ztype = self._node_ztype(data)
         elem_ctype = "int64_t"
         if data_ztype is not None and data_ztype.element_type is not None:
             elem_ctype = _ctype(self.typing, data_ztype.element_type)

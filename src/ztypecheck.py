@@ -2791,6 +2791,9 @@ class TypeChecker:
         self._set_child(dtype, "tag", tag_type)
 
         self._resolving.pop()
+        # Stamp the data definition's own ZType on its node so the emitter
+        # reads it (by id) instead of re-resolving the data block by name.
+        self.typing.node_type[data_defn.nodeid] = dtype
         return dtype
 
     def _resolve_record_type(
