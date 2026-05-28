@@ -1654,6 +1654,10 @@ class TypeChecker:
 
         self._assign_cname_type(ftype, qualified_name=name)
         self._resolving.pop()
+        # Stamp the function's own ZType on its node so the emitter reads it by
+        # id (covers methods + as-functions, which bypass the top-level
+        # _type_of_definition chokepoint).
+        self.typing.node_type[func.nodeid] = ftype
         return ftype
 
     def _validate_function_ownership(self, ftype: ZType, func: zast.Function) -> None:

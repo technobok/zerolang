@@ -5754,7 +5754,7 @@ class CEmitter:
         # Ownership annotations live on the resolved ZType (which carries
         # both syntactic suffixes and the inferred BORROW-default for
         # stack-reftype params); read them from there.
-        ftype = self._resolved_type(name)
+        ftype = self._node_ztype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
@@ -5805,7 +5805,7 @@ class CEmitter:
 
         # Ownership annotations live on the resolved ZType (carries
         # both syntactic suffixes and inferred BORROW-default).
-        ftype = self._resolved_type(name)
+        ftype = self._node_ztype(func)
 
         params: List[str] = []
         pointer_params: List[str] = []
