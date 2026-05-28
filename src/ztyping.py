@@ -190,6 +190,10 @@ class ZTyping:
     # Per-DottedPath stamps.
     dp_parent_tagged_type: Dict[int, ZType] = field(default_factory=dict, init=False)
     dp_child_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # Per-DottedPath selector → the UNIT type_id it resolves to, when the path
+    # names a (file-level or inline) unit. Lets the emitter classify a composite
+    # `a.b` unit selector by id instead of re-resolving the qualified name.
+    dp_unit_type_id: Dict[int, int] = field(default_factory=dict, init=False)
     # Per-With binding ownership + alias target.
     with_ownership: Dict[int, ZOwnership] = field(default_factory=dict, init=False)
     with_alias_of: Dict[int, "Optional[str]"] = field(default_factory=dict, init=False)
@@ -328,9 +332,11 @@ class ZTyping:
         self.set_child_default(parent, name, str(value))
 
     def set_default_function(self, parent: ZType, name: str, funcname: str) -> None:
-        """Stash a function-reference default. Stored as the zerolang
-        function name; the emitter mangles to `z_<name>` at use."""
-        self.set_child_default(parent, name, funcname)
+        """Stash a function-reference default as `#function:<name>`; the emitter
+        mangles the payload to `z_<name>` at use. The `#function:` tag lets the
+        emitter classify the default mechanically instead of re-resolving the
+        name by type."""
+        self.set_child_default(parent, name, f"#function:{funcname}")
 
     def set_default_variant_arm(self, parent: ZType, name: str, arm_name: str) -> None:
         """Stash a variant / union null-payload subtype default.

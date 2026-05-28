@@ -4381,6 +4381,12 @@ class TypeChecker:
                 return rtype
         return None
 
+    def _stamp_dp_unit(self, path: zast.DottedPath, child: Optional[ZType]) -> None:
+        """If `child` (the type `path` resolves to) is a unit, record its type_id
+        on the path so the emitter classifies the selector by id, not by name."""
+        if child is not None and child.typetype == ZTypeType.UNIT:
+            self.typing.dp_unit_type_id[path.nodeid] = child.type_id
+
     def _resolve_dp_parent_type(
         self, path: zast.DottedPath
     ) -> Tuple[Optional[ZType], bool]:
@@ -4456,6 +4462,7 @@ class TypeChecker:
                 if utype:
                     child = self.typing.child_of(utype, path.child.name)
                     if child:
+                        self._stamp_dp_unit(path, child)
                         return child, True
                 t = self._resolve_unit_name(pname, path.child.name)
                 if t:
@@ -4491,6 +4498,7 @@ class TypeChecker:
             ):
                 child = self.typing.child_of(inline_unit_type, path.child.name)
                 if child:
+                    self._stamp_dp_unit(path, child)
                     return child, True
                 candidates = self.typing.child_names_of(inline_unit_type)
                 suggestion = _suggest_similar(path.child.name, candidates)
@@ -4790,6 +4798,7 @@ class TypeChecker:
                     loc=path.start,
                 )
                 return None
+            self._stamp_dp_unit(path, child)
             return child
         # Typedef fall-through: walk base chain for unshadowed methods
         base = parent_type.typedef_base

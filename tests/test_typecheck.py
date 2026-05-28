@@ -6143,7 +6143,7 @@ class TestDefaults:
         t = tc._resolve_unit_name("test", "apply")
         assert t is not None
         assert tc.typing.has_child_default(t, "f")
-        assert tc.typing.child_default(t, "f") == "add"
+        assert tc.typing.child_default(t, "f") == "#function:add"
 
     def test_spec_no_default(self):
         """Spec (function without body) does NOT produce a default."""
@@ -6225,13 +6225,15 @@ class TestDefaults:
         method_t = tc.typing.child_of(t, "method1")
         assert field_t is not None and method_t is not None
         assert field_t is method_t
-        # default carries the sibling method's name
-        assert tc.typing.child_default(t, "instancemethod") == "method1"
+        # default carries the sibling method's name, tagged for the emitter
+        assert tc.typing.child_default(t, "instancemethod") == "#function:method1"
         # default propagates to the meta.create constructor; calling
         # with no `instancemethod:` arg is therefore allowed.
         create_t = t.meta_create
         assert create_t is not None
-        assert tc.typing.child_default(create_t, "instancemethod") == "method1"
+        assert (
+            tc.typing.child_default(create_t, "instancemethod") == "#function:method1"
+        )
 
     def test_record_sibling_method_ref_default(self):
         """Record field defaulted to a sibling method behaves the
@@ -6252,7 +6254,7 @@ class TestDefaults:
         method_t = tc.typing.child_of(t, "transform1")
         assert field_t is not None and method_t is not None
         assert field_t is method_t
-        assert tc.typing.child_default(t, "hook") == "transform1"
+        assert tc.typing.child_default(t, "hook") == "#function:transform1"
 
     def test_variant_subtype_default_on_field(self):
         """`field: VariantType.arm` (qualified, null-payload arm) sets

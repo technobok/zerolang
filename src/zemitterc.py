@@ -488,33 +488,6 @@ class CEmitter:
     def _indent(self) -> str:
         return "    " * self.indent_level
 
-    def _resolved_type(self, name: str) -> Optional[ZType]:
-        """Look up a name in the type checker's resolved dict.
-
-        Tries the bare name first, then prefixed with the main unit name,
-        then each other loaded unit. Mainunit has priority so that user
-        definitions shadow any system namesake; the final fallback lets
-        names re-exported through core (like `ioerror`, `seekorigin`)
-        resolve against their definition unit when the caller writes
-        them bare in a mainunit that does not redefine them.
-        """
-        t = self.typing.resolved.get(name)
-        if t is None:
-            t = self.typing.resolved.get(f"{self.program.mainunitname}.{name}")
-        if t is None:
-            for unitname in self.program.units:
-                if unitname == self.program.mainunitname:
-                    continue
-                t = self.typing.resolved.get(f"{unitname}.{name}")
-                if t is not None:
-                    break
-        return t
-
-    def _typetype_of(self, name: str) -> Optional[ZTypeType]:
-        """Get the ZTypeType for a resolved name, or None if not found."""
-        t = self._resolved_type(name)
-        return t.typetype if t else None
-
     def _find_unit_def_by_name(self, name: str) -> Optional[zast.Node]:
         """Look up a top-level unit definition by simple name. Used by
         the macro-style inlining of unit-level numeric constants when
@@ -653,6 +626,12 @@ class CEmitter:
         binds to a local (carries atom_variable_id instead) or is unstamped.
         Honors typecheck's binding decision — never re-resolves by name."""
         tid = self.typing.atom_unit_def_type_id.get(node.nodeid)
+        return _type_by_id(tid) if tid is not None else None
+
+    def _dp_unit_type(self, node: zast.Node) -> Optional[ZType]:
+        """The UNIT type a composite dotted-path selector resolves to, by id, or
+        None. Reads the `dp_unit_type_id` stamp — never re-resolves by name."""
+        tid = self.typing.dp_unit_type_id.get(node.nodeid)
         return _type_by_id(tid) if tid is not None else None
 
     def _node_typetype(self, node: zast.Node) -> "Optional[ZTypeType]":
@@ -7545,23 +7524,22 @@ class CEmitter:
     def _render_default(self, default: str, target_type: ZType) -> str:
         """Render a stored default string as a C expression.
 
-        Numeric / function-ref defaults pass through unchanged (modulo
-        the existing function-name mangling). Tagged defaults are
-        encoded `#<kind>:<payload>` and dispatched on `<kind>` --
-        currently only `variant` (case-A variant / union null-payload
-        subtype default) needs a structured render.
+        Numeric defaults pass through verbatim. Tagged defaults are encoded
+        `#<kind>:<payload>` and dispatched on `<kind>`: `function` mangles the
+        payload to its C symbol; `variant` (case-A variant / union null-payload
+        subtype default) renders the tag struct literal.
         """
         if default and default[0] == "#":
             sep = default.find(":")
             if sep > 0:
                 kind = default[1:sep]
                 payload = default[sep + 1 :]
+                if kind == "function":  # ztc-string-compare-ok: default-kind tag
+                    return _mangle_func(payload)
                 if kind == "variant":  # ztc-string-compare-ok: default-kind tag
                     ctype = _ctype(self.typing, target_type)
                     tag = f"Z_{target_type.name.upper()}_TAG_{payload.upper()}"
                     return f"({ctype}){{.tag = {tag}}}"
-        if self._typetype_of(default) == ZTypeType.FUNCTION:
-            return _mangle_func(default)
         return default
 
     def _zero_args_for_ctypes(self, type_name: str) -> str:
@@ -8996,10 +8974,8 @@ class CEmitter:
             return None
         if path.nodetype == NodeType.DOTTEDPATH:
             parent_path = self._extract_unit_path(cast(zast.DottedPath, path).parent)
-            if parent_path is not None:
-                qname = f"{parent_path}.{cast(zast.DottedPath, path).child.name}"
-                if self._typetype_of(qname) == ZTypeType.UNIT:
-                    return qname
+            if parent_path is not None and self._dp_unit_type(path) is not None:
+                return f"{parent_path}.{cast(zast.DottedPath, path).child.name}"
         return None
 
     def _emit_dotted_path_value(self, path: zast.DottedPath) -> str:
@@ -9110,7 +9086,7 @@ class CEmitter:
             if parent_def is not None and parent_def.typetype == ZTypeType.UNIT:
                 qname = f"{pname}.{child}"
                 # check if the child is itself a unit (nested)
-                if self._typetype_of(qname) == ZTypeType.UNIT:
+                if self._dp_unit_type(path) is not None:
                     # will be resolved by further dotted path traversal
                     return _mangle_func(qname)
                 # Unit-level numeric constant referenced via the unit:
