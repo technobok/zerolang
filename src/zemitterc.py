@@ -666,6 +666,14 @@ class CEmitter:
         zt = self._node_ztype(node)
         return zt.typetype if zt is not None else None
 
+    def _unit_def_typetype(self, node: zast.Node) -> "Optional[ZTypeType]":
+        """The `typetype` of the unit/core definition `node` binds to, or None
+        when it is a local or a non-unit-level reference (e.g. a sibling
+        method). Distinguishes a top-level function from a sibling method,
+        which `node_type` cannot."""
+        zt = self._unit_def_ztype(node)
+        return zt.typetype if zt is not None else None
+
     def _enclosing_type(self, func: zast.Function) -> Optional[ZType]:
         """The enclosing record/class type of a method, by id, or None for a
         top-level function. Read from the `enclosing_type_id` stamp on the
@@ -3230,8 +3238,7 @@ class CEmitter:
                     # `field: VariantType.arm` emits a tag-only compound
                     # literal. Typecheck has already validated that the
                     # arm is null-payload.
-                    parent_name = cast(zast.AtomId, dp.parent).name
-                    parent_type = self._resolved_type(parent_name)
+                    parent_type = self._unit_def_ztype(dp.parent)
                     if parent_type is not None and parent_type.typetype in (
                         ZTypeType.VARIANT,
                         ZTypeType.UNION,
@@ -3244,8 +3251,7 @@ class CEmitter:
                             field_defaults[fname] = f"({ctype}){{.tag = {tag}}}"
             elif (
                 fpath.nodetype == NodeType.ATOMID
-                and self._typetype_of(cast(zast.AtomId, fpath).name)
-                == ZTypeType.FUNCTION
+                and self._unit_def_typetype(fpath) == ZTypeType.FUNCTION
             ):
                 field_defaults[fname] = _mangle_func(cast(zast.AtomId, fpath).name)
             elif fpath.nodetype == NodeType.ATOMID:
