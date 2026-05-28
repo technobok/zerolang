@@ -129,6 +129,9 @@ Node: union {
     stringchunk: stringchunkdata
     binop:       binopdata
     atomstring:  atomstringdata
+    dottedpath:  dottedpathdata
+    call:        calldata
+    typeofexpr:  typeofexprdata
 }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -189,6 +192,35 @@ atomstringdata: class {
     lineno:      u32
     colno:       u32
     stringparts: (List of: Node)
+}
+
+# Dotted-path node payload: a parent path and a child selector,
+# both Node children (the child is an AtomId arm).
+dottedpathdata: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    parent: Node
+    child:  Node
+}
+
+# Call node payload: the callable path and an ordered list of
+# argument nodes (each a NamedOperation arm once that arm lands).
+calldata: class {
+    nodeid:    u32
+    lineno:    u32
+    colno:     u32
+    callable:  Node
+    arguments: (List of: Node)
+}
+
+# typeof-expression payload (compiler-synthesised): the operation
+# whose static type is taken.
+typeofexprdata: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    source: Node
 }
 
 # Arm-name dumpers: return the canonical uppercase label for an
@@ -435,6 +467,20 @@ printNode: function {n: Node} is {
         for part: iter loop {
             printNode part
         }
+    } case dottedpath then {
+        print "\{n.nodeid}: dottedpath @\{n.lineno}:\{n.colno}"
+        printNode n.parent
+        printNode n.child
+    } case call then {
+        print "\{n.nodeid}: call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
+        printNode n.callable
+        argiter: n.arguments.iterate
+        for arg: argiter loop {
+            printNode arg
+        }
+    } case typeofexpr then {
+        print "\{n.nodeid}: typeofexpr @\{n.lineno}:\{n.colno}"
+        printNode n.source
     }
 }
 
@@ -562,4 +608,22 @@ main: function is {
     rhs: Node.atomid (atomiddata nodeid: 10.u32 lineno: 15.u32 colno: 5.u32 name: "y".string)
     n6: Node.binop (binopdata nodeid: 11.u32 lineno: 15.u32 colno: 3.u32 lhs: lhs operator: op rhs: rhs)
     printNode n6
+
+    # dottedpath "a.b": parent and child are atomid Node children.
+    dpp: Node.atomid (atomiddata nodeid: 12.u32 lineno: 16.u32 colno: 1.u32 name: "a".string)
+    dpc: Node.atomid (atomiddata nodeid: 13.u32 lineno: 16.u32 colno: 3.u32 name: "b".string)
+    n7: Node.dottedpath (dottedpathdata nodeid: 14.u32 lineno: 16.u32 colno: 2.u32 parent: dpp child: dpc)
+    printNode n7
+
+    # call "f arg": callable atomid + one-element argument list.
+    callee: Node.atomid (atomiddata nodeid: 15.u32 lineno: 17.u32 colno: 1.u32 name: "f".string)
+    args: (List of: Node)
+    args.append (Node.atomid (atomiddata nodeid: 16.u32 lineno: 17.u32 colno: 3.u32 name: "arg".string))
+    n8: Node.call (calldata nodeid: 17.u32 lineno: 17.u32 colno: 1.u32 callable: callee arguments: args)
+    printNode n8
+
+    # typeofexpr over a single source operation.
+    tsrc: Node.atomid (atomiddata nodeid: 18.u32 lineno: 18.u32 colno: 1.u32 name: "x".string)
+    n9: Node.typeofexpr (typeofexprdata nodeid: 19.u32 lineno: 18.u32 colno: 1.u32 source: tsrc)
+    printNode n9
 }
