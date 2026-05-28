@@ -8092,7 +8092,11 @@ class TypeChecker:
                         self.typing.atom_variable_id[parent_atom.nodeid] = (
                             pvar.variable_id
                         )
-                    else:
+                    elif self.symtab.lookup_entry(parent_atom.name) is None:
+                        # Unit/core definition (no symtab binding). A local
+                        # without a ZVariable (e.g. a borrowed for-loop view)
+                        # has an entry but no var -> neither stamp, lowered as
+                        # a local by the emitter.
                         self.typing.atom_unit_def_type_id[parent_atom.nodeid] = (
                             parent_type.type_id
                         )
@@ -8352,9 +8356,12 @@ class TypeChecker:
                 # variable_id so the emitter emits a local (not a unit-level
                 # namesake) without re-resolving by name.
                 self.typing.atom_variable_id[atom.nodeid] = var.variable_id
-            else:
-                # Non-local: a unit/core definition. Record its type_id so the
-                # emitter resolves the def by id, not by re-resolving the name.
+            elif self.symtab.lookup_entry(name) is None:
+                # No symtab binding at all -> a unit/core definition. Record
+                # its type_id so the emitter resolves the def by id. (A local
+                # without a ZVariable -- e.g. a borrowed for-loop view binding
+                # -- has an entry but no var; it is NOT a unit def, so it gets
+                # neither stamp and the emitter lowers it as a local.)
                 self.typing.atom_unit_def_type_id[atom.nodeid] = t.type_id
             self.typing.node_type[atom.nodeid] = t
             # Narrowing stamp: if the name was narrowed via shadow=True

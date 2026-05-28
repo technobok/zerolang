@@ -652,6 +652,13 @@ class CEmitter:
             return zt
         return self.typing.node_type.get(node.nodeid)
 
+    def _unit_def_ztype(self, node: zast.Node) -> Optional[ZType]:
+        """The unit/core definition `node` resolves to, by id, or None when it
+        binds to a local (carries atom_variable_id instead) or is unstamped.
+        Honors typecheck's binding decision — never re-resolves by name."""
+        tid = self.typing.atom_unit_def_type_id.get(node.nodeid)
+        return _type_by_id(tid) if tid is not None else None
+
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
         """Read the child_id stamped on `clause.match` (the tag selector
         AtomId of a case arm)."""
@@ -6361,9 +6368,7 @@ class CEmitter:
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = (
-            self._resolved_type(cast(zast.AtomId, inner).name)
-            if inner.nodetype == NodeType.ATOMID
-            else None
+            self._unit_def_ztype(inner) if inner.nodetype == NodeType.ATOMID else None
         )
         if (
             inner.nodetype == NodeType.ATOMID
@@ -6599,12 +6604,15 @@ class CEmitter:
     def _is_data_index_call(self, call: zast.Call) -> bool:
         """Check if this is a data.index call like primes.index i."""
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            if cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
-                pname = cast(
-                    zast.AtomId, cast(zast.DottedPath, call.callable).parent
-                ).name
+            parent = cast(zast.DottedPath, call.callable).parent
+            if parent.nodetype == NodeType.ATOMID:
                 child = cast(zast.DottedPath, call.callable).child.name
-                if self._typetype_of(pname) == ZTypeType.DATA and child == "index":
+                pt = self._unit_def_ztype(parent)
+                if (
+                    pt is not None
+                    and pt.typetype == ZTypeType.DATA
+                    and child == "index"
+                ):
                     return True
         return False
 
@@ -7254,10 +7262,13 @@ class CEmitter:
         """
         if op.nodetype == NodeType.ATOMID:
             name = cast(zast.AtomId, op).name
+            udt = self._unit_def_ztype(op)
             if (
                 not _is_numeric_id(name)
-                and self._typetype_of(name) != ZTypeType.FUNCTION
-                and self._typetype_of(name) != ZTypeType.DATA
+                and (
+                    udt is None
+                    or udt.typetype not in (ZTypeType.FUNCTION, ZTypeType.DATA)
+                )
                 and name not in self._const_names
             ):
                 # If this name is an alias, redirect implicit-take to
@@ -8993,6 +9004,9 @@ class CEmitter:
 
         if path.parent.nodetype == NodeType.ATOMID:
             pname = cast(zast.AtomId, path.parent).name
+            # The unit/core definition the parent binds to (by id), or None
+            # when the parent is a local — typecheck's binding decision.
+            parent_def = self._unit_def_ztype(path.parent)
             # numeric dotted path: 0.u32, 42.i8, 0xff.u16
             if _is_numeric_id(pname):
                 child_name = path.child.name
@@ -9054,7 +9068,7 @@ class CEmitter:
             ):
                 return _mangle_func(f"{pname}.{child}")
             # inline unit.name reference
-            if self._typetype_of(pname) == ZTypeType.UNIT:
+            if parent_def is not None and parent_def.typetype == ZTypeType.UNIT:
                 qname = f"{pname}.{child}"
                 # check if the child is itself a unit (nested)
                 if self._typetype_of(qname) == ZTypeType.UNIT:
@@ -9075,10 +9089,11 @@ class CEmitter:
             # class / record type — variables flow to the per-type dispatch
             # branches below so zero-arg methods like `list.listview` emit
             # as method calls instead of bare field accesses.
-            ptt = self._typetype_of(pname)
-            resolved_pname = self._resolved_type(pname)
-            is_type_name = resolved_pname is not None and resolved_pname.name == pname
-            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS) and is_type_name:
+            # `parent_def is not None` already means the parent names the type
+            # itself (a variable carries atom_variable_id, not this stamp), so
+            # it stands in for the old `resolved.name == pname` disambiguator.
+            ptt = parent_def.typetype if parent_def is not None else None
+            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS):
                 return _mangle_func(f"{pname}.{child}")
             # union_name.subtype — emit null subtype construction
             if ptt == ZTypeType.UNION:
@@ -10006,21 +10021,14 @@ class CEmitter:
         ):
             return True
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            if cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
-                if (
-                    self._typetype_of(
-                        cast(
-                            zast.AtomId, cast(zast.DottedPath, call.callable).parent
-                        ).name
-                    )
-                    == ZTypeType.UNION
-                ):
+            parent = cast(zast.DottedPath, call.callable).parent
+            if parent.nodetype == NodeType.ATOMID:
+                pt = self._unit_def_ztype(parent)
+                if pt is not None and pt.typetype == ZTypeType.UNION:
                     return True
         if call.callable.nodetype == NodeType.ATOMID:
-            if (
-                self._typetype_of(cast(zast.AtomId, call.callable).name)
-                == ZTypeType.UNION
-            ):
+            ct = self._unit_def_ztype(call.callable)
+            if ct is not None and ct.typetype == ZTypeType.UNION:
                 return True
         return False
 
@@ -10347,21 +10355,14 @@ class CEmitter:
         ):
             return True
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            if cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
-                if (
-                    self._typetype_of(
-                        cast(
-                            zast.AtomId, cast(zast.DottedPath, call.callable).parent
-                        ).name
-                    )
-                    == ZTypeType.VARIANT
-                ):
+            parent = cast(zast.DottedPath, call.callable).parent
+            if parent.nodetype == NodeType.ATOMID:
+                pt = self._unit_def_ztype(parent)
+                if pt is not None and pt.typetype == ZTypeType.VARIANT:
                     return True
         if call.callable.nodetype == NodeType.ATOMID:
-            if (
-                self._typetype_of(cast(zast.AtomId, call.callable).name)
-                == ZTypeType.VARIANT
-            ):
+            ct = self._unit_def_ztype(call.callable)
+            if ct is not None and ct.typetype == ZTypeType.VARIANT:
                 return True
         return False
 
