@@ -2623,7 +2623,7 @@ class CEmitter:
         lines: List[str] = []
 
         # vtable struct — function pointers with void* as first param (same as protocol)
-        facet_type = self._resolved_type(name)
+        facet_type = self._node_ztype(facet)
         lines.append("typedef struct {\n")
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
@@ -2752,7 +2752,7 @@ class CEmitter:
             return
 
         self.needs_stdint = True
-        ztype = self._resolved_type(name)
+        ztype = self._node_ztype(rec)
         # see _emit_class for the self-reference rationale.
         needs_forward_typedef = self._class_needs_forward_typedef(name, rec, ztype)
         struct_id = f"z_{name}_t"
@@ -2805,7 +2805,7 @@ class CEmitter:
         self._emit_meta_create(name, rec)
 
         # emit auto-generated equality function
-        self._emit_autogen_eq(name, rec.is_paths(), rec.functions())
+        self._emit_autogen_eq(name, rec.is_paths(), rec.functions(), ztype)
 
         # emit 'is' functions with body as regular C functions (for default values)
         for mname, mfunc in rec.functions().items():
@@ -2833,9 +2833,9 @@ class CEmitter:
         name: str,
         items: dict,
         functions: dict,
+        ztype: Optional[ZType],
     ) -> None:
         """Emit a static z_{name}_eq() function for auto-generated == on records."""
-        ztype = self._resolved_type(name)
         if not ztype:
             return
         eq_method = self.typing.child_of(ztype, "==")
@@ -3294,7 +3294,7 @@ class CEmitter:
         """
         assert defn.nodetype in (NodeType.RECORD, NodeType.CLASS)
         rc_defn = cast(zast.ObjectDef, defn)
-        ztype = self._resolved_type(name)
+        ztype = self._node_ztype(defn)
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
         params, field_names, field_ctypes = self._collect_field_params(
@@ -3381,7 +3381,7 @@ class CEmitter:
 
         self.needs_stdint = True
         self.needs_stdlib = True
-        ztype = self._resolved_type(name)
+        ztype = self._node_ztype(cls)
         # Function-pointer fields whose signature references the
         # enclosing class (via a `this` receiver) need the typedef
         # name to be in scope before the struct body. Emit a forward
@@ -5608,7 +5608,7 @@ class CEmitter:
         lines.append(f"}} z_{name}_t;\n\n")
 
         # emit equality function (if auto-generated)
-        vtype = self._resolved_type(name)
+        vtype = self._node_ztype(variant_defn)
         eq_method = self.typing.child_of(vtype, "==") if vtype else None
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"

@@ -1085,7 +1085,12 @@ class TypeChecker:
         # entry binds to the per-instance bound method — no getattr).
         resolver = self._definition_resolvers.get(defn.nodetype)
         if resolver is not None:
-            return resolver(unitname, name, defn)
+            t = resolver(unitname, name, defn)
+            if t is not None:
+                # Stamp the definition's own ZType on its node so the emitter
+                # reads it (by id) instead of re-resolving the definition name.
+                self.typing.node_type[defn.nodeid] = t
+            return t
         # alias: DottedPath reference
         if defn.nodetype == NodeType.DOTTEDPATH:
             key = f"{unitname}.{name}"
