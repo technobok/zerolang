@@ -129,9 +129,10 @@ class ZTyping:
     # base flavour propagates from the operands (see
     # `_check_binop_inner`).
     node_literal_base: Dict[int, str] = field(default_factory=dict, init=False)
-    # Per-Call classification + resolved callable's type name.
+    # Per-Call classification + resolved callable's type_id (for CALLABLE
+    # dispatch; the emitter resolves the ZType by id, not by name).
     call_kind: Dict[int, CallKind] = field(default_factory=dict, init=False)
-    call_callable_type_name: Dict[int, str] = field(default_factory=dict, init=False)
+    call_callable_type_id: Dict[int, int] = field(default_factory=dict, init=False)
     # Per-Call set of generic-arg names (e.g. `t` in `myrec t: i64 x: 5`)
     # that the dispatch stamped before falling through to the standard
     # call pipeline. `_check_call_arguments` skips any arg whose name

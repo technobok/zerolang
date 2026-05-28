@@ -29,6 +29,7 @@ check:
 # name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
 # startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
 # name-literal-compare:270 (F3/F4 — buckets A/B/C done, D deferred)
+# emitter-name-resolution:60 (typed-AST-authoritative — emitter reads stamps, not names; drive to 0)
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
@@ -108,6 +109,15 @@ bootstrap-lint:
 		echo "  This mirrors the Phase 7 ZScope/Entry/Unit pattern and keeps the type graph SQL-friendly."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -nE 'Optional.*ZType.*= field' src/ztypes.py | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -cE '_(resolved_type|typetype_of)\(' src/zemitterc.py); \
+	if [ $$count -gt 60 ]; then \
+		echo "ERROR: emitter name-resolution calls increased ($$count > 60 baseline)"; \
+		echo "  The typed AST is authoritative: read the typecheck stamp"; \
+		echo "  (node_type / *_type_id) instead of re-resolving by name with"; \
+		echo "  _resolved_type / _typetype_of. Drive this baseline to 0."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -nE '_(resolved_type|typetype_of)\(' src/zemitterc.py | tail -5; fail=1; \
 	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail

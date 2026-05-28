@@ -23,6 +23,7 @@ from ztypes import (
     ZParamOwnership,
     ZOwnership,
     NUMERIC_RANGES,
+    _type_by_id,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -6861,14 +6862,15 @@ class CEmitter:
 
     def _emit_callable_dispatch(self, call: zast.Call) -> str:
         """Emit a callable object dispatch: obj(args) -> z_type_call(obj, args)."""
-        # Step 4d: Call decoration reads via typed mirror.
-        _call_ctn = self.typing.call_callable_type_name.get(call.nodeid)
-        type_name = _call_ctn
+        # The callable object's type is identified by id; resolve it via the
+        # global type registry rather than re-resolving its name.
+        type_id = self.typing.call_callable_type_id.get(call.nodeid)
+        rec_t = _type_by_id(type_id) if type_id is not None else None
+        type_name = rec_t.name if rec_t is not None else None
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
         # Class methods expect a pointer receiver. Wrap the variable with &
         # when the receiver is a plain atom (not already a pointer).
-        rec_t = self._resolved_type(type_name) if type_name is not None else None
         if (
             rec_t is not None
             and rec_t.typetype == ZTypeType.CLASS

@@ -8389,7 +8389,7 @@ class TypeChecker:
     def _check_call(self, call: zast.Call) -> ZExprResult:
         """Type-check a call. Thin wrapper that builds the typed-tree
         mirror after the resolution body has populated `self.typing.node_type.get(call.nodeid)`,
-        `self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self.typing.call_callable_type_name.get(call.nodeid)`, and the per-argument
+        `self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self.typing.call_callable_type_id.get(call.nodeid)`, and the per-argument
         `NamedOperation` projection stamps. Captures and clears the legacy
         `_pending_*` side-channel flags at the boundary so the result
         carries the borrow_target / private_access intent explicitly."""
@@ -8590,7 +8590,7 @@ class TypeChecker:
             call_method = self.typing.child_of(callee_type, "call")
             if call_method and call_method.typetype == ZTypeType.FUNCTION:
                 self.typing.call_kind[call.nodeid] = zast.CallKind.CALLABLE
-                self.typing.call_callable_type_name[call.nodeid] = callee_type.name
+                self.typing.call_callable_type_id[call.nodeid] = callee_type.type_id
                 callee_type = call_method
                 self.typing.node_type[call.callable.nodeid] = call_method
                 # fall through
