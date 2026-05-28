@@ -2876,7 +2876,7 @@ class CEmitter:
         lines: List[str] = []
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
-        if self._use_memcmp_eq(name, eq_method):
+        if self._use_memcmp_eq(name, ztype, eq_method):
             self.needs_string = True  # memcmp is in string.h
             lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
         else:
@@ -2940,20 +2940,23 @@ class CEmitter:
         # function call is required.
         return True
 
-    def _use_memcmp_eq(self, name: str, eq_method: ZType) -> bool:
+    def _use_memcmp_eq(
+        self, name: str, ztype: Optional[ZType], eq_method: ZType
+    ) -> bool:
         """Check if a type should use memcmp for equality.
 
         True when is_simple_eq and estimated size exceeds the threshold.
         """
         if not eq_method.is_simple_eq:
             return False
-        return self._estimate_type_size(name) > _EQ_MEMCMP_THRESHOLD
+        return self._estimate_type_size(name, ztype) > _EQ_MEMCMP_THRESHOLD
 
-    def _estimate_type_size(self, name: str) -> int:
+    def _estimate_type_size(self, name: str, ztype: Optional[ZType]) -> int:
         """Estimate byte size of a type from its C fields.
 
-        Returns 0 if the size cannot be determined (conservative: caller
-        should fall back to field-by-field comparison).
+        name keys the cached field-ctype list; ztype supplies the type's
+        children when there is no cache entry. Returns 0 if the size cannot
+        be determined (conservative: caller falls back to field-by-field).
         """
         # check cached field ctypes from mono/record emission
         field_ctypes = self._type_field_ctypes.get(name)
@@ -2962,16 +2965,16 @@ class CEmitter:
             for ct in field_ctypes:
                 sz = CTYPE_SIZES.get(ct, 0)
                 if sz == 0:
-                    # nested struct type: z_foo_t -> foo, recurse
+                    # nested struct type: z_foo_t -> foo, recurse. The cache
+                    # holds only ctype strings, so the nested ZType is unknown;
+                    # the recursion resolves it from its own cache entry.
                     if ct.startswith("z_") and ct.endswith("_t"):
                         inner_name = ct[2:-2]
-                        sz = self._estimate_type_size(inner_name)
+                        sz = self._estimate_type_size(inner_name, None)
                     if sz == 0:
                         return 0  # unknown size
                 total += sz
             return total
-        # try resolved type's children for non-cached types
-        ztype = self._resolved_type(name)
         if not ztype:
             return 0
         if ztype.typetype == ZTypeType.VARIANT:
@@ -2991,7 +2994,7 @@ class CEmitter:
                 ct = _ctype(self.typing, ftype)
                 sz = CTYPE_SIZES.get(ct, 0)
                 if sz == 0 and ct.startswith("z_") and ct.endswith("_t"):
-                    sz = self._estimate_type_size(ct[2:-2])
+                    sz = self._estimate_type_size(ct[2:-2], ftype)
                 if sz > max_sub:
                     max_sub = sz
             return 4 + max_sub  # tag + largest union member
@@ -3013,7 +3016,7 @@ class CEmitter:
             ct = _ctype(self.typing, ftype)
             sz = CTYPE_SIZES.get(ct, 0)
             if sz == 0 and ct.startswith("z_") and ct.endswith("_t"):
-                sz = self._estimate_type_size(ct[2:-2])
+                sz = self._estimate_type_size(ct[2:-2], ftype)
             if sz == 0:
                 return 0
             total += sz
@@ -3034,7 +3037,7 @@ class CEmitter:
         ctype = f"z_{name}_t"
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
-        if self._use_memcmp_eq(name, eq_method):
+        if self._use_memcmp_eq(name, mono_type, eq_method):
             self.needs_string = True
             lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
         else:
@@ -3979,7 +3982,7 @@ class CEmitter:
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            if self._use_memcmp_eq(name, eq_method):
+            if self._use_memcmp_eq(name, mono_type, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
             elif all_null:
@@ -4113,7 +4116,7 @@ class CEmitter:
         eq_method = self.typing.child_of(mono_type, "==")
         if eq_method and eq_method.is_autogen_eq:
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
-            if self._use_memcmp_eq(name, eq_method):
+            if self._use_memcmp_eq(name, mono_type, eq_method):
                 self.needs_string = True
                 eq_body_parts.append(
                     f"    return memcmp(&a, &b, sizeof({ctype})) == 0;"
@@ -5637,7 +5640,7 @@ class CEmitter:
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            if self._use_memcmp_eq(name, eq_method):
+            if self._use_memcmp_eq(name, vtype, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
             elif all_null:
