@@ -690,6 +690,19 @@ class TypeChecker:
         )
 
     def _set_child(self, parent: ZType, name: str, child: ZType) -> None:
+        # Record a method's enclosing type by id so the emitter recovers it
+        # without re-resolving the enclosing name. Only for FUNCTION children
+        # of a method-owning type (not as-functions of functions, which go
+        # through this wrapper too but whose FUNCTION parent is harmless).
+        if child.typetype == ZTypeType.FUNCTION and parent.typetype in (
+            ZTypeType.RECORD,
+            ZTypeType.CLASS,
+            ZTypeType.VARIANT,
+            ZTypeType.UNION,
+            ZTypeType.FACET,
+            ZTypeType.PROTOCOL,
+        ):
+            child.enclosing_type_id = parent.type_id
         self.typing.set_child(parent, name, child)
 
     def _set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:

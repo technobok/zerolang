@@ -193,6 +193,12 @@ class ZType:
     # starts with "tag__"): the DATA type this tag RECORD belongs to.
     data_owner_id: Optional[int] = field(default=None, init=False)
 
+    # Set on FUNCTION ZTypes that are a type's method (via _set_child): the
+    # type_id of the enclosing record/class/etc. -1 when none (top-level
+    # function). Lets the emitter recover a method's enclosing type by id
+    # instead of re-resolving the enclosing name.
+    enclosing_type_id: int = field(default=-1, init=False)
+
     # parallel name→id map for children. Lazily populated by child_id_for;
     # never pre-seeded. Globally-unique ids consumed by `ZTyping.type_child`
     # rows and by narrowing entries that reference a child by id rather

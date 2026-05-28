@@ -665,6 +665,15 @@ class CEmitter:
         zt = self._node_ztype(node)
         return zt.typetype if zt is not None else None
 
+    def _enclosing_type(self, func: zast.Function) -> Optional[ZType]:
+        """The enclosing record/class type of a method, by id, or None for a
+        top-level function. Read from the `enclosing_type_id` stamp on the
+        function's ZType — never re-resolves the enclosing name."""
+        ftype = self._node_ztype(func)
+        if ftype is None or ftype.enclosing_type_id < 0:
+            return None
+        return _type_by_id(ftype.enclosing_type_id)
+
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
         """Read the child_id stamped on `clause.match` (the tag selector
         AtomId of a case arm)."""
@@ -2385,7 +2394,7 @@ class CEmitter:
         params) by pointer."""
         self.needs_stdint = True
         ret_ctype = self._return_ctype(func)
-        record_type = self._resolved_type(record_name) if record_name else None
+        record_type = self._enclosing_type(func)
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
         params: List[str] = []
         for _pname, ppath in func.parameters.items():
@@ -3049,7 +3058,7 @@ class CEmitter:
         Record methods pass `this` by value (records are valtypes).
         """
         ret_ctype = self._return_ctype(mfunc)
-        parent_type = self._resolved_type(parent_name) if parent_name else None
+        parent_type = self._enclosing_type(mfunc)
         parent_ctype = f"z_{parent_name}_t" if parent_name else ""
         parent_is_class = (
             parent_type is not None and parent_type.typetype == ZTypeType.CLASS
@@ -5748,7 +5757,7 @@ class CEmitter:
         self.needs_stdint = True
         cname = _mangle_func(name)
         ret_ctype = self._return_ctype(func)
-        record_type = self._resolved_type(record_name) if record_name else None
+        record_type = self._enclosing_type(func)
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
         # Ownership annotations live on the resolved ZType (which carries
         # both syntactic suffixes and the inferred BORROW-default for
@@ -5799,7 +5808,7 @@ class CEmitter:
 
         # Class methods pass the `this` receiver by pointer so mutations via
         # `it.field = ...` persist across calls.
-        record_type = self._resolved_type(record_name) if record_name else None
+        record_type = self._enclosing_type(func)
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
 
         # Ownership annotations live on the resolved ZType (carries
