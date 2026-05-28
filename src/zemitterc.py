@@ -2036,7 +2036,8 @@ class CEmitter:
 
         # register monomorphized type names before emission
         for mono_type, _ in self.typing.mono_types:
-            # register in resolved dict so _typetype_of() works for mono types
+            # register in resolved dict so name-based type lookups resolve
+            # monomorphized types
             self.typing.resolved[mono_type.name] = mono_type
             if _is_array_type(mono_type):
                 continue
