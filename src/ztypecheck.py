@@ -561,6 +561,10 @@ class TypeChecker:
             self._register_unit_type(unitname, unit_ast, t)
         # track which file units have been fully resolved (generic params detected)
         self._resolved_file_units: set[str] = set()
+        # track system units whose conforming classes have been eagerly resolved
+        # (so a system class hidden behind a native — e.g. io.File behind
+        # io.stdout — still gets its conformance type-checked / stamped)
+        self._system_conformance_resolved: set[str] = set()
 
         # Function-body context. See `FunctionContext` for per-field documentation.
         self.func_ctx = FunctionContext()
@@ -1075,6 +1079,30 @@ class TypeChecker:
             # also populate unit_types for dotted path access
             if unitname in self.unit_types:
                 self._set_child(self.unit_types[unitname], name, t)
+        # Completeness for system items: when a system unit is first used,
+        # resolve the conformance of its classes/records whose construction is
+        # hidden inside native implementations (e.g. io.File behind io.stdout,
+        # which returns the bare Writer protocol). Demand-driven resolution
+        # would otherwise never run _resolve_class_type on such a type, so its
+        # `as_items` protocol/facet paths would never get node_type-stamped and
+        # the emitter could not read the conformance by id. Generic classes are
+        # unaffected (conformance is deferred to monomorphization). Runs once
+        # per system unit; the _resolved cache makes each inner resolve a no-op.
+        if (
+            unitname in self._SYSTEM_UNITS
+            and unitname not in self._system_conformance_resolved
+        ):
+            self._system_conformance_resolved.add(unitname)
+            for defname, sdefn in unit.body.items():
+                if sdefn.nodetype not in (NodeType.CLASS, NodeType.RECORD):
+                    continue
+                declares_conformance = False
+                for apath in cast(zast.ObjectDef, sdefn).as_items.values():
+                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+                        declares_conformance = True
+                        break
+                if declares_conformance:
+                    self._resolve_unit_name(unitname, defname)
         return t
 
     def _type_of_definition(

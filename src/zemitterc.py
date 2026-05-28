@@ -1370,13 +1370,7 @@ class CEmitter:
                 if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 else None
             )
-            # The io `File` class is a native construct whose `as_items`
-            # conformance paths are not stamped by typecheck (it does not run
-            # through _process_as_items_protocols), so the per-node stamp is
-            # unavailable here. This is a global "is `Writer` a known protocol"
-            # existence check, not a per-reference classification — keep the
-            # name lookup. (ztc-string-compare-ok: native io File conformance)
-            if proto_name and self._resolved_type(proto_name) is not None:
+            if proto_name and self._node_ztype(apath) is not None:
                 proto = self._io_protocol_defs.get(proto_name)
                 if proto is not None:
                     self._emit_protocol_impl(
