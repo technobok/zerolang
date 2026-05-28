@@ -132,6 +132,9 @@ Node: union {
     dottedpath:  dottedpathdata
     call:        calldata
     typeofexpr:  typeofexprdata
+    namedoperation: namedoperationdata
+    datablock:      datablockdata
+    yieldexpr:      yieldexprdata
 }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -221,6 +224,37 @@ typeofexprdata: class {
     lineno: u32
     colno:  u32
     source: Node
+}
+
+# Named-operation payload: an optional argument label plus the
+# operation value. Appears as a Call/Data argument; `name` is
+# absent for positional arguments.
+namedoperationdata: class {
+    nodeid:    u32
+    lineno:    u32
+    colno:     u32
+    name:      (Option t: String)
+    operation: Node
+}
+
+# Data-block payload: an ordered list of NamedOperation element
+# nodes and an optional `out <type-ref>` annotation that pins the
+# element type for the whole block.
+datablockdata: class {
+    nodeid:   u32
+    lineno:   u32
+    colno:    u32
+    elements: (List of: Node)
+    out_type: (Option t: Node)
+}
+
+# Yield payload: the expression whose value is yielded out of a
+# generator function at this suspension point.
+yieldexprdata: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    expr:   Node
 }
 
 # Arm-name dumpers: return the canonical uppercase label for an
@@ -441,6 +475,31 @@ printCallKind: function {ck: CallKind} is {
     print s
 }
 
+# Print a NamedOperation's optional label. The Option is passed by
+# borrow so it can be matched without moving it out of its carrier.
+printOptName: function {o: (Option t: String)} is {
+    match (
+        o
+    ) case some then {
+        print "  name=\{o}"
+    } case none then {
+        print "  name=<none>"
+    }
+}
+
+# Print a Data block's optional `out` type annotation, descending
+# into the type node when present.
+printOptType: function {o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        print "  out_type:"
+        printNode o
+    } case none then {
+        print "  out_type=<none>"
+    }
+}
+
 # Print one line per Node in the form
 #   "<nodeid>: <arm> @<lineno>:<colno>"
 # Recursive arms (binop, atomstring) descend into their children.
@@ -481,6 +540,20 @@ printNode: function {n: Node} is {
     } case typeofexpr then {
         print "\{n.nodeid}: typeofexpr @\{n.lineno}:\{n.colno}"
         printNode n.source
+    } case namedoperation then {
+        print "\{n.nodeid}: namedoperation @\{n.lineno}:\{n.colno}"
+        printOptName n.name
+        printNode n.operation
+    } case datablock then {
+        print "\{n.nodeid}: datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
+        eiter: n.elements.iterate
+        for el: eiter loop {
+            printNode el
+        }
+        printOptType n.out_type
+    } case yieldexpr then {
+        print "\{n.nodeid}: yieldexpr @\{n.lineno}:\{n.colno}"
+        printNode n.expr
     }
 }
 
@@ -626,4 +699,34 @@ main: function is {
     tsrc: Node.atomid (atomiddata nodeid: 18.u32 lineno: 18.u32 colno: 1.u32 name: "x".string)
     n9: Node.typeofexpr (typeofexprdata nodeid: 19.u32 lineno: 18.u32 colno: 1.u32 source: tsrc)
     printNode n9
+
+    # namedoperation "label: x" — a labelled argument value.
+    noval: Node.atomid (atomiddata nodeid: 20.u32 lineno: 19.u32 colno: 8.u32 name: "x".string)
+    noname: (Option.some "label".string)
+    n10: Node.namedoperation (namedoperationdata nodeid: 21.u32 lineno: 19.u32 colno: 1.u32 name: noname operation: noval)
+    printNode n10
+
+    # namedoperation with no label (positional argument).
+    noval2: Node.atomid (atomiddata nodeid: 22.u32 lineno: 20.u32 colno: 1.u32 name: "y".string)
+    n11: Node.namedoperation (namedoperationdata nodeid: 23.u32 lineno: 20.u32 colno: 1.u32 name: (Option.none String) operation: noval2)
+    printNode n11
+
+    # datablock "data { a b } out T" — two element nodes plus an out type.
+    elems: (List of: Node)
+    elems.append (Node.atomid (atomiddata nodeid: 24.u32 lineno: 21.u32 colno: 8.u32 name: "a".string))
+    elems.append (Node.atomid (atomiddata nodeid: 25.u32 lineno: 21.u32 colno: 10.u32 name: "b".string))
+    douttype: Node.atomid (atomiddata nodeid: 26.u32 lineno: 21.u32 colno: 18.u32 name: "T".string)
+    n12: Node.datablock (datablockdata nodeid: 27.u32 lineno: 21.u32 colno: 1.u32 elements: elems out_type: (Option.some douttype))
+    printNode n12
+
+    # datablock with no out annotation.
+    elems2: (List of: Node)
+    elems2.append (Node.atomid (atomiddata nodeid: 28.u32 lineno: 22.u32 colno: 8.u32 name: "c".string))
+    n13: Node.datablock (datablockdata nodeid: 29.u32 lineno: 22.u32 colno: 1.u32 elements: elems2 out_type: (Option.none Node))
+    printNode n13
+
+    # yieldexpr "yield x" — a generator suspension point.
+    yval: Node.atomid (atomiddata nodeid: 30.u32 lineno: 23.u32 colno: 7.u32 name: "x".string)
+    n14: Node.yieldexpr (yieldexprdata nodeid: 31.u32 lineno: 23.u32 colno: 1.u32 expr: yval)
+    printNode n14
 }
