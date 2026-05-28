@@ -181,6 +181,12 @@ class ZTyping:
     # to choose local vs unit-level emission without re-resolving by name,
     # so a local that shadows a unit-level namesake emits correctly.
     atom_variable_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # Per-AtomId reference → resolved unit-level definition's type_id. Present
+    # iff the bare reference resolves to a unit/core definition (function, data
+    # block, record/class/variant used as a value, unit-level const) rather
+    # than a local — the exact complement of atom_variable_id. The emitter
+    # resolves the def by id (via _type_by_id) instead of re-resolving the name.
+    atom_unit_def_type_id: Dict[int, int] = field(default_factory=dict, init=False)
     # Per-DottedPath stamps.
     dp_parent_tagged_type: Dict[int, ZType] = field(default_factory=dict, init=False)
     dp_child_id: Dict[int, int] = field(default_factory=dict, init=False)

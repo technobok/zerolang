@@ -8811,8 +8811,10 @@ class CEmitter:
         # shadows a `data` block).
         if atom.nodeid in self.typing.atom_variable_id:
             return _mangle_var(name)
-        # check if this refers to a function, constant, data, or record
-        resolved = self._resolved_type(name)
+        # Resolve the unit-level definition this name binds to by id (typecheck
+        # stamped it); locals already returned above via atom_variable_id.
+        udt = self.typing.atom_unit_def_type_id.get(atom.nodeid)
+        resolved = _type_by_id(udt) if udt is not None else None
         tt = resolved.typetype if resolved else None
         if tt in (ZTypeType.FUNCTION, ZTypeType.DATA):
             return _mangle_func(name)

@@ -8077,6 +8077,20 @@ class TypeChecker:
                         self.typing.node_const_value[parent_atom.nodeid] = defn_cv
             if parent_type:
                 self.typing.node_type[path.parent.nodeid] = parent_type
+                # Mirror _check_atomid: record the parent reference's binding
+                # (local variable_id vs unit-def type_id) so the emitter lowers
+                # it by id, not by re-resolving the name. Numeric-literal
+                # parents lower via the numeric short-circuit, not this path.
+                if not _is_numeric_id(parent_atom.name):
+                    pvar = self.symtab.lookup_var(parent_atom.name)
+                    if pvar is not None:
+                        self.typing.atom_variable_id[parent_atom.nodeid] = (
+                            pvar.variable_id
+                        )
+                    else:
+                        self.typing.atom_unit_def_type_id[parent_atom.nodeid] = (
+                            parent_type.type_id
+                        )
                 # Narrowing stamp: same as in _check_atomid, so the
                 # emitter's AtomId lowering can unwrap the union/variant
                 # payload when the parent is a narrowed name.
@@ -8333,6 +8347,10 @@ class TypeChecker:
                 # variable_id so the emitter emits a local (not a unit-level
                 # namesake) without re-resolving by name.
                 self.typing.atom_variable_id[atom.nodeid] = var.variable_id
+            else:
+                # Non-local: a unit/core definition. Record its type_id so the
+                # emitter resolves the def by id, not by re-resolving the name.
+                self.typing.atom_unit_def_type_id[atom.nodeid] = t.type_id
             self.typing.node_type[atom.nodeid] = t
             # Narrowing stamp: if the name was narrowed via shadow=True
             # (match arm narrowing), record the subtype + original outer

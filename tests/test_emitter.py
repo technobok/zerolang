@@ -2274,6 +2274,28 @@ class TestNameShadowing:
         )
         assert compile_and_run(csource).strip() == "v=90"
 
+    def test_unit_def_refs_resolve_through_stamp(self):
+        # Bare unit-level references resolve via the atom_unit_def_type_id
+        # stamp, not a name lookup: a function used as a value emits z_<name>,
+        # a record name used as a value emits z_<name>_create, and a data
+        # block used as a runtime array emits the z_<name> static block.
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "point: record { x: 0  y: 0 }\n"
+            "primes: data { 2 3 5 7 11 }\n"
+            "calc: record { op: function {a: i64 b: i64} out i64 }\n"
+            "main: function is {\n"
+            "    c: calc op: add.take\n"
+            "    p: point\n"
+            "    arr: primes.array\n"
+            '    print "\\{c.op a: 3 b: 4} \\{p.x} \\{arr.0}"\n'
+            "}"
+        )
+        assert "z_add" in csource
+        assert "z_point_create" in csource
+        assert "z_primes" in csource
+        assert compile_and_run(csource).strip() == "7 0 2"
+
 
 class TestImplicitReturn:
     """Tests for implicit return — last expression is the return value."""
