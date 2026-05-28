@@ -361,11 +361,6 @@ class TrackedList(list):
         self.node_ids.append(self._emitter._current_node_id)
 
 
-def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
-    """Check if a name refers to a unit-level definition."""
-    return emitter._resolved_type(name) is not None or name in emitter._const_names
-
-
 class CEmitter:
     def __init__(self, typing: ztyping.ZTyping) -> None:
         self.typing = typing
@@ -674,6 +669,19 @@ class CEmitter:
         zt = self._unit_def_ztype(node)
         return zt.typetype if zt is not None else None
 
+    def _is_definition_ref(self, atom: zast.AtomId) -> bool:
+        """True when `atom` names a unit-level definition (function, type, or
+        numeric-constant macro) rather than a local. Honors typecheck's binding
+        decision via the same stamps `_emit_atomid_value` uses: a local carries
+        `atom_variable_id`, a unit-level reference carries
+        `atom_unit_def_type_id`; constant macros have neither but are tracked in
+        `_const_names`."""
+        if atom.nodeid in self.typing.atom_variable_id:
+            return False
+        if self._unit_def_ztype(atom) is not None:
+            return True
+        return atom.name in self._const_names
+
     def _enclosing_type(self, func: zast.Function) -> Optional[ZType]:
         """The enclosing record/class type of a method, by id, or None for a
         top-level function. Read from the `enclosing_type_id` stamp on the
@@ -752,11 +760,6 @@ class CEmitter:
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
-    def _is_typedef(self, name: str) -> bool:
-        """Check if a name is a typedef (has a typedef_base in the resolved type)."""
-        t = self._resolved_type(name)
-        return t is not None and t.typedef_base is not None
-
     def _temp_name(self, prefix: str) -> str:
         """Generate a unique temporary variable name with function NodeID."""
         self._scope.temp_counter += 1
@@ -833,12 +836,14 @@ class CEmitter:
         self._string_literals[escaped] = name
         return name
 
-    def _mangle_callable(self, name: str) -> str:
+    def _mangle_callable(self, name: str, callable_node: zast.Node) -> str:
         """Mangle a callable name: unit-level definitions use _mangle_func, locals use _mangle_var."""
         # dotted names are always definition references (unit.func, record.method)
         if "." in name:
             return _mangle_func(name)
-        if _is_definition_name(name, self):
+        if callable_node.nodetype == NodeType.ATOMID and self._is_definition_ref(
+            cast(zast.AtomId, callable_node)
+        ):
             return _mangle_func(name)
         return _mangle_var(name)
 
@@ -1027,7 +1032,7 @@ class CEmitter:
                     self._track_stdlib_unit_native(mangled, ftype)
                     return mangled
         callable_name = self._get_callable_name(call.callable)
-        mangled = self._mangle_callable(callable_name)
+        mangled = self._mangle_callable(callable_name, call.callable)
         self._track_stdlib_unit_native(mangled, self._node_ztype(call.callable))
         return mangled
 
@@ -2765,7 +2770,7 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _emit_record(self, name: str, rec: zast.ObjectDef) -> None:
-        if self._is_typedef(name):
+        if self._is_typedef_defn(rec):
             # Typedef: no struct, no meta.create — just emit as/is functions
             for mname, mfunc in rec.as_functions().items():
                 if mfunc.body:
@@ -3389,7 +3394,7 @@ class CEmitter:
     def _emit_class(
         self, name: str, cls: zast.ObjectDef, skip_protocol_impls: bool = False
     ) -> None:
-        if self._is_typedef(name):
+        if self._is_typedef_defn(cls):
             # Typedef: no struct, no destructor, no meta.create — just emit as/is functions
             for mname, mfunc in cls.as_functions().items():
                 if mfunc.body:
@@ -6558,8 +6563,8 @@ class CEmitter:
         ):
             dp = cast(zast.DottedPath, inner)
             # function definitions are immutable — .take as statement is a no-op
-            if dp.parent.nodetype == zast.NodeType.ATOMID and _is_definition_name(
-                cast(zast.AtomId, dp.parent).name, self
+            if dp.parent.nodetype == zast.NodeType.ATOMID and self._is_definition_ref(
+                cast(zast.AtomId, dp.parent)
             ):
                 return ""
             var = self._emit_path_value(dp.parent)
@@ -7262,10 +7267,11 @@ class CEmitter:
                 cast(zast.DottedPath, op).child.name == "take"
                 and cast(zast.DottedPath, op).parent.nodetype == NodeType.ATOMID
             ):
-                name = cast(zast.AtomId, cast(zast.DottedPath, op).parent).name
+                parent_atom = cast(zast.AtomId, cast(zast.DottedPath, op).parent)
+                name = parent_atom.name
                 if not _is_numeric_id(name):
                     # don't nullify function/spec definitions (immutable program text)
-                    if _is_definition_name(name, self):
+                    if self._is_definition_ref(parent_atom):
                         return None
                     if name in self._alias_map:
                         return self._alias_map[name]
