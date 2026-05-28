@@ -2439,7 +2439,7 @@ class CEmitter:
         # until they're explicitly instantiated. The resolved type's
         # children hold function ZTypes whose own children hold
         # fully-resolved parameter types.
-        proto_type = self._resolved_type(name)
+        proto_type = self._node_ztype(proto)
 
         # Build the function-pointer block. One line per spec function,
         # `void*` first param, `this`-typed param elided.
@@ -2486,7 +2486,7 @@ class CEmitter:
         # forward declarations for methods called by wrappers
         all_methods = dict(impl_defn.as_functions())
         all_methods.update(impl_defn.functions())
-        impl_type = self._resolved_type(impl_name)
+        impl_type = self._node_ztype(impl_defn)
         for sname in proto.functions():
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
@@ -2509,7 +2509,7 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
-        proto_type = self._resolved_type(proto_name)
+        proto_type = self._node_ztype(proto)
         for sname, sfunc in proto.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             # wrapper params: void* _data, then remaining non-this params.
@@ -2573,7 +2573,7 @@ class CEmitter:
             # class: destroy frees boxed copy (+ field cleanup if needed)
             destroy_name = f"z_{impl_name}_{label}_owned_destroy"
             lines.append(f"static void {destroy_name}(void* p) {{\n")
-            impl_zt = self._resolved_type(impl_name)
+            impl_zt = self._node_ztype(impl_defn)
             if impl_zt and impl_zt.needs_field_cleanup:
                 lines.append(f"    z_{impl_name}_destroy(({impl_ctype}*)p);\n")
             lines.append("    free(p);\n")
@@ -2698,7 +2698,7 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
-        facet_type = self._resolved_type(facet_name)
+        facet_type = self._node_ztype(facet)
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
