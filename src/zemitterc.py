@@ -7779,12 +7779,15 @@ class CEmitter:
             zast.NodeType.EXPRESSION,
             zast.NodeType.LABELVALUE,
         ):
-            # bare function name = call with all-default args
-            if (
-                inner.nodetype == zast.NodeType.ATOMID
-                and self._typetype_of(cast(zast.AtomId, inner).name)
-                == ZTypeType.FUNCTION
-            ):
+            # bare function name = call with all-default args. Use the
+            # binding stamp (not node_type.typetype) so a FUNCTION-typed local
+            # is not mistaken for a unit-level function reference.
+            inner_def = (
+                self._unit_def_ztype(inner)
+                if inner.nodetype == zast.NodeType.ATOMID
+                else None
+            )
+            if inner_def is not None and inner_def.typetype == ZTypeType.FUNCTION:
                 atom = cast(zast.AtomId, inner)
                 ftype = self._node_ztype(atom)
                 if ftype and self.typing.has_any_default(ftype):
@@ -8953,7 +8956,8 @@ class CEmitter:
     def _extract_unit_path(self, path: zast.Path) -> Optional[str]:
         """If path resolves to an inline unit, return its dotted name. Otherwise None."""
         if path.nodetype == NodeType.ATOMID:
-            if self._typetype_of(cast(zast.AtomId, path).name) == ZTypeType.UNIT:
+            path_def = self._unit_def_ztype(path)
+            if path_def is not None and path_def.typetype == ZTypeType.UNIT:
                 return cast(zast.AtomId, path).name
             return None
         if path.nodetype == NodeType.DOTTEDPATH:
