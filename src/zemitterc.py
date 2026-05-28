@@ -659,6 +659,12 @@ class CEmitter:
         tid = self.typing.atom_unit_def_type_id.get(node.nodeid)
         return _type_by_id(tid) if tid is not None else None
 
+    def _node_typetype(self, node: zast.Node) -> "Optional[ZTypeType]":
+        """The `typetype` of the type typecheck stamped on `node`, or None.
+        Reads node_type — never re-resolves by name."""
+        zt = self._node_ztype(node)
+        return zt.typetype if zt is not None else None
+
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
         """Read the child_id stamped on `clause.match` (the tag selector
         AtomId of a case arm)."""
@@ -1101,15 +1107,11 @@ class CEmitter:
                             if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                             else None
                         )
-                        if (
-                            proto_name
-                            and self._typetype_of(proto_name) == ZTypeType.PROTOCOL
-                        ):
+                        apath_zt = self._node_ztype(apath)
+                        proto_tt = apath_zt.typetype if apath_zt is not None else None
+                        if proto_name and proto_tt == ZTypeType.PROTOCOL:
                             self._proto_conformance[(qname, proto_name)] = label
-                        if (
-                            proto_name
-                            and self._typetype_of(proto_name) == ZTypeType.FACET
-                        ):
+                        if proto_name and proto_tt == ZTypeType.FACET:
                             self._proto_conformance[(qname, proto_name)] = label
                             self._facet_conformers.setdefault(proto_name, []).append(
                                 qname
@@ -1291,9 +1293,11 @@ class CEmitter:
                             if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                             else None
                         )
+                        facet_zt = self._node_ztype(apath)
                         if (
                             facet_name
-                            and self._typetype_of(facet_name) == ZTypeType.FACET
+                            and facet_zt is not None
+                            and facet_zt.typetype == ZTypeType.FACET
                         ):
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
@@ -1320,7 +1324,7 @@ class CEmitter:
                 # type information and would emit `void`-typed
                 # vtable entries. Programs that don't touch a given
                 # stream protocol don't need its vtable struct.
-                if self._resolved_type(pname) is None:
+                if self._node_ztype(defn) is None:
                     continue
                 self._current_node_id = defn.nodeid
                 self._emit_protocol(pname, cast(zast.ObjectDef, defn))
@@ -1366,6 +1370,12 @@ class CEmitter:
                 if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 else None
             )
+            # The io `File` class is a native construct whose `as_items`
+            # conformance paths are not stamped by typecheck (it does not run
+            # through _process_as_items_protocols), so the per-node stamp is
+            # unavailable here. This is a global "is `Writer` a known protocol"
+            # existence check, not a per-reference classification — keep the
+            # name lookup. (ztc-string-compare-ok: native io File conformance)
             if proto_name and self._resolved_type(proto_name) is not None:
                 proto = self._io_protocol_defs.get(proto_name)
                 if proto is not None:
@@ -1484,7 +1494,7 @@ class CEmitter:
                     if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                     else None
                 )
-                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+                if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, defn)
         out = "".join(self.struct_defs)
         self.struct_defs = saved
@@ -2754,7 +2764,7 @@ class CEmitter:
                     if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                     else None
                 )
-                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+                if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, rec)
             return
 
@@ -2829,7 +2839,7 @@ class CEmitter:
                 if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 else None
             )
-            if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+            if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, rec)
             # facet impls are deferred to _emit_deferred_facets
         # emit 'as' constants
@@ -3379,10 +3389,7 @@ class CEmitter:
                         if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                         else None
                     )
-                    if (
-                        proto_name
-                        and self._typetype_of(proto_name) == ZTypeType.PROTOCOL
-                    ):
+                    if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
                         self._emit_protocol_impl(name, label, proto_name, cls)
             return
 
@@ -3474,7 +3481,7 @@ class CEmitter:
                     if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                     else None
                 )
-                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+                if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, cls)
         # emit 'as' constants
         self._emit_as_constants(name, cls.as_items)
