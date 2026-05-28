@@ -2255,6 +2255,26 @@ class TestBareBlockScope:
         assert output.strip().split("\n") == ["hello", "done"]
 
 
+class TestNameShadowing:
+    """A local variable that shares a unit-level definition's name must emit
+    as the local, not the unit-level namesake."""
+
+    def test_local_shadows_unit_data_block(self):
+        # `tag` names both a unit-level data block and a function-local. A bare
+        # reference to the local (`show x: tag`) must emit the local, not the
+        # data block's mangled global (which is undeclared as a bare symbol).
+        csource = emit_source(
+            "tag: data { a: 65  b: 66 } out u8\n"
+            'show: function {x: u8} is { print "v=\\{x.u64}" }\n'
+            "main: function is {\n"
+            "    tag: 90.u8\n"
+            "    show x: tag\n"
+            "    return\n"
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "v=90"
+
+
 class TestImplicitReturn:
     """Tests for implicit return — last expression is the return value."""
 

@@ -8801,6 +8801,14 @@ class CEmitter:
             )
             if unwrap is not None:
                 return unwrap
+        # Honor typecheck's resolution: a reference stamped with a local
+        # variable_id is a local — emit the bare (un-prefixed) name and skip
+        # the unit-level name classification below. This is the local-scope-
+        # first precedence the typechecker already applied; re-deriving it by
+        # name here would lose to a unit-level namesake (e.g. a local that
+        # shadows a `data` block).
+        if atom.nodeid in self.typing.atom_variable_id:
+            return _mangle_var(name)
         # check if this refers to a function, constant, data, or record
         resolved = self._resolved_type(name)
         tt = resolved.typetype if resolved else None

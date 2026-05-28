@@ -8326,8 +8326,13 @@ class TypeChecker:
         if t:
             # Borrow-scoped lock enforcement: locked paths are completely
             # unavailable (reads AND writes) for the duration of the lock.
-            if self.symtab.lookup_var(name):
+            var = self.symtab.lookup_var(name)
+            if var is not None:
                 self._check_not_locked((name,), "Cannot access", atom.start)
+                # Persist the resolution: a local binding records its
+                # variable_id so the emitter emits a local (not a unit-level
+                # namesake) without re-resolving by name.
+                self.typing.atom_variable_id[atom.nodeid] = var.variable_id
             self.typing.node_type[atom.nodeid] = t
             # Narrowing stamp: if the name was narrowed via shadow=True
             # (match arm narrowing), record the subtype + original outer

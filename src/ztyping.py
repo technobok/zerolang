@@ -173,6 +173,13 @@ class ZTyping:
     atom_narrowed_subtype: Dict[int, str] = field(default_factory=dict, init=False)
     atom_original_ztype: Dict[int, ZType] = field(default_factory=dict, init=False)
     atom_child_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # Per-AtomId reference → resolved local variable_id. Present iff the
+    # bare reference binds to a symbol-table variable (param / local /
+    # with-binding / for-iterator / narrowed subject); absent for unit-level
+    # definitions, core names, and numeric literals. The emitter reads this
+    # to choose local vs unit-level emission without re-resolving by name,
+    # so a local that shadows a unit-level namesake emits correctly.
+    atom_variable_id: Dict[int, int] = field(default_factory=dict, init=False)
     # Per-DottedPath stamps.
     dp_parent_tagged_type: Dict[int, ZType] = field(default_factory=dict, init=False)
     dp_child_id: Dict[int, int] = field(default_factory=dict, init=False)
