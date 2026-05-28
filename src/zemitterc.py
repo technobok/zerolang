@@ -1167,7 +1167,7 @@ class CEmitter:
                     if self._is_typedef_defn(defn):
                         continue
                     _, field_names, field_ctypes = self._collect_field_params(
-                        qname, defn.is_items, defn.functions()
+                        qname, defn.is_items, defn.functions(), self._node_ztype(defn)
                     )
                     self._type_field_names[qname] = field_names
                     self._type_field_ctypes[qname] = field_ctypes
@@ -3118,15 +3118,14 @@ class CEmitter:
         param_str = self._method_pointer_param_str(method_ztype, parent_ztype)
         return f"{ret_ctype} (*{field_name})({param_str})"
 
-    def _collect_field_params(self, name: str, items: dict, functions: dict) -> tuple:
+    def _collect_field_params(
+        self, name: str, items: dict, functions: dict, ztype: Optional[ZType]
+    ) -> tuple:
         """Collect C parameter strings, field names, and field C types.
 
-        Returns (params, field_names, field_ctypes).
+        Returns (params, field_names, field_ctypes). `ztype` is the type's
+        own resolved ZType (passed by the caller, which holds its defn node).
         """
-        # check lock field names for the type (classes with .lock fields
-        # store stack-allocated class fields as pointers)
-        ztype = self._resolved_type(name)
-
         params: List[str] = []
         field_names: List[str] = []
         field_ctypes: List[str] = []
@@ -3309,7 +3308,7 @@ class CEmitter:
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
         params, field_names, field_ctypes = self._collect_field_params(
-            name, rc_defn.is_paths(), rc_defn.functions()
+            name, rc_defn.is_paths(), rc_defn.functions(), ztype
         )
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
