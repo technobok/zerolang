@@ -10898,7 +10898,7 @@ class CEmitter:
 
         init_vars: List[str] = []
         cond_exprs: List[str] = []
-        # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_type, opt_type)
+        # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_ztype, opt_type, elem_type)
         iter_bindings: List[
             Tuple[
                 str,
@@ -10906,7 +10906,7 @@ class CEmitter:
                 str,
                 str,
                 str,
-                Optional[str],
+                Optional[ZType],
                 Optional[ZType],
                 Optional[ZType],
             ]
@@ -10993,7 +10993,7 @@ class CEmitter:
                                     opt_ctype,
                                     elem_ctype,
                                     opt_name,
-                                    t.name,
+                                    t,
                                     opt_type,
                                     some_type,
                                 )
@@ -11090,16 +11090,16 @@ class CEmitter:
                 opt_ctype,
                 elem_ctype,
                 opt_name,
-                callable_type,
+                callable_ztype,
                 opt_type,
                 elem_type,
             ) in iter_bindings:
-                if callable_type:
+                if callable_ztype is not None:
                     obj_val = self._emit_operation_value(iop)
-                    call_fn = _mangle_func(f"{callable_type}.call")
+                    call_fn = _mangle_func(f"{callable_ztype.name}.call")
                     # Class iterators take a pointer receiver since 'this' is
                     # always a pointer.
-                    rec_t = self._resolved_type(callable_type)
+                    rec_t = callable_ztype
                     if (
                         rec_t is not None
                         and rec_t.typetype == ZTypeType.CLASS
