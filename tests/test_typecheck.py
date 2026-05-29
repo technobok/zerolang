@@ -14383,3 +14383,58 @@ class TestBranchOwnershipDivergingArms:
         assert any("wstr" in e.msg and "ownership" in e.msg.lower() for e in errors), [
             e.msg for e in errors
         ]
+
+
+class TestCrossUnitDependency:
+    """A unit imported as a DEPENDENCY must have its method bodies
+    type-checked in its own unit context — not the main unit's. The
+    regression: a dependency class method with a `.take` parameter was
+    seen as borrowed (its resolved type was looked up under the main
+    unit name and missed), so calling it cross-unit failed even though
+    the dependency compiles fine standalone.
+    """
+
+    @staticmethod
+    def _two_unit_program(mainsrc: str, depsrc: str):
+        from zvfs import ZVfs, FSProvider, StringProvider, BindType
+
+        vfs = ZVfs()
+        psystemid = vfs.register(FSProvider(rootpath=LIB_DIR, parentpath="system"))
+        pmainid = vfs.register(
+            StringProvider(files={"mainmod.z": mainsrc, "depmod.z": depsrc})
+        )
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = make_parser_with_vfs(vfs, "mainmod")
+        program = p.parse()
+        assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
+        typing = typecheck(program)
+        return typing.errors
+
+    def test_dependency_take_param_method(self):
+        """Calling a dependency class method whose constructor has a
+        `.take` String parameter must type-check (the param keeps its
+        OWNED ownership when the body is checked as a dependency)."""
+        depsrc = (
+            "Holder: class {\n"
+            "    s: String\n"
+            "} as {\n"
+            "    make: function {text: String.take} out this is {\n"
+            "        return (meta.create s: text)\n"
+            "    }\n"
+            "    len: function {:this} out u64 is {\n"
+            "        return this.s.length\n"
+            "    }\n"
+            "}\n"
+        )
+        mainsrc = (
+            "main: function is {\n"
+            '    h: depmod.Holder.make text: "hello".string\n'
+            '    print "\\{h.len}"\n'
+            "}\n"
+        )
+        errors = self._two_unit_program(mainsrc, depsrc)
+        assert errors == [], [e.msg for e in errors]

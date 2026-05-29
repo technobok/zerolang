@@ -941,7 +941,7 @@ class TypeChecker:
             elif defn.nodetype == NodeType.FUNCTION and cast(zast.Function, defn).body:
                 self._resolve_unit_name(self.program.mainunitname, name)
                 # skip body checking for generic functions (checked during monomorphization)
-                ftype = self._resolved.get(f"{self.program.mainunitname}.{name}")
+                ftype = self._resolved.get(f"{self._current_unit_name()}.{name}")
                 if not (ftype and ftype.isgeneric):
                     self._check_function_body(name, cast(zast.Function, defn))
             elif (
@@ -6945,8 +6945,14 @@ class TypeChecker:
         # Read ownership from the resolved ZType — it carries both the
         # syntactic annotations AND the inferred BORROW-default for
         # stack-reftype parameters (set during _resolve_function_type).
+        # Qualify by the unit we are resolving inside (the OWNING unit),
+        # not the main unit: a dependency unit's bodies are body-checked
+        # demand-driven, and keying the lookup off mainunitname would
+        # miss their resolved type (losing .take / ownership defaults).
+        # _current_unit_name() falls back to mainunitname when not
+        # resolving, so the main unit's own functions are unaffected.
         ftype = self._resolved.get(name) or self._resolved.get(
-            f"{self.program.mainunitname}.{name}"
+            f"{self._current_unit_name()}.{name}"
         )
         if ftype is not None and ftype.typetype == ZTypeType.FUNCTION:
             self.func_ctx.func_ownership = dict(self.typing.child_ownerships_of(ftype))
