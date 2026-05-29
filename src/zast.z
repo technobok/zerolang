@@ -1,17 +1,17 @@
 # Parsed-AST surface for the zerolang compiler. Defines the AST
-# node-type tag (NodeType), error codes (ERR), Call-node
-# classification (CallKind), and the Node union of all node
+# node-type tag (nodetype), error codes (err), Call-node
+# classification (callkind), and the Node union of all node
 # kinds. The binary built from this file is the AST-slice smoke
 # harness: it constructs one instance of each variant arm and
 # prints a deterministic dump, compared against
 # tests/fixtures/zast_z/smoke.expected.
 
-# Error codes. Uppercase arm names to avoid keyword collisions
-# in places where the code mentions specific errors. Numeric
-# E0xxx values aren't stored here; the diagnostics layer assigns
-# them based on arm position.
+# Error codes. Arm names are UPPERCASE to match the sibling
+# nodetype enum, whose tags must be (they name language keywords
+# like unit/function/class). Numeric E0xxx values aren't stored
+# here; the diagnostics layer assigns them based on arm position.
 
-ERR: variant {
+err: variant {
     FILENOTFOUND:      null
     DUPLICATEDEF:      null
     BADUNITNAME:       null
@@ -53,7 +53,7 @@ ERR: variant {
 # (UNIT, FUNCTION, RECORD, CLASS, UNION, ...) are language
 # keywords and the lowercase spelling would not compile.
 
-NodeType: variant {
+nodetype: variant {
     UNIT:           null
     FUNCTION:       null
     PROTOCOL:       null
@@ -93,7 +93,7 @@ NodeType: variant {
 # Classification of a Call node, set by the type checker. The
 # emitter dispatches on this to choose the right call shape.
 
-CallKind: variant {
+callkind: variant {
     UNKNOWN:          null
     REGULAR:          null
     RETURN:           null
@@ -123,18 +123,24 @@ CallKind: variant {
 # struct must be fully visible at each carrier's field site.
 
 Node: union {
-    error:       errordata
-    atomid:      atomiddata
-    labelvalue:  labelvaluedata
-    stringchunk: stringchunkdata
-    binop:       binopdata
-    atomstring:  atomstringdata
-    dottedpath:  dottedpathdata
-    call:        calldata
-    typeofexpr:  typeofexprdata
-    namedoperation: namedoperationdata
-    datablock:      datablockdata
-    yieldexpr:      yieldexprdata
+    error:       ErrorData
+    atomid:      AtomIdData
+    labelvalue:  LabelValueData
+    stringchunk: StringChunkData
+    binop:       BinOpData
+    atomstring:  AtomStringData
+    dottedpath:  DottedPathData
+    call:        CallData
+    typeofexpr:  TypeOfExprData
+    namedoperation: NamedOperationData
+    datablock:      DataBlockData
+    yieldexpr:      YieldExprData
+    statement:      StatementData
+    statementline:  StatementLineData
+    assignment:     AssignmentData
+    reassignment:   ReassignmentData
+    swapstmt:       SwapStmtData
+    expression:     ExpressionData
 }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -142,29 +148,29 @@ Node: union {
 # because they hold reftype fields (String, Node, List); records
 # cannot hold reftypes.
 
-errordata: class {
+ErrorData: class {
     nodeid: u32
     lineno: u32
     colno:  u32
-    err:    ERR
+    err:    err
     msg:    String
 }
 
-atomiddata: class {
+AtomIdData: class {
     nodeid: u32
     lineno: u32
     colno:  u32
     name:   String
 }
 
-labelvaluedata: class {
+LabelValueData: class {
     nodeid: u32
     lineno: u32
     colno:  u32
     name:   String
 }
 
-stringchunkdata: class {
+StringChunkData: class {
     nodeid:     u32
     lineno:     u32
     colno:      u32
@@ -177,7 +183,7 @@ stringchunkdata: class {
 # specific child-type constraints (e.g. operator must be an
 # AtomId) live in the typechecker.
 
-binopdata: class {
+BinOpData: class {
     nodeid:   u32
     lineno:   u32
     colno:    u32
@@ -190,7 +196,7 @@ binopdata: class {
 # children representing the literal text chunks and embedded
 # interpolation expressions.
 
-atomstringdata: class {
+AtomStringData: class {
     nodeid:      u32
     lineno:      u32
     colno:       u32
@@ -199,7 +205,7 @@ atomstringdata: class {
 
 # Dotted-path node payload: a parent path and a child selector,
 # both Node children (the child is an AtomId arm).
-dottedpathdata: class {
+DottedPathData: class {
     nodeid: u32
     lineno: u32
     colno:  u32
@@ -209,7 +215,7 @@ dottedpathdata: class {
 
 # Call node payload: the callable path and an ordered list of
 # argument nodes (each a NamedOperation arm once that arm lands).
-calldata: class {
+CallData: class {
     nodeid:    u32
     lineno:    u32
     colno:     u32
@@ -219,7 +225,7 @@ calldata: class {
 
 # typeof-expression payload (compiler-synthesised): the operation
 # whose static type is taken.
-typeofexprdata: class {
+TypeOfExprData: class {
     nodeid: u32
     lineno: u32
     colno:  u32
@@ -229,7 +235,7 @@ typeofexprdata: class {
 # Named-operation payload: an optional argument label plus the
 # operation value. Appears as a Call/Data argument; `name` is
 # absent for positional arguments.
-namedoperationdata: class {
+NamedOperationData: class {
     nodeid:    u32
     lineno:    u32
     colno:     u32
@@ -240,7 +246,7 @@ namedoperationdata: class {
 # Data-block payload: an ordered list of NamedOperation element
 # nodes and an optional `out <type-ref>` annotation that pins the
 # element type for the whole block.
-datablockdata: class {
+DataBlockData: class {
     nodeid:   u32
     lineno:   u32
     colno:    u32
@@ -250,17 +256,74 @@ datablockdata: class {
 
 # Yield payload: the expression whose value is yielded out of a
 # generator function at this suspension point.
-yieldexprdata: class {
+YieldExprData: class {
     nodeid: u32
     lineno: u32
     colno:  u32
     expr:   Node
 }
 
+# Statement payload: an ordered list of StatementLine nodes — the
+# lines of a brace-delimited code block.
+StatementData: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    statements: (List of: Node)
+}
+
+# StatementLine payload: one line of a block, wrapping exactly one of
+# assignment / reassignment / swapstmt / expression.
+StatementLineData: class {
+    nodeid:        u32
+    lineno:        u32
+    colno:         u32
+    statementline: Node
+}
+
+# Assignment payload: bind a new local `name` to the value of an
+# expression node.
+AssignmentData: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    name:   String
+    value:  Node
+}
+
+# Reassignment payload: update the target path with the value of an
+# expression node.
+ReassignmentData: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    topath: Node
+    value:  Node
+}
+
+# Swap payload: exchange the contents of two owned reference paths.
+# (Arm named swapstmt because `swap` is a keyword.)
+SwapStmtData: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    lhs:    Node
+    rhs:    Node
+}
+
+# Expression payload: wraps the single operation/control-flow node
+# that forms an expression.
+ExpressionData: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    expression: Node
+}
+
 # Arm-name dumpers: return the canonical uppercase label for an
 # enum arm. Used by printNode and the smoke harness.
 
-errname: function {e: ERR} out String is {
+errname: function {e: err} out String is {
     match (
         e
     ) case FILENOTFOUND then {
@@ -336,7 +399,7 @@ errname: function {e: ERR} out String is {
     }
 }
 
-nodetypename: function {nt: NodeType} out String is {
+nodetypename: function {nt: nodetype} out String is {
     match (
         nt
     ) case UNIT then {
@@ -410,7 +473,7 @@ nodetypename: function {nt: NodeType} out String is {
     }
 }
 
-callkindname: function {ck: CallKind} out String is {
+callkindname: function {ck: callkind} out String is {
     match (
         ck
     ) case UNKNOWN then {
@@ -460,17 +523,17 @@ callkindname: function {ck: CallKind} out String is {
 # by the smoke main; bare nested function calls cannot be passed
 # directly to `print` because of its StringLike constraint.
 
-printErr: function {e: ERR} is {
+printErr: function {e: err} is {
     s: errname e
     print s
 }
 
-printNodeType: function {nt: NodeType} is {
+printNodeType: function {nt: nodetype} is {
     s: nodetypename nt
     print s
 }
 
-printCallKind: function {ck: CallKind} is {
+printCallKind: function {ck: callkind} is {
     s: callkindname ck
     print s
 }
@@ -554,6 +617,29 @@ printNode: function {n: Node} is {
     } case yieldexpr then {
         print "\{n.nodeid}: yieldexpr @\{n.lineno}:\{n.colno}"
         printNode n.expr
+    } case statement then {
+        print "\{n.nodeid}: statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
+        siter: n.statements.iterate
+        for line: siter loop {
+            printNode line
+        }
+    } case statementline then {
+        print "\{n.nodeid}: statementline @\{n.lineno}:\{n.colno}"
+        printNode n.statementline
+    } case assignment then {
+        print "\{n.nodeid}: assignment @\{n.lineno}:\{n.colno} name=\{n.name}"
+        printNode n.value
+    } case reassignment then {
+        print "\{n.nodeid}: reassignment @\{n.lineno}:\{n.colno}"
+        printNode n.topath
+        printNode n.value
+    } case swapstmt then {
+        print "\{n.nodeid}: swapstmt @\{n.lineno}:\{n.colno}"
+        printNode n.lhs
+        printNode n.rhs
+    } case expression then {
+        print "\{n.nodeid}: expression @\{n.lineno}:\{n.colno}"
+        printNode n.expression
     }
 }
 
@@ -562,171 +648,216 @@ printNode: function {n: Node} is {
 # tests/fixtures/zast_z/smoke.expected.
 
 main: function is {
-    print "=== ERR ==="
-    printErr ERR.FILENOTFOUND
-    printErr ERR.DUPLICATEDEF
-    printErr ERR.BADUNITNAME
-    printErr ERR.BADUNIT
-    printErr ERR.BADFUNCTION
-    printErr ERR.IOERROR
-    printErr ERR.EXPECTEDDEF
-    printErr ERR.EXPECTEDEXP
-    printErr ERR.EXPECTEDOP
-    printErr ERR.EXPECTEDTYPEDEF
-    printErr ERR.EXPECTEDSTATEMENT
-    printErr ERR.BADARGUMENT
-    printErr ERR.BADARGUMENTBLOCK
-    printErr ERR.BADEXPRESSION
-    printErr ERR.BADOPERATION
-    printErr ERR.BADSTRING
-    printErr ERR.BADPATH
-    printErr ERR.BADREFERENCE
-    printErr ERR.BADCALL
-    printErr ERR.BADPARAMETER
-    printErr ERR.BADPARAMETERBLOCK
-    printErr ERR.BADOBJECTBLOCK
-    printErr ERR.BADITEM
-    printErr ERR.BADTHEN
-    printErr ERR.BADELSE
-    printErr ERR.BADCASE
-    printErr ERR.BADFOR
-    printErr ERR.BADDATA
-    printErr ERR.BADSTATEMENT
-    printErr ERR.TYPEERROR
-    printErr ERR.REFNOTFOUND
-    printErr ERR.OWNERERROR
-    printErr ERR.CALLERROR
-    printErr ERR.GENERICERROR
-    printErr ERR.COMPILERERROR
+    print "=== err ==="
+    printErr err.FILENOTFOUND
+    printErr err.DUPLICATEDEF
+    printErr err.BADUNITNAME
+    printErr err.BADUNIT
+    printErr err.BADFUNCTION
+    printErr err.IOERROR
+    printErr err.EXPECTEDDEF
+    printErr err.EXPECTEDEXP
+    printErr err.EXPECTEDOP
+    printErr err.EXPECTEDTYPEDEF
+    printErr err.EXPECTEDSTATEMENT
+    printErr err.BADARGUMENT
+    printErr err.BADARGUMENTBLOCK
+    printErr err.BADEXPRESSION
+    printErr err.BADOPERATION
+    printErr err.BADSTRING
+    printErr err.BADPATH
+    printErr err.BADREFERENCE
+    printErr err.BADCALL
+    printErr err.BADPARAMETER
+    printErr err.BADPARAMETERBLOCK
+    printErr err.BADOBJECTBLOCK
+    printErr err.BADITEM
+    printErr err.BADTHEN
+    printErr err.BADELSE
+    printErr err.BADCASE
+    printErr err.BADFOR
+    printErr err.BADDATA
+    printErr err.BADSTATEMENT
+    printErr err.TYPEERROR
+    printErr err.REFNOTFOUND
+    printErr err.OWNERERROR
+    printErr err.CALLERROR
+    printErr err.GENERICERROR
+    printErr err.COMPILERERROR
 
-    print "=== NodeType ==="
-    printNodeType NodeType.UNIT
-    printNodeType NodeType.FUNCTION
-    printNodeType NodeType.PROTOCOL
-    printNodeType NodeType.RECORD
-    printNodeType NodeType.CLASS
-    printNodeType NodeType.UNION
-    printNodeType NodeType.VARIANT
-    printNodeType NodeType.ENUM
-    printNodeType NodeType.FACET
-    printNodeType NodeType.WITH
-    printNodeType NodeType.EXPRESSION
-    printNodeType NodeType.IF
-    printNodeType NodeType.IFCLAUSE
-    printNodeType NodeType.FOR
-    printNodeType NodeType.DO
-    printNodeType NodeType.CASE
-    printNodeType NodeType.CASECLAUSE
-    printNodeType NodeType.CALL
-    printNodeType NodeType.DATA
-    printNodeType NodeType.YIELD
-    printNodeType NodeType.NAMEDOPERATION
-    printNodeType NodeType.STATEMENT
-    printNodeType NodeType.STATEMENTLINE
-    printNodeType NodeType.ASSIGNMENT
-    printNodeType NodeType.REASSIGNMENT
-    printNodeType NodeType.SWAP
-    printNodeType NodeType.DOTTEDPATH
-    printNodeType NodeType.BINOP
-    printNodeType NodeType.TYPEOFEXPR
-    printNodeType NodeType.ATOMID
-    printNodeType NodeType.LABELVALUE
-    printNodeType NodeType.ATOMSTRING
-    printNodeType NodeType.STRINGCHUNK
-    printNodeType NodeType.ERROR
+    print "=== nodetype ==="
+    printNodeType nodetype.UNIT
+    printNodeType nodetype.FUNCTION
+    printNodeType nodetype.PROTOCOL
+    printNodeType nodetype.RECORD
+    printNodeType nodetype.CLASS
+    printNodeType nodetype.UNION
+    printNodeType nodetype.VARIANT
+    printNodeType nodetype.ENUM
+    printNodeType nodetype.FACET
+    printNodeType nodetype.WITH
+    printNodeType nodetype.EXPRESSION
+    printNodeType nodetype.IF
+    printNodeType nodetype.IFCLAUSE
+    printNodeType nodetype.FOR
+    printNodeType nodetype.DO
+    printNodeType nodetype.CASE
+    printNodeType nodetype.CASECLAUSE
+    printNodeType nodetype.CALL
+    printNodeType nodetype.DATA
+    printNodeType nodetype.YIELD
+    printNodeType nodetype.NAMEDOPERATION
+    printNodeType nodetype.STATEMENT
+    printNodeType nodetype.STATEMENTLINE
+    printNodeType nodetype.ASSIGNMENT
+    printNodeType nodetype.REASSIGNMENT
+    printNodeType nodetype.SWAP
+    printNodeType nodetype.DOTTEDPATH
+    printNodeType nodetype.BINOP
+    printNodeType nodetype.TYPEOFEXPR
+    printNodeType nodetype.ATOMID
+    printNodeType nodetype.LABELVALUE
+    printNodeType nodetype.ATOMSTRING
+    printNodeType nodetype.STRINGCHUNK
+    printNodeType nodetype.ERROR
 
-    print "=== CallKind ==="
-    printCallKind CallKind.UNKNOWN
-    printCallKind CallKind.REGULAR
-    printCallKind CallKind.RETURN
-    printCallKind CallKind.RECORD_CREATE
-    printCallKind CallKind.CLASS_CREATE
-    printCallKind CallKind.UNION_CREATE
-    printCallKind CallKind.PROTOCOL_CREATE
-    printCallKind CallKind.PROTOCOL_BORROW
-    printCallKind CallKind.FACET_CREATE
-    printCallKind CallKind.FACET_BORROW
-    printCallKind CallKind.TYPEDEF_CREATE
-    printCallKind CallKind.TYPEDEF_BORROW
-    printCallKind CallKind.CALLABLE
-    printCallKind CallKind.UNIT_INSTANTIATE
-    printCallKind CallKind.BOX_CREATE
-    printCallKind CallKind.BOX_PASSTHROUGH
-    printCallKind CallKind.BREAK
-    printCallKind CallKind.CONTINUE
-    printCallKind CallKind.ERROR
-    printCallKind CallKind.PANIC
+    print "=== callkind ==="
+    printCallKind callkind.UNKNOWN
+    printCallKind callkind.REGULAR
+    printCallKind callkind.RETURN
+    printCallKind callkind.RECORD_CREATE
+    printCallKind callkind.CLASS_CREATE
+    printCallKind callkind.UNION_CREATE
+    printCallKind callkind.PROTOCOL_CREATE
+    printCallKind callkind.PROTOCOL_BORROW
+    printCallKind callkind.FACET_CREATE
+    printCallKind callkind.FACET_BORROW
+    printCallKind callkind.TYPEDEF_CREATE
+    printCallKind callkind.TYPEDEF_BORROW
+    printCallKind callkind.CALLABLE
+    printCallKind callkind.UNIT_INSTANTIATE
+    printCallKind callkind.BOX_CREATE
+    printCallKind callkind.BOX_PASSTHROUGH
+    printCallKind callkind.BREAK
+    printCallKind callkind.CONTINUE
+    printCallKind callkind.ERROR
+    printCallKind callkind.PANIC
 
     print "=== Node ==="
-    n1: Node.error (errordata nodeid: 1.u32 lineno: 10.u32 colno: 5.u32 err: ERR.BADUNIT msg: "bad unit".string)
+    n1: Node.error (ErrorData nodeid: 1.u32 lineno: 10.u32 colno: 5.u32 err: err.BADUNIT msg: "bad unit".string)
     printNode n1
-    n2: Node.atomid (atomiddata nodeid: 2.u32 lineno: 11.u32 colno: 3.u32 name: "myvar".string)
+    n2: Node.atomid (AtomIdData nodeid: 2.u32 lineno: 11.u32 colno: 3.u32 name: "myvar".string)
     printNode n2
-    n3: Node.labelvalue (labelvaluedata nodeid: 3.u32 lineno: 12.u32 colno: 7.u32 name: "x".string)
+    n3: Node.labelvalue (LabelValueData nodeid: 3.u32 lineno: 12.u32 colno: 7.u32 name: "x".string)
     printNode n3
-    n4: Node.stringchunk (stringchunkdata nodeid: 4.u32 lineno: 13.u32 colno: 9.u32 text: "hello".string chunk_kind: 0.u8)
+    n4: Node.stringchunk (StringChunkData nodeid: 4.u32 lineno: 13.u32 colno: 9.u32 text: "hello".string chunk_kind: 0.u8)
     printNode n4
 
     # Recursive: an atomstring containing two child nodes (list of Node).
     parts: (List of: Node)
-    parts.append (Node.stringchunk (stringchunkdata nodeid: 5.u32 lineno: 14.u32 colno: 1.u32 text: "hello ".string chunk_kind: 0.u8))
-    parts.append (Node.atomid (atomiddata nodeid: 6.u32 lineno: 14.u32 colno: 8.u32 name: "name".string))
-    n5: Node.atomstring (atomstringdata nodeid: 7.u32 lineno: 14.u32 colno: 1.u32 stringparts: parts)
+    parts.append (Node.stringchunk (StringChunkData nodeid: 5.u32 lineno: 14.u32 colno: 1.u32 text: "hello ".string chunk_kind: 0.u8))
+    parts.append (Node.atomid (AtomIdData nodeid: 6.u32 lineno: 14.u32 colno: 8.u32 name: "name".string))
+    n5: Node.atomstring (AtomStringData nodeid: 7.u32 lineno: 14.u32 colno: 1.u32 stringparts: parts)
     printNode n5
 
     # Recursive: a binop "x + y" with three Node children stored
     # by value on the carrier class.
-    lhs: Node.atomid (atomiddata nodeid: 8.u32 lineno: 15.u32 colno: 1.u32 name: "x".string)
-    op:  Node.atomid (atomiddata nodeid: 9.u32 lineno: 15.u32 colno: 3.u32 name: "+".string)
-    rhs: Node.atomid (atomiddata nodeid: 10.u32 lineno: 15.u32 colno: 5.u32 name: "y".string)
-    n6: Node.binop (binopdata nodeid: 11.u32 lineno: 15.u32 colno: 3.u32 lhs: lhs operator: op rhs: rhs)
+    lhs: Node.atomid (AtomIdData nodeid: 8.u32 lineno: 15.u32 colno: 1.u32 name: "x".string)
+    op:  Node.atomid (AtomIdData nodeid: 9.u32 lineno: 15.u32 colno: 3.u32 name: "+".string)
+    rhs: Node.atomid (AtomIdData nodeid: 10.u32 lineno: 15.u32 colno: 5.u32 name: "y".string)
+    n6: Node.binop (BinOpData nodeid: 11.u32 lineno: 15.u32 colno: 3.u32 lhs: lhs operator: op rhs: rhs)
     printNode n6
 
     # dottedpath "a.b": parent and child are atomid Node children.
-    dpp: Node.atomid (atomiddata nodeid: 12.u32 lineno: 16.u32 colno: 1.u32 name: "a".string)
-    dpc: Node.atomid (atomiddata nodeid: 13.u32 lineno: 16.u32 colno: 3.u32 name: "b".string)
-    n7: Node.dottedpath (dottedpathdata nodeid: 14.u32 lineno: 16.u32 colno: 2.u32 parent: dpp child: dpc)
+    dpp: Node.atomid (AtomIdData nodeid: 12.u32 lineno: 16.u32 colno: 1.u32 name: "a".string)
+    dpc: Node.atomid (AtomIdData nodeid: 13.u32 lineno: 16.u32 colno: 3.u32 name: "b".string)
+    n7: Node.dottedpath (DottedPathData nodeid: 14.u32 lineno: 16.u32 colno: 2.u32 parent: dpp child: dpc)
     printNode n7
 
     # call "f arg": callable atomid + one-element argument list.
-    callee: Node.atomid (atomiddata nodeid: 15.u32 lineno: 17.u32 colno: 1.u32 name: "f".string)
+    callee: Node.atomid (AtomIdData nodeid: 15.u32 lineno: 17.u32 colno: 1.u32 name: "f".string)
     args: (List of: Node)
-    args.append (Node.atomid (atomiddata nodeid: 16.u32 lineno: 17.u32 colno: 3.u32 name: "arg".string))
-    n8: Node.call (calldata nodeid: 17.u32 lineno: 17.u32 colno: 1.u32 callable: callee arguments: args)
+    args.append (Node.atomid (AtomIdData nodeid: 16.u32 lineno: 17.u32 colno: 3.u32 name: "arg".string))
+    n8: Node.call (CallData nodeid: 17.u32 lineno: 17.u32 colno: 1.u32 callable: callee arguments: args)
     printNode n8
 
     # typeofexpr over a single source operation.
-    tsrc: Node.atomid (atomiddata nodeid: 18.u32 lineno: 18.u32 colno: 1.u32 name: "x".string)
-    n9: Node.typeofexpr (typeofexprdata nodeid: 19.u32 lineno: 18.u32 colno: 1.u32 source: tsrc)
+    tsrc: Node.atomid (AtomIdData nodeid: 18.u32 lineno: 18.u32 colno: 1.u32 name: "x".string)
+    n9: Node.typeofexpr (TypeOfExprData nodeid: 19.u32 lineno: 18.u32 colno: 1.u32 source: tsrc)
     printNode n9
 
     # namedoperation "label: x" — a labelled argument value.
-    noval: Node.atomid (atomiddata nodeid: 20.u32 lineno: 19.u32 colno: 8.u32 name: "x".string)
+    noval: Node.atomid (AtomIdData nodeid: 20.u32 lineno: 19.u32 colno: 8.u32 name: "x".string)
     noname: (Option.some "label".string)
-    n10: Node.namedoperation (namedoperationdata nodeid: 21.u32 lineno: 19.u32 colno: 1.u32 name: noname operation: noval)
+    n10: Node.namedoperation (NamedOperationData nodeid: 21.u32 lineno: 19.u32 colno: 1.u32 name: noname operation: noval)
     printNode n10
 
     # namedoperation with no label (positional argument).
-    noval2: Node.atomid (atomiddata nodeid: 22.u32 lineno: 20.u32 colno: 1.u32 name: "y".string)
-    n11: Node.namedoperation (namedoperationdata nodeid: 23.u32 lineno: 20.u32 colno: 1.u32 name: (Option.none String) operation: noval2)
+    noval2: Node.atomid (AtomIdData nodeid: 22.u32 lineno: 20.u32 colno: 1.u32 name: "y".string)
+    n11: Node.namedoperation (NamedOperationData nodeid: 23.u32 lineno: 20.u32 colno: 1.u32 name: (Option.none String) operation: noval2)
     printNode n11
 
     # datablock "data { a b } out T" — two element nodes plus an out type.
     elems: (List of: Node)
-    elems.append (Node.atomid (atomiddata nodeid: 24.u32 lineno: 21.u32 colno: 8.u32 name: "a".string))
-    elems.append (Node.atomid (atomiddata nodeid: 25.u32 lineno: 21.u32 colno: 10.u32 name: "b".string))
-    douttype: Node.atomid (atomiddata nodeid: 26.u32 lineno: 21.u32 colno: 18.u32 name: "T".string)
-    n12: Node.datablock (datablockdata nodeid: 27.u32 lineno: 21.u32 colno: 1.u32 elements: elems out_type: (Option.some douttype))
+    elems.append (Node.atomid (AtomIdData nodeid: 24.u32 lineno: 21.u32 colno: 8.u32 name: "a".string))
+    elems.append (Node.atomid (AtomIdData nodeid: 25.u32 lineno: 21.u32 colno: 10.u32 name: "b".string))
+    douttype: Node.atomid (AtomIdData nodeid: 26.u32 lineno: 21.u32 colno: 18.u32 name: "T".string)
+    n12: Node.datablock (DataBlockData nodeid: 27.u32 lineno: 21.u32 colno: 1.u32 elements: elems out_type: (Option.some douttype))
     printNode n12
 
     # datablock with no out annotation.
     elems2: (List of: Node)
-    elems2.append (Node.atomid (atomiddata nodeid: 28.u32 lineno: 22.u32 colno: 8.u32 name: "c".string))
-    n13: Node.datablock (datablockdata nodeid: 29.u32 lineno: 22.u32 colno: 1.u32 elements: elems2 out_type: (Option.none Node))
+    elems2.append (Node.atomid (AtomIdData nodeid: 28.u32 lineno: 22.u32 colno: 8.u32 name: "c".string))
+    n13: Node.datablock (DataBlockData nodeid: 29.u32 lineno: 22.u32 colno: 1.u32 elements: elems2 out_type: (Option.none Node))
     printNode n13
 
     # yieldexpr "yield x" — a generator suspension point.
-    yval: Node.atomid (atomiddata nodeid: 30.u32 lineno: 23.u32 colno: 7.u32 name: "x".string)
-    n14: Node.yieldexpr (yieldexprdata nodeid: 31.u32 lineno: 23.u32 colno: 1.u32 expr: yval)
+    yval: Node.atomid (AtomIdData nodeid: 30.u32 lineno: 23.u32 colno: 7.u32 name: "x".string)
+    n14: Node.yieldexpr (YieldExprData nodeid: 31.u32 lineno: 23.u32 colno: 1.u32 expr: yval)
     printNode n14
+
+    # expression wrapping an atomid operation.
+    exprop: Node.atomid (AtomIdData nodeid: 32.u32 lineno: 24.u32 colno: 4.u32 name: "y".string)
+    n15: Node.expression (ExpressionData nodeid: 33.u32 lineno: 24.u32 colno: 4.u32 expression: exprop)
+    printNode n15
+
+    # assignment "x: y" — bind x to the expression node above (rebuilt).
+    asgexprop: Node.atomid (AtomIdData nodeid: 34.u32 lineno: 25.u32 colno: 4.u32 name: "y".string)
+    asgval: Node.expression (ExpressionData nodeid: 35.u32 lineno: 25.u32 colno: 4.u32 expression: asgexprop)
+    n16: Node.assignment (AssignmentData nodeid: 36.u32 lineno: 25.u32 colno: 1.u32 name: "x".string value: asgval)
+    printNode n16
+
+    # reassignment "a.b = z" — target dotted path, expression value.
+    raparent: Node.atomid (AtomIdData nodeid: 37.u32 lineno: 26.u32 colno: 1.u32 name: "a".string)
+    rachild: Node.atomid (AtomIdData nodeid: 38.u32 lineno: 26.u32 colno: 3.u32 name: "b".string)
+    rapath: Node.dottedpath (DottedPathData nodeid: 39.u32 lineno: 26.u32 colno: 2.u32 parent: raparent child: rachild)
+    raexprop: Node.atomid (AtomIdData nodeid: 40.u32 lineno: 26.u32 colno: 7.u32 name: "z".string)
+    raval: Node.expression (ExpressionData nodeid: 41.u32 lineno: 26.u32 colno: 7.u32 expression: raexprop)
+    n17: Node.reassignment (ReassignmentData nodeid: 42.u32 lineno: 26.u32 colno: 1.u32 topath: rapath value: raval)
+    printNode n17
+
+    # swapstmt "swap p q" — two owned paths.
+    swlhs: Node.atomid (AtomIdData nodeid: 43.u32 lineno: 27.u32 colno: 6.u32 name: "p".string)
+    swrhs: Node.atomid (AtomIdData nodeid: 44.u32 lineno: 27.u32 colno: 8.u32 name: "q".string)
+    n18: Node.swapstmt (SwapStmtData nodeid: 45.u32 lineno: 27.u32 colno: 1.u32 lhs: swlhs rhs: swrhs)
+    printNode n18
+
+    # statementline wrapping a standalone assignment.
+    slexprop: Node.atomid (AtomIdData nodeid: 46.u32 lineno: 28.u32 colno: 4.u32 name: "m".string)
+    slval: Node.expression (ExpressionData nodeid: 47.u32 lineno: 28.u32 colno: 4.u32 expression: slexprop)
+    slasg: Node.assignment (AssignmentData nodeid: 48.u32 lineno: 28.u32 colno: 1.u32 name: "k".string value: slval)
+    n19: Node.statementline (StatementLineData nodeid: 49.u32 lineno: 28.u32 colno: 1.u32 statementline: slasg)
+    printNode n19
+
+    # statement block holding two statementlines (exercises the list iterator).
+    lines: (List of: Node)
+    l1op: Node.atomid (AtomIdData nodeid: 50.u32 lineno: 29.u32 colno: 8.u32 name: "u".string)
+    l1val: Node.expression (ExpressionData nodeid: 51.u32 lineno: 29.u32 colno: 8.u32 expression: l1op)
+    l1asg: Node.assignment (AssignmentData nodeid: 52.u32 lineno: 29.u32 colno: 5.u32 name: "t".string value: l1val)
+    lines.append (Node.statementline (StatementLineData nodeid: 53.u32 lineno: 29.u32 colno: 5.u32 statementline: l1asg))
+    l2op: Node.atomid (AtomIdData nodeid: 54.u32 lineno: 30.u32 colno: 5.u32 name: "v".string)
+    l2expr: Node.expression (ExpressionData nodeid: 55.u32 lineno: 30.u32 colno: 5.u32 expression: l2op)
+    lines.append (Node.statementline (StatementLineData nodeid: 56.u32 lineno: 30.u32 colno: 5.u32 statementline: l2expr))
+    n20: Node.statement (StatementData nodeid: 57.u32 lineno: 29.u32 colno: 1.u32 statements: lines)
+    printNode n20
 }
