@@ -482,21 +482,30 @@ more clearly than a table.</li>
 node type for the static type checker (<code>ty</code>); see
 <code>src/zast.py</code>.</p>
 <h2 id="resolution-stack-and-cycle-detection"><a href="#resolution-stack-and-cycle-detection">6. Resolution Stack and Cycle Detection</a></h2>
-<p><code>TypeChecker._resolving</code> is the list-shaped resolution stack:
-each entry is a <code>(qualified_name, ZType)</code> tuple. The flow is:</p>
+<p>Resolution is keyed by <em><strong>definition nodeid</strong></em>, not by synthesized
+dotted-string names. Every definition is one AST node with one stable
+<code>nodeid</code>, and that node is shared across every reference to it, so
+the same definition always resolves to the same cached type no matter
+which unit asks. <code>TypeChecker._resolved</code> maps <code>defn.nodeid -&gt; ZType</code>;
+<code>TypeChecker._resolving</code> is the list-shaped resolution stack of
+<code>ResolvingFrame</code> entries (<code>unit_name</code>, <code>def_id</code>, <code>ztype</code>,
+<code>defn</code>). The flow is:</p>
 <ol>
-<li><code>_resolve_unit_name(unit, name)</code> checks
-<code>self._resolved</code> -- a cache of fully-resolved unit-level
-names. Hit: return immediately.</li>
-<li>Cache miss: push <code>(qualified, placeholder_ztype)</code> onto
-    <code>_resolving</code>, dispatch to the appropriate
-    <code>_resolve_*_type</code> via <code>_definition_resolvers</code>.</li>
-<li>If a nested resolution re-enters the same qualified name,
-    the resolver finds it on the stack and reports a
-    cycle error.</li>
+<li><code>_resolve_unit_name(unit, name)</code> looks the definition up in
+the unit's member table, then checks <code>self._resolved</code> keyed by
+<code>defn.nodeid</code>. Hit: return immediately.</li>
+<li>Cache miss: push a <code>ResolvingFrame</code> for <code>defn.nodeid</code> onto
+    <code>_resolving</code>, dispatch to the appropriate <code>_resolve_*_type</code>
+    via <code>_definition_resolvers</code>.</li>
+<li>If a nested resolution re-enters the same definition, the
+    resolver finds its <code>def_id</code> on the stack and reports a cycle
+    error.</li>
 <li>On success, the resolver pops the stack frame and writes
-    the final <code>ZType</code> into <code>_resolved</code>.</li>
+    the final <code>ZType</code> into <code>_resolved</code> under <code>defn.nodeid</code>.</li>
 </ol>
+<p>The emitter and SQL dump read <code>ZTyping.resolved</code>, a qualified-name
+<code>({unit}.{member} -&gt; ZType)</code> projection of the nodeid cache built by
+<code>_build_resolved_name_view</code> at the end of <code>typecheck</code>.</p>
 <p>The <code>type</code> keyword (in receiver position) resolves to the type
 at the bottom of the resolving stack, so a method body can refer
 to its own enclosing type without naming it. <code>this</code> works

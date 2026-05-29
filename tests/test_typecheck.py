@@ -944,8 +944,7 @@ class TestDemandDriven:
         tc.check()
         # unused should still get resolved because check() iterates all functions
         # in the main unit
-        key = "test.unused"
-        assert key in tc._resolved
+        assert tc._resolved_by_name("test.unused") is not None
 
 
 class TestCircularReferences:
@@ -989,7 +988,7 @@ class TestCircularReferences:
         )
         tc = TypeChecker(program)
         tc.check()
-        vec_type = tc._resolved.get("test.vec")
+        vec_type = tc._resolved_by_name("test.vec")
         assert vec_type is not None
         scale = tc.typing.child_of(vec_type, "scale")
         assert scale is not None
@@ -1305,7 +1304,7 @@ class TestOwnershipInZType:
         )
         tc = TypeChecker(program)
         tc.check()
-        ftype = tc._resolved.get("test.f")
+        ftype = tc._resolved_by_name("test.f")
         assert ftype is not None
         assert tc.typing.child_ownership(ftype, "a") == ZParamOwnership.TAKE
         assert tc.typing.child_ownership(ftype, "b") == ZParamOwnership.BORROW
@@ -1319,7 +1318,7 @@ class TestOwnershipInZType:
         )
         tc = TypeChecker(program)
         tc.check()
-        ftype = tc._resolved.get("test.f")
+        ftype = tc._resolved_by_name("test.f")
         assert ftype is not None
         assert ftype.return_ownership == ZParamOwnership.BORROW
         assert tc.typing.child_ownership(ftype, "a") == ZParamOwnership.LOCK
@@ -1331,7 +1330,7 @@ class TestOwnershipInZType:
         )
         tc = TypeChecker(program)
         tc.check()
-        ftype = tc._resolved.get("test.f")
+        ftype = tc._resolved_by_name("test.f")
         assert ftype is not None
         assert tc.typing.child_ownerships_of(ftype) == {}
 
@@ -1356,7 +1355,7 @@ class TestValTypeTagging:
         )
         tc = TypeChecker(program)
         tc.check()
-        point = tc._resolved.get("test.point")
+        point = tc._resolved_by_name("test.point")
         assert point is not None
         assert point.is_valtype is True
 
@@ -1386,7 +1385,7 @@ class TestValTypeTagging:
         program, typing = check_ok("f: function is {}\nmain: function is {}")
         tc = TypeChecker(program)
         tc.check()
-        ftype = tc._resolved.get("test.f")
+        ftype = tc._resolved_by_name("test.f")
         assert ftype is not None
         assert ftype.is_valtype is None
 
@@ -5031,7 +5030,7 @@ class TestClassTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.MyClass")
+        ct = tc._resolved_by_name("test.MyClass")
         assert ct is not None
         assert ct.typetype == ZTypeType.CLASS
 
@@ -5042,7 +5041,7 @@ class TestClassTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.MyClass")
+        ct = tc._resolved_by_name("test.MyClass")
         assert ct is not None
         assert ct.is_valtype is False
 
@@ -5053,7 +5052,7 @@ class TestClassTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.MyClass")
+        ct = tc._resolved_by_name("test.MyClass")
         assert tc.typing.has_child(ct, "x")
         assert tc.typing.child_of(ct, "x").name == "i64"
         assert tc.typing.has_child(ct, "y")
@@ -5069,7 +5068,7 @@ class TestClassTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.MyClass")
+        ct = tc._resolved_by_name("test.MyClass")
         assert tc.typing.has_child(ct, "get")
         assert tc.typing.child_of(ct, "get").typetype == ZTypeType.FUNCTION
 
@@ -5083,7 +5082,7 @@ class TestClassTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.MyClass")
+        ct = tc._resolved_by_name("test.MyClass")
         get_fn = tc.typing.child_of(ct, "get")
         param_c = tc.typing.child_of(get_fn, "c")
         assert param_c is ct
@@ -5098,7 +5097,7 @@ class TestClassTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.MyClass")
+        ct = tc._resolved_by_name("test.MyClass")
         clone_fn = tc.typing.child_of(ct, "clone")
         ret = clone_fn.return_type
         assert ret is ct
@@ -5179,7 +5178,7 @@ class TestStringMigration:
         program, typing = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()
-        st = tc._resolved.get("system.String")
+        st = tc._resolved_by_name("system.String")
         assert st is not None
         assert st.typetype == ZTypeType.CLASS
 
@@ -5188,7 +5187,7 @@ class TestStringMigration:
         program, typing = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()
-        st = tc._resolved.get("system.String")
+        st = tc._resolved_by_name("system.String")
         assert st is not None
         assert st.is_valtype is False
 
@@ -5242,7 +5241,7 @@ class TestUnionTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert ut is not None
         assert ut.typetype == ZTypeType.UNION
 
@@ -5253,7 +5252,7 @@ class TestUnionTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert ut is not None
         assert ut.is_valtype is False
 
@@ -5265,7 +5264,7 @@ class TestUnionTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert tc.typing.has_child(ut, "a")
         assert tc.typing.has_child(ut, "b")
         assert tc.typing.has_child(ut, "c")
@@ -5280,7 +5279,7 @@ class TestUnionTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert tc.typing.child_of(ut, "b").name == "null"
         assert tc.typing.child_of(ut, "b").is_valtype is True
 
@@ -5295,7 +5294,7 @@ class TestUnionConstruction:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert ut is not None
 
     def test_union_null_construction(self):
@@ -5449,7 +5448,7 @@ class TestDataTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         assert dt is not None
         assert dt.typetype == ZTypeType.DATA
 
@@ -5460,7 +5459,7 @@ class TestDataTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         assert tc.typing.has_child(dt, "0")
         assert tc.typing.has_child(dt, "1")
         assert tc.typing.has_child(dt, "2")
@@ -5472,7 +5471,7 @@ class TestDataTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         assert tc.typing.has_child(dt, "LOW")
         assert tc.typing.has_child(dt, "HIGH")
 
@@ -5483,7 +5482,7 @@ class TestDataTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         assert tc.typing.has_child(dt, "tag")
         tag = tc.typing.child_of(dt, "tag")
         assert tag.typetype == ZTypeType.RECORD
@@ -5497,7 +5496,7 @@ class TestDataTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         tag = tc.typing.child_of(dt, "tag")
         assert tag.data_owner_type() is dt
 
@@ -5508,7 +5507,7 @@ class TestDataTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         assert tc.typing.has_child(dt, "0")
         assert tc.typing.has_child(dt, "MIDDLE")
         assert tc.typing.has_child(dt, "2")
@@ -5539,7 +5538,7 @@ class TestUnionCustomTag:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         # check that the discriminator values match the data
@@ -5580,7 +5579,7 @@ class TestUnionCustomTag:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.Priority")
+        ut = tc._resolved_by_name("test.Priority")
         tag = tc.typing.child_of(ut, "tag")
         assert tag.data_values["CRITICAL"] == "10"
 
@@ -5601,7 +5600,7 @@ class TestUnionCustomTag:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         assert tc.typing.child_of(tag, "a").name == "0"
@@ -5614,7 +5613,7 @@ class TestUnionCustomTag:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert tc.typing.has_child(ut, "tag")
         assert tc.typing.child_of(ut, "tag").typetype == ZTypeType.DATA
 
@@ -5627,7 +5626,7 @@ class TestUnionCustomTag:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert tc.typing.has_child(ut, "tag")
         tag_data = tc.typing.child_of(ut, "tag")
         assert tag_data.typetype == ZTypeType.DATA
@@ -5683,7 +5682,7 @@ class TestUnionCustomTag:
         )
         tc = TypeChecker(program)
         tc.check()
-        dt = tc._resolved.get("test.mydata")
+        dt = tc._resolved_by_name("test.mydata")
         tag = tc.typing.child_of(dt, "tag")
         assert tag.is_tag_generic_origin
         assert tag.name == "tag__i64"
@@ -5712,7 +5711,7 @@ class TestLabelValueShorthand:
         program, typing = check_ok(":u8\nmain: function is { x: u8 42 }")
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.u8")
+        ut = tc._resolved_by_name("test.u8")
         assert ut is not None
         assert ut.name == "u8"
 
@@ -5721,7 +5720,7 @@ class TestLabelValueShorthand:
         program, typing = check_ok(":i64\nmain: function is { x: i64 1 }")
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.i64")
+        ut = tc._resolved_by_name("test.i64")
         assert ut is not None
         assert ut.name == "i64"
 
@@ -5740,7 +5739,7 @@ class TestLabelValueShorthand:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert ut is not None
         assert ut.typetype == ZTypeType.UNION
         assert tc.typing.has_child(ut, "u8")
@@ -5754,7 +5753,7 @@ class TestLabelValueShorthand:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.MyUnion")
+        ut = tc._resolved_by_name("test.MyUnion")
         assert tc.typing.child_of(ut, "u8").name == "u8"
         assert tc.typing.child_of(ut, "String").name == "String"
 
@@ -5873,7 +5872,7 @@ class TestVariantTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        vt = tc._resolved.get("test.myvar")
+        vt = tc._resolved_by_name("test.myvar")
         assert vt is not None
         assert vt.typetype == ZTypeType.VARIANT
 
@@ -5884,7 +5883,7 @@ class TestVariantTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        vt = tc._resolved.get("test.myvar")
+        vt = tc._resolved_by_name("test.myvar")
         assert vt is not None
         assert vt.is_valtype is True
 
@@ -5896,7 +5895,7 @@ class TestVariantTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        vt = tc._resolved.get("test.myvar")
+        vt = tc._resolved_by_name("test.myvar")
         assert tc.typing.has_child(vt, "a")
         assert tc.typing.has_child(vt, "b")
         assert tc.typing.has_child(vt, "c")
@@ -5911,7 +5910,7 @@ class TestVariantTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        vt = tc._resolved.get("test.myvar")
+        vt = tc._resolved_by_name("test.myvar")
         tag = tc.typing.child_of(vt, "tag")
         assert tag is not None
         assert tag.typetype == ZTypeType.DATA
@@ -5925,7 +5924,7 @@ class TestVariantTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        vt = tc._resolved.get("test.myvar")
+        vt = tc._resolved_by_name("test.myvar")
         assert tc.typing.child_of(vt, "b").name == "null"
         assert tc.typing.child_of(vt, "b").is_valtype is True
 
@@ -5968,7 +5967,7 @@ class TestVariantTypeResolution:
         )
         tc = TypeChecker(program)
         tc.check()
-        vt = tc._resolved.get("test.myvar")
+        vt = tc._resolved_by_name("test.myvar")
         assert vt is not None
 
     def test_variant_match_exhaustiveness(self):
@@ -6810,7 +6809,7 @@ class TestProtocols:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        t = tc._resolved.get("test.MyProto")
+        t = tc._resolved_by_name("test.MyProto")
         assert t is not None
         assert t.isgeneric is True
         assert not tc.typing.has_child(t, "create")
@@ -6962,7 +6961,7 @@ class TestProtocols:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        t = tc._resolved.get("test.MyProto")
+        t = tc._resolved_by_name("test.MyProto")
         assert t is not None
         assert t.isgeneric is True
         assert not tc.typing.has_child(t, "take")
@@ -6978,7 +6977,7 @@ class TestProtocols:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        t = tc._resolved.get("test.MyProto")
+        t = tc._resolved_by_name("test.MyProto")
         assert t is not None
         assert t.isgeneric is True
         assert not tc.typing.has_child(t, "borrow")
@@ -7600,7 +7599,7 @@ class TestStreamProtocolsAndFile:
         program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        f = tc._resolved.get("system.io.File") or tc._resolved.get("io.File")
+        f = tc._resolved_by_name("system.io.File") or tc._resolved_by_name("io.File")
         assert f is not None
         assert f.typetype == ZTypeType.CLASS
         assert tc.typing.has_child(f, "fd")
@@ -7612,7 +7611,9 @@ class TestStreamProtocolsAndFile:
         tc = TypeChecker(program)
         tc.check(full=True)
         for p in ("Reader", "Writer", "Closer", "Seeker"):
-            t = tc._resolved.get(f"system.io.{p}") or tc._resolved.get(f"io.{p}")
+            t = tc._resolved_by_name(f"system.io.{p}") or tc._resolved_by_name(
+                f"io.{p}"
+            )
             assert t is not None, f"protocol {p} not resolved"
             assert t.typetype == ZTypeType.PROTOCOL, (
                 f"{p} expected PROTOCOL, got {t.typetype}"
@@ -7630,7 +7631,7 @@ class TestStreamProtocolsAndFile:
             "Seeker": {"seek"},
         }
         for proto, methods in expected.items():
-            t = tc._resolved.get(f"system.io.{proto}") or tc._resolved.get(
+            t = tc._resolved_by_name(f"system.io.{proto}") or tc._resolved_by_name(
                 f"io.{proto}"
             )
             assert t is not None
@@ -7751,7 +7752,7 @@ class TestIoNativeDispatch:
         program, typing, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        file_type = tc._resolved.get("io.File")
+        file_type = tc._resolved_by_name("io.File")
         assert file_type is not None
         assert (file_type.destructor_name is not None) is True
         assert file_type.destructor_name == "z_File_destroy"
@@ -7819,7 +7820,7 @@ class TestIoNativeDispatch:
         program, typing, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        file_type = tc._resolved.get("io.File")
+        file_type = tc._resolved_by_name("io.File")
         assert file_type is not None
         labels = [lbl for (lbl, _) in tc._protocol_labels.get("File", [])]
         for expected in ("Reader", "Writer", "Closer", "Seeker"):
@@ -8116,7 +8117,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myrec = tc._resolved.get("test.myrec")
+        myrec = tc._resolved_by_name("test.myrec")
         assert myrec is not None
         assert myrec.isgeneric is True
         assert "t" in myrec.generic_params
@@ -8130,7 +8131,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myrec = tc._resolved.get("test.myrec")
+        myrec = tc._resolved_by_name("test.myrec")
         assert myrec is not None
         assert myrec.isgeneric
         assert tc.typing.has_child(myrec, "x")
@@ -8144,7 +8145,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        MyOpt = tc._resolved.get("test.MyOpt")
+        MyOpt = tc._resolved_by_name("test.MyOpt")
         assert MyOpt is not None
         assert MyOpt.isgeneric is True
         assert "t" in MyOpt.generic_params
@@ -8160,7 +8161,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        MyOpt = tc._resolved.get("test.MyOpt")
+        MyOpt = tc._resolved_by_name("test.MyOpt")
         assert MyOpt is not None
         assert tc.typing.child_of(MyOpt, "some").typetype == ZTypeType.GENERIC_PARAM
 
@@ -8172,7 +8173,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        pair = tc._resolved.get("test.mypair")
+        pair = tc._resolved_by_name("test.mypair")
         assert pair is not None
         assert pair.isgeneric
         assert "a" in pair.generic_params
@@ -8187,7 +8188,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myfn = tc._resolved.get("test.myfn")
+        myfn = tc._resolved_by_name("test.myfn")
         assert myfn is not None
         assert myfn.isgeneric is True
         assert "t" in myfn.generic_params
@@ -8202,7 +8203,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myfn = tc._resolved.get("test.myfn")
+        myfn = tc._resolved_by_name("test.myfn")
         assert myfn is not None
         assert myfn.isgeneric is True
         assert "t" in myfn.generic_params
@@ -8217,7 +8218,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myfn = tc._resolved.get("test.myfn")
+        myfn = tc._resolved_by_name("test.myfn")
         assert myfn is not None
         assert myfn.isgeneric is True
         assert "t" in myfn.generic_params
@@ -8252,7 +8253,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        helper = tc._resolved.get("test.myrec.helper")
+        helper = tc._resolved_by_name("test.myrec.helper")
         assert helper is not None
         assert helper.isgeneric is True
         assert "t" in helper.generic_params
@@ -8560,7 +8561,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        ftype = tc._resolved.get("test.id")
+        ftype = tc._resolved_by_name("test.id")
         assert ftype is not None
         assert "t" in ftype.generic_defaults
         assert ftype.generic_defaults["t"].name == "i64"
@@ -8865,7 +8866,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        wrapper = tc._resolved.get("test.wrapper")
+        wrapper = tc._resolved_by_name("test.wrapper")
         assert wrapper is not None
         inner = tc.typing.child_of(wrapper, "inner")
         assert inner is not None
@@ -8882,7 +8883,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        wrapper = tc._resolved.get("test.wrapper")
+        wrapper = tc._resolved_by_name("test.wrapper")
         assert wrapper is not None
         inner = tc.typing.child_of(wrapper, "inner")
         assert inner is not None
@@ -8943,7 +8944,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        MyCls = tc._resolved.get("test.MyCls")
+        MyCls = tc._resolved_by_name("test.MyCls")
         assert MyCls is not None
         assert MyCls.isgeneric is True
         assert "t" in MyCls.generic_params
@@ -8957,7 +8958,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        MyCls = tc._resolved.get("test.MyCls")
+        MyCls = tc._resolved_by_name("test.MyCls")
         assert MyCls is not None
         assert MyCls.isgeneric
         assert tc.typing.has_child(MyCls, "val")
@@ -9033,7 +9034,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        MyProto = tc._resolved.get("test.MyProto")
+        MyProto = tc._resolved_by_name("test.MyProto")
         assert MyProto is not None
         assert MyProto.isgeneric is True
         assert "t" in MyProto.generic_params
@@ -9048,7 +9049,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        MyProto = tc._resolved.get("test.MyProto")
+        MyProto = tc._resolved_by_name("test.MyProto")
         assert MyProto is not None
         get_fn = tc.typing.child_of(MyProto, "get")
         assert get_fn is not None
@@ -9155,7 +9156,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myrec = tc._resolved.get("test.myrec")
+        myrec = tc._resolved_by_name("test.myrec")
         assert myrec is not None
         assert myrec.isgeneric
         assert "t" in myrec.generic_params
@@ -9168,7 +9169,7 @@ class TestGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myrec = tc._resolved.get("test.myrec")
+        myrec = tc._resolved_by_name("test.myrec")
         assert myrec is not None
         assert myrec.isgeneric
         assert "t" in myrec.generic_params
@@ -9203,7 +9204,7 @@ class TestTypedefs:
         )
         tc = TypeChecker(program)
         tc.check()
-        mt = tc._resolved.get("test.meters")
+        mt = tc._resolved_by_name("test.meters")
         assert mt is not None
         assert mt.typedef_base is not None
         assert mt.typedef_base.name == "i64"
@@ -9234,7 +9235,7 @@ class TestTypedefs:
         )
         tc = TypeChecker(program)
         tc.check()
-        mt = tc._resolved.get("test.meters")
+        mt = tc._resolved_by_name("test.meters")
         assert mt is not None
         assert tc.typing.has_child(mt, "double")
 
@@ -9330,7 +9331,7 @@ class TestTypedefs:
         )
         tc = TypeChecker(program)
         tc.check()
-        mt = tc._resolved.get("test.meters")
+        mt = tc._resolved_by_name("test.meters")
         assert mt is not None
         assert tc.typing.has_child(mt, "create")
         assert tc.typing.has_child(mt, "borrow")
@@ -9505,7 +9506,7 @@ class TestNumericGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myrec = tc._resolved.get("test.myrec")
+        myrec = tc._resolved_by_name("test.myrec")
         assert myrec is not None
         assert myrec.isgeneric is True
         assert "size" in myrec.generic_params
@@ -9518,7 +9519,7 @@ class TestNumericGenerics:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myrec = tc._resolved.get("test.myrec")
+        myrec = tc._resolved_by_name("test.myrec")
         assert myrec is not None
         assert myrec.generic_params["size"].name == "u64"
 
@@ -12496,7 +12497,7 @@ class TestUnionLockedArm:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.Myview")
+        ut = tc._resolved_by_name("test.Myview")
         assert ut is not None
         assert tc.typing.is_child_lock_arm(ut, "some")
         assert not tc.typing.is_child_lock_arm(ut, "none")
@@ -12513,7 +12514,7 @@ class TestUnionLockedArm:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.Myview")
+        ut = tc._resolved_by_name("test.Myview")
         assert (ut.destructor_name is not None) is False
         assert ut.destructor_name is None
 
@@ -12530,7 +12531,7 @@ class TestUnionLockedArm:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.Mixed")
+        ut = tc._resolved_by_name("test.Mixed")
         assert (ut.destructor_name is not None) is True
         assert ut.destructor_name == "z_Mixed_destroy"
         assert set(tc.typing.lock_arm_names_of(ut)) == {"cached"}
@@ -12570,7 +12571,7 @@ class TestUnionLockedArm:
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.Wrap")
+        ut = tc._resolved_by_name("test.Wrap")
         assert set(tc.typing.lock_arm_names_of(ut)) == {"val"}
         assert (ut.destructor_name is not None) is False
 
@@ -12592,7 +12593,7 @@ class TestUnionBorrowABI:
         )
         tc = TypeChecker(program)
         tc.check()
-        ftype = tc._resolved.get("test.f")
+        ftype = tc._resolved_by_name("test.f")
         assert ftype is not None
         assert tc.typing.child_ownership(ftype, "n") == ZParamOwnership.BORROW, (
             "union param without annotation should default to BORROW"
@@ -12607,7 +12608,7 @@ class TestUnionBorrowABI:
         )
         tc = TypeChecker(program)
         tc.check()
-        ftype = tc._resolved.get("test.f")
+        ftype = tc._resolved_by_name("test.f")
         assert ftype is not None
         assert tc.typing.child_ownership(ftype, "n") == ZParamOwnership.TAKE
 
@@ -12658,7 +12659,7 @@ class TestOptionview:
         tc = TypeChecker(program)
         tc.check()
         mono = None
-        for k, v in tc._resolved.items():
+        for k, v in tc._build_resolved_name_view().items():
             if "OptionView" in k and v.typetype == ZTypeType.UNION:
                 if v.generic_origin is not None:
                     mono = v
@@ -12683,7 +12684,7 @@ class TestOptionview:
         tc = TypeChecker(program)
         tc.check()
         a_t = b_t = c_t = None
-        for k, v in tc._resolved.items():
+        for k, v in tc._build_resolved_name_view().items():
             if "Option_String" in k and v.typetype == ZTypeType.UNION:
                 a_t = v
             elif "optionval_i64" in k and v.typetype == ZTypeType.VARIANT:
@@ -14434,6 +14435,52 @@ class TestCrossUnitDependency:
             "main: function is {\n"
             '    h: depmod.Holder.make text: "hello".string\n'
             '    print "\\{h.len}"\n'
+            "}\n"
+        )
+        errors = self._two_unit_program(mainsrc, depsrc)
+        assert errors == [], [e.msg for e in errors]
+
+    def test_dependency_double_checked_method_body(self):
+        """A dependency method body must be type-checked exactly once.
+
+        When a sibling in the dependency references a class by bare name,
+        the resolver used to re-resolve that class under a divergent key
+        and re-check its method bodies — the second pass running on the
+        AST the first pass already ANF-rewrote (hoisted arg temps now
+        dangling, data-element literals already materialised to i64). The
+        method here passes data-element literals (`asc.x`) to `u8`
+        parameters via a hoisted call, so a second check surfaces
+        `expected u8, got i64` and undefined-temp errors; the sibling
+        `usebox` (bare `Box` reference) is the essential trigger."""
+        depsrc = (
+            "asc: data {\n"
+            "    x: 65\n"
+            "} out u8\n"
+            "\n"
+            "Box: class {\n"
+            "    v: u8\n"
+            "} as {\n"
+            "    make: function {n: u8} out this is {\n"
+            "        return (meta.create v: n)\n"
+            "    }\n"
+            "    bump: function {:this} out u8 is {\n"
+            "        return (combine lo: asc.x hi: this.v)\n"
+            "    }\n"
+            "}\n"
+            "\n"
+            "combine: function {lo: u8 hi: u8} out u8 is {\n"
+            "    return lo + hi\n"
+            "}\n"
+            "\n"
+            "usebox: function {n: u8} out u8 is {\n"
+            "    b: Box.make n: n\n"
+            "    return b.bump\n"
+            "}\n"
+        )
+        mainsrc = (
+            "main: function is {\n"
+            "    b: depmod.Box.make n: 7.u8\n"
+            '    print "\\{b.bump}"\n'
             "}\n"
         )
         errors = self._two_unit_program(mainsrc, depsrc)

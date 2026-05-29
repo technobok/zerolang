@@ -518,6 +518,24 @@ class MonoState:
     assigned_cnames: "set[str]" = field(default_factory=set)
 
 
+@dataclass(frozen=True)
+class ResolvingFrame:
+    """One in-progress definition on the resolver stack.
+
+    Identity is `def_id` — the definition's AST `nodeid`, the same value
+    `_resolved` is keyed by, so cycle detection is an integer compare.
+    `defn` is the source AST node (None for synthesised monomorphizations,
+    which have no source def); `unit_name` is the owning unit (read by
+    `_current_unit_name`); `ztype` is the shell-or-concrete type used for
+    `type`/`this` keyword resolution and valid self-reference.
+    """
+
+    unit_name: str
+    def_id: int
+    ztype: ZType
+    defn: "Optional[zast.Node]" = None
+
+
 class TypeChecker:
     """
     Single-pass demand-driven type checker.
@@ -543,12 +561,15 @@ class TypeChecker:
         # well-known types (only null/never are standalone — others come from system.z)
         self.t_null = _make_type("null", ZTypeType.NULL)
 
-        # resolving stack: list of (qualified_name, ZType) for cycle detection
-        # and `type` keyword resolution
-        self._resolving: List[Tuple[str, ZType]] = []
+        # resolving stack of in-progress definitions (cycle detection +
+        # `type`/`this` keyword resolution). See `ResolvingFrame`.
+        self._resolving: List[ResolvingFrame] = []
 
-        # cache of resolved unit-level names: "unit.name" -> ZType
-        self._resolved: dict[str, ZType] = {}
+        # cache of resolved definitions, keyed by the definition's AST
+        # nodeid. One definition AST node has one identity regardless of
+        # which unit references it, so the same node always resolves to
+        # the same cached type (no synthesized dotted-string keys).
+        self._resolved: dict[int, ZType] = {}
 
         # unit types (for dotted path resolution like mathutil.square)
         self.unit_types: dict[str, ZType] = {}
@@ -941,7 +962,7 @@ class TypeChecker:
             elif defn.nodetype == NodeType.FUNCTION and cast(zast.Function, defn).body:
                 self._resolve_unit_name(self.program.mainunitname, name)
                 # skip body checking for generic functions (checked during monomorphization)
-                ftype = self._resolved.get(f"{self._current_unit_name()}.{name}")
+                ftype = self._resolved.get(defn.nodeid)
                 if not (ftype and ftype.isgeneric):
                     self._check_function_body(name, cast(zast.Function, defn))
             elif (
@@ -960,7 +981,7 @@ class TypeChecker:
                         and cast(zast.Function, defn).body
                     ):
                         # skip body checking for generic functions
-                        ftype = self._resolved.get(f"{unitname}.{name}")
+                        ftype = self._resolved.get(defn.nodeid)
                         if not (ftype and ftype.isgeneric):
                             self._check_function_body(name, cast(zast.Function, defn))
 
@@ -1020,44 +1041,6 @@ class TypeChecker:
 
     def _resolve_unit_name(self, unitname: str, name: str) -> Optional[ZType]:
         """Resolve a name from a unit, type-checking its definition on demand."""
-        key = f"{unitname}.{name}"
-
-        # already resolved?
-        if key in self._resolved:
-            return self._resolved[key]
-
-        # currently being resolved? check for valid self-reference vs circular alias
-        for i, (rkey, rtype) in enumerate(self._resolving):
-            if rkey == key:
-                # on the resolving stack — check if it's a concrete type (valid self-ref)
-                if rtype.typetype in (
-                    ZTypeType.RECORD,
-                    ZTypeType.ENUM,
-                    ZTypeType.UNION,
-                    ZTypeType.FUNCTION,
-                    ZTypeType.CLASS,
-                    ZTypeType.PROTOCOL,
-                    ZTypeType.FACET,
-                ):
-                    return rtype  # valid self-reference via `type`
-                # NULL shell (alias) — check if the chain contains a concrete
-                # type that this alias will eventually resolve to
-                for _, rt in self._resolving[i + 1 :]:
-                    if rt.typetype in (
-                        ZTypeType.RECORD,
-                        ZTypeType.ENUM,
-                        ZTypeType.UNION,
-                        ZTypeType.FUNCTION,
-                        ZTypeType.CLASS,
-                        ZTypeType.PROTOCOL,
-                        ZTypeType.FACET,
-                    ):
-                        return rt
-                # circular alias with no concrete type in chain
-                chain = " -> ".join(rk for rk, _ in self._resolving[i:])
-                self._error(f"Circular type alias: {chain} -> {key}")
-                return None
-
         unit = self.program.units.get(unitname)
         if not unit:
             return None
@@ -1077,6 +1060,48 @@ class TypeChecker:
             defn = current_body.get(parts[-1])
         if defn is None:
             return None
+
+        # The definition's AST nodeid is its resolution identity: one node,
+        # one cached type, no matter which unit asked.
+        key = defn.nodeid
+
+        # already resolved?
+        if key in self._resolved:
+            return self._resolved[key]
+
+        # currently being resolved? check for valid self-reference vs circular alias
+        for i, frame in enumerate(self._resolving):
+            if frame.def_id == key:
+                # on the resolving stack — check if it's a concrete type (valid self-ref)
+                if frame.ztype.typetype in (
+                    ZTypeType.RECORD,
+                    ZTypeType.ENUM,
+                    ZTypeType.UNION,
+                    ZTypeType.FUNCTION,
+                    ZTypeType.CLASS,
+                    ZTypeType.PROTOCOL,
+                    ZTypeType.FACET,
+                ):
+                    return frame.ztype  # valid self-reference via `type`
+                # NULL shell (alias) — check if the chain contains a concrete
+                # type that this alias will eventually resolve to
+                for later in self._resolving[i + 1 :]:
+                    if later.ztype.typetype in (
+                        ZTypeType.RECORD,
+                        ZTypeType.ENUM,
+                        ZTypeType.UNION,
+                        ZTypeType.FUNCTION,
+                        ZTypeType.CLASS,
+                        ZTypeType.PROTOCOL,
+                        ZTypeType.FACET,
+                    ):
+                        return later.ztype
+                # circular alias with no concrete type in chain
+                chain = " -> ".join(
+                    f"{f.unit_name}.{f.ztype.name}" for f in self._resolving[i:]
+                )
+                self._error(f"Circular type alias: {chain} -> {unitname}.{name}")
+                return None
 
         t = self._type_of_definition(unitname, name, defn)
         if t is not None and t.is_literal:
@@ -1134,9 +1159,12 @@ class TypeChecker:
             return t
         # alias: DottedPath reference
         if defn.nodetype == NodeType.DOTTEDPATH:
-            key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
-            self._resolving.append((key, shell))
+            self._resolving.append(
+                ResolvingFrame(
+                    unit_name=unitname, def_id=defn.nodeid, ztype=shell, defn=defn
+                )
+            )
             dp = cast(zast.DottedPath, defn)
             t = self._resolve_dotted_path(dp)
             self._resolving.pop()
@@ -1158,9 +1186,12 @@ class TypeChecker:
                 return outer
             return t
         if defn.nodetype == NodeType.LABELVALUE:
-            key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
-            self._resolving.append((key, shell))
+            self._resolving.append(
+                ResolvingFrame(
+                    unit_name=unitname, def_id=defn.nodeid, ztype=shell, defn=defn
+                )
+            )
             t = self._resolve_name(
                 cast(zast.LabelValue, defn).name, skip_unit_def=(unitname, name)
             )
@@ -1192,9 +1223,12 @@ class TypeChecker:
             NodeType.NAMEDOPERATION,
             NodeType.LABELVALUE,
         ):
-            key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
-            self._resolving.append((key, shell))
+            self._resolving.append(
+                ResolvingFrame(
+                    unit_name=unitname, def_id=defn.nodeid, ztype=shell, defn=defn
+                )
+            )
             t = self._check_expression(cast(zast.Expression, defn)).ztype
             self._resolving.pop()
             return t
@@ -1210,17 +1244,23 @@ class TypeChecker:
                     elif not err and type(value) is float and typename == "f64":
                         self.typing.node_const_value[defn_atom.nodeid] = value
                 return t
-            key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
-            self._resolving.append((key, shell))
+            self._resolving.append(
+                ResolvingFrame(
+                    unit_name=unitname, def_id=defn.nodeid, ztype=shell, defn=defn
+                )
+            )
             t = self._resolve_name(defn_atom.name)
             self._resolving.pop()
             return t
         # constant folding: handle BinOp at unit level (e.g., b: a + 2)
         if defn.nodetype == NodeType.BINOP:
-            key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
-            self._resolving.append((key, shell))
+            self._resolving.append(
+                ResolvingFrame(
+                    unit_name=unitname, def_id=defn.nodeid, ztype=shell, defn=defn
+                )
+            )
             t = self._check_binop(cast(zast.BinOp, defn))
             self._resolving.pop()
             return t
@@ -1232,9 +1272,12 @@ class TypeChecker:
         """Resolve a unit-level if definition (compile-time conditional)."""
         assert defn.expression.nodetype == NodeType.IF
         ifnode = cast(zast.If, defn.expression)
-        key = f"{unitname}.{name}"
         shell = _make_type(name, ZTypeType.NULL)
-        self._resolving.append((key, shell))
+        self._resolving.append(
+            ResolvingFrame(
+                unit_name=unitname, def_id=defn.nodeid, ztype=shell, defn=defn
+            )
+        )
 
         # type-check all conditions and branches
         for clause in ifnode.clauses:
@@ -1341,15 +1384,8 @@ class TypeChecker:
         rule (nearest-enclosing scope first), fixing the bug where the
         default-value resolver only saw module-level definitions.
         """
-        for key, _rtype in reversed(self._resolving):
-            if "." in key:
-                unitname, tname = key.rsplit(".", 1)
-            else:
-                unitname, tname = self.program.mainunitname, key
-            unit = self.program.units.get(unitname)
-            if unit is None:
-                continue
-            defn = unit.body.get(tname)
+        for frame in reversed(self._resolving):
+            defn = frame.defn
             if defn is None:
                 continue
             if defn.nodetype not in (
@@ -1431,11 +1467,13 @@ class TypeChecker:
     def _resolve_function_type(
         self, unitname: str, name: str, func: zast.Function
     ) -> ZType:
-        key = f"{unitname}.{name}"
+        key = func.nodeid
         ftype = _make_type(name, ZTypeType.FUNCTION)
         ftype.is_native = func.is_native
         self._resolved[key] = ftype  # early register for self-reference
-        self._resolving.append((key, ftype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=ftype, defn=func)
+        )
 
         # tag control flow functions by name (resolved from system.z)
         _CONTROL_KINDS = {
@@ -1818,10 +1856,12 @@ class TypeChecker:
     def _resolve_class_type(
         self, unitname: str, name: str, cls: zast.ObjectDef
     ) -> ZType:
-        key = f"{unitname}.{name}"
+        key = cls.nodeid
         ctype = _make_type(name, ZTypeType.CLASS)
         self._resolved[key] = ctype  # early register for self-reference
-        self._resolving.append((key, ctype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=ctype, defn=cls)
+        )
 
         ctype.is_valtype = False  # classes are reference types
         if cls.is_native:
@@ -2199,10 +2239,12 @@ class TypeChecker:
     def _resolve_union_type(
         self, unitname: str, name: str, union_defn: zast.ObjectDef
     ) -> ZType:
-        key = f"{unitname}.{name}"
+        key = union_defn.nodeid
         utype = _make_type(name, ZTypeType.UNION)
         self._resolved[key] = utype  # early register for self-reference
-        self._resolving.append((key, utype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=utype, defn=union_defn)
+        )
 
         utype.is_valtype = False  # unions are reference types
         _set_destructor_metadata(utype)
@@ -2431,10 +2473,14 @@ class TypeChecker:
         Variants are value types (stack-allocated, copy semantics).
         All subtypes must also be value types.
         """
-        key = f"{unitname}.{name}"
+        key = variant_defn.nodeid
         vtype = _make_type(name, ZTypeType.VARIANT)
         self._resolved[key] = vtype
-        self._resolving.append((key, vtype))
+        self._resolving.append(
+            ResolvingFrame(
+                unit_name=unitname, def_id=key, ztype=vtype, defn=variant_defn
+            )
+        )
 
         vtype.is_valtype = True  # variants are value types
         _set_destructor_metadata(vtype)
@@ -2674,10 +2720,12 @@ class TypeChecker:
         must agree. The unified type becomes the block's
         `element_type`. With no explicit tags, the default is i64.
         """
-        key = f"{unitname}.{name}"
+        key = data_defn.nodeid
         dtype = _make_type(name, ZTypeType.DATA)
         self._resolved[key] = dtype
-        self._resolving.append((key, dtype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=dtype, defn=data_defn)
+        )
 
         dtype.is_valtype = False  # data is a reference type (constant array)
 
@@ -2816,10 +2864,12 @@ class TypeChecker:
     def _resolve_record_type(
         self, unitname: str, name: str, rec: zast.ObjectDef
     ) -> ZType:
-        key = f"{unitname}.{name}"
+        key = rec.nodeid
         rtype = _make_type(name, ZTypeType.RECORD)
         self._resolved[key] = rtype  # early register for self-reference
-        self._resolving.append((key, rtype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=rtype, defn=rec)
+        )
 
         rtype.is_valtype = True  # records are value types
         if rec.is_native:
@@ -3596,10 +3646,12 @@ class TypeChecker:
     def _resolve_protocol_type(
         self, unitname: str, name: str, proto: zast.ObjectDef
     ) -> ZType:
-        key = f"{unitname}.{name}"
+        key = proto.nodeid
         ptype = _make_type(name, ZTypeType.PROTOCOL)
         self._resolved[key] = ptype
-        self._resolving.append((key, ptype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=ptype, defn=proto)
+        )
         ptype.is_valtype = False  # protocol instances are reference types
         _set_destructor_metadata(ptype)
         self._assign_cname_type(ptype)
@@ -3660,10 +3712,12 @@ class TypeChecker:
     def _resolve_facet_type(
         self, unitname: str, name: str, facet: zast.ObjectDef
     ) -> ZType:
-        key = f"{unitname}.{name}"
+        key = facet.nodeid
         ftype = _make_type(name, ZTypeType.FACET)
         self._resolved[key] = ftype
-        self._resolving.append((key, ftype))
+        self._resolving.append(
+            ResolvingFrame(unit_name=unitname, def_id=key, ztype=ftype, defn=facet)
+        )
         ftype.is_valtype = True  # facet instances are value types
         _set_destructor_metadata(ftype)
         self._assign_cname_type(ftype)
@@ -3834,9 +3888,8 @@ class TypeChecker:
         self, unitname: str, name: str, unit: zast.Unit
     ) -> ZType:
         """Resolve an inline unit definition, recursively processing its body."""
-        key = f"{unitname}.{name}"
         utype = _make_type(name, ZTypeType.UNIT)
-        self._resolved[key] = utype
+        self._resolved[unit.nodeid] = utype
         self._register_unit_type(name, unit, utype)
 
         # detect generic params in unit body (DottedPath items like t: any.generic)
@@ -3869,13 +3922,16 @@ class TypeChecker:
         for dname, ddefn in unit.body.items():
             if dname in generic_param_names:
                 continue  # skip generic param declarations
-            dkey = f"{unitname}.{name}.{dname}"
-            if dkey in self._resolved:
-                self._set_child(utype, dname, self._resolved[dkey])
+            # Members are cached by their own AST nodeid: one definition node
+            # has one resolved type regardless of which unit references it,
+            # so a sibling reference reuses this resolution rather than
+            # re-resolving (and re-checking) the member under a divergent key.
+            if ddefn.nodeid in self._resolved:
+                self._set_child(utype, dname, self._resolved[ddefn.nodeid])
                 continue
             t = self._type_of_definition(unitname, f"{name}.{dname}", ddefn)
             if t:
-                self._resolved[dkey] = t
+                self._resolved[ddefn.nodeid] = t
                 self._set_child(utype, dname, t)
             # check function bodies inside inline units (skip for generic units —
             # bodies will be checked after monomorphization)
@@ -3914,8 +3970,65 @@ class TypeChecker:
     def _current_unit_name(self) -> str:
         """Return the unit name we're currently resolving inside."""
         if self._resolving:
-            return self._resolving[-1][0].split(".")[0]
+            return self._resolving[-1].unit_name
         return self.program.mainunitname
+
+    def _build_resolved_name_view(self) -> "dict[str, ZType]":
+        """Project the nodeid-keyed `_resolved` cache to the qualified-name
+        view the emitter (`_system_type_resolved`) and SQL dump consume.
+
+        Internal resolution keys by definition nodeid; this derives the
+        `{unit}.{member}` names by walking each unit's member table (and
+        nested inline units), and carries over the monomorphization
+        entries, which are already name-keyed.
+        """
+        view: "dict[str, ZType]" = {}
+        for k, v in self._resolved.items():
+            if type(k) is str:
+                view[k] = v
+        objectdef_kinds = (
+            NodeType.RECORD,
+            NodeType.CLASS,
+            NodeType.UNION,
+            NodeType.VARIANT,
+            NodeType.PROTOCOL,
+            NodeType.FACET,
+        )
+        worklist: "List[Tuple[str, zast.Unit]]" = list(self.program.units.items())
+        while worklist:
+            unitname, unit = worklist.pop()
+            for dname, ddefn in unit.body.items():
+                rt = self._resolved.get(ddefn.nodeid)
+                if rt is not None:
+                    view[f"{unitname}.{dname}"] = rt
+                if ddefn.nodetype == NodeType.UNIT:
+                    worklist.append((f"{unitname}.{dname}", cast(zast.Unit, ddefn)))
+                elif ddefn.nodetype in objectdef_kinds:
+                    # project the type's methods: `{unit}.{Type}.{method}`
+                    obj = cast(zast.ObjectDef, ddefn)
+                    for mname, mfunc in obj.functions().items():
+                        mt = self._resolved.get(mfunc.nodeid)
+                        if mt is not None:
+                            view[f"{unitname}.{dname}.{mname}"] = mt
+                    for mname, mfunc in obj.as_functions().items():
+                        mt = self._resolved.get(mfunc.nodeid)
+                        if mt is not None:
+                            view[f"{unitname}.{dname}.{mname}"] = mt
+        # Monomorphizations have no source AST node; key them by their
+        # mangled name (the same convention the emitter uses when it adds
+        # monos to `typing.resolved`).
+        for mono_type, _defn in self.mono.types:
+            view[mono_type.name] = mono_type
+        for mono_ftype, _cloned in self.mono.functions:
+            view[mono_ftype.name] = mono_ftype
+        return view
+
+    def _resolved_by_name(self, qualified_name: str) -> "Optional[ZType]":
+        """Look up a resolved definition by its qualified `{unit}.{member}`
+        name. Resolution is keyed by definition nodeid; this projects back
+        to names via `_build_resolved_name_view`. Diagnostic / test accessor
+        — not on any resolution hot path."""
+        return self._build_resolved_name_view().get(qualified_name)
 
     def _resolve_name(self, name: str, skip_unit_def=None) -> Optional[ZType]:
         """Resolve a name: local scope, current unit, core.
@@ -3937,15 +4050,26 @@ class TypeChecker:
         # 2. inline unit context stack (innermost first)
         for uname, unode in reversed(self._unit_context):
             if name in unode.body:
-                # resolve this definition from the inline unit
-                qname = f"{self.program.mainunitname}.{uname}.{name}"
-                if qname in self._resolved:
-                    return self._resolved[qname]
-                t = self._type_of_definition(
-                    self.program.mainunitname, f"{uname}.{name}", unode.body[name]
+                defn = unode.body[name]
+                # Cache hit on the member's nodeid: the unit's body loop
+                # resolves its members eagerly when the unit loads, so a
+                # sibling reference reuses that resolution rather than
+                # re-resolving (and re-checking its body on the
+                # already-ANF-rewritten AST).
+                if defn.nodeid in self._resolved:
+                    return self._resolved[defn.nodeid]
+                # Forward reference (member not yet reached by the body
+                # loop): resolve it in the owning unit's context. A file
+                # unit is its own namespace; a nested inline unit is
+                # qualified under the main unit.
+                owner = (
+                    uname
+                    if self.program.units.get(uname) is unode
+                    else self.program.mainunitname
                 )
+                t = self._type_of_definition(owner, f"{uname}.{name}", defn)
                 if t:
-                    self._resolved[qname] = t
+                    self._resolved[defn.nodeid] = t
                     ut = self.unit_types.get(uname)
                     if ut:
                         self._set_child(ut, name, t)
@@ -4364,21 +4488,21 @@ class TypeChecker:
 
     def _resolve_type_keyword(self) -> Optional[ZType]:
         """Resolve `type` to the nearest enclosing concrete type on the resolving stack."""
-        for _, rtype in reversed(self._resolving):
-            if rtype.typetype in (
+        for frame in reversed(self._resolving):
+            if frame.ztype.typetype in (
                 ZTypeType.RECORD,
                 ZTypeType.ENUM,
                 ZTypeType.UNION,
                 ZTypeType.CLASS,
             ):
-                return rtype
+                return frame.ztype
         return None
 
     def _resolve_this_keyword(self) -> Optional[ZType]:
         """Resolve `this` to the nearest enclosing record/class type."""
-        for _, rtype in reversed(self._resolving):
-            if rtype.typetype in (ZTypeType.RECORD, ZTypeType.CLASS):
-                return rtype
+        for frame in reversed(self._resolving):
+            if frame.ztype.typetype in (ZTypeType.RECORD, ZTypeType.CLASS):
+                return frame.ztype
         return None
 
     def _stamp_dp_unit(self, path: zast.DottedPath, child: Optional[ZType]) -> None:
@@ -5255,9 +5379,6 @@ class TypeChecker:
                     f"{mangled}.{child_name}", child_type, generic_args
                 )
                 self._set_child(mono, child_name, new_func)
-                for unitname_key in self.program.units:
-                    self._resolved[f"{unitname_key}.{mangled}.{child_name}"] = new_func
-                    break
 
         # 2. recursively partially instantiate nested generic subunits
         self._partially_instantiate_subunits(mono, mangled, generic_args)
@@ -5855,11 +5976,6 @@ class TypeChecker:
         self.mono.cache[cache_key] = mono
         if not is_partial:
             self.mono.types.append((mono, defn))
-            # Register the mono in _resolved under the first unit's
-            # qualified name so the emitter can find it.
-            for unitname in self.program.units:
-                self._resolved[f"{unitname}.{mangled}"] = mono
-                break
 
     def _mark_mono_native(self, mono: ZType) -> None:
         """Mark the mono's child function ZTypes `is_native=True` when
@@ -6173,8 +6289,12 @@ class TypeChecker:
         for mname, mfunc in method_sources:
             qualified = f"{mangled}.{mname}"
             cloned = clone_function(mfunc)
-            # push mono type onto resolving stack so 'this' resolves
-            self._resolving.append((mangled, mono))
+            # push mono type onto resolving stack so 'this'/'type' resolve;
+            # def_id=-1 marks a synthesised frame with no source definition
+            # (never matched by the nodeid cycle check).
+            self._resolving.append(
+                ResolvingFrame(unit_name=mangled, def_id=-1, ztype=mono, defn=None)
+            )
             self.mono.generic_context.append({k: v for k, v in generic_args.items()})
             self._check_function_body(qualified, cloned)
             self.mono.generic_context.pop()
@@ -6866,13 +6986,7 @@ class TypeChecker:
             # native generic function: no body to clone
             self.mono.functions.append((mono, func_defn))
 
-        # cache and register
         self.mono.cache[cache_key] = mono
-        for unitname in self.program.units:
-            key = f"{unitname}.{mangled}"
-            self._resolved[key] = mono
-            break
-
         return mono
 
     def _type_conforms_to_protocol(self, concrete: ZType, protocol: ZType) -> bool:
@@ -6945,15 +7059,11 @@ class TypeChecker:
         # Read ownership from the resolved ZType — it carries both the
         # syntactic annotations AND the inferred BORROW-default for
         # stack-reftype parameters (set during _resolve_function_type).
-        # Qualify by the unit we are resolving inside (the OWNING unit),
-        # not the main unit: a dependency unit's bodies are body-checked
-        # demand-driven, and keying the lookup off mainunitname would
-        # miss their resolved type (losing .take / ownership defaults).
-        # _current_unit_name() falls back to mainunitname when not
-        # resolving, so the main unit's own functions are unaffected.
-        ftype = self._resolved.get(name) or self._resolved.get(
-            f"{self._current_unit_name()}.{name}"
-        )
+        # The function's own AST nodeid is its resolution key, so this is
+        # unambiguous regardless of which unit the body is checked from
+        # (no unit-qualified name lookup, which used to miss dependency
+        # bodies and lose their .take / ownership defaults).
+        ftype = self._resolved.get(func.nodeid)
         if ftype is not None and ftype.typetype == ZTypeType.FUNCTION:
             self.func_ctx.func_ownership = dict(self.typing.child_ownerships_of(ftype))
             self.func_ctx.func_return_ownership = ftype.return_ownership
@@ -11247,8 +11357,8 @@ class TypeChecker:
             and cast(zast.AtomId, path.parent).name == "this"
         ):
             return True
-        for _, rtype in self._resolving:
-            if rtype is parent_type or rtype.name == parent_type.name:
+        for frame in self._resolving:
+            if frame.ztype is parent_type or frame.ztype.name == parent_type.name:
                 return True
         return False
 
@@ -12427,7 +12537,7 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.ZTyping:
     tc.typing.mono_functions = tc.mono.functions
     tc.typing.func_aliases = tc.mono.func_aliases
     tc.typing.cloned_methods = tc.mono.cloned_methods
-    tc.typing.resolved = dict(tc._resolved)
+    tc.typing.resolved = tc._build_resolved_name_view()
     tc.typing.symbol_table = tc.symtab
     tc.typing.unit_types_by_id = dict(tc.unit_types_by_id)
     return tc.typing

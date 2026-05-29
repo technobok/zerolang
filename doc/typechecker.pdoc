@@ -436,21 +436,31 @@ node type for the static type checker (#~"ty"); see
 
 #--: Resolution Stack and Cycle Detection
 
-#~"TypeChecker._resolving" is the list-shaped resolution stack:
-each entry is a #~"(qualified_name, ZType)" tuple. The flow is:
+Resolution is keyed by #_*"definition nodeid", not by synthesized
+dotted-string names. Every definition is one AST node with one stable
+#~"nodeid", and that node is shared across every reference to it, so
+the same definition always resolves to the same cached type no matter
+which unit asks. #~"TypeChecker._resolved" maps #~"defn.nodeid -> ZType";
+#~"TypeChecker._resolving" is the list-shaped resolution stack of
+#~"ResolvingFrame" entries (#~"unit_name", #~"def_id", #~"ztype",
+#~"defn"). The flow is:
 
 #ol:
-  [#*: #~"_resolve_unit_name(unit, name)" checks
-    #~"self._resolved" -- a cache of fully-resolved unit-level
-    names. Hit: return immediately.]
-  [#*: Cache miss: push #~"(qualified, placeholder_ztype)" onto
-    #~"_resolving", dispatch to the appropriate
-    #~"_resolve_*_type" via #~"_definition_resolvers".]
-  [#*: If a nested resolution re-enters the same qualified name,
-    the resolver finds it on the stack and reports a
-    cycle error.]
+  [#*: #~"_resolve_unit_name(unit, name)" looks the definition up in
+    the unit's member table, then checks #~"self._resolved" keyed by
+    #~"defn.nodeid". Hit: return immediately.]
+  [#*: Cache miss: push a #~"ResolvingFrame" for #~"defn.nodeid" onto
+    #~"_resolving", dispatch to the appropriate #~"_resolve_*_type"
+    via #~"_definition_resolvers".]
+  [#*: If a nested resolution re-enters the same definition, the
+    resolver finds its #~"def_id" on the stack and reports a cycle
+    error.]
   [#*: On success, the resolver pops the stack frame and writes
-    the final #~"ZType" into #~"_resolved".]
+    the final #~"ZType" into #~"_resolved" under #~"defn.nodeid".]
+
+The emitter and SQL dump read #~"ZTyping.resolved", a qualified-name
+#~"({unit}.{member} -> ZType)" projection of the nodeid cache built by
+#~"_build_resolved_name_view" at the end of #~"typecheck".
 
 The #~"type" keyword (in receiver position) resolves to the type
 at the bottom of the resolving stack, so a method body can refer
