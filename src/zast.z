@@ -141,6 +141,13 @@ Node: union {
     reassignment:   ReassignmentData
     swapstmt:       SwapStmtData
     expression:     ExpressionData
+    ifexpr:     IfData
+    ifclause:   IfClauseData
+    forexpr:    ForData
+    doexpr:     DoData
+    withexpr:   WithData
+    caseexpr:   CaseData
+    caseclause: CaseClauseData
 }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -318,6 +325,78 @@ ExpressionData: class {
     lineno:     u32
     colno:      u32
     expression: Node
+}
+
+# If payload: ordered if/when clauses plus an optional else statement.
+IfData: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    clauses:    (List of: Node)
+    elseclause: (Option t: Node)
+}
+
+# IfClause payload: the clause conditions (each a namedoperation arm;
+# unnamed = positional when-condition) and the statement to run.
+IfClauseData: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    conditions: (List of: Node)
+    statement:  Node
+}
+
+# For payload: loop conditions (namedoperation arms; named = binding,
+# unnamed = while-condition), an optional loop body, and the bool
+# postconditions re-checked each iteration.
+ForData: class {
+    nodeid:         u32
+    lineno:         u32
+    colno:          u32
+    conditions:     (List of: Node)
+    body:           (Option t: Node)
+    postconditions: (List of: Node)
+}
+
+# Do payload: a statement block evaluated as an expression.
+DoData: class {
+    nodeid:    u32
+    lineno:    u32
+    colno:     u32
+    statement: Node
+}
+
+# With payload: a scoped binding `name`, its value, and the body
+# expression evaluated under that binding.
+WithData: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    name:   String
+    value:  Node
+    body:   Node
+}
+
+# Case payload: the subject operation, the ordered match clauses, and
+# an optional else statement.
+CaseData: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    subject:    Node
+    clauses:    (List of: Node)
+    elseclause: (Option t: Node)
+}
+
+# CaseClause payload: the binding name, the AtomId arm being matched,
+# and the statement to run.
+CaseClauseData: class {
+    nodeid:    u32
+    lineno:    u32
+    colno:     u32
+    name:      String
+    matcharm:  Node
+    statement: Node
 }
 
 # Arm-name dumpers: return the canonical uppercase label for an
@@ -552,14 +631,13 @@ printOptName: function {o: (Option t: String)} is {
 
 # Print a Data block's optional `out` type annotation, descending
 # into the type node when present.
-printOptType: function {o: (Option t: Node)} is {
+printOptChild: function {o: (Option t: Node)} is {
     match (
         o
     ) case some then {
-        print "  outType:"
         printNode o
     } case none then {
-        print "  outType=<none>"
+        print "  <none>"
     }
 }
 
@@ -613,7 +691,8 @@ printNode: function {n: Node} is {
         for el: eiter loop {
             printNode el
         }
-        printOptType n.outType
+        print "  outType:"
+        printOptChild n.outType
     } case yieldexpr then {
         print "\{n.nodeid}: yieldexpr @\{n.lineno}:\{n.colno}"
         printNode n.expr
@@ -640,6 +719,53 @@ printNode: function {n: Node} is {
     } case expression then {
         print "\{n.nodeid}: expression @\{n.lineno}:\{n.colno}"
         printNode n.expression
+    } case ifexpr then {
+        print "\{n.nodeid}: ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        clit: n.clauses.iterate
+        for cl: clit loop {
+            printNode cl
+        }
+        print "  elseclause:"
+        printOptChild n.elseclause
+    } case ifclause then {
+        print "\{n.nodeid}: ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
+        coit: n.conditions.iterate
+        for co: coit loop {
+            printNode co
+        }
+        printNode n.statement
+    } case forexpr then {
+        print "\{n.nodeid}: forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
+        fcit: n.conditions.iterate
+        for fc: fcit loop {
+            printNode fc
+        }
+        print "  body:"
+        printOptChild n.body
+        fpit: n.postconditions.iterate
+        for fp: fpit loop {
+            printNode fp
+        }
+    } case doexpr then {
+        print "\{n.nodeid}: doexpr @\{n.lineno}:\{n.colno}"
+        printNode n.statement
+    } case withexpr then {
+        print "\{n.nodeid}: withexpr @\{n.lineno}:\{n.colno} name=\{n.name}"
+        printNode n.value
+        printNode n.body
+    } case caseexpr then {
+        print "\{n.nodeid}: caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        printNode n.subject
+        ccit: n.clauses.iterate
+        for cc: ccit loop {
+            printNode cc
+        }
+        print "  elseclause:"
+        printOptChild n.elseclause
+    } case caseclause then {
+        print "\{n.nodeid}: caseclause @\{n.lineno}:\{n.colno} name=\{n.name}"
+        printNode n.matcharm
+        printNode n.statement
     }
 }
 
@@ -860,4 +986,60 @@ main: function is {
     lines.append (Node.statementline (StatementLineData nodeid: 56.u32 lineno: 30.u32 colno: 5.u32 statementline: l2expr))
     n20: Node.statement (StatementData nodeid: 57.u32 lineno: 29.u32 colno: 1.u32 statements: lines)
     printNode n20
+
+    # --- control flow (PR-C) ---
+
+    # ifexpr: one ifclause (positional condition + empty body) + else.
+    ifCondOp: Node.atomid (AtomIdData nodeid: 58.u32 lineno: 31.u32 colno: 4.u32 name: "cond".string)
+    ifCond: Node.namedoperation (NamedOperationData nodeid: 59.u32 lineno: 31.u32 colno: 4.u32 name: (Option.none String) operation: ifCondOp)
+    ifConds: (List of: Node)
+    ifConds.append ifCond
+    ifStmtItems: (List of: Node)
+    ifStmt: Node.statement (StatementData nodeid: 60.u32 lineno: 31.u32 colno: 12.u32 statements: ifStmtItems)
+    ifClause0: Node.ifclause (IfClauseData nodeid: 61.u32 lineno: 31.u32 colno: 1.u32 conditions: ifConds statement: ifStmt)
+    ifClauses: (List of: Node)
+    ifClauses.append ifClause0
+    elseItems: (List of: Node)
+    elseStmt: Node.statement (StatementData nodeid: 62.u32 lineno: 32.u32 colno: 5.u32 statements: elseItems)
+    n21: Node.ifexpr (IfData nodeid: 63.u32 lineno: 31.u32 colno: 1.u32 clauses: ifClauses elseclause: (Option.some elseStmt))
+    printNode n21
+
+    # forexpr: one binding + one positional while-condition, body, one postcondition.
+    forBindOp: Node.atomid (AtomIdData nodeid: 64.u32 lineno: 33.u32 colno: 8.u32 name: "items".string)
+    forBind: Node.namedoperation (NamedOperationData nodeid: 65.u32 lineno: 33.u32 colno: 5.u32 name: (Option.some "i".string) operation: forBindOp)
+    forWhileOp: Node.atomid (AtomIdData nodeid: 66.u32 lineno: 33.u32 colno: 16.u32 name: "more".string)
+    forWhile: Node.namedoperation (NamedOperationData nodeid: 67.u32 lineno: 33.u32 colno: 16.u32 name: (Option.none String) operation: forWhileOp)
+    forConds: (List of: Node)
+    forConds.append forBind
+    forConds.append forWhile
+    forBodyItems: (List of: Node)
+    forBody: Node.statement (StatementData nodeid: 68.u32 lineno: 33.u32 colno: 24.u32 statements: forBodyItems)
+    forPostOp: Node.atomid (AtomIdData nodeid: 69.u32 lineno: 33.u32 colno: 30.u32 name: "go".string)
+    forPost: (List of: Node)
+    forPost.append forPostOp
+    n22: Node.forexpr (ForData nodeid: 70.u32 lineno: 33.u32 colno: 1.u32 conditions: forConds body: (Option.some forBody) postconditions: forPost)
+    printNode n22
+
+    # doexpr: an empty statement block.
+    doItems: (List of: Node)
+    doStmt: Node.statement (StatementData nodeid: 71.u32 lineno: 34.u32 colno: 4.u32 statements: doItems)
+    n23: Node.doexpr (DoData nodeid: 72.u32 lineno: 34.u32 colno: 1.u32 statement: doStmt)
+    printNode n23
+
+    # withexpr "with w: v do e".
+    withVal: Node.atomid (AtomIdData nodeid: 73.u32 lineno: 35.u32 colno: 9.u32 name: "v".string)
+    withBody: Node.atomid (AtomIdData nodeid: 74.u32 lineno: 35.u32 colno: 14.u32 name: "e".string)
+    n24: Node.withexpr (WithData nodeid: 75.u32 lineno: 35.u32 colno: 1.u32 name: "w".string value: withVal body: withBody)
+    printNode n24
+
+    # caseexpr: subject + one caseclause (matcharm atomid), no else.
+    caseSubject: Node.atomid (AtomIdData nodeid: 76.u32 lineno: 36.u32 colno: 6.u32 name: "opt".string)
+    caseMatch: Node.atomid (AtomIdData nodeid: 77.u32 lineno: 37.u32 colno: 6.u32 name: "some".string)
+    caseStmtItems: (List of: Node)
+    caseStmt: Node.statement (StatementData nodeid: 78.u32 lineno: 37.u32 colno: 16.u32 statements: caseStmtItems)
+    caseClause0: Node.caseclause (CaseClauseData nodeid: 79.u32 lineno: 37.u32 colno: 1.u32 name: "c".string matcharm: caseMatch statement: caseStmt)
+    caseClauses: (List of: Node)
+    caseClauses.append caseClause0
+    n25: Node.caseexpr (CaseData nodeid: 80.u32 lineno: 36.u32 colno: 1.u32 subject: caseSubject clauses: caseClauses elseclause: (Option.none Node))
+    printNode n25
 }
