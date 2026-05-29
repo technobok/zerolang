@@ -1352,6 +1352,53 @@ class TestEmitterBasic:
         )
         assert out == "9"
 
+    def test_cross_unit_dependency_construction_in_dep_body(self):
+        """A dependency function constructs another dependency type via
+        bare-name sugar; the create call must pass its args (not zero-arg)."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    'main: function is {\n  r: mod.makeInner 5\n  print "\\{r.a}"\n}'
+                ),
+                "mod.z": (
+                    "Inner: record { a: i64 b: i64 }\n"
+                    "makeInner: function {n: i64} out Inner is {\n"
+                    "  return (Inner a: n b: 99)\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "5"
+
+    def test_cross_unit_dependency_variant_payload(self):
+        """A dependency variant's payload arm is constructed inside the
+        dependency (2-segment, dot-free qualified cname/tag) and the payload is
+        read back through a match — mirrors zlexer's `tokstatetype.STRINGRAW`."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  n: nums.wrap 42\n"
+                    '  print "\\{nums.value n: n}"\n'
+                    "}"
+                ),
+                "nums.z": (
+                    "num: variant { val: i64 none: null }\n"
+                    "wrap: function {x: i64} out num is {\n"
+                    "  return (num.val x)\n"
+                    "}\n"
+                    "value: function {n: num} out i64 is {\n"
+                    "  match ( n ) case val then {\n"
+                    "    return n\n"
+                    "  } case none then {\n"
+                    "    return 0\n"
+                    "  }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "42"
+
     def test_swap(self):
         csource = emit_source(
             'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'

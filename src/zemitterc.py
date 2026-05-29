@@ -1211,15 +1211,21 @@ class CEmitter:
             if defn_type == NodeType.UNIT:
                 self._pre_register_fields(qname, defn.body)
             elif defn_type in (NodeType.RECORD, NodeType.CLASS):
-                if qname not in self._type_field_names:
+                # Key field-info by the type's dot-free `ztype.name` (the stable
+                # identifier the construction-arg builders look up by, via
+                # `rec_type.name`); for a dependency-unit type that differs from
+                # the dotted AST path `qname`.
+                zt = self._node_ztype(defn)
+                key = zt.name if zt is not None and zt.name else qname
+                if key not in self._type_field_names:
                     if self._is_typedef_defn(defn):
                         continue
                     _, field_names, field_ctypes = self._collect_field_params(
-                        qname, defn.is_items, defn.functions(), self._node_ztype(defn)
+                        qname, defn.is_items, defn.functions(), zt
                     )
-                    self._type_field_names[qname] = field_names
-                    self._type_field_ctypes[qname] = field_ctypes
-                    self._type_field_defaults[qname] = self._extract_field_defaults(
+                    self._type_field_names[key] = field_names
+                    self._type_field_ctypes[key] = field_ctypes
+                    self._type_field_defaults[key] = self._extract_field_defaults(
                         qname, defn.is_items, defn.functions()
                     )
 
@@ -3399,12 +3405,16 @@ class CEmitter:
         ztype = self._node_ztype(defn)
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = _cname_of(ztype, name)
+        # Key field-info by the dot-free ztype.name (matches the construction
+        # arg-builders, which look up by `rec_type.name`); falls back to the
+        # AST-path name only for an unstamped type.
+        fkey = ztype.name if ztype is not None and ztype.name else name
         params, field_names, field_ctypes = self._collect_field_params(
             name, rc_defn.is_paths(), rc_defn.functions(), ztype
         )
-        self._type_field_ctypes[name] = field_ctypes
-        self._type_field_names[name] = field_names
-        self._type_field_defaults[name] = self._extract_field_defaults(
+        self._type_field_ctypes[fkey] = field_ctypes
+        self._type_field_names[fkey] = field_names
+        self._type_field_defaults[fkey] = self._extract_field_defaults(
             name, rc_defn.is_paths(), rc_defn.functions()
         )
         has_user_create = (
@@ -8596,8 +8606,15 @@ class CEmitter:
             == "create"  # ztc-string-compare-ok: meta.create dispatch
             and self._current_enclosing_type_name
         ):
-            type_name = self._current_enclosing_type_name
             enclosing_t = self._current_enclosing_type
+            # Use the enclosing type's dot-free ztype.name as the field-info key
+            # (matches how field-info is registered); the AST-path name is the
+            # fallback for an unstamped enclosing type.
+            type_name = (
+                enclosing_t.name
+                if enclosing_t is not None and enclosing_t.name
+                else self._current_enclosing_type_name
+            )
             args_str, take_vars = self._build_meta_create_args(
                 type_name, enclosing_t, call.arguments
             )
@@ -9212,12 +9229,14 @@ class CEmitter:
             ptt = parent_def.typetype if parent_def is not None else None
             if ptt in (ZTypeType.RECORD, ZTypeType.CLASS):
                 return _mangle_func(f"{pname}.{child}")
-            # union_name.subtype — emit null subtype construction
-            if ptt == ZTypeType.UNION:
-                return self._emit_union_null_construction(pname, child)
+            # union_name.subtype — emit null subtype construction. Use the
+            # type's dot-free ztype.name (not the bare atom `pname`) so a
+            # dependency-unit variant/union emits a valid C name.
+            if parent_def is not None and ptt == ZTypeType.UNION:
+                return self._emit_union_null_construction(parent_def.name, child)
             # variant_name.subtype — emit null subtype construction
-            if ptt == ZTypeType.VARIANT:
-                return self._emit_variant_null_construction(pname, child)
+            if parent_def is not None and ptt == ZTypeType.VARIANT:
+                return self._emit_variant_null_construction(parent_def.name, child)
             # data.index call
             if ptt == ZTypeType.DATA and child == "index":
                 return _mangle_func(pname)
@@ -10502,33 +10521,33 @@ class CEmitter:
         else:
             return "(z_unknown_t){0}"
 
-        # check for monomorphized variant type (from type annotation)
+        # Prefer the stamped variant type for the name + cname: works for
+        # monomorphized generics AND for non-mono / cross-unit variants (whose
+        # ztype.name is dot-free, e.g. `zlexer_tokstatetype`). Fall back to the
+        # parent atom name only when the call carries no variant stamp.
         call_type = _call_ztype
-        if (
-            call_type
-            and call_type.typetype == ZTypeType.VARIANT
-            and call_type.generic_origin
-        ):
+        if call_type and call_type.typetype == ZTypeType.VARIANT:
             variant_name = call_type.name
+            ctype = _cname_of(call_type, variant_name)
         elif cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
             variant_name = cast(
                 zast.AtomId, cast(zast.DottedPath, call.callable).parent
             ).name
+            ctype = f"z_{variant_name}_t"
         else:
             return "(z_unknown_t){0}"
 
-        ctype = f"z_{variant_name}_t"
         tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
 
         self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
         self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
 
-        # determine if this is a null subtype — check monomorphized type first
+        # null-subtype detection: read the subtype off the stamped variant type
+        # when available (covers mono + cross-unit); else look up by name.
         is_null = False
-        if call_type and call_type.generic_origin:
+        if call_type and call_type.typetype == ZTypeType.VARIANT:
             sub_ztype = self.typing.child_of(call_type, subtype_name)
-            if sub_ztype:
-                is_null = sub_ztype.typetype == ZTypeType.NULL
+            is_null = sub_ztype is not None and sub_ztype.typetype == ZTypeType.NULL
         else:
             mainunit = self.program.units.get(self.program.mainunitname)
             variant_defn = mainunit.body.get(variant_name) if mainunit else None
