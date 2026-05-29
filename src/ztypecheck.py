@@ -733,19 +733,30 @@ class TypeChecker:
         for k, v in self.typing.children_of(src):
             self.typing.set_child(dst, k, v)
 
-    def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
-        """Assign a C identifier to a type, auto-resolving collisions.
+    def _assign_cname(self, ztype: ZType, base_id: str, suffix: str = "_t") -> None:
+        """Assign C identifiers to a type, auto-resolving collisions.
 
-        If base_cname is already taken, appends the type's nodeid to
-        disambiguate. The final cname is stored on ztype.cname.
+        `base_id` is the C identifier without any type suffix ("z_point");
+        `suffix` is appended for the full cname ("_t" for type definitions, ""
+        for function types). On collision the type's id disambiguates BOTH the
+        cname and the cname_base, so helper names derived as
+        f"{cname_base}_{suffix}" stay collision-free too. A compiler-generated
+        destructor name (set provisionally by `_set_destructor_metadata`) is
+        realigned to the final cname_base so the emitter's destructor definition
+        and the stored destructor_name (read at call sites) always agree.
         """
         if ztype.cname:
             return  # already assigned via earlier resolution path
-        if base_cname not in self.mono.assigned_cnames:
-            ztype.cname = base_cname
+        candidate = base_id + suffix
+        if candidate not in self.mono.assigned_cnames:
+            ztype.cname = candidate
+            ztype.cname_base = base_id
         else:
-            ztype.cname = f"{base_cname}_{ztype.type_id}"
+            ztype.cname = f"{candidate}_{ztype.type_id}"
+            ztype.cname_base = f"{base_id}_{ztype.type_id}"
         self.mono.assigned_cnames.add(ztype.cname)
+        if ztype.destructor_name == f"z_{ztype.name}_destroy":
+            ztype.destructor_name = f"{ztype.cname_base}_destroy"
 
     # Multi-char operator names (checked first, before per-char mangling)
     _OP_NAMES = {
@@ -809,8 +820,8 @@ class TypeChecker:
         """
         if ztype.typetype == ZTypeType.FUNCTION:
             name = qualified_name if qualified_name else ztype.name
-            base = "z_" + self._mangle_name(name)
-            self._assign_cname(ztype, base)
+            base_id = "z_" + self._mangle_name(name)
+            self._assign_cname(ztype, base_id, suffix="")
         elif ztype.typetype in (
             ZTypeType.RECORD,
             ZTypeType.CLASS,
@@ -821,8 +832,11 @@ class TypeChecker:
             ZTypeType.ENUM,
             ZTypeType.TAG,
         ):
-            base = f"z_{ztype.name}_t"
-            self._assign_cname(ztype, base)
+            # _mangle_name is a no-op for plain identifiers; it is a backstop
+            # for any residual dot/operator in a name so the struct cname is
+            # always a valid C identifier.
+            base_id = "z_" + self._mangle_name(ztype.name)
+            self._assign_cname(ztype, base_id, suffix="_t")
 
     def _release_template_cname(self, ztype: ZType) -> None:
         """Release a generic template's cname slot after generic
@@ -3929,7 +3943,13 @@ class TypeChecker:
             if ddefn.nodeid in self._resolved:
                 self._set_child(utype, dname, self._resolved[ddefn.nodeid])
                 continue
-            t = self._type_of_definition(unitname, f"{name}.{dname}", ddefn)
+            # Join unit and member with '_' so a top-level dependency/inline-unit
+            # type (`zlexer.tokstatetype`) gets a dot-free `ztype.name`
+            # (`zlexer_tokstatetype`); its cname, monomorphisation name,
+            # union/variant tag and destructor are then dot-free without per-site
+            # mangling. Methods/subtypes keep '.' (resolved elsewhere) — their
+            # FUNCTION/carrier cnames mangle dots anyway.
+            t = self._type_of_definition(unitname, f"{name}_{dname}", ddefn)
             if t:
                 self._resolved[ddefn.nodeid] = t
                 self._set_child(utype, dname, t)

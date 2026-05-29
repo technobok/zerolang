@@ -276,6 +276,27 @@ def _mangle_func(name: str) -> str:
     return "z_" + name.replace(".", "_")
 
 
+def _cname_of(ztype: Optional[ZType], name: str) -> str:
+    """C struct type name for a type definition. Reads the typechecker-assigned
+    `ztype.cname`; the `name` fallback covers only a synthesized type that never
+    received one. The emitter reads stored C names rather than regenerating
+    them, so a dependency/inline-unit type's dot-free cname is used at both its
+    definition and every reference (see `_assign_cname` in ztypecheck)."""
+    if ztype is not None and ztype.cname:
+        return ztype.cname
+    return f"z_{name}_t"
+
+
+def _cbase_of(ztype: Optional[ZType], name: str) -> str:
+    """C identifier base (cname without the type suffix) for a type. Helper
+    names append a literal suffix, e.g. f"{_cbase_of(zt, name)}_meta_create".
+    Reads the typechecker-assigned `ztype.cname_base`; the `name` fallback
+    covers only a synthesized type that never received one."""
+    if ztype is not None and ztype.cname_base:
+        return ztype.cname_base
+    return f"z_{name}"
+
+
 def _mangle_var(name: str) -> str:
     """Mangle a local variable name — only escape C reserved words."""
     if name in (
@@ -993,7 +1014,10 @@ class CEmitter:
             == "create"  # ztc-string-compare-ok: meta.create dispatch
             and self._current_enclosing_type_name
         ):
-            return f"z_{self._current_enclosing_type_name}_meta_create"
+            cbase = _cbase_of(
+                self._current_enclosing_type, self._current_enclosing_type_name
+            )
+            return f"{cbase}_meta_create"
 
         # check if this is a function pointer field call (e.g. c.op)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -1139,6 +1163,28 @@ class CEmitter:
             elif self._node_const_value(defn) is not None:
                 # unit-level expression that folded to a constant
                 self._const_names.add(qname)
+
+    # Library units emitted via the dedicated system-unit paths (or, for
+    # generics, as monos). A cross-unit dependency is any OTHER user file unit
+    # imported by main.
+    _SYSTEM_UNIT_NAMES = ("system", "core", "io", "os", "cli", "collections")
+
+    def _dependency_file_units(self) -> "list[tuple[str, zast.Unit]]":
+        """User file units other than main. Their TYPE definitions must be
+        emitted cross-unit (their functions are already emitted by the
+        file-unit-function loop). System library units and generic templates
+        are skipped."""
+        out: "list[tuple[str, zast.Unit]]" = []
+        for unitname, unit in self.program.units.items():
+            if (
+                unitname in self._SYSTEM_UNIT_NAMES
+                or unitname == self.program.mainunitname
+            ):
+                continue
+            if self._is_generic_template(unit):
+                continue
+            out.append((unitname, cast(zast.Unit, unit)))
+        return out
 
     def _emit_file_unit_functions(self, prefix: str, body: dict) -> None:
         """Emit functions from a file unit body, recursing into subunits."""
@@ -1710,7 +1756,13 @@ class CEmitter:
                     NodeType.PROTOCOL,
                     NodeType.FACET,
                 ):
-                    names.add(name)
+                    # Use the resolved type's dot-free name (e.g.
+                    # `zlexer_tokstatetype` for a dependency-unit member) so it
+                    # matches the `ztype.name` that `_mono_depends_on_user`
+                    # tests — a monomorphisation embedding a dependency type
+                    # must be classified late and emitted after it.
+                    zt = self._node_ztype(defn)
+                    names.add(zt.name if zt is not None else name)
                 if defn.nodetype == NodeType.UNIT:
                     visit(cast(zast.Unit, defn).body)
 
@@ -2004,6 +2056,12 @@ class CEmitter:
         if not mainunit:
             return "/* empty program */\n"
 
+        # User file units imported by main. Their type definitions are emitted
+        # cross-unit (interleaved with main's, ordered before it since main may
+        # embed a dependency type); their functions are emitted by the existing
+        # file-unit-function loop below.
+        dep_units = self._dependency_file_units()
+
         # pre-emission pass: collect supplementary data
         # Collect io first so user-code definitions shadow system
         # ones (e.g. a user-declared `reader` protocol wins the slot
@@ -2017,6 +2075,8 @@ class CEmitter:
                 if proto is not None:
                     self._io_protocol_defs[pname] = proto
         self._collect_pre_emission("", mainunit.body)
+        for dep_name, dep_unit in dep_units:
+            self._collect_pre_emission(dep_name, dep_unit.body)
 
         # register monomorphized type names before emission
         for mono_type, _ in self.typing.mono_types:
@@ -2090,6 +2150,8 @@ class CEmitter:
         # pre-register field info for all non-generic records/classes
         # so that construction calls work regardless of definition order
         self._pre_register_fields("", mainunit.body)
+        for dep_name, dep_unit in dep_units:
+            self._pre_register_fields(dep_name, dep_unit.body)
 
         # Emit non-generic union/variant types from system units
         # (io / os) that don't reference monomorphized collection
@@ -2114,6 +2176,8 @@ class CEmitter:
         # defs between.
         mono_types_all = list(self.typing.mono_types)
         user_type_names = self._collect_user_type_names(mainunit.body)
+        for dep_name, dep_unit in dep_units:
+            user_type_names.update(self._collect_user_type_names(dep_unit.body))
         early_monos: list = []
         late_monos: list = []
         for mono_type, template_defn in mono_types_all:
@@ -2162,7 +2226,22 @@ class CEmitter:
         def _is_late_user(name, defn) -> bool:
             return self._user_defn_references_type(name, defn, late_mono_names)
 
-        # second pass (a): early-user defs (no late-mono field refs)
+        # Dependency-unit type passes exclude FUNCTION defs: a dependency unit's
+        # functions are emitted by `_emit_file_unit_functions` below, so the
+        # type passes emit only its TYPE / DATA definitions (no double-emit).
+        # The main unit emits its functions via these passes.
+        def _is_early_user_type(name, defn) -> bool:
+            return defn.nodetype != NodeType.FUNCTION and _is_early_user(name, defn)
+
+        def _is_late_user_type(name, defn) -> bool:
+            return defn.nodetype != NodeType.FUNCTION and _is_late_user(name, defn)
+
+        # second pass (a): early-user defs (no late-mono field refs). Dependency
+        # units first — a main type may embed a dependency type by value.
+        for dep_name, dep_unit in dep_units:
+            self._emit_unit_definitions(
+                dep_name, dep_unit.body, defn_filter=_is_early_user_type
+            )
         self._emit_unit_definitions("", mainunit.body, defn_filter=_is_early_user)
 
         # late mono types (their layouts reference early-user types,
@@ -2172,9 +2251,15 @@ class CEmitter:
             self._emit_mono_type(mono_type, template_defn)
 
         # second pass (b): late-user defs (reference late monos in fields)
+        for dep_name, dep_unit in dep_units:
+            self._emit_unit_definitions(
+                dep_name, dep_unit.body, defn_filter=_is_late_user_type
+            )
         self._emit_unit_definitions("", mainunit.body, defn_filter=_is_late_user)
 
         # third pass: emit facets (must come after all conforming types are defined)
+        for dep_name, dep_unit in dep_units:
+            self._emit_deferred_facets(dep_name, dep_unit.body)
         self._emit_deferred_facets("", mainunit.body)
 
         # emit monomorphized generic functions
@@ -2769,7 +2854,7 @@ class CEmitter:
         ztype = self._node_ztype(rec)
         # see _emit_class for the self-reference rationale.
         needs_forward_typedef = self._class_needs_forward_typedef(name, rec, ztype)
-        struct_id = f"z_{name}_t"
+        struct_id = _cname_of(ztype, name)
         lines: List[str] = []
         if needs_forward_typedef:
             lines.append(f"typedef struct {struct_id} {struct_id};\n")
@@ -2856,9 +2941,10 @@ class CEmitter:
         if not eq_method or not eq_method.is_autogen_eq:
             return
 
-        ctype = f"z_{name}_t"
+        ctype = _cname_of(ztype, name)
+        eq_fn = f"{_cbase_of(ztype, name)}_eq"
         lines: List[str] = []
-        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+        lines.append(f"static bool {eq_fn}({ctype} a, {ctype} b) {{\n")
 
         if self._use_memcmp_eq(name, ztype, eq_method):
             self.needs_string = True  # memcmp is in string.h
@@ -2869,15 +2955,15 @@ class CEmitter:
             for fname, fpath in items.items():
                 ft = self._node_ztype(fpath)
                 if ft and self._needs_eq_call(ft):
-                    tname = ft.name.replace(".", "_")
+                    field_eq = f"{_cbase_of(ft, ft.name.replace('.', '_'))}_eq"
                     # string/stringview eq functions take pointers
                     # (their C signature is `(z_X_t* a, z_X_t* b)`).
                     # Other auto-generated / native eq functions take
                     # their operands by value.
                     if ft.subtype == ZSubType.STRING:
-                        comparisons.append(f"z_{tname}_eq(&a.{fname}, &b.{fname})")
+                        comparisons.append(f"{field_eq}(&a.{fname}, &b.{fname})")
                     else:
-                        comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+                        comparisons.append(f"{field_eq}(a.{fname}, b.{fname})")
                 else:
                     comparisons.append(f"(a.{fname} == b.{fname})")
             # function pointer fields
@@ -3018,8 +3104,9 @@ class CEmitter:
         if not eq_method or not eq_method.is_autogen_eq:
             return
 
-        ctype = f"z_{name}_t"
-        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+        ctype = _cname_of(mono_type, name)
+        eq_fn = f"{_cbase_of(mono_type, name)}_eq"
+        lines.append(f"static bool {eq_fn}({ctype} a, {ctype} b) {{\n")
 
         if self._use_memcmp_eq(name, mono_type, eq_method):
             self.needs_string = True
@@ -3029,11 +3116,11 @@ class CEmitter:
             for fname, ct in field_items:
                 ftype = self.typing.child_of(mono_type, fname)
                 if ftype and self._needs_eq_call(ftype):
-                    tname = ftype.name.replace(".", "_")
+                    field_eq = f"{_cbase_of(ftype, ftype.name.replace('.', '_'))}_eq"
                     if ftype.subtype == ZSubType.STRING:
-                        comparisons.append(f"z_{tname}_eq(&a.{fname}, &b.{fname})")
+                        comparisons.append(f"{field_eq}(&a.{fname}, &b.{fname})")
                     else:
-                        comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+                        comparisons.append(f"{field_eq}(a.{fname}, b.{fname})")
                 else:
                     comparisons.append(f"(a.{fname} == b.{fname})")
             if comparisons:
@@ -3056,7 +3143,7 @@ class CEmitter:
         """
         ret_ctype = self._return_ctype(mfunc)
         parent_type = self._enclosing_type(mfunc)
-        parent_ctype = f"z_{parent_name}_t" if parent_name else ""
+        parent_ctype = _cname_of(parent_type, parent_name) if parent_name else ""
         parent_is_class = (
             parent_type is not None and parent_type.typetype == ZTypeType.CLASS
         )
@@ -3166,7 +3253,7 @@ class CEmitter:
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
-        parent_ctype = f"z_{name}_t" if name else ""
+        parent_ctype = _cname_of(ztype, name) if name else ""
         parent_is_class = ztype is not None and ztype.typetype == ZTypeType.CLASS
         for mname, mfunc in functions.items():
             ret_ctype = self._return_ctype(mfunc)
@@ -3259,7 +3346,7 @@ class CEmitter:
 
     def _emit_create_functions(
         self,
-        name: str,
+        cbase: str,
         ctype: str,
         params: List[str],
         field_names: List[str],
@@ -3267,9 +3354,10 @@ class CEmitter:
         has_user_create: bool,
         lines: List[str],
     ) -> None:
-        """Emit meta.create and optional create forwarding functions."""
+        """Emit meta.create and optional create forwarding functions. `cbase`
+        is the type's stored cname_base (e.g. "z_point")."""
         param_str = ", ".join(params) if params else "void"
-        func_name = f"z_{name}_meta_create"
+        func_name = f"{cbase}_meta_create"
         accessor = "->" if is_heap else "."
         field_init_parts: List[str] = []
         for fname in field_names:
@@ -3292,7 +3380,7 @@ class CEmitter:
             # has the same effect and skips a function body per type.
             # Emit inline next to meta_create so callers within struct_defs
             # (e.g. array default-init) see the alias before use.
-            create_name = f"z_{name}_create"
+            create_name = f"{cbase}_create"
             lines.append(f"#define {create_name} {func_name}\n\n")
 
     def _emit_meta_create(
@@ -3310,7 +3398,7 @@ class CEmitter:
         rc_defn = cast(zast.ObjectDef, defn)
         ztype = self._node_ztype(defn)
         is_heap = ztype.is_heap_allocated if ztype else False
-        ctype = f"z_{name}_t"
+        ctype = _cname_of(ztype, name)
         params, field_names, field_ctypes = self._collect_field_params(
             name, rc_defn.is_paths(), rc_defn.functions(), ztype
         )
@@ -3324,7 +3412,7 @@ class CEmitter:
         )
         target: List[str] = lines if lines is not None else []
         self._emit_create_functions(
-            name,
+            _cbase_of(ztype, name),
             ctype,
             params,
             field_names,
@@ -3399,7 +3487,7 @@ class CEmitter:
         # typedef and a tagged struct in that case; otherwise keep
         # the anonymous-struct form to minimise churn.
         needs_forward_typedef = self._class_needs_forward_typedef(name, cls, ztype)
-        struct_id = f"z_{name}_t"
+        struct_id = _cname_of(ztype, name)
         lines: List[str] = []
         if needs_forward_typedef:
             lines.append(f"typedef struct {struct_id} {struct_id};\n")
@@ -3440,7 +3528,9 @@ class CEmitter:
 
         # emit destructor (only if class has fields needing cleanup)
         if ztype and ztype.needs_field_cleanup:
-            lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
+            lines.append(
+                f"static void {_cbase_of(ztype, name)}_destroy({struct_id}* p) {{\n"
+            )
             lines.append("    if (!p) return;\n")
             for fname, fpath in cls.is_paths().items():
                 # .lock fields are borrowed references, don't own data
@@ -3556,6 +3646,15 @@ class CEmitter:
         self.needs_stdlib = True
         lines: List[str] = []
 
+        # Read the stored dot-free C names: `struct` (z_..._t), `cbase`
+        # (z_...) for the tag-enum type and destructor, `tagpfx` for the
+        # Z_..._TAG_* enumerators. `ztype.name` is dot-free even for a
+        # dependency-unit union (see ztypecheck), so the tags are valid C.
+        ztype = self._node_ztype(union_defn)
+        struct = _cname_of(ztype, name)
+        cbase = _cbase_of(ztype, name)
+        tagpfx = (ztype.name if ztype and ztype.name else name).upper()
+
         # resolve custom tag values from as_items
         custom_tag_values = self._resolve_tag_values(union_defn)
 
@@ -3563,20 +3662,20 @@ class CEmitter:
         lines.append("typedef enum {\n")
         tag_names = []
         for sname in union_defn.is_paths().keys():
-            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            tag = f"Z_{tagpfx}_TAG_{sname.upper()}"
             tag_names.append(tag)
             if custom_tag_values and sname in custom_tag_values:
                 lines.append(f"    {tag} = {custom_tag_values[sname]},\n")
             else:
                 lines.append(f"    {tag},\n")
-        lines.append(f"}} z_{name}_tag_t;\n\n")
+        lines.append(f"}} {cbase}_tag_t;\n\n")
 
         # emit union struct: always {tag, void*}. Named-struct form so a
         # forward typedef stays compatible with the full definition.
-        lines.append(f"typedef struct z_{name}_t {{\n")
-        lines.append(f"    z_{name}_tag_t tag;\n")
+        lines.append(f"typedef struct {struct} {{\n")
+        lines.append(f"    {cbase}_tag_t tag;\n")
         lines.append("    void* data;\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        lines.append(f"}} {struct};\n\n")
 
         # No-cleanup arms: `null` (no payload) and `.lock` (borrowed
         # reference — the union doesn't own its payload). When every arm
@@ -3598,9 +3697,7 @@ class CEmitter:
             for sname, spath in union_defn.is_paths().items()
         )
         if all_no_cleanup:
-            lines.append(
-                f"static void z_{name}_destroy(z_{name}_t* u) {{ (void)u; }}\n\n"
-            )
+            lines.append(f"static void {cbase}_destroy({struct}* u) {{ (void)u; }}\n\n")
             self.struct_defs.append("".join(lines))
             return
 
@@ -3650,21 +3747,21 @@ class CEmitter:
             if not self._arm_type_supports_forward_typedef(stype):
                 continue
             forward_decls_emitted.add(stype.name)
-            cid = f"z_{stype.name}_t"
+            cid = _cname_of(stype, stype.name)
             lines.append(f"typedef struct {cid} {cid};\n")
             if stype.is_heap_allocated:
                 lines.append(f"static void {stype.destructor_name}({cid}* p);\n")
             else:
                 lines.append(f"static void {stype.destructor_name}({cid}* p);\n")
 
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
+        lines.append(f"static void {cbase}_destroy({struct}* u) {{\n")
         lines.append("    if (!u) return;\n")
         lines.append("    if (!u->data) return;\n")
         lines.append("    switch (u->tag) {\n")
         pending_cases: list[str] = []
         pending_body: tuple[str, ...] | None = None
         for sname, spath in non_null_items:
-            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            tag = f"Z_{tagpfx}_TAG_{sname.upper()}"
             body = _arm_body(spath)
             if pending_body is not None and body != pending_body:
                 for t in pending_cases:
@@ -4028,7 +4125,7 @@ class CEmitter:
         """Emit a monomorphized record type."""
         self.needs_stdint = True
         name = mono_type.name
-        ctype = f"z_{name}_t"
+        ctype = _cname_of(mono_type, name)
         lines: List[str] = []
         lines.append("typedef struct {\n")
         field_items: list = []
@@ -4044,7 +4141,7 @@ class CEmitter:
         params = [f"{ct} {fn}" for fn, ct in field_items]
         field_names = [fn for fn, _ in field_items]
         self._emit_create_functions(
-            name,
+            _cbase_of(mono_type, name),
             ctype,
             params,
             field_names,
@@ -5518,7 +5615,7 @@ class CEmitter:
 
         Uses mono_type.is_heap_allocated to select stack vs heap allocation.
         """
-        ctype = f"z_{name}_t"
+        ctype = _cname_of(mono_type, name)
         params: List[str] = []
         field_names: List[str] = []
         field_ctypes_list: List[str] = []
@@ -5532,7 +5629,7 @@ class CEmitter:
         if name not in self._type_field_defaults:
             self._type_field_defaults[name] = {}
         self._emit_create_functions(
-            name,
+            _cbase_of(mono_type, name),
             ctype,
             params,
             field_names,
@@ -5581,18 +5678,24 @@ class CEmitter:
         self.needs_stdint = True
         lines: List[str] = []
 
+        # Stored dot-free C names (see _emit_union for the rationale).
+        vtype = self._node_ztype(variant_defn)
+        struct = _cname_of(vtype, name)
+        cbase = _cbase_of(vtype, name)
+        tagpfx = (vtype.name if vtype and vtype.name else name).upper()
+
         # resolve custom tag values from as_items
         custom_tag_values = self._resolve_tag_values(variant_defn)
 
         # emit tag enum
         lines.append("typedef enum {\n")
         for sname in variant_defn.is_paths().keys():
-            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            tag = f"Z_{tagpfx}_TAG_{sname.upper()}"
             if custom_tag_values and sname in custom_tag_values:
                 lines.append(f"    {tag} = {custom_tag_values[sname]},\n")
             else:
                 lines.append(f"    {tag},\n")
-        lines.append(f"}} z_{name}_tag_t;\n\n")
+        lines.append(f"}} {cbase}_tag_t;\n\n")
 
         # check if all subtypes are null (enum pattern)
         all_null = all(
@@ -5603,7 +5706,7 @@ class CEmitter:
 
         # emit variant struct with inline union
         lines.append("typedef struct {\n")
-        lines.append(f"    z_{name}_tag_t tag;\n")
+        lines.append(f"    {cbase}_tag_t tag;\n")
         if not all_null:
             lines.append("    union {\n")
             for sname, spath in variant_defn.is_paths().items():
@@ -5616,14 +5719,13 @@ class CEmitter:
                     if sub_ctype:
                         lines.append(f"        {sub_ctype} {sname};\n")
             lines.append("    } data;\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        lines.append(f"}} {struct};\n\n")
 
         # emit equality function (if auto-generated)
-        vtype = self._node_ztype(variant_defn)
         eq_method = self.typing.child_of(vtype, "==") if vtype else None
         if eq_method and eq_method.is_autogen_eq:
-            ctype = f"z_{name}_t"
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            ctype = struct
+            lines.append(f"static bool {cbase}_eq({ctype} a, {ctype} b) {{\n")
             if self._use_memcmp_eq(name, vtype, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
@@ -5633,7 +5735,7 @@ class CEmitter:
                 lines.append("    if (a.tag != b.tag) return false;\n")
                 lines.append("    switch (a.tag) {\n")
                 for sname, spath in variant_defn.is_paths().items():
-                    tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+                    tag = f"Z_{tagpfx}_TAG_{sname.upper()}"
                     is_null = (
                         spath.nodetype == NodeType.ATOMID
                         and cast(zast.AtomId, spath).name == "null"
@@ -5645,9 +5747,9 @@ class CEmitter:
                         sub_ctype = self._get_subtype_ctype(spath)
                         sub_type = self._node_ztype(spath)
                         if sub_type and self._needs_eq_call(sub_type):
-                            tname = sub_type.name.replace(".", "_")
+                            sub_eq = f"{_cbase_of(sub_type, sub_type.name.replace('.', '_'))}_eq"
                             lines.append(
-                                f" return z_{tname}_eq(a.data.{sname}, b.data.{sname});\n"
+                                f" return {sub_eq}(a.data.{sname}, b.data.{sname});\n"
                             )
                         elif (
                             sub_ctype
@@ -7841,7 +7943,7 @@ class CEmitter:
                 if _call_ztype.subtype == ZSubType.STRING:
                     return self._alloc_temp(result)
                 if _call_ztype.typetype == ZTypeType.CLASS:
-                    ctype = f"z_{_call_ztype.name}_t"
+                    ctype = _cname_of(_call_ztype, _call_ztype.name)
                     tmp = self._temp_name("c")
                     indent = self._indent()
                     self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
@@ -7850,7 +7952,7 @@ class CEmitter:
                         self._temp.class_set[tmp] = _call_ztype.name
                     return tmp
                 if _call_ztype.typetype == ZTypeType.UNION:
-                    ctype = f"z_{_call_ztype.name}_t"
+                    ctype = _cname_of(_call_ztype, _call_ztype.name)
                     tmp = self._temp_name("c")
                     indent = self._indent()
                     self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
@@ -8151,7 +8253,7 @@ class CEmitter:
                             .encode("utf-8")
                         )
                         if cap is not None and lit_len <= cap:
-                            ctype = f"z_{target_name}_t"
+                            ctype = _cname_of(target_type, target_name)
                             return f'({ctype}){{{lit_len}, "{literal}"}}'
                     # emit call to shared converter
                     if dp_parent_type.subtype == ZSubType.STRING:
@@ -8459,7 +8561,7 @@ class CEmitter:
             args_str, take_vars = self._build_create_args(
                 rec_type.name, rec_type, call.arguments
             )
-            result = f"z_{rec_type.name}_create({args_str})"
+            result = f"{_cbase_of(rec_type, rec_type.name)}_create({args_str})"
             # handle .take nullification
             for fname, tv in take_vars.items():
                 if tv:
@@ -8499,8 +8601,8 @@ class CEmitter:
             args_str, take_vars = self._build_meta_create_args(
                 type_name, enclosing_t, call.arguments
             )
-            result = f"z_{type_name}_meta_create({args_str})"
-            ctype = f"z_{type_name}_t"
+            result = f"{_cbase_of(enclosing_t, type_name)}_meta_create({args_str})"
+            ctype = _cname_of(enclosing_t, type_name)
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
@@ -8524,12 +8626,12 @@ class CEmitter:
             and cast(ZType, self._node_ztype(call.callable)).typetype == ZTypeType.CLASS
         ):
             cls_type = cast(ZType, self._node_ztype(call.callable))
-            ctype = f"z_{cls_type.name}_t"
+            ctype = _cname_of(cls_type, cls_type.name)
             self.needs_stdlib = True
             args_str, take_vars = self._build_create_args(
                 cls_type.name, cls_type, call.arguments
             )
-            result = f"z_{cls_type.name}_create({args_str})"
+            result = f"{_cbase_of(cls_type, cls_type.name)}_create({args_str})"
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
@@ -8567,7 +8669,7 @@ class CEmitter:
                 self._apply_call_implicit_takes(call, indent)
                 return tmp
             if _call_ztype.typetype == ZTypeType.CLASS:
-                ctype = f"z_{_call_ztype.name}_t"
+                ctype = _cname_of(_call_ztype, _call_ztype.name)
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
                 if _call_ztype.destructor_name is not None:
@@ -8581,7 +8683,7 @@ class CEmitter:
                 # address. Cleanup routes through class_set so scope
                 # exit emits `z_<T>_destroy(&tmp)` (freeing the inner
                 # payload without trying to free the stack slot).
-                ctype = f"z_{_call_ztype.name}_t"
+                ctype = _cname_of(_call_ztype, _call_ztype.name)
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
                 if _call_ztype.destructor_name is not None:
@@ -9739,9 +9841,13 @@ class CEmitter:
         return False
 
     def _emit_class_free(self, var: str, type_name: Optional[str]) -> str:
-        """Emit the right destroy call for a class variable (stack-allocated)."""
+        """Emit the right destroy call for a class variable (stack-allocated).
+
+        `type_name` is the type's display name as tracked in `class_set`; dots
+        from a dependency/inline-unit qualifier are mangled so the destructor
+        identifier matches the dot-free name emitted at its definition site."""
         if type_name:
-            return f"z_{type_name}_destroy(&{var});"
+            return f"z_{type_name.replace('.', '_')}_destroy(&{var});"
         return ""
 
     def _narrowed_alias_expr(self, value: "zast.Expression") -> "Optional[str]":

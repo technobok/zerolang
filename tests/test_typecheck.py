@@ -5856,8 +5856,9 @@ class TestInlineUnits:
         )
         tc = TypeChecker(prog)
         tc.check()
-        # b is stored under qualified name "a.b"
-        bt = tc.unit_types.get("a.b")
+        # nested unit members join with '_' so their member types get dot-free
+        # C names; b is stored under "a_b".
+        bt = tc.unit_types.get("a_b")
         assert bt is not None
         assert tc.typing.has_child(bt, "Y")
 

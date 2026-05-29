@@ -341,6 +341,13 @@ class ZType:
     # For function types: "z_math_add", "z_point_distance", etc.
     cname: str = field(default="", init=False)
 
+    # C identifier base: cname without the trailing "_t" for type definitions
+    # ("z_point"); identical to cname for function types. Helper C names derive
+    # from it as f"{cname_base}_{suffix}" (e.g. "z_point_meta_create",
+    # "z_List_i64_get", "z_point_destroy"). The emitter reads this and never
+    # regenerates a C name from a name-string.
+    cname_base: str = field(default="", init=False)
+
     def __post_init__(self) -> None:
         _types_by_id[self.type_id] = self
 

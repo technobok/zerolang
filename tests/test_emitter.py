@@ -1253,6 +1253,105 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "9\n-7"
 
+    def _build_multifile(self, files: dict) -> str:
+        """Build a multi-file program (dependency units imported by main) and
+        return its stdout. Used for cross-unit type-emission tests."""
+        from zvfs import ZVfs, StringProvider, FSProvider, BindType
+
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        vfs = ZVfs()
+        psystemid = vfs.register(FSProvider(rootpath=lib_dir, parentpath="system"))
+        pmainid = vfs.register(StringProvider(files=files))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        program = make_parser_with_vfs(vfs, "test").parse()
+        assert isinstance(program, zast.Program)
+        typing = typecheck(program)
+        assert typing.errors == [], [e.msg for e in typing.errors]
+        return compile_and_run(zemitterc.emit(typing)).strip()
+
+    def test_cross_unit_dependency_record(self):
+        """A record defined in a dependency unit is emitted (dot-free cname),
+        constructed, and field-read from main."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  p: shapes.point.create x: 3 y: 4\n"
+                    '  print "\\{p.x}"\n'
+                    "}"
+                ),
+                "shapes.z": "point: record { x: i64 y: i64 }",
+            }
+        )
+        assert out == "3"
+
+    def test_cross_unit_dependency_variant(self):
+        """A variant defined in a dependency unit emits dot-free tags; it is
+        constructed in main and matched inside the dependency."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  c: colors.color.red\n"
+                    '  print "\\{colors.rank c: c}"\n'
+                    "}"
+                ),
+                "colors.z": (
+                    "color: variant { red: null green: null }\n"
+                    "rank: function {c: color} out i64 is {\n"
+                    "  match ( c ) case red then {\n"
+                    "    return 1\n"
+                    "  } case green then {\n"
+                    "    return 2\n"
+                    "  }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "1"
+
+    def test_cross_unit_dependency_class_method(self):
+        """A class defined in a dependency unit is created from main and a
+        static method is called cross-unit (dot-free cnames throughout)."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  ctr: counters.Counter.create start: 10\n"
+                    '  print "\\{counters.Counter.bump ctr by: 5}"\n'
+                    "}"
+                ),
+                "counters.z": (
+                    "Counter: class { start: i64 } as {\n"
+                    "  bump: function {c: this by: i64} out i64 is {\n"
+                    "    return c.start + by\n"
+                    "  }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "15"
+
+    def test_cross_unit_dependency_embedded_record(self):
+        """A main-unit record embeds a dependency-unit record by value."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "box: record { p: shapes.point }\n"
+                    "main: function is {\n"
+                    "  b: box.create p: (shapes.point.create x: 7 y: 9)\n"
+                    '  print "\\{b.p.y}"\n'
+                    "}"
+                ),
+                "shapes.z": "point: record { x: i64 y: i64 }",
+            }
+        )
+        assert out == "9"
+
     def test_swap(self):
         csource = emit_source(
             'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'
