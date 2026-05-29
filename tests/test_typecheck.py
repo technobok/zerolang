@@ -777,6 +777,65 @@ class TestMatchExpression:
             "}\nmain: function is {}"
         )
 
+    def test_narrowed_subject_field_access_after_iterate(self):
+        """Inside a match arm, iterating one field of the narrowed subject
+        and then accessing another of its fields must still see the
+        narrowing. The iterator installs a borrow lock on the subject
+        root; the lock overlay must carry the arm narrowing forward so the
+        subject does not revert to the bare union for later field access."""
+        src = (
+            "N: union { leaf: LData two: TData }\n"
+            "LData: class { nodeid: u32 }\n"
+            "TData: class { nodeid: u32 a: (List of: N) b: (List of: N) }\n"
+            "walk: function {x: N} is {\n"
+            "    match (\n"
+            "        x\n"
+            "    ) case two then {\n"
+            "        ait: x.a.iterate\n"
+            "        for p: ait loop {\n"
+            "            walk p\n"
+            "        }\n"
+            "        ln: x.b.length\n"
+            '        print "\\{ln}"\n'
+            "    } case leaf then {\n"
+            '        print "leaf"\n'
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    t: N.two (TData nodeid: 1.u32 a: (List of: N) b: (List of: N))\n"
+            "    walk t\n"
+            "}\n"
+        )
+        check_ok(src)
+
+    def test_narrowed_subject_field_access_before_iterate(self):
+        """The pre-loop ordering already worked; pin it so both orderings
+        stay covered."""
+        src = (
+            "N: union { leaf: LData two: TData }\n"
+            "LData: class { nodeid: u32 }\n"
+            "TData: class { nodeid: u32 a: (List of: N) b: (List of: N) }\n"
+            "walk: function {x: N} is {\n"
+            "    match (\n"
+            "        x\n"
+            "    ) case two then {\n"
+            "        ln: x.b.length\n"
+            '        print "\\{ln}"\n'
+            "        ait: x.a.iterate\n"
+            "        for p: ait loop {\n"
+            "            walk p\n"
+            "        }\n"
+            "    } case leaf then {\n"
+            '        print "leaf"\n'
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    t: N.two (TData nodeid: 1.u32 a: (List of: N) b: (List of: N))\n"
+            "    walk t\n"
+            "}\n"
+        )
+        check_ok(src)
+
 
 class TestStringInterpolation:
     def test_interpolation_checks_expressions(self):

@@ -539,12 +539,23 @@ class ZSymbolTable:
         if idempotent:
             return None
 
-        # add lock entry to current scope
+        # add lock entry to current scope. Carry forward the current
+        # effective entry's narrowing: a lock overlay shadows the prior
+        # entry (ZScope.find returns the last match), so without this the
+        # lock would expose target_var's un-narrowed definition type and
+        # drop a match-arm narrowing of `target_name`. Mirrors how
+        # `invalidate` carries `ztype` forward onto a taken overlay.
+        cur = self.lookup_entry(target_name)
         lock_entry = ZEntry(
             name=target_name,
-            ztype=target_var.ztype,
+            ztype=cur.ztype if cur is not None else target_var.ztype,
             is_definition=False,
             lock=ZLockInfo(lock_type=lock_type, holder=holder, path=path),
+            narrowed_subtype=cur.narrowed_subtype if cur is not None else None,
+            narrowed_subtype_id=cur.narrowed_subtype_id if cur is not None else None,
+            original_ztype=cur.original_ztype if cur is not None else None,
+            excluded_subtypes=cur.excluded_subtypes if cur is not None else None,
+            excluded_subtype_ids=cur.excluded_subtype_ids if cur is not None else None,
         )
         self._scopes[-1].append(lock_entry)
         return None
