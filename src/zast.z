@@ -148,6 +148,10 @@ Node: union {
     withexpr:   WithData
     caseexpr:   CaseData
     caseclause: CaseClauseData
+    functiondef: FunctionData
+    objectdef:   ObjectDefData
+    unitdef:     UnitData
+    program:     ProgramData
 }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -397,6 +401,55 @@ CaseClauseData: class {
     name:      String
     matcharm:  Node
     statement: Node
+}
+
+# Function payload: optional return type, parameter list (namedoperation
+# arms), an optional body statement (none for a spec), the native flag,
+# and the `as`-block members (namedoperation arms). Member maps are
+# ordered name+node lists, not keyed Maps.
+FunctionData: class {
+    nodeid:     u32
+    lineno:     u32
+    colno:      u32
+    returntype: (Option t: Node)
+    parameters: (List of: Node)
+    body:       (Option t: Node)
+    isNative:   bool
+    asItems:    (List of: Node)
+}
+
+# Unified type-definition payload. `kind` discriminates which kind of
+# object this is (one of nodetype RECORD/CLASS/UNION/VARIANT/ENUM/
+# PROTOCOL/FACET). `isItems` are the `is`-block members and `asItems`
+# the `as`-block members, each a namedoperation arm.
+ObjectDefData: class {
+    nodeid:   u32
+    lineno:   u32
+    colno:    u32
+    kind:     nodetype
+    isItems:  (List of: Node)
+    asItems:  (List of: Node)
+    isNative: bool
+}
+
+# Unit payload: the unit's top-level definitions as namedoperation arms.
+UnitData: class {
+    nodeid: u32
+    lineno: u32
+    colno:  u32
+    body:   (List of: Node)
+}
+
+# Program payload (parse root): the file-level units as namedoperation
+# arms keyed by unit name, plus the entry unit's name. (Program.vfs is
+# carried only for error reporting in the Python reference and is not
+# part of the AST tree; omitted here.)
+ProgramData: class {
+    nodeid:       u32
+    lineno:       u32
+    colno:        u32
+    units:        (List of: Node)
+    mainUnitName: String
 }
 
 # Arm-name dumpers: return the canonical uppercase label for an
@@ -766,6 +819,42 @@ printNode: function {n: Node} is {
         print "\{n.nodeid}: caseclause @\{n.lineno}:\{n.colno} name=\{n.name}"
         printNode n.matcharm
         printNode n.statement
+    } case functiondef then {
+        print "\{n.nodeid}: functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}"
+        print "  returntype:"
+        printOptChild n.returntype
+        piter: n.parameters.iterate
+        for pm: piter loop {
+            printNode pm
+        }
+        print "  body:"
+        printOptChild n.body
+        faiter: n.asItems.iterate
+        for fam: faiter loop {
+            printNode fam
+        }
+    } case objectdef then {
+        print "\{n.nodeid}: objectdef @\{n.lineno}:\{n.colno} kind=\{nodetypename n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
+        oiiter: n.isItems.iterate
+        for oim: oiiter loop {
+            printNode oim
+        }
+        oaiter: n.asItems.iterate
+        for oam: oaiter loop {
+            printNode oam
+        }
+    } case unitdef then {
+        print "\{n.nodeid}: unitdef @\{n.lineno}:\{n.colno} body=\{n.body.length}"
+        ubiter: n.body.iterate
+        for ubm: ubiter loop {
+            printNode ubm
+        }
+    } case program then {
+        print "\{n.nodeid}: program @\{n.lineno}:\{n.colno} units=\{n.units.length} mainUnitName=\{n.mainUnitName}"
+        puiter: n.units.iterate
+        for pum: puiter loop {
+            printNode pum
+        }
     }
 }
 
@@ -1042,4 +1131,38 @@ main: function is {
     caseClauses.append caseClause0
     n25: Node.caseexpr (CaseData nodeid: 80.u32 lineno: 36.u32 colno: 1.u32 subject: caseSubject clauses: caseClauses elseclause: (Option.none Node))
     printNode n25
+
+    # --- definitions / containers (PR-D) ---
+
+    # objectdef: a record with one field (isItems entry), no as-members.
+    objFieldType: Node.atomid (AtomIdData nodeid: 81.u32 lineno: 40.u32 colno: 11.u32 name: "i64".string)
+    objField: Node.namedoperation (NamedOperationData nodeid: 82.u32 lineno: 40.u32 colno: 5.u32 name: (Option.some "x".string) operation: objFieldType)
+    objIsItems: (List of: Node)
+    objIsItems.append objField
+    objAsItems: (List of: Node)
+    n26: Node.objectdef (ObjectDefData nodeid: 83.u32 lineno: 40.u32 colno: 1.u32 kind: nodetype.RECORD isItems: objIsItems asItems: objAsItems isNative: false)
+    printNode n26
+
+    # functiondef "greet: function {x: i64} out i64 is { ... }" -> nested
+    # in a unit, in a program; only the program is printed (recurses).
+    fnRet: Node.atomid (AtomIdData nodeid: 84.u32 lineno: 41.u32 colno: 30.u32 name: "i64".string)
+    fnParamType: Node.atomid (AtomIdData nodeid: 85.u32 lineno: 41.u32 colno: 21.u32 name: "i64".string)
+    fnParam: Node.namedoperation (NamedOperationData nodeid: 86.u32 lineno: 41.u32 colno: 18.u32 name: (Option.some "x".string) operation: fnParamType)
+    fnParams: (List of: Node)
+    fnParams.append fnParam
+    fnBodyItems: (List of: Node)
+    fnBody: Node.statement (StatementData nodeid: 87.u32 lineno: 41.u32 colno: 40.u32 statements: fnBodyItems)
+    fnAsItems: (List of: Node)
+    fnDef: Node.functiondef (FunctionData nodeid: 88.u32 lineno: 41.u32 colno: 1.u32 returntype: (Option.some fnRet) parameters: fnParams body: (Option.some fnBody) isNative: false asItems: fnAsItems)
+
+    unitMember: Node.namedoperation (NamedOperationData nodeid: 89.u32 lineno: 41.u32 colno: 1.u32 name: (Option.some "greet".string) operation: fnDef)
+    unitBody: (List of: Node)
+    unitBody.append unitMember
+    unitDef: Node.unitdef (UnitData nodeid: 90.u32 lineno: 39.u32 colno: 1.u32 body: unitBody)
+
+    progUnit: Node.namedoperation (NamedOperationData nodeid: 91.u32 lineno: 39.u32 colno: 1.u32 name: (Option.some "main".string) operation: unitDef)
+    progUnits: (List of: Node)
+    progUnits.append progUnit
+    n27: Node.program (ProgramData nodeid: 92.u32 lineno: 39.u32 colno: 1.u32 units: progUnits mainUnitName: "main".string)
+    printNode n27
 }
