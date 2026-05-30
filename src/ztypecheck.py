@@ -5907,6 +5907,13 @@ class TypeChecker:
                         )
                         self._set_child(mono, "iterateItems", iterate_items_type)
 
+        # Assign C names to every synthesised FUNCTION method so the emitter
+        # reads the stored cname (z_{mangled}_{method}) rather than rebuilding
+        # it inline at each call site.
+        for method_name, method_type in self.typing.children_of(mono):
+            if method_type.typetype == ZTypeType.FUNCTION and not method_type.cname:
+                self._assign_cname_type(method_type, f"{mangled}.{method_name}")
+
     def _make_mono_shell(
         self,
         template_type: ZType,

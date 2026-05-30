@@ -672,6 +672,18 @@ class CEmitter:
             return None
         return self.typing.variable_cname.get(vid)
 
+    def _synth_method_cname(self, parent: Optional[ZType], method: str) -> str:
+        """C name of a synthesised collection method (List/Map/Set/array/str/
+        view/iterator). Reads the typechecker-assigned cname off the method
+        child of the *unwrapped base* mono (synth methods hang off the base,
+        not a typedef wrapper). The inline fallback covers only the case where
+        the child or its cname is absent, which is output-identical."""
+        base = _unwrap_typedef(parent) if parent is not None else None
+        m = self.typing.child_of(base, method) if base is not None else None
+        if m is not None and m.cname:
+            return m.cname
+        return f"z_{_mono_name(parent)}_{method}"
+
     def _def_vid(self, node: zast.Node) -> Optional[int]:
         """The variable_id a declaration node binds (from `def_variable_id`),
         or None when unstamped. Used to register a binding in the id-keyed
@@ -7078,7 +7090,12 @@ class CEmitter:
         type_id = self.typing.call_callable_type_id.get(call.nodeid)
         rec_t = _type_by_id(type_id) if type_id is not None else None
         type_name = rec_t.name if rec_t is not None else None
-        cname = _mangle_func(f"{type_name}.call")
+        call_method = self.typing.child_of(rec_t, "call") if rec_t is not None else None
+        cname = (
+            call_method.cname
+            if call_method is not None and call_method.cname
+            else _mangle_func(f"{type_name}.call")
+        )
         receiver = self._emit_path_value(call.callable)
         # Class methods expect a pointer receiver. Wrap the variable with &
         # when the receiver is a plain atom (not already a pointer).
@@ -8281,14 +8298,16 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                arr_type_name = _mono_name(dp_parent_type)
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{arr_type_name}_get({parent_val}, {idx_val})"
+                    return (
+                        f"{self._synth_method_cname(dp_parent_type, 'get')}"
+                        f"({parent_val}, {idx_val})"
+                    )
                 if method_name == "set" and len(call.arguments) >= 2:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     val_val = self._emit_operation_value(call.arguments[1].valtype)
-                    return f"z_{arr_type_name}_set(&{parent_val}, {idx_val}, {val_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'set')}(&{parent_val}, {idx_val}, {val_val})"
 
         # str method calls: .string
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -8300,9 +8319,8 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                str_type_name = _mono_name(dp_parent_type)
                 if method_name == "string":
-                    result = f"z_{str_type_name}_string({parent_val})"
+                    result = f"{self._synth_method_cname(dp_parent_type, 'string')}({parent_val})"
                     return self._alloc_temp(result)
 
         # stringview method calls: .string
@@ -8469,7 +8487,7 @@ class CEmitter:
                     # pure valtype elements (i64 etc.).
                     indent = self._indent()
                     self._transfer_implicit_take(val, from_arg.valtype, indent)
-                    return f"z_{list_type_name}_append({parent_val}, {val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'append')}({parent_val}, {val})"
                 if method_name == "insert" and len(call.arguments) >= 2:
                     from_val = None
                     at_val = None
@@ -8482,9 +8500,7 @@ class CEmitter:
                         from_val = self._emit_operation_value(call.arguments[0].valtype)
                     if at_val is None:
                         at_val = self._emit_operation_value(call.arguments[1].valtype)
-                    return (
-                        f"z_{list_type_name}_insert({parent_val}, {from_val}, {at_val})"
-                    )
+                    return f"{self._synth_method_cname(dp_parent_type, 'insert')}({parent_val}, {from_val}, {at_val})"
                 if method_name == "extend" and call.arguments:
                     from_arg = call.arguments[0]
                     from_val = self._emit_operation_value(from_arg.valtype)
@@ -8495,17 +8511,17 @@ class CEmitter:
                     indent = self._indent()
                     from_tmp = self._alloc_arg_temp(f"z_{list_type_name}_t", from_val)
                     self._transfer_implicit_take(from_val, from_arg.valtype, indent)
-                    return f"z_{list_type_name}_extend({parent_val}, &{from_tmp})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'extend')}({parent_val}, &{from_tmp})"
                 if method_name == "extendView" and call.arguments:
                     # extendView takes a listview by value (copies, does
                     # not consume). The argument is typed as a listview of
                     # the list's element; the mono emitter generates a
                     # z_{listname}_extendView(z_{listname}_t*, z_ListView_T_t).
                     from_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{list_type_name}_extendView({parent_val}, {from_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'extendView')}({parent_val}, {from_val})"
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{list_type_name}_get({parent_val}, {idx_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'get')}({parent_val}, {idx_val})"
                 if method_name == "set" and len(call.arguments) >= 2:
                     idx_val = None
                     val_val = None
@@ -8518,9 +8534,9 @@ class CEmitter:
                         idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     if val_val is None:
                         val_val = self._emit_operation_value(call.arguments[1].valtype)
-                    return f"z_{list_type_name}_set({parent_val}, {idx_val}, {val_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'set')}({parent_val}, {idx_val}, {val_val})"
                 if method_name == "pop":
-                    return f"z_{list_type_name}_pop({parent_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'pop')}({parent_val})"
                 # fmt: off
                 if method_name == "contains" and call.arguments:  # ztc-string-compare-ok: stdlib mthd
                     # fmt: on
@@ -8532,11 +8548,11 @@ class CEmitter:
                     if item_arg is None:
                         item_arg = call.arguments[0]
                     item_val = self._emit_operation_value(item_arg.valtype)
-                    return f"z_{list_type_name}_contains({parent_val}, {item_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'contains')}({parent_val}, {item_val})"
                 if method_name == "sort":  # ztc-string-compare-ok: stdlib mthd
-                    return f"z_{list_type_name}_sort({parent_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'sort')}({parent_val})"
                 if method_name == "listview":
-                    return f"z_{list_type_name}_listview({parent_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'listview')}({parent_val})"
 
         # listview method calls: .get
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -8553,10 +8569,9 @@ class CEmitter:
                     parent_path
                 ) and not parent_val.startswith("&"):
                     parent_val = f"&{parent_val}"
-                lv_type_name = _mono_name(dp_parent_type)
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{lv_type_name}_get({parent_val}, {idx_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'get')}({parent_val}, {idx_val})"
 
         # map method calls: .set, .get, .delete, .has
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -8568,7 +8583,6 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                map_type_name = _mono_name(dp_parent_type)
                 if method_name == "set" and len(call.arguments) >= 2:
                     key_arg = None
                     val_arg = None
@@ -8588,10 +8602,10 @@ class CEmitter:
                     indent = self._indent()
                     self._transfer_implicit_take(key_val, key_arg.valtype, indent)
                     self._transfer_implicit_take(val_val, val_arg.valtype, indent)
-                    return f"z_{map_type_name}_set({parent_val}, {key_val}, {val_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'set')}({parent_val}, {key_val}, {val_val})"
                 if method_name == "get" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
-                    result = f"z_{map_type_name}_get({parent_val}, {key_val})"
+                    result = f"{self._synth_method_cname(dp_parent_type, 'get')}({parent_val}, {key_val})"
                     ret_type = _call_ztype
                     if ret_type and ret_type.is_nullable_ptr:
                         # nullable-ptr option: track as temp for destroy
@@ -8625,10 +8639,10 @@ class CEmitter:
                     return result
                 if method_name == "delete" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{map_type_name}_delete({parent_val}, {key_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'delete')}({parent_val}, {key_val})"
                 if method_name == "has" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{map_type_name}_has({parent_val}, {key_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, 'has')}({parent_val}, {key_val})"
 
             # set method calls: .add / .has / .delete
             if dp_parent_type and _is_set_type(dp_parent_type):
@@ -8636,7 +8650,6 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                set_type_name = _mono_name(dp_parent_type)
                 # Set has three mutating methods that all follow the
                 # same `item:` arg shape: add / has / delete. Look up
                 # the named `item` arg (or fall back to positional),
@@ -8654,7 +8667,7 @@ class CEmitter:
                     if method_name == "add":  # ztc-string-compare-ok: stdlib mthd
                         indent = self._indent()
                         self._transfer_implicit_take(item_val, item_arg.valtype, indent)
-                    return f"z_{set_type_name}_{method_name}({parent_val}, {item_val})"
+                    return f"{self._synth_method_cname(dp_parent_type, method_name)}({parent_val}, {item_val})"
 
         if (
             self._node_ztype(call.callable)
@@ -11301,7 +11314,12 @@ class CEmitter:
             ) in iter_bindings:
                 if callable_ztype is not None:
                     obj_val = self._emit_operation_value(iop)
-                    call_fn = _mangle_func(f"{callable_ztype.name}.call")
+                    _cm = self.typing.child_of(callable_ztype, "call")
+                    call_fn = (
+                        _cm.cname
+                        if _cm is not None and _cm.cname
+                        else _mangle_func(f"{callable_ztype.name}.call")
+                    )
                     # Class iterators take a pointer receiver since 'this' is
                     # always a pointer.
                     rec_t = callable_ztype
