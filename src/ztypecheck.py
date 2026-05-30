@@ -17,6 +17,7 @@ from zenv import ZSymbolTable
 from zsynth import FreshNamer, make_assignment, make_atom_id, register_synth_var
 import zasthash
 from ztypes import (
+    ZConformance,
     ZType,
     ZTypeType,
     ZSubType,
@@ -3449,6 +3450,40 @@ class TypeChecker:
         self._resolving.pop()
         return rtype
 
+    def _record_conformance(self, rtype: ZType, spec_zt: ZType, label: str) -> None:
+        """Create the Case-A conformance entity for `rtype as { label: spec }`.
+
+        The C names of the conformance helpers are composed here, once, off the
+        impl type's dot-free `cname_base` (== the emitter's historical
+        `z_{impl_name}`), so the emitter reads them instead of rebuilding the
+        `z_{impl}_{label}_{method}_...` strings inline. All names are stored as
+        strings; no synth ZTypes are created, so no type_id is allocated."""
+        base = rtype.cname_base or ("z_" + self._mangle_name(rtype.name))
+        is_facet = spec_zt.typetype == ZTypeType.FACET
+        conf = ZConformance(
+            impl_type_id=rtype.type_id,
+            spec_type_id=spec_zt.type_id,
+            label=label,
+            is_facet=is_facet,
+        )
+        for sname, sfunc in self.typing.children_of(spec_zt):
+            if sname in ("create", "take", "borrow"):
+                continue
+            if sfunc.typetype != ZTypeType.FUNCTION:
+                continue
+            conf.method_wrapper_cnames[sname] = f"{base}_{label}_{sname}_wrapper"
+        conf.vtable_cname = f"{base}_{label}_vtable"
+        if is_facet:
+            conf.create_owned_cname = f"{base}_{label}_create_owned"
+        else:
+            conf.create_cname = f"{base}_{label}_create"
+            conf.create_owned_cname = f"{base}_{label}_create_owned"
+            if rtype.typetype == ZTypeType.CLASS:
+                conf.destroy_cname = f"{base}_{label}_owned_destroy"
+            else:
+                conf.destroy_cname = f"{base}_{label}_boxed_destroy"
+        self.typing.conformance.append(conf)
+
     def _process_as_items_protocols(
         self, name: str, rtype: ZType, as_items: dict, start: Token
     ) -> None:
@@ -3574,6 +3609,7 @@ class TypeChecker:
                 # register: label becomes a child of type (PROTOCOL or FACET)
                 self._set_child(rtype, label, at)
                 self._protocol_labels.setdefault(name, []).append((label, at))
+                self._record_conformance(rtype, at, label)
             else:
                 # non-protocol as_item (existing behavior: tag refs, etc.)
                 if at:

@@ -204,6 +204,23 @@ CREATE TABLE IF NOT EXISTS narrowed_subtype (
     type_id   INTEGER,
     excluded  INTEGER NOT NULL  -- 0 = narrowed-to, 1 = excluded
 );
+CREATE TABLE IF NOT EXISTS conformance (
+    conformance_id      INTEGER PRIMARY KEY,
+    impl_type_id        INTEGER NOT NULL REFERENCES types(type_id),
+    spec_type_id        INTEGER NOT NULL REFERENCES types(type_id),
+    label               TEXT NOT NULL,
+    is_facet            INTEGER NOT NULL,
+    vtable_cname        TEXT,
+    create_cname        TEXT,
+    create_owned_cname  TEXT,
+    destroy_cname       TEXT
+);
+CREATE TABLE IF NOT EXISTS conformance_wrapper (
+    conformance_id  INTEGER NOT NULL REFERENCES conformance(conformance_id),
+    spec_method     TEXT NOT NULL,
+    wrapper_cname   TEXT NOT NULL,
+    PRIMARY KEY (conformance_id, spec_method)
+);
 """
 
 
@@ -520,6 +537,25 @@ def dump_sql(
             lines.append(
                 f"INSERT INTO emitted_lines VALUES ("
                 f"{i + 1}, {_sql_int(nid)}, {_sql_str(text)});"
+            )
+
+    # Stage 7: conformance entities (Case A). Skip any whose impl/spec type is
+    # unreachable from `all_types` (mirrors the type_children reachability gate).
+    for conf in typing.conformance:
+        if conf.impl_type_id not in all_types or conf.spec_type_id not in all_types:
+            continue
+        lines.append(
+            f"INSERT INTO conformance VALUES ("
+            f"{conf.conformance_id}, {conf.impl_type_id}, {conf.spec_type_id}, "
+            f"{_sql_str(conf.label)}, {1 if conf.is_facet else 0}, "
+            f"{_sql_str(conf.vtable_cname)}, {_sql_str(conf.create_cname)}, "
+            f"{_sql_str(conf.create_owned_cname)}, {_sql_str(conf.destroy_cname)});"
+        )
+        for spec_method, wrapper_cname in conf.method_wrapper_cnames.items():
+            lines.append(
+                f"INSERT INTO conformance_wrapper VALUES ("
+                f"{conf.conformance_id}, {_sql_str(spec_method)}, "
+                f"{_sql_str(wrapper_cname)});"
             )
 
     return "\n".join(lines) + "\n"

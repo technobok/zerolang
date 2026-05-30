@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import zast
-from ztypes import ZType, ZOwnership, ZParamOwnership
+from ztypes import ZConformance, ZType, ZOwnership, ZParamOwnership
 from zast import CallKind
 from zsymtab_proto import ZSymbolTableProto
 
@@ -100,6 +100,9 @@ class ZTyping:
     mono_functions: List[Tuple[ZType, "zast.Function"]] = field(
         default_factory=list, init=False
     )
+    # protocol/facet conformance entities (Case A): one per (impl, spec, label),
+    # carrying the pre-composed C names of its conformance helpers.
+    conformance: List[ZConformance] = field(default_factory=list, init=False)
     # dedup aliases: {qualified_alias_name: qualified_canonical_name}
     func_aliases: Dict[str, str] = field(default_factory=dict, init=False)
     # cloned methods per mono type: {mono_name: {mname: Function}}

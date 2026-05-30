@@ -598,6 +598,52 @@ class ZVariable:
     synth_origin: Optional[str] = None
 
 
+_next_conformance_id: int = 0
+
+
+def _alloc_conformance_id() -> int:
+    """Allocate the next auto-incrementing conformance ID."""
+    global _next_conformance_id
+    cid = _next_conformance_id
+    _next_conformance_id += 1
+    return cid
+
+
+_conformances_by_id: "dict[int, ZConformance]" = {}
+
+
+def _conformance_by_id(cid: int) -> "Optional[ZConformance]":
+    return _conformances_by_id.get(cid)
+
+
+@dataclass
+class ZConformance:
+    """A protocol/facet conformance: an impl type satisfying a spec type under
+    a label (`impl: record { ... } as { <label>: <spec> }`). A first-class
+    entity (own monotonic id, dumpable to SQL) so the C names of the generated
+    conformance helpers are computed once here and read by the emitter, not
+    rebuilt inline. Stores ids (not ZTypes) per the id-keyed convention; the
+    helper C names are pre-composed off the impl type's `cname_base`."""
+
+    impl_type_id: int
+    spec_type_id: int
+    label: str
+    is_facet: bool
+    conformance_id: int = field(default_factory=_alloc_conformance_id, init=False)
+    # spec method name -> the wrapper function's C name. Stored as strings (not
+    # synth ZTypes) so recording a conformance allocates no type_id and cannot
+    # perturb collision-suffix (`_{type_id}`) naming of other types.
+    method_wrapper_cnames: Dict[str, str] = field(default_factory=dict, init=False)
+    # pre-composed helper C names (these helpers have no ZType of their own)
+    vtable_cname: str = ""
+    create_cname: str = ""
+    create_owned_cname: str = ""
+    destroy_cname: str = ""
+
+    def __post_init__(self) -> None:
+        _conformances_by_id[self.conformance_id] = self
+
+
 # Numeric type suffix sets used both by `parse_number` (to peel an
 # inline suffix off the lexeme) and by `numeric_literal_form` (to
 # detect whether a literal carries an explicit suffix vs. is bare).
