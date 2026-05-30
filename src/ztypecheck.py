@@ -3942,19 +3942,23 @@ class TypeChecker:
             # re-resolving (and re-checking) the member under a divergent key.
             if ddefn.nodeid in self._resolved:
                 self._set_child(utype, dname, self._resolved[ddefn.nodeid])
-                continue
-            # Join unit and member with '_' so a top-level dependency/inline-unit
-            # type (`zlexer.tokstatetype`) gets a dot-free `ztype.name`
-            # (`zlexer_tokstatetype`); its cname, monomorphisation name,
-            # union/variant tag and destructor are then dot-free without per-site
-            # mangling. Methods/subtypes keep '.' (resolved elsewhere) — their
-            # FUNCTION/carrier cnames mangle dots anyway.
-            t = self._type_of_definition(unitname, f"{name}_{dname}", ddefn)
-            if t:
-                self._resolved[ddefn.nodeid] = t
-                self._set_child(utype, dname, t)
-            # check function bodies inside inline units (skip for generic units —
-            # bodies will be checked after monomorphization)
+            else:
+                # Join unit and member with '_' so a top-level dependency/inline
+                # type (`zlexer.tokstatetype`) gets a dot-free `ztype.name`
+                # (`zlexer_tokstatetype`); its cname, monomorphisation name,
+                # union/variant tag and destructor are then dot-free without
+                # per-site mangling. Methods/subtypes keep '.' (resolved
+                # elsewhere) — their FUNCTION/carrier cnames mangle dots anyway.
+                t = self._type_of_definition(unitname, f"{name}_{dname}", ddefn)
+                if t:
+                    self._resolved[ddefn.nodeid] = t
+                    self._set_child(utype, dname, t)
+            # Check function bodies (skip generic units — checked post-mono).
+            # Runs for cache-hit members too: a sibling forward reference
+            # resolves a function's signature without checking its body, so the
+            # body-check must not be skipped just because the type is cached.
+            # Each member is visited once per unit, and a unit is resolved once
+            # (nodeid-cached), so this checks each body exactly once.
             if (
                 not utype.isgeneric
                 and ddefn.nodetype == NodeType.FUNCTION

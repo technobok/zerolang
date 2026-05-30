@@ -1034,6 +1034,23 @@ class CEmitter:
                     mangled = _mangle_func(func_name)
                     self._track_stdlib_unit_native(mangled, ftype)
                     return mangled
+        # Bare free-function call. A dependency unit's sibling call (e.g.
+        # `escapeStr` inside zlexer) must emit the function's qualified cname
+        # (z_zlexer_escapeStr), not the bare `_mangle_func(name)` (z_escapeStr).
+        # Scoped to a definition-ref ATOMID resolving to a non-native function:
+        # method calls on variables and natives keep the legacy path (their
+        # ftype.cname can name the call site / not match a runtime symbol).
+        if call.callable.nodetype == NodeType.ATOMID:
+            atom_ft = self._node_ztype(call.callable)
+            if (
+                atom_ft is not None
+                and atom_ft.typetype == ZTypeType.FUNCTION
+                and atom_ft.cname
+                and not atom_ft.is_native
+                and self._is_definition_ref(cast(zast.AtomId, call.callable))
+            ):
+                self._track_stdlib_unit_native(atom_ft.cname, atom_ft)
+                return atom_ft.cname
         callable_name = self._get_callable_name(call.callable)
         mangled = self._mangle_callable(callable_name, call.callable)
         self._track_stdlib_unit_native(mangled, self._node_ztype(call.callable))

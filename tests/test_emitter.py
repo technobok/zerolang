@@ -1370,6 +1370,32 @@ class TestEmitterBasic:
         )
         assert out == "5"
 
+    def test_cross_unit_dependency_forward_ref_body_checked(self):
+        """A dependency function forward-referenced by an earlier sibling still
+        has its body type-checked, so typed ops (StringView ==) emit
+        z_StringView_eq rather than a raw struct == (regression: zlexer
+        kwlookup, whose body was skipped when reached via cache-hit)."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    '  s: "x".string\n'
+                    '  print "\\{mod.caller sv: s.stringview}"\n'
+                    "}"
+                ),
+                "mod.z": (
+                    "caller: function {sv: StringView} out i64 is {\n"
+                    "  return (callee sv: sv)\n"
+                    "}\n"
+                    "callee: function {sv: StringView} out i64 is {\n"
+                    '  if sv == "x" then return 1\n'
+                    "  return 0\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "1"
+
     def test_cross_unit_dependency_variant_payload(self):
         """A dependency variant's payload arm is constructed inside the
         dependency (2-segment, dot-free qualified cname/tag) and the payload is
