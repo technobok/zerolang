@@ -658,6 +658,16 @@ class CEmitter:
             return None
         return self.typing.variable_cname.get(vid)
 
+    def _def_cname(self, node: zast.Node) -> Optional[str]:
+        """Stored C name for a variable *declaration* node (parameter path,
+        assignment, with-binding), read by the `def_variable_id` stamp →
+        `variable_cname`. None when the node was not stamped (e.g. for-loop
+        bindings, which register via `symtab.define` and have no variable_id)."""
+        vid = self.typing.def_variable_id.get(node.nodeid)
+        if vid is None:
+            return None
+        return self.typing.variable_cname.get(vid)
+
     def _enclosing_type(self, func: zast.Function) -> Optional[ZType]:
         """The enclosing record/class type of a method, by id, or None for a
         top-level function. Read from the `enclosing_type_id` stamp on the
@@ -5890,7 +5900,9 @@ class CEmitter:
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
-            params.append(f"{ptype_str} {_mangle_var(pname)}")
+            params.append(
+                f"{ptype_str} {self._def_cname(ppath) or mangle_var_name(pname)}"
+            )
         param_str = ", ".join(params) if params else "void"
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
@@ -5945,7 +5957,9 @@ class CEmitter:
             ):
                 ptype_str = f"{ptype_str}*"
                 pointer_params.append(_mangle_var(pname))
-            params.append(f"{ptype_str} {_mangle_var(pname)}")
+            params.append(
+                f"{ptype_str} {self._def_cname(ppath) or mangle_var_name(pname)}"
+            )
 
         param_str = ", ".join(params) if params else "void"
 
@@ -6421,7 +6435,7 @@ class CEmitter:
             self._temp.decls.append(yield_fragment)
             decls = "".join(self._temp.decls)
             self._temp.decls.clear()
-            cname = _mangle_var(assign.name)
+            cname = self._def_cname(assign) or mangle_var_name(assign.name)
             ptr_name = f"__borrow_{cname}"
             elem_ctype = _ctype(self.typing, _assign_ztype)
             self._alias_map[assign.name] = f"(*{ptr_name})"
@@ -6445,7 +6459,7 @@ class CEmitter:
             alias_expr = self._narrowed_alias_expr(assign.value)
             if alias_expr is None:
                 alias_expr = self._alias_c_expr(_alias_of)
-            cname = _mangle_var(assign.name)
+            cname = self._def_cname(assign) or mangle_var_name(assign.name)
             self._alias_map[assign.name] = alias_expr
             return f"{indent}/* alias: {cname} => {alias_expr} */\n"
         ctype = "int64_t"
@@ -6466,7 +6480,7 @@ class CEmitter:
                 ctype = _ctype(self.typing, _assign_ztype.return_type)
             else:
                 ctype = _ctype(self.typing, _assign_ztype)
-        cname = _mangle_var(assign.name)
+        cname = self._def_cname(assign) or mangle_var_name(assign.name)
         self._in_named_assignment = True
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
@@ -11488,7 +11502,7 @@ class CEmitter:
         is_string = ctype == "z_String_t"
         is_class = ctype.startswith("z_") and ctype.endswith("_t*")
         is_union = val_type and val_type.typetype == ZTypeType.UNION
-        cname = _mangle_var(withnode.name)
+        cname = self._def_cname(withnode) or mangle_var_name(withnode.name)
 
         _with_ownership = self.typing.with_ownership.get(withnode.nodeid)
         _with_alias_of = self.typing.with_alias_of.get(withnode.nodeid)

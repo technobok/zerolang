@@ -7126,6 +7126,9 @@ class TypeChecker:
                     ownership = ZOwnership.BORROWED
                 var = ZVariable(ztype=pt, ownership=ownership)
                 self.symtab.define_var(pname, var)
+                # Stamp the parameter path so the emitter reads the param's C
+                # name from `variable_cname` rather than re-mangling `pname`.
+                self.typing.def_variable_id[ppath.nodeid] = var.variable_id
 
         # set expected return type for return statement checking
         prev_return_type = self.func_ctx.return_type
@@ -7338,6 +7341,10 @@ class TypeChecker:
                 var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
             self.typing.node_type[assign.nodeid] = t
+            # Stamp the assignment node so the emitter reads the local's C name
+            # from `variable_cname` at the declaration site (both branches bind
+            # `var`).
+            self.typing.def_variable_id[assign.nodeid] = var.variable_id
 
             # Phase B: alias optimization for inline `x: y.take` and
             # `x: y.borrow`. We only alias when ownership is explicitly
@@ -9794,6 +9801,9 @@ class TypeChecker:
             origin="anf",
         )
         self.symtab.define_var(temp_name, var)
+        # Stamp the synth Assignment so the emitter reads the temp's C name from
+        # `variable_cname` at its declaration site (parallel to user locals).
+        self.typing.def_variable_id[temp_assn.nodeid] = var.variable_id
         # Replace the arg's value with an AtomId reference to the temp.
         atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
         self.typing.node_type[atom.nodeid] = arg_type
@@ -11950,6 +11960,9 @@ class TypeChecker:
         var = ZVariable(ztype=t, ownership=ownership)
         var.is_private_access = result.private_access
         self.symtab.define_var(withnode.name, var)
+        # Stamp the with-binding so the emitter reads its C name from
+        # `variable_cname` at the declaration site.
+        self.typing.def_variable_id[withnode.nodeid] = var.variable_id
 
         # Acquire borrow-scoped locks on the source path for reftypes only.
         # Valtype borrows are copies; they do not need a lock at this level

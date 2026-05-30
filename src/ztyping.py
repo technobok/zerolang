@@ -185,6 +185,12 @@ class ZTyping:
     # emitter reads this (via atom_variable_id for refs, or the def-node stamp
     # for declarations) instead of re-mangling the variable's name string.
     variable_cname: Dict[int, str] = field(default_factory=dict, init=False)
+    # Per-definition-node nodeid → the variable_id it binds. The complement of
+    # atom_variable_id (which keys reference nodes): this keys the *declaring*
+    # node — a parameter path, an assignment, a with-binding — so the emitter
+    # reads `variable_cname[def_variable_id[node.nodeid]]` at declaration sites
+    # instead of re-mangling the binding's name.
+    def_variable_id: Dict[int, int] = field(default_factory=dict, init=False)
     # Per-AtomId reference → resolved unit-level definition's type_id. Present
     # iff the bare reference resolves to a unit/core definition (function, data
     # block, record/class/variant used as a value, unit-level const) rather
