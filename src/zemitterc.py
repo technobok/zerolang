@@ -4099,6 +4099,8 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdlib = True
         name = mono_type.name
+        struct = _cname_of(mono_type, name)
+        cbase = _cbase_of(mono_type, name)
         lines: List[str] = []
 
         # collect subtypes (non-special children)
@@ -4122,13 +4124,13 @@ class CEmitter:
         for sname, _ in subtype_items:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
             lines.append(f"    {tag},\n")
-        lines.append(f"}} z_{name}_tag_t;\n\n")
+        lines.append(f"}} {cbase}_tag_t;\n\n")
 
         # emit union struct
         lines.append("typedef struct {\n")
-        lines.append(f"    z_{name}_tag_t tag;\n")
+        lines.append(f"    {cbase}_tag_t tag;\n")
         lines.append("    void* data;\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        lines.append(f"}} {struct};\n\n")
 
         # destructor: collapse to a no-op when every subtype is `null` or
         # a locked arm (locked arms hold a borrowed pointer the union does
@@ -4142,9 +4144,7 @@ class CEmitter:
             _is_no_cleanup_mono(sname, stype) for sname, stype in subtype_items
         )
         if all_no_cleanup_mono:
-            lines.append(
-                f"static void z_{name}_destroy(z_{name}_t* u) {{ (void)u; }}\n\n"
-            )
+            lines.append(f"static void {cbase}_destroy({struct}* u) {{ (void)u; }}\n\n")
             self.struct_defs.append("".join(lines))
             return
 
@@ -4168,7 +4168,7 @@ class CEmitter:
                 )
             return ("            free(u->data);\n",)
 
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
+        lines.append(f"static void {cbase}_destroy({struct}* u) {{\n")
         lines.append("    if (!u) return;\n")
         lines.append("    if (!u->data) return;\n")
         lines.append("    switch (u->tag) {\n")
@@ -4206,7 +4206,9 @@ class CEmitter:
         inner_ctype = _ctype(self.typing, some_type)
         lines: List[str] = []
         # emit destructor: if non-null, destroy the inner value
-        lines.append(f"static void z_{name}_destroy({inner_ctype} v) {{\n")
+        lines.append(
+            f"static void {_cbase_of(mono_type, name)}_destroy({inner_ctype} v) {{\n"
+        )
         lines.append("    if (!v) return;\n")
         if (some_type.destructor_name is not None) and some_type.destructor_name:
             lines.append(f"    {some_type.destructor_name}(v);\n")
@@ -4221,6 +4223,8 @@ class CEmitter:
         """Emit a monomorphized variant type."""
         self.needs_stdint = True
         name = mono_type.name
+        struct = _cname_of(mono_type, name)
+        cbase = _cbase_of(mono_type, name)
         lines: List[str] = []
 
         # collect subtypes (non-special children)
@@ -4244,14 +4248,14 @@ class CEmitter:
         for sname, _ in subtype_items:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
             lines.append(f"    {tag},\n")
-        lines.append(f"}} z_{name}_tag_t;\n\n")
+        lines.append(f"}} {cbase}_tag_t;\n\n")
 
         # check if all subtypes are null (enum pattern)
         all_null = all(stype.typetype == ZTypeType.NULL for _, stype in subtype_items)
 
         # emit variant struct with inline union
         lines.append("typedef struct {\n")
-        lines.append(f"    z_{name}_tag_t tag;\n")
+        lines.append(f"    {cbase}_tag_t tag;\n")
         if not all_null:
             lines.append("    union {\n")
             for sname, stype in subtype_items:
@@ -4261,13 +4265,13 @@ class CEmitter:
                     if sub_ctype and sub_ctype != "void":
                         lines.append(f"        {sub_ctype} {sname};\n")
             lines.append("    } data;\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        lines.append(f"}} {struct};\n\n")
 
         # emit equality function (if auto-generated)
         eq_method = self.typing.child_of(mono_type, "==")
         if eq_method and eq_method.is_autogen_eq:
-            ctype = f"z_{name}_t"
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            ctype = struct
+            lines.append(f"static bool {cbase}_eq({ctype} a, {ctype} b) {{\n")
             if self._use_memcmp_eq(name, mono_type, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
@@ -4285,7 +4289,8 @@ class CEmitter:
                     elif self._needs_eq_call(stype):
                         tname = stype.name.replace(".", "_")
                         lines.append(
-                            f" return z_{tname}_eq(a.data.{sname}, b.data.{sname});\n"
+                            f" return {_cbase_of(stype, tname)}_eq"
+                            f"(a.data.{sname}, b.data.{sname});\n"
                         )
                     else:
                         lines.append(f" return a.data.{sname} == b.data.{sname};\n")
@@ -5962,9 +5967,11 @@ class CEmitter:
                             and sub_ctype.startswith("z_")
                             and sub_ctype.endswith("_t")
                         ):
-                            sub_name = sub_ctype[2:-2]  # z_foo_t -> foo
+                            # sub_ctype is `z_<base>_t`; drop the `_t` suffix to
+                            # get the eq function's base.
                             lines.append(
-                                f" return z_{sub_name}_eq(a.data.{sname}, b.data.{sname});\n"
+                                f" return {sub_ctype[:-2]}_eq"
+                                f"(a.data.{sname}, b.data.{sname});\n"
                             )
                         else:
                             lines.append(f" return a.data.{sname} == b.data.{sname};\n")
@@ -9407,9 +9414,9 @@ class CEmitter:
         parent_tagged = self.typing.dp_parent_tagged_type.get(path.nodeid)
         if parent_tagged is not None:
             if parent_tagged.typetype == ZTypeType.UNION:
-                return self._emit_union_null_construction(parent_tagged.name, child)
+                return self._emit_union_null_construction(parent_tagged, child)
             if parent_tagged.typetype == ZTypeType.VARIANT:
-                return self._emit_variant_null_construction(parent_tagged.name, child)
+                return self._emit_variant_null_construction(parent_tagged, child)
 
         if path.parent.nodetype == NodeType.ATOMID:
             pname = cast(zast.AtomId, path.parent).name
@@ -9521,10 +9528,10 @@ class CEmitter:
             # type's dot-free ztype.name (not the bare atom `pname`) so a
             # dependency-unit variant/union emits a valid C name.
             if parent_def is not None and ptt == ZTypeType.UNION:
-                return self._emit_union_null_construction(parent_def.name, child)
+                return self._emit_union_null_construction(parent_def, child)
             # variant_name.subtype — emit null subtype construction
             if parent_def is not None and ptt == ZTypeType.VARIANT:
-                return self._emit_variant_null_construction(parent_def.name, child)
+                return self._emit_variant_null_construction(parent_def, child)
             # data.index call. Use the data type's dot-free ztype.name
             # (parent_def.name), not the bare atom pname, so a dependency
             # unit's block emits its qualified array cname.
@@ -10499,14 +10506,14 @@ class CEmitter:
         # type annotation may be missing.
         if call_type and call_type.typetype == ZTypeType.UNION:
             union_name = call_type.name
+            ctype = _cname_of(call_type, union_name)
         elif cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
-            union_name = cast(
-                zast.AtomId, cast(zast.DottedPath, call.callable).parent
-            ).name
+            parent_atom = cast(zast.AtomId, cast(zast.DottedPath, call.callable).parent)
+            union_name = parent_atom.name
+            ctype = _cname_of(self._unit_def_ztype(parent_atom), union_name)
         else:
             return "NULL"
 
-        ctype = f"z_{union_name}_t"
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
 
         self._temp.decls.append(f"{indent}{ctype} {tmp} = {{0}};\n")
@@ -10748,12 +10755,15 @@ class CEmitter:
         ct = _ctype(self.typing, self._node_ztype(subtype_path))
         return ct if ct != "void" else None
 
-    def _emit_union_null_construction(self, union_name: str, subtype_name: str) -> str:
+    def _emit_union_null_construction(
+        self, union_ztype: ZType, subtype_name: str
+    ) -> str:
         """Emit construction for a null-subtype union (no data)."""
         self.needs_stdlib = True
         indent = self._indent()
         tmp = self._temp_name("c")
-        ctype = f"z_{union_name}_t"
+        union_name = union_ztype.name
+        ctype = _cname_of(union_ztype, union_name)
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
         self._temp.decls.append(f"{indent}{ctype} {tmp} = {{0}};\n")
         self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
@@ -10827,10 +10837,9 @@ class CEmitter:
             variant_name = call_type.name
             ctype = _cname_of(call_type, variant_name)
         elif cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
-            variant_name = cast(
-                zast.AtomId, cast(zast.DottedPath, call.callable).parent
-            ).name
-            ctype = f"z_{variant_name}_t"
+            parent_atom = cast(zast.AtomId, cast(zast.DottedPath, call.callable).parent)
+            variant_name = parent_atom.name
+            ctype = _cname_of(self._unit_def_ztype(parent_atom), variant_name)
         else:
             return "(z_unknown_t){0}"
 
@@ -10879,12 +10888,13 @@ class CEmitter:
         return tmp
 
     def _emit_variant_null_construction(
-        self, variant_name: str, subtype_name: str
+        self, variant_ztype: ZType, subtype_name: str
     ) -> str:
         """Emit construction for a null-subtype variant (tag only, no data)."""
         indent = self._indent()
         tmp = self._temp_name("c")
-        ctype = f"z_{variant_name}_t"
+        variant_name = variant_ztype.name
+        ctype = _cname_of(variant_ztype, variant_name)
         tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
         self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
         self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
@@ -11957,6 +11967,8 @@ class CEmitter:
         indent = self._indent()
         parts: List[str] = []
         union_name = union_type.name
+        union_ctype = _cname_of(union_type, union_name)
+        union_cbase = _cbase_of(union_type, union_name)
 
         subject = self._emit_operation_value(casenode.subject)
         alias_name = self._narrow_alias_name(casenode.subject)
@@ -12014,7 +12026,7 @@ class CEmitter:
                 # there's no per-arm payload to zero — only the union
                 # wrapper. Zero the whole union; post-switch destroy
                 # will no-op on the zeroed value.
-                parts.append(f"{self._indent()}{subject} = (z_{union_name}_t){{0}};\n")
+                parts.append(f"{self._indent()}{subject} = ({union_ctype}){{0}};\n")
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
@@ -12024,8 +12036,8 @@ class CEmitter:
         # post-match cleanup: destroy subject if taken in any arm but not all
         if _case_subject_taken:
             parts.append(
-                f"{indent}z_{union_name}_destroy(&{subject});\n"
-                f"{indent}{subject} = (z_{union_name}_t){{0}};\n"
+                f"{indent}{union_cbase}_destroy(&{subject});\n"
+                f"{indent}{subject} = ({union_ctype}){{0}};\n"
             )
 
         # post-match cleanup: destroy+zero variables taken in some arm
@@ -12100,7 +12112,7 @@ class CEmitter:
             union_name = union_type.name
             parts.append(
                 f"{indent}if ({subject} != NULL) {{\n"
-                f"{indent}    z_{union_name}_destroy({subject});\n"
+                f"{indent}    {_cbase_of(union_type, union_name)}_destroy({subject});\n"
                 f"{indent}}}\n"
                 f"{indent}{subject} = NULL;\n"
             )
