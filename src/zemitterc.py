@@ -482,9 +482,9 @@ class CEmitter:
         self._string_literals: Dict[str, str] = {}  # escaped C string → static var name
         self._string_literal_counter: int = 0
         # emitter-local scratch for For nodes used as list comprehensions:
-        # nodeid → (C temp name for result list, mangled list-type name).
+        # nodeid → (C temp name for result list, the list's ZType).
         # Entry presence signals "this For is being emitted as a comprehension".
-        self._comprehension_state: Dict[int, Tuple[str, str]] = {}
+        self._comprehension_state: Dict[int, Tuple[str, ZType]] = {}
 
     @property
     def _scope(self) -> ScopeState:
@@ -6687,7 +6687,7 @@ class CEmitter:
             and inner_resolved.typetype == ZTypeType.RECORD
             and inner_resolved.name == cast(zast.AtomId, inner).name
         ):
-            ctype = f"z_{cast(zast.AtomId, inner).name}_t"
+            ctype = _cname_of(inner_resolved, cast(zast.AtomId, inner).name)
         result = f"{indent}{ctype} {cname} = {val};\n"
         # invalidate source on .take for reftypes
         take_var = self._get_take_var_from_expr(assign.value)
@@ -7316,7 +7316,8 @@ class CEmitter:
                     ):
                         recv = f"&{arg}"
                     return (
-                        f"{indent}z_StringView_print(z_{tname}_stringview({recv}));\n"
+                        f"{indent}z_StringView_print("
+                        f"{_cbase_of(arg_type, tname)}_stringview({recv}));\n"
                     )
                 # Unknown type — shouldn't happen post-typecheck, but keep
                 # a safe fallback.
@@ -8270,7 +8271,8 @@ class CEmitter:
         if self._node_ztype(call.callable) and _is_array_type(
             self._node_ztype(call.callable)
         ):
-            return f"z_{cast(ZType, self._node_ztype(call.callable)).name}_create()"
+            arr_zt = cast(ZType, self._node_ztype(call.callable))
+            return f"{_cbase_of(arr_zt, arr_zt.name)}_create()"
 
         # stringview method calls: .string, .length
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -8371,14 +8373,17 @@ class CEmitter:
         if self._node_ztype(call.callable) and _is_str_type(
             self._node_ztype(call.callable)
         ):
-            str_name = _mono_name(self._node_ztype(call.callable))
-            return f"z_{str_name}_create()"
+            str_zt = self._node_ztype(call.callable)
+            str_name = _mono_name(str_zt)
+            return f"{_cbase_of(str_zt, str_name)}_create()"
 
         # list construction: (list of: T) or (list of: T) capacity: N
         if self._node_ztype(call.callable) and _is_list_type(
             self._node_ztype(call.callable)
         ):
-            list_name = _mono_name(self._node_ztype(call.callable))
+            list_zt = self._node_ztype(call.callable)
+            list_name = _mono_name(list_zt)
+            list_base = _cbase_of(list_zt, list_name)
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":
@@ -8386,14 +8391,16 @@ class CEmitter:
                     break
             if cap_arg is not None:
                 cap_val = self._emit_operation_value(cap_arg.valtype)
-                return f"z_{list_name}_create({cap_val})"
-            return f"z_{list_name}_create(0)"
+                return f"{list_base}_create({cap_val})"
+            return f"{list_base}_create(0)"
 
         # map construction: (map key: K value: V) or with capacity:
         if self._node_ztype(call.callable) and _is_map_type(
             self._node_ztype(call.callable)
         ):
-            map_name = _mono_name(self._node_ztype(call.callable))
+            map_zt = self._node_ztype(call.callable)
+            map_name = _mono_name(map_zt)
+            map_base = _cbase_of(map_zt, map_name)
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":
@@ -8401,14 +8408,16 @@ class CEmitter:
                     break
             if cap_arg is not None:
                 cap_val = self._emit_operation_value(cap_arg.valtype)
-                return f"z_{map_name}_create({cap_val})"
-            return f"z_{map_name}_create(0)"
+                return f"{map_base}_create({cap_val})"
+            return f"{map_base}_create(0)"
 
         # set construction: (set of: T) or with capacity:
         if self._node_ztype(call.callable) and _is_set_type(
             self._node_ztype(call.callable)
         ):
-            set_name = _mono_name(self._node_ztype(call.callable))
+            set_zt = self._node_ztype(call.callable)
+            set_name = _mono_name(set_zt)
+            set_base = _cbase_of(set_zt, set_name)
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":  # ztc-string-compare-ok: stdlib arg
@@ -8416,8 +8425,8 @@ class CEmitter:
                     break
             if cap_arg is not None:
                 cap_val = self._emit_operation_value(cap_arg.valtype)
-                return f"z_{set_name}_create({cap_val})"
-            return f"z_{set_name}_create(0)"
+                return f"{set_base}_create({cap_val})"
+            return f"{set_base}_create(0)"
 
         # array method calls: .get and .set
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -8640,7 +8649,9 @@ class CEmitter:
                     # the source post-call so scope exit doesn't free a
                     # buffer the destination now owns.
                     indent = self._indent()
-                    from_tmp = self._alloc_arg_temp(f"z_{list_type_name}_t", from_val)
+                    from_tmp = self._alloc_arg_temp(
+                        _cname_of(dp_parent_type, list_type_name), from_val
+                    )
                     self._transfer_implicit_take(from_val, from_arg.valtype, indent)
                     return f"{self._synth_method_cname(dp_parent_type, 'extend')}({parent_val}, &{from_tmp})"
                 if method_name == "extendView" and call.arguments:
@@ -9028,7 +9039,7 @@ class CEmitter:
             eq_method = self.typing.child_of(lhs_zt, "==")
             if eq_method and eq_method.is_autogen_eq:
                 tname = lhs_zt.name.replace(".", "_")
-                call = f"z_{tname}_eq({lhs}, {rhs})"
+                call = f"{_cbase_of(lhs_zt, tname)}_eq({lhs}, {rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
@@ -9220,7 +9231,7 @@ class CEmitter:
         # only match user-defined records (not numeric constant aliases like north: 0)
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
-            return f"z_{name}_create({zero_args})"
+            return f"{_cbase_of(resolved, name)}_create({zero_args})"
         # string class: bare class name as value -> empty string constructor.
         # Disambiguator (`atom_ztype.name == name`) rejects variables of String
         # type — same idiom as the record case above.
@@ -9265,7 +9276,7 @@ class CEmitter:
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(
-                f"{indent}{ctype} {tmp} = z_{mangled}_create({create_args});\n"
+                f"{indent}{ctype} {tmp} = {_cbase_of(base, mangled)}_create({create_args});\n"
             )
             if resolved.destructor_name is not None:
                 self._temp.frees.append(tmp)
@@ -9522,18 +9533,20 @@ class CEmitter:
             return f"{parent}.data[{child}]"
         # array: .length constant access
         if parent_type_dp and _is_array_type(parent_type_dp) and child == "length":
-            return f"z_{parent_type_dp.name}_length"
+            return f"{_cbase_of(parent_type_dp, parent_type_dp.name)}_length"
         # str: .length field access
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
             return f"{parent}.len"
         # str: .size constant access
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "size":
-            return f"z_{parent_type_dp.name}_size"
+            return f"{_cbase_of(parent_type_dp, parent_type_dp.name)}_size"
         # str: .string conversion (str -> z_String_t*)
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "string":
             parent = self._emit_path_value(path.parent)
-            result = f"z_{parent_type_dp.name}_string({parent})"
+            result = (
+                f"{_cbase_of(parent_type_dp, parent_type_dp.name)}_string({parent})"
+            )
             return self._alloc_temp(result)
         # stringview: .length field access
         if parent_type_dp and _is_stringview_type(parent_type_dp) and child == "length":
@@ -9747,7 +9760,7 @@ class CEmitter:
                 "&"
             ):
                 parent = f"&{parent}"
-            return f"z_{_mono_name(parent_type_dp)}_pop({parent})"
+            return f"{self._synth_method_cname(parent_type_dp, 'pop')}({parent})"
         # list: .listview as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "listview":
             parent = self._emit_path_value(path.parent)
@@ -9755,7 +9768,7 @@ class CEmitter:
                 "&"
             ):
                 parent = f"&{parent}"
-            return f"z_{_mono_name(parent_type_dp)}_listview({parent})"
+            return f"{self._synth_method_cname(parent_type_dp, 'listview')}({parent})"
         # map: .length field access
         if parent_type_dp and _is_map_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
@@ -9926,7 +9939,7 @@ class CEmitter:
                 create_name = (
                     conf.create_cname
                     if conf
-                    else f"z_{parent_type.name}_{child}_create"
+                    else f"{_cbase_of(parent_type, parent_type.name)}_{child}_create"
                 )
                 # pass address for stack-allocated types
                 if parent_type.is_valtype or not parent_type.is_heap_allocated:
@@ -11556,7 +11569,7 @@ class CEmitter:
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(
                         f"{inner}if ({tmp}.tag == {none_tag}) "
-                        f"{{ z_{opt_name}_destroy(&{tmp}); break; }}\n"
+                        f"{{ {_cbase_of(opt_type, opt_name)}_destroy(&{tmp}); break; }}\n"
                     )
                     parts.append(
                         f"{inner}{elem_ctype} {iname_c} = *({elem_ctype}*){tmp}.data;\n"
@@ -11653,7 +11666,7 @@ class CEmitter:
         if state is None:
             body = self._emit_statement(fornode.loop)
         else:
-            list_var, list_name = state
+            list_var, list_type = state
             parts: List[str] = []
             stmts = fornode.loop.statements
             for sl in stmts[:-1]:
@@ -11662,7 +11675,8 @@ class CEmitter:
             if last.nodetype == NodeType.EXPRESSION:
                 val = self._emit_expression_value(cast(zast.Expression, last))
                 indent = self._indent()
-                parts.append(f"{indent}z_{list_name}_append(&{list_var}, {val});\n")
+                append_cn = self._synth_method_cname(list_type, "append")
+                parts.append(f"{indent}{append_cn}(&{list_var}, {val});\n")
             else:
                 parts.append(self._emit_statement_line(stmts[-1]))
             body = "".join(parts)
@@ -11677,12 +11691,14 @@ class CEmitter:
         tmp = self._temp_name("fl")
         indent = self._indent()
         self._temp.decls.append(
-            f"{indent}{list_ctype} {tmp} = z_{list_name}_create(0);\n"
+            f"{indent}{list_ctype} {tmp} = {_cbase_of(list_type, list_name)}_create(0);\n"
         )
         self._temp.frees.append(tmp)
         if list_name not in self._temp.class_set:
             self._temp.class_set[tmp] = list_name
-        self._comprehension_state[fornode.nodeid] = (tmp, list_name)
+        # Carry the list ZType (not just its name) so the body can read the
+        # append method's stored cname via _synth_method_cname.
+        self._comprehension_state[fornode.nodeid] = (tmp, list_type)
         self._temp.decls.append(self._emit_for(fornode))
         del self._comprehension_state[fornode.nodeid]
         if tmp in self._temp.frees:
@@ -11837,11 +11853,15 @@ class CEmitter:
 
         if is_owned:
             if is_union and val_type:
-                parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
+                parts.append(
+                    f"{inner_indent}{_cbase_of(val_type, val_type.name)}_destroy({cname});\n"
+                )
             elif is_string:
                 parts.append(f"{inner_indent}z_String_free(&{cname});\n")
             elif is_class and val_type:
-                parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
+                parts.append(
+                    f"{inner_indent}{_cbase_of(val_type, val_type.name)}_destroy({cname});\n"
+                )
             elif is_class:
                 parts.append(f"{inner_indent}if ({cname}) free({cname});\n")
         self.indent_level -= 1
