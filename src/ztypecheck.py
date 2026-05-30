@@ -838,6 +838,12 @@ class TypeChecker:
             # always a valid C identifier.
             base_id = "z_" + self._mangle_name(ztype.name)
             self._assign_cname(ztype, base_id, suffix="_t")
+            # Record native base-type cnames (String, StringView, ...) so the
+            # emitter can recover a stdlib cname by name without hardcoding the
+            # literal. Monomorphizations carry the native flag too; exclude them
+            # (generic_origin set) so the registry holds only base stdlib types.
+            if ztype.is_native and ztype.generic_origin is None:
+                self.typing.runtime_cname[ztype.name] = ztype.cname
 
     def _release_template_cname(self, ztype: ZType) -> None:
         """Release a generic template's cname slot after generic

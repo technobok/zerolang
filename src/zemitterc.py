@@ -807,11 +807,22 @@ class CEmitter:
         nid = self._scope.func_nodeid
         return f"_{prefix}{nid}_{self._scope.temp_counter}"
 
+    def _string_cname(self) -> str:
+        """C type name of the String class, read from the stdlib cname
+        registry rather than hardcoded. system.z is always loaded, so the
+        entry is always present when the emitter constructs a String."""
+        return self.typing.runtime_cname["String"]
+
+    def _stringview_cname(self) -> str:
+        """C type name of the StringView class, read from the stdlib cname
+        registry rather than hardcoded."""
+        return self.typing.runtime_cname["StringView"]
+
     def _alloc_temp(self, expr: str) -> str:
         """Allocate a temporary variable for a stack-allocated string expression."""
         name = self._temp_name("t")
         indent = self._indent()
-        self._temp.decls.append(f"{indent}z_String_t {name} = {expr};\n")
+        self._temp.decls.append(f"{indent}{self._string_cname()} {name} = {expr};\n")
         self._temp.frees.append(name)
         self._temp.string_set.add(name)
         return name
@@ -5053,7 +5064,7 @@ class CEmitter:
                 lines.append(f"    int64_t idx = {find_fn}(_this, _key, h, NULL);\n")
                 lines.append("    if (idx >= 0) {\n")
                 if val_is_string:
-                    lines.append("        z_String_t _copy = {0};\n")
+                    lines.append(f"        {self._string_cname()} _copy = {{0}};\n")
                     lines.append(
                         "        _copy.size = _this->entries[idx].value.size;\n"
                     )
@@ -5116,7 +5127,7 @@ class CEmitter:
                     # returned Option's box are destroyed. Deep-copy: malloc
                     # a fresh String + memcpy the buffer.
                     lines.append(
-                        "        z_String_t* _copy = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
+                        f"        {self._string_cname()}* _copy = ({self._string_cname()}*)z_xmalloc(sizeof({self._string_cname()}));\n"
                     )
                     lines.append(
                         "        _copy->size = _this->entries[idx].value.size;\n"
@@ -7293,7 +7304,7 @@ class CEmitter:
                     # emit anyway.
                     return (
                         f"{indent}z_StringView_print("
-                        f"(z_StringView_t){{{arg}.data, {arg}.len}});\n"
+                        f"({self._stringview_cname()}){{{arg}.data, {arg}.len}});\n"
                     )
                 # User type conforming to `text`: call the type's
                 # declared `.stringview` method. The method's C name
@@ -7492,9 +7503,7 @@ class CEmitter:
                             ):
                                 # temp created by .string conversion — zero-init
                                 # so scope cleanup doesn't double-free
-                                code += (
-                                    f"{indent}{emitted_vals[i]} = (z_String_t){{0}};\n"
-                                )
+                                code += f"{indent}{emitted_vals[i]} = ({self._string_cname()}){{0}};\n"
 
         return code
 
@@ -8924,7 +8933,9 @@ class CEmitter:
                 ftype = self._node_ztype(call.callable)
                 if ftype and ftype.return_ownership == ZParamOwnership.BORROW:
                     tmp = self._temp_name("t")
-                    self._temp.decls.append(f"{indent}z_String_t {tmp} = {result};\n")
+                    self._temp.decls.append(
+                        f"{indent}{self._string_cname()} {tmp} = {result};\n"
+                    )
                 else:
                     tmp = self._alloc_temp(result)
                 self._apply_call_implicit_takes(call, indent)
@@ -9050,11 +9061,15 @@ class CEmitter:
                 if lhs_zt.subtype == ZSubType.STRINGVIEW:
                     l_expr = lhs
                 else:
-                    l_expr = f"((z_StringView_t){{ {lhs}.data, {lhs}.size }})"
+                    l_expr = (
+                        f"(({self._stringview_cname()}){{ {lhs}.data, {lhs}.size }})"
+                    )
                 if rhs_sub == ZSubType.STRINGVIEW:
                     r_expr = rhs
                 else:
-                    r_expr = f"((z_StringView_t){{ {rhs}.data, {rhs}.size }})"
+                    r_expr = (
+                        f"(({self._stringview_cname()}){{ {rhs}.data, {rhs}.size }})"
+                    )
                 call = f"z_StringView_eq({l_expr}, {r_expr})"
                 if op == "!=":
                     return f"(!{call})"
@@ -10195,7 +10210,7 @@ class CEmitter:
         data_access = f"{parent_val}{acc}data"
         len_access = f"{parent_val}{acc}{len_field}"
         if from_val is None or to_val is None:
-            return f"(z_StringView_t){{ {data_access}, {len_access} }}"
+            return f"({self._stringview_cname()}){{ {data_access}, {len_access} }}"
         self.needs_stdlib = True
         self.needs_stdio = True
         indent = self._indent()
@@ -10206,7 +10221,7 @@ class CEmitter:
             f' z_panic("stringview: bounds error");\n'
         )
         return (
-            f"(z_StringView_t){{ {data_access}"
+            f"({self._stringview_cname()}){{ {data_access}"
             f" + (uint64_t){from_val},"
             f" (uint64_t){to_val} - (uint64_t){from_val} }}"
         )
@@ -10902,7 +10917,7 @@ class CEmitter:
             else:
                 est_cap += len(cast(zast.StringChunk, p).text)
         self._temp.decls.append(
-            f"{indent}z_String_t {result} = z_String_create((uint64_t){est_cap});\n"
+            f"{indent}{self._string_cname()} {result} = z_String_create((uint64_t){est_cap});\n"
         )
         self._temp.frees.append(result)
         self._temp.string_set.add(result)

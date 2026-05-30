@@ -111,6 +111,13 @@ class ZTyping:
     )
     # resolved type names: {qualified_name: ZType}
     resolved: Dict[str, ZType] = field(default_factory=dict, init=False)
+    # Stdlib/runtime cnames: {type_name: cname} for native types (String,
+    # StringView, ...). The emitter and runtime-emission layer read this
+    # instead of hardcoding the literal C name, so id-based naming reflects
+    # automatically. Stdlib types are not exposed by name in `resolved`, so
+    # this is the channel the emitter uses to recover a stdlib cname when no
+    # ZType is in scope (notably the type-identity comparisons).
+    runtime_cname: Dict[str, str] = field(default_factory=dict, init=False)
     # Unit AST nodeid → resolved unit ZType.
     unit_types_by_id: Dict[int, ZType] = field(default_factory=dict, init=False)
     # Symbol table (scope/entry/variable hierarchy). Typed via
