@@ -440,6 +440,10 @@ class CEmitter:
         # conforming impl type-ids (sizes the facet's inline data union).
         self._facet_def_by_id: Dict[int, zast.ObjectDef] = {}
         self._facet_conformer_ids: Dict[int, list] = {}
+        # protocol type-id -> AST def (same cross-unit fix as facets: a
+        # conforming type emits its protocol impl by the protocol's type-id, not
+        # the as-item's short name which misses across units).
+        self._protocol_def_by_id: Dict[int, zast.ObjectDef] = {}
         # (impl_type, proto_name) -> label for owned protocol create
         self._proto_conformance: Dict[tuple, str] = {}
         # Case-A conformance entities, indexed for O(1) emitter lookup by the
@@ -1285,6 +1289,9 @@ class CEmitter:
             elif defn_type == NodeType.PROTOCOL:
                 if not self._is_generic_template(defn):
                     self._protocol_defs[qname] = defn
+                    proto_zt = self._node_ztype(defn)
+                    if proto_zt is not None:
+                        self._protocol_def_by_id[proto_zt.type_id] = defn
             elif defn_type == NodeType.FACET:
                 if not self._is_generic_template(defn):
                     self._facet_defs[qname] = defn
@@ -1676,7 +1683,9 @@ class CEmitter:
                     else None
                 )
                 if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
-                    self._emit_protocol_impl(name, label, proto_name, defn)
+                    self._emit_protocol_impl(
+                        name, label, proto_name, defn, proto_zt=self._node_ztype(apath)
+                    )
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -2703,15 +2712,21 @@ class CEmitter:
         proto_name: str,
         impl_defn: "zast.ObjectDef",
         proto: "Optional[zast.ObjectDef]" = None,
+        proto_zt: "Optional[ZType]" = None,
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a protocol implementation."""
+        # Find the protocol def by its type-id when available (cross-unit-correct;
+        # the short-name `_protocol_defs` map misses across units). The io caller
+        # passes the resolved `proto` directly and bypasses both lookups.
+        if proto is None and proto_zt is not None:
+            proto = self._protocol_def_by_id.get(proto_zt.type_id)
         if proto is None:
             proto = self._protocol_defs.get(proto_name)
         if not proto:
             return
         is_class = impl_defn.nodetype == NodeType.CLASS
         impl_type = self._node_ztype(impl_defn)
-        proto_type = self._node_ztype(proto)
+        proto_type = proto_zt if proto_zt is not None else self._node_ztype(proto)
         conf = self._conformance_of(impl_type, proto_type, label)
         # All conformance C names are read from the conformance entity and the
         # resolved spec/impl ZTypes, so they stay dot-free cross-unit. The
@@ -3030,7 +3045,9 @@ class CEmitter:
                     else None
                 )
                 if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
-                    self._emit_protocol_impl(name, label, proto_name, rec)
+                    self._emit_protocol_impl(
+                        name, label, proto_name, rec, proto_zt=self._node_ztype(apath)
+                    )
             return
 
         self.needs_stdint = True
@@ -3105,7 +3122,9 @@ class CEmitter:
                 else None
             )
             if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
-                self._emit_protocol_impl(name, label, proto_name, rec)
+                self._emit_protocol_impl(
+                    name, label, proto_name, rec, proto_zt=self._node_ztype(apath)
+                )
             # facet impls are deferred to _emit_deferred_facets
         # emit 'as' constants
         self._emit_as_constants(name, rec.as_items)
@@ -3662,7 +3681,13 @@ class CEmitter:
                         else None
                     )
                     if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
-                        self._emit_protocol_impl(name, label, proto_name, cls)
+                        self._emit_protocol_impl(
+                            name,
+                            label,
+                            proto_name,
+                            cls,
+                            proto_zt=self._node_ztype(apath),
+                        )
             return
 
         self.needs_stdint = True
@@ -3756,7 +3781,9 @@ class CEmitter:
                     else None
                 )
                 if proto_name and self._node_typetype(apath) == ZTypeType.PROTOCOL:
-                    self._emit_protocol_impl(name, label, proto_name, cls)
+                    self._emit_protocol_impl(
+                        name, label, proto_name, cls, proto_zt=self._node_ztype(apath)
+                    )
         # emit 'as' constants
         self._emit_as_constants(name, cls.as_items)
 

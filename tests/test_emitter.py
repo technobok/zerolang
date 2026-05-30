@@ -1478,6 +1478,36 @@ class TestEmitterBasic:
         )
         assert out == "15"
 
+    def test_cross_unit_dependency_protocol_vtable(self):
+        """A user protocol + conforming class both in a dependency unit, with a
+        protocol handle created and a method dispatched THROUGH the vtable from
+        main. Guards that the protocol impl (wrappers / vtable / create) is found
+        and emitted by the protocol's type-id cross-unit — the short-name
+        `_protocol_defs` lookup misses across units, so without the id-based find
+        the create/vtable are never defined and the program fails to link."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  sq: shapes.Square side: 4\n"
+                    "  sh: shapes.Shape.borrow from: sq\n"
+                    '  print "\\{sh.area}"\n'
+                    "}"
+                ),
+                "shapes.z": (
+                    "Shape: protocol {\n"
+                    "  area: function {:this} out i64\n"
+                    "}\n"
+                    "Square: class { side: i64 } as {\n"
+                    "  s: Shape\n"
+                    "  area: function {sq: this} out i64 is "
+                    "{ return sq.side * sq.side }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "16"
+
     def test_reserved_word_variables(self):
         """Locals named after C reserved words are escaped (v_int etc.).
         Guards the variable-cname move into the typechecker."""
