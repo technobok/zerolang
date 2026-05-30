@@ -6417,6 +6417,14 @@ class CEmitter:
         indent = self._indent()
         _alias_of = self.typing.assign_alias_of.get(assign.nodeid)
         _assign_ztype = self._node_ztype(assign)
+        # Dead hoisted-arg temp: an ANF synth temp (synth_origin "anf")
+        # whose value is a compile-time constant is never read — the use
+        # site inlines the stamped const_value (propagated in _hoist_arg),
+        # so the `int64_t _tN = 92;` decl would be unused. Emit nothing.
+        if assign.synth_origin == "anf" and (
+            self.typing.node_const_value.get(assign.value.expression.nodeid) is not None
+        ):
+            return ""
         # Bidirectional generator with `.lock` (or rewritten-to-`.lock`)
         # `accepts:`: `name: yield v` binds `name` as a pointer alias
         # into the synth class's `_resume_input` slot. The body's
