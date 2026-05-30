@@ -1425,6 +1425,94 @@ class TestEmitterBasic:
         )
         assert out == "42"
 
+    def test_cross_unit_dependency_protocol(self):
+        """A class in a dependency unit conforms to a protocol and is used
+        through it from main. Impl-helper C names derive from the impl type's
+        dot-free cname_base, so they stay valid cross-unit."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    '  m: shapes.MyLabel data_: "hi".string\n'
+                    "  print m\n"
+                    "}"
+                ),
+                "shapes.z": (
+                    "MyLabel: class { data_: String } as {\n"
+                    "  :Text\n"
+                    "  stringview: function {m: this} out StringView is {\n"
+                    "    return m.data_.stringview\n"
+                    "  }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "hi"
+
+    @pytest.mark.xfail(
+        reason="cross-unit facet emits dotted struct names (z_geo.measurable_t); "
+        "fixed in Phase 3 of the emitter cname-purity refactor",
+        strict=True,
+    )
+    def test_cross_unit_dependency_facet(self):
+        """A facet defined+conformed-to in a dependency unit, used through a
+        facet handle from main. Guards the facet struct/vtable/data_u C names:
+        they must use the facet type's dot-free cname, not the dotted qname."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  p: geo.point x: 5\n"
+                    "  f: geo.measurable.create from: p\n"
+                    '  print "\\{f.measure b: 10}"\n'
+                    "}"
+                ),
+                "geo.z": (
+                    "measurable: facet {\n"
+                    "  measure: function {:this b: i64} out i64\n"
+                    "}\n"
+                    "point: record { x: i64 } as {\n"
+                    "  m: measurable\n"
+                    "  measure: function {p: this b: i64} out i64 is "
+                    "{ return p.x + b }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "15"
+
+    def test_reserved_word_variables(self):
+        """Locals named after C reserved words are escaped (v_int etc.).
+        Guards the variable-cname move into the typechecker."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  int: 5\n"
+            "  default: 7\n"
+            '  print "\\{int + default}"\n'
+            "}"
+        )
+        assert "v_int" in csource and "v_default" in csource
+        assert compile_and_run(csource).strip() == "12"
+
+    def test_collection_method_sweep(self):
+        """List/Map/Set synthesized methods all emit + run. Guards the
+        synth-collection-method cname work (file-static z_<mono>_<method>)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (List of: i64)\n"
+            "  xs.append from: 1\n"
+            "  xs.append from: 2\n"
+            "  xs.set i: 0.u64 val: 10\n"
+            "  m: (Map key: i64 value: i64)\n"
+            "  m.set key: 1 value: 100\n"
+            "  s: (Set of: i64)\n"
+            "  s.add item: 7\n"
+            '  print "\\{xs.get i: 0.u64} \\{xs.contains item: 2} '
+            '\\{m.has key: 1} \\{s.has item: 7}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "10 1 1 1"
+
     def test_swap(self):
         csource = emit_source(
             'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'
