@@ -4682,7 +4682,8 @@ class CEmitter:
         # pull the SipHash runtime in.
         self.needs_hash = True
         name = mono_type.name
-        ctype = f"z_{name}_t"
+        cbase = _cbase_of(mono_type, name)
+        ctype = f"{cbase}_t"
         key_type = _map_key_type(self.typing, mono_type)
         value_type = _map_value_type(self.typing, mono_type)
         if key_type is None or value_type is None:
@@ -4692,7 +4693,7 @@ class CEmitter:
         key_is_string = key_ctype == "z_String_t"
         val_is_string = val_ctype == "z_String_t"
         val_is_reftype = val_ctype.endswith("*")
-        entry_type = f"z_{name}_entry_t"
+        entry_type = f"{cbase}_entry_t"
         # Kept alias for backward-compatible external references (e.g.
         # mapitemiter emits mapentry as a typedef of the entry type).
         bucket_type = entry_type
@@ -4725,7 +4726,7 @@ class CEmitter:
         # helpers in the runtime preamble. String / str / view keys feed
         # raw bytes into z_siphash_bytes; numeric keys cast to u64 and
         # run through z_hash_u64 (splitmix64 finalizer).
-        hash_fn = f"z_{name}_hash_key"
+        hash_fn = f"{cbase}_hash_key"
         lines.append(f"static uint64_t {hash_fn}({key_ctype} _key);\n")
         lines.append(f"static uint64_t {hash_fn}({key_ctype} _key) {{\n")
         if key_is_string:
@@ -4737,7 +4738,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # key equality function
-        eq_fn = f"z_{name}_keys_equal"
+        eq_fn = f"{cbase}_keys_equal"
         lines.append(f"static int {eq_fn}({key_ctype} _a, {key_ctype} _b);\n")
         lines.append(f"static int {eq_fn}({key_ctype} _a, {key_ctype} _b) {{\n")
         if key_is_string:
@@ -4779,8 +4780,8 @@ class CEmitter:
             return ""
 
         # destroy — walk dense entries[] and free live keys/values.
-        lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
-        lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
+        lines.append(f"static void {cbase}_destroy({ctype}* p);\n")
+        lines.append(f"static void {cbase}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
         key_needs_free = bool(key_type and (key_type.destructor_name is not None))
         val_needs_free = bool(value_type and (value_type.destructor_name is not None))
@@ -4797,8 +4798,8 @@ class CEmitter:
         lines.append("}\n\n")
 
         # create
-        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity);\n")
-        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity) {{\n")
+        lines.append(f"static {ctype}* {cbase}_create(uint64_t _capacity);\n")
+        lines.append(f"static {ctype}* {cbase}_create(uint64_t _capacity) {{\n")
         lines.append(f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n")
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         lines.append("    if (_capacity < 8) _capacity = 0;\n")
@@ -4821,7 +4822,7 @@ class CEmitter:
         # grow/resize — rebuild indices (doubled) and compact entries
         # (drop tombstones, preserve insertion order). After grow,
         # entries_len == length and entries_cap == new capacity.
-        grow_fn = f"z_{name}_grow"
+        grow_fn = f"{cbase}_grow"
         lines.append(f"static void {grow_fn}({ctype}* _this);\n")
         lines.append(f"static void {grow_fn}({ctype}* _this) {{\n")
         lines.append("    uint64_t old_cap = _this->capacity;\n")
@@ -4862,7 +4863,7 @@ class CEmitter:
         # find helper — probe indices[]; returns entry index (>=0) or -1.
         # Writes the indices-slot to *_slot_out (caller's reference)
         # when non-NULL; used by delete to mark the slot DELETED.
-        find_fn = f"z_{name}_find"
+        find_fn = f"{cbase}_find"
         lines.append(
             f"static int64_t {find_fn}({ctype}* _this, {key_ctype} _key, "
             "uint64_t _hash, int64_t* _slot_out);\n"
@@ -4897,10 +4898,10 @@ class CEmitter:
         # write its index into the first empty (or earliest deleted)
         # indices slot encountered on the probe sequence.
         lines.append(
-            f"static void z_{name}_set({ctype}* _this, {key_ctype} _key, {val_ctype} _val);\n"
+            f"static void {cbase}_set({ctype}* _this, {key_ctype} _key, {val_ctype} _val);\n"
         )
         lines.append(
-            f"static void z_{name}_set({ctype}* _this, {key_ctype} _key, {val_ctype} _val) {{\n"
+            f"static void {cbase}_set({ctype}* _this, {key_ctype} _key, {val_ctype} _val) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
         lines.append(f"    int64_t existing = {find_fn}(_this, _key, h, NULL);\n")
@@ -4967,7 +4968,7 @@ class CEmitter:
             self.needs_stdlib = True
             ret_ctype = _ctype(self.typing, ret_type)
             opt_name = ret_type.name
-            get_fn = f"z_{name}_get"
+            get_fn = f"{cbase}_get"
 
             if ret_type.is_nullable_ptr:
                 # nullable-ptr option: return pointer or NULL
@@ -5001,7 +5002,7 @@ class CEmitter:
                 lines.append("}\n\n")
             elif ret_type.typetype == ZTypeType.VARIANT:
                 # optionval variant: return struct by value
-                opt_struct = f"z_{opt_name}_t"
+                opt_struct = _cname_of(ret_type, opt_name)
                 some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
                 none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                 lines.append(
@@ -5023,7 +5024,7 @@ class CEmitter:
                 lines.append("}\n\n")
             else:
                 # regular tagged union (legacy path)
-                opt_struct = f"z_{opt_name}_t"
+                opt_struct = _cname_of(ret_type, opt_name)
                 some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
                 none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                 lines.append(
@@ -5081,9 +5082,9 @@ class CEmitter:
 
         # delete — mark indices slot DELETED, tombstone entries[idx]
         # (free key/value, alive=0). Compaction happens on next resize.
-        lines.append(f"static int z_{name}_delete({ctype}* _this, {key_ctype} _key);\n")
+        lines.append(f"static int {cbase}_delete({ctype}* _this, {key_ctype} _key);\n")
         lines.append(
-            f"static int z_{name}_delete({ctype}* _this, {key_ctype} _key) {{\n"
+            f"static int {cbase}_delete({ctype}* _this, {key_ctype} _key) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
         lines.append("    int64_t slot = -1;\n")
@@ -5098,8 +5099,8 @@ class CEmitter:
         lines.append("}\n\n")
 
         # has — returns bool
-        lines.append(f"static int z_{name}_has({ctype}* _this, {key_ctype} _key);\n")
-        lines.append(f"static int z_{name}_has({ctype}* _this, {key_ctype} _key) {{\n")
+        lines.append(f"static int {cbase}_has({ctype}* _this, {key_ctype} _key);\n")
+        lines.append(f"static int {cbase}_has({ctype}* _this, {key_ctype} _key) {{\n")
         lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
         lines.append(f"    return {find_fn}(_this, _key, h, NULL) >= 0;\n")
         lines.append("}\n\n")
@@ -5110,8 +5111,9 @@ class CEmitter:
         # Emitted only when the map mono carries an `.iterate` child.
         iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
+            iterate_cn = iterate_child.cname or f"z_{name}_iterate"
             self._emit_mapkeyiter_runtime(
-                ctype, name, key_ctype, iterate_child.return_type
+                ctype, iterate_cn, key_ctype, iterate_child.return_type
             )
 
         # mapitemiter + mapentry companion: borrowed-entry iterator +
@@ -5121,14 +5123,15 @@ class CEmitter:
         # the bucket pointer.
         iterate_items_child = self.typing.child_of(mono_type, "iterateItems")
         if iterate_items_child and iterate_items_child.return_type:
+            iterate_items_cn = iterate_items_child.cname or f"z_{name}_iterateItems"
             self._emit_mapitemiter_runtime(
-                ctype, name, bucket_type, iterate_items_child.return_type
+                ctype, iterate_items_cn, bucket_type, iterate_items_child.return_type
             )
 
     def _emit_mapkeyiter_runtime(
         self,
         map_ctype: str,
-        map_name: str,
+        iterate_cn: str,
         key_ctype: str,
         mki_mono: ZType,
     ) -> None:
@@ -5142,13 +5145,14 @@ class CEmitter:
         iteration order.
         """
         mki_name = mki_mono.name
-        mki_ctype = f"z_{mki_name}_t"
+        mki_ctype = _cname_of(mki_mono, mki_name)
         call_method = self.typing.child_of(mki_mono, "call")
         if not call_method or not call_method.return_type:
             return
+        call_cn = call_method.cname or f"z_{mki_name}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
-        ov_ctype = f"z_{ov_name}_t"
+        ov_ctype = _cname_of(ov_mono, ov_name)
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
 
@@ -5158,8 +5162,8 @@ class CEmitter:
         lines.append(f"    {map_ctype}* m;\n")
         lines.append("    uint64_t idx;\n")
         lines.append(f"}} {mki_ctype};\n\n")
-        lines.append(f"static {ov_ctype} z_{mki_name}_call({mki_ctype}* _it);\n")
-        lines.append(f"static {ov_ctype} z_{mki_name}_call({mki_ctype}* _it) {{\n")
+        lines.append(f"static {ov_ctype} {call_cn}({mki_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} {call_cn}({mki_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
         lines.append("    while (_it->idx < _it->m->entries_len) {\n")
         lines.append("        if (_it->m->entries[_it->idx].alive) {\n")
@@ -5173,10 +5177,8 @@ class CEmitter:
         lines.append(f"    _out.tag = {ov_none_tag};\n")
         lines.append("    return _out;\n")
         lines.append("}\n\n")
-        lines.append(f"static {mki_ctype} z_{map_name}_iterate({map_ctype}* _this);\n")
-        lines.append(
-            f"static {mki_ctype} z_{map_name}_iterate({map_ctype}* _this) {{\n"
-        )
+        lines.append(f"static {mki_ctype} {iterate_cn}({map_ctype}* _this);\n")
+        lines.append(f"static {mki_ctype} {iterate_cn}({map_ctype}* _this) {{\n")
         lines.append(f"    {mki_ctype} _it = {{0}};\n")
         lines.append("    _it.m = _this;\n")
         lines.append("    _it.idx = 0;\n")
@@ -5187,7 +5189,7 @@ class CEmitter:
     def _emit_mapitemiter_runtime(
         self,
         map_ctype: str,
-        map_name: str,
+        iterate_items_cn: str,
         bucket_type: str,
         mii_mono: ZType,
     ) -> None:
@@ -5204,13 +5206,14 @@ class CEmitter:
         field projections through the entry pointer.
         """
         mii_name = mii_mono.name
-        mii_ctype = f"z_{mii_name}_t"
+        mii_ctype = _cname_of(mii_mono, mii_name)
         call_method = self.typing.child_of(mii_mono, "call")
         if not call_method or not call_method.return_type:
             return
+        call_cn = call_method.cname or f"z_{mii_name}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
-        ov_ctype = f"z_{ov_name}_t"
+        ov_ctype = _cname_of(ov_mono, ov_name)
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
 
@@ -5219,7 +5222,7 @@ class CEmitter:
         if me_mono is None:
             return
         me_name = me_mono.name
-        me_ctype = f"z_{me_name}_t"
+        me_ctype = _cname_of(me_mono, me_name)
 
         lines: List[str] = []
         lines.append(f"/* mapentry<{me_name}> = view of {bucket_type} */\n")
@@ -5229,8 +5232,8 @@ class CEmitter:
         lines.append(f"    {map_ctype}* m;\n")
         lines.append("    uint64_t idx;\n")
         lines.append(f"}} {mii_ctype};\n\n")
-        lines.append(f"static {ov_ctype} z_{mii_name}_call({mii_ctype}* _it);\n")
-        lines.append(f"static {ov_ctype} z_{mii_name}_call({mii_ctype}* _it) {{\n")
+        lines.append(f"static {ov_ctype} {call_cn}({mii_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} {call_cn}({mii_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
         lines.append("    while (_it->idx < _it->m->entries_len) {\n")
         lines.append("        if (_it->m->entries[_it->idx].alive) {\n")
@@ -5244,12 +5247,8 @@ class CEmitter:
         lines.append(f"    _out.tag = {ov_none_tag};\n")
         lines.append("    return _out;\n")
         lines.append("}\n\n")
-        lines.append(
-            f"static {mii_ctype} z_{map_name}_iterateItems({map_ctype}* _this);\n"
-        )
-        lines.append(
-            f"static {mii_ctype} z_{map_name}_iterateItems({map_ctype}* _this) {{\n"
-        )
+        lines.append(f"static {mii_ctype} {iterate_items_cn}({map_ctype}* _this);\n")
+        lines.append(f"static {mii_ctype} {iterate_items_cn}({map_ctype}* _this) {{\n")
         lines.append(f"    {mii_ctype} _it = {{0}};\n")
         lines.append("    _it.m = _this;\n")
         lines.append("    _it.idx = 0;\n")
@@ -5264,14 +5263,16 @@ class CEmitter:
         value_method = self.typing.child_of(me_mono, "value")
         if key_method is not None and key_method.return_type is not None:
             key_ctype = _ctype(self.typing, key_method.return_type)
-            lines.append(f"static {key_ctype} z_{me_name}_key({me_ctype}* _e);\n")
-            lines.append(f"static {key_ctype} z_{me_name}_key({me_ctype}* _e) {{\n")
+            key_cn = key_method.cname or f"z_{me_name}_key"
+            lines.append(f"static {key_ctype} {key_cn}({me_ctype}* _e);\n")
+            lines.append(f"static {key_ctype} {key_cn}({me_ctype}* _e) {{\n")
             lines.append("    return _e->key;\n")
             lines.append("}\n\n")
         if value_method is not None and value_method.return_type is not None:
             val_ctype = _ctype(self.typing, value_method.return_type)
-            lines.append(f"static {val_ctype} z_{me_name}_value({me_ctype}* _e);\n")
-            lines.append(f"static {val_ctype} z_{me_name}_value({me_ctype}* _e) {{\n")
+            value_cn = value_method.cname or f"z_{me_name}_value"
+            lines.append(f"static {val_ctype} {value_cn}({me_ctype}* _e);\n")
+            lines.append(f"static {val_ctype} {value_cn}({me_ctype}* _e) {{\n")
             lines.append("    return _e->value;\n")
             lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
@@ -5287,13 +5288,14 @@ class CEmitter:
         self.needs_string = True
         self.needs_hash = True
         name = mono_type.name
-        ctype = f"z_{name}_t"
+        cbase = _cbase_of(mono_type, name)
+        ctype = f"{cbase}_t"
         elem_type = _set_element_type(self.typing, mono_type)
         if elem_type is None:
             return
         elem_ctype = _ctype(self.typing, elem_type)
         elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
-        entry_type = f"z_{name}_entry_t"
+        entry_type = f"{cbase}_entry_t"
         lines: List[str] = []
 
         # indices sentinels
@@ -5320,7 +5322,7 @@ class CEmitter:
 
         # hash function -- same dispatch as map; thin wrapper over the
         # shared SipHash / splitmix64 helpers in the runtime preamble.
-        hash_fn = f"z_{name}_hash_item"
+        hash_fn = f"{cbase}_hash_item"
         lines.append(f"static uint64_t {hash_fn}({elem_ctype} _key);\n")
         lines.append(f"static uint64_t {hash_fn}({elem_ctype} _key) {{\n")
         if elem_is_string:
@@ -5332,7 +5334,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # equality function
-        eq_fn = f"z_{name}_items_equal"
+        eq_fn = f"{cbase}_items_equal"
         lines.append(f"static int {eq_fn}({elem_ctype} _a, {elem_ctype} _b);\n")
         lines.append(f"static int {eq_fn}({elem_ctype} _a, {elem_ctype} _b) {{\n")
         if elem_is_string:
@@ -5364,8 +5366,8 @@ class CEmitter:
         item_needs_free = bool(elem_type and (elem_type.destructor_name is not None))
 
         # destroy — walk dense entries[] and free live items.
-        lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
-        lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
+        lines.append(f"static void {cbase}_destroy({ctype}* p);\n")
+        lines.append(f"static void {cbase}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
         if item_needs_free:
             lines.append("    for (uint64_t i = 0; i < p->entries_len; i++) {\n")
@@ -5379,8 +5381,8 @@ class CEmitter:
         lines.append("}\n\n")
 
         # create
-        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity);\n")
-        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity) {{\n")
+        lines.append(f"static {ctype}* {cbase}_create(uint64_t _capacity);\n")
+        lines.append(f"static {ctype}* {cbase}_create(uint64_t _capacity) {{\n")
         lines.append(f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n")
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         lines.append("    if (_capacity < 8) _capacity = 0;\n")
@@ -5401,7 +5403,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # grow/resize — rebuild indices (doubled) and compact entries.
-        grow_fn = f"z_{name}_grow"
+        grow_fn = f"{cbase}_grow"
         lines.append(f"static void {grow_fn}({ctype}* _this);\n")
         lines.append(f"static void {grow_fn}({ctype}* _this) {{\n")
         lines.append("    uint64_t old_cap = _this->capacity;\n")
@@ -5441,7 +5443,7 @@ class CEmitter:
 
         # find — returns entry index (>=0) or -1; writes indices slot
         # to *_slot_out when non-NULL (for delete).
-        find_fn = f"z_{name}_find"
+        find_fn = f"{cbase}_find"
         lines.append(
             f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, "
             "uint64_t _hash, int64_t* _slot_out);\n"
@@ -5474,10 +5476,8 @@ class CEmitter:
 
         # add — true if new, false if already present. Append to entries
         # and write index to first empty / earliest deleted indices slot.
-        lines.append(f"static int z_{name}_add({ctype}* _this, {elem_ctype} _item);\n")
-        lines.append(
-            f"static int z_{name}_add({ctype}* _this, {elem_ctype} _item) {{\n"
-        )
+        lines.append(f"static int {cbase}_add({ctype}* _this, {elem_ctype} _item);\n")
+        lines.append(f"static int {cbase}_add({ctype}* _this, {elem_ctype} _item) {{\n")
         lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
         lines.append(f"    int64_t existing = {find_fn}(_this, _item, h, NULL);\n")
         lines.append("    if (existing >= 0) {\n")
@@ -5532,20 +5532,18 @@ class CEmitter:
         lines.append("}\n\n")
 
         # has
-        lines.append(f"static int z_{name}_has({ctype}* _this, {elem_ctype} _item);\n")
-        lines.append(
-            f"static int z_{name}_has({ctype}* _this, {elem_ctype} _item) {{\n"
-        )
+        lines.append(f"static int {cbase}_has({ctype}* _this, {elem_ctype} _item);\n")
+        lines.append(f"static int {cbase}_has({ctype}* _this, {elem_ctype} _item) {{\n")
         lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
         lines.append(f"    return {find_fn}(_this, _item, h, NULL) >= 0;\n")
         lines.append("}\n\n")
 
         # delete — mark indices slot DELETED, tombstone entries[idx].
         lines.append(
-            f"static int z_{name}_delete({ctype}* _this, {elem_ctype} _item);\n"
+            f"static int {cbase}_delete({ctype}* _this, {elem_ctype} _item);\n"
         )
         lines.append(
-            f"static int z_{name}_delete({ctype}* _this, {elem_ctype} _item) {{\n"
+            f"static int {cbase}_delete({ctype}* _this, {elem_ctype} _item) {{\n"
         )
         lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
         lines.append("    int64_t slot = -1;\n")
@@ -5564,14 +5562,15 @@ class CEmitter:
         # `.iterate` child (it always does, but be defensive).
         iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
+            iterate_cn = iterate_child.cname or f"z_{name}_iterate"
             self._emit_setiter_runtime(
-                ctype, name, elem_ctype, iterate_child.return_type
+                ctype, iterate_cn, elem_ctype, iterate_child.return_type
             )
 
     def _emit_setiter_runtime(
         self,
         set_ctype: str,
-        set_name: str,
+        iterate_cn: str,
         elem_ctype: str,
         si_mono: ZType,
     ) -> None:
@@ -5584,13 +5583,14 @@ class CEmitter:
         entries (alive == 0) are skipped.
         """
         si_name = si_mono.name
-        si_ctype = f"z_{si_name}_t"
+        si_ctype = _cname_of(si_mono, si_name)
         call_method = self.typing.child_of(si_mono, "call")
         if not call_method or not call_method.return_type:
             return
+        call_cn = call_method.cname or f"z_{si_name}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
-        ov_ctype = f"z_{ov_name}_t"
+        ov_ctype = _cname_of(ov_mono, ov_name)
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
 
@@ -5600,8 +5600,8 @@ class CEmitter:
         lines.append(f"    {set_ctype}* s;\n")
         lines.append("    uint64_t idx;\n")
         lines.append(f"}} {si_ctype};\n\n")
-        lines.append(f"static {ov_ctype} z_{si_name}_call({si_ctype}* _it);\n")
-        lines.append(f"static {ov_ctype} z_{si_name}_call({si_ctype}* _it) {{\n")
+        lines.append(f"static {ov_ctype} {call_cn}({si_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} {call_cn}({si_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
         lines.append("    while (_it->idx < _it->s->entries_len) {\n")
         lines.append("        if (_it->s->entries[_it->idx].alive) {\n")
@@ -5615,8 +5615,8 @@ class CEmitter:
         lines.append(f"    _out.tag = {ov_none_tag};\n")
         lines.append("    return _out;\n")
         lines.append("}\n\n")
-        lines.append(f"static {si_ctype} z_{set_name}_iterate({set_ctype}* _this);\n")
-        lines.append(f"static {si_ctype} z_{set_name}_iterate({set_ctype}* _this) {{\n")
+        lines.append(f"static {si_ctype} {iterate_cn}({set_ctype}* _this);\n")
+        lines.append(f"static {si_ctype} {iterate_cn}({set_ctype}* _this) {{\n")
         lines.append(f"    {si_ctype} _it = {{0}};\n")
         lines.append("    _it.s = _this;\n")
         lines.append("    _it.idx = 0;\n")
