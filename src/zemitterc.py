@@ -5840,11 +5840,17 @@ class CEmitter:
                 # side table.
                 if item.name:
                     label_values[item.name] = val_str
-        cname = _mangle_func(name)
+        # Key the array cname and the label table by the data block's
+        # dot-free ztype.name. A dependency unit's block has a dotted
+        # AST-path `name` (zlexer.ascii); ztype.name is the dot-free
+        # zlexer_ascii, matching the parent_def.name the access sites in
+        # _emit_dotted_path_value look up by.
+        data_ztype = self._node_ztype(data)
+        key = data_ztype.name if data_ztype is not None else name
+        cname = _mangle_func(key)
         # Pick the C element type from the data block's resolved
         # element_type. Falls back to int64_t when unresolved (defensive
         # against early-error recovery).
-        data_ztype = self._node_ztype(data)
         elem_ctype = "int64_t"
         if data_ztype is not None and data_ztype.element_type is not None:
             elem_ctype = _ctype(self.typing, data_ztype.element_type)
@@ -5861,7 +5867,7 @@ class CEmitter:
                 f"static const int64_t {cname}_len = {len(values)};\n\n"
             )
         if label_values:
-            self._data_label_values[name] = label_values
+            self._data_label_values[key] = label_values
 
     def _return_ctype(self, func: zast.Function) -> str:
         if not func.returntype:
@@ -7148,12 +7154,16 @@ class CEmitter:
             self._is_data_index_call(call)
             and call.callable.nodetype == NodeType.DOTTEDPATH
         ):
-            assert (
-                cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
+            _data_parent = cast(zast.DottedPath, call.callable).parent
+            assert _data_parent.nodetype == NodeType.ATOMID
+            # Dot-free ztype.name (z_zlexer_charflags), not the bare atom,
+            # so a dependency unit's data array resolves cross-unit.
+            _data_zt = self._unit_def_ztype(_data_parent)
+            data_name = (
+                _data_zt.name
+                if _data_zt is not None
+                else cast(zast.AtomId, _data_parent).name
             )
-            data_name = cast(
-                zast.AtomId, cast(zast.DottedPath, call.callable).parent
-            ).name
             idx = (
                 self._emit_operation_value(call.arguments[0].valtype)
                 if call.arguments
@@ -8022,12 +8032,16 @@ class CEmitter:
             self._is_data_index_call(call)
             and call.callable.nodetype == NodeType.DOTTEDPATH
         ):
-            assert (
-                cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
+            _data_parent = cast(zast.DottedPath, call.callable).parent
+            assert _data_parent.nodetype == NodeType.ATOMID
+            # Dot-free ztype.name (z_zlexer_charflags), not the bare atom,
+            # so a dependency unit's data array resolves cross-unit.
+            _data_zt = self._unit_def_ztype(_data_parent)
+            data_name = (
+                _data_zt.name
+                if _data_zt is not None
+                else cast(zast.AtomId, _data_parent).name
             )
-            data_name = cast(
-                zast.AtomId, cast(zast.DottedPath, call.callable).parent
-            ).name
             idx = (
                 self._emit_operation_value(call.arguments[0].valtype)
                 if call.arguments
@@ -9254,17 +9268,19 @@ class CEmitter:
             # variant_name.subtype — emit null subtype construction
             if parent_def is not None and ptt == ZTypeType.VARIANT:
                 return self._emit_variant_null_construction(parent_def.name, child)
-            # data.index call
-            if ptt == ZTypeType.DATA and child == "index":
-                return _mangle_func(pname)
+            # data.index call. Use the data type's dot-free ztype.name
+            # (parent_def.name), not the bare atom pname, so a dependency
+            # unit's block emits its qualified array cname.
+            if parent_def is not None and ptt == ZTypeType.DATA and child == "index":
+                return _mangle_func(parent_def.name)
             # data.LABEL — compile-time substitution for named items.
             # data.N — array index access for ordinal lookups.
-            if ptt == ZTypeType.DATA:
-                labels = self._data_label_values.get(pname)
+            if parent_def is not None and ptt == ZTypeType.DATA:
+                labels = self._data_label_values.get(parent_def.name)
                 if labels is not None and child in labels:
                     return labels[child]
                 if child.isdigit():
-                    return f"{_mangle_func(pname)}[{child}]"
+                    return f"{_mangle_func(parent_def.name)}[{child}]"
 
         # check if parent resolves to a nested inline unit path
         unit_path = self._extract_unit_path(path.parent)
