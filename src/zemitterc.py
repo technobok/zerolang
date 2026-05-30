@@ -683,7 +683,7 @@ class CEmitter:
         m = self.typing.child_of(base, method) if base is not None else None
         if m is not None and m.cname:
             return m.cname
-        return f"z_{_mono_name(parent)}_{method}"
+        return f"{_cbase_of(base, _mono_name(parent))}_{method}"
 
     def _user_method_cname(
         self, owner: Optional[ZType], owner_name: str, method: str
@@ -2579,9 +2579,8 @@ class CEmitter:
                 ptype_str = f"{ptype_str}*"
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
-        cname = name.replace(".", "_")
         self.func_typedefs.append(
-            f"typedef {ret_ctype} (*z_{cname}_ft)({param_str});\n"
+            f"typedef {ret_ctype} (*{mangle_func_name(name)}_ft)({param_str});\n"
         )
 
     def _emit_spec_typedef(self, name: str, func: zast.Function) -> None:
@@ -2593,9 +2592,8 @@ class CEmitter:
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
-        cname = name.replace(".", "_")
         self.spec_typedefs.append(
-            f"typedef {ret_ctype} (*z_{cname}_ft)({param_str});\n"
+            f"typedef {ret_ctype} (*{mangle_func_name(name)}_ft)({param_str});\n"
         )
 
     def _emit_constant(self, name: str, atom: zast.AtomId) -> None:
@@ -3081,7 +3079,7 @@ class CEmitter:
         functions: dict,
         ztype: Optional[ZType],
     ) -> None:
-        """Emit a static z_{name}_eq() function for auto-generated == on records."""
+        """Emit a static <type>_eq() function for auto-generated == on records."""
         if not ztype:
             return
         eq_method = self.typing.child_of(ztype, "==")
@@ -3124,7 +3122,7 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _needs_eq_call(self, ztype: ZType) -> bool:
-        """Check if a type needs a `z_{name}_eq()` call instead of C `==`.
+        """Check if a type needs a `<type>_eq()` call instead of C `==`.
 
         - Auto-generated equality (record/class/variant synthesised by
           the typechecker): always needs a call — structs have no `==`.
@@ -3246,7 +3244,7 @@ class CEmitter:
         field_items: list,
         lines: List[str],
     ) -> None:
-        """Emit z_{name}_eq() for a monomorphized record/variant from field_items."""
+        """Emit <type>_eq() for a monomorphized record/variant from field_items."""
         eq_method = self.typing.child_of(mono_type, "==")
         if not eq_method or not eq_method.is_autogen_eq:
             return
@@ -3706,7 +3704,7 @@ class CEmitter:
         # emit 'is' functions with body as regular C functions (for default values).
         # Method-reference fields (e.g. `instancemethod: method1`) and overrides
         # at construction (`c val: 0 instancemethod: c.method2`) bind a function
-        # pointer typedef; emit `z_{name}_{mname}_ft` so the assignment-side
+        # pointer typedef; emit `<type>_<method>_ft` so the assignment-side
         # hoist's local declaration has a real type.
         for mname, mfunc in cls.functions().items():
             if mfunc.body:
@@ -8658,7 +8656,7 @@ class CEmitter:
                     # extendView takes a listview by value (copies, does
                     # not consume). The argument is typed as a listview of
                     # the list's element; the mono emitter generates a
-                    # z_{listname}_extendView(z_{listname}_t*, z_ListView_T_t).
+                    # <list>_extendView(<list>*, ListView_T).
                     from_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"{self._synth_method_cname(dp_parent_type, 'extendView')}({parent_val}, {from_val})"
                 if method_name == "get" and call.arguments:
@@ -9031,7 +9029,7 @@ class CEmitter:
         ):
             rhs = f"(*{rhs})"
         op = binop.operator.name
-        # route == and != through z_{name}_eq() for autogen equality types
+        # route == and != through <type>_eq() for autogen equality types
         if op in ("==", "!=") and self._node_ztype(binop.lhs):
             lhs_zt = cast(ZType, self._node_ztype(binop.lhs))
             rhs_zt_obj = self._node_ztype(binop.rhs)
@@ -9065,7 +9063,7 @@ class CEmitter:
                     return f"(!{call})"
                 return call
         # Ordering comparisons on string / stringview: route through the
-        # shared cmp primitive. `z_{type}_cmp` returns -1 / 0 / 1 so the
+        # shared cmp primitive. The `<type>_cmp` returns -1 / 0 / 1 so the
         # four operators map to plain C comparisons against zero.
         if op in ("<", "<=", ">", ">=") and self._node_ztype(binop.lhs):
             if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRING:
@@ -9699,7 +9697,12 @@ class CEmitter:
             # z_List_u8_listview helper auto-emitted by _emit_mono_listview.
             if cls_name == "Bytes" and child == "byteview":
                 return f"z_List_u8_listview({parent})"
-            return f"z_{cls_name}_{child}({parent})"
+            method_cn = (
+                method_fn.cname
+                if method_fn.cname and not method_fn.is_native
+                else mangle_func_name(f"{cls_name}.{child}")
+            )
+            return f"{method_cn}({parent})"
 
         # io.file: protocol projection. `f.closer` / `f.seeker` emit
         # a call to the matching `z_File_<proto>_create` wrapper
@@ -10150,7 +10153,7 @@ class CEmitter:
         from a dependency/inline-unit qualifier are mangled so the destructor
         identifier matches the dot-free name emitted at its definition site."""
         if type_name:
-            return f"z_{type_name.replace('.', '_')}_destroy(&{var});"
+            return f"{mangle_func_name(type_name)}_destroy(&{var});"
         return ""
 
     def _narrowed_alias_expr(self, value: "zast.Expression") -> "Optional[str]":
