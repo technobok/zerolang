@@ -19,6 +19,7 @@ from ztypes import (
     ZSubType,
     ZBuiltinFunc,
     ZControlKind,
+    ZConformance,
     parse_number,
     ZParamOwnership,
     ZOwnership,
@@ -436,6 +437,19 @@ class CEmitter:
         ] = {}  # facet name -> list of impl type names
         # (impl_type, proto_name) -> label for owned protocol create
         self._proto_conformance: Dict[tuple, str] = {}
+        # Case-A conformance entities, indexed for O(1) emitter lookup by the
+        # impl/spec type-id pair (consumer sites that have both resolved types
+        # but no label) and the (impl, spec, label) triple (definition sites).
+        # The entity carries the pre-composed C names of the conformance
+        # helpers, so the emitter reads them instead of rebuilding
+        # `z_<impl>_<label>_<...>` strings inline (see ztypes.ZConformance).
+        self._conformance_by_pair: Dict[tuple, ZConformance] = {}
+        self._conformance_by_triple: Dict[tuple, ZConformance] = {}
+        for conf in typing.conformance:
+            self._conformance_by_pair[(conf.impl_type_id, conf.spec_type_id)] = conf
+            self._conformance_by_triple[
+                (conf.impl_type_id, conf.spec_type_id, conf.label)
+            ] = conf
         # qualified names like "calculator.op" for func pointer fields in 'is' sections
         self._is_func_fields: set[str] = set()
         # set briefly while emitting a reassignment LHS so function-
@@ -683,6 +697,29 @@ class CEmitter:
         if m is not None and m.cname:
             return m.cname
         return f"z_{_mono_name(parent)}_{method}"
+
+    def _conformance_of(
+        self, impl_zt: Optional[ZType], spec_zt: Optional[ZType], label: str
+    ) -> Optional[ZConformance]:
+        """The conformance entity for `impl as { label: spec }`, by the impl/spec
+        type-id pair + label. None when either type is unresolved or no
+        conformance was recorded. The entity holds the pre-composed C names of
+        the conformance helpers (wrappers / vtable / create / destroy)."""
+        if impl_zt is None or spec_zt is None:
+            return None
+        return self._conformance_by_triple.get(
+            (impl_zt.type_id, spec_zt.type_id, label)
+        )
+
+    def _conformance_pair(
+        self, impl_zt: Optional[ZType], spec_zt: Optional[ZType]
+    ) -> Optional[ZConformance]:
+        """The conformance entity for an (impl, spec) pair regardless of label,
+        for consumer sites that have both resolved types but no label in scope.
+        None when unresolved or unrecorded."""
+        if impl_zt is None or spec_zt is None:
+            return None
+        return self._conformance_by_pair.get((impl_zt.type_id, spec_zt.type_id))
 
     def _def_vid(self, node: zast.Node) -> Optional[int]:
         """The variable_id a declaration node binds (from `def_variable_id`),
@@ -2635,10 +2672,14 @@ class CEmitter:
             param_str = ", ".join(params)
             func_lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
 
+        # The template builds `z_<NAME>_t` / `_vtable_t` / `_destroy`; feed it the
+        # resolved type's dot-free name so cross-unit protocols stay valid C
+        # (== `name` for a single-unit / top-level protocol).
+        vtable_struct_name = proto_type.name if proto_type is not None else name
         self.struct_defs.append(
             ztmpl.apply(
                 "z_protocol_vtable",
-                {"NAME": name, "VTABLE_FUNCS": "".join(func_lines)},
+                {"NAME": vtable_struct_name, "VTABLE_FUNCS": "".join(func_lines)},
             )
         )
 
@@ -2656,14 +2697,34 @@ class CEmitter:
         if not proto:
             return
         is_class = impl_defn.nodetype == NodeType.CLASS
-        impl_ctype = f"z_{impl_name}_t"
+        impl_type = self._node_ztype(impl_defn)
+        proto_type = self._node_ztype(proto)
+        conf = self._conformance_of(impl_type, proto_type, label)
+        # All conformance C names are read from the conformance entity and the
+        # resolved spec/impl ZTypes, so they stay dot-free cross-unit. The
+        # composed fallbacks (used only when no conformance was recorded) mirror
+        # the entity's own composition off the impl type's `cname_base`.
+        impl_ctype = _cname_of(impl_type, impl_name)
+        impl_base = _cbase_of(impl_type, impl_name)
+        proto_ctype = _cname_of(proto_type, proto_name)
+        proto_vtable_ctype = f"{_cbase_of(proto_type, proto_name)}_vtable_t"
+        vtable_name = conf.vtable_cname if conf else f"{impl_base}_{label}_vtable"
+        create_name = conf.create_cname if conf else f"{impl_base}_{label}_create"
+        owned_create = (
+            conf.create_owned_cname if conf else f"{impl_base}_{label}_create_owned"
+        )
+        wrapper_names: Dict[str, str] = {}
+        for sname in proto.functions():
+            if conf is not None and sname in conf.method_wrapper_cnames:
+                wrapper_names[sname] = conf.method_wrapper_cnames[sname]
+            else:
+                wrapper_names[sname] = f"{impl_base}_{label}_{sname}_wrapper"
 
         lines: List[str] = []
 
         # forward declarations for methods called by wrappers
         all_methods = dict(impl_defn.as_functions())
         all_methods.update(impl_defn.functions())
-        impl_type = self._node_ztype(impl_defn)
         for sname in proto.functions():
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
@@ -2686,7 +2747,6 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
-        proto_type = self._node_ztype(proto)
         for sname, sfunc in proto.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             # wrapper params: void* _data, then remaining non-this params.
@@ -2706,7 +2766,7 @@ class CEmitter:
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
-            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
+            wrapper_name = wrapper_names[sname]
             param_str = ", ".join(wrapper_params)
             lines.append(f"static {ret_ctype} {wrapper_name}({param_str}) {{\n")
             lines.append(f"    {impl_ctype}* _self = ({impl_ctype}*)_data;\n")
@@ -2726,19 +2786,16 @@ class CEmitter:
             lines.append("}\n\n")
 
         # static vtable instance
-        vtable_name = f"z_{impl_name}_{label}_vtable"
-        lines.append(f"static z_{proto_name}_vtable_t {vtable_name} = {{\n")
+        lines.append(f"static {proto_vtable_ctype} {vtable_name} = {{\n")
         for sname in proto.functions():
-            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
-            lines.append(f"    .{sname} = {wrapper_name},\n")
+            lines.append(f"    .{sname} = {wrapper_names[sname]},\n")
         lines.append("};\n\n")
 
         # create function (borrowed — pointer to original, no copy)
         # Returns protocol struct by value; caller stores on stack.
-        create_name = f"z_{impl_name}_{label}_create"
-        lines.append(f"static z_{proto_name}_t {create_name}({impl_ctype}* val);\n")
-        lines.append(f"static z_{proto_name}_t {create_name}({impl_ctype}* val) {{\n")
-        lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
+        lines.append(f"static {proto_ctype} {create_name}({impl_ctype}* val);\n")
+        lines.append(f"static {proto_ctype} {create_name}({impl_ctype}* val) {{\n")
+        lines.append(f"    {proto_ctype} proto = {{0}};\n")
         lines.append("    proto.data = val;\n")
         lines.append(f"    proto.vtable = &{vtable_name};\n")
         lines.append("    proto.destroy = NULL;\n")
@@ -2748,23 +2805,19 @@ class CEmitter:
         # owned create + destroy wrapper
         if is_class:
             # class: destroy frees boxed copy (+ field cleanup if needed)
-            destroy_name = f"z_{impl_name}_{label}_owned_destroy"
+            destroy_name = (
+                conf.destroy_cname if conf else f"{impl_base}_{label}_owned_destroy"
+            )
             lines.append(f"static void {destroy_name}(void* p) {{\n")
-            impl_zt = self._node_ztype(impl_defn)
-            if impl_zt and impl_zt.needs_field_cleanup:
-                lines.append(f"    z_{impl_name}_destroy(({impl_ctype}*)p);\n")
+            if impl_type and impl_type.needs_field_cleanup:
+                lines.append(f"    {impl_base}_destroy(({impl_ctype}*)p);\n")
             lines.append("    free(p);\n")
             lines.append("}\n\n")
 
             # stack class: owned create boxes the struct (malloc + copy)
-            owned_create = f"z_{impl_name}_{label}_create_owned"
-            lines.append(
-                f"static z_{proto_name}_t {owned_create}({impl_ctype}* val);\n"
-            )
-            lines.append(
-                f"static z_{proto_name}_t {owned_create}({impl_ctype}* val) {{\n"
-            )
-            lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
+            lines.append(f"static {proto_ctype} {owned_create}({impl_ctype}* val);\n")
+            lines.append(f"static {proto_ctype} {owned_create}({impl_ctype}* val) {{\n")
+            lines.append(f"    {proto_ctype} proto = {{0}};\n")
             lines.append(
                 f"    {impl_ctype}* boxed = ({impl_ctype}*)z_xmalloc(sizeof({impl_ctype}));\n"
             )
@@ -2776,7 +2829,9 @@ class CEmitter:
             lines.append("}\n\n")
         else:
             # record: destroy frees boxed record (+ reftype fields)
-            destroy_name = f"z_{impl_name}_{label}_boxed_destroy"
+            destroy_name = (
+                conf.destroy_cname if conf else f"{impl_base}_{label}_boxed_destroy"
+            )
             lines.append(f"static void {destroy_name}(void* p) {{\n")
             lines.append(f"    {impl_ctype}* r = ({impl_ctype}*)p;\n")
             # cleanup reftype fields
@@ -2787,12 +2842,9 @@ class CEmitter:
             lines.append("    free(r);\n")
             lines.append("}\n\n")
 
-            owned_create = f"z_{impl_name}_{label}_create_owned"
-            lines.append(f"static z_{proto_name}_t {owned_create}({impl_ctype} val);\n")
-            lines.append(
-                f"static z_{proto_name}_t {owned_create}({impl_ctype} val) {{\n"
-            )
-            lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
+            lines.append(f"static {proto_ctype} {owned_create}({impl_ctype} val);\n")
+            lines.append(f"static {proto_ctype} {owned_create}({impl_ctype} val) {{\n")
+            lines.append(f"    {proto_ctype} proto = {{0}};\n")
             lines.append(
                 f"    {impl_ctype}* boxed = ({impl_ctype}*)z_xmalloc(sizeof({impl_ctype}));\n"
             )
@@ -2812,6 +2864,10 @@ class CEmitter:
 
         # vtable struct — function pointers with void* as first param (same as protocol)
         facet_type = self._node_ztype(facet)
+        # Dot-free C names read from the resolved facet type so a cross-unit
+        # facet stays valid C (== z_<name>_... for a single-unit facet).
+        facet_base = _cbase_of(facet_type, name)
+        facet_ctype = _cname_of(facet_type, name)
         lines.append("typedef struct {\n")
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
@@ -2823,7 +2879,7 @@ class CEmitter:
                 params.append(_ctype(self.typing, self._node_ztype(ppath)))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
-        lines.append(f"}} z_{name}_vtable_t;\n\n")
+        lines.append(f"}} {facet_base}_vtable_t;\n\n")
 
         # data union — sized to largest conforming type (provides size + alignment)
         conformers = self._facet_conformers.get(name, [])
@@ -2833,13 +2889,13 @@ class CEmitter:
                 lines.append(f"    z_{impl_name}_t _{impl_name.replace('.', '_')};\n")
         else:
             lines.append("    char _empty;\n")
-        lines.append(f"}} z_{name}_data_u;\n\n")
+        lines.append(f"}} {facet_base}_data_u;\n\n")
 
         # instance struct — vtable first (constant offset), then inline data
         lines.append("typedef struct {\n")
-        lines.append(f"    z_{name}_vtable_t* vtable;\n")
-        lines.append(f"    z_{name}_data_u data;\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        lines.append(f"    {facet_base}_vtable_t* vtable;\n")
+        lines.append(f"    {facet_base}_data_u data;\n")
+        lines.append(f"}} {facet_ctype};\n\n")
 
         self.struct_defs.append("".join(lines))
 
@@ -2854,7 +2910,25 @@ class CEmitter:
         facet = self._facet_defs.get(facet_name)
         if not facet:
             return
-        impl_ctype = f"z_{impl_name}_t"
+        impl_type = self._node_ztype(impl_defn)
+        facet_type = self._node_ztype(facet)
+        conf = self._conformance_of(impl_type, facet_type, label)
+        # Conformance C names read from the entity / resolved ZTypes (dot-free
+        # cross-unit); composed fallbacks mirror the entity off the impl base.
+        impl_ctype = _cname_of(impl_type, impl_name)
+        impl_base = _cbase_of(impl_type, impl_name)
+        facet_ctype = _cname_of(facet_type, facet_name)
+        facet_vtable_ctype = f"{_cbase_of(facet_type, facet_name)}_vtable_t"
+        vtable_name = conf.vtable_cname if conf else f"{impl_base}_{label}_vtable"
+        owned_create = (
+            conf.create_owned_cname if conf else f"{impl_base}_{label}_create_owned"
+        )
+        wrapper_names: Dict[str, str] = {}
+        for sname in facet.functions():
+            if conf is not None and sname in conf.method_wrapper_cnames:
+                wrapper_names[sname] = conf.method_wrapper_cnames[sname]
+            else:
+                wrapper_names[sname] = f"{impl_base}_{label}_{sname}_wrapper"
 
         lines: List[str] = []
 
@@ -2875,7 +2949,6 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
-        facet_type = self._node_ztype(facet)
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
@@ -2888,7 +2961,7 @@ class CEmitter:
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
-            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
+            wrapper_name = wrapper_names[sname]
             param_str = ", ".join(wrapper_params)
             lines.append(f"static {ret_ctype} {wrapper_name}({param_str}) {{\n")
             # facet data is a void* to the inline data union — cast and dereference
@@ -2903,18 +2976,15 @@ class CEmitter:
             lines.append("}\n\n")
 
         # static vtable instance
-        vtable_name = f"z_{impl_name}_{label}_vtable"
-        lines.append(f"static z_{facet_name}_vtable_t {vtable_name} = {{\n")
+        lines.append(f"static {facet_vtable_ctype} {vtable_name} = {{\n")
         for sname in facet.functions():
-            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
-            lines.append(f"    .{sname} = {wrapper_name},\n")
+            lines.append(f"    .{sname} = {wrapper_names[sname]},\n")
         lines.append("};\n\n")
 
         # create/take function — copies value into inline data buffer
-        create_name = f"z_{impl_name}_{label}_create_owned"
-        lines.append(f"static z_{facet_name}_t {create_name}({impl_ctype} val);\n")
-        lines.append(f"static z_{facet_name}_t {create_name}({impl_ctype} val) {{\n")
-        lines.append(f"    z_{facet_name}_t facet;\n")
+        lines.append(f"static {facet_ctype} {owned_create}({impl_ctype} val);\n")
+        lines.append(f"static {facet_ctype} {owned_create}({impl_ctype} val) {{\n")
+        lines.append(f"    {facet_ctype} facet;\n")
         lines.append(f"    facet.vtable = &{vtable_name};\n")
         lines.append(f"    *({impl_ctype}*)&facet.data = val;\n")
         lines.append("    return facet;\n")
@@ -6193,8 +6263,8 @@ class CEmitter:
             if t in self._temp.string_set:
                 result += f"{indent}z_String_free(&{t});\n"
             elif t in self._temp.proto_set:
-                proto_name = self._temp.proto_set[t]
-                result += f"{indent}z_{proto_name}_destroy(&{t});\n"
+                proto_base = self._temp.proto_set[t]
+                result += f"{indent}{proto_base}_destroy(&{t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
                 result += f"{indent}{self._emit_class_free(t, tname)}\n"
@@ -6478,8 +6548,8 @@ class CEmitter:
             if t in self._temp.string_set:
                 result += f"{indent}z_String_free(&{t});\n"
             elif t in self._temp.proto_set:
-                proto_name = self._temp.proto_set[t]
-                result += f"{indent}z_{proto_name}_destroy(&{t});\n"
+                proto_base = self._temp.proto_set[t]
+                result += f"{indent}{proto_base}_destroy(&{t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
                 result += f"{indent}{self._emit_class_free(t, tname)}\n"
@@ -6895,9 +6965,15 @@ class CEmitter:
                 )
         impl_name = arg_type.name if arg_type else ""
 
-        # look up label
-        label = self._proto_conformance.get((impl_name, proto_name), "")
-        owned_create = f"z_{impl_name}_{label}_create_owned"
+        # owned-create C name + handle type from the conformance entity
+        # (dot-free, label-correct cross-unit); legacy compose as fallback.
+        conf = self._conformance_pair(arg_type, proto_type)
+        if conf is not None:
+            owned_create = conf.create_owned_cname
+        else:
+            label = self._proto_conformance.get((impl_name, proto_name), "")
+            owned_create = f"z_{impl_name}_{label}_create_owned"
+        proto_ctype = _cname_of(proto_type, proto_name)
 
         # stack-allocated class: pass address to protocol create
         if (
@@ -6912,10 +6988,10 @@ class CEmitter:
         tmp = self._temp_name("c")
         indent = self._indent()
         self._temp.decls.append(
-            f"{indent}z_{proto_name}_t {tmp} = {owned_create}({arg_val});\n"
+            f"{indent}{proto_ctype} {tmp} = {owned_create}({arg_val});\n"
         )
         self._temp.frees.append(tmp)
-        self._temp.proto_set[tmp] = proto_name
+        self._temp.proto_set[tmp] = _cbase_of(proto_type, proto_name)
 
         # Ownership of the impl transfers into the protocol. Invalidate
         # the source so scope-exit cleanup doesn't double-destroy the
@@ -6967,9 +7043,13 @@ class CEmitter:
                 )
         impl_name = arg_type.name if arg_type else ""
 
-        # look up label
-        label = self._proto_conformance.get((impl_name, proto_name), "")
-        create_name = f"z_{impl_name}_{label}_create"
+        # borrowed-create C name from the conformance entity; legacy fallback.
+        conf = self._conformance_pair(arg_type, proto_type)
+        if conf is not None:
+            create_name = conf.create_cname
+        else:
+            label = self._proto_conformance.get((impl_name, proto_name), "")
+            create_name = f"z_{impl_name}_{label}_create"
 
         # pass address for stack-allocated types (records, stack classes)
         if arg_type and (
@@ -6985,12 +7065,12 @@ class CEmitter:
         # allocate temp and track as protocol var (borrowed: no destroy)
         tmp = self._temp_name("p")
         indent = self._indent()
-        proto_ctype = f"z_{proto_name}_t"
+        proto_ctype = _cname_of(proto_type, proto_name)
         self._temp.decls.append(
             f"{indent}{proto_ctype} {tmp} = {create_name}({arg_expr});\n"
         )
         self._temp.frees.append(tmp)
-        self._temp.proto_set[tmp] = proto_name
+        self._temp.proto_set[tmp] = _cbase_of(proto_type, proto_name)
 
         return tmp
 
@@ -7037,8 +7117,13 @@ class CEmitter:
                 )
         impl_name = arg_type.name if arg_type else ""
 
-        label = self._proto_conformance.get((impl_name, facet_name), "")
-        owned_create = f"z_{impl_name}_{label}_create_owned"
+        # owned-create C name from the conformance entity; legacy fallback.
+        conf = self._conformance_pair(arg_type, facet_type)
+        if conf is not None:
+            owned_create = conf.create_owned_cname
+        else:
+            label = self._proto_conformance.get((impl_name, facet_name), "")
+            owned_create = f"z_{impl_name}_{label}_create_owned"
         return f"{owned_create}({arg_val})"
 
     def _emit_facet_borrow_call(self, call: zast.Call) -> str:
@@ -7433,8 +7518,8 @@ class CEmitter:
                 if t in self._temp.string_set:
                     result += f"{indent}z_String_free(&{t});\n"
                 elif t in self._temp.proto_set:
-                    proto_name = self._temp.proto_set[t]
-                    result += f"{indent}z_{proto_name}_destroy(&{t});\n"
+                    proto_base = self._temp.proto_set[t]
+                    result += f"{indent}{proto_base}_destroy(&{t});\n"
                 elif t in self._temp.class_set:
                     tname = self._temp.class_set[t]
                     result += f"{indent}{self._emit_class_free(t, tname)}\n"
@@ -7557,6 +7642,11 @@ class CEmitter:
         arg_val = self._emit_operation_value(arg.valtype)
         arg_type = self._get_operation_type(arg.valtype)
         impl_name = arg_type.name if arg_type else ""
+        # Conformance helper names + handle type read from the entity / resolved
+        # protocol type (dot-free cross-unit); legacy compose as fallback.
+        conf = self._conformance_of(arg_type, proto_type, label)
+        proto_ctype = _cname_of(proto_type, proto_type.name)
+        proto_base = _cbase_of(proto_type, proto_type.name)
         # Stack-allocated CLASS conformers are passed by pointer; RECORD
         # (valtype) conformers are passed by value. Heap classes already
         # flow as pointers at the call site.
@@ -7569,14 +7659,18 @@ class CEmitter:
             f"&{arg_val}" if needs_addr and not arg_val.startswith("&") else arg_val
         )
         if proj_kind == "take":
-            create_name = f"z_{impl_name}_{label}_create_owned"
+            create_name = (
+                conf.create_owned_cname
+                if conf
+                else f"z_{impl_name}_{label}_create_owned"
+            )
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(
-                f"{indent}z_{proto_type.name}_t {tmp} = {create_name}({arg_expr});\n"
+                f"{indent}{proto_ctype} {tmp} = {create_name}({arg_expr});\n"
             )
             self._temp.frees.append(tmp)
-            self._temp.proto_set[tmp] = proto_type.name
+            self._temp.proto_set[tmp] = proto_base
             # invalidate the source (take semantics) when the arg was a
             # named variable — mirror _apply_take_to_arg's C-side zero.
             src = self._get_implicit_take_var(arg.valtype) if arg_type else None
@@ -7586,14 +7680,14 @@ class CEmitter:
                 )
             return tmp
         # borrow (default): stack-allocated protocol handle, no destroy.
-        create_name = f"z_{impl_name}_{label}_create"
+        create_name = conf.create_cname if conf else f"z_{impl_name}_{label}_create"
         tmp = self._temp_name("p")
         indent = self._indent()
         self._temp.decls.append(
-            f"{indent}z_{proto_type.name}_t {tmp} = {create_name}({arg_expr});\n"
+            f"{indent}{proto_ctype} {tmp} = {create_name}({arg_expr});\n"
         )
         self._temp.frees.append(tmp)
-        self._temp.proto_set[tmp] = proto_type.name
+        self._temp.proto_set[tmp] = proto_base
         return tmp
 
     def _prepend_method_receiver(self, call: zast.Call, args: str) -> str:
@@ -9811,7 +9905,12 @@ class CEmitter:
             ):
                 self.needs_stdlib = True
                 parent_val = self._emit_path_value(path.parent)
-                create_name = f"z_{parent_type.name}_{child}_create"
+                conf = self._conformance_of(parent_type, _pt_ztype, child)
+                create_name = (
+                    conf.create_cname
+                    if conf
+                    else f"z_{parent_type.name}_{child}_create"
+                )
                 # pass address for stack-allocated types
                 if parent_type.is_valtype or not parent_type.is_heap_allocated:
                     arg = f"&{parent_val}"
@@ -9819,13 +9918,13 @@ class CEmitter:
                     arg = parent_val
                 tmp = self._temp_name("p")
                 indent = self._indent()
-                proto_ctype = f"z_{_pt_ztype.name}_t"
+                proto_ctype = _cname_of(_pt_ztype, _pt_ztype.name)
                 # stack-allocate: protocol struct is now stack-based
                 self._temp.decls.append(
                     f"{indent}{proto_ctype} {tmp} = {create_name}({arg});\n"
                 )
                 self._temp.frees.append(tmp)
-                self._temp.proto_set[tmp] = _pt_ztype.name
+                self._temp.proto_set[tmp] = _cbase_of(_pt_ztype, _pt_ztype.name)
                 return tmp
 
         # runtime numeric cast: x.u32 where x is a numeric variable
