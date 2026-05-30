@@ -1449,15 +1449,12 @@ class TestEmitterBasic:
         )
         assert out == "hi"
 
-    @pytest.mark.xfail(
-        reason="cross-unit facet emits dotted struct names (z_geo.measurable_t); "
-        "fixed in Phase 3 of the emitter cname-purity refactor",
-        strict=True,
-    )
     def test_cross_unit_dependency_facet(self):
         """A facet defined+conformed-to in a dependency unit, used through a
-        facet handle from main. Guards the facet struct/vtable/data_u C names:
-        they must use the facet type's dot-free cname, not the dotted qname."""
+        facet handle from main. Guards the facet struct/vtable/data_u C names
+        and the impl wrappers/create: all must use the dot-free cname (read from
+        the conformance entity + resolved facet type), not the dotted qname, and
+        the facet impl must be found by the facet's type-id cross-unit."""
         out = self._build_multifile(
             {
                 "test.z": (

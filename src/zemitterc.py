@@ -435,6 +435,11 @@ class CEmitter:
         self._facet_conformers: dict[
             str, list
         ] = {}  # facet name -> list of impl type names
+        # Id-keyed facet lookups (cross-unit-correct: the short-name maps above
+        # miss across units). facet type-id -> AST def; facet type-id -> list of
+        # conforming impl type-ids (sizes the facet's inline data union).
+        self._facet_def_by_id: Dict[int, zast.ObjectDef] = {}
+        self._facet_conformer_ids: Dict[int, list] = {}
         # (impl_type, proto_name) -> label for owned protocol create
         self._proto_conformance: Dict[tuple, str] = {}
         # Case-A conformance entities, indexed for O(1) emitter lookup by the
@@ -1262,6 +1267,11 @@ class CEmitter:
                             self._facet_conformers.setdefault(proto_name, []).append(
                                 qname
                             )
+                            impl_zt = self._node_ztype(defn)
+                            if apath_zt is not None and impl_zt is not None:
+                                self._facet_conformer_ids.setdefault(
+                                    apath_zt.type_id, []
+                                ).append(impl_zt.type_id)
                         # constant in 'as' section
                         if self._node_const_value(apath) is not None:
                             self._const_names.add(f"{qname}.{label}")
@@ -1278,6 +1288,9 @@ class CEmitter:
             elif defn_type == NodeType.FACET:
                 if not self._is_generic_template(defn):
                     self._facet_defs[qname] = defn
+                    facet_zt = self._node_ztype(defn)
+                    if facet_zt is not None:
+                        self._facet_def_by_id[facet_zt.type_id] = defn
             elif defn_type == NodeType.ATOMID and _is_numeric_id(defn.name):
                 self._const_names.add(qname)
             elif self._node_const_value(defn) is not None:
@@ -1473,7 +1486,7 @@ class CEmitter:
                             and facet_zt is not None
                             and facet_zt.typetype == ZTypeType.FACET
                         ):
-                            self._emit_facet_impl(qname, label, facet_name, defn)
+                            self._emit_facet_impl(qname, label, facet_zt, defn)
 
     def _emit_io_stream_protocols(self) -> str:
         """Emit the stream protocol struct + vtable types (reader,
@@ -2881,12 +2894,21 @@ class CEmitter:
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
         lines.append(f"}} {facet_base}_vtable_t;\n\n")
 
-        # data union — sized to largest conforming type (provides size + alignment)
-        conformers = self._facet_conformers.get(name, [])
+        # data union — sized to largest conforming type (provides size + alignment).
+        # Keyed by the facet's type-id so a cross-unit conformer is found (the
+        # short-name map misses across units) and emitted with its dot-free cname.
+        conformer_ids = (
+            self._facet_conformer_ids.get(facet_type.type_id, [])
+            if facet_type is not None
+            else []
+        )
         lines.append("typedef union {\n")
-        if conformers:
-            for impl_name in conformers:
-                lines.append(f"    z_{impl_name}_t _{impl_name.replace('.', '_')};\n")
+        if conformer_ids:
+            for impl_id in conformer_ids:
+                impl_zt = _type_by_id(impl_id)
+                if impl_zt is not None:
+                    member = _cname_of(impl_zt, impl_zt.name)
+                    lines.append(f"    {member} _{impl_zt.name};\n")
         else:
             lines.append("    char _empty;\n")
         lines.append(f"}} {facet_base}_data_u;\n\n")
@@ -2903,22 +2925,24 @@ class CEmitter:
         self,
         impl_name: str,
         label: str,
-        facet_name: str,
+        facet_zt: ZType,
         impl_defn: "zast.ObjectDef",
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a facet implementation."""
-        facet = self._facet_defs.get(facet_name)
+        # The facet def is found by the facet's type-id (cross-unit-correct; the
+        # short-name `_facet_defs` map misses across units).
+        facet = self._facet_def_by_id.get(facet_zt.type_id)
         if not facet:
             return
         impl_type = self._node_ztype(impl_defn)
-        facet_type = self._node_ztype(facet)
+        facet_type = facet_zt
         conf = self._conformance_of(impl_type, facet_type, label)
         # Conformance C names read from the entity / resolved ZTypes (dot-free
         # cross-unit); composed fallbacks mirror the entity off the impl base.
         impl_ctype = _cname_of(impl_type, impl_name)
         impl_base = _cbase_of(impl_type, impl_name)
-        facet_ctype = _cname_of(facet_type, facet_name)
-        facet_vtable_ctype = f"{_cbase_of(facet_type, facet_name)}_vtable_t"
+        facet_ctype = _cname_of(facet_type, facet_type.name)
+        facet_vtable_ctype = f"{_cbase_of(facet_type, facet_type.name)}_vtable_t"
         vtable_name = conf.vtable_cname if conf else f"{impl_base}_{label}_vtable"
         owned_create = (
             conf.create_owned_cname if conf else f"{impl_base}_{label}_create_owned"
