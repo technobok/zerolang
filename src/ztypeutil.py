@@ -241,3 +241,15 @@ def is_stringview_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return ztype.subtype == ZSubType.STRINGVIEW
+
+
+def is_string_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is the String class (heap-allocated owned string).
+
+    Follows typedef_base before testing the subtype so the result matches
+    `_ctype`'s typedef resolution — the emitter uses this to detect String
+    by its subtype id rather than by string-comparing the C name."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return ztype.subtype == ZSubType.STRING

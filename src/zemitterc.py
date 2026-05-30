@@ -50,6 +50,7 @@ from ztypeutil import (
     set_element_type as _set_element_type,
     is_setiter_type as _is_setiter_type,
     is_stringview_type as _is_stringview_type,
+    is_string_type as _is_string_type,
     _unwrap_typedef,
 )
 
@@ -4563,7 +4564,7 @@ class CEmitter:
         """Emit `static int <cbase>_contains(...)` -- linear scan with
         equality dispatch by element type. Numeric: `_a == _b`. String
         (`z_String_t`): size + memcmp. `str` valtype: len + memcmp."""
-        elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
+        elem_is_string = _is_string_type(elem_type)
         lines: List[str] = []
         lines.append(
             f"static int {cbase}_contains({ctype}* _this, {elem_ctype} _item);\n"
@@ -4602,7 +4603,7 @@ class CEmitter:
         mergesort with hardcoded comparator. Numeric: `<`. String
         (`z_String_t`): z_String_cmp. `str` valtype: byte-lex memcmp
         with shorter-prefix-loses tie-break."""
-        elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
+        elem_is_string = _is_string_type(elem_type)
         cmp_fn = f"{cbase}_sort_lt"
         merge_fn = f"{cbase}_sort_merge"
         msort_fn = f"{cbase}_sort_rec"
@@ -4772,8 +4773,8 @@ class CEmitter:
             return
         key_ctype = _ctype(self.typing, key_type)
         val_ctype = _ctype(self.typing, value_type)
-        key_is_string = key_ctype == "z_String_t"
-        val_is_string = val_ctype == "z_String_t"
+        key_is_string = _is_string_type(key_type)
+        val_is_string = _is_string_type(value_type)
         val_is_reftype = val_ctype.endswith("*")
         entry_type = f"{cbase}_entry_t"
         # Kept alias for backward-compatible external references (e.g.
@@ -5379,7 +5380,7 @@ class CEmitter:
         if elem_type is None:
             return
         elem_ctype = _ctype(self.typing, elem_type)
-        elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
+        elem_is_string = _is_string_type(elem_type)
         entry_type = f"{cbase}_entry_t"
         lines: List[str] = []
 
@@ -6029,7 +6030,7 @@ class CEmitter:
         if not func.returntype:
             return "void"
         ct = _ctype(self.typing, self._node_ztype(func.returntype))
-        if ct == "z_String_t":
+        if _is_string_type(self._node_ztype(func.returntype)):
             self.needs_string = True
             self.needs_stdlib = True
         elif ct.endswith("*"):
@@ -6660,7 +6661,9 @@ class CEmitter:
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
         if _assign_ztype and (_assign_ztype.destructor_name is not None):
-            if ctype == "z_String_t":
+            if _is_string_type(
+                _assign_ztype.return_type if _is_typedef_call else _assign_ztype
+            ):
                 self.needs_string = True
             self.needs_stdlib = True
             # the variable now owns the value — remove from temp frees
@@ -11272,7 +11275,7 @@ class CEmitter:
             and cast(ZType, self._node_ztype(ifnode)).destructor_name is not None
         ):
             self._temp.frees.append(tmp)
-            if ctype == "z_String_t":
+            if _is_string_type(self._node_ztype(ifnode)):
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 
@@ -11774,7 +11777,7 @@ class CEmitter:
         if val_type:
             ctype = _ctype(self.typing, val_type)
 
-        is_string = ctype == "z_String_t"
+        is_string = _is_string_type(val_type)
         is_class = ctype.startswith("z_") and ctype.endswith("_t*")
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = self._def_cname(withnode) or mangle_var_name(withnode.name)
@@ -12228,7 +12231,7 @@ class CEmitter:
             and cast(ZType, self._node_ztype(casenode)).destructor_name is not None
         ):
             self._temp.frees.append(tmp)
-            if ctype == "z_String_t":
+            if _is_string_type(self._node_ztype(casenode)):
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 
