@@ -431,18 +431,12 @@ class CEmitter:
         # wrapper emission can find them even when user code shadows
         # the short name (e.g. a user-declared `reader` protocol).
         self._io_protocol_defs: dict[str, zast.ObjectDef] = {}
-        self._facet_defs: dict[str, zast.ObjectDef] = {}  # name -> AST node
-        self._facet_conformers: dict[
-            str, list
-        ] = {}  # facet name -> list of impl type names
-        # Id-keyed facet lookups (cross-unit-correct: the short-name maps above
-        # miss across units). facet type-id -> AST def; facet type-id -> list of
-        # conforming impl type-ids (sizes the facet's inline data union).
+        # Id-keyed facet/protocol lookups, keyed by the spec's type-id
+        # (cross-unit-correct — a short-name map misses across units). facet
+        # type-id -> AST def; facet type-id -> conforming impl type-ids (sizes
+        # the facet's inline data union); protocol type-id -> AST def.
         self._facet_def_by_id: Dict[int, zast.ObjectDef] = {}
         self._facet_conformer_ids: Dict[int, list] = {}
-        # protocol type-id -> AST def (same cross-unit fix as facets: a
-        # conforming type emits its protocol impl by the protocol's type-id, not
-        # the as-item's short name which misses across units).
         self._protocol_def_by_id: Dict[int, zast.ObjectDef] = {}
         # (impl_type, proto_name) -> label for owned protocol create
         self._proto_conformance: Dict[tuple, str] = {}
@@ -1241,8 +1235,9 @@ class CEmitter:
     def _collect_pre_emission(self, prefix: str, body: dict) -> None:
         """Pre-emission pass: collect supplementary data not derivable from ZType.
 
-        Gathers _const_names, _protocol_defs, _facet_defs, _is_func_fields,
-        _proto_conformance, and _facet_conformers in a single walk.
+        Gathers _const_names, _protocol_defs, _is_func_fields, _proto_conformance,
+        the id-keyed facet/protocol def maps, and _facet_conformer_ids in a single
+        walk.
         """
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
@@ -1268,9 +1263,6 @@ class CEmitter:
                             self._proto_conformance[(qname, proto_name)] = label
                         if proto_name and proto_tt == ZTypeType.FACET:
                             self._proto_conformance[(qname, proto_name)] = label
-                            self._facet_conformers.setdefault(proto_name, []).append(
-                                qname
-                            )
                             impl_zt = self._node_ztype(defn)
                             if apath_zt is not None and impl_zt is not None:
                                 self._facet_conformer_ids.setdefault(
@@ -1294,7 +1286,6 @@ class CEmitter:
                         self._protocol_def_by_id[proto_zt.type_id] = defn
             elif defn_type == NodeType.FACET:
                 if not self._is_generic_template(defn):
-                    self._facet_defs[qname] = defn
                     facet_zt = self._node_ztype(defn)
                     if facet_zt is not None:
                         self._facet_def_by_id[facet_zt.type_id] = defn
@@ -2944,8 +2935,8 @@ class CEmitter:
         impl_defn: "zast.ObjectDef",
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a facet implementation."""
-        # The facet def is found by the facet's type-id (cross-unit-correct; the
-        # short-name `_facet_defs` map misses across units).
+        # The facet def is found by the facet's type-id (cross-unit-correct; a
+        # short-name lookup would miss across units).
         facet = self._facet_def_by_id.get(facet_zt.type_id)
         if not facet:
             return
@@ -7023,7 +7014,7 @@ class CEmitter:
             owned_create = conf.create_owned_cname
         else:
             label = self._proto_conformance.get((impl_name, proto_name), "")
-            owned_create = f"z_{impl_name}_{label}_create_owned"
+            owned_create = f"{_cbase_of(arg_type, impl_name)}_{label}_create_owned"
         proto_ctype = _cname_of(proto_type, proto_name)
 
         # stack-allocated class: pass address to protocol create
@@ -7100,7 +7091,7 @@ class CEmitter:
             create_name = conf.create_cname
         else:
             label = self._proto_conformance.get((impl_name, proto_name), "")
-            create_name = f"z_{impl_name}_{label}_create"
+            create_name = f"{_cbase_of(arg_type, impl_name)}_{label}_create"
 
         # pass address for stack-allocated types (records, stack classes)
         if arg_type and (
@@ -7174,7 +7165,7 @@ class CEmitter:
             owned_create = conf.create_owned_cname
         else:
             label = self._proto_conformance.get((impl_name, facet_name), "")
-            owned_create = f"z_{impl_name}_{label}_create_owned"
+            owned_create = f"{_cbase_of(arg_type, impl_name)}_{label}_create_owned"
         return f"{owned_create}({arg_val})"
 
     def _emit_facet_borrow_call(self, call: zast.Call) -> str:
@@ -7713,7 +7704,7 @@ class CEmitter:
             create_name = (
                 conf.create_owned_cname
                 if conf
-                else f"z_{impl_name}_{label}_create_owned"
+                else f"{_cbase_of(arg_type, impl_name)}_{label}_create_owned"
             )
             tmp = self._temp_name("c")
             indent = self._indent()
@@ -7731,7 +7722,11 @@ class CEmitter:
                 )
             return tmp
         # borrow (default): stack-allocated protocol handle, no destroy.
-        create_name = conf.create_cname if conf else f"z_{impl_name}_{label}_create"
+        create_name = (
+            conf.create_cname
+            if conf
+            else f"{_cbase_of(arg_type, impl_name)}_{label}_create"
+        )
         tmp = self._temp_name("p")
         indent = self._indent()
         self._temp.decls.append(
