@@ -887,17 +887,6 @@ class CEmitter:
         self._string_literals[escaped] = name
         return name
 
-    def _mangle_callable(self, name: str, callable_node: zast.Node) -> str:
-        """Mangle a callable name: unit-level definitions use _mangle_func, locals use _mangle_var."""
-        # dotted names are always definition references (unit.func, record.method)
-        if "." in name:
-            return _mangle_func(name)
-        if callable_node.nodetype == NodeType.ATOMID and self._is_definition_ref(
-            cast(zast.AtomId, callable_node)
-        ):
-            return _mangle_func(name)
-        return _mangle_var(name)
-
     def _track_stdlib_unit_native(
         self, mangled: str, ftype: "Optional[ZType]" = None
     ) -> None:
@@ -1049,7 +1038,11 @@ class CEmitter:
             and ftype.typetype == ZTypeType.FUNCTION
             and ftype.generic_origin is not None
         ):
-            return _mangle_func(ftype.name)
+            return (
+                ftype.cname
+                if ftype.cname and not ftype.is_native
+                else _mangle_func(ftype.name)
+            )
 
         # `meta.create` inside a type's method body resolves to that
         # type's raw allocator. The typechecker stamps the callable's
@@ -1082,7 +1075,11 @@ class CEmitter:
                 # use the resolved type name for proper qualification
                 # (handles subunit functions like mymod.helper.square)
                 if "." in func_name:
-                    mangled = _mangle_func(func_name)
+                    mangled = (
+                        ftype.cname
+                        if ftype.cname and not ftype.is_native
+                        else _mangle_func(func_name)
+                    )
                     self._track_stdlib_unit_native(mangled, ftype)
                     return mangled
         # Bare free-function call. A dependency unit's sibling call (e.g.
@@ -1103,8 +1100,26 @@ class CEmitter:
                 self._track_stdlib_unit_native(atom_ft.cname, atom_ft)
                 return atom_ft.cname
         callable_name = self._get_callable_name(call.callable)
-        mangled = self._mangle_callable(callable_name, call.callable)
-        self._track_stdlib_unit_native(mangled, self._node_ztype(call.callable))
+        callable_ft = self._node_ztype(call.callable)
+        # A unit-level definition (dotted name, or a definition-ref atom) is a
+        # function: read its stored cname. A bare local holding a callable
+        # mangles as a variable.
+        is_func_ref = "." in callable_name or (
+            call.callable.nodetype == NodeType.ATOMID
+            and self._is_definition_ref(cast(zast.AtomId, call.callable))
+        )
+        if is_func_ref:
+            mangled = (
+                callable_ft.cname
+                if callable_ft is not None
+                and callable_ft.typetype == ZTypeType.FUNCTION
+                and callable_ft.cname
+                and not callable_ft.is_native
+                else _mangle_func(callable_name)
+            )
+        else:
+            mangled = _mangle_var(callable_name)
+        self._track_stdlib_unit_native(mangled, callable_ft)
         return mangled
 
     def _qualify(self, prefix: str, name: str) -> str:
@@ -8028,7 +8043,11 @@ class CEmitter:
                         self.typing.has_child_default(ftype, p) for p, _ in real_params
                     )
                     if all_defaulted:
-                        cname = _mangle_func(atom.name)
+                        cname = (
+                            ftype.cname
+                            if ftype.cname and not ftype.is_native
+                            else _mangle_func(atom.name)
+                        )
                         defaults: List[str] = []
                         for pname, ptype in real_params:
                             d = self.typing.child_default(ftype, pname)
@@ -9071,6 +9090,13 @@ class CEmitter:
         resolved = _type_by_id(udt) if udt is not None else None
         tt = resolved.typetype if resolved else None
         if tt in (ZTypeType.FUNCTION, ZTypeType.DATA):
+            if (
+                tt == ZTypeType.FUNCTION
+                and resolved is not None
+                and resolved.cname
+                and not resolved.is_native
+            ):
+                return resolved.cname
             return _mangle_func(name)
         if name in self._const_names:
             # Unit-level numeric constants are macros: inline the value
@@ -9296,6 +9322,8 @@ class CEmitter:
                                 has_runtime_params = True
                                 break
                     if not has_runtime_params:
+                        # Always a native (child_is_native guard above); native
+                        # cnames don't match the qualified runtime symbol.
                         mangled = _mangle_func(f"{pname}.{child}")
                         self._track_stdlib_unit_native(mangled, fn_type)
                         if pname == "io":
@@ -9335,8 +9363,19 @@ class CEmitter:
             # itself (a variable carries atom_variable_id, not this stamp), so
             # it stands in for the old `resolved.name == pname` disambiguator.
             ptt = parent_def.typetype if parent_def is not None else None
-            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS):
-                return _mangle_func(f"{pname}.{child}")
+            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS) and parent_def is not None:
+                # Only a method (FUNCTION child) has a usable function cname; an
+                # `as`-section constant resolves to its value type, whose cname
+                # is a struct name — fall back to the qualified mangle there.
+                method_ct = self.typing.child_of(parent_def, child)
+                return (
+                    method_ct.cname
+                    if method_ct is not None
+                    and method_ct.typetype == ZTypeType.FUNCTION
+                    and method_ct.cname
+                    and not method_ct.is_native
+                    else _mangle_func(f"{pname}.{child}")
+                )
             # union_name.subtype — emit null subtype construction. Use the
             # type's dot-free ztype.name (not the bare atom `pname`) so a
             # dependency-unit variant/union emits a valid C name.
@@ -9748,7 +9787,12 @@ class CEmitter:
                 and not self._is_class_pointer_path(path.parent)
             ):
                 parent = f"&{parent}"
-            return f"{_mangle_func(func_name)}({parent})"
+            method_cn = (
+                method_type.cname
+                if method_type.cname and not method_type.is_native
+                else _mangle_func(func_name)
+            )
+            return f"{method_cn}({parent})"
 
         # protocol instance creation: obj.label where label maps to a
         # protocol conformance (synthesize a protocol value via
