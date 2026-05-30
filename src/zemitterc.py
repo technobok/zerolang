@@ -4391,7 +4391,8 @@ class CEmitter:
         self.needs_stdio = True
         self.needs_string = True
         name = mono_type.name
-        ctype = f"z_{name}_t"
+        cbase = _cbase_of(mono_type, name)
+        ctype = _cname_of(mono_type, name)
         elem_type = _list_element_type(self.typing, mono_type)
         if elem_type is None:
             return
@@ -4417,16 +4418,16 @@ class CEmitter:
         listview_methods = ""
         if listview_child and listview_child.return_type:
             lv_name = listview_child.return_type.name
-            lv_ctype = f"z_{lv_name}_t"
+            lv_ctype = _cname_of(listview_child.return_type, lv_name)
             listview_methods = (
-                f"static {lv_ctype} z_{name}_listview({ctype}* _this);\n"
-                f"static {lv_ctype} z_{name}_listview({ctype}* _this) {{\n"
+                f"static {lv_ctype} {cbase}_listview({ctype}* _this);\n"
+                f"static {lv_ctype} {cbase}_listview({ctype}* _this) {{\n"
                 f"    return *({lv_ctype}*)_this;\n"
                 f"}}\n"
                 f"\n"
-                f"static void z_{name}_extendView({ctype}* _this, {lv_ctype} _from);\n"
-                f"static void z_{name}_extendView({ctype}* _this, {lv_ctype} _from) {{\n"
-                f"    z_{name}_grow(_this, _this->length + _from.length);\n"
+                f"static void {cbase}_extendView({ctype}* _this, {lv_ctype} _from);\n"
+                f"static void {cbase}_extendView({ctype}* _this, {lv_ctype} _from) {{\n"
+                f"    {cbase}_grow(_this, _this->length + _from.length);\n"
                 f"    memcpy(&_this->data[_this->length], _from.data, "
                 f"_from.length * sizeof({elem_ctype}));\n"
                 f"    _this->length += _from.length;\n"
@@ -4451,13 +4452,13 @@ class CEmitter:
         # (numeric ==, String size+memcmp, str len+memcmp).
         contains_child = self.typing.child_of(mono_type, "contains")
         if contains_child is not None:
-            self._emit_list_contains(name, ctype, elem_ctype, elem_type)
+            self._emit_list_contains(cbase, ctype, elem_ctype, elem_type)
 
         # sort companion: stable in-place mergesort with comparator
         # hardcoded by element type.
         sort_child = self.typing.child_of(mono_type, "sort")
         if sort_child is not None:
-            self._emit_list_sort(name, ctype, elem_ctype, elem_type)
+            self._emit_list_sort(cbase, ctype, elem_ctype, elem_type)
 
         # listiter companion: iterator + .iterate factory. Emitted only
         # when the list mono carries an `.iterate` child returning a
@@ -4465,27 +4466,28 @@ class CEmitter:
         # `.iterate` synthesised — currently every concrete list mono).
         iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
+            iterate_cn = iterate_child.cname or f"z_{name}_iterate"
             self._emit_listiter_runtime(
-                ctype, name, elem_ctype, iterate_child.return_type
+                ctype, iterate_cn, elem_ctype, iterate_child.return_type
             )
 
     def _emit_list_contains(
         self,
-        name: str,
+        cbase: str,
         ctype: str,
         elem_ctype: str,
         elem_type: ZType,
     ) -> None:
-        """Emit `static int z_<name>_contains(...)` -- linear scan with
+        """Emit `static int <cbase>_contains(...)` -- linear scan with
         equality dispatch by element type. Numeric: `_a == _b`. String
         (`z_String_t`): size + memcmp. `str` valtype: len + memcmp."""
         elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
         lines: List[str] = []
         lines.append(
-            f"static int z_{name}_contains({ctype}* _this, {elem_ctype} _item);\n"
+            f"static int {cbase}_contains({ctype}* _this, {elem_ctype} _item);\n"
         )
         lines.append(
-            f"static int z_{name}_contains({ctype}* _this, {elem_ctype} _item) {{\n"
+            f"static int {cbase}_contains({ctype}* _this, {elem_ctype} _item) {{\n"
         )
         lines.append("    for (uint64_t i = 0; i < _this->length; i++) {\n")
         if elem_is_string:
@@ -4509,19 +4511,19 @@ class CEmitter:
 
     def _emit_list_sort(
         self,
-        name: str,
+        cbase: str,
         ctype: str,
         elem_ctype: str,
         elem_type: ZType,
     ) -> None:
-        """Emit `static void z_<name>_sort(...)` -- stable in-place
+        """Emit `static void <cbase>_sort(...)` -- stable in-place
         mergesort with hardcoded comparator. Numeric: `<`. String
         (`z_String_t`): z_String_cmp. `str` valtype: byte-lex memcmp
         with shorter-prefix-loses tie-break."""
         elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
-        cmp_fn = f"z_{name}_sort_lt"
-        merge_fn = f"z_{name}_sort_merge"
-        msort_fn = f"z_{name}_sort_rec"
+        cmp_fn = f"{cbase}_sort_lt"
+        merge_fn = f"{cbase}_sort_merge"
+        msort_fn = f"{cbase}_sort_rec"
         lines: List[str] = []
         # element-type comparator: returns 1 if a < b, else 0. The merge
         # step uses `!cmp(b, a)` for the "take from left" predicate so
@@ -4578,8 +4580,8 @@ class CEmitter:
         lines.append(f"    {merge_fn}(data, scratch, lo, mid, hi);\n")
         lines.append("}\n\n")
         # public entry: allocate scratch once, drive the recursion.
-        lines.append(f"static void z_{name}_sort({ctype}* _this);\n")
-        lines.append(f"static void z_{name}_sort({ctype}* _this) {{\n")
+        lines.append(f"static void {cbase}_sort({ctype}* _this);\n")
+        lines.append(f"static void {cbase}_sort({ctype}* _this) {{\n")
         lines.append("    if (_this->length < 2) return;\n")
         lines.append(
             f"    {elem_ctype}* scratch = ({elem_ctype}*)z_xmalloc("
@@ -4593,7 +4595,7 @@ class CEmitter:
     def _emit_listiter_runtime(
         self,
         list_ctype: str,
-        list_name: str,
+        iterate_cn: str,
         elem_ctype: str,
         listiter_mono: ZType,
     ) -> None:
@@ -4604,13 +4606,14 @@ class CEmitter:
         increments idx; returns optionview.none when idx >= length.
         """
         li_name = listiter_mono.name
-        li_ctype = f"z_{li_name}_t"
+        li_ctype = _cname_of(listiter_mono, li_name)
         call_method = self.typing.child_of(listiter_mono, "call")
         if not call_method or not call_method.return_type:
             return
+        call_cn = call_method.cname or f"z_{li_name}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
-        ov_ctype = f"z_{ov_name}_t"
+        ov_ctype = _cname_of(ov_mono, ov_name)
         ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
         ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
 
@@ -4623,8 +4626,8 @@ class CEmitter:
         lines.append(f"    {list_ctype}* list;\n")
         lines.append("    uint64_t idx;\n")
         lines.append(f"}} {li_ctype};\n\n")
-        lines.append(f"static {ov_ctype} z_{li_name}_call({li_ctype}* _it);\n")
-        lines.append(f"static {ov_ctype} z_{li_name}_call({li_ctype}* _it) {{\n")
+        lines.append(f"static {ov_ctype} {call_cn}({li_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} {call_cn}({li_ctype}* _it) {{\n")
         lines.append(f"    {ov_ctype} _out = {{0}};\n")
         lines.append("    if (_it->idx >= _it->list->length) {\n")
         lines.append(f"        _out.tag = {ov_none_tag};\n")
@@ -4635,10 +4638,8 @@ class CEmitter:
         lines.append("    _it->idx++;\n")
         lines.append("    return _out;\n")
         lines.append("}\n\n")
-        lines.append(f"static {li_ctype} z_{list_name}_iterate({list_ctype}* _this);\n")
-        lines.append(
-            f"static {li_ctype} z_{list_name}_iterate({list_ctype}* _this) {{\n"
-        )
+        lines.append(f"static {li_ctype} {iterate_cn}({list_ctype}* _this);\n")
+        lines.append(f"static {li_ctype} {iterate_cn}({list_ctype}* _this) {{\n")
         lines.append(f"    {li_ctype} _it = {{0}};\n")
         lines.append("    _it.list = _this;\n")
         lines.append("    _it.idx = 0;\n")
