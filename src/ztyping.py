@@ -191,6 +191,15 @@ class ZTyping:
     # reads `variable_cname[def_variable_id[node.nodeid]]` at declaration sites
     # instead of re-mangling the binding's name.
     def_variable_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # Per-synth-temp-atom nodeid → the variable_id of the local the temp's
+    # alias resolves to. Call-arg hoisting turns an alias-safe projection
+    # (`x.lock` / `x.private` / `x.borrow` / `x.take` of a bare local) into a
+    # synth temp that the emitter renders as the bare source via `_alias_map`.
+    # The temp atom never goes through `_check_atomid`, so it carries no
+    # `atom_variable_id`; this records the source local so the emitter can test
+    # set membership (class_params / borrowed_vars) by the identity the temp
+    # actually emits as.
+    alias_root_variable_id: Dict[int, int] = field(default_factory=dict, init=False)
     # Per-AtomId reference → resolved unit-level definition's type_id. Present
     # iff the bare reference resolves to a unit/core definition (function, data
     # block, record/class/variant used as a value, unit-level const) rather

@@ -103,8 +103,9 @@ class ScopeState:
     """Per-function cleanup state, pushed/popped at function boundaries.
 
     `cleanup_stack` is a stack of block scopes. Each inner list collects
-    `(mangled_var_name, ZType)` pairs in insertion order for one block
-    body. The outermost frame (`cleanup_stack[0]`) is the function body
+    `(variable_id, ZType)` pairs in insertion order for one block body; the
+    emitter resolves the C name from `variable_cname[variable_id]` at flush
+    time. The outermost frame (`cleanup_stack[0]`) is the function body
     itself; subsequent frames push when entering a nested block (if/else/
     for/do/with/match-arm) and pop at block close, emitting destructors
     for the popped frame's entries in reverse declaration order.
@@ -113,9 +114,12 @@ class ScopeState:
     cleanup_stack: list = field(default_factory=lambda: [[]])
     temp_counter: int = 0
     record_name: str = ""
+    # variable_ids of pointer-passed parameters (class `this`, borrow/lock
+    # class params, already-pointer params). Queried to choose `->` vs `.`
+    # and to suppress a redundant `&` when forwarding such a param.
     class_params: set = field(default_factory=set)
     func_nodeid: int = 0  # NodeID of enclosing function (for unique temp names)
-    # Mangled names of locals bound to a borrow (assigned from `out T.borrow`
+    # variable_ids of locals bound to a borrow (assigned from `out T.borrow`
     # call result, or from a `.borrow`/`.lock` projection). Used by `.release`
     # emit to skip the destructor — freeing a borrow corrupts the source.
     borrowed_vars: set = field(default_factory=set)
@@ -668,6 +672,54 @@ class CEmitter:
             return None
         return self.typing.variable_cname.get(vid)
 
+    def _def_vid(self, node: zast.Node) -> Optional[int]:
+        """The variable_id a declaration node binds (from `def_variable_id`),
+        or None when unstamped. Used to register a binding in the id-keyed
+        class_params / borrowed_vars / cleanup sets."""
+        return self.typing.def_variable_id.get(node.nodeid)
+
+    def _operand_vid(self, op: zast.Node) -> Optional[int]:
+        """The variable_id an operand reduces to for set-membership tests:
+        unwrap Expression wrappers, strip the value-preserving projections
+        (`.take`/`.lock`/`.private`) that emit as the bare parent, then read
+        the root AtomId's identity. A hoisted alias temp carries its source
+        local in `alias_root_variable_id` (it emits as that local via
+        `_alias_map`); a plain reference carries `atom_variable_id`. None when
+        the operand does not reduce to a bare local reference. Lets a call-arg /
+        `.release` site test membership by identity rather than by the emitted
+        string it would otherwise have compared."""
+        n: Optional[zast.Node] = op
+        while n is not None and n.nodetype == NodeType.EXPRESSION:
+            n = cast(zast.Expression, n).expression
+        while (
+            n is not None
+            and n.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, n).child.name in ("take", "lock", "private")
+        ):
+            n = cast(zast.DottedPath, n).parent
+        if n is None or n.nodetype not in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return None
+        alias_vid = self.typing.alias_root_variable_id.get(n.nodeid)
+        if alias_vid is not None:
+            return alias_vid
+        return self.typing.atom_variable_id.get(n.nodeid)
+
+    def _root_atom_vid(self, path: zast.Node) -> Optional[int]:
+        """The variable_id of the root AtomId of a path, walking dotted parents
+        (`a.b.c` → `a`); None if the path does not root in a local. Used where
+        the prior logic walked to the path root by name."""
+        n: Optional[zast.Node] = path
+        while n is not None and n.nodetype == NodeType.EXPRESSION:
+            n = cast(zast.Expression, n).expression
+        while n is not None and n.nodetype == NodeType.DOTTEDPATH:
+            n = cast(zast.DottedPath, n).parent
+        if n is None or n.nodetype not in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return None
+        alias_vid = self.typing.alias_root_variable_id.get(n.nodeid)
+        if alias_vid is not None:
+            return alias_vid
+        return self.typing.atom_variable_id.get(n.nodeid)
+
     def _enclosing_type(self, func: zast.Function) -> Optional[ZType]:
         """The enclosing record/class type of a method, by id, or None for a
         top-level function. Read from the `enclosing_type_id` stamp on the
@@ -808,8 +860,9 @@ class CEmitter:
         for frame in self._scope.cleanup_stack:
             for v in frame:
                 all_vars.append(v)
-        for var_name, var_type in reversed(all_vars):
-            if var_name != exclude_var:
+        for var_id, var_type in reversed(all_vars):
+            var_name = self.typing.variable_cname.get(var_id)
+            if var_name is not None and var_name != exclude_var:
                 result += self._emit_field_cleanup(var_name, var_type, indent)
         return result
 
@@ -5934,7 +5987,7 @@ class CEmitter:
         ftype = self._node_ztype(func)
 
         params: List[str] = []
-        pointer_params: List[str] = []
+        pointer_params: List[Optional[int]] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
             # class this-receiver: pass by pointer
@@ -5944,7 +5997,7 @@ class CEmitter:
                 and not ptype_str.endswith("*")
             ):
                 ptype_str = f"{ptype_str}*"
-                pointer_params.append(_mangle_var(pname))
+                pointer_params.append(self._def_vid(ppath))
             # stack-allocated class borrow/lock params: pass by pointer
             elif (
                 self._node_ztype(ppath)
@@ -5956,7 +6009,7 @@ class CEmitter:
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
-                pointer_params.append(_mangle_var(pname))
+                pointer_params.append(self._def_vid(ppath))
             params.append(
                 f"{ptype_str} {self._def_cname(ppath) or mangle_var_name(pname)}"
             )
@@ -5981,12 +6034,15 @@ class CEmitter:
             self._current_enclosing_type = record_type
         # track all pointer parameters for -> field access dispatch
         for pp in pointer_params:
-            self._scope.class_params.add(pp)
+            if pp is not None:
+                self._scope.class_params.add(pp)
         # also track other parameters that are already pointer types (unions, etc.)
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
             if ptype_str.endswith("*") and ptype_str.startswith("z_"):
-                self._scope.class_params.add(_mangle_var(pname))
+                vid = self._def_vid(ppath)
+                if vid is not None:
+                    self._scope.class_params.add(vid)
 
         # register .take params with a destructor for scope-exit cleanup.
         # Ownership was transferred in from the caller, so the callee owns the
@@ -5999,9 +6055,9 @@ class CEmitter:
                 and ftype
                 and self.typing.child_ownership(ftype, pname) == ZParamOwnership.TAKE
             ):
-                self._scope.cleanup_vars.append(
-                    (_mangle_var(pname), self._node_ztype(ppath))
-                )
+                vid = self._def_vid(ppath)
+                if vid is not None:
+                    self._scope.cleanup_vars.append((vid, self._node_ztype(ppath)))
 
         # Register borrow/lock union params in borrowed_vars so any
         # synth-hoisted projection assignment from them (e.g. the
@@ -6021,7 +6077,9 @@ class CEmitter:
                 and self.typing.child_ownership(ftype, pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
-                self._scope.borrowed_vars.add(_mangle_var(pname))
+                vid = self._def_vid(ppath)
+                if vid is not None:
+                    self._scope.borrowed_vars.add(vid)
 
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
@@ -6499,12 +6557,14 @@ class CEmitter:
             # the projection aliases the source's heap-owned `data`
             # pointer, so destroying the LHS would free memory still
             # owned by the borrowed source.
+            assign_vid = self._def_vid(assign)
             if self._is_borrow_return_call(
                 assign.value
             ) or self._rhs_is_borrowed_projection(assign.value):
-                self._scope.borrowed_vars.add(cname)
-            else:
-                self._scope.cleanup_vars.append((cname, _assign_ztype))
+                if assign_vid is not None:
+                    self._scope.borrowed_vars.add(assign_vid)
+            elif assign_vid is not None:
+                self._scope.cleanup_vars.append((assign_vid, _assign_ztype))
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = (
@@ -6705,7 +6765,10 @@ class CEmitter:
             # a borrow into someone else's heap data; freeing or zeroing
             # here would corrupt the source. `.release` for a borrow is a
             # type-checker-side lock release with no C-level effect.
-            is_borrowed = var in self._scope.borrowed_vars
+            release_vid = self._operand_vid(dp.parent)
+            is_borrowed = (
+                release_vid is not None and release_vid in self._scope.borrowed_vars
+            )
             # owned reftypes: call destructor
             if (
                 var_type
@@ -7627,19 +7690,17 @@ class CEmitter:
                 is_take_string = (
                     own == ZParamOwnership.TAKE and arg_type.subtype == ZSubType.STRING
                 )
-                # `val not in self._scope.class_params` guards against
-                # double-indirection when val is already a pointer-
-                # typed param of the enclosing function (e.g. a class
-                # borrow forwarded into a nested call). Without this
-                # check, an arg like `table` where the enclosing fn
-                # already received `z_DentryTable_t*` becomes `&table`
-                # = `z_DentryTable_t**` and the callee reads garbage.
-                # Mirrors the sibling guard in
-                # _build_meta_create_args:7445.
+                # Suppress a redundant `&` when the argument is already a
+                # pointer-typed param of the enclosing function (e.g. a class
+                # borrow forwarded into a nested call): taking its address
+                # would make `z_DentryTable_t**` and the callee would read
+                # garbage. Membership is by identity (variable_id), not by the
+                # emitted string. Mirrors the sibling guards in
+                # _build_create_args / _build_meta_create_args.
                 if (
                     (is_this_param or is_borrow_lock)
                     and not is_take_string
-                    and val not in self._scope.class_params
+                    and self._operand_vid(arg.valtype) not in self._scope.class_params
                 ):
                     val = f"&{val}"
             parts.append(val)
@@ -7761,6 +7822,7 @@ class CEmitter:
 
         arg_map: Dict[str, str] = {}
         arg_types: Dict[str, Optional[ZType]] = {}
+        arg_vids: Dict[str, Optional[int]] = {}
         take_vars: Dict[str, Optional[str]] = {}
         indent = self._indent()
         for arg in arguments[skip_first:]:
@@ -7768,6 +7830,7 @@ class CEmitter:
                 val = self._emit_operation_value(arg.valtype)
                 arg_map[arg.name] = val
                 arg_types[arg.name] = self._get_operation_type(arg.valtype)
+                arg_vids[arg.name] = self._operand_vid(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
                 param_own = self.typing.child_ownership(create_fn, arg.name)
                 if (
@@ -7789,7 +7852,7 @@ class CEmitter:
                     and at.typetype == ZTypeType.CLASS
                     and not at.is_heap_allocated
                     and not val.startswith("&")
-                    and val not in self._scope.class_params
+                    and arg_vids.get(pname) not in self._scope.class_params
                 ):
                     val = f"&{val}"
                 parts.append(val)
@@ -7831,6 +7894,7 @@ class CEmitter:
         # build dict from call arguments
         arg_map: Dict[str, str] = {}
         arg_types: Dict[str, Optional[ZType]] = {}
+        arg_vids: Dict[str, Optional[int]] = {}
         take_vars: Dict[str, Optional[str]] = {}
         indent = self._indent()
         for arg in arguments[skip_first:]:
@@ -7838,6 +7902,7 @@ class CEmitter:
                 val = self._emit_operation_value(arg.valtype)
                 arg_map[arg.name] = val
                 arg_types[arg.name] = self._get_operation_type(arg.valtype)
+                arg_vids[arg.name] = self._operand_vid(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
                 param_own = (
                     self.typing.child_ownership(meta_fn, arg.name)
@@ -7864,7 +7929,7 @@ class CEmitter:
                     and at.typetype == ZTypeType.CLASS
                     and not at.is_heap_allocated
                     and not val.startswith("&")
-                    and val not in self._scope.class_params
+                    and arg_vids.get(fname) not in self._scope.class_params
                 ):
                     val = f"&{val}"
                 parts.append(val)
@@ -9881,13 +9946,13 @@ class CEmitter:
         # active block frame, not just the innermost, so a var declared
         # in an outer scope is still recognised inside a nested body.
         if path.nodetype == NodeType.ATOMID:
-            cname = _mangle_var(cast(zast.AtomId, path).name)
+            vid = self.typing.atom_variable_id.get(path.nodeid)
             for frame in self._scope.cleanup_stack:
-                for vname, vtype in frame:
-                    if vname == cname and vtype.is_heap_allocated:
+                for var_id, vtype in frame:
+                    if var_id == vid and vtype.is_heap_allocated:
                         return True
             # method 'this' parameter (class) is a pointer
-            if cname in self._scope.class_params:
+            if vid is not None and vid in self._scope.class_params:
                 return True
         return False
 
@@ -10002,8 +10067,10 @@ class CEmitter:
         indent = self._indent()
         frame = self._scope.cleanup_stack.pop()
         result = ""
-        for var_name, var_type in reversed(frame):
-            result += self._emit_field_cleanup(var_name, var_type, indent)
+        for var_id, var_type in reversed(frame):
+            var_name = self.typing.variable_cname.get(var_id)
+            if var_name is not None:
+                result += self._emit_field_cleanup(var_name, var_type, indent)
         return result
 
     def _emit_taken_vars_cleanup(
@@ -10112,14 +10179,9 @@ class CEmitter:
         inner = expr.expression
         if inner.nodetype != NodeType.DOTTEDPATH:
             return False
-        # Walk to the root AtomId of the dotted path.
-        node: zast.Path = cast(zast.Path, inner)
-        while node.nodetype == NodeType.DOTTEDPATH:
-            node = cast(zast.DottedPath, node).parent
-        if node.nodetype != NodeType.ATOMID:
-            return False
-        root_name = _mangle_var(cast(zast.AtomId, node).name)
-        return root_name in self._scope.borrowed_vars
+        # The projection's root local; borrowed-ness is an identity property.
+        vid = self._root_atom_vid(inner)
+        return vid is not None and vid in self._scope.borrowed_vars
 
     def _call_has_string_arg(self, call: zast.Call) -> bool:
         """True if any arg to ``call`` is a string (needs post-call ordering)."""

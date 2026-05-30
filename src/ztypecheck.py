@@ -9807,6 +9807,26 @@ class TypeChecker:
         # Replace the arg's value with an AtomId reference to the temp.
         atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
         self.typing.node_type[atom.nodeid] = arg_type
+        # If the hoisted source is an alias-safe projection of a bare local
+        # (`x.lock` / `x.private` / `x.borrow` / `x.take`), the emitter renders
+        # the temp as that local. Record the local's variable_id so emit-time
+        # set-membership tests recognise the temp by the identity it emits as.
+        _src: "Optional[zast.Node]" = arg.valtype
+        while _src is not None and _src.nodetype == NodeType.EXPRESSION:
+            _src = cast(zast.Expression, _src).expression
+        while (
+            _src is not None
+            and _src.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, _src).child.name
+            in ("take", "borrow", "lock", "private")
+        ):
+            _src = cast(zast.DottedPath, _src).parent
+        if _src is not None and _src.nodetype == NodeType.ATOMID:
+            _src_entry = self.symtab.lookup_entry(cast(zast.AtomId, _src).name)
+            if _src_entry is not None and _src_entry.var is not None:
+                self.typing.alias_root_variable_id[atom.nodeid] = (
+                    _src_entry.var.variable_id
+                )
         # Propagate const_value from the hoisted expression so
         # downstream literal-coercion (`_coerce_literal`) at the
         # call-site param-match still sees the constant — the
