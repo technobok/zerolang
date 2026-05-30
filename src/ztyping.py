@@ -181,6 +181,10 @@ class ZTyping:
     # to choose local vs unit-level emission without re-resolving by name,
     # so a local that shadows a unit-level namesake emits correctly.
     atom_variable_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # variable_id → C identifier, set once at the `define_var` chokepoint. The
+    # emitter reads this (via atom_variable_id for refs, or the def-node stamp
+    # for declarations) instead of re-mangling the variable's name string.
+    variable_cname: Dict[int, str] = field(default_factory=dict, init=False)
     # Per-AtomId reference → resolved unit-level definition's type_id. Present
     # iff the bare reference resolves to a unit/core definition (function, data
     # block, record/class/variant used as a value, unit-level const) rather

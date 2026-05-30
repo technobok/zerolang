@@ -516,6 +516,59 @@ class ZExprResult:
     private_access: bool = False
 
 
+# C reserved words a local variable name must not collide with. A variable
+# whose zerolang name is one of these is emitted as `v_<name>`.
+_C_RESERVED_WORDS = frozenset(
+    (
+        "main",
+        "break",
+        "continue",
+        "return",
+        "switch",
+        "case",
+        "default",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "int",
+        "float",
+        "double",
+        "char",
+        "void",
+        "struct",
+        "union",
+        "enum",
+        "static",
+        "const",
+        "auto",
+        "register",
+        "extern",
+        "volatile",
+        "signed",
+        "unsigned",
+        "long",
+        "short",
+        "sizeof",
+        "typedef",
+        "goto",
+        "abs",
+        "exit",
+    )
+)
+
+
+def mangle_var_name(name: str) -> str:
+    """The single canonical local-variable name mangler: prefix a C reserved
+    word with `v_`, otherwise pass through unchanged. Called once at the
+    `define_var` chokepoint to set `ZVariable.cname`; the emitter reads the
+    stored cname rather than re-deriving it."""
+    if name in _C_RESERVED_WORDS:
+        return f"v_{name}"
+    return name
+
+
 @dataclass
 class ZVariable:
     """
@@ -530,6 +583,9 @@ class ZVariable:
     variable_id: int = field(default_factory=_alloc_variable_id, init=False)
     ztype: ZType
     ownership: ZOwnership
+    # C identifier for this binding, set once at the `define_var` chokepoint via
+    # `mangle_var_name`. The emitter reads this rather than re-mangling the name.
+    cname: str = field(default="", init=False)
     # private access: variable declared with .private type, bypasses public_members
     is_private_access: bool = False
     # escape-analysis: name of the function-local source this variable

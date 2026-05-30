@@ -24,6 +24,7 @@ from ztypes import (
     ZOwnership,
     NUMERIC_RANGES,
     _type_by_id,
+    mangle_var_name,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -298,46 +299,12 @@ def _cbase_of(ztype: Optional[ZType], name: str) -> str:
 
 
 def _mangle_var(name: str) -> str:
-    """Mangle a local variable name — only escape C reserved words."""
-    if name in (
-        "main",
-        "break",
-        "continue",
-        "return",
-        "switch",
-        "case",
-        "default",
-        "if",
-        "else",
-        "for",
-        "while",
-        "do",
-        "int",
-        "float",
-        "double",
-        "char",
-        "void",
-        "struct",
-        "union",
-        "enum",
-        "static",
-        "const",
-        "auto",
-        "register",
-        "extern",
-        "volatile",
-        "signed",
-        "unsigned",
-        "long",
-        "short",
-        "sizeof",
-        "typedef",
-        "goto",
-        "abs",
-        "exit",
-    ):
-        return f"v_{name}"
-    return name
+    """Compose a local variable's C name for sites that have only a name
+    string and no `ZVariable` (synthesized wrapper params, string-keyed
+    scope sets). Delegates to the single canonical `mangle_var_name` so the
+    emitter never carries its own variable-name mangling logic. Sites that
+    hold a variable_id read the stored `variable_cname` instead."""
+    return mangle_var_name(name)
 
 
 def _unwrap_outer_parens(s: str) -> str:
@@ -681,6 +648,15 @@ class CEmitter:
         if self._unit_def_ztype(atom) is not None:
             return True
         return atom.name in self._const_names
+
+    def _var_cname(self, atom: zast.AtomId) -> Optional[str]:
+        """Stored C name for a local-variable reference, read by the
+        `atom_variable_id` stamp → `variable_cname`. None when `atom` is not a
+        local reference (unit-level def, constant, numeric literal)."""
+        vid = self.typing.atom_variable_id.get(atom.nodeid)
+        if vid is None:
+            return None
+        return self.typing.variable_cname.get(vid)
 
     def _enclosing_type(self, func: zast.Function) -> Optional[ZType]:
         """The enclosing record/class type of a method, by id, or None for a
@@ -8984,7 +8960,7 @@ class CEmitter:
                 original_ztype,
                 narrowed_subtype,
                 child_id,
-                _mangle_var(name),
+                self._var_cname(atom) or _mangle_var(name),
             )
             if unwrap is not None:
                 return unwrap
@@ -8994,8 +8970,9 @@ class CEmitter:
         # first precedence the typechecker already applied; re-deriving it by
         # name here would lose to a unit-level namesake (e.g. a local that
         # shadows a `data` block).
-        if atom.nodeid in self.typing.atom_variable_id:
-            return _mangle_var(name)
+        _vc = self._var_cname(atom)
+        if _vc is not None:
+            return _vc
         # Resolve the unit-level definition this name binds to by id (typecheck
         # stamped it); locals already returned above via atom_variable_id.
         udt = self.typing.atom_unit_def_type_id.get(atom.nodeid)

@@ -10,6 +10,7 @@ from typing import Any, Optional, List, Tuple
 from ztypes import (
     ZType,
     ZVariable,
+    mangle_var_name,
     ZLockState,
     ZLockInfo,
     ZLockHolder,
@@ -261,7 +262,15 @@ class ZSymbolTable:
         self._scopes[-1].append(entry)
 
     def define_var(self, name: str, var: ZVariable) -> None:
-        """Define a runtime variable with ownership tracking."""
+        """Define a runtime variable with ownership tracking.
+
+        Assigns the variable's C identifier here, the single chokepoint every
+        binding (param / local / for / with / case / synth temp) flows through,
+        so the emitter can read `cname` instead of re-mangling the name."""
+        if not var.cname:
+            var.cname = mangle_var_name(name)
+        if self._typing is not None:
+            self._typing.variable_cname[var.variable_id] = var.cname
         entry = ZEntry(
             name=name,
             ztype=var.ztype,
