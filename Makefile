@@ -30,6 +30,8 @@ check:
 # startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
 # name-literal-compare:270 (F3/F4 — buckets A/B/C done, D deferred)
 # emitter-name-resolution:0 (typed-AST-authoritative — emitter reads stamps, not names; achieved)
+# emitter-z-literal:0 (emitter generates no inline z_{ identifiers; reads stored cnames; achieved)
+# emitter-name-mangler:0 (no local _mangle_func/_mangle_var; shared mangle_*_name only; achieved)
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
@@ -118,6 +120,24 @@ bootstrap-lint:
 		echo "  _resolved_type / _typetype_of. Drive this baseline to 0."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -nE '_(resolved_type|typetype_of)\(' src/zemitterc.py | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -cE 'z_\{' src/zemitterc.py); \
+	if [ $$count -gt 0 ]; then \
+		echo "ERROR: inline z_{ identifier derivations increased ($$count > 0 baseline)"; \
+		echo "  The emitter generates NO C names: read ztype.cname / cname_base /"; \
+		echo "  variable_cname / the ZConformance entity (or compose from cname_base)."; \
+		echo "  Shared mangle_func_name / mangle_var_name cover the name-string residual."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -nE 'z_\{' src/zemitterc.py | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -cE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' src/zemitterc.py); \
+	if [ $$count -gt 0 ]; then \
+		echo "ERROR: emitter-local name manglers increased ($$count > 0 baseline)"; \
+		echo "  The emitter has no local _mangle_func/_mangle_var/_mangle_callable."; \
+		echo "  Read the stored cname; shared ztypes.mangle_func_name / mangle_var_name"; \
+		echo "  (no leading underscore, so allowed) cover the name-string residual."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -nE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' src/zemitterc.py | tail -5; fail=1; \
 	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail
