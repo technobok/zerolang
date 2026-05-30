@@ -244,11 +244,8 @@ def _ctype(typing: ztyping.ZTyping, ztype: Optional[ZType]) -> str:
     name = ztype.name
     if name in TYPEMAP:
         return TYPEMAP[name]
-    if ztype.subtype == ZSubType.STRING:
-        return "z_String_t"
-    if ztype.subtype == ZSubType.STRINGVIEW:
-        return "z_StringView_t"
-    # use pre-computed cname when available
+    # String / StringView read their stored cname like any other type — their
+    # cname is the canonical z_String_t / z_StringView_t, no special case needed.
     if ztype.cname:
         if ztype.is_heap_allocated:
             return f"{ztype.cname}*"
