@@ -701,6 +701,22 @@ class CEmitter:
             return m.cname
         return f"z_{_mono_name(parent)}_{method}"
 
+    def _user_method_cname(
+        self, owner: Optional[ZType], owner_name: str, method: str
+    ) -> str:
+        """C name of a user-defined method `owner.method` — the impl method a
+        protocol/facet wrapper calls. Reads the method's stored cname; the
+        mangle fallback covers an unresolved or native method."""
+        m = self.typing.child_of(owner, method) if owner is not None else None
+        if (
+            m is not None
+            and m.cname
+            and m.typetype == ZTypeType.FUNCTION
+            and not m.is_native
+        ):
+            return m.cname
+        return _mangle_func(f"{owner_name}.{method}")
+
     def _conformance_of(
         self, impl_zt: Optional[ZType], spec_zt: Optional[ZType], label: str
     ) -> Optional[ZConformance]:
@@ -2715,7 +2731,7 @@ class CEmitter:
                         ptype_str = f"{ptype_str}*"
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
-                method_cname = _mangle_func(f"{impl_name}.{sname}")
+                method_cname = self._user_method_cname(impl_type, impl_name, sname)
                 lines.append(f"static {ret_ctype} {method_cname}({param_str});\n")
         lines.append("\n")
 
@@ -2745,7 +2761,7 @@ class CEmitter:
             lines.append(f"    {impl_ctype}* _self = ({impl_ctype}*)_data;\n")
 
             # build the method call: dereference for value types, pointer for ref types
-            method_cname = _mangle_func(f"{impl_name}.{sname}")
+            method_cname = self._user_method_cname(impl_type, impl_name, sname)
             if is_class:
                 this_arg = "_self"
             else:
@@ -2928,7 +2944,7 @@ class CEmitter:
                     ptype_str = _ctype(self.typing, self._node_ztype(ppath))
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
-                method_cname = _mangle_func(f"{impl_name}.{sname}")
+                method_cname = self._user_method_cname(impl_type, impl_name, sname)
                 lines.append(f"static {ret_ctype} {method_cname}({param_str});\n")
         lines.append("\n")
 
@@ -2950,7 +2966,7 @@ class CEmitter:
             lines.append(f"static {ret_ctype} {wrapper_name}({param_str}) {{\n")
             # facet data is a void* to the inline data union — cast and dereference
             lines.append(f"    {impl_ctype} _self = *({impl_ctype}*)_data;\n")
-            method_cname = _mangle_func(f"{impl_name}.{sname}")
+            method_cname = self._user_method_cname(impl_type, impl_name, sname)
             all_args = ["_self"] + call_args
             call_expr = f"{method_cname}({', '.join(all_args)})"
             if ret_ctype == "void":
