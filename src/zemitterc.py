@@ -804,52 +804,6 @@ class CEmitter:
         """Emit a bounds-check with error exit for container get/set."""
         zrt.emit_bounds_check(lines, idx_expr, len_expr, label, idx_fmt, idx_cast)
 
-    def _emit_heap_container_create(
-        self,
-        lines: List[str],
-        name: str,
-        ctype: str,
-        data_ctype: str,
-    ) -> None:
-        """Emit a heap-allocated container create function (map pattern)."""
-        create_name = f"z_{name}_create"
-        lines.append(f"static {ctype}* {create_name}(uint64_t _capacity);\n")
-        lines.append(f"static {ctype}* {create_name}(uint64_t _capacity) {{\n")
-        lines.append(f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n")
-        lines.append(f"    *_this = ({ctype}){{0}};\n")
-        lines.append("    _this->capacity = _capacity;\n")
-        lines.append("    if (_capacity > 0) {\n")
-        lines.append(
-            f"        _this->data = ({data_ctype}*)z_xcalloc(_capacity, sizeof({data_ctype}));\n"
-        )
-        lines.append("    }\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
-
-    def _emit_stack_container_create(
-        self,
-        lines: List[str],
-        name: str,
-        ctype: str,
-        data_ctype: str,
-    ) -> None:
-        """Emit a stack-allocated container create function (list pattern).
-
-        Returns struct by value. Only the data buffer is heap-allocated.
-        """
-        create_name = f"z_{name}_create"
-        lines.append(f"static {ctype} {create_name}(uint64_t _capacity);\n")
-        lines.append(f"static {ctype} {create_name}(uint64_t _capacity) {{\n")
-        lines.append(f"    {ctype} _this = {{0}};\n")
-        lines.append("    _this.capacity = _capacity;\n")
-        lines.append("    if (_capacity > 0) {\n")
-        lines.append(
-            f"        _this.data = ({data_ctype}*)z_xcalloc(_capacity, sizeof({data_ctype}));\n"
-        )
-        lines.append("    }\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
-
     def _temp_name(self, prefix: str) -> str:
         """Generate a unique temporary variable name with function NodeID."""
         self._scope.temp_counter += 1
@@ -4315,7 +4269,9 @@ class CEmitter:
         inner_ctype = _ctype(self.typing, inner_type)
         ptr_ctype = f"{inner_ctype}*"
         lines: List[str] = []
-        lines.append(f"static void z_{name}_destroy({ptr_ctype} v) {{\n")
+        lines.append(
+            f"static void {_cbase_of(mono_type, name)}_destroy({ptr_ctype} v) {{\n"
+        )
         lines.append("    if (!v) return;\n")
         # chain inner destructor for types that own heap resources
         if (inner_type.destructor_name is not None) and inner_type.destructor_name:
@@ -4381,7 +4337,8 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdio = True
         name = mono_type.name
-        ctype = f"z_{name}_t"
+        ctype = _cname_of(mono_type, name)
+        cbase = _cbase_of(mono_type, name)
         elem_type = _array_element_type(self.typing, mono_type)
         arr_len = _array_length(self.typing, mono_type)
         if not elem_type or arr_len is None:
@@ -4394,7 +4351,7 @@ class CEmitter:
             create_body = (
                 f"    {ctype} _this;\n"
                 f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
-                f"_this.data[_i] = z_{elem_type.name}_create("
+                f"_this.data[_i] = {_cbase_of(elem_type, elem_type.name)}_create("
                 f"{self._zero_args_for_ctypes(elem_type.name)}"
                 f"); }}"
             )
@@ -4406,7 +4363,7 @@ class CEmitter:
         eq_body_parts: List[str] = []
         eq_method = self.typing.child_of(mono_type, "==")
         if eq_method and eq_method.is_autogen_eq:
-            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
+            eq_body_parts.append(f"static bool {cbase}_eq({ctype} a, {ctype} b) {{")
             if self._use_memcmp_eq(name, mono_type, eq_method):
                 self.needs_string = True
                 eq_body_parts.append(
@@ -4416,7 +4373,8 @@ class CEmitter:
                 ename = elem_type.name.replace(".", "_")
                 eq_body_parts.append(
                     f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
-                    f"if (!z_{ename}_eq(a.data[_i], b.data[_i])) return false; }}"
+                    f"if (!{_cbase_of(elem_type, ename)}_eq(a.data[_i], b.data[_i]))"
+                    f" return false; }}"
                 )
                 eq_body_parts.append("    return true;")
             else:
@@ -4451,7 +4409,8 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_string = True
         name = mono_type.name
-        ctype = f"z_{name}_t"
+        ctype = _cname_of(mono_type, name)
+        cbase = _cbase_of(mono_type, name)
         cap = _str_capacity(self.typing, mono_type)
         if cap is None:
             return
@@ -4471,7 +4430,7 @@ class CEmitter:
         eq_method = self.typing.child_of(mono_type, "==")
         eq_body_parts: List[str] = []
         if eq_method and eq_method.is_autogen_eq:
-            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
+            eq_body_parts.append(f"static bool {cbase}_eq({ctype} a, {ctype} b) {{")
             eq_body_parts.append(
                 "    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;"
             )
@@ -4583,7 +4542,7 @@ class CEmitter:
         # `.iterate` synthesised — currently every concrete list mono).
         iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
-            iterate_cn = iterate_child.cname or f"z_{name}_iterate"
+            iterate_cn = iterate_child.cname or f"{_cbase_of(mono_type, name)}_iterate"
             self._emit_listiter_runtime(
                 ctype, iterate_cn, elem_ctype, iterate_child.return_type
             )
@@ -4727,7 +4686,7 @@ class CEmitter:
         call_method = self.typing.child_of(listiter_mono, "call")
         if not call_method or not call_method.return_type:
             return
-        call_cn = call_method.cname or f"z_{li_name}_call"
+        call_cn = call_method.cname or f"{_cbase_of(listiter_mono, li_name)}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
         ov_ctype = _cname_of(ov_mono, ov_name)
@@ -5228,7 +5187,7 @@ class CEmitter:
         # Emitted only when the map mono carries an `.iterate` child.
         iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
-            iterate_cn = iterate_child.cname or f"z_{name}_iterate"
+            iterate_cn = iterate_child.cname or f"{_cbase_of(mono_type, name)}_iterate"
             self._emit_mapkeyiter_runtime(
                 ctype, iterate_cn, key_ctype, iterate_child.return_type
             )
@@ -5240,7 +5199,10 @@ class CEmitter:
         # the bucket pointer.
         iterate_items_child = self.typing.child_of(mono_type, "iterateItems")
         if iterate_items_child and iterate_items_child.return_type:
-            iterate_items_cn = iterate_items_child.cname or f"z_{name}_iterateItems"
+            iterate_items_cn = (
+                iterate_items_child.cname
+                or f"{_cbase_of(mono_type, name)}_iterateItems"
+            )
             self._emit_mapitemiter_runtime(
                 ctype, iterate_items_cn, bucket_type, iterate_items_child.return_type
             )
@@ -5266,7 +5228,7 @@ class CEmitter:
         call_method = self.typing.child_of(mki_mono, "call")
         if not call_method or not call_method.return_type:
             return
-        call_cn = call_method.cname or f"z_{mki_name}_call"
+        call_cn = call_method.cname or f"{_cbase_of(mki_mono, mki_name)}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
         ov_ctype = _cname_of(ov_mono, ov_name)
@@ -5327,7 +5289,7 @@ class CEmitter:
         call_method = self.typing.child_of(mii_mono, "call")
         if not call_method or not call_method.return_type:
             return
-        call_cn = call_method.cname or f"z_{mii_name}_call"
+        call_cn = call_method.cname or f"{_cbase_of(mii_mono, mii_name)}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
         ov_ctype = _cname_of(ov_mono, ov_name)
@@ -5380,14 +5342,14 @@ class CEmitter:
         value_method = self.typing.child_of(me_mono, "value")
         if key_method is not None and key_method.return_type is not None:
             key_ctype = _ctype(self.typing, key_method.return_type)
-            key_cn = key_method.cname or f"z_{me_name}_key"
+            key_cn = key_method.cname or f"{_cbase_of(me_mono, me_name)}_key"
             lines.append(f"static {key_ctype} {key_cn}({me_ctype}* _e);\n")
             lines.append(f"static {key_ctype} {key_cn}({me_ctype}* _e) {{\n")
             lines.append("    return _e->key;\n")
             lines.append("}\n\n")
         if value_method is not None and value_method.return_type is not None:
             val_ctype = _ctype(self.typing, value_method.return_type)
-            value_cn = value_method.cname or f"z_{me_name}_value"
+            value_cn = value_method.cname or f"{_cbase_of(me_mono, me_name)}_value"
             lines.append(f"static {val_ctype} {value_cn}({me_ctype}* _e);\n")
             lines.append(f"static {val_ctype} {value_cn}({me_ctype}* _e) {{\n")
             lines.append("    return _e->value;\n")
@@ -5679,7 +5641,7 @@ class CEmitter:
         # `.iterate` child (it always does, but be defensive).
         iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
-            iterate_cn = iterate_child.cname or f"z_{name}_iterate"
+            iterate_cn = iterate_child.cname or f"{_cbase_of(mono_type, name)}_iterate"
             self._emit_setiter_runtime(
                 ctype, iterate_cn, elem_ctype, iterate_child.return_type
             )
@@ -5704,7 +5666,7 @@ class CEmitter:
         call_method = self.typing.child_of(si_mono, "call")
         if not call_method or not call_method.return_type:
             return
-        call_cn = call_method.cname or f"z_{si_name}_call"
+        call_cn = call_method.cname or f"{_cbase_of(si_mono, si_name)}_call"
         ov_mono = call_method.return_type
         ov_name = ov_mono.name
         ov_ctype = _cname_of(ov_mono, ov_name)
@@ -5748,6 +5710,8 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdlib = True
         name = mono_type.name
+        struct = _cname_of(mono_type, name)
+        cbase = _cbase_of(mono_type, name)
         lines: List[str] = []
 
         # collect fields (non-special, non-function children)
@@ -5759,7 +5723,7 @@ class CEmitter:
 
         # struct typedef -- tagged so the forward-typedef pass for late
         # monos can name it before user defs that reference it
-        lines.append(f"typedef struct z_{name}_t {{\n")
+        lines.append(f"typedef struct {struct} {{\n")
         for fname, ftype in field_items:
             ct = _ctype(self.typing, ftype)
             # .lock fields of stack-allocated class type: store as pointer
@@ -5771,11 +5735,11 @@ class CEmitter:
             ):
                 ct = f"{ct}*"
             lines.append(f"    {ct} {fname};\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        lines.append(f"}} {struct};\n\n")
 
         # destructor (only if class has fields needing cleanup)
         if mono_type.needs_field_cleanup:
-            lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
+            lines.append(f"static void {cbase}_destroy({struct}* p) {{\n")
             lines.append("    if (!p) return;\n")
             for fname, ftype in field_items:
                 # .lock fields are borrowed references, don't own data
