@@ -569,6 +569,17 @@ def mangle_var_name(name: str) -> str:
     return name
 
 
+def mangle_func_name(name: str) -> str:
+    """The single canonical function/global name mangler: `z_` prefix with dots
+    flattened to underscores (`main` is the C entry point and keeps its bare
+    `z_main`). Emittable functions read their stored `ZType.cname`; this covers
+    the residual sites with only a name string (natives, constant/data symbols,
+    unresolved-call fallbacks)."""
+    if name == "main":
+        return "z_main"
+    return "z_" + name.replace(".", "_")
+
+
 @dataclass
 class ZVariable:
     """

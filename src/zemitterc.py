@@ -26,6 +26,7 @@ from ztypes import (
     NUMERIC_RANGES,
     _type_by_id,
     mangle_var_name,
+    mangle_func_name,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -256,30 +257,22 @@ def _ctype(typing: ztyping.ZTyping, ztype: Optional[ZType]) -> str:
         return ztype.cname
     # fallback for types without cname (e.g. synthesized helper types)
     if ztype.typetype == ZTypeType.RECORD and name not in TYPEMAP:
-        return f"z_{name}_t"
+        return f"{mangle_func_name(name)}_t"
     if ztype.typetype == ZTypeType.CLASS:
         if ztype.is_heap_allocated:
-            return f"z_{name}_t*"
-        return f"z_{name}_t"
+            return f"{mangle_func_name(name)}_t*"
+        return f"{mangle_func_name(name)}_t"
     if ztype.typetype == ZTypeType.UNION:
-        return f"z_{name}_t"
+        return f"{mangle_func_name(name)}_t"
     if ztype.typetype == ZTypeType.VARIANT:
-        return f"z_{name}_t"
+        return f"{mangle_func_name(name)}_t"
     if ztype.typetype == ZTypeType.FUNCTION:
-        cname = name.replace(".", "_")
-        return f"z_{cname}_ft"
+        return f"{mangle_func_name(name)}_ft"
     if ztype.typetype == ZTypeType.PROTOCOL:
-        return f"z_{name}_t"
+        return f"{mangle_func_name(name)}_t"
     if ztype.typetype == ZTypeType.FACET:
-        return f"z_{name}_t"
+        return f"{mangle_func_name(name)}_t"
     return "void"
-
-
-def _mangle_func(name: str) -> str:
-    """Mangle a zerolang function/global name for C."""
-    if name == "main":
-        return "z_main"
-    return "z_" + name.replace(".", "_")
 
 
 def _cname_of(ztype: Optional[ZType], name: str) -> str:
@@ -290,7 +283,7 @@ def _cname_of(ztype: Optional[ZType], name: str) -> str:
     definition and every reference (see `_assign_cname` in ztypecheck)."""
     if ztype is not None and ztype.cname:
         return ztype.cname
-    return f"z_{name}_t"
+    return f"{mangle_func_name(name)}_t"
 
 
 def _cbase_of(ztype: Optional[ZType], name: str) -> str:
@@ -300,16 +293,7 @@ def _cbase_of(ztype: Optional[ZType], name: str) -> str:
     covers only a synthesized type that never received one."""
     if ztype is not None and ztype.cname_base:
         return ztype.cname_base
-    return f"z_{name}"
-
-
-def _mangle_var(name: str) -> str:
-    """Compose a local variable's C name for sites that have only a name
-    string and no `ZVariable` (synthesized wrapper params, string-keyed
-    scope sets). Delegates to the single canonical `mangle_var_name` so the
-    emitter never carries its own variable-name mangling logic. Sites that
-    hold a variable_id read the stored `variable_cname` instead."""
-    return mangle_var_name(name)
+    return mangle_func_name(name)
 
 
 def _unwrap_outer_parens(s: str) -> str:
@@ -715,7 +699,7 @@ class CEmitter:
             and not m.is_native
         ):
             return m.cname
-        return _mangle_func(f"{owner_name}.{method}")
+        return mangle_func_name(f"{owner_name}.{method}")
 
     def _conformance_of(
         self, impl_zt: Optional[ZType], spec_zt: Optional[ZType], label: str
@@ -1051,7 +1035,7 @@ class CEmitter:
             return (
                 ftype.cname
                 if ftype.cname and not ftype.is_native
-                else _mangle_func(ftype.name)
+                else mangle_func_name(ftype.name)
             )
 
         # `meta.create` inside a type's method body resolves to that
@@ -1088,13 +1072,13 @@ class CEmitter:
                     mangled = (
                         ftype.cname
                         if ftype.cname and not ftype.is_native
-                        else _mangle_func(func_name)
+                        else mangle_func_name(func_name)
                     )
                     self._track_stdlib_unit_native(mangled, ftype)
                     return mangled
         # Bare free-function call. A dependency unit's sibling call (e.g.
         # `escapeStr` inside zlexer) must emit the function's qualified cname
-        # (z_zlexer_escapeStr), not the bare `_mangle_func(name)` (z_escapeStr).
+        # (z_zlexer_escapeStr), not the bare `mangle_func_name(name)` (z_escapeStr).
         # Scoped to a definition-ref ATOMID resolving to a non-native function:
         # method calls on variables and natives keep the legacy path (their
         # ftype.cname can name the call site / not match a runtime symbol).
@@ -1125,10 +1109,10 @@ class CEmitter:
                 and callable_ft.typetype == ZTypeType.FUNCTION
                 and callable_ft.cname
                 and not callable_ft.is_native
-                else _mangle_func(callable_name)
+                else mangle_func_name(callable_name)
             )
         else:
-            mangled = _mangle_var(callable_name)
+            mangled = mangle_var_name(callable_name)
         self._track_stdlib_unit_native(mangled, callable_ft)
         return mangled
 
@@ -1392,7 +1376,7 @@ class CEmitter:
         v = self._node_const_value(node)
         assert v is not None
         self.needs_stdint = True
-        cname = _mangle_func(name)
+        cname = mangle_func_name(name)
         ctype = "int64_t"
         n_ztype = self._node_ztype(node)
         if n_ztype:
@@ -1408,7 +1392,7 @@ class CEmitter:
             v = self._node_const_value(apath)
             if v is not None:
                 qname = f"{type_name}.{label}"
-                cname = _mangle_func(qname)
+                cname = mangle_func_name(qname)
                 ap_ztype = self._node_ztype(apath)
                 if type(v) is str:
                     # string constant: emit static stringview + alias
@@ -2620,7 +2604,7 @@ class CEmitter:
             return
         self.needs_stdint = True
         ctype = TYPEMAP.get(typename, "int64_t")
-        cname = _mangle_func(name)
+        cname = mangle_func_name(name)
         if typename.startswith("f"):
             self.data_defs.append(f"static const {ctype} {cname} = {value};\n")
         else:
@@ -2729,7 +2713,7 @@ class CEmitter:
                         and impl_type.typetype == ZTypeType.CLASS
                     ):
                         ptype_str = f"{ptype_str}*"
-                    params.append(f"{ptype_str} {_mangle_var(pname)}")
+                    params.append(f"{ptype_str} {mangle_var_name(pname)}")
                 param_str = ", ".join(params) if params else "void"
                 method_cname = self._user_method_cname(impl_type, impl_name, sname)
                 lines.append(f"static {ret_ctype} {method_cname}({param_str});\n")
@@ -2752,8 +2736,8 @@ class CEmitter:
                 if ptype is None and spec_type is not None:
                     ptype = self.typing.child_of(spec_type, pname)
                 pctype = _proto_param_ctype(self.typing, ptype)
-                wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
-                call_args.append(_mangle_var(pname))
+                wrapper_params.append(f"{pctype} {mangle_var_name(pname)}")
+                call_args.append(mangle_var_name(pname))
 
             wrapper_name = wrapper_names[sname]
             param_str = ", ".join(wrapper_params)
@@ -2942,7 +2926,7 @@ class CEmitter:
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
                     ptype_str = _ctype(self.typing, self._node_ztype(ppath))
-                    params.append(f"{ptype_str} {_mangle_var(pname)}")
+                    params.append(f"{ptype_str} {mangle_var_name(pname)}")
                 param_str = ", ".join(params) if params else "void"
                 method_cname = self._user_method_cname(impl_type, impl_name, sname)
                 lines.append(f"static {ret_ctype} {method_cname}({param_str});\n")
@@ -2958,8 +2942,8 @@ class CEmitter:
                 if spec_type is not None and spec_type.this_param_name == pname:
                     continue
                 pctype = _ctype(self.typing, self._node_ztype(ppath))
-                wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
-                call_args.append(_mangle_var(pname))
+                wrapper_params.append(f"{pctype} {mangle_var_name(pname)}")
+                call_args.append(mangle_var_name(pname))
 
             wrapper_name = wrapper_names[sname]
             param_str = ", ".join(wrapper_params)
@@ -3491,7 +3475,7 @@ class CEmitter:
                 fpath.nodetype == NodeType.ATOMID
                 and self._unit_def_typetype(fpath) == ZTypeType.FUNCTION
             ):
-                field_defaults[fname] = _mangle_func(cast(zast.AtomId, fpath).name)
+                field_defaults[fname] = mangle_func_name(cast(zast.AtomId, fpath).name)
             elif fpath.nodetype == NodeType.ATOMID:
                 # Sibling-method reference default:
                 # `instancemethod: method1` inside the enclosing
@@ -3501,10 +3485,10 @@ class CEmitter:
                 # type's own `functions` dict before falling through.
                 ref_name = cast(zast.AtomId, fpath).name
                 if ref_name in functions and functions[ref_name].body is not None:
-                    field_defaults[fname] = _mangle_func(f"{name}.{ref_name}")
+                    field_defaults[fname] = mangle_func_name(f"{name}.{ref_name}")
         for mname, mfunc in functions.items():
             if mfunc.body is not None:
-                field_defaults[mname] = _mangle_func(f"{name}.{mname}")
+                field_defaults[mname] = mangle_func_name(f"{name}.{mname}")
         return field_defaults
 
     def _emit_create_functions(
@@ -4050,8 +4034,8 @@ class CEmitter:
                 if qualified in aliases:
                     # already emitted via canonical name; emit typedef alias
                     canonical = aliases[qualified]
-                    alias_c = _mangle_func(qualified)
-                    canon_c = _mangle_func(canonical)
+                    alias_c = mangle_func_name(qualified)
+                    canon_c = mangle_func_name(canonical)
                     self.func_aliases.append(f"#define {alias_c} {canon_c}\n")
                 else:
                     self._emit_func_typedef(qualified, func)
@@ -5780,8 +5764,8 @@ class CEmitter:
                     qualified = f"{name}.{mname}"
                     if qualified in func_aliases:
                         canonical = func_aliases[qualified]
-                        alias_c = _mangle_func(qualified)
-                        canon_c = _mangle_func(canonical)
+                        alias_c = mangle_func_name(qualified)
+                        canon_c = mangle_func_name(canonical)
                         self.func_aliases.append(f"#define {alias_c} {canon_c}\n")
                         # emit forward decl so callers can reference the alias
                         self._emit_alias_forward_decl(
@@ -6013,7 +5997,7 @@ class CEmitter:
         # _emit_dotted_path_value look up by.
         data_ztype = self._node_ztype(data)
         key = data_ztype.name if data_ztype is not None else name
-        cname = _mangle_func(key)
+        cname = mangle_func_name(key)
         # Pick the C element type from the data block's resolved
         # element_type. Falls back to int64_t when unresolved (defensive
         # against early-error recovery).
@@ -6051,7 +6035,7 @@ class CEmitter:
     ) -> None:
         """Emit a forward declaration for a deduped alias function."""
         self.needs_stdint = True
-        cname = _mangle_func(name)
+        cname = mangle_func_name(name)
         ret_ctype = self._return_ctype(func)
         record_type = self._enclosing_type(func)
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
@@ -6090,7 +6074,7 @@ class CEmitter:
         self, name: str, func: zast.Function, record_name: str = ""
     ) -> None:
         self.needs_stdint = True
-        cname = _mangle_func(name)
+        cname = mangle_func_name(name)
 
         # G4: synthesised generator `.call` body — wire up the
         # state-machine context before normal function emission. The
@@ -7224,7 +7208,7 @@ class CEmitter:
         cname = (
             call_method.cname
             if call_method is not None and call_method.cname
-            else _mangle_func(f"{type_name}.call")
+            else mangle_func_name(f"{type_name}.call")
         )
         receiver = self._emit_path_value(call.callable)
         # Class methods expect a pointer receiver. Wrap the variable with &
@@ -7378,7 +7362,7 @@ class CEmitter:
                 if call.arguments
                 else "0"
             )
-            return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
+            return f"{indent}{mangle_func_name(data_name)}[{idx}];\n"
 
         # array method calls as statements
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -7602,7 +7586,7 @@ class CEmitter:
                         return None
                     if name in self._alias_map:
                         return self._alias_map[name]
-                    return _mangle_var(name)
+                    return mangle_var_name(name)
         return None
 
     def _get_implicit_take_var(self, op: zast.Operation) -> Optional[str]:
@@ -7637,7 +7621,7 @@ class CEmitter:
                     if target.replace("_", "").isalnum():
                         return target
                     return None
-                return _mangle_var(name)
+                return mangle_var_name(name)
         if op.nodetype == NodeType.EXPRESSION and cast(
             zast.Expression, op
         ).expression.nodetype in (
@@ -7894,7 +7878,7 @@ class CEmitter:
                 kind = default[1:sep]
                 payload = default[sep + 1 :]
                 if kind == "function":  # ztc-string-compare-ok: default-kind tag
-                    return _mangle_func(payload)
+                    return mangle_func_name(payload)
                 if kind == "variant":  # ztc-string-compare-ok: default-kind tag
                     ctype = _ctype(self.typing, target_type)
                     tag = f"Z_{target_type.name.upper()}_TAG_{payload.upper()}"
@@ -8175,7 +8159,7 @@ class CEmitter:
                         cname = (
                             ftype.cname
                             if ftype.cname and not ftype.is_native
-                            else _mangle_func(atom.name)
+                            else mangle_func_name(atom.name)
                         )
                         defaults: List[str] = []
                         for pname, ptype in real_params:
@@ -8275,7 +8259,7 @@ class CEmitter:
                 if call.arguments
                 else "0"
             )
-            return f"{_mangle_func(data_name)}[{idx}]"
+            return f"{mangle_func_name(data_name)}[{idx}]"
 
         # typedef create/take/borrow: identity — just emit the from: argument
         if _call_ztype and _call_ztype.typedef_base is not None:
@@ -9210,7 +9194,7 @@ class CEmitter:
                 original_ztype,
                 narrowed_subtype,
                 child_id,
-                self._var_cname(atom) or _mangle_var(name),
+                self._var_cname(atom) or mangle_var_name(name),
             )
             if unwrap is not None:
                 return unwrap
@@ -9236,14 +9220,14 @@ class CEmitter:
                 and not resolved.is_native
             ):
                 return resolved.cname
-            return _mangle_func(name)
+            return mangle_func_name(name)
         if name in self._const_names:
             # Unit-level numeric constants are macros: inline the value
             # at every reference site (no backing static decl exists).
             inlined = self._inline_const_lookup(atom, name)
             if inlined is not None:
                 return inlined
-            return _mangle_func(name)
+            return mangle_func_name(name)
         # only match user-defined records (not numeric constant aliases like north: 0)
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
@@ -9298,7 +9282,7 @@ class CEmitter:
                 self._temp.frees.append(tmp)
                 self._temp.class_set[tmp] = mangled
             return tmp
-        return _mangle_var(name)
+        return mangle_var_name(name)
 
     def _emit_numeric_literal(self, name: str) -> str:
         typename, value, err = parse_number(name)
@@ -9463,7 +9447,7 @@ class CEmitter:
                     if not has_runtime_params:
                         # Always a native (child_is_native guard above); native
                         # cnames don't match the qualified runtime symbol.
-                        mangled = _mangle_func(f"{pname}.{child}")
+                        mangled = mangle_func_name(f"{pname}.{child}")
                         self._track_stdlib_unit_native(mangled, fn_type)
                         if pname == "io":
                             self.needs_stdio = True
@@ -9475,14 +9459,14 @@ class CEmitter:
                 "io",
                 "os",
             ):
-                return _mangle_func(f"{pname}.{child}")
+                return mangle_func_name(f"{pname}.{child}")
             # inline unit.name reference
             if parent_def is not None and parent_def.typetype == ZTypeType.UNIT:
                 qname = f"{pname}.{child}"
                 # check if the child is itself a unit (nested)
                 if self._dp_unit_type(path) is not None:
                     # will be resolved by further dotted path traversal
-                    return _mangle_func(qname)
+                    return mangle_func_name(qname)
                 # Unit-level numeric constant referenced via the unit:
                 # inline the value (macro semantics; no backing decl).
                 if qname in self._const_names:
@@ -9491,7 +9475,7 @@ class CEmitter:
                         inlined = self._inline_const_via_defn(child_defn)
                         if inlined is not None:
                             return inlined
-                return _mangle_func(qname)
+                return mangle_func_name(qname)
             # record_name.method or class_name.method — method call with no
             # extra args. Only fire when `pname` resolves to the type itself
             # (e.g. `myclass.method`), not a variable that happens to have
@@ -9513,7 +9497,7 @@ class CEmitter:
                     and method_ct.typetype == ZTypeType.FUNCTION
                     and method_ct.cname
                     and not method_ct.is_native
-                    else _mangle_func(f"{pname}.{child}")
+                    else mangle_func_name(f"{pname}.{child}")
                 )
             # union_name.subtype — emit null subtype construction. Use the
             # type's dot-free ztype.name (not the bare atom `pname`) so a
@@ -9527,7 +9511,7 @@ class CEmitter:
             # (parent_def.name), not the bare atom pname, so a dependency
             # unit's block emits its qualified array cname.
             if parent_def is not None and ptt == ZTypeType.DATA and child == "index":
-                return _mangle_func(parent_def.name)
+                return mangle_func_name(parent_def.name)
             # data.LABEL — compile-time substitution for named items.
             # data.N — array index access for ordinal lookups.
             if parent_def is not None and ptt == ZTypeType.DATA:
@@ -9535,12 +9519,12 @@ class CEmitter:
                 if labels is not None and child in labels:
                     return labels[child]
                 if child.isdigit():
-                    return f"{_mangle_func(parent_def.name)}[{child}]"
+                    return f"{mangle_func_name(parent_def.name)}[{child}]"
 
         # check if parent resolves to a nested inline unit path
         unit_path = self._extract_unit_path(path.parent)
         if unit_path is not None:
-            return _mangle_func(f"{unit_path}.{child}")
+            return mangle_func_name(f"{unit_path}.{child}")
 
         # array: numeric index access (a.0 → a.data[0])
         parent_type_dp = self._node_ztype(path.parent)
@@ -9826,7 +9810,7 @@ class CEmitter:
             if parent_type_dp:
                 const_qname = f"{parent_type_dp.name}.{child}"
                 if const_qname in self._const_names:
-                    return _mangle_func(const_qname)
+                    return mangle_func_name(const_qname)
 
         # protocol method call via path (zero-arg form). When the
         # parent is a protocol value and the child names a spec, emit
@@ -9931,7 +9915,7 @@ class CEmitter:
             method_cn = (
                 method_type.cname
                 if method_type.cname and not method_type.is_native
-                else _mangle_func(func_name)
+                else mangle_func_name(func_name)
             )
             return f"{method_cn}({parent})"
 
@@ -10234,7 +10218,7 @@ class CEmitter:
         accesses — the type checker rejects reftype pointer hops).
         """
         parts = path.split(".")
-        out = _mangle_var(parts[0])
+        out = mangle_var_name(parts[0])
         for p in parts[1:]:
             out = f"{out}.{p}"
         return out
@@ -10290,7 +10274,7 @@ class CEmitter:
         parts: List[str] = []
         for vname, vtype in taken_vars:
             if vtype and (vtype.destructor_name is not None) and vtype.destructor_name:
-                var = _mangle_var(vname)
+                var = mangle_var_name(vname)
                 if vtype.is_heap_allocated:
                     parts.append(
                         f"{indent}if ({var}) {{ {vtype.destructor_name}({var}); }}\n"
@@ -11437,7 +11421,7 @@ class CEmitter:
                 t = self._get_operation_type(cond_op)
                 if t:
                     ctype = _ctype(self.typing, t)
-                init_vars.append(f"{indent}{ctype} {_mangle_var(name)} = {val};\n")
+                init_vars.append(f"{indent}{ctype} {mangle_var_name(name)} = {val};\n")
 
         for iv in init_vars:
             parts.append(iv)
@@ -11455,7 +11439,7 @@ class CEmitter:
         if has_each and not has_iter:
             # each-based loop: emit optimized C for loop
             for ename, limit_val, from_val, elem_ctype in each_bindings:
-                cvar = _mangle_var(ename)
+                cvar = mangle_var_name(ename)
                 parts.append(
                     f"{indent}for ({elem_ctype} {cvar} = {from_val}; "
                     f"{cvar} < {limit_val}; {cvar}++) {{\n"
@@ -11511,7 +11495,7 @@ class CEmitter:
                     call_fn = (
                         _cm.cname
                         if _cm is not None and _cm.cname
-                        else _mangle_func(f"{callable_ztype.name}.call")
+                        else mangle_func_name(f"{callable_ztype.name}.call")
                     )
                     # Class iterators take a pointer receiver since 'this' is
                     # always a pointer.
@@ -11525,8 +11509,8 @@ class CEmitter:
                     iter_val = f"{call_fn}({obj_val})"
                 else:
                     iter_val = self._emit_operation_value(iop)
-                tmp = f"__iter_{_mangle_var(iname)}"
-                iname_c = _mangle_var(iname)
+                tmp = f"__iter_{mangle_var_name(iname)}"
+                iname_c = mangle_var_name(iname)
                 if opt_type and opt_type.is_nullable_ptr:
                     # nullable-ptr option: NULL = none
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
