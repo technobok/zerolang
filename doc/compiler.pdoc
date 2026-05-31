@@ -567,6 +567,30 @@ separation is enforced by #~"bootstrap-lint" ratchets that pin both the inline
 z-identifier derivations and the emitter-local name manglers in
 #~"src/zemitterc.py" at zero.
 
+#--: Id-based naming
+
+A type's (and a non-native function's) cname embeds its monotonic id right after
+the #~"z_" namespace prefix: #~"z_t{type_id}_<mangled>" (so the type
+#~"point" with id 525 becomes #~"z_t525_point_t", its #b:"add" method
+#~"z_t527_point_add"). Because the id is unique by construction, names cannot
+collide -- there is no dedup set and no on-collision suffix; #~"_assign_cname"
+just splices the id in. The id goes #b:"after" #~"z_" so the emitter's
+#~"z_"-prefix / #~"_t"-suffix shape checks and #~"cname_base"-derived helper
+names keep working unchanged. Two kinds of symbol stay #b:"canonical"
+(un-id'd): the hand-written runtime ABI -- native functions (#~"z_io_open",
+#~"z_String_create", ...) and the C entry point #~"z_main" -- and local
+variables (#~"mangle_var_name"); embedding a variable id is a separate,
+not-yet-applied step.
+
+The hand-written runtime (#~"src/runtime/*.inc" / #~"*.c.tmpl" and inline C in
+#~"zemitterc_runtime.py") is authored with the #b:"canonical" type spelling
+#~"z_<Name>". A single #~"_substitute_runtime_cnames" pass over the emitted
+output rewrites each canonical spelling to the id-named #~"cname_base" recorded
+in #~"ZTyping.canonical_cname_base" (longest-canonical first, so #~"z_String"
+is rewritten after #~"z_StringView"). Emitter-generated code already carries
+id-named names, so the pass is a no-op there; pure-C helpers (#~"z_panic",
+#~"z_xmalloc", #~"z_siphash_*") have no entry and are untouched.
+
 #---: Type Emission
 
 Each zerolang type maps to a C representation:
