@@ -1,15 +1,17 @@
 # Recursive-descent parser for zerolang, ported from src/zparser.py.
-# This slice covers the atom layer: identifiers, dotted paths, string
-# literals, and parenthesised expressions.
+# This slice covers atoms (identifiers, dotted paths, string literals)
+# and the operations/calls layer (binops and calls with positional and
+# named arguments).
 #
-# Public atom productions return (Option t: Node): none means "no atom
-# here" (the caller tries another production), some carrying an `error`
-# arm means "committed but malformed". Internally the parse helpers
-# return a bare Node and the leading token is checked first (atomLookahead),
-# because a reftype payload cannot be moved back out of an Option to build
-# a parent node -- so an owned Node local is threaded through construction
-# and wrapped in an Option only at the boundary. Node ids come from the
-# parser's sequential counter, in parse order, mirroring the Python reference.
+# Public productions return (Option t: Node): none means "nothing here"
+# (the caller tries another production), some carrying an `error` arm
+# means "committed but malformed". Internally the parse helpers return a
+# bare Node and the leading token is checked first (atomLookahead),
+# because a reftype payload cannot be moved back out of an Option to
+# build a parent node -- so an owned Node local is threaded through
+# construction and wrapped in an Option only at the boundary. Node ids
+# come from the parser's sequential counter, in parse order, mirroring
+# the Python reference.
 
 # Local alias for the cross-unit AST node union, for brevity at the many
 # `Node.<arm>` / `(Option t: Node)` sites below.
@@ -51,6 +53,18 @@ isStrChunkTok: function {tt: zlexer.TT} out bool is {
     }
 }
 
+# Reverse a node list into a new list. The greedy operation list is
+# built in source order but consumed front-to-back; List.pop yields the
+# tail, so reversing once lets each pop yield the next source element.
+# The input is drained (its elements move into the result).
+reverseNodes: function {src: (List of: Node).take} out (List of: Node) is {
+    output: (List of: Node)
+    for while src.length > 0.u64 loop {
+        output.append src.pop
+    }
+    return output
+}
+
 Parser: class {
     # Monotonic source-node id, assigned in parse order.
     nextNodeId: u32
@@ -76,6 +90,49 @@ Parser: class {
     # True when `node` is an `error` arm (propagate malformed sub-results).
     isError: function {node: Node} out bool is {
         match (node) case error then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # True when `node` is an `atomid` arm (a binop operator must be one).
+    isAtomId: function {node: Node} out bool is {
+        match (node) case atomid then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # True when `node` is an arm valid as a call's first unnamed argument.
+    isOperationArm: function {node: Node} out bool is {
+        match (node) case binop then {
+            return true
+        } case dottedpath then {
+            return true
+        } case atomid then {
+            return true
+        } case atomstring then {
+            return true
+        } case expression then {
+            return true
+        } case namedoperation then {
+            return true
+        } case labelvalue then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # True when `tok` is a named-argument label (LABEL) or label shorthand
+    # (LABELPRE), which forces a single-path operation to parse as a call.
+    tokIsLabel: function {tok: zlexer.Token} out bool is {
+        tt: tok.toktype
+        match (tt) case LABEL then {
+            return true
+        } case LABELPRE then {
             return true
         } else {
             return false
@@ -137,47 +194,57 @@ Parser: class {
 
     # path -> atom | ( path "." atomid )
     #
-    # An atom followed by zero or more `. id` selectors, folded left
-    # into nested DottedPath nodes.
-    acceptPath: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
-        la: this.atomLookahead lex: lex
-        if la then {
-            startTok: lex.peek
-            sLine: startTok.lineno
-            sCol: startTok.colno
-            node: this.parseAtom lex: lex
-            if (this.isError node: node) then return (Option.some node)
-            nx: lex.peek
-            if nx.toktype != zlexer.TT.DOT then return (Option.some node)
-            return (this.acceptPathTail lex: lex parent: node startLine: sLine startCol: sCol)
-        } else {
-            return (Option.none Node)
+    # Bare-Node producer: an atom followed by zero or more `. id`
+    # selectors, folded left into nested DottedPath nodes. Used by the
+    # greedy operation-path collector, which appends owned nodes.
+    parsePath: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        sLine: startTok.lineno
+        sCol: startTok.colno
+        node: this.parseAtom lex: lex
+        nIsErr: this.isError node: node
+        if nIsErr then return node
+        nx: lex.peek
+        nxIsDot: nx.toktype == zlexer.TT.DOT
+        if nxIsDot then {
+            return (this.parsePathTail lex: lex parent: node startLine: sLine startCol: sCol)
         }
+        return node
     }
 
     # Consume `. id` selectors, nesting each into a DottedPath whose
     # parent is the path built so far. Recursion (rather than a loop
     # reassigning an outer-scope binding) keeps each owned `parent`
     # local to its call.
-    acceptPathTail: function {:this lex: zlexer.Lexer parent: Node.take startLine: u32 startCol: u32} out (Option t: Node) is {
+    parsePathTail: function {:this lex: zlexer.Lexer parent: Node.take startLine: u32 startCol: u32} out Node is {
         dotOpt: lex.accept tt: zlexer.TT.DOT
         match (dotOpt) case none then {
-            return (Option.some parent)
+            return parent
         } case some then {
             idOpt: lex.accept tt: zlexer.TT.REFID
             match (idOpt) case some then {
                 child: Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: idOpt.lineno colno: idOpt.colno name: idOpt.tokstr.copy)
                 np: Node.dottedpath (zast.DottedPathData nodeid: this.nextId lineno: startLine colno: startCol parent: parent child: child)
-                return (this.acceptPathTail lex: lex parent: np startLine: startLine startCol: startCol)
+                return (this.parsePathTail lex: lex parent: np startLine: startLine startCol: startCol)
             } case none then {
                 bad: lex.acceptAny
                 err: this.mkError tok: bad code: zast.err.BADPATH msg: "Expected ID after dot".string
-                return (Option.some err)
+                return err
             }
         }
     }
 
-    # atomexpr / atomstring / expression: filled in by the next stage.
+    # acceptPath -> Option boundary over parsePath.
+    acceptPath: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
+        la: this.atomLookahead lex: lex
+        if la then {
+            return (Option.some (this.parsePath lex: lex))
+        } else {
+            return (Option.none Node)
+        }
+    }
+
+    # atomexpr: filled in by the next stage.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "atomexpr: not yet implemented".string)
@@ -231,14 +298,230 @@ Parser: class {
         return parts
     }
 
+    # mkBinop / mkCall / mkNamedOp / mkLabelValue: id-allocating node
+    # constructors for the operations layer. Children move in.
+    mkBinop: function {:this lhs: Node.take operator: Node.take rhs: Node.take line: u32 col: u32} out Node is {
+        return (Node.binop (zast.BinOpData nodeid: this.nextId lineno: line colno: col lhs: lhs operator: operator rhs: rhs))
+    }
+
+    mkCall: function {:this callable: Node.take arguments: (List of: Node).take line: u32 col: u32} out Node is {
+        return (Node.call (zast.CallData nodeid: this.nextId lineno: line colno: col callable: callable arguments: arguments))
+    }
+
+    mkNamedOp: function {:this name: (Option t: String).take operation: Node.take line: u32 col: u32} out Node is {
+        return (Node.namedoperation (zast.NamedOperationData nodeid: this.nextId lineno: line colno: col name: name operation: operation))
+    }
+
+    mkLabelValue: function {:this line: u32 col: u32 name: String.take} out Node is {
+        return (Node.labelvalue (zast.LabelValueData nodeid: this.nextId lineno: line colno: col name: name))
+    }
+
+    # Greedily collect operand/operator paths in source order. Stops at
+    # the first non-atom token. A malformed path is appended as a
+    # trailing error arm (callers pop and check the tail before
+    # dispatching on the count).
+    operationPaths: function {:this lex: zlexer.Lexer} out (List of: Node) is {
+        paths: (List of: Node)
+        for while (this.atomLookahead lex: lex) loop {
+            node: this.parsePath lex: lex
+            errored: this.isError node: node
+            paths.append node
+            if errored then break
+        }
+        return paths
+    }
+
+    # Fold a reversed operand/operator stack (pop yields source order)
+    # into a left-associative, flat-precedence binop chain. The stack
+    # must be non-empty. The whole chain is positioned at its first
+    # operand, matching the reference.
+    foldStack: function {:this stack: (List of: Node).take nextTok: zlexer.Token} out Node is {
+        acc: stack.pop
+        sp: zast.posOf n: acc
+        return (this.foldBinopTail stack: stack acc: acc line: sp.line col: sp.col nextTok: nextTok)
+    }
+
+    foldBinopTail: function {:this stack: (List of: Node).take acc: Node.take line: u32 col: u32 nextTok: zlexer.Token} out Node is {
+        if stack.length == 0.u64 then return acc
+        op: stack.pop
+        opOk: this.isAtomId node: op
+        if opOk then {
+            if stack.length == 0.u64 then {
+                return (this.mkError tok: nextTok code: zast.err.BADEXPRESSION msg: "Expected an operand for the right hand side of operation".string)
+            }
+            rhs: stack.pop
+            nb: this.mkBinop lhs: acc operator: op rhs: rhs line: line col: col
+            return (this.foldBinopTail stack: stack acc: nb line: line col: col nextTok: nextTok)
+        } else {
+            return (this.mkError tok: nextTok code: zast.err.BADEXPRESSION msg: "Expected an operator (single identifier)".string)
+        }
+    }
+
+    # Fold a source-order path list into a binop chain (reverse, then
+    # drain). A single path returns itself.
+    foldBinop: function {:this paths: (List of: Node).take nextTok: zlexer.Token} out Node is {
+        stack: this.reverseStack src: paths
+        return (this.foldStack stack: stack nextTok: nextTok)
+    }
+
+    # reverseNodes wrapper as a method, for `this.`-prefixed calls.
+    reverseStack: function {src: (List of: Node).take} out (List of: Node) is {
+        return (reverseNodes src: src)
+    }
+
+    # ( term binop ) form: callable + one unnamed folded argument, with
+    # NO named arguments. Distinct from acceptCall (which consumes named
+    # args); used for grammar operations like `abs -5`.
+    acceptTermBinopCall: function {:this paths: (List of: Node).take lex: zlexer.Lexer} out Node is {
+        stack: this.reverseStack src: paths
+        callable: stack.pop
+        cp: zast.posOf n: callable
+        args: (List of: Node)
+        if stack.length > 0.u64 then {
+            argNode: this.foldStack stack: stack nextTok: lex.peek
+            argIsErr: this.isError node: argNode
+            if argIsErr then return argNode
+            ap: zast.posOf n: argNode
+            uarg: this.mkNamedOp name: (Option.none String) operation: argNode line: ap.line col: ap.col
+            args.append uarg
+        }
+        return (this.mkCall callable: callable arguments: args line: cp.line col: cp.col)
+    }
+
+    # call = callable path + arguments. The first unnamed argument is the
+    # remaining paths folded as a binop; then zero or more named
+    # arguments (LABEL -> operation value; LABELPRE -> label shorthand).
+    acceptCall: function {:this lex: zlexer.Lexer paths: (List of: Node).take} out Node is {
+        stack: this.reverseStack src: paths
+        callable: stack.pop
+        cp: zast.posOf n: callable
+        args: (List of: Node)
+        if stack.length > 0.u64 then {
+            argNode: this.foldStack stack: stack nextTok: lex.peek
+            argIsErr: this.isError node: argNode
+            if argIsErr then return argNode
+            argIsOp: this.isOperationArm node: argNode
+            if argIsOp then {
+                ap: zast.posOf n: argNode
+                uarg: this.mkNamedOp name: (Option.none String) operation: argNode line: ap.line col: ap.col
+                args.append uarg
+            }
+        }
+        argNames: (List of: String)
+        for while true loop {
+            lblOpt: lex.accept tt: zlexer.TT.LABEL
+            match (lblOpt) case some then {
+                nm: lblOpt.tokstr.copy
+                noName: lblOpt.tokstr.copy
+                vLine: lblOpt.lineno
+                vCol: lblOpt.colno
+                dup: argNames.contains item: nm
+                if dup then {
+                    bad: lex.acceptAny
+                    return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Duplicate argument name".string)
+                }
+                vpaths: this.operationPaths lex: lex
+                vlen: vpaths.length
+                if vlen == 0.u64 then {
+                    bad: lex.acceptAny
+                    return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected an Operation after label".string)
+                }
+                val: this.operationFromPaths paths: vpaths lex: lex
+                vIsErr: this.isError node: val
+                if vIsErr then return val
+                no: this.mkNamedOp name: (Option.some noName) operation: val line: vLine col: vCol
+                args.append no
+                argNames.append nm
+            } case none then {
+                lblOpt2: lex.accept tt: zlexer.TT.LABELPRE
+                match (lblOpt2) case some then {
+                    nm: lblOpt2.tokstr.copy
+                    lvName: lblOpt2.tokstr.copy
+                    noName: lblOpt2.tokstr.copy
+                    vLine: lblOpt2.lineno
+                    vCol: lblOpt2.colno
+                    dup: argNames.contains item: nm
+                    if dup then {
+                        bad: lex.acceptAny
+                        return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Duplicate argument name".string)
+                    }
+                    lv: this.mkLabelValue line: vLine col: vCol name: lvName
+                    no: this.mkNamedOp name: (Option.some noName) operation: lv line: vLine col: vCol
+                    args.append no
+                    argNames.append nm
+                } case none then {
+                    break
+                }
+            }
+        }
+        return (this.mkCall callable: callable arguments: args line: cp.line col: cp.col)
+    }
+
+    # Bare operation core: dispatch a non-empty path list. Odd count ->
+    # binop; even count -> ( term binop ) call. A trailing error path is
+    # propagated. NO named arguments (those belong to acceptCall).
+    operationFromPaths: function {:this paths: (List of: Node).take lex: zlexer.Lexer} out Node is {
+        last: paths.pop
+        lerr: this.isError node: last
+        if lerr then return last
+        paths.append last
+        n: paths.length
+        half: n / 2.u64
+        twiceHalf: half * 2.u64
+        even: twiceHalf == n
+        if even then {
+            return (this.acceptTermBinopCall paths: paths lex: lex)
+        }
+        return (this.foldBinop paths: paths nextTok: lex.peek)
+    }
+
+    # operation: binop | ( term binop ). Top-level Option boundary; no
+    # named arguments. none means no paths were found.
+    acceptOperation: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
+        paths: this.operationPaths lex: lex
+        n: paths.length
+        if n == 0.u64 then return (Option.none Node)
+        return (Option.some (this.operationFromPaths paths: paths lex: lex))
+    }
+
+    # operation-or-call: the top-level entry that also accepts named
+    # arguments. Dispatch on the pre-parsed path count: (count == 1 and
+    # the next token is a label) or count is even -> call; else binop.
+    acceptOperationOrCall: function {:this paths: (List of: Node).take lex: zlexer.Lexer} out (Option t: Node) is {
+        n0: paths.length
+        if n0 == 0.u64 then return (Option.none Node)
+        last: paths.pop
+        lerr: this.isError node: last
+        if lerr then return (Option.some last)
+        paths.append last
+        n: paths.length
+        pk: lex.peek
+        half: n / 2.u64
+        twiceHalf: half * 2.u64
+        even: twiceHalf == n
+        if even then {
+            return (Option.some (this.acceptCall lex: lex paths: paths))
+        }
+        nIsOne: n == 1.u64
+        if nIsOne then {
+            labelNext: this.tokIsLabel tok: pk
+            if labelNext then {
+                return (Option.some (this.acceptCall lex: lex paths: paths))
+            }
+        }
+        return (Option.some (this.foldBinop paths: paths nextTok: pk))
+    }
+
     acceptExpression: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
         return (Option.none Node)
     }
 }
 
-# Smoke harness: parse each inline snippet as a path and dump the
-# resulting node tree via zast.printNode.
-runSnippet: function {label: StringView src: String.take} is {
+# Smoke harness: parse each inline snippet and dump the resulting node
+# tree via zast.printNode. Atom snippets drive acceptPath; operation
+# and call snippets drive acceptOperationOrCall (the named-argument
+# entry).
+runPath: function {label: StringView src: String.take} is {
     print "=== \{label} ==="
     p: Parser.create
     tk: zlexer.Tokenizer.create source: src fsno: 0.u32
@@ -251,8 +534,31 @@ runSnippet: function {label: StringView src: String.take} is {
     }
 }
 
+runOp: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: 0.u32
+    lx: zlexer.Lexer.create lexer: tk
+    paths: p.operationPaths lex: lx
+    r: p.acceptOperationOrCall paths: paths lex: lx
+    match (r) case some then {
+        zast.printNode r
+    } case none then {
+        print "<none>"
+    }
+}
+
 main: function is {
-    runSnippet label: "foo" src: "foo".string
-    runSnippet label: "a.b.c" src: "a.b.c".string
-    runSnippet label: "string" src: "\"hello\"".string
+    runPath label: "foo" src: "foo".string
+    runPath label: "a.b.c" src: "a.b.c".string
+    runPath label: "string" src: "\"hello\"".string
+    runOp label: "f x" src: "f x".string
+    runOp label: "f x y" src: "f x y".string
+    runOp label: "f label: x" src: "f label: x".string
+    runOp label: "f x label: y" src: "f x label: y".string
+    runOp label: "a + b" src: "a + b".string
+    runOp label: "a + b + c" src: "a + b + c".string
+    runOp label: "f a + b" src: "f a + b".string
+    runOp label: "a.b x" src: "a.b x".string
+    runOp label: "a.b + c" src: "a.b + c".string
 }
