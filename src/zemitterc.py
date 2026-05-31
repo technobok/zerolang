@@ -365,6 +365,18 @@ class CEmitter:
         # yields out of non-generator code, so this should never fire
         # there in a green compile).
         self._generator_ctx: Optional[Dict[str, object]] = None
+        # A loop `break` lowers to a `goto` targeting a per-loop label, so
+        # it leaves the loop even from inside a `match` (a C switch, where
+        # a bare `break` would only leave the switch). `continue` needs no
+        # such handling — C `continue` is not caught by a switch. The
+        # counter is global so labels are unique across the whole
+        # translation unit; `_loop_labels` is the active break-target
+        # stack (entries ("loop", id) or ("do", None)); `_loop_break_used`
+        # records which labels a break referenced, so `_emit_for` only
+        # emits a label that is actually reached (no unused-label noise).
+        self._loop_label_counter: int = 0
+        self._loop_labels: List[tuple] = []
+        self._loop_break_used: set = set()
         self.needs_stdio = False
         self.needs_stdint = False
         self.needs_stdlib = False
@@ -6966,9 +6978,13 @@ class CEmitter:
         # `_emit_return`: function-scope cleanup, then bare C `return;`.
         ck = self._expr_call_kind(expr)
         if ck == zast.CallKind.BREAK:
-            return self._emit_break_continue_cleanup(indent) + f"{indent}break;\n"
+            return self._emit_break_continue_cleanup(indent) + self._loop_jump_target(
+                indent, False
+            )
         if ck == zast.CallKind.CONTINUE:
-            return self._emit_break_continue_cleanup(indent) + f"{indent}continue;\n"
+            return self._emit_break_continue_cleanup(indent) + self._loop_jump_target(
+                indent, True
+            )
         if ck == zast.CallKind.RETURN and inner.nodetype == zast.NodeType.ATOMID:
             # Bare `return` only — `return X` is a Call and is routed to
             # `_emit_call_stmt` → `_emit_return` further below, which
@@ -7525,9 +7541,9 @@ class CEmitter:
         if _ck == zast.CallKind.RETURN:
             return self._emit_return(call, indent)
         if _ck == zast.CallKind.BREAK:
-            return f"{indent}break;\n"
+            return self._loop_jump_target(indent, False)
         if _ck == zast.CallKind.CONTINUE:
-            return f"{indent}continue;\n"
+            return self._loop_jump_target(indent, True)
 
         # data.index call -> array access
         if (
@@ -10506,6 +10522,26 @@ class CEmitter:
                 result += self._emit_field_cleanup(var_name, var_type, indent)
         return result
 
+    def _loop_jump_target(self, indent: str, is_continue: bool) -> str:
+        """The `break`/`continue` jump itself (no cleanup prefix).
+
+        A `break` lowers to a goto so it leaves the loop even from inside
+        a `match` (a C switch, where a bare C `break` would only leave the
+        switch). It targets the innermost break target: a loop via its
+        label, a `do`-block via the plain C `break` that leaves its
+        do-while(0); the C keyword is the fallback when no target is on
+        the stack. `continue` stays a plain C `continue` — it is not
+        caught by a switch, so it already targets the enclosing loop.
+        """
+        if is_continue:
+            return f"{indent}continue;\n"
+        if self._loop_labels:
+            kind, lbl = self._loop_labels[-1]
+            if kind == "loop":
+                self._loop_break_used.add(lbl)
+                return f"{indent}goto __zbrk_{lbl};\n"
+        return f"{indent}break;\n"
+
     def _emit_taken_vars_cleanup(
         self,
         taken_vars: "List[tuple]",
@@ -11552,6 +11588,11 @@ class CEmitter:
         indent = self._indent()
         parts: List[str] = []
 
+        # Allocate this loop's break/continue labels (see _loop_jump_target).
+        loop_lbl = self._loop_label_counter
+        self._loop_label_counter += 1
+        self._loop_labels.append(("loop", loop_lbl))
+
         init_vars: List[str] = []
         cond_exprs: List[str] = []
         # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_ztype, opt_type, elem_type)
@@ -11910,6 +11951,11 @@ class CEmitter:
                     parts.append(f"{inner}if (!({post_str})) break;\n")
                 parts.append(f"{indent}}}\n")
 
+        self._loop_labels.pop()
+        if loop_lbl in self._loop_break_used:
+            # break landed here: place the target just past the loop.
+            parts.append(f"{indent}__zbrk_{loop_lbl}: ;\n")
+
         return "".join(parts)
 
     def _emit_for_body(self, fornode: zast.For) -> str:
@@ -11981,7 +12027,13 @@ class CEmitter:
             # don't leak to the enclosing frame on normal completion.
             self._push_block_scope()
             self._scope.break_scope_indices.append(len(self._scope.cleanup_stack) - 1)
+            # A do-block is a break target but not a loop: marking it on
+            # the stack keeps a `break` inside it lowering to the plain C
+            # break that leaves its do-while(0), rather than a goto out of
+            # an enclosing loop.
+            self._loop_labels.append(("do", None))
             body = self._emit_statement(donode.statement)
+            self._loop_labels.pop()
             self._scope.break_scope_indices.pop()
             parts.append(body)
             parts.append(self._pop_block_scope_and_emit())
@@ -12007,9 +12059,15 @@ class CEmitter:
             self._temp.decls.append(f"{indent}{tmp}.tag = {none_tag};\n")
             self._temp.decls.append(f"{indent}do {{\n")
             self.indent_level += 1
+            # A break inside the block-expression leaves this do-while(0),
+            # yielding none; mark it as a non-loop break target so the
+            # break stays a plain C break rather than a goto out of an
+            # enclosing loop.
+            self._loop_labels.append(("do", None))
             body = self._emit_branch_with_result_optional(
                 donode.statement, tmp, some_tag
             )
+            self._loop_labels.pop()
             self._temp.decls.append(body)
             self.indent_level -= 1
             self._temp.decls.append(f"{indent}}} while (0);\n")

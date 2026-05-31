@@ -237,6 +237,118 @@ class TestBareReturn:
         assert result.stdout == "got 1\n"
 
 
+class TestLoopBreakInMatch:
+    """Regression: a loop `break` inside a `match` arm must leave the
+    loop, not merely the match's C `switch`.
+
+    A `match` lowers to a C `switch`, where a bare C `break` only leaves
+    the switch. Before the fix a `break` in a match arm therefore left
+    the switch and the enclosing `for while true loop` spun forever (the
+    self-hosted parser's named-argument loop hit exactly this). The
+    emitter now lowers a loop `break` to `goto __zbrk_<id>`, a label
+    placed just past the loop. `continue` is unaffected — C `continue`
+    is not caught by a switch.
+    """
+
+    def test_break_in_match_arm_exits_loop(self):
+        # Without the fix the loop never terminates and this times out.
+        csource = emit_source(
+            "gate: variant { up: null down: null }\n"
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while true loop {\n"
+            "        f: gate.down\n"
+            "        if n >= 3.u64 then { f = gate.up }\n"
+            "        match (f) case up then {\n"
+            "            break\n"
+            "        } case down then {\n"
+            '            print "iter \\{n}"\n'
+            "            n = n + 1.u64\n"
+            "        }\n"
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "iter 0\niter 1\niter 2\ndone\n"
+
+    def test_break_in_match_arm_under_asan(self):
+        # A heap (String) local in the loop body confirms the goto-break
+        # path still runs the loop-body scope cleanup (no leak).
+        csource = emit_source(
+            "gate: variant { up: null down: null }\n"
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while true loop {\n"
+            '        msg: "row".string\n'
+            "        f: gate.down\n"
+            "        if n >= 2.u64 then { f = gate.up }\n"
+            "        match (f) case up then {\n"
+            "            break\n"
+            "        } case down then {\n"
+            '            print "\\{msg} \\{n}"\n'
+            "            n = n + 1.u64\n"
+            "        }\n"
+            "    }\n"
+            '    print "end"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0 and "runtime error" not in result.stderr, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "row 0\nrow 1\nend\n"
+
+    def test_break_targets_innermost_loop(self):
+        # A break in a match inside the inner loop exits only the inner
+        # loop; the outer loop keeps iterating (distinct labels per loop).
+        csource = emit_source(
+            "gate: variant { up: null down: null }\n"
+            "main: function is {\n"
+            "    o: 0.u64\n"
+            "    for while o < 2.u64 loop {\n"
+            "        i: 0.u64\n"
+            "        for while true loop {\n"
+            "            f: gate.down\n"
+            "            if i >= 2.u64 then { f = gate.up }\n"
+            "            match (f) case up then {\n"
+            "                break\n"
+            "            } case down then {\n"
+            '                print "o\\{o} i\\{i}"\n'
+            "                i = i + 1.u64\n"
+            "            }\n"
+            "        }\n"
+            "        o = o + 1.u64\n"
+            "    }\n"
+            '    print "fin"\n'
+            "}"
+        )
+        assert compile_and_run(csource) == ("o0 i0\no0 i1\no1 i0\no1 i1\nfin\n")
+
+    def test_continue_in_match_continues_loop(self):
+        # `continue` is not caught by a C switch, so a continue inside a
+        # match already continues the enclosing loop; coverage for the
+        # path the fix deliberately leaves as plain C continue.
+        csource = emit_source(
+            "mark: variant { yes: null no: null }\n"
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 3.u64 loop {\n"
+            "        cur: n\n"
+            "        n = n + 1.u64\n"
+            "        f: mark.no\n"
+            "        if cur == 1.u64 then { f = mark.yes }\n"
+            "        match (f) case yes then {\n"
+            "            continue\n"
+            "        } case no then {\n"
+            '            print "take \\{cur}"\n'
+            "        }\n"
+            "    }\n"
+            '    print "ok"\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "take 0\ntake 2\nok\n"
+
+
 class TestReturnConstructionTakeSoundness:
     """Regression coverage for the return-construction-shorthand take bug.
 
