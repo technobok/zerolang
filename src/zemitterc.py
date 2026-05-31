@@ -9625,14 +9625,8 @@ class CEmitter:
                     and child_defn.nodetype == NodeType.FUNCTION
                     else False
                 )
-                if (
-                    child_defn is not None
-                    and child_defn.nodetype == NodeType.FUNCTION
-                    and child_is_native
-                ):
-                    fn_type = self._node_ztype(child_defn) or self._node_ztype(
-                        child_defn
-                    )
+                if child_defn is not None and child_defn.nodetype == NodeType.FUNCTION:
+                    fn_type = self._node_ztype(child_defn)
                     has_runtime_params = False
                     if fn_type is not None:
                         for p in self.typing.child_names_of(fn_type):
@@ -9640,13 +9634,20 @@ class CEmitter:
                                 has_runtime_params = True
                                 break
                     if not has_runtime_params:
-                        # Always a native (child_is_native guard above); native
-                        # cnames don't match the qualified runtime symbol.
-                        mangled = mangle_func_name(f"{pname}.{child}")
-                        self._track_stdlib_unit_native(mangled, fn_type)
-                        if pname == "io":
-                            self.needs_stdio = True
-                        return f"{mangled}()"
+                        if child_is_native:
+                            # Native cnames don't match the qualified runtime
+                            # symbol; use the mangled name.
+                            mangled = mangle_func_name(f"{pname}.{child}")
+                            self._track_stdlib_unit_native(mangled, fn_type)
+                            if pname == "io":
+                                self.needs_stdio = True
+                            return f"{mangled}()"
+                        # User zero-arg unit function in value position: the
+                        # typecheck coerced it to its return type, so invoke it
+                        # via its id-based cname. The bare reference below would
+                        # emit the unqualified name and fail to link.
+                        if fn_type is not None and fn_type.cname:
+                            return f"{fn_type.cname}()"
             # unit.name reference (file-level units)
             if pname in self.program.units and pname not in (
                 "system",
@@ -9686,14 +9687,29 @@ class CEmitter:
                 # `as`-section constant resolves to its value type, whose cname
                 # is a struct name — fall back to the qualified mangle there.
                 method_ct = self.typing.child_of(parent_def, child)
-                return (
-                    method_ct.cname
-                    if method_ct is not None
+                if (
+                    method_ct is not None
                     and method_ct.typetype == ZTypeType.FUNCTION
                     and method_ct.cname
                     and not method_ct.is_native
-                    else mangle_func_name(f"{pname}.{child}")
-                )
+                ):
+                    method_has_runtime_params = any(
+                        p != "this" for p in self.typing.child_names_of(method_ct)
+                    )
+                    # A no-user-arg static method in value position whose type
+                    # the typechecker coerced away from FUNCTION is an
+                    # auto-invoke (e.g. `Counter.create`): insert the call `()`.
+                    # A method with runtime params used as a value is a
+                    # reference (e.g. a method-ref default) — emit the bare
+                    # cname so the args bind at the actual call site.
+                    if (
+                        not method_has_runtime_params
+                        and _pt_ztype is not None
+                        and _pt_ztype.typetype != ZTypeType.FUNCTION
+                    ):
+                        return f"{method_ct.cname}()"
+                    return method_ct.cname
+                return mangle_func_name(f"{pname}.{child}")
             # union_name.subtype — emit null subtype construction. Use the
             # type's dot-free ztype.name (not the bare atom `pname`) so a
             # dependency-unit variant/union emits a valid C name.

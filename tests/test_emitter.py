@@ -1273,6 +1273,34 @@ class TestEmitterBasic:
         assert typing.errors == [], [e.msg for e in typing.errors]
         return compile_and_run(EmittedC(zemitterc.emit(typing))).strip()
 
+    def test_zero_arg_static_create_auto_invoked(self):
+        """A zero-arg static `Type.create` in value position is invoked."""
+        csource = emit_source(
+            "Counter: class { n: i64 } as {\n"
+            "  create: function {} out this is { return (meta.create n: 7) }\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: Counter.create\n"
+            '  print "\\{c.n}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_cross_unit_zero_arg_function_invoked(self):
+        """A zero-arg free function in a dependency unit, called from main, is
+        invoked with the id-based qualified cname (links + runs) — previously
+        it emitted the unqualified name and failed to link."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    'main: function is {\n  r: helpers.answer\n  print "\\{r}"\n}'
+                ),
+                "helpers.z": "answer: function out i64 is { return 99 }\n",
+            }
+        )
+        assert out == "99"
+
     def test_cross_unit_dependency_record(self):
         """A record defined in a dependency unit is emitted (dot-free cname),
         constructed, and field-read from main."""
