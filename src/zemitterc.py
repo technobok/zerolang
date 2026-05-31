@@ -9228,7 +9228,7 @@ class CEmitter:
             rhs_zt_obj = self._node_ztype(binop.rhs)
             rhs_sub = rhs_zt_obj.subtype if rhs_zt_obj else None
             eq_method = self.typing.child_of(lhs_zt, "==")
-            if eq_method and eq_method.is_autogen_eq:
+            if eq_method and eq_method.is_autogen_eq and self._needs_eq_call(lhs_zt):
                 tname = lhs_zt.name.replace(".", "_")
                 call = f"{_cbase_of(lhs_zt, tname)}_eq({lhs}, {rhs})"
                 if op == "!=":
