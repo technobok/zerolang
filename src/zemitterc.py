@@ -683,6 +683,31 @@ class CEmitter:
             return m.cname
         return f"{_cbase_of(base, _mono_name(parent))}_{method}"
 
+    def _create_fn_cname(self, type_zt: Optional[ZType], fallback_name: str) -> str:
+        """C name of a type's create function at a construction site. A
+        user-defined `create` method carries its own stored cname (method-own
+        id); the compiler-generated create has an empty-cname `create` child
+        (or none), so compose the owner-derived `{cbase}_create` it is emitted
+        under. Keeps construction calls matching the create definition."""
+        cr = self.typing.child_of(type_zt, "create") if type_zt is not None else None
+        if cr is not None and cr.cname and not cr.is_native:
+            return cr.cname
+        return f"{_cbase_of(type_zt, fallback_name)}_create"
+
+    def _func_ref_cname(self, node: zast.Node, fallback_name: str) -> str:
+        """C name of a function referenced as a value (a function-pointer
+        default / argument). Reads the resolved function ZType's stored cname;
+        the mangle fallback covers an unresolved or native reference."""
+        ft = self._node_ztype(node)
+        if (
+            ft is not None
+            and ft.cname
+            and ft.typetype == ZTypeType.FUNCTION
+            and not ft.is_native
+        ):
+            return ft.cname
+        return mangle_func_name(fallback_name)
+
     def _user_method_cname(
         self, owner: Optional[ZType], owner_name: str, method: str
     ) -> str:
@@ -1327,7 +1352,7 @@ class CEmitter:
                         qname, defn.is_items, defn.functions(), zt
                     )
                     self._type_field_names[key] = field_names
-                    self._type_field_ctypes[key] = field_ctypes
+                    self._cache_field_ctypes(key, zt, field_ctypes)
                     self._type_field_defaults[key] = self._extract_field_defaults(
                         qname, defn.is_items, defn.functions()
                     )
@@ -2216,7 +2241,7 @@ class CEmitter:
                     field_names_r.append(fn)
                     field_ctypes_r.append(_ctype(self.typing, ft))
                 self._type_field_names[name] = field_names_r
-                self._type_field_ctypes[name] = field_ctypes_r
+                self._cache_field_ctypes(name, mono_type, field_ctypes_r)
                 defaults_r: Dict[str, str] = {}
                 for fn, default_val in self.typing.child_defaults_of(mono_type).items():
                     idx = field_names_r.index(fn) if fn in field_names_r else -1
@@ -2239,7 +2264,7 @@ class CEmitter:
                     field_names.append(fn)
                     field_ctypes_list.append(_ctype(self.typing, ft))
                 self._type_field_names[name] = field_names
-                self._type_field_ctypes[name] = field_ctypes_list
+                self._cache_field_ctypes(name, mono_type, field_ctypes_list)
                 defaults_c: Dict[str, str] = {}
                 for fn, default_val in self.typing.child_defaults_of(mono_type).items():
                     idx = field_names.index(fn) if fn in field_names else -1
@@ -2377,7 +2402,7 @@ class CEmitter:
         for mono_ftype, cloned_func in self.typing.mono_functions:
             if cloned_func.body:
                 self._current_node_id = cloned_func.nodeid
-                self._emit_function(mono_ftype.name, cloned_func)
+                self._emit_function(mono_ftype.name, cloned_func, ftype=mono_ftype)
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", "os", self.program.mainunitname):
@@ -2530,11 +2555,14 @@ class CEmitter:
 
         output = "".join(parts)
         output = self._strip_unused_ft_typedefs(output)
-        output = self._substitute_runtime_cnames(output)
 
-        # build source map: for each output line, find the node ID
-        # by walking the tracked output sections
+        # build source map BEFORE the cname substitution: it matches tracked
+        # section strings against the output, which only agree pre-substitution.
+        # The substitution rewrites within lines (no line added/removed), so the
+        # line->node map stays valid for the final output.
         self._build_source_map(output)
+
+        output = self._substitute_runtime_cnames(output)
 
         return output
 
@@ -2615,8 +2643,14 @@ class CEmitter:
                 ptype_str = f"{ptype_str}*"
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
+        ftype = self._node_ztype(func)
+        ft_base = (
+            ftype.cname
+            if ftype is not None and ftype.cname and not ftype.is_native
+            else mangle_func_name(name)
+        )
         self.func_typedefs.append(
-            f"typedef {ret_ctype} (*{mangle_func_name(name)}_ft)({param_str});\n"
+            f"typedef {ret_ctype} (*{ft_base}_ft)({param_str});\n"
         )
 
     def _emit_spec_typedef(self, name: str, func: zast.Function) -> None:
@@ -2628,8 +2662,14 @@ class CEmitter:
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
+        ftype = self._node_ztype(func)
+        ft_base = (
+            ftype.cname
+            if ftype is not None and ftype.cname and not ftype.is_native
+            else mangle_func_name(name)
+        )
         self.spec_typedefs.append(
-            f"typedef {ret_ctype} (*{mangle_func_name(name)}_ft)({param_str});\n"
+            f"typedef {ret_ctype} (*{ft_base}_ft)({param_str});\n"
         )
 
     def _emit_constant(self, name: str, atom: zast.AtomId) -> None:
@@ -3202,6 +3242,18 @@ class CEmitter:
             return False
         return self._estimate_type_size(name, ztype) > _EQ_MEMCMP_THRESHOLD
 
+    def _cache_field_ctypes(
+        self, name_key: str, ztype: Optional[ZType], field_ctypes: list
+    ) -> None:
+        """Cache a type's field ctype list for `_estimate_type_size`. Keyed by
+        the type's name (matches construction-arg builders) and ALSO by its
+        id-named `cname_base`, so the nested-struct recursion in
+        `_estimate_type_size` — which has only the C type string — can recover
+        the entry via `ctype[:-2]`."""
+        self._type_field_ctypes[name_key] = field_ctypes
+        if ztype is not None and ztype.cname_base:
+            self._type_field_ctypes[ztype.cname_base] = field_ctypes
+
     def _estimate_type_size(self, name: str, ztype: Optional[ZType]) -> int:
         """Estimate byte size of a type from its C fields.
 
@@ -3216,11 +3268,12 @@ class CEmitter:
             for ct in field_ctypes:
                 sz = CTYPE_SIZES.get(ct, 0)
                 if sz == 0:
-                    # nested struct type: z_foo_t -> foo, recurse. The cache
+                    # nested struct type: strip the "_t" suffix to recover the
+                    # cname_base (the cache's id-named key), recurse. The cache
                     # holds only ctype strings, so the nested ZType is unknown;
                     # the recursion resolves it from its own cache entry.
                     if ct.startswith("z_") and ct.endswith("_t"):
-                        inner_name = ct[2:-2]
+                        inner_name = ct[:-2]
                         sz = self._estimate_type_size(inner_name, None)
                     if sz == 0:
                         return 0  # unknown size
@@ -3245,7 +3298,7 @@ class CEmitter:
                 ct = _ctype(self.typing, ftype)
                 sz = CTYPE_SIZES.get(ct, 0)
                 if sz == 0 and ct.startswith("z_") and ct.endswith("_t"):
-                    sz = self._estimate_type_size(ct[2:-2], ftype)
+                    sz = self._estimate_type_size(ct[:-2], ftype)
                 if sz > max_sub:
                     max_sub = sz
             return 4 + max_sub  # tag + largest union member
@@ -3267,7 +3320,7 @@ class CEmitter:
             ct = _ctype(self.typing, ftype)
             sz = CTYPE_SIZES.get(ct, 0)
             if sz == 0 and ct.startswith("z_") and ct.endswith("_t"):
-                sz = self._estimate_type_size(ct[2:-2], ftype)
+                sz = self._estimate_type_size(ct[:-2], ftype)
             if sz == 0:
                 return 0
             total += sz
@@ -3509,7 +3562,9 @@ class CEmitter:
                 fpath.nodetype == NodeType.ATOMID
                 and self._unit_def_typetype(fpath) == ZTypeType.FUNCTION
             ):
-                field_defaults[fname] = mangle_func_name(cast(zast.AtomId, fpath).name)
+                field_defaults[fname] = self._func_ref_cname(
+                    fpath, cast(zast.AtomId, fpath).name
+                )
             elif fpath.nodetype == NodeType.ATOMID:
                 # Sibling-method reference default:
                 # `instancemethod: method1` inside the enclosing
@@ -3519,10 +3574,12 @@ class CEmitter:
                 # type's own `functions` dict before falling through.
                 ref_name = cast(zast.AtomId, fpath).name
                 if ref_name in functions and functions[ref_name].body is not None:
-                    field_defaults[fname] = mangle_func_name(f"{name}.{ref_name}")
+                    field_defaults[fname] = self._func_ref_cname(
+                        functions[ref_name], f"{name}.{ref_name}"
+                    )
         for mname, mfunc in functions.items():
             if mfunc.body is not None:
-                field_defaults[mname] = mangle_func_name(f"{name}.{mname}")
+                field_defaults[mname] = self._func_ref_cname(mfunc, f"{name}.{mname}")
         return field_defaults
 
     def _emit_create_functions(
@@ -3587,7 +3644,7 @@ class CEmitter:
         params, field_names, field_ctypes = self._collect_field_params(
             name, rc_defn.is_paths(), rc_defn.functions(), ztype
         )
-        self._type_field_ctypes[fkey] = field_ctypes
+        self._cache_field_ctypes(fkey, ztype, field_ctypes)
         self._type_field_names[fkey] = field_names
         self._type_field_defaults[fkey] = self._extract_field_defaults(
             name, rc_defn.is_paths(), rc_defn.functions()
@@ -4351,7 +4408,7 @@ class CEmitter:
         )
 
         # register field info for call emission
-        self._type_field_ctypes[name] = [ct for _, ct in field_items]
+        self._cache_field_ctypes(name, mono_type, [ct for _, ct in field_items])
         self._type_field_names[name] = field_names
 
         # emit auto-generated equality function
@@ -5833,7 +5890,7 @@ class CEmitter:
             params.append(f"{ct} {fname}")
             field_names.append(fname)
             field_ctypes_list.append(ct)
-        self._type_field_ctypes[name] = field_ctypes_list
+        self._cache_field_ctypes(name, mono_type, field_ctypes_list)
         self._type_field_names[name] = field_names
         if name not in self._type_field_defaults:
             self._type_field_defaults[name] = {}
@@ -6105,10 +6162,25 @@ class CEmitter:
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
     def _emit_function(
-        self, name: str, func: zast.Function, record_name: str = ""
+        self,
+        name: str,
+        func: zast.Function,
+        record_name: str = "",
+        ftype: "Optional[ZType]" = None,
     ) -> None:
         self.needs_stdint = True
-        cname = mangle_func_name(name)
+        # Ownership annotations live on the resolved ZType (carries both
+        # syntactic suffixes and inferred BORROW-default).
+        if ftype is None:
+            ftype = self._node_ztype(func)
+        # Read the stored (id-named) cname so the definition matches every call
+        # site, which reads the same ZType's cname. Natives keep their canonical
+        # ABI name; synth/unstamped functions fall back to the name mangler.
+        cname = (
+            ftype.cname
+            if ftype is not None and ftype.cname and not ftype.is_native
+            else mangle_func_name(name)
+        )
 
         # G4: synthesised generator `.call` body — wire up the
         # state-machine context before normal function emission. The
@@ -6126,10 +6198,6 @@ class CEmitter:
         # `it.field = ...` persist across calls.
         record_type = self._enclosing_type(func)
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
-
-        # Ownership annotations live on the resolved ZType (carries
-        # both syntactic suffixes and inferred BORROW-default).
-        ftype = self._node_ztype(func)
 
         params: List[str] = []
         pointer_params: List[Optional[int]] = []
@@ -7353,7 +7421,7 @@ class CEmitter:
                         recv = f"&{arg}"
                     return (
                         f"{indent}z_StringView_print("
-                        f"{_cbase_of(arg_type, tname)}_stringview({recv}));\n"
+                        f"{self._user_method_cname(arg_type, tname, 'stringview')}({recv}));\n"
                     )
                 # Unknown type — shouldn't happen post-typecheck, but keep
                 # a safe fallback.
@@ -7912,6 +7980,16 @@ class CEmitter:
                 kind = default[1:sep]
                 payload = default[sep + 1 :]
                 if kind == "function":  # ztc-string-compare-ok: default-kind tag
+                    # The param's type IS the referenced function, so its stored
+                    # (id-named) cname is the function symbol; fall back to the
+                    # name mangler only if the target type isn't resolved.
+                    if (
+                        target_type is not None
+                        and target_type.typetype == ZTypeType.FUNCTION
+                        and target_type.cname
+                        and not target_type.is_native
+                    ):
+                        return target_type.cname
                     return mangle_func_name(payload)
                 if kind == "variant":  # ztc-string-compare-ok: default-kind tag
                     ctype = _ctype(self.typing, target_type)
@@ -8854,7 +8932,7 @@ class CEmitter:
             args_str, take_vars = self._build_create_args(
                 rec_type.name, rec_type, call.arguments
             )
-            result = f"{_cbase_of(rec_type, rec_type.name)}_create({args_str})"
+            result = f"{self._create_fn_cname(rec_type, rec_type.name)}({args_str})"
             # handle .take nullification
             for fname, tv in take_vars.items():
                 if tv:
@@ -8931,7 +9009,7 @@ class CEmitter:
             args_str, take_vars = self._build_create_args(
                 cls_type.name, cls_type, call.arguments
             )
-            result = f"{_cbase_of(cls_type, cls_type.name)}_create({args_str})"
+            result = f"{self._create_fn_cname(cls_type, cls_type.name)}({args_str})"
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
@@ -9271,7 +9349,7 @@ class CEmitter:
         # only match user-defined records (not numeric constant aliases like north: 0)
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
-            return f"{_cbase_of(resolved, name)}_create({zero_args})"
+            return f"{self._create_fn_cname(resolved, name)}({zero_args})"
         # string class: bare class name as value -> empty string constructor.
         # Disambiguator (`atom_ztype.name == name`) rejects variables of String
         # type — same idiom as the record case above.
@@ -9316,7 +9394,7 @@ class CEmitter:
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(
-                f"{indent}{ctype} {tmp} = {_cbase_of(base, mangled)}_create({create_args});\n"
+                f"{indent}{ctype} {tmp} = {self._create_fn_cname(base, mangled)}({create_args});\n"
             )
             if resolved.destructor_name is not None:
                 self._temp.frees.append(tmp)

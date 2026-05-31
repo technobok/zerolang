@@ -8,7 +8,7 @@ import tempfile
 
 import pytest
 
-from conftest import make_parser_vfs, make_parser, make_parser_with_vfs
+from conftest import make_parser_vfs, make_parser, make_parser_with_vfs, EmittedC
 from zparser import Parser  # noqa: F401  (kept for type references)
 from ztypecheck import typecheck
 import zemitterc
@@ -35,7 +35,7 @@ def emit_source(source: str, unitname: str = "test") -> str:
     typing = typecheck(program)
     errors = typing.errors
     assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-    return zemitterc.emit(typing)
+    return EmittedC(zemitterc.emit(typing))
 
 
 def compile_and_run_with_args(csource: str, argv: list[str]) -> str:
@@ -1161,7 +1161,7 @@ class TestEmitterBasic:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], [e.msg for e in errors]
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         output = compile_and_run(csource)
         assert output.strip() == "8"
 
@@ -1199,7 +1199,7 @@ class TestEmitterBasic:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], [e.msg for e in errors]
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         output = compile_and_run(csource)
         assert output.strip() == "49"
 
@@ -1249,7 +1249,7 @@ class TestEmitterBasic:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], [e.msg for e in errors]
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         output = compile_and_run(csource)
         assert output.strip() == "9\n-7"
 
@@ -1271,7 +1271,7 @@ class TestEmitterBasic:
         assert isinstance(program, zast.Program)
         typing = typecheck(program)
         assert typing.errors == [], [e.msg for e in typing.errors]
-        return compile_and_run(zemitterc.emit(typing)).strip()
+        return compile_and_run(EmittedC(zemitterc.emit(typing))).strip()
 
     def test_cross_unit_dependency_record(self):
         """A record defined in a dependency unit is emitted (dot-free cname),
@@ -1587,7 +1587,7 @@ class TestEmitterExamples:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], f"Type errors for {name}: {[e.msg for e in errors]}"
-        return zemitterc.emit(typing)
+        return EmittedC(zemitterc.emit(typing))
 
     def test_hello(self):
         csource = self._emit_example("hello")
@@ -1936,7 +1936,7 @@ class TestUserMethodStringTake:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         # Under ASan the double-free caused by the pre-fix emission
         # would be caught here.
         result = compile_and_run_asan(csource)
@@ -1996,7 +1996,7 @@ class TestClassParamThreading:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         assert compile_and_run(csource).strip() == "11"
 
     def test_user_method_threading_stringview_no_unwanted_amp(self):
@@ -2110,7 +2110,7 @@ class TestCliUnitEmission:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        return zemitterc.emit(typing)
+        return EmittedC(zemitterc.emit(typing))
 
     def test_flag_and_positionals(self):
         out = (
@@ -2891,7 +2891,7 @@ class TestEmitterMemorySafety:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "Hello, World!" in result.stdout
@@ -2914,7 +2914,7 @@ class TestEmitterMemorySafety:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "Welcome to Zero v1" in result.stdout
@@ -3177,7 +3177,7 @@ class TestEmitterClassIntegration:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         output = compile_and_run(csource)
         assert "initial = 10" in output
         assert "after 3 increments = 13" in output
@@ -3273,7 +3273,7 @@ class TestEmitterClassMemorySafety:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "initial = 10" in result.stdout
@@ -3424,7 +3424,7 @@ class TestEmitterClassDestructorIntegration:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "named: test=42" in result.stdout
@@ -3818,7 +3818,7 @@ class TestEmitterUnionIntegration:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         output = compile_and_run(csource)
         assert "a is ok" in output
         assert "b is error" in output
@@ -4057,7 +4057,7 @@ class TestEmitterUnionMemorySafety:
         typing = typecheck(program)
         errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(typing)
+        csource = EmittedC(zemitterc.emit(typing))
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "a is ok" in result.stdout

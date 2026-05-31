@@ -7,7 +7,12 @@ from typing import Optional
 
 import pytest
 
-from conftest import make_parser_vfs, make_parser, make_parser_with_vfs
+from conftest import (
+    make_parser_vfs,
+    make_parser,
+    make_parser_with_vfs,
+    normalize_cnames,
+)
 from ztypecheck import typecheck, TypeChecker
 from ztypes import (
     ZTypeType,
@@ -7756,7 +7761,7 @@ class TestIoNativeDispatch:
         file_type = tc._resolved_by_name("io.File")
         assert file_type is not None
         assert (file_type.destructor_name is not None) is True
-        assert file_type.destructor_name == "z_File_destroy"
+        assert normalize_cnames(file_type.destructor_name) == "z_File_destroy"
 
     def test_file_read_typechecks(self):
         """File.read takes (into: Bytes, max: u64) and returns
@@ -12534,7 +12539,7 @@ class TestUnionLockedArm:
         tc.check()
         ut = tc._resolved_by_name("test.Mixed")
         assert (ut.destructor_name is not None) is True
-        assert ut.destructor_name == "z_Mixed_destroy"
+        assert normalize_cnames(ut.destructor_name) == "z_Mixed_destroy"
         assert set(tc.typing.lock_arm_names_of(ut)) == {"cached"}
 
     def test_variant_locked_arm_rejected(self):

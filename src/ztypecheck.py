@@ -515,8 +515,6 @@ class MonoState:
     func_aliases: "dict[str, str]" = field(default_factory=dict)
     # cloned methods per mono type: mono_name -> {mname: Function}
     cloned_methods: "dict[str, dict[str, zast.Function]]" = field(default_factory=dict)
-    # C-name collision tracking: assigned cnames for collision detection
-    assigned_cnames: "set[str]" = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -735,27 +733,31 @@ class TypeChecker:
             self.typing.set_child(dst, k, v)
 
     def _assign_cname(self, ztype: ZType, base_id: str, suffix: str = "_t") -> None:
-        """Assign C identifiers to a type, auto-resolving collisions.
+        """Assign C identifiers to a type.
 
         `base_id` is the C identifier without any type suffix ("z_point");
         `suffix` is appended for the full cname ("_t" for type definitions, ""
-        for function types). On collision the type's id disambiguates BOTH the
-        cname and the cname_base, so helper names derived as
-        f"{cname_base}_{suffix}" stay collision-free too. A compiler-generated
-        destructor name (set provisionally by `_set_destructor_metadata`) is
-        realigned to the final cname_base so the emitter's destructor definition
-        and the stored destructor_name (read at call sites) always agree.
+        for function types). The type's monotonic id is spliced in right after
+        the `z_` namespace prefix (`z_t{type_id}_<mangled>`) so names are unique
+        by construction — no dedup needed — while the emitter's z_-prefix /
+        _t-suffix shape checks and base-derived helper names (f"{cname_base}_eq")
+        keep working. Native runtime functions are the exception: they keep
+        their canonical ABI name (the hand-written runtime defines them by it).
+        A compiler-generated destructor name (set provisionally by
+        `_set_destructor_metadata`) is realigned to the final cname_base so the
+        emitter's destructor definition and the stored destructor_name (read at
+        call sites) always agree.
         """
         if ztype.cname:
             return  # already assigned via earlier resolution path
-        candidate = base_id + suffix
-        if candidate not in self.mono.assigned_cnames:
-            ztype.cname = candidate
+        keep_canonical = (
+            ztype.is_native and ztype.typetype == ZTypeType.FUNCTION
+        ) or base_id == "z_main"  # the C entry point has a fixed conventional name
+        if keep_canonical:
             ztype.cname_base = base_id
         else:
-            ztype.cname = f"{candidate}_{ztype.type_id}"
-            ztype.cname_base = f"{base_id}_{ztype.type_id}"
-        self.mono.assigned_cnames.add(ztype.cname)
+            ztype.cname_base = f"z_t{ztype.type_id}_{base_id.removeprefix('z_')}"
+        ztype.cname = ztype.cname_base + suffix
         if ztype.destructor_name == f"z_{ztype.name}_destroy":
             ztype.destructor_name = f"{ztype.cname_base}_destroy"
 
@@ -852,20 +854,6 @@ class TypeChecker:
             # the registry holds only base stdlib types.
             if ztype.is_native and ztype.generic_origin is None:
                 self.typing.runtime_cname_base[ztype.name] = ztype.cname_base
-
-    def _release_template_cname(self, ztype: ZType) -> None:
-        """Release a generic template's cname slot after generic
-        detection. Templates never emit directly — only their
-        monomorphizations do — so clinging to a `z_{name}_t` slot
-        blocks user-declared non-generic types from using the same
-        name (e.g. a user `result: variant { ... }` shadowing
-        system's generic `result` union).
-        """
-        if not ztype.isgeneric:
-            return
-        if ztype.cname:
-            self.mono.assigned_cnames.discard(ztype.cname)
-            ztype.cname = ""
 
     def _link_literal_typedefs(self) -> None:
         """Point LITERAL_INT / LITERAL_FLOAT at this typechecker's
@@ -2296,7 +2284,6 @@ class TypeChecker:
                     utype.numeric_generic_params.add(sname)
                 if default_type:
                     self._record_generic_default(utype, sname, default_type, constraint)
-        self._release_template_cname(utype)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -5958,11 +5945,16 @@ class TypeChecker:
                         self._set_child(mono, "iterateItems", iterate_items_type)
 
         # Assign C names to every synthesised FUNCTION method so the emitter
-        # reads the stored cname (z_{mangled}_{method}) rather than rebuilding
-        # it inline at each call site.
+        # reads the stored cname rather than rebuilding it inline. Derive the
+        # name from the MONO's cname_base (`z_<mono>_<method>`), NOT each
+        # method's own type id, so it matches the template-emitted definition,
+        # which the runtime substitution rewrites by the mono's cname prefix.
         for method_name, method_type in self.typing.children_of(mono):
             if method_type.typetype == ZTypeType.FUNCTION and not method_type.cname:
-                self._assign_cname_type(method_type, f"{mangled}.{method_name}")
+                method_type.cname_base = (
+                    f"{mono.cname_base}_{self._mangle_name(method_name)}"
+                )
+                method_type.cname = method_type.cname_base
 
     def _make_mono_shell(
         self,

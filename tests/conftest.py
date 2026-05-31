@@ -5,6 +5,7 @@ Shared test fixtures and helpers for zerolang tests
 import io
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,47 @@ from zvfs import ZVfsOpenFile, DEntryID, ZVfs, FSProvider, StringProvider, BindT
 from zlexer import Tokenizer, Lexer
 from ztokentype import TT
 from zparser import Parser
+
+
+def normalize_cnames(text: str) -> str:
+    """Strip the id-naming segment from generated C / cname fields so
+    assertions can match canonical names: ``z_t<N>_`` -> ``z_`` (types/
+    functions) and ``z_v<N>_`` -> `` (variables). Apply only to assertion
+    haystacks, never to C that is compiled — the ids keep names unique."""
+    text = re.sub(r"z_t[0-9]+_", "z_", text)
+    text = re.sub(r"z_v[0-9]+_", "", text)
+    return text
+
+
+class EmittedC(str):
+    """Generated-C string whose substring queries normalize id-named cnames,
+    so existing assertions like ``"z_String_free" in csource`` keep matching
+    (``z_t5_String_free`` normalizes to ``z_String_free``) while ``str(...)``
+    — what gets written and compiled — preserves the ids that keep the C
+    unique. ``in`` / ``index`` / ``find`` / ``count`` run against the
+    normalized text (relative order and counts are preserved); plain string
+    indexing/slicing and ``str(...)`` stay raw."""
+
+    def _norm(self) -> str:
+        return normalize_cnames(str(self))
+
+    def __contains__(self, item) -> bool:
+        return str(item) in self._norm()
+
+    def index(self, sub, *args) -> int:  # type: ignore[override]
+        return self._norm().index(sub, *args)
+
+    def find(self, sub, *args) -> int:  # type: ignore[override]
+        return self._norm().find(sub, *args)
+
+    def count(self, sub, *args) -> int:  # type: ignore[override]
+        return self._norm().count(sub, *args)
+
+    def __getitem__(self, key):  # slices/inspection see the normalized text
+        return self._norm()[key]
+
+    def split(self, *args, **kwargs):  # type: ignore[override]
+        return self._norm().split(*args, **kwargs)
 
 
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))

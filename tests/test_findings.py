@@ -19,7 +19,13 @@ import tempfile
 
 import pytest
 
-from conftest import make_parser_vfs, collect_tokens, make_parser
+from conftest import (
+    make_parser_vfs,
+    collect_tokens,
+    make_parser,
+    normalize_cnames,
+    EmittedC,
+)
 from zparser import Parser
 from ztypecheck import typecheck, audit_type_annotations
 from ztypes import ZTypeType
@@ -74,7 +80,7 @@ def emit_with_emitter(source: str, unitname: str = "test"):
     """Parse, type-check, and return (c_source, emitter) for inspection."""
     _program, typing = parse_and_check(source, unitname)
     emitter = zemitterc.CEmitter(typing)
-    csource = emitter.emit()
+    csource = EmittedC(emitter.emit())
     return csource, emitter
 
 
@@ -216,7 +222,7 @@ class TestFinding3DestructorMetadata:
         assert name_type is not None
         assert name_type.name == "String"
         assert (name_type.destructor_name is not None) is True
-        assert name_type.destructor_name == "z_String_free"
+        assert normalize_cnames(name_type.destructor_name) == "z_String_free"
         assert name_type.is_heap_allocated is False
 
     def test_class_destructor(self):
@@ -245,7 +251,7 @@ class TestFinding3DestructorMetadata:
                 break
         assert t is not None, "Result type not found in resolved"
         assert (t.destructor_name is not None) is True
-        assert t.destructor_name == "z_Result_destroy"
+        assert normalize_cnames(t.destructor_name) == "z_Result_destroy"
         assert t.is_heap_allocated is False
 
     def test_record_no_destructor(self):
@@ -1102,7 +1108,7 @@ class TestCname:
         )
         for ztype in typing.resolved.values():
             if ztype.name == "point":
-                assert ztype.cname == "z_point_t"
+                assert normalize_cnames(ztype.cname) == "z_point_t"
                 return
         assert False, "point type not found in resolved"
 
@@ -1117,7 +1123,7 @@ class TestCname:
         )
         for ztype in typing.resolved.values():
             if ztype.name == "Node":
-                assert ztype.cname == "z_Node_t"
+                assert normalize_cnames(ztype.cname) == "z_Node_t"
                 return
         assert False, "Node type not found in resolved"
 
@@ -1129,7 +1135,7 @@ class TestCname:
         )
         for ztype in typing.resolved.values():
             if ztype.name == "add":
-                assert ztype.cname == "z_add"
+                assert normalize_cnames(ztype.cname) == "z_add"
                 return
         assert False, "add function type not found in resolved"
 
@@ -1147,7 +1153,7 @@ class TestCname:
         )
         for ztype in typing.resolved.values():
             if ztype.name == "Shape":
-                assert ztype.cname == "z_Shape_t"
+                assert normalize_cnames(ztype.cname) == "z_Shape_t"
                 return
         assert False, "Shape type not found in resolved"
 
@@ -1186,7 +1192,7 @@ class TestCname:
         # check cname column exists
         row = conn.execute("SELECT cname FROM types WHERE name = 'point'").fetchone()
         assert row is not None
-        assert row[0] == "z_point_t"
+        assert normalize_cnames(row[0]) == "z_point_t"
         conn.close()
 
     def test_cname_in_typed_nodes_dump(self):
@@ -1206,10 +1212,10 @@ class TestCname:
         sql = zsqldump.dump_sql(typing)
         conn = _load_sql(sql)
         # expression nodes referencing point should have its cname
-        row = conn.execute(
-            "SELECT cname FROM typed_nodes WHERE cname = 'z_point_t'"
-        ).fetchone()
-        assert row is not None
+        rows = conn.execute(
+            "SELECT cname FROM typed_nodes WHERE cname != ''"
+        ).fetchall()
+        assert any(normalize_cnames(r[0]) == "z_point_t" for r in rows)
         conn.close()
 
     def test_dot_underscore_collision_resolved(self):
