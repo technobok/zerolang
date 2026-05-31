@@ -245,9 +245,32 @@ Parser: class {
     }
 
     # atomexpr: filled in by the next stage.
+    # atomexpr -> "(" expression ")". EOLs are filtered inside the parens
+    # (a parenthesised expression may span lines). Returns the inner
+    # Expression node (bare), or an error.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out Node is {
-        t: lex.peek
-        return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "atomexpr: not yet implemented".string)
+        firstTok: lex.peek
+        openOpt: lex.accept tt: zlexer.TT.PARENOPEN
+        match (openOpt) case none then {
+            return (this.mkError tok: firstTok code: zast.err.BADEXPRESSION msg: "Expected open parenthesis".string)
+        } case some then {
+            prevFilter: lex.filterEolState
+            lex.setFilterEol enabled: true
+            expr: this.parseExpression lex: lex
+            isErr: this.isError node: expr
+            if isErr then {
+                lex.setFilterEol enabled: prevFilter
+                return expr
+            }
+            lex.setFilterEol enabled: prevFilter
+            closeOpt: lex.accept tt: zlexer.TT.PARENCLOSE
+            match (closeOpt) case some then {
+                return expr
+            } case none then {
+                bad: lex.peek
+                return (this.mkError tok: bad code: zast.err.BADEXPRESSION msg: "Expected closing parenthesis".string)
+            }
+        }
     }
 
     # atomstring -> "\"" { strmid | newline | strchr | strexpr } "\""
@@ -487,12 +510,14 @@ Parser: class {
     # operation-or-call: the top-level entry that also accepts named
     # arguments. Dispatch on the pre-parsed path count: (count == 1 and
     # the next token is a label) or count is even -> call; else binop.
-    acceptOperationOrCall: function {:this paths: (List of: Node).take lex: zlexer.Lexer} out (Option t: Node) is {
-        n0: paths.length
-        if n0 == 0.u64 then return (Option.none Node)
+    # Bare core of operation-or-call dispatch: a non-empty path list maps
+    # to a call (named args allowed) or a binop, returning the bare Node.
+    # parseExpression needs the bare result to wrap it in an Expression
+    # without moving it out of an Option.
+    operationOrCallFromPaths: function {:this paths: (List of: Node).take lex: zlexer.Lexer} out Node is {
         last: paths.pop
         lerr: this.isError node: last
-        if lerr then return (Option.some last)
+        if lerr then return last
         paths.append last
         n: paths.length
         pk: lex.peek
@@ -500,20 +525,90 @@ Parser: class {
         twiceHalf: half * 2.u64
         even: twiceHalf == n
         if even then {
-            return (Option.some (this.acceptCall lex: lex paths: paths))
+            return (this.acceptCall lex: lex paths: paths)
         }
         nIsOne: n == 1.u64
         if nIsOne then {
             labelNext: this.tokIsLabel tok: pk
             if labelNext then {
-                return (Option.some (this.acceptCall lex: lex paths: paths))
+                return (this.acceptCall lex: lex paths: paths)
             }
         }
-        return (Option.some (this.foldBinop paths: paths nextTok: pk))
+        return (this.foldBinop paths: paths nextTok: pk)
+    }
+
+    # operation-or-call: top-level Option boundary over the bare core;
+    # none when the pre-parsed path list is empty.
+    acceptOperationOrCall: function {:this paths: (List of: Node).take lex: zlexer.Lexer} out (Option t: Node) is {
+        n0: paths.length
+        if n0 == 0.u64 then return (Option.none Node)
+        return (Option.some (this.operationOrCallFromPaths paths: paths lex: lex))
+    }
+
+    # Does an expression start at the current token? Control-flow forms
+    # begin with a keyword; everything else begins with an atom.
+    exprLookahead: function {:this lex: zlexer.Lexer} out bool is {
+        t: lex.peek
+        match (t.toktype) case IF then {
+            return true
+        } case FOR then {
+            return true
+        } case MATCH then {
+            return true
+        } case DATA then {
+            return true
+        } case WITH then {
+            return true
+        } case BRACEOPEN then {
+            return true
+        } case YIELD then {
+            return true
+        } else {
+            return (this.atomLookahead lex: lex)
+        }
+    }
+
+    # parseExpression -> bare Node. The control-flow expression forms
+    # (if/for/match/data/with/block/yield) land in later slices and report
+    # a not-yet-implemented error for now; the operation form wraps the
+    # operation/call in an Expression node.
+    parseExpression: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        match (t.toktype) case IF then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "if-expression not yet implemented".string)
+        } case FOR then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "for-expression not yet implemented".string)
+        } case MATCH then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "match-expression not yet implemented".string)
+        } case DATA then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "data definition not yet implemented".string)
+        } case WITH then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "with-expression not yet implemented".string)
+        } case BRACEOPEN then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "block expression not yet implemented".string)
+        } case YIELD then {
+            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "yield not yet implemented".string)
+        } else {
+            paths: this.operationPaths lex: lex
+            n: paths.length
+            if n == 0.u64 then {
+                return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "Expected an expression".string)
+            }
+            inner: this.operationOrCallFromPaths paths: paths lex: lex
+            ierr: this.isError node: inner
+            if ierr then return inner
+            ip: zast.posOf n: inner
+            return (Node.expression (zast.ExpressionData nodeid: this.nextId lineno: ip.line colno: ip.col expression: inner))
+        }
     }
 
     acceptExpression: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
-        return (Option.none Node)
+        la: this.exprLookahead lex: lex
+        if la then {
+            return (Option.some (this.parseExpression lex: lex))
+        } else {
+            return (Option.none Node)
+        }
     }
 }
 
@@ -561,4 +656,7 @@ main: function is {
     runOp label: "f a + b" src: "f a + b".string
     runOp label: "a.b x" src: "a.b x".string
     runOp label: "a.b + c" src: "a.b + c".string
+    runPath label: "(a)" src: "(a)".string
+    runPath label: "(a + b)" src: "(a + b)".string
+    runPath label: "(f x)" src: "(f x)".string
 }
