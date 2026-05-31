@@ -1,0 +1,286 @@
+# Recursive-descent parser for zerolang, ported from src/zparser.py.
+# This slice covers the atom layer: identifiers, dotted paths, string
+# literals, and parenthesised expressions.
+#
+# Public atom productions return (Option t: Node): none means "no atom
+# here" (the caller tries another production), some carrying an `error`
+# arm means "committed but malformed". Internally the parse helpers
+# return a bare Node and the leading token is checked first (atomLookahead),
+# because a reftype payload cannot be moved back out of an Option to build
+# a parent node -- so an owned Node local is threaded through construction
+# and wrapped in an Option only at the boundary. Node ids come from the
+# parser's sequential counter, in parse order, mirroring the Python reference.
+
+# Local alias for the cross-unit AST node union. Beyond brevity, the
+# alias lets `Option.none Node` resolve its type argument -- a dotted
+# `zast.Node` is rejected in that position.
+Node: zast.Node
+
+# StringChunk.chunkKind codes. Values match the Python TT enum
+# (EOL=5, STRMID=21, STRCHR=22) so the eventual ast_nodes differential
+# lines up; the zerolang TT variant''s auto-assigned tags differ, hence
+# the explicit mapping.
+chunkkind: data {
+    eol:    5
+    strmid: 21
+    strchr: 22
+} out u8
+
+chunkKindOf: function {tt: zlexer.TT} out u8 is {
+    match (tt) case STRMID then {
+        return chunkkind.strmid
+    } case STRCHR then {
+        return chunkkind.strchr
+    } case EOL then {
+        return chunkkind.eol
+    } else {
+        return 0.u8
+    }
+}
+
+# True for the token types that contribute literal text to a string
+# (a coalesced run, an escaped char, or an embedded newline).
+isStrChunkTok: function {tt: zlexer.TT} out bool is {
+    match (tt) case STRMID then {
+        return true
+    } case STRCHR then {
+        return true
+    } case EOL then {
+        return true
+    } else {
+        return false
+    }
+}
+
+Parser: class {
+    # Monotonic source-node id, assigned in parse order.
+    nextNodeId: u32
+    # Nesting depth of function bodies (reserved for later slices).
+    functionBodyDepth: u32
+} as {
+    create: function {firstId: u32} out this is {
+        return (meta.create nextNodeId: firstId functionBodyDepth: 0.u32)
+    }
+
+    # Allocate the next node id.
+    nextId: function {:this} out u32 is {
+        id: this.nextNodeId
+        this.nextNodeId = this.nextNodeId + 1.u32
+        return id
+    }
+
+    # Build an error node located at line/col.
+    mkError: function {:this line: u32 col: u32 code: zast.err msg: String.take} out Node is {
+        return (Node.error (zast.ErrorData nodeid: this.nextId lineno: line colno: col err: code msg: msg))
+    }
+
+    # True when `node` is an `error` arm (propagate malformed sub-results).
+    isError: function {node: Node} out bool is {
+        match (node) case error then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG)
+    atomLookahead: function {:this lex: zlexer.Lexer} out bool is {
+        t: lex.peek
+        match (t.toktype) case PARENOPEN then {
+            return true
+        } case REFID then {
+            return true
+        } case STRBEG then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # parseAtom -> atomexpr | atomid | atomstring
+    #
+    # Dispatch on the leading token. Precondition: atomLookahead is true,
+    # so the else arm is unreachable (guarded with an error node).
+    parseAtom: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        match (t.toktype) case PARENOPEN then {
+            return (this.parseAtomExpr lex: lex)
+        } case REFID then {
+            return (this.parseAtomId lex: lex)
+        } case STRBEG then {
+            return (this.parseAtomString lex: lex)
+        } else {
+            return (this.mkError line: t.lineno col: t.colno code: zast.err.BADREFERENCE msg: "Expected an atom".string)
+        }
+    }
+
+    # parseAtomId -> id
+    parseAtomId: function {:this lex: zlexer.Lexer} out Node is {
+        r: lex.accept tt: zlexer.TT.REFID
+        match (r) case some then {
+            return (Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: r.lineno colno: r.colno name: r.tokstr.copy))
+        } case none then {
+            t: lex.peek
+            return (this.mkError line: t.lineno col: t.colno code: zast.err.BADREFERENCE msg: "Expected an identifier".string)
+        }
+    }
+
+    # acceptAtom -> Option boundary over parseAtom.
+    acceptAtom: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
+        la: this.atomLookahead lex: lex
+        if la then {
+            n: this.parseAtom lex: lex
+            return (Option.some n)
+        } else {
+            return (Option.none Node)
+        }
+    }
+
+    # path -> atom | ( path "." atomid )
+    #
+    # An atom followed by zero or more `. id` selectors, folded left
+    # into nested DottedPath nodes.
+    acceptPath: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
+        la: this.atomLookahead lex: lex
+        if la then {
+            startTok: lex.peek
+            sLine: startTok.lineno
+            sCol: startTok.colno
+            node: this.parseAtom lex: lex
+            if (this.isError node: node) then return (Option.some node)
+            nx: lex.peek
+            if nx.toktype != zlexer.TT.DOT then return (Option.some node)
+            return (this.acceptPathTail lex: lex parent: node startLine: sLine startCol: sCol)
+        } else {
+            return (Option.none Node)
+        }
+    }
+
+    # Consume `. id` selectors, nesting each into a DottedPath whose
+    # parent is the path built so far. Recursion (rather than a loop
+    # reassigning an outer-scope binding) keeps each owned `parent`
+    # local to its call.
+    acceptPathTail: function {:this lex: zlexer.Lexer parent: Node.take startLine: u32 startCol: u32} out (Option t: Node) is {
+        dotOpt: lex.accept tt: zlexer.TT.DOT
+        match (dotOpt) case none then {
+            return (Option.some parent)
+        } case some then {
+            idOpt: lex.accept tt: zlexer.TT.REFID
+            match (idOpt) case some then {
+                child: Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: idOpt.lineno colno: idOpt.colno name: idOpt.tokstr.copy)
+                np: Node.dottedpath (zast.DottedPathData nodeid: this.nextId lineno: startLine colno: startCol parent: parent child: child)
+                return (this.acceptPathTail lex: lex parent: np startLine: startLine startCol: startCol)
+            } case none then {
+                bad: lex.acceptAny
+                err: this.mkError line: bad.lineno col: bad.colno code: zast.err.BADPATH msg: "Expected ID after dot".string
+                return (Option.some err)
+            }
+        }
+    }
+
+    # atomexpr / atomstring / expression: filled in by the next stage.
+    parseAtomExpr: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        return (this.mkError line: t.lineno col: t.colno code: zast.err.BADEXPRESSION msg: "atomexpr: not yet implemented".string)
+    }
+
+    # atomstring -> "\"" { strmid | newline | strchr | strexpr } "\""
+    #
+    # Collect literal-text chunks; an embedded interpolation (STREXPRBEG)
+    # is rejected for now because acceptExpression is stubbed. The
+    # closing STREND must repeat the opening delimiter.
+    parseAtomString: function {:this lex: zlexer.Lexer} out Node is {
+        firstTok: lex.peek
+        fLine: firstTok.lineno
+        fCol: firstTok.colno
+        fDelim: firstTok.tokstr.copy
+        lex.advance
+        parts: (List of: Node)
+        # Errors are accumulated into fields and built after the loop:
+        # a `break`/`return` inside the loop would skip the drop of the
+        # iteration''s peek copy, and the error node cannot be carried in
+        # an Option (a reftype payload cannot be moved back out).
+        hasErr: false
+        errLine: 0.u32
+        errCol: 0.u32
+        errCode: zast.err.BADSTRING
+        errMsg: "".string
+        running: true
+        for while running loop {
+            t: lex.peek
+            tt: t.toktype
+            if tt == zlexer.TT.STREND then {
+                same: t.tokstr.stringview == fDelim.stringview
+                if same then {
+                    lex.advance
+                } else {
+                    hasErr = true
+                    errLine = t.lineno
+                    errCol = t.colno
+                    errCode = zast.err.BADSTRING
+                    errMsg = "Unmatched string literal delimiter".string
+                }
+                running = false
+            } else if tt == zlexer.TT.STREXPRBEG then {
+                hasErr = true
+                errLine = t.lineno
+                errCol = t.colno
+                errCode = zast.err.BADEXPRESSION
+                errMsg = "string interpolation not yet implemented".string
+                running = false
+            } else if (isStrChunkTok tt: tt) then {
+                ck: chunkKindOf tt: tt
+                chunk: Node.stringchunk (zast.StringChunkData nodeid: this.nextId lineno: t.lineno colno: t.colno text: t.tokstr.copy chunkKind: ck)
+                parts.append chunk
+                lex.advance
+            } else {
+                hasErr = true
+                errLine = t.lineno
+                errCol = t.colno
+                errCode = zast.err.BADSTRING
+                errMsg = "Unexpected token in string literal".string
+                lex.advance
+                running = false
+            }
+        }
+        if hasErr then {
+            return (this.mkError line: errLine col: errCol code: errCode msg: errMsg)
+        }
+        stripped: this.stripStringWhitespace parts: parts
+        return (Node.atomstring (zast.AtomStringData nodeid: this.nextId lineno: fLine colno: fCol stringparts: stripped))
+    }
+
+    # Apply the spec''s string newline/whitespace handling. PR-E sees
+    # chunk-only inputs (interpolation is rejected above), and the
+    # common case needs no rewriting, so this currently returns the
+    # parts unchanged; the blank-line/common-prefix trimming lands in a
+    # follow-up alongside interpolation.
+    stripStringWhitespace: function {:this parts: (List of: Node).take} out (List of: Node) is {
+        return parts
+    }
+
+    acceptExpression: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
+        return (Option.none Node)
+    }
+}
+
+# Smoke harness: parse each inline snippet as a path and dump the
+# resulting node tree via zast.printNode.
+runSnippet: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: Parser.create firstId: 1.u32
+    tk: zlexer.Tokenizer.create source: src fsno: 0.u32
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptPath lex: lx
+    match (r) case some then {
+        zast.printNode r
+    } case none then {
+        print "<no atom>"
+    }
+}
+
+main: function is {
+    runSnippet label: "foo" src: "foo".string
+    runSnippet label: "a.b.c" src: "a.b.c".string
+    runSnippet label: "string" src: "\"hello\"".string
+}
