@@ -1472,6 +1472,40 @@ class TestEmitterBasic:
         ).strip()
         assert out == "ok"
 
+    def test_cross_unit_transitive_struct_embed_order(self):
+        """A dependency class (Wrap) embeds another dependency class
+        (Inner) that is itself "late" because it embeds a `(List of:
+        <user type>)` mono. Wrap names no late mono directly, so without
+        the embedding-transitive ordering closure it is emitted before
+        Inner — a reference to an as-yet-undeclared struct. Both must
+        emit in embedded-before-embedder order."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    "  w: lib.makeWrap n: 2.u64\n"
+                    '  print "\\{lib.count w}"\n'
+                    "}"
+                ),
+                "lib.z": (
+                    "item: variant { a: null  b: null }\n"
+                    "Inner: class { xs: (List of: item) }\n"
+                    "Wrap: class { inner: Inner }\n"
+                    "makeWrap: function {n: u64} out Wrap is {\n"
+                    "  xs: (List of: item)\n"
+                    "  for while xs.length < n loop {\n"
+                    "    xs.append item.a\n"
+                    "  }\n"
+                    "  inner: Inner xs: xs\n"
+                    "  return (Wrap inner: inner)\n"
+                    "}\n"
+                    "count: function {w: Wrap} out u64 is {\n"
+                    "  return w.inner.xs.length\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "2"
 
     def test_cross_unit_dependency_protocol(self):
         """A class in a dependency unit conforms to a protocol and is used

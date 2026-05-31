@@ -1985,13 +1985,20 @@ class CEmitter:
         user def's emitted struct references the late mono by name --
         which is exactly the case a field type captures.
 
+        Unions are excluded: a union's emitted struct is `{tag; void*
+        data}` — the arm payloads are heap-boxed behind the `void*`, so
+        the struct names no arm type and imposes no by-value ordering
+        constraint (a forward declaration suffices). Counting arms here
+        would wrongly drag a union after its arm carriers, e.g. the AST
+        `Node` union after the `(List of: Node)` mono that its carriers
+        embed.
+
         The binding name is taken from the unit-body dict key (passed
         in by the caller) because ObjectDef has no `.name` attribute.
         """
         if defn.nodetype not in (
             NodeType.RECORD,
             NodeType.CLASS,
-            NodeType.UNION,
             NodeType.VARIANT,
         ):
             return False
@@ -2004,6 +2011,53 @@ class CEmitter:
             if ft.name in type_names:
                 return True
         return False
+
+    def _late_type_closure(
+        self, seed_names: "set[str]", mainunit: "zast.Unit", dep_units: list
+    ) -> "set[str]":
+        """Grow `seed_names` (the late-mono type names) to a fixpoint
+        over by-value user-type embedding.
+
+        A user struct that embeds another user struct which is itself
+        late must also be classified late, transitively: otherwise the
+        embedder's struct can be emitted before the embedded one, which
+        names an as-yet-undeclared type. Cross-unit construction
+        surfaces this — `Lexer` embeds `Tokenizer`, which is late
+        because it embeds `(List of: tokstatetype)`; `Lexer` itself
+        names no late mono directly, so without the closure it would be
+        emitted early, ahead of `Tokenizer`.
+        """
+        late = set(seed_names)
+        defs: list = []
+
+        def visit(body: dict) -> None:
+            for name, defn in body.items():
+                if defn.nodetype in (
+                    NodeType.RECORD,
+                    NodeType.CLASS,
+                    NodeType.UNION,
+                    NodeType.VARIANT,
+                ):
+                    zt = self._node_ztype(defn)
+                    if zt is not None:
+                        defs.append((name, defn, zt.name))
+                if defn.nodetype == NodeType.UNIT:
+                    visit(cast(zast.Unit, defn).body)
+
+        visit(mainunit.body)
+        for _dep_name, dep_unit in dep_units:
+            visit(dep_unit.body)
+
+        changed = True
+        while changed:
+            changed = False
+            for name, defn, tname in defs:
+                if tname in late:
+                    continue
+                if self._user_defn_references_type(name, defn, late):
+                    late.add(tname)
+                    changed = True
+        return late
 
     def _io_record_referenced(self, name: str) -> bool:
         """True when a system io record is used by the program (e.g.
@@ -2374,12 +2428,16 @@ class CEmitter:
         #     mono types. Emitted AFTER late monos so the field
         #     references resolve.
         late_mono_names = {m.name for m, _ in late_monos}
+        # Transitively classify by-value embedders of late types as late
+        # too, so an embedded struct is always emitted before its
+        # embedder (see _late_type_closure).
+        late_type_names = self._late_type_closure(late_mono_names, mainunit, dep_units)
 
         def _is_early_user(name, defn) -> bool:
-            return not self._user_defn_references_type(name, defn, late_mono_names)
+            return not self._user_defn_references_type(name, defn, late_type_names)
 
         def _is_late_user(name, defn) -> bool:
-            return self._user_defn_references_type(name, defn, late_mono_names)
+            return self._user_defn_references_type(name, defn, late_type_names)
 
         # Dependency-unit type passes exclude FUNCTION defs: a dependency unit's
         # functions are emitted by `_emit_file_unit_functions` below, so the
