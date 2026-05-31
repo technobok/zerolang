@@ -10434,6 +10434,22 @@ class TypeChecker:
             and cast(zast.DottedPath, arg.valtype).child.name == "copy"
         )
         param_own = self.func_ctx.func_ownership.get(arg_path[0])
+        # A field PROJECTION of a borrowed value that reads a pure valtype
+        # field is a by-value COPY, not an alias of the caller's heap:
+        # `tok.lineno` (a u32) is safe to store even though `tok` itself
+        # owns heap. A borrowed reftype field (real alias) or a valtype
+        # field that transitively owns heap (shallow copy still aliases)
+        # is NOT exempt. The projected type was stamped by the preceding
+        # `_check_operation(arg.valtype)`; a missing stamp falls through to
+        # the reject path (safe default).
+        proj_t = (
+            self.typing.node_type.get(arg.valtype.nodeid) if len(arg_path) > 1 else None
+        )
+        arg_is_valtype_copy = (
+            proj_t is not None
+            and bool(proj_t.is_valtype)
+            and not proj_t.needs_field_cleanup
+        )
         # Only fire when the source actually has heap-backed data that
         # would be aliased: string itself, or a struct holding string /
         # other heap-backed fields. A class with only valtype fields
@@ -10441,6 +10457,7 @@ class TypeChecker:
         if (
             arg_root_var is not None
             and not arg_breaks_borrow
+            and not arg_is_valtype_copy
             and param_own != ZParamOwnership.LOCK
             and arg_root_var.ownership == ZOwnership.BORROWED
             and arg_root_var.borrow_origin is None

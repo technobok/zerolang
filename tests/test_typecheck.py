@@ -1554,6 +1554,34 @@ class TestOwnershipReturnChecking:
             "main: function is {}"
         )
 
+    def test_store_borrowed_param_valtype_field_allowed(self):
+        """Reading a pure VALTYPE field (u32) from a borrowed param and
+        storing it in an aggregate is a by-value copy — no heap alias —
+        even though the param itself owns heap (a String field)."""
+        check_ok(
+            "Tok: class { lineno: u32  txt: String }\n"
+            "MyBox: class { line: u32 }\n"
+            "mk: function {t: Tok} out MyBox is {\n"
+            "  return (MyBox line: t.lineno)\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_store_borrowed_param_reftype_field_rejected(self):
+        """Reading a REFTYPE field from a borrowed param and storing it in
+        an aggregate aliases the caller's heap — still rejected (the
+        valtype-copy exemption does not apply)."""
+        errors = check_errors(
+            "Inner: class { s: String }\n"
+            "Tok: class { inr: Inner  ln: u32 }\n"
+            "MyBox: class { kept: Inner }\n"
+            "mk: function {t: Tok} out MyBox is {\n"
+            "  return (MyBox kept: t.inr)\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any("aggregate field" in e.msg for e in errors), [e.msg for e in errors]
+
     def test_store_lock_param_in_lock_field_allowed(self):
         """`.lock`-annotated params are user-explicit borrow holders;
         they may legitimately be projected into matching `.lock` fields
