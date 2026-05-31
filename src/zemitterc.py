@@ -808,16 +808,25 @@ class CEmitter:
         nid = self._scope.func_nodeid
         return f"_{prefix}{nid}_{self._scope.temp_counter}"
 
+    def _string_cbase(self) -> str:
+        """C name base of the String class (e.g. `z_String`), read from the
+        stdlib cname registry rather than hardcoded. system.z is always loaded,
+        so the entry is always present when the emitter constructs a String.
+        The type is `base + "_t"`, each runtime method is `base + "_<method>"`."""
+        return self.typing.runtime_cname_base["String"]
+
+    def _stringview_cbase(self) -> str:
+        """C name base of the StringView class (e.g. `z_StringView`), read from
+        the stdlib cname registry rather than hardcoded."""
+        return self.typing.runtime_cname_base["StringView"]
+
     def _string_cname(self) -> str:
-        """C type name of the String class, read from the stdlib cname
-        registry rather than hardcoded. system.z is always loaded, so the
-        entry is always present when the emitter constructs a String."""
-        return self.typing.runtime_cname["String"]
+        """C type name of the String class (`base + "_t"`)."""
+        return f"{self._string_cbase()}_t"
 
     def _stringview_cname(self) -> str:
-        """C type name of the StringView class, read from the stdlib cname
-        registry rather than hardcoded."""
-        return self.typing.runtime_cname["StringView"]
+        """C type name of the StringView class (`base + "_t"`)."""
+        return f"{self._stringview_cbase()}_t"
 
     def _alloc_temp(self, expr: str) -> str:
         """Allocate a temporary variable for a stack-allocated string expression."""
@@ -2521,11 +2530,42 @@ class CEmitter:
 
         output = "".join(parts)
         output = self._strip_unused_ft_typedefs(output)
+        output = self._substitute_runtime_cnames(output)
 
         # build source map: for each output line, find the node ID
         # by walking the tracked output sections
         self._build_source_map(output)
 
+        return output
+
+    # (canonical runtime spelling, registry type name) for each stdlib type
+    # whose hand-written runtime (src/runtime/*.inc + the zemitterc_runtime
+    # natives) spells its C name canonically as `z_<Name>`.
+    # `_substitute_runtime_cnames` rewrites that canonical spelling to the
+    # typechecker-assigned base from the registry. The canonical literal is the
+    # runtime's own spelling (the rewrite source); the emitted name still comes
+    # from the registry. Ordered longest-canonical-first so a prefix
+    # (`z_String`) is rewritten after its extension (`z_StringView`). Curated by
+    # name, not the whole registry: mono-backed entries like `str` would
+    # wrongly catch `z_str_8`.
+    _RUNTIME_CNAME_TYPES = (
+        ("z_StringView", "StringView"),
+        ("z_String", "String"),
+    )
+
+    def _substitute_runtime_cnames(self, output: str) -> str:
+        """Rewrite the canonical stdlib cname spelling used in the
+        hand-written runtime (`z_String`, `z_StringView`, ...) to the
+        typechecker-assigned base from the registry. The runtime is authored
+        in canonical C for readability; this single pass is the one place that
+        maps canonical -> actual, so id-based naming (which changes the base)
+        flows through with no per-site edits. A no-op while the base equals the
+        canonical spelling (today), hence byte-identical."""
+        reg = self.typing.runtime_cname_base
+        for canonical, name in self._RUNTIME_CNAME_TYPES:
+            actual = reg.get(name)
+            if actual is not None and actual != canonical:
+                output = output.replace(canonical, actual)
         return output
 
     def _strip_unused_ft_typedefs(self, output: str) -> str:
