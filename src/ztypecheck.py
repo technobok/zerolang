@@ -846,14 +846,6 @@ class TypeChecker:
             # the un-suffixed (system-first) type owns the key; under id-based
             # naming the value diverges and the substitution rewrites the runtime.
             self.typing.canonical_cname_base.setdefault(base_id, ztype.cname_base)
-            # Record native base-type cname bases (String, StringView, ...) so
-            # the emitter and runtime layer can recover a stdlib name without
-            # hardcoding the literal. The base is the building block (type is
-            # base + "_t", methods are base + "_<method>"). Monomorphizations
-            # carry the native flag too; exclude them (generic_origin set) so
-            # the registry holds only base stdlib types.
-            if ztype.is_native and ztype.generic_origin is None:
-                self.typing.runtime_cname_base[ztype.name] = ztype.cname_base
 
     def _link_literal_typedefs(self) -> None:
         """Point LITERAL_INT / LITERAL_FLOAT at this typechecker's

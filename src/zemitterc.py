@@ -835,15 +835,16 @@ class CEmitter:
 
     def _string_cbase(self) -> str:
         """C name base of the String class (e.g. `z_String`), read from the
-        stdlib cname registry rather than hardcoded. system.z is always loaded,
-        so the entry is always present when the emitter constructs a String.
-        The type is `base + "_t"`, each runtime method is `base + "_<method>"`."""
-        return self.typing.runtime_cname_base["String"]
+        canonical-cname registry by String's canonical spelling rather than
+        hardcoded. system.z is always loaded, so the entry is always present
+        when the emitter constructs a String. The type is `base + "_t"`, each
+        runtime method is `base + "_<method>"`."""
+        return self.typing.canonical_cname_base["z_String"]
 
     def _stringview_cbase(self) -> str:
         """C name base of the StringView class (e.g. `z_StringView`), read from
-        the stdlib cname registry rather than hardcoded."""
-        return self.typing.runtime_cname_base["StringView"]
+        the canonical-cname registry by StringView's canonical spelling."""
+        return self.typing.canonical_cname_base["z_StringView"]
 
     def _string_cname(self) -> str:
         """C type name of the String class (`base + "_t"`)."""

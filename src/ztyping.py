@@ -111,24 +111,17 @@ class ZTyping:
     )
     # resolved type names: {qualified_name: ZType}
     resolved: Dict[str, ZType] = field(default_factory=dict, init=False)
-    # Stdlib/runtime cname bases: {type_name: cname_base} for native types
-    # (String -> "z_String", StringView -> "z_StringView", ...). The base is
-    # the atomic building block: the C type is `base + "_t"` and each method
-    # is `base + "_<method>"`. The emitter and the runtime-emission layer read
-    # this instead of hardcoding the literal name, so id-based naming (which
-    # puts the id inside the base, e.g. `z_t5_String`) reflects automatically.
-    # Stdlib types are not exposed by name in `resolved`, so this is the
-    # channel the emitter uses to recover a stdlib name when no ZType is in
-    # scope (notably the runtime fragments and the type-identity comparisons).
-    runtime_cname_base: Dict[str, str] = field(default_factory=dict, init=False)
-    # Canonical-cname → actual-cname-base map for the runtime substitution.
-    # The key is the canonical spelling the hand-written runtime/templates use
-    # for a type ("z_" + mangled name, e.g. "z_String", "z_List_i64"); the
-    # value is the typechecker-assigned cname_base. First-write-wins so the
-    # un-suffixed (first-assigned, system-first) type owns each canonical key —
-    # that keeps the map an identity (no-op substitution) until id-based naming
-    # diverges the base, at which point `_substitute_runtime_cnames` rewrites
-    # every canonical occurrence in the emitted runtime to the id-named symbol.
+    # Canonical-cname → actual-cname-base map for the runtime substitution and
+    # stdlib-name recovery. The key is the canonical spelling the hand-written
+    # runtime/templates use for a type ("z_" + mangled name, e.g. "z_String",
+    # "z_List_i64"); the value is the typechecker-assigned cname_base.
+    # First-write-wins so the un-suffixed (first-assigned, system-first) type
+    # owns each canonical key — that keeps the map an identity (no-op
+    # substitution) until id-based naming diverges the base, at which point
+    # `_substitute_runtime_cnames` rewrites every canonical occurrence in the
+    # emitted runtime to the id-named symbol. Stdlib types are not exposed by
+    # name in `resolved`, so this is also the channel the emitter uses to
+    # recover a stdlib base (e.g. `z_String`) when no ZType is in scope.
     canonical_cname_base: Dict[str, str] = field(default_factory=dict, init=False)
     # Unit AST nodeid → resolved unit ZType.
     unit_types_by_id: Dict[int, ZType] = field(default_factory=dict, init=False)
