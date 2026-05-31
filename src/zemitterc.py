@@ -1380,6 +1380,24 @@ class CEmitter:
                 continue
             if defn_filter is not None and not defn_filter(name, defn):
                 continue
+            # Skip a type definition the typechecker never visited (no
+            # resolved ztype). The typechecker only types definitions
+            # reachable from the entry point, so a main-unit type that
+            # nothing references is dead — emitting it would render a
+            # struct with unresolved (void) field types and invalid C.
+            # The emitter renders only what was typed.
+            if (
+                defn_type
+                in (
+                    NodeType.RECORD,
+                    NodeType.CLASS,
+                    NodeType.UNION,
+                    NodeType.VARIANT,
+                    NodeType.PROTOCOL,
+                )
+                and self._node_ztype(defn) is None
+            ):
+                continue
             if defn_type == NodeType.RECORD:
                 self._emit_record(qname, defn)
             elif defn_type == NodeType.CLASS:

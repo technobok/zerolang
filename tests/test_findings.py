@@ -526,8 +526,12 @@ class TestFinding7SourceMap:
         assert emitter.source_map[0] is None
 
     def test_source_map_definition_lines_have_node_ids(self):
+        # `point` must be referenced from main: the emitter only renders
+        # type definitions the typechecker visited (reachable from the
+        # entry point), so an unused record is never emitted.
         csource, emitter = emit_with_emitter(
-            'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is { p: point x: 1.0 y: 2.0\n  print "\\{p.x}" }'
         )
         lines = csource.split("\n")
         # find the struct definition line

@@ -1457,6 +1457,22 @@ class TestEmitterBasic:
         )
         assert out == "box id=7 name=hello"
 
+    def test_dead_type_def_skipped(self):
+        """A type definition unreachable from main is never typechecked;
+        the emitter must skip it rather than emit a struct with
+        unresolved (void) field types and invalid C. The dead class
+        embeds another user type so its field cannot resolve without the
+        typechecker having visited it."""
+        out = compile_and_run(
+            emit_source(
+                "buried: record { y: i64 }\n"
+                "Dead: class { o: buried }\n"
+                'main: function is { print "ok" }'
+            )
+        ).strip()
+        assert out == "ok"
+
+
     def test_cross_unit_dependency_protocol(self):
         """A class in a dependency unit conforms to a protocol and is used
         through it from main. Impl-helper C names derive from the impl type's
