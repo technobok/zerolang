@@ -297,7 +297,27 @@ Parser: class {
                     return (this.mkError tok: t code: zast.err.BADSTRING msg: "Unmatched string literal delimiter".string)
                 }
             } else if tt == zlexer.TT.STREXPRBEG then {
-                return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "string interpolation not yet implemented".string)
+                lex.advance
+                bt: lex.peek
+                if bt.toktype != zlexer.TT.BRACEOPEN then {
+                    return (this.mkError tok: bt code: zast.err.BADSTRING msg: "Expected open brace after backslash in string interpolation".string)
+                }
+                lex.advance
+                eLook: this.exprLookahead lex: lex
+                if eLook then {
+                    expr: this.parseExpression lex: lex
+                    eErr: this.isError node: expr
+                    if eErr then return expr
+                    parts.append expr
+                    ct: lex.peek
+                    if ct.toktype != zlexer.TT.BRACECLOSE then {
+                        return (this.mkError tok: ct code: zast.err.BADSTRING msg: "Expected close brace after interpolation expression".string)
+                    }
+                    lex.advance
+                } else {
+                    bad: lex.peek
+                    return (this.mkError tok: bad code: zast.err.BADEXPRESSION msg: "Bad expression in string interpolation".string)
+                }
             } else if (isStrChunkTok tt: tt) then {
                 ck: chunkKindOf tt: tt
                 chunk: Node.stringchunk (zast.StringChunkData nodeid: this.nextId lineno: t.lineno colno: t.colno text: t.tokstr.copy chunkKind: ck)
@@ -659,4 +679,5 @@ main: function is {
     runPath label: "(a)" src: "(a)".string
     runPath label: "(a + b)" src: "(a + b)".string
     runPath label: "(f x)" src: "(f x)".string
+    runPath label: "interp" src: "\"a\\{x}b\"".string
 }
