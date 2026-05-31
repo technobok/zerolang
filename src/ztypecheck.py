@@ -838,6 +838,12 @@ class TypeChecker:
             # always a valid C identifier.
             base_id = "z_" + self._mangle_name(ztype.name)
             self._assign_cname(ztype, base_id, suffix="_t")
+            # Map this type's canonical spelling (the un-id'd `z_<mangled>` that
+            # the hand-written runtime/templates use) to its assigned cname_base,
+            # for the emitter's runtime-cname substitution. First-write-wins so
+            # the un-suffixed (system-first) type owns the key; under id-based
+            # naming the value diverges and the substitution rewrites the runtime.
+            self.typing.canonical_cname_base.setdefault(base_id, ztype.cname_base)
             # Record native base-type cname bases (String, StringView, ...) so
             # the emitter and runtime layer can recover a stdlib name without
             # hardcoding the literal. The base is the building block (type is

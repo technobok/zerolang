@@ -2538,33 +2538,20 @@ class CEmitter:
 
         return output
 
-    # (canonical runtime spelling, registry type name) for each stdlib type
-    # whose hand-written runtime (src/runtime/*.inc + the zemitterc_runtime
-    # natives) spells its C name canonically as `z_<Name>`.
-    # `_substitute_runtime_cnames` rewrites that canonical spelling to the
-    # typechecker-assigned base from the registry. The canonical literal is the
-    # runtime's own spelling (the rewrite source); the emitted name still comes
-    # from the registry. Ordered longest-canonical-first so a prefix
-    # (`z_String`) is rewritten after its extension (`z_StringView`). Curated by
-    # name, not the whole registry: mono-backed entries like `str` would
-    # wrongly catch `z_str_8`.
-    _RUNTIME_CNAME_TYPES = (
-        ("z_StringView", "StringView"),
-        ("z_String", "String"),
-    )
-
     def _substitute_runtime_cnames(self, output: str) -> str:
-        """Rewrite the canonical stdlib cname spelling used in the
-        hand-written runtime (`z_String`, `z_StringView`, ...) to the
-        typechecker-assigned base from the registry. The runtime is authored
-        in canonical C for readability; this single pass is the one place that
-        maps canonical -> actual, so id-based naming (which changes the base)
-        flows through with no per-site edits. A no-op while the base equals the
-        canonical spelling (today), hence byte-identical."""
-        reg = self.typing.runtime_cname_base
-        for canonical, name in self._RUNTIME_CNAME_TYPES:
-            actual = reg.get(name)
-            if actual is not None and actual != canonical:
+        """Rewrite the canonical type-cname spellings used in the hand-written
+        runtime (`z_String`, `z_List_i64`, `z_File`, ...) to the typechecker-
+        assigned cname_base. The runtime (.inc + .c.tmpl + inline natives) is
+        authored in canonical C for readability; this single pass is the one
+        place that maps canonical -> actual, so id-based naming (which changes
+        the base) flows through with no per-site edits. Longest canonical first
+        so a prefix (`z_String`) is rewritten after its extension
+        (`z_StringView`) / its methods (`z_String_create`). A no-op while each
+        base equals its canonical spelling (today), hence byte-identical."""
+        subs = self.typing.canonical_cname_base
+        for canonical in sorted(subs, key=str.__len__, reverse=True):
+            actual = subs[canonical]
+            if actual != canonical:
                 output = output.replace(canonical, actual)
         return output
 
