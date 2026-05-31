@@ -10659,6 +10659,21 @@ class CEmitter:
             if not is_null and subtype_path:
                 subtype_ctype_resolved = self._get_subtype_ctype(subtype_path)
 
+        # Cross-unit construction: call_type.name is the unit-qualified
+        # union name (e.g. "plib_Foo"), so the AST-walk-by-name above —
+        # keyed against unit bodies that store the simple name "Foo" —
+        # misses and leaves the carrier type unresolved, degrading the
+        # heap box to int64_t. Resolve the arm payload from the stamped
+        # union ztype's child instead, which keys on type id rather than
+        # name. (Null arms take the value_arg==None path below, so only
+        # non-null carriers need this.)
+        if subtype_ctype_resolved is None and not is_null and call_type is not None:
+            sub_ztype = self.typing.child_of(call_type, subtype_name)
+            if sub_ztype is not None:
+                is_null = sub_ztype.typetype == ZTypeType.NULL
+                if not is_null:
+                    subtype_ctype_resolved = _ctype(self.typing, sub_ztype)
+
         # find the value arg: from: takes priority, then first positional arg
         value_arg = None
         for arg in call.arguments:

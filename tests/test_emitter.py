@@ -1425,6 +1425,38 @@ class TestEmitterBasic:
         )
         assert out == "42"
 
+    def test_cross_unit_dependency_union_boxed_arm(self):
+        """A union whose arm carries a reftype (heap-boxed) is constructed
+        inside the dependency body. The carrier type must resolve from the
+        stamped union ztype's child — the AST-walk-by-name keys on the
+        unit-qualified union name and misses, which used to degrade the box
+        to `int64_t*` and fail to compile."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    "main: function is {\n"
+                    '  f: shapes.mk id: 7 nm: "hello".string\n'
+                    "  shapes.show f\n"
+                    "}"
+                ),
+                "shapes.z": (
+                    "Box: class { nodeid: u32 name: String }\n"
+                    "Foo: union { box: Box  empty: null }\n"
+                    "mk: function {id: u32 nm: String.take} out Foo is {\n"
+                    "  return (Foo.box (Box nodeid: id name: nm))\n"
+                    "}\n"
+                    "show: function {f: Foo} is {\n"
+                    "  match ( f ) case box then {\n"
+                    '    print "box id=\\{f.nodeid} name=\\{f.name}"\n'
+                    "  } case empty then {\n"
+                    '    print "empty"\n'
+                    "  }\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "box id=7 name=hello"
+
     def test_cross_unit_dependency_protocol(self):
         """A class in a dependency unit conforms to a protocol and is used
         through it from main. Impl-helper C names derive from the impl type's
