@@ -6594,19 +6594,28 @@ class TypeChecker:
         is ZTypeType.NULL even though it is declared as a `record` in the
         stdlib.
         """
+        type_kinds = (
+            ZTypeType.RECORD,
+            ZTypeType.UNION,
+            ZTypeType.CLASS,
+            ZTypeType.VARIANT,
+            ZTypeType.ENUM,
+            ZTypeType.NULL,
+        )
         if op.nodetype == NodeType.ATOMID:
             name = cast(zast.AtomId, op).name
             if not _is_numeric_id(name):
                 t = self._resolve_name(name)
-                if t and t.typetype in (
-                    ZTypeType.RECORD,
-                    ZTypeType.UNION,
-                    ZTypeType.CLASS,
-                    ZTypeType.VARIANT,
-                    ZTypeType.ENUM,
-                    ZTypeType.NULL,
-                ):
+                if t and t.typetype in type_kinds:
                     return t
+        elif op.nodetype == NodeType.DOTTEDPATH:
+            # A unit-qualified type, e.g. `zast.Node`, as an explicit type
+            # argument. Resolve through the dotted-path type resolver; the
+            # whitelist filters out non-type dotted paths (which return None,
+            # as a bare ATOMID non-type does).
+            t = self._resolve_dotted_path(cast(zast.DottedPath, op))
+            if t and t.typetype in type_kinds:
+                return t
         return None
 
     def _infer_generic_record_construction(

@@ -14491,3 +14491,17 @@ class TestCrossUnitDependency:
         )
         errors = self._two_unit_program(mainsrc, depsrc)
         assert errors == [], [e.msg for e in errors]
+
+    def test_cross_unit_type_as_generic_type_arg(self):
+        """A unit-qualified type (`depmod.Node`) used as an explicit generic
+        type argument for a null-arm construction (`MyOpt.none depmod.Node`)
+        must resolve. Previously only a bare (same-unit / aliased) type name
+        worked in that position; a dotted cross-unit type returned None and
+        generic inference failed."""
+        depsrc = "Node: record { x: i64 }\n"
+        mainsrc = (
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.none depmod.Node }\n"
+        )
+        errors = self._two_unit_program(mainsrc, depsrc)
+        assert errors == [], [e.msg for e in errors]
