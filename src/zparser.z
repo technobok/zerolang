@@ -11,9 +11,8 @@
 # and wrapped in an Option only at the boundary. Node ids come from the
 # parser's sequential counter, in parse order, mirroring the Python reference.
 
-# Local alias for the cross-unit AST node union. Beyond brevity, the
-# alias lets `Option.none Node` resolve its type argument -- a dotted
-# `zast.Node` is rejected in that position.
+# Local alias for the cross-unit AST node union, for brevity at the many
+# `Node.<arm>` / `(Option t: Node)` sites below.
 Node: zast.Node
 
 # StringChunk.chunkKind codes. Values match the Python TT enum
@@ -58,8 +57,8 @@ Parser: class {
     # Nesting depth of function bodies (reserved for later slices).
     functionBodyDepth: u32
 } as {
-    create: function {firstId: u32} out this is {
-        return (meta.create nextNodeId: firstId functionBodyDepth: 0.u32)
+    create: function {} out this is {
+        return (meta.create nextNodeId: 1.u32 functionBodyDepth: 0.u32)
     }
 
     # Allocate the next node id.
@@ -69,9 +68,9 @@ Parser: class {
         return id
     }
 
-    # Build an error node located at line/col.
-    mkError: function {:this line: u32 col: u32 code: zast.err msg: String.take} out Node is {
-        return (Node.error (zast.ErrorData nodeid: this.nextId lineno: line colno: col err: code msg: msg))
+    # Build an error node located at `tok`.
+    mkError: function {:this tok: zlexer.Token code: zast.err msg: String.take} out Node is {
+        return (Node.error (zast.ErrorData nodeid: this.nextId lineno: tok.lineno colno: tok.colno err: code msg: msg))
     }
 
     # True when `node` is an `error` arm (propagate malformed sub-results).
@@ -110,7 +109,7 @@ Parser: class {
         } case STRBEG then {
             return (this.parseAtomString lex: lex)
         } else {
-            return (this.mkError line: t.lineno col: t.colno code: zast.err.BADREFERENCE msg: "Expected an atom".string)
+            return (this.mkError tok: t code: zast.err.BADREFERENCE msg: "Expected an atom".string)
         }
     }
 
@@ -121,7 +120,7 @@ Parser: class {
             return (Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: r.lineno colno: r.colno name: r.tokstr.copy))
         } case none then {
             t: lex.peek
-            return (this.mkError line: t.lineno col: t.colno code: zast.err.BADREFERENCE msg: "Expected an identifier".string)
+            return (this.mkError tok: t code: zast.err.BADREFERENCE msg: "Expected an identifier".string)
         }
     }
 
@@ -172,7 +171,7 @@ Parser: class {
                 return (this.acceptPathTail lex: lex parent: np startLine: startLine startCol: startCol)
             } case none then {
                 bad: lex.acceptAny
-                err: this.mkError line: bad.lineno col: bad.colno code: zast.err.BADPATH msg: "Expected ID after dot".string
+                err: this.mkError tok: bad code: zast.err.BADPATH msg: "Expected ID after dot".string
                 return (Option.some err)
             }
         }
@@ -181,7 +180,7 @@ Parser: class {
     # atomexpr / atomstring / expression: filled in by the next stage.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
-        return (this.mkError line: t.lineno col: t.colno code: zast.err.BADEXPRESSION msg: "atomexpr: not yet implemented".string)
+        return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "atomexpr: not yet implemented".string)
     }
 
     # atomstring -> "\"" { strmid | newline | strchr | strexpr } "\""
@@ -196,55 +195,28 @@ Parser: class {
         fDelim: firstTok.tokstr.copy
         lex.advance
         parts: (List of: Node)
-        # Errors are accumulated into fields and built after the loop:
-        # a `break`/`return` inside the loop would skip the drop of the
-        # iteration''s peek copy, and the error node cannot be carried in
-        # an Option (a reftype payload cannot be moved back out).
-        hasErr: false
-        errLine: 0.u32
-        errCol: 0.u32
-        errCode: zast.err.BADSTRING
-        errMsg: "".string
-        running: true
-        for while running loop {
+        for while true loop {
             t: lex.peek
             tt: t.toktype
             if tt == zlexer.TT.STREND then {
                 same: t.tokstr.stringview == fDelim.stringview
                 if same then {
                     lex.advance
+                    break
                 } else {
-                    hasErr = true
-                    errLine = t.lineno
-                    errCol = t.colno
-                    errCode = zast.err.BADSTRING
-                    errMsg = "Unmatched string literal delimiter".string
+                    return (this.mkError tok: t code: zast.err.BADSTRING msg: "Unmatched string literal delimiter".string)
                 }
-                running = false
             } else if tt == zlexer.TT.STREXPRBEG then {
-                hasErr = true
-                errLine = t.lineno
-                errCol = t.colno
-                errCode = zast.err.BADEXPRESSION
-                errMsg = "string interpolation not yet implemented".string
-                running = false
+                return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "string interpolation not yet implemented".string)
             } else if (isStrChunkTok tt: tt) then {
                 ck: chunkKindOf tt: tt
                 chunk: Node.stringchunk (zast.StringChunkData nodeid: this.nextId lineno: t.lineno colno: t.colno text: t.tokstr.copy chunkKind: ck)
                 parts.append chunk
                 lex.advance
             } else {
-                hasErr = true
-                errLine = t.lineno
-                errCol = t.colno
-                errCode = zast.err.BADSTRING
-                errMsg = "Unexpected token in string literal".string
-                lex.advance
-                running = false
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADSTRING msg: "Unexpected token in string literal".string)
             }
-        }
-        if hasErr then {
-            return (this.mkError line: errLine col: errCol code: errCode msg: errMsg)
         }
         stripped: this.stripStringWhitespace parts: parts
         return (Node.atomstring (zast.AtomStringData nodeid: this.nextId lineno: fLine colno: fCol stringparts: stripped))
@@ -268,7 +240,7 @@ Parser: class {
 # resulting node tree via zast.printNode.
 runSnippet: function {label: StringView src: String.take} is {
     print "=== \{label} ==="
-    p: Parser.create firstId: 1.u32
+    p: Parser.create
     tk: zlexer.Tokenizer.create source: src fsno: 0.u32
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptPath lex: lx
