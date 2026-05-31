@@ -969,6 +969,93 @@ Tokenizer: class {
     }
 }
 
+# Parser-facing token cursor over a Tokenizer. Provides one token of
+# lookahead (peek) plus filtering: WS / COMMENT / COLON are always
+# skipped, EOL is skipped while filterEol is set (the parser clears it
+# inside parens and toggles it around unit-body definition separators).
+# Tokens handed out by peek / accept / acceptAny are owned copies; the
+# buffered token stays in place until advance replaces it.
+Lexer: class {
+    lexer: Tokenizer
+    thistoken: Token
+    filterEol: bool
+} as {
+    create: function {lexer: Tokenizer.take} out this is {
+        placeholder: (Token toktype: TT.BOF tokstr: "".string fsno: 0 lineno: 0 colno: 0 tokenid: 0)
+        lx: (meta.create lexer: lexer thistoken: placeholder filterEol: true)
+        lx.advance
+        return lx
+    }
+
+    # Read the next token into thistoken, dropping filtered tokens.
+    advance: function {:this} is {
+        for while true loop {
+            t: this.lexer.token
+            keep: true
+            match (
+                t.toktype
+            ) case WS then {
+                keep = false
+            } case COMMENT then {
+                keep = false
+            } case COLON then {
+                keep = false
+            } case EOL then {
+                if this.filterEol then keep = false
+            } else {
+            }
+            if keep then {
+                this.thistoken = t
+                return
+            }
+        }
+    }
+
+    # The buffered token, without advancing. Returns an owned copy.
+    peek: function {:this} out Token is {
+        return this.currentCopy
+    }
+
+    # Accept and advance if the buffered token matches tt; else none.
+    accept: function {:this tt: TT} out (Option t: Token) is {
+        if this.thistoken.toktype == tt then {
+            tok: this.currentCopy
+            this.advance
+            return (Option.some tok)
+        }
+        return (Option.none Token)
+    }
+
+    # Accept and return the buffered token unconditionally, advancing.
+    acceptAny: function {:this} out Token is {
+        tok: this.currentCopy
+        this.advance
+        return tok
+    }
+
+    # Set EOL filtering. When turning filtering back on, drop a
+    # currently-buffered EOL so the next peek sees a real token.
+    setFilterEol: function {:this enabled: bool} is {
+        this.filterEol = enabled
+        if enabled then {
+            iseol: this.thistoken.toktype == TT.EOL
+            if iseol then this.advance
+        }
+    }
+
+    filterEolState: function {:this} out bool is {
+        return this.filterEol
+    }
+
+    # Owned clone of the buffered token. Reading the receiver's own
+    # field subvalues into a fresh Token mirrors Tokenizer.token; a
+    # free helper taking a borrowed Token param is rejected (the
+    # projection would alias the caller's still-owned value).
+    currentCopy: function {:this} out Token is {
+        return (Token toktype: this.thistoken.toktype tokstr: this.thistoken.tokstr.copy fsno: this.thistoken.fsno lineno: this.thistoken.lineno colno: this.thistoken.colno tokenid: this.thistoken.tokenid)
+    }
+}
+
 # Keyword and reserved-word lookups. Per-call StringView equality;
 # acceptable at this scale, can migrate to a Map later.
 
