@@ -348,6 +348,94 @@ class TestForBodyClassCleanup:
         )
         assert result.stdout == self._EXPECTED_OUTPUT
 
+    def _assert_asan_clean(self, csource, expected):
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == expected
+
+    def test_break_frees_loop_body_string_no_leak(self):
+        """A heap String local declared in a loop body is freed on `break`,
+        not leaked (the normal iteration-end cleanup is skipped on break)."""
+        src = (
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 5.u64 loop {\n"
+            '        s: "leak".string\n'
+            '        print "v=\\{s}"\n'
+            "        if n == 2.u64 then break\n"
+            "        n = n + 1.u64\n"
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        self._assert_asan_clean(emit_source(src), "v=leak\nv=leak\nv=leak\ndone\n")
+
+    def test_continue_frees_loop_body_string_no_leak(self):
+        """A heap String local is freed on `continue` before the next iter."""
+        src = (
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 4.u64 loop {\n"
+            '        s: "leak".string\n'
+            '        print "v=\\{s}"\n'
+            "        n = n + 1.u64\n"
+            "        if n == 2.u64 then continue\n"
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        self._assert_asan_clean(
+            emit_source(src), "v=leak\nv=leak\nv=leak\nv=leak\ndone\n"
+        )
+
+    def test_break_in_nested_block_frees_strings_no_leak(self):
+        """`break` from a nested `if` block inside the loop frees BOTH the
+        if-block local and the loop-body local (the cleanup spans every frame
+        from the break site up to the loop body)."""
+        src = (
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 5.u64 loop {\n"
+            '        s: "outer".string\n'
+            '        print "s=\\{s}"\n'
+            "        if n == 2.u64 then {\n"
+            '            t: "inner".string\n'
+            '            print "t=\\{t}"\n'
+            "            break\n"
+            "        }\n"
+            "        n = n + 1.u64\n"
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        self._assert_asan_clean(
+            emit_source(src), "s=outer\ns=outer\ns=outer\nt=inner\ndone\n"
+        )
+
+    def test_do_block_break_frees_string_no_leak(self):
+        """A bare block (lowered to do-while(0)) is a break target: a String
+        local in it is freed when a `break` exits the block; the enclosing loop
+        continues."""
+        src = (
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 4.u64 loop {\n"
+            "        {\n"
+            '            s: "leak".string\n'
+            '            print "v=\\{s}"\n'
+            "            if n == 2.u64 then { break }\n"
+            "        }\n"
+            "        n = n + 1.u64\n"
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        self._assert_asan_clean(
+            emit_source(src), "v=leak\nv=leak\nv=leak\nv=leak\ndone\n"
+        )
+
 
 class TestUnionTakeInArmNoDoubleFree:
     """Pin: `.take` of a match-narrowed union arm whose payload moves

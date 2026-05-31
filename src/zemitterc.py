@@ -115,6 +115,12 @@ class ScopeState:
     """
 
     cleanup_stack: list = field(default_factory=lambda: [[]])
+    # Stack of `cleanup_stack` frame indices marking break-target body frames
+    # (for-loop bodies, do-block break targets). `break`/`continue` emit the
+    # destructors for frames from the innermost break target up to the top,
+    # without popping (the normal block close still pops + frees on the
+    # fall-through path).
+    break_scope_indices: list = field(default_factory=list)
     temp_counter: int = 0
     record_name: str = ""
     # variable_ids of pointer-passed parameters (class `this`, borrow/lock
@@ -6960,9 +6966,9 @@ class CEmitter:
         # `_emit_return`: function-scope cleanup, then bare C `return;`.
         ck = self._expr_call_kind(expr)
         if ck == zast.CallKind.BREAK:
-            return f"{indent}break;\n"
+            return self._emit_break_continue_cleanup(indent) + f"{indent}break;\n"
         if ck == zast.CallKind.CONTINUE:
-            return f"{indent}continue;\n"
+            return self._emit_break_continue_cleanup(indent) + f"{indent}continue;\n"
         if ck == zast.CallKind.RETURN and inner.nodetype == zast.NodeType.ATOMID:
             # Bare `return` only — `return X` is a Call and is routed to
             # `_emit_call_stmt` → `_emit_return` further below, which
@@ -10476,6 +10482,30 @@ class CEmitter:
                 result += self._emit_field_cleanup(var_name, var_type, indent)
         return result
 
+    def _emit_break_continue_cleanup(self, indent: str) -> str:
+        """Destructors for locals between a `break`/`continue` and the innermost
+        break target (loop body or do-block), inclusive.
+
+        Non-destructive: reads the frames `cleanup_stack[lo:]` (lo = innermost
+        break-target frame) without popping, since the normal block close still
+        pops and frees them on the fall-through path. Spans nested if/case/with
+        frames inside the loop but never the function-level frames below `lo`
+        (unlike `return`, which cleans everything).
+        """
+        if not self._scope.break_scope_indices:
+            return ""
+        lo = self._scope.break_scope_indices[-1]
+        result = ""
+        all_vars: list = []
+        for frame in self._scope.cleanup_stack[lo:]:
+            for v in frame:
+                all_vars.append(v)
+        for var_id, var_type in reversed(all_vars):
+            var_name = self.typing.variable_cname.get(var_id)
+            if var_name is not None:
+                result += self._emit_field_cleanup(var_name, var_type, indent)
+        return result
+
     def _emit_taken_vars_cleanup(
         self,
         taken_vars: "List[tuple]",
@@ -11893,6 +11923,9 @@ class CEmitter:
         if not fornode.loop:
             return ""
         self._push_block_scope()
+        # Mark this body frame as a break target so a `break`/`continue` in it
+        # (or in a nested block) frees the loop-body locals before jumping.
+        self._scope.break_scope_indices.append(len(self._scope.cleanup_stack) - 1)
         state = self._comprehension_state.get(fornode.nodeid)
         if state is None:
             body = self._emit_statement(fornode.loop)
@@ -11911,6 +11944,7 @@ class CEmitter:
             else:
                 parts.append(self._emit_statement_line(stmts[-1]))
             body = "".join(parts)
+        self._scope.break_scope_indices.pop()
         return body + self._pop_block_scope_and_emit()
 
     def _emit_for_expression_value(self, fornode: zast.For) -> str:
@@ -11942,7 +11976,15 @@ class CEmitter:
             indent = self._indent()
             parts = [f"{indent}do {{\n"]
             self.indent_level += 1
-            parts.append(self._emit_statement(donode.statement))
+            # A `do` block is a break target (break exits the do-while(0)).
+            # Scope its locals so a `break` inside frees them, and so they
+            # don't leak to the enclosing frame on normal completion.
+            self._push_block_scope()
+            self._scope.break_scope_indices.append(len(self._scope.cleanup_stack) - 1)
+            body = self._emit_statement(donode.statement)
+            self._scope.break_scope_indices.pop()
+            parts.append(body)
+            parts.append(self._pop_block_scope_and_emit())
             self.indent_level -= 1
             parts.append(f"{indent}}} while (0);\n")
             return "".join(parts)
