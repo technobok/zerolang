@@ -1188,6 +1188,47 @@ Parser: class {
         }
     }
 
+    # Build a reassignment from an already-parsed LHS path list (the `=`
+    # is consumed). The LHS must be a single path; the RHS is a full
+    # expression (so `x = if c then a else b` parses).
+    buildReassignment: function {:this paths: (List of: Node).take lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
+        n: paths.length
+        if n != 1.u64 then {
+            bad: lex.peek
+            return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Reassignment must be to a single path on the LHS".string)
+        }
+        lhs: paths.pop
+        lhsErr: this.isError node: lhs
+        if lhsErr then return lhs
+        rhs: this.parseExpression lex: lex
+        rErr: this.isError node: rhs
+        if rErr then return rhs
+        return (Node.reassignment (zast.ReassignmentData nodeid: this.nextId lineno: startLine colno: startCol topath: lhs value: rhs))
+    }
+
+    # Build a swap from an already-parsed LHS path list (the `swap` is
+    # consumed). Both sides are single paths.
+    buildSwap: function {:this paths: (List of: Node).take lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
+        n: paths.length
+        if n != 1.u64 then {
+            bad: lex.peek
+            return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Swap must be to a single path on the LHS".string)
+        }
+        lhs: paths.pop
+        lhsErr: this.isError node: lhs
+        if lhsErr then return lhs
+        la: this.atomLookahead lex: lex
+        if la then {
+            rhs: this.parsePath lex: lex
+            rErr: this.isError node: rhs
+            if rErr then return rhs
+            return (Node.swapstmt (zast.SwapStmtData nodeid: this.nextId lineno: startLine colno: startCol lhs: lhs rhs: rhs))
+        } else {
+            bad: lex.acceptAny
+            return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Swap requires a right hand side".string)
+        }
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
@@ -1231,10 +1272,26 @@ Parser: class {
             if n == 0.u64 then {
                 return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "Expected an expression".string)
             }
-            inner: this.operationOrCallFromPaths paths: paths lex: lex
-            ierr: this.isError node: inner
-            if ierr then return inner
-            return (this.wrapExpression inner: inner)
+            eqOpt: lex.accept tt: zlexer.TT.EQUALS
+            match (eqOpt) case some then {
+                ra: this.buildReassignment paths: paths lex: lex startLine: t.lineno startCol: t.colno
+                raErr: this.isError node: ra
+                if raErr then return ra
+                return (this.wrapExpression inner: ra)
+            } case none then {
+                swOpt: lex.accept tt: zlexer.TT.SWAP
+                match (swOpt) case some then {
+                    sw: this.buildSwap paths: paths lex: lex startLine: t.lineno startCol: t.colno
+                    swErr: this.isError node: sw
+                    if swErr then return sw
+                    return (this.wrapExpression inner: sw)
+                } case none then {
+                    inner: this.operationOrCallFromPaths paths: paths lex: lex
+                    ierr: this.isError node: inner
+                    if ierr then return inner
+                    return (this.wrapExpression inner: inner)
+                }
+            }
         }
     }
 
@@ -1343,5 +1400,9 @@ main: function is {
     runExpr label: "data3" src: "data { x: 1 x: 2 }".string
     runYieldBody label: "yield1" src: "yield x".string
     runExpr label: "yield2" src: "yield x".string
+    runExpr label: "reassign1" src: "a = b".string
+    runExpr label: "reassign2" src: "p.x = a + b".string
+    runExpr label: "swap1" src: "a swap b".string
+    runExpr label: "rsblock" src: "{ a = b }".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
