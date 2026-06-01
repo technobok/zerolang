@@ -7333,6 +7333,46 @@ class TypeChecker:
         self._check_assignment_inner(assign)
 
     def _check_assignment_inner(self, assign: zast.Assignment) -> None:
+        # Reject binding a narrowed match-arm reftype payload to a local,
+        # BEFORE checking the RHS (a `.take` RHS would invalidate the
+        # narrowing first, hiding it). The narrowed payload (`case some then
+        # { ... }`) is a borrow/alias into the subject's union box; binding
+        # it to a local either double-frees (`n: o` — n and the subject both
+        # free the box) or leaks (`n: o.take` — the alias optimisation never
+        # frees it). Move it straight into its destination sink instead (a
+        # constructor argument or a `.take` parameter — the call site zeroes
+        # the box and the sink owns the value), or use the narrowed name in
+        # place.
+        _rhs = assign.value.expression
+        _narrowed_root: Optional[str] = None
+        if _rhs.nodetype == NodeType.ATOMID:
+            _narrowed_root = cast(zast.AtomId, _rhs).name
+        elif _rhs.nodetype == NodeType.DOTTEDPATH:
+            _dp0 = cast(zast.DottedPath, _rhs)
+            if _dp0.child.name == "take" and _dp0.parent.nodetype == NodeType.ATOMID:
+                _narrowed_root = cast(zast.AtomId, _dp0.parent).name
+        if _narrowed_root is not None:
+            _ne = self.symtab.lookup_entry(_narrowed_root)
+            if (
+                _ne is not None
+                and _ne.original_ztype is not None
+                and _ne.narrowed_subtype
+            ):
+                _pl = self.typing.child_of(_ne.original_ztype, _ne.narrowed_subtype)
+                if (
+                    _pl is not None
+                    and _pl.typetype != ZTypeType.NULL
+                    and not _is_valtype(_pl)
+                ):
+                    self._error(
+                        f"cannot bind the narrowed match payload "
+                        f"'{_narrowed_root}' to a local; move it directly into "
+                        f"its destination (a constructor argument or a '.take' "
+                        f"parameter), or use '{_narrowed_root}' in place",
+                        loc=assign.start,
+                        err=ERR.OWNERERROR,
+                    )
+                    return
         result = self._check_expression(assign.value)
         t = result.ztype
         # Bind-site materialisation: a name binding (`x: 100`) freezes

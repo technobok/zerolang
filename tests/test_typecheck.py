@@ -14533,3 +14533,78 @@ class TestCrossUnitDependency:
         )
         errors = self._two_unit_program(mainsrc, depsrc)
         assert errors == [], [e.msg for e in errors]
+
+
+class TestNarrowedPayloadRebindRejected:
+    """A narrowed match-arm reftype payload is a borrow/alias into the
+    subject's union box. Binding it to a local was unsound -- `n: o`
+    double-freed and `n: o.take` leaked, both silently (only ASan caught
+    them). Both are now rejected; moving the payload into a sink
+    (constructor arg / `.take` param) and using the narrowed name in place
+    remain valid."""
+
+    def test_rebind_narrowed_reftype_payload_rejected(self):
+        errors = check_errors(
+            "main: function is {\n"
+            '  o: Option.some "hi".string\n'
+            "  match (o) case some then {\n"
+            "    n: o\n"
+            '    print "in some"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}\n"
+        )
+        assert any("narrowed match payload" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_take_narrowed_reftype_payload_to_local_rejected(self):
+        errors = check_errors(
+            "main: function is {\n"
+            '  o: Option.some "hi".string\n'
+            "  match (o) case some then {\n"
+            "    n: o.take\n"
+            '    print "in some"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}\n"
+        )
+        assert any("narrowed match payload" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_sink_move_of_narrowed_payload_ok(self):
+        # Moving the payload directly into a `.take` sink (constructor arg)
+        # is the supported pattern and must still type-check.
+        check_ok(
+            "Holder: class { s: String } as {\n"
+            "  create: function {s: String.take} out this is "
+            "{ return (meta.create s: s) }\n"
+            "}\n"
+            "main: function is {\n"
+            '  o: Option.some "hi".string\n'
+            "  match (o) case some then {\n"
+            "    h: Holder s: o.take\n"
+            '    print "moved"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_field_access_of_narrowed_payload_ok(self):
+        # Accessing a field of the narrowed payload is not a move and must
+        # still type-check.
+        check_ok(
+            "main: function is {\n"
+            '  o: Option.some "hi".string\n'
+            "  match (o) case some then {\n"
+            "    n: o.length\n"
+            '    print "\\{n}"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}\n"
+        )
