@@ -1015,6 +1015,179 @@ Parser: class {
         }
     }
 
+    # with-expression -> "with" label op "do" expression. The binding name
+    # is a LABEL; the value is an operation (wrapped in an Expression, no
+    # named-arg calls); the body is a full expression in the binding's scope.
+    acceptWithExpression: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        wLine: startTok.lineno
+        wCol: startTok.colno
+        wOpt: lex.accept tt: zlexer.TT.WITH
+        match (wOpt) case none then {
+            return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected with".string)
+        } case some then {
+            t: lex.peek
+            isLabel: t.toktype == zlexer.TT.LABEL
+            if isLabel then {
+                lblTok: lex.acceptAny
+                nm: lblTok.tokstr.copy
+                vpaths: this.operationPaths lex: lex
+                n: vpaths.length
+                if n == 0.u64 then {
+                    bad: lex.peek
+                    return (this.mkError tok: bad code: zast.err.EXPECTEDEXP msg: "Expected operation for with value".string)
+                }
+                op: this.operationFromPaths paths: vpaths lex: lex
+                oErr: this.isError node: op
+                if oErr then return op
+                value: this.wrapExpression inner: op
+                doOpt: lex.accept tt: zlexer.TT.DO
+                match (doOpt) case none then {
+                    bad: lex.peek
+                    return (this.mkError tok: bad code: zast.err.EXPECTEDEXP msg: "Expected do after with definition".string)
+                } case some then {
+                    body: this.parseExpression lex: lex
+                    bErr: this.isError node: body
+                    if bErr then return body
+                    return (Node.withexpr (zast.WithData nodeid: this.nextId lineno: wLine colno: wCol name: nm value: value body: body))
+                }
+            }
+            bad: lex.acceptAny
+            return (this.mkError tok: bad code: zast.err.EXPECTEDDEF msg: "Expected label after with".string)
+        }
+    }
+
+    # data-definition -> "data" ["is"] "{" { [label] term | label-value } "}"
+    # ["out" type]. Elements are single terms (paths): a LABEL names the
+    # element, a LABELPRE is a label-value, bare terms are positional.
+    # Duplicate member names are rejected here (the typechecker does not
+    # re-check). The optional "out" pins the element type.
+    acceptDataDefinition: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        dLine: startTok.lineno
+        dCol: startTok.colno
+        dOpt: lex.accept tt: zlexer.TT.DATA
+        match (dOpt) case none then {
+            return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected data".string)
+        } case some then {
+            lex.accept tt: zlexer.TT.IS
+            openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+            match (openOpt) case none then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADDATA msg: "Expected opening brace for data body".string)
+            } case some then {
+                elements: (List of: Node)
+                datanames: (List of: String)
+                for while true loop {
+                    et: lex.peek
+                    ett: et.toktype
+                    if ett == zlexer.TT.LABELPRE then {
+                        lblTok: lex.acceptAny
+                        checkName: lblTok.tokstr.copy
+                        dup: datanames.contains item: checkName
+                        if dup then {
+                            bad: lex.acceptAny
+                            return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Duplicate data member name".string)
+                        }
+                        datanames.append checkName
+                        lvName: lblTok.tokstr.copy
+                        opName: lblTok.tokstr.copy
+                        lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                        no: this.mkNamedOp name: (Option.some opName) operation: lv line: lblTok.lineno col: lblTok.colno
+                        elements.append no
+                    } else {
+                        isLbl: ett == zlexer.TT.LABEL
+                        if isLbl then {
+                            lblTok: lex.acceptAny
+                            checkName: lblTok.tokstr.copy
+                            dup: datanames.contains item: checkName
+                            if dup then {
+                                bad: lex.acceptAny
+                                return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Duplicate data member name".string)
+                            }
+                            datanames.append checkName
+                            opName: lblTok.tokstr.copy
+                            la: this.atomLookahead lex: lex
+                            if la then {
+                                pathNode: this.parsePath lex: lex
+                                pErr: this.isError node: pathNode
+                                if pErr then return pathNode
+                                no: this.mkNamedOp name: (Option.some opName) operation: pathNode line: lblTok.lineno col: lblTok.colno
+                                elements.append no
+                            } else {
+                                bad: lex.peek
+                                return (this.mkError tok: bad code: zast.err.BADDATA msg: "Expected term after data label".string)
+                            }
+                        } else {
+                            la: this.atomLookahead lex: lex
+                            if la then {
+                                pathNode: this.parsePath lex: lex
+                                pErr: this.isError node: pathNode
+                                if pErr then return pathNode
+                                cp: zast.posOf n: pathNode
+                                no: this.mkNamedOp name: (Option.none String) operation: pathNode line: cp.line col: cp.col
+                                elements.append no
+                            } else {
+                                break
+                            }
+                        }
+                    }
+                }
+                closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+                match (closeOpt) case none then {
+                    bad: lex.acceptAny
+                    return (this.mkError tok: bad code: zast.err.BADDATA msg: "Expected closing brace for data body".string)
+                } case some then {
+                    eLen: elements.length
+                    if eLen == 0.u64 then {
+                        return (this.mkError tok: startTok code: zast.err.BADDATA msg: "data definition must have at least one element".string)
+                    }
+                    outOpt: lex.accept tt: zlexer.TT.OUT
+                    match (outOpt) case some then {
+                        la: this.atomLookahead lex: lex
+                        if la then {
+                            typeNode: this.parsePath lex: lex
+                            tErr: this.isError node: typeNode
+                            if tErr then return typeNode
+                            return (Node.datablock (zast.DataBlockData nodeid: this.nextId lineno: dLine colno: dCol elements: elements outType: (Option.some typeNode)))
+                        } else {
+                            bad: lex.acceptAny
+                            return (this.mkError tok: bad code: zast.err.BADDATA msg: "Expected type reference after out".string)
+                        }
+                    } case none then {
+                        return (Node.datablock (zast.DataBlockData nodeid: this.nextId lineno: dLine colno: dCol elements: elements outType: (Option.none Node)))
+                    }
+                }
+            }
+        }
+    }
+
+    # yield-expression -> "yield" expression. Valid only directly inside a
+    # function body (depth 1); rejected at top level (0) or in a nested
+    # function literal (>1). Whether the function is a generator is checked
+    # later by the typechecker.
+    acceptYieldExpression: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        yOpt: lex.accept tt: zlexer.TT.YIELD
+        match (yOpt) case none then {
+            return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected yield".string)
+        } case some then {
+            depth: this.functionBodyDepth
+            atTop: depth == 0.u32
+            if atTop then {
+                return (this.mkError tok: startTok code: zast.err.BADSTATEMENT msg: "yield is only valid inside a function body".string)
+            }
+            nested: depth > 1.u32
+            if nested then {
+                return (this.mkError tok: startTok code: zast.err.BADSTATEMENT msg: "yield is not allowed inside a nested function literal".string)
+            }
+            body: this.parseExpression lex: lex
+            bErr: this.isError node: body
+            if bErr then return body
+            return (Node.yieldexpr (zast.YieldExprData nodeid: this.nextId lineno: startTok.lineno colno: startTok.colno expr: body))
+        }
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
@@ -1033,16 +1206,25 @@ Parser: class {
             if mErr then return mexpr
             return (this.wrapExpression inner: mexpr)
         } case DATA then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "data definition not yet implemented".string)
+            dn: this.acceptDataDefinition lex: lex
+            dErr: this.isError node: dn
+            if dErr then return dn
+            return (this.wrapExpression inner: dn)
         } case WITH then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "with-expression not yet implemented".string)
+            wn: this.acceptWithExpression lex: lex
+            wErr: this.isError node: wn
+            if wErr then return wn
+            return (this.wrapExpression inner: wn)
         } case BRACEOPEN then {
             blk: this.acceptBareblock lex: lex
             bErr: this.isError node: blk
             if bErr then return blk
             return (this.wrapExpression inner: blk)
         } case YIELD then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "yield not yet implemented".string)
+            yn: this.acceptYieldExpression lex: lex
+            yErr: this.isError node: yn
+            if yErr then return yn
+            return (this.wrapExpression inner: yn)
         } else {
             paths: this.operationPaths lex: lex
             n: paths.length
@@ -1110,6 +1292,22 @@ runExpr: function {label: StringView src: String.take} is {
     }
 }
 
+# Like runExpr but simulates being inside a function body (depth 1) so a
+# yield-expression parses to a yieldexpr rather than the depth-0 error.
+runYieldBody: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: Parser.create
+    p.functionBodyDepth = 1.u32
+    tk: zlexer.Tokenizer.create source: src fsno: 0.u32
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptExpression lex: lx
+    match (r) case some then {
+        zast.printNode r
+    } case none then {
+        print "<none>"
+    }
+}
+
 main: function is {
     runPath label: "foo" src: "foo".string
     runPath label: "a.b.c" src: "a.b.c".string
@@ -1138,5 +1336,12 @@ main: function is {
     runExpr label: "for1" src: "for ready loop a".string
     runExpr label: "for2" src: "for i: items while more loop { a }".string
     runExpr label: "for3" src: "for while c loop a while d".string
+    runExpr label: "with1" src: "with x: v do e".string
+    runExpr label: "with2" src: "with y: a + b do { c }".string
+    runExpr label: "data1" src: "data { :lo a b }".string
+    runExpr label: "data2" src: "data { x: 1 y: 2 } out u8".string
+    runExpr label: "data3" src: "data { x: 1 x: 2 }".string
+    runYieldBody label: "yield1" src: "yield x".string
+    runExpr label: "yield2" src: "yield x".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
