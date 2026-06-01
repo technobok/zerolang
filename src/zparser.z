@@ -53,6 +53,30 @@ isStrChunkTok: function {tt: zlexer.TT} out bool is {
     }
 }
 
+# True for the keyword token types that open an inline type definition
+# (record / class / variant / union / protocol / facet / data). These are
+# rejected inside an object body -- such a type must be defined at unit
+# level and referenced by name.
+isInlineTypedefTok: function {tt: zlexer.TT} out bool is {
+    match (tt) case RECORD then {
+        return true
+    } case CLASS then {
+        return true
+    } case VARIANT then {
+        return true
+    } case UNION then {
+        return true
+    } case PROTOCOL then {
+        return true
+    } case FACET then {
+        return true
+    } case DATA then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # Reverse a node list into a new list. The greedy operation list is
 # built in source order but consumed front-to-back; List.pop yields the
 # tail, so reversing once lets each pop yield the next source element.
@@ -609,6 +633,13 @@ Parser: class {
         } else {
             return false
         }
+    }
+
+    # True when the current token is an EOL (a unit-body definition
+    # separator; only observable while EOL filtering is off).
+    atEol: function {:this lex: zlexer.Lexer} out bool is {
+        t: lex.peek
+        return (t.toktype == zlexer.TT.EOL)
     }
 
     # Does a block line start at the current token? (a binding label, a
@@ -1309,7 +1340,7 @@ Parser: class {
     # nothing is held across a loop body (E0200) -- mirrors forClausesTail.
     # Each clause rejects a duplicate; an unmatched token terminates and
     # builds the functiondef.
-    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (List of: Node).take asItems: (List of: Node).take returntype: (Option t: Node).take body: (Option t: Node).take gotIn: bool hasOut: bool hasIs: bool isNative: bool startLine: u32 startCol: u32} out Node is {
+    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (List of: Node).take asItems: (List of: Node).take returntype: (Option t: Node).take body: (Option t: Node).take gotIn: bool hasOut: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
         if tt == zlexer.TT.OUT then {
@@ -1322,7 +1353,7 @@ Parser: class {
                 rt: this.parsePath lex: lex
                 rErr: this.isError node: rt
                 if rErr then return rt
-                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.some rt) body: body gotIn: gotIn hasOut: true hasIs: hasIs isNative: isNative startLine: startLine startCol: startCol)
+                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.some rt) body: body gotIn: gotIn hasOut: true hasIs: hasIs isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
             } else {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected type reference for out".string)
@@ -1335,13 +1366,28 @@ Parser: class {
             lex.advance
             natOpt: lex.accept tt: zlexer.TT.NATIVE
             match (natOpt) case some then {
-                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: body gotIn: gotIn hasOut: hasOut hasIs: true isNative: true startLine: startLine startCol: startCol)
+                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: body gotIn: gotIn hasOut: hasOut hasIs: true isNative: true hasAs: hasAs startLine: startLine startCol: startCol)
             } case none then {
                 stmt: this.acceptBlock lex: lex
                 sErr: this.isError node: stmt
                 if sErr then return stmt
-                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: (Option.some stmt) gotIn: gotIn hasOut: hasOut hasIs: true isNative: isNative startLine: startLine startCol: startCol)
+                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: (Option.some stmt) gotIn: gotIn hasOut: hasOut hasIs: true isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
             }
+        }
+        if tt == zlexer.TT.AS then {
+            if hasAs then {
+                return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate as".string)
+            }
+            lex.advance
+            ab: this.getObjectBody lex: lex
+            an: ab.length
+            if an > 0.u64 then {
+                last: ab.pop
+                le: this.isError node: last
+                if le then return last
+                ab.append last
+            }
+            return (this.functionClausesTail lex: lex parameters: parameters asItems: ab returntype: returntype body: body gotIn: gotIn hasOut: hasOut hasIs: hasIs isNative: isNative hasAs: true startLine: startLine startCol: startCol)
         }
         if tt == zlexer.TT.IN then {
             if gotIn then {
@@ -1356,7 +1402,7 @@ Parser: class {
                 if le then return last
                 pb.append last
             }
-            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: returntype body: body gotIn: true hasOut: hasOut hasIs: hasIs isNative: isNative startLine: startLine startCol: startCol)
+            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: returntype body: body gotIn: true hasOut: hasOut hasIs: hasIs isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
         }
         return (Node.functiondef (zast.FunctionData nodeid: this.nextId lineno: startLine colno: startCol returntype: returntype parameters: parameters body: body isNative: isNative asItems: asItems))
     }
@@ -1378,25 +1424,246 @@ Parser: class {
                 if le then return last
                 pb.append last
             }
-            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: true hasOut: false hasIs: false isNative: false startLine: startLine startCol: startCol)
+            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: true hasOut: false hasIs: false isNative: false hasAs: false startLine: startLine startCol: startCol)
         }
-        return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: false hasOut: false hasIs: false isNative: false startLine: startLine startCol: startCol)
+        return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: false hasOut: false hasIs: false isNative: false hasAs: false startLine: startLine startCol: startCol)
     }
 
-    # function-definition -> "function" [in-block] {out|is|as|in}*. Bumps
-    # functionBodyDepth around the whole definition (the yield gate reads
-    # it) and restores it on the single funneled return. Returns none when
-    # there is no `function` keyword.
+    # Parse a function definition whose `function` keyword the caller has
+    # already peeked (startTok points at it); this consumes it. Bumps
+    # functionBodyDepth around the whole definition (incl. the `as` block)
+    # so the yield gate sees nested function literals, and restores it on
+    # the single funneled return. Returns a bare functiondef Node.
+    parseFunctionDefinition: function {:this lex: zlexer.Lexer startTok: zlexer.Token} out Node is {
+        lex.advance
+        this.functionBodyDepth = this.functionBodyDepth + 1.u32
+        inner: this.functionDefinitionInner lex: lex startLine: startTok.lineno startCol: startTok.colno
+        this.functionBodyDepth = this.functionBodyDepth - 1.u32
+        return inner
+    }
+
+    # function-definition -> "function" [in-block] {out|is|as|in}*. The
+    # Option boundary: none when there is no `function` keyword.
     acceptFunctionDefinition: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
         startTok: lex.peek
-        funcOpt: lex.accept tt: zlexer.TT.FUNCTION
-        match (funcOpt) case none then {
-            return (Option.none Node)
+        isFunc: startTok.toktype == zlexer.TT.FUNCTION
+        if isFunc then {
+            return (Option.some (this.parseFunctionDefinition lex: lex startTok: startTok))
+        }
+        return (Option.none Node)
+    }
+
+    # object-body -> "{" { item } "}". Each item is `name: value` or a
+    # `:name` shorthand: a method (function), an inline unit, an inline
+    # field operation, or a label-value. Inline type definitions are
+    # rejected. EOL filtering is on while an object body is parsed (the
+    # enclosing definition value), so newlines never reach the loop in
+    # practice; the EOL skip is kept for the filtering-off case. Returns
+    # the items as namedoperation arms; a trailing error node flags a
+    # malformed item for the caller to detect.
+    getObjectBody: function {:this lex: zlexer.Lexer} out (List of: Node) is {
+        items: (List of: Node)
+        names: (List of: String)
+        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        match (openOpt) case none then {
+            bad: lex.peek
+            items.append (this.mkError tok: bad code: zast.err.BADOBJECTBLOCK msg: "Expected open brace for object body".string)
+            return items
         } case some then {
-            this.functionBodyDepth = this.functionBodyDepth + 1.u32
-            inner: this.functionDefinitionInner lex: lex startLine: startTok.lineno startCol: startTok.colno
-            this.functionBodyDepth = this.functionBodyDepth - 1.u32
-            return (Option.some inner)
+            for while true loop {
+                for while (this.atEol lex: lex) loop {
+                    lex.advance
+                }
+                pk: lex.peek
+                pktt: pk.toktype
+                if pktt == zlexer.TT.LABELPRE then {
+                    lblTok: lex.acceptAny
+                    nm: lblTok.tokstr.copy
+                    dup: names.contains item: nm
+                    if dup then {
+                        items.append (this.mkError tok: lblTok code: zast.err.BADITEM msg: "Duplicate item name".string)
+                        return items
+                    }
+                    names.append nm
+                    lvName: lblTok.tokstr.copy
+                    opName: lblTok.tokstr.copy
+                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                    no: this.mkNamedOp name: (Option.some opName) operation: lv line: lblTok.lineno col: lblTok.colno
+                    items.append no
+                } else {
+                    isLbl: pktt == zlexer.TT.LABEL
+                    if isLbl then {
+                        lblTok: lex.acceptAny
+                        nm: lblTok.tokstr.copy
+                        dup: names.contains item: nm
+                        if dup then {
+                            items.append (this.mkError tok: lblTok code: zast.err.BADITEM msg: "Duplicate item name".string)
+                            return items
+                        }
+                        names.append nm
+                        opName: lblTok.tokstr.copy
+                        lex.accept tt: zlexer.TT.EOL
+                        member: this.objectBodyMember lex: lex
+                        mErr: this.isError node: member
+                        if mErr then {
+                            items.append member
+                            return items
+                        }
+                        no: this.mkNamedOp name: (Option.some opName) operation: member line: lblTok.lineno col: lblTok.colno
+                        items.append no
+                    } else {
+                        break
+                    }
+                }
+            }
+            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            match (closeOpt) case none then {
+                bad: lex.peek
+                items.append (this.mkError tok: bad code: zast.err.BADOBJECTBLOCK msg: "Expected closing brace for object body".string)
+                return items
+            } case some then {
+                return items
+            }
+        }
+    }
+
+    # The value of a `name:` item inside an object body: a method, an
+    # inline unit, or a field operation (no named arguments). Inline type
+    # definitions (record / class / ...) are rejected. Returns a bare Node.
+    objectBodyMember: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        tt: t.toktype
+        if tt == zlexer.TT.FUNCTION then {
+            return (this.parseFunctionDefinition lex: lex startTok: t)
+        }
+        if tt == zlexer.TT.UNIT then {
+            return (this.parseUnitDefinition lex: lex startTok: t)
+        }
+        inlineTypedef: isInlineTypedefTok tt: tt
+        if inlineTypedef then {
+            bad: lex.acceptAny
+            return (this.mkError tok: bad code: zast.err.BADITEM msg: "Inline type definition is not allowed here; define it at unit level and reference it by name".string)
+        }
+        paths: this.operationPaths lex: lex
+        n: paths.length
+        if n == 0.u64 then {
+            bad: lex.acceptAny
+            return (this.mkError tok: bad code: zast.err.BADITEM msg: "Expected a function or expression for item".string)
+        }
+        return (this.operationFromPaths paths: paths lex: lex)
+    }
+
+    # type-definition dispatcher (minimal: unit / function / operation).
+    # The type-def keywords (record / class / ...) and the if/match/data
+    # expression forms land in a later slice. Returns a bare Node; an
+    # absent definition becomes an EXPECTEDTYPEDEF error node.
+    acceptTypeDefinition: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        match (t.toktype) case UNIT then {
+            return (this.parseUnitDefinition lex: lex startTok: t)
+        } case FUNCTION then {
+            return (this.parseFunctionDefinition lex: lex startTok: t)
+        } else {
+            paths: this.operationPaths lex: lex
+            n: paths.length
+            if n == 0.u64 then {
+                return (this.mkError tok: t code: zast.err.EXPECTEDTYPEDEF msg: "Expected a type definition or expression".string)
+            }
+            return (this.operationFromPaths paths: paths lex: lex)
+        }
+    }
+
+    # unit-body -> { newline | definition }. A definition is `name: value`
+    # or `:name`; values dispatch through acceptTypeDefinition. EOL
+    # filtering is off so newlines separate definitions, and re-enabled
+    # while a definition value is parsed. Returns the definitions as
+    # namedoperation arms; a trailing error node flags a malformed body.
+    acceptUnitBody: function {:this lex: zlexer.Lexer} out (List of: Node) is {
+        body: (List of: Node)
+        names: (List of: String)
+        prevFilter: lex.filterEolState
+        lex.setFilterEol enabled: false
+        for while true loop {
+            for while (this.atEol lex: lex) loop {
+                lex.advance
+            }
+            pk: lex.peek
+            pktt: pk.toktype
+            if pktt == zlexer.TT.LABELPRE then {
+                lblTok: lex.acceptAny
+                nm: lblTok.tokstr.copy
+                dup: names.contains item: nm
+                if dup then {
+                    body.append (this.mkError tok: lblTok code: zast.err.DUPLICATEDEF msg: "Duplicate definition".string)
+                    lex.setFilterEol enabled: prevFilter
+                    return body
+                }
+                names.append nm
+                lvName: lblTok.tokstr.copy
+                opName: lblTok.tokstr.copy
+                lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                no: this.mkNamedOp name: (Option.some opName) operation: lv line: lblTok.lineno col: lblTok.colno
+                body.append no
+            } else {
+                isLbl: pktt == zlexer.TT.LABEL
+                if isLbl then {
+                    lblTok: lex.acceptAny
+                    nm: lblTok.tokstr.copy
+                    dup: names.contains item: nm
+                    if dup then {
+                        body.append (this.mkError tok: lblTok code: zast.err.DUPLICATEDEF msg: "Duplicate definition".string)
+                        lex.setFilterEol enabled: prevFilter
+                        return body
+                    }
+                    names.append nm
+                    opName: lblTok.tokstr.copy
+                    lex.accept tt: zlexer.TT.EOL
+                    lex.setFilterEol enabled: true
+                    defNode: this.acceptTypeDefinition lex: lex
+                    lex.setFilterEol enabled: false
+                    dErr: this.isError node: defNode
+                    if dErr then {
+                        body.append defNode
+                        lex.setFilterEol enabled: prevFilter
+                        return body
+                    }
+                    no: this.mkNamedOp name: (Option.some opName) operation: defNode line: lblTok.lineno col: lblTok.colno
+                    body.append no
+                } else {
+                    break
+                }
+            }
+        }
+        lex.setFilterEol enabled: prevFilter
+        return body
+    }
+
+    # subunit -> "unit" [ "as" ] "{" unit-body "}". The caller has peeked
+    # the `unit` keyword (startTok); this consumes it. Returns a bare
+    # unitdef Node positioned at the keyword.
+    parseUnitDefinition: function {:this lex: zlexer.Lexer startTok: zlexer.Token} out Node is {
+        lex.advance
+        lex.accept tt: zlexer.TT.AS
+        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        match (openOpt) case none then {
+            bad: lex.peek
+            return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected open brace for unit body".string)
+        } case some then {
+            body: this.acceptUnitBody lex: lex
+            bn: body.length
+            if bn > 0.u64 then {
+                last: body.pop
+                le: this.isError node: last
+                if le then return last
+                body.append last
+            }
+            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            match (closeOpt) case none then {
+                bad: lex.peek
+                return (this.mkError tok: bad code: zast.err.BADUNIT msg: "Expected closing brace at end of unit".string)
+            } case some then {
+                return (Node.unitdef (zast.UnitData nodeid: this.nextId lineno: startTok.lineno colno: startTok.colno body: body))
+            }
         }
     }
 
@@ -1551,6 +1818,17 @@ runFunc: function {label: StringView src: String.take} is {
     }
 }
 
+# Drive the type-definition dispatcher over an inline snippet and dump
+# the resulting node tree (units, methods, operation definitions).
+runDef: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: 0.u32
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptTypeDefinition lex: lx
+    zast.printNode r
+}
+
 main: function is {
     runPath label: "foo" src: "foo".string
     runPath label: "a.b.c" src: "a.b.c".string
@@ -1596,5 +1874,16 @@ main: function is {
     runFunc label: "func4" src: "function is native".string
     runFunc label: "func5" src: "function { x: i64 } out i64 is { x }".string
     runFunc label: "func6" src: "function { x: i64 x: i64 }".string
+    runFunc label: "func7" src: "function { x: t } as { t: i64 }".string
+    runFunc label: "func8" src: "function as { :a :b }".string
+    runFunc label: "func9" src: "function as { }".string
+    runFunc label: "func10" src: "function as { r: record { x: i64 } }".string
+    runFunc label: "func11" src: "function as { a: i64 } as { b: i64 }".string
+    runDef label: "unit1" src: "unit { x: 5 y: 6 }".string
+    runDef label: "unit2" src: "unit { inner: unit { a: 1 } }".string
+    runDef label: "unit3" src: "unit { greet: function { x: i64 } out i64 is { x } }".string
+    runDef label: "unit4" src: "unit { }".string
+    runDef label: "unit5" src: "unit { a: 1 a: 2 }".string
+    runDef label: "defop" src: "a + b".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
