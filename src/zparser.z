@@ -592,6 +592,141 @@ Parser: class {
     # (if/for/match/data/with/block/yield) land in later slices and report
     # a not-yet-implemented error for now; the operation form wraps the
     # operation/call in an Expression node.
+    # Wrap an operation/block node in an Expression carrier, positioned at
+    # its inner node (matches the Python _accept_expression).
+    wrapExpression: function {:this inner: Node.take} out Node is {
+        ip: zast.posOf n: inner
+        return (Node.expression (zast.ExpressionData nodeid: this.nextId lineno: ip.line colno: ip.col expression: inner))
+    }
+
+    # True for a block-line separator token (EOL or ';').
+    atSeparator: function {:this lex: zlexer.Lexer} out bool is {
+        t: lex.peek
+        match (t.toktype) case EOL then {
+            return true
+        } case SEMICOLON then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # Does a block line start at the current token? (a binding label, a
+    # label shorthand, or an expression)
+    blocklineLookahead: function {:this lex: zlexer.Lexer} out bool is {
+        t: lex.peek
+        match (t.toktype) case LABEL then {
+            return true
+        } case LABELPRE then {
+            return true
+        } else {
+            return (this.exprLookahead lex: lex)
+        }
+    }
+
+    # blockline -> ( label expression ) | label-value | expression.
+    # Reassignment/swap (path "=" / "swap") are deferred. The caller
+    # guarantees blocklineLookahead, so the bare-expression tail always
+    # finds an expression. Returns a bare StatementLine node.
+    parseBlockline: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        sLine: startTok.lineno
+        sCol: startTok.colno
+        tt: startTok.toktype
+        if tt == zlexer.TT.LABELPRE then {
+            lblTok: lex.acceptAny
+            lvName: lblTok.tokstr.copy
+            asgnName: lblTok.tokstr.copy
+            lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+            asgn: Node.assignment (zast.AssignmentData nodeid: this.nextId lineno: sLine colno: sCol name: asgnName value: lv)
+            return (Node.statementline (zast.StatementLineData nodeid: this.nextId lineno: sLine colno: sCol statementline: asgn))
+        }
+        if tt == zlexer.TT.LABEL then {
+            lblTok: lex.acceptAny
+            nm: lblTok.tokstr.copy
+            lex.accept tt: zlexer.TT.EOL
+            eLook: this.exprLookahead lex: lex
+            if eLook then {
+                expr: this.parseExpression lex: lex
+                eErr: this.isError node: expr
+                if eErr then return expr
+                asgn: Node.assignment (zast.AssignmentData nodeid: this.nextId lineno: sLine colno: sCol name: nm value: expr)
+                return (Node.statementline (zast.StatementLineData nodeid: this.nextId lineno: sLine colno: sCol statementline: asgn))
+            } else {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Expected expression for assignment statement".string)
+            }
+        }
+        expr: this.parseExpression lex: lex
+        eErr: this.isError node: expr
+        if eErr then return expr
+        return (Node.statementline (zast.StatementLineData nodeid: this.nextId lineno: sLine colno: sCol statementline: expr))
+    }
+
+    # block -> "{" { sep } { blockline { sep } } "}" | blockline. EOL
+    # filtering is disabled inside the braces so newlines separate lines.
+    # Duplicate-definition detection is deferred to the typechecker.
+    # Returns a bare Statement node.
+    acceptBlock: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        sLine: startTok.lineno
+        sCol: startTok.colno
+        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        match (openOpt) case some then {
+            prevFilter: lex.filterEolState
+            lex.setFilterEol enabled: false
+            statements: (List of: Node)
+            for while true loop {
+                for while (this.atSeparator lex: lex) loop {
+                    lex.advance
+                }
+                la: this.blocklineLookahead lex: lex
+                if la then {
+                    sl: this.parseBlockline lex: lex
+                    slErr: this.isError node: sl
+                    if slErr then {
+                        lex.setFilterEol enabled: prevFilter
+                        return sl
+                    }
+                    statements.append sl
+                } else {
+                    break
+                }
+            }
+            lex.setFilterEol enabled: prevFilter
+            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            match (closeOpt) case some then {
+                return (Node.statement (zast.StatementData nodeid: this.nextId lineno: sLine colno: sCol statements: statements))
+            } case none then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Expected closing brace for statement body".string)
+            }
+        } case none then {
+            la: this.blocklineLookahead lex: lex
+            if la then {
+                sl: this.parseBlockline lex: lex
+                slErr: this.isError node: sl
+                if slErr then return sl
+                one: (List of: Node)
+                one.append sl
+                return (Node.statement (zast.StatementData nodeid: this.nextId lineno: sLine colno: sCol statements: one))
+            } else {
+                return (this.mkError tok: startTok code: zast.err.BADSTATEMENT msg: "Expected a statement".string)
+            }
+        }
+    }
+
+    # bareblock -> "{ ... }" as an expression; wraps a block in a Do node.
+    acceptBareblock: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        sLine: startTok.lineno
+        sCol: startTok.colno
+        blk: this.acceptBlock lex: lex
+        bErr: this.isError node: blk
+        if bErr then return blk
+        return (Node.doexpr (zast.DoData nodeid: this.nextId lineno: sLine colno: sCol statement: blk))
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
@@ -605,7 +740,10 @@ Parser: class {
         } case WITH then {
             return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "with-expression not yet implemented".string)
         } case BRACEOPEN then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "block expression not yet implemented".string)
+            blk: this.acceptBareblock lex: lex
+            bErr: this.isError node: blk
+            if bErr then return blk
+            return (this.wrapExpression inner: blk)
         } case YIELD then {
             return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "yield not yet implemented".string)
         } else {
@@ -617,8 +755,7 @@ Parser: class {
             inner: this.operationOrCallFromPaths paths: paths lex: lex
             ierr: this.isError node: inner
             if ierr then return inner
-            ip: zast.posOf n: inner
-            return (Node.expression (zast.ExpressionData nodeid: this.nextId lineno: ip.line colno: ip.col expression: inner))
+            return (this.wrapExpression inner: inner)
         }
     }
 
@@ -663,6 +800,19 @@ runOp: function {label: StringView src: String.take} is {
     }
 }
 
+runExpr: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: 0.u32
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptExpression lex: lx
+    match (r) case some then {
+        zast.printNode r
+    } case none then {
+        print "<none>"
+    }
+}
+
 main: function is {
     runPath label: "foo" src: "foo".string
     runPath label: "a.b.c" src: "a.b.c".string
@@ -679,5 +829,8 @@ main: function is {
     runPath label: "(a)" src: "(a)".string
     runPath label: "(a + b)" src: "(a + b)".string
     runPath label: "(f x)" src: "(f x)".string
+    runExpr label: "block1" src: "{ a }".string
+    runExpr label: "block2" src: "{ a; b }".string
+    runExpr label: "blockbind" src: "{ x: a + b }".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
