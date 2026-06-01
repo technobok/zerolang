@@ -7644,7 +7644,37 @@ class CEmitter:
         args = self._emit_call_args(call)
         args = self._prepend_method_receiver(call, args)
         cname = self._emit_callable_expr(call)
-        code = f"{indent}{cname}({args});\n"
+        # A discarded owned return value (e.g. the Option<Token> from a
+        # bare `lex.accept tt: X` whose result is ignored) must still be
+        # freed, or its heap payload leaks. Capture it into a temp
+        # registered for statement-end cleanup. Borrowed returns
+        # (out T.borrow) aren't owned — never free them. Mirrors the
+        # owned-return capture in _emit_call_value.
+        _ret_t = self._node_ztype(call)
+        _ret_ftype = self._node_ztype(call.callable)
+        _ret_is_borrow = bool(
+            _ret_ftype and _ret_ftype.return_ownership == ZParamOwnership.BORROW
+        )
+        if (
+            _ret_t is not None
+            and _ret_t.destructor_name
+            and not _ret_is_borrow
+            and (
+                _ret_t.subtype == ZSubType.STRING
+                or _ret_t.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
+            )
+        ):
+            _disc_tmp = self._temp_name("c")
+            if _ret_t.subtype == ZSubType.STRING:
+                _disc_ctype = self._string_cname()
+                self._temp.string_set.add(_disc_tmp)
+            else:
+                _disc_ctype = _cname_of(_ret_t, _ret_t.name)
+                self._temp.class_set[_disc_tmp] = _ret_t.name
+            self._temp.frees.append(_disc_tmp)
+            code = f"{indent}{_disc_ctype} {_disc_tmp} = {cname}({args});\n"
+        else:
+            code = f"{indent}{cname}({args});\n"
 
         # if call takes a .take argument, invalidate it after the call
         for arg in call.arguments:

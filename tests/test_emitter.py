@@ -237,6 +237,49 @@ class TestBareReturn:
         assert result.stdout == "got 1\n"
 
 
+class TestDiscardedOwnedReturnNoLeak:
+    """Regression: a call whose owned return value is discarded (used as a
+    bare statement, not bound to a name) must still free that value. The
+    generic call-statement emitter previously dropped the return on the
+    floor, leaking heap data inside owned String / class / union returns.
+    First surfaced by a bare `lex.accept tt: X` (Option<Token>) in the
+    self-hosted parser."""
+
+    def test_discarded_string_return_no_leak_under_asan(self):
+        csource = emit_source(
+            "getstr: function {n: i64} out String is {\n"
+            '    return "leak".string\n'
+            "}\n"
+            "main: function is {\n"
+            "    getstr n: 1\n"
+            '    print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "done\n"
+
+    def test_discarded_option_return_no_leak_under_asan(self):
+        # The literal shape of the parser-port bug: a discarded
+        # Option<reftype> return must destroy its owned payload.
+        csource = emit_source(
+            "getopt: function {n: i64} out (Option t: String) is {\n"
+            '    return (Option.some "leak".string)\n'
+            "}\n"
+            "main: function is {\n"
+            "    getopt n: 1\n"
+            '    print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "done\n"
+
+
 class TestLoopBreakInMatch:
     """Regression: a loop `break` inside a `match` arm must leave the
     loop, not merely the match's C `switch`.
