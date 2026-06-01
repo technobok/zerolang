@@ -832,6 +832,83 @@ Parser: class {
         }
     }
 
+    # Tail of the case-clause loop. Threads the subject and the clauses
+    # list through recursion (each clause's owned pieces move into the
+    # CaseClause, the list moves on), so neither is held across a loop
+    # body -- mirrors ifClausesTail. `case` adds a clause; anything else
+    # ends the clauses and parses an optional `else`.
+    caseClausesTail: function {:this lex: zlexer.Lexer subject: Node.take clauses: (List of: Node).take mLine: u32 mCol: u32} out Node is {
+        clStart: lex.peek
+        isCase: clStart.toktype == zlexer.TT.CASE
+        if isCase then {
+            cLine: clStart.lineno
+            cCol: clStart.colno
+            lex.advance
+            lex.accept tt: zlexer.TT.EOL
+            idOpt: lex.accept tt: zlexer.TT.REFID
+            match (idOpt) case some then {
+                nm: idOpt.tokstr.copy
+                armNode: Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: idOpt.lineno colno: idOpt.colno name: idOpt.tokstr.copy)
+                tk: lex.peek
+                isThen: tk.toktype == zlexer.TT.THEN
+                if isThen then {
+                    lex.advance
+                    body: this.acceptPrimaryExpression lex: lex
+                    bErr: this.isError node: body
+                    if bErr then return body
+                    clause: Node.caseclause (zast.CaseClauseData nodeid: this.nextId lineno: cLine colno: cCol name: nm matcharm: armNode statement: body)
+                    clauses.append clause
+                    return (this.caseClausesTail lex: lex subject: subject clauses: clauses mLine: mLine mCol: mCol)
+                } else {
+                    bad: lex.acceptAny
+                    return (this.mkError tok: bad code: zast.err.BADCASE msg: "Expected then keyword for case".string)
+                }
+            } case none then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADREFERENCE msg: "Case match expression expected (simple id)".string)
+            }
+        }
+        elseOpt: lex.accept tt: zlexer.TT.ELSE
+        match (elseOpt) case some then {
+            estmt: this.acceptPrimaryExpression lex: lex
+            eErr: this.isError node: estmt
+            if eErr then return estmt
+            return (Node.caseexpr (zast.CaseData nodeid: this.nextId lineno: mLine colno: mCol subject: subject clauses: clauses elseclause: (Option.some estmt)))
+        } case none then {
+            return (Node.caseexpr (zast.CaseData nodeid: this.nextId lineno: mLine colno: mCol subject: subject clauses: clauses elseclause: (Option.none Node)))
+        }
+    }
+
+    # match-expression -> "match" [ "on" ] op
+    #                     { "case" id "then" primary }* [ "else" primary ]
+    # The subject is a bare operation; each clause binds the matched id's
+    # name plus the AtomId arm being matched. The clause loop is a
+    # recursive tail (caseClausesTail) so the subject/clauses are never
+    # held across a loop body. Narrowing the subject and rejecting `.take`
+    # on it are typecheck concerns, not parse ones.
+    acceptMatchExpression: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        mLine: startTok.lineno
+        mCol: startTok.colno
+        matchOpt: lex.accept tt: zlexer.TT.MATCH
+        match (matchOpt) case none then {
+            return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected match".string)
+        } case some then {
+            lex.accept tt: zlexer.TT.ON
+            spaths: this.operationPaths lex: lex
+            sn: spaths.length
+            if sn == 0.u64 then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation for match (subject)".string)
+            }
+            subject: this.operationFromPaths paths: spaths lex: lex
+            sErr: this.isError node: subject
+            if sErr then return subject
+            clauses: (List of: Node)
+            return (this.caseClausesTail lex: lex subject: subject clauses: clauses mLine: mLine mCol: mCol)
+        }
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
@@ -842,7 +919,10 @@ Parser: class {
         } case FOR then {
             return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "for-expression not yet implemented".string)
         } case MATCH then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "match-expression not yet implemented".string)
+            mexpr: this.acceptMatchExpression lex: lex
+            mErr: this.isError node: mexpr
+            if mErr then return mexpr
+            return (this.wrapExpression inner: mexpr)
         } case DATA then {
             return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "data definition not yet implemented".string)
         } case WITH then {
@@ -943,5 +1023,8 @@ main: function is {
     runExpr label: "if1" src: "if c then x".string
     runExpr label: "if2" src: "if c then { a } else { b }".string
     runExpr label: "if3" src: "if a when b then x else y".string
+    runExpr label: "match1" src: "match x case a then b".string
+    runExpr label: "match2" src: "match on x case a then { p } else { q }".string
+    runExpr label: "match3" src: "match x case a then p case b then q".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
