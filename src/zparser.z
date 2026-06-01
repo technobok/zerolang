@@ -727,10 +727,118 @@ Parser: class {
         return (Node.doexpr (zast.DoData nodeid: this.nextId lineno: sLine colno: sCol statement: blk))
     }
 
+    # primary-expression -> block | operation. Control-flow bodies
+    # (if/match then/else). A block parses directly to a Statement; a bare
+    # expression is wrapped Statement(StatementLine(Expression)) so the
+    # clause statement field has a uniform shape.
+    acceptPrimaryExpression: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        sLine: t.lineno
+        sCol: t.colno
+        if t.toktype == zlexer.TT.BRACEOPEN then {
+            return (this.acceptBlock lex: lex)
+        }
+        eLook: this.exprLookahead lex: lex
+        if eLook then {
+            expr: this.parseExpression lex: lex
+            eErr: this.isError node: expr
+            if eErr then return expr
+            sl: Node.statementline (zast.StatementLineData nodeid: this.nextId lineno: sLine colno: sCol statementline: expr)
+            one: (List of: Node)
+            one.append sl
+            return (Node.statement (zast.StatementData nodeid: this.nextId lineno: sLine colno: sCol statements: one))
+        } else {
+            return (this.mkError tok: t code: zast.err.EXPECTEDSTATEMENT msg: "Expected primary-expression".string)
+        }
+    }
+
+    # Tail of the if-clause loop. Threads the clauses list and the current
+    # clause's conditions list through recursion (so the conditions list is
+    # moved into the IfClause and a fresh one passed on, never reassigned).
+    # `when` adds a condition; `then` closes a clause and starts a fresh one;
+    # otherwise the clauses end and an optional `else` is parsed.
+    ifClausesTail: function {:this lex: zlexer.Lexer clauses: (List of: Node).take conditions: (List of: Node).take clauseLine: u32 clauseCol: u32 ifLine: u32 ifCol: u32} out Node is {
+        t: lex.peek
+        tt: t.toktype
+        if tt == zlexer.TT.WHEN then {
+            lex.advance
+            lex.accept tt: zlexer.TT.EOL
+            vpaths: this.operationPaths lex: lex
+            n: vpaths.length
+            if n == 0.u64 then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation (condition) for if".string)
+            }
+            cond: this.operationFromPaths paths: vpaths lex: lex
+            cErr: this.isError node: cond
+            if cErr then return cond
+            cp: zast.posOf n: cond
+            no: this.mkNamedOp name: (Option.none String) operation: cond line: cp.line col: cp.col
+            conditions.append no
+            return (this.ifClausesTail lex: lex clauses: clauses conditions: conditions clauseLine: clauseLine clauseCol: clauseCol ifLine: ifLine ifCol: ifCol)
+        }
+        if tt == zlexer.TT.THEN then {
+            lex.advance
+            stmt: this.acceptPrimaryExpression lex: lex
+            sErr: this.isError node: stmt
+            if sErr then return stmt
+            clause: Node.ifclause (zast.IfClauseData nodeid: this.nextId lineno: clauseLine colno: clauseCol conditions: conditions statement: stmt)
+            clauses.append clause
+            nextTok: lex.peek
+            return (this.ifClausesTail lex: lex clauses: clauses conditions: (List of: Node) clauseLine: nextTok.lineno clauseCol: nextTok.colno ifLine: ifLine ifCol: ifCol)
+        }
+        cn: conditions.length
+        if cn != 0.u64 then {
+            return (this.mkError tok: t code: zast.err.BADTHEN msg: "Expected then after conditions".string)
+        }
+        if tt == zlexer.TT.ELSE then {
+            lex.advance
+            estmt: this.acceptPrimaryExpression lex: lex
+            eErr: this.isError node: estmt
+            if eErr then return estmt
+            return (Node.ifexpr (zast.IfData nodeid: this.nextId lineno: ifLine colno: ifCol clauses: clauses elseclause: (Option.some estmt)))
+        }
+        return (Node.ifexpr (zast.IfData nodeid: this.nextId lineno: ifLine colno: ifCol clauses: clauses elseclause: (Option.none Node)))
+    }
+
+    # if-expression -> "if" op { "when" op }* "then" primary
+    #                  { "when" op }* "then" primary ... [ "else" primary ]
+    acceptIfExpression: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        ifLine: startTok.lineno
+        ifCol: startTok.colno
+        ifOpt: lex.accept tt: zlexer.TT.IF
+        match (ifOpt) case none then {
+            return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected if".string)
+        } case some then {
+            clauseStart: lex.peek
+            cLine: clauseStart.lineno
+            cCol: clauseStart.colno
+            vpaths: this.operationPaths lex: lex
+            n: vpaths.length
+            if n == 0.u64 then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation (condition) for if".string)
+            }
+            cond: this.operationFromPaths paths: vpaths lex: lex
+            cErr: this.isError node: cond
+            if cErr then return cond
+            cp: zast.posOf n: cond
+            no: this.mkNamedOp name: (Option.none String) operation: cond line: cp.line col: cp.col
+            conditions: (List of: Node)
+            conditions.append no
+            clauses: (List of: Node)
+            return (this.ifClausesTail lex: lex clauses: clauses conditions: conditions clauseLine: cLine clauseCol: cCol ifLine: ifLine ifCol: ifCol)
+        }
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "if-expression not yet implemented".string)
+            ifn: this.acceptIfExpression lex: lex
+            iErr: this.isError node: ifn
+            if iErr then return ifn
+            return (this.wrapExpression inner: ifn)
         } case FOR then {
             return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "for-expression not yet implemented".string)
         } case MATCH then {
@@ -832,5 +940,8 @@ main: function is {
     runExpr label: "block1" src: "{ a }".string
     runExpr label: "block2" src: "{ a; b }".string
     runExpr label: "blockbind" src: "{ x: a + b }".string
+    runExpr label: "if1" src: "if c then x".string
+    runExpr label: "if2" src: "if c then { a } else { b }".string
+    runExpr label: "if3" src: "if a when b then x else y".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
