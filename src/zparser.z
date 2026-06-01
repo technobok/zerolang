@@ -1553,16 +1553,44 @@ Parser: class {
         return (this.operationFromPaths paths: paths lex: lex)
     }
 
-    # type-definition dispatcher (minimal: unit / function / operation).
-    # The type-def keywords (record / class / ...) and the if/match/data
-    # expression forms land in a later slice. Returns a bare Node; an
-    # absent definition becomes an EXPECTEDTYPEDEF error node.
+    # type-definition dispatcher: unit / function / the six item-definition
+    # kinds (record/class/variant/union/protocol/facet) / the if/match/data
+    # expression forms (wrapped as an Expression) / else a bare operation.
+    # Returns a bare Node; an absent definition becomes an EXPECTEDTYPEDEF
+    # error node.
     acceptTypeDefinition: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case UNIT then {
             return (this.parseUnitDefinition lex: lex startTok: t)
         } case FUNCTION then {
             return (this.parseFunctionDefinition lex: lex startTok: t)
+        } case RECORD then {
+            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.RECORD)
+        } case CLASS then {
+            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.CLASS)
+        } case VARIANT then {
+            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.VARIANT)
+        } case UNION then {
+            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.UNION)
+        } case PROTOCOL then {
+            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.PROTOCOL)
+        } case FACET then {
+            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.FACET)
+        } case IF then {
+            ifn: this.acceptIfExpression lex: lex
+            iErr: this.isError node: ifn
+            if iErr then return ifn
+            return (this.wrapExpression inner: ifn)
+        } case MATCH then {
+            mexpr: this.acceptMatchExpression lex: lex
+            mErr: this.isError node: mexpr
+            if mErr then return mexpr
+            return (this.wrapExpression inner: mexpr)
+        } case DATA then {
+            dn: this.acceptDataDefinition lex: lex
+            dErr: this.isError node: dn
+            if dErr then return dn
+            return (this.wrapExpression inner: dn)
         } else {
             paths: this.operationPaths lex: lex
             n: paths.length
@@ -1665,6 +1693,97 @@ Parser: class {
                 return (Node.unitdef (zast.UnitData nodeid: this.nextId lineno: startTok.lineno colno: startTok.colno body: body))
             }
         }
+    }
+
+    # item-definition entry (record/class/variant/union/protocol/facet).
+    # The caller has peeked the keyword (startTok); this consumes it, seeds
+    # empty is/as accumulators, and tail-calls the reorder loop. Stays a
+    # thin seed so the tail is re-entrant with the keyword already consumed.
+    parseItemDefinition: function {:this lex: zlexer.Lexer startTok: zlexer.Token kind: zast.nodetype} out Node is {
+        lex.advance
+        isItems: (List of: Node)
+        asItems: (List of: Node)
+        return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: asItems isNative: false hasIs: false hasAs: false kind: kind startLine: startTok.lineno startCol: startTok.colno)
+    }
+
+    # Reorderable `is { ... }` / `as { ... }` / `is native` / bare `native`
+    # clause loop for an item definition. Recursive tail threading the two
+    # owned member lists (like functionClausesTail) -- a leading bare `{`
+    # defaults to the is-body. An item must carry an is-body or `native`;
+    # otherwise the body is malformed. Builds the objectdef at the terminal.
+    acceptItemBodiesTail: function {:this lex: zlexer.Lexer isItems: (List of: Node).take asItems: (List of: Node).take isNative: bool hasIs: bool hasAs: bool kind: zast.nodetype startLine: u32 startCol: u32} out Node is {
+        t: lex.peek
+        tt: t.toktype
+        if tt == zlexer.TT.IS then {
+            if hasIs then {
+                return (this.mkError tok: t code: zast.err.BADITEM msg: "Duplicate is clause".string)
+            }
+            if isNative then {
+                return (this.mkError tok: t code: zast.err.BADITEM msg: "Duplicate is clause".string)
+            }
+            lex.advance
+            natOpt: lex.accept tt: zlexer.TT.NATIVE
+            match (natOpt) case some then {
+                return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: asItems isNative: true hasIs: hasIs hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+            } case none then {
+                ib: this.getObjectBody lex: lex
+                ibn: ib.length
+                if ibn > 0.u64 then {
+                    last: ib.pop
+                    le: this.isError node: last
+                    if le then return last
+                    ib.append last
+                }
+                return (this.acceptItemBodiesTail lex: lex isItems: ib asItems: asItems isNative: isNative hasIs: true hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+            }
+        }
+        if tt == zlexer.TT.NATIVE then {
+            noBodyYet: true
+            if hasIs then noBodyYet = false
+            if isNative then noBodyYet = false
+            if noBodyYet then {
+                lex.advance
+                return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: asItems isNative: true hasIs: hasIs hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+            }
+        }
+        if tt == zlexer.TT.AS then {
+            if hasAs then {
+                return (this.mkError tok: t code: zast.err.BADITEM msg: "Duplicate as clause".string)
+            }
+            lex.advance
+            ab: this.getObjectBody lex: lex
+            abn: ab.length
+            if abn > 0.u64 then {
+                last: ab.pop
+                le: this.isError node: last
+                if le then return last
+                ab.append last
+            }
+            return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: ab isNative: isNative hasIs: hasIs hasAs: true kind: kind startLine: startLine startCol: startCol)
+        }
+        if tt == zlexer.TT.BRACEOPEN then {
+            noBodyYet: true
+            if hasIs then noBodyYet = false
+            if isNative then noBodyYet = false
+            if noBodyYet then {
+                ib: this.getObjectBody lex: lex
+                ibn: ib.length
+                if ibn > 0.u64 then {
+                    last: ib.pop
+                    le: this.isError node: last
+                    if le then return last
+                    ib.append last
+                }
+                return (this.acceptItemBodiesTail lex: lex isItems: ib asItems: asItems isNative: isNative hasIs: true hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+            }
+        }
+        hasBody: false
+        if hasIs then hasBody = true
+        if isNative then hasBody = true
+        if hasBody then {
+            return (Node.objectdef (zast.ObjectDefData nodeid: this.nextId lineno: startLine colno: startCol kind: kind isItems: isItems asItems: asItems isNative: isNative))
+        }
+        return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Expected open brace or native for item body".string)
     }
 
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
@@ -1885,5 +2004,19 @@ main: function is {
     runDef label: "unit4" src: "unit { }".string
     runDef label: "unit5" src: "unit { a: 1 a: 2 }".string
     runDef label: "defop" src: "a + b".string
+    runDef label: "record1" src: "record { x: i64 y: i64 }".string
+    runDef label: "record2" src: "record { x: i64 } as { m: measurable }".string
+    runDef label: "class1" src: "class is native".string
+    runDef label: "class2" src: "class native".string
+    runDef label: "variant1" src: "variant { red: 0 green: 1 }".string
+    runDef label: "union1" src: "union { a: i64 b: i64 }".string
+    runDef label: "protocol1" src: "protocol { foo: function {:this} out i64 }".string
+    runDef label: "facet1" src: "facet { measure: function {:this b: i64} out i64 }".string
+    runDef label: "reorder1" src: "class as { t: i64 } is { x: i64 }".string
+    runDef label: "generic1" src: "class { v: t } as { t: i64 }".string
+    runDef label: "err1" src: "record as { x: i64 }".string
+    runDef label: "defif" src: "if c then x".string
+    runDef label: "defmatch" src: "match x case a then b".string
+    runDef label: "defdata" src: "data { x: 1 } out u8".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
