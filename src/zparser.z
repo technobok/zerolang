@@ -1229,6 +1229,177 @@ Parser: class {
         }
     }
 
+    # Parse a `{ (:name | name: typeref)* }` parameter block into a
+    # (List of: Node) of namedoperation arms (name=param, operation=type
+    # path or label-value). Duplicate names rejected. Errors use the
+    # operationPaths trailing-sentinel: on failure an error node is the
+    # last element (the caller pop-checks and propagates).
+    acceptParamBlock: function {:this lex: zlexer.Lexer} out (List of: Node) is {
+        params: (List of: Node)
+        names: (List of: String)
+        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        match (openOpt) case none then {
+            bad: lex.peek
+            params.append (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected open brace for parameter block".string)
+            return params
+        } case some then {
+            for while true loop {
+                lex.accept tt: zlexer.TT.EOL
+                pk: lex.peek
+                pktt: pk.toktype
+                if pktt == zlexer.TT.LABELPRE then {
+                    lblTok: lex.acceptAny
+                    nm: lblTok.tokstr.copy
+                    dup: names.contains item: nm
+                    if dup then {
+                        params.append (this.mkError tok: lblTok code: zast.err.BADPARAMETER msg: "Duplicate parameter name".string)
+                        return params
+                    }
+                    names.append nm
+                    lvName: lblTok.tokstr.copy
+                    opName: lblTok.tokstr.copy
+                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                    no: this.mkNamedOp name: (Option.some opName) operation: lv line: lblTok.lineno col: lblTok.colno
+                    params.append no
+                } else {
+                    isLbl: pktt == zlexer.TT.LABEL
+                    if isLbl then {
+                        lblTok: lex.acceptAny
+                        nm: lblTok.tokstr.copy
+                        dup: names.contains item: nm
+                        if dup then {
+                            params.append (this.mkError tok: lblTok code: zast.err.BADPARAMETER msg: "Duplicate parameter name".string)
+                            return params
+                        }
+                        names.append nm
+                        opName: lblTok.tokstr.copy
+                        la: this.atomLookahead lex: lex
+                        if la then {
+                            pathNode: this.parsePath lex: lex
+                            pErr: this.isError node: pathNode
+                            if pErr then {
+                                params.append pathNode
+                                return params
+                            }
+                            no: this.mkNamedOp name: (Option.some opName) operation: pathNode line: lblTok.lineno col: lblTok.colno
+                            params.append no
+                        } else {
+                            bad: lex.peek
+                            params.append (this.mkError tok: bad code: zast.err.BADPARAMETER msg: "Expected type reference for parameter".string)
+                            return params
+                        }
+                    } else {
+                        break
+                    }
+                }
+            }
+            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            match (closeOpt) case none then {
+                bad: lex.peek
+                params.append (this.mkError tok: bad code: zast.err.BADPARAMETERBLOCK msg: "Expected closing brace after parameters".string)
+                return params
+            } case some then {
+                return params
+            }
+        }
+    }
+
+    # Tail of the function-definition clause loop (out/is/in; `as` lands
+    # in slice 2). Threads the owned accumulators through recursion so
+    # nothing is held across a loop body (E0200) -- mirrors forClausesTail.
+    # Each clause rejects a duplicate; an unmatched token terminates and
+    # builds the functiondef.
+    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (List of: Node).take asItems: (List of: Node).take returntype: (Option t: Node).take body: (Option t: Node).take gotIn: bool hasOut: bool hasIs: bool isNative: bool startLine: u32 startCol: u32} out Node is {
+        t: lex.peek
+        tt: t.toktype
+        if tt == zlexer.TT.OUT then {
+            if hasOut then {
+                return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate out".string)
+            }
+            lex.advance
+            la: this.atomLookahead lex: lex
+            if la then {
+                rt: this.parsePath lex: lex
+                rErr: this.isError node: rt
+                if rErr then return rt
+                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.some rt) body: body gotIn: gotIn hasOut: true hasIs: hasIs isNative: isNative startLine: startLine startCol: startCol)
+            } else {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected type reference for out".string)
+            }
+        }
+        if tt == zlexer.TT.IS then {
+            if hasIs then {
+                return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate is".string)
+            }
+            lex.advance
+            natOpt: lex.accept tt: zlexer.TT.NATIVE
+            match (natOpt) case some then {
+                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: body gotIn: gotIn hasOut: hasOut hasIs: true isNative: true startLine: startLine startCol: startCol)
+            } case none then {
+                stmt: this.acceptBlock lex: lex
+                sErr: this.isError node: stmt
+                if sErr then return stmt
+                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: (Option.some stmt) gotIn: gotIn hasOut: hasOut hasIs: true isNative: isNative startLine: startLine startCol: startCol)
+            }
+        }
+        if tt == zlexer.TT.IN then {
+            if gotIn then {
+                return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate in".string)
+            }
+            lex.advance
+            pb: this.acceptParamBlock lex: lex
+            pn: pb.length
+            if pn > 0.u64 then {
+                last: pb.pop
+                le: this.isError node: last
+                if le then return last
+                pb.append last
+            }
+            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: returntype body: body gotIn: true hasOut: hasOut hasIs: hasIs isNative: isNative startLine: startLine startCol: startCol)
+        }
+        return (Node.functiondef (zast.FunctionData nodeid: this.nextId lineno: startLine colno: startCol returntype: returntype parameters: parameters body: body isNative: isNative asItems: asItems))
+    }
+
+    # Body of acceptFunctionDefinition after `function` is consumed. A
+    # leading `{` is an implicit `in` param block; otherwise the clause
+    # tail starts with empty accumulators.
+    functionDefinitionInner: function {:this lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
+        parameters: (List of: Node)
+        asItems: (List of: Node)
+        pk: lex.peek
+        isBrace: pk.toktype == zlexer.TT.BRACEOPEN
+        if isBrace then {
+            pb: this.acceptParamBlock lex: lex
+            pn: pb.length
+            if pn > 0.u64 then {
+                last: pb.pop
+                le: this.isError node: last
+                if le then return last
+                pb.append last
+            }
+            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: true hasOut: false hasIs: false isNative: false startLine: startLine startCol: startCol)
+        }
+        return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: false hasOut: false hasIs: false isNative: false startLine: startLine startCol: startCol)
+    }
+
+    # function-definition -> "function" [in-block] {out|is|as|in}*. Bumps
+    # functionBodyDepth around the whole definition (the yield gate reads
+    # it) and restores it on the single funneled return. Returns none when
+    # there is no `function` keyword.
+    acceptFunctionDefinition: function {:this lex: zlexer.Lexer} out (Option t: Node) is {
+        startTok: lex.peek
+        funcOpt: lex.accept tt: zlexer.TT.FUNCTION
+        match (funcOpt) case none then {
+            return (Option.none Node)
+        } case some then {
+            this.functionBodyDepth = this.functionBodyDepth + 1.u32
+            inner: this.functionDefinitionInner lex: lex startLine: startTok.lineno startCol: startTok.colno
+            this.functionBodyDepth = this.functionBodyDepth - 1.u32
+            return (Option.some inner)
+        }
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
@@ -1365,6 +1536,21 @@ runYieldBody: function {label: StringView src: String.take} is {
     }
 }
 
+# Drive acceptFunctionDefinition over an inline snippet and dump the
+# resulting node tree.
+runFunc: function {label: StringView src: String.take} is {
+    print "=== \{label} ==="
+    p: Parser.create
+    tk: zlexer.Tokenizer.create source: src fsno: 0.u32
+    lx: zlexer.Lexer.create lexer: tk
+    r: p.acceptFunctionDefinition lex: lx
+    match (r) case some then {
+        zast.printNode r
+    } case none then {
+        print "<none>"
+    }
+}
+
 main: function is {
     runPath label: "foo" src: "foo".string
     runPath label: "a.b.c" src: "a.b.c".string
@@ -1404,5 +1590,11 @@ main: function is {
     runExpr label: "reassign2" src: "p.x = a + b".string
     runExpr label: "swap1" src: "a swap b".string
     runExpr label: "rsblock" src: "{ a = b }".string
+    runFunc label: "func1" src: "function { x: i64 }".string
+    runFunc label: "func2" src: "function { :T }".string
+    runFunc label: "func3" src: "function out i64 is { x }".string
+    runFunc label: "func4" src: "function is native".string
+    runFunc label: "func5" src: "function { x: i64 } out i64 is { x }".string
+    runFunc label: "func6" src: "function { x: i64 x: i64 }".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
