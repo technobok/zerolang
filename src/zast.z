@@ -927,6 +927,180 @@ printNode: function {n: Node} is {
     }
 }
 
+# Canonical (id-stripped) dump used by the parser differential. Same as
+# printNode but without the `<nodeid>: ` header prefix and without the
+# namedoperation position (the Python reference cannot recover the label
+# token position for dict-valued member maps).
+printOptChildCanonical: function {o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        printNodeCanonical o
+    } case none then {
+        print "  <none>"
+    }
+}
+
+printNodeCanonical: function {n: Node} is {
+    match (
+        n
+    ) case error then {
+        print "error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
+    } case atomid then {
+        print "atomid @\{n.lineno}:\{n.colno} name=\{n.name}"
+    } case labelvalue then {
+        print "labelvalue @\{n.lineno}:\{n.colno} name=\{n.name}"
+    } case stringchunk then {
+        print "stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
+    } case binop then {
+        print "binop @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.lhs
+        printNodeCanonical n.operator
+        printNodeCanonical n.rhs
+    } case atomstring then {
+        print "atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
+        iter: n.stringparts.iterate
+        for part: iter loop {
+            printNodeCanonical part
+        }
+    } case dottedpath then {
+        print "dottedpath @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.parent
+        printNodeCanonical n.child
+    } case call then {
+        print "call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
+        printNodeCanonical n.callable
+        argiter: n.arguments.iterate
+        for arg: argiter loop {
+            printNodeCanonical arg
+        }
+    } case typeofexpr then {
+        print "typeofexpr @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.source
+    } case namedoperation then {
+        print "namedoperation"
+        printOptName n.name
+        printNodeCanonical n.operation
+    } case datablock then {
+        print "datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
+        eiter: n.elements.iterate
+        for el: eiter loop {
+            printNodeCanonical el
+        }
+        print "  outType:"
+        printOptChildCanonical n.outType
+    } case yieldexpr then {
+        print "yieldexpr @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.expr
+    } case statement then {
+        print "statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
+        siter: n.statements.iterate
+        for line: siter loop {
+            printNodeCanonical line
+        }
+    } case statementline then {
+        print "statementline @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.statementline
+    } case assignment then {
+        print "assignment @\{n.lineno}:\{n.colno} name=\{n.name}"
+        printNodeCanonical n.value
+    } case reassignment then {
+        print "reassignment @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.topath
+        printNodeCanonical n.value
+    } case swapstmt then {
+        print "swapstmt @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.lhs
+        printNodeCanonical n.rhs
+    } case expression then {
+        print "expression @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.expression
+    } case ifexpr then {
+        print "ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        clit: n.clauses.iterate
+        for cl: clit loop {
+            printNodeCanonical cl
+        }
+        print "  elseclause:"
+        printOptChildCanonical n.elseclause
+    } case ifclause then {
+        print "ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
+        coit: n.conditions.iterate
+        for co: coit loop {
+            printNodeCanonical co
+        }
+        printNodeCanonical n.statement
+    } case forexpr then {
+        print "forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
+        fcit: n.conditions.iterate
+        for fc: fcit loop {
+            printNodeCanonical fc
+        }
+        print "  body:"
+        printOptChildCanonical n.body
+        fpit: n.postconditions.iterate
+        for fp: fpit loop {
+            printNodeCanonical fp
+        }
+    } case doexpr then {
+        print "doexpr @\{n.lineno}:\{n.colno}"
+        printNodeCanonical n.statement
+    } case withexpr then {
+        print "withexpr @\{n.lineno}:\{n.colno} name=\{n.name}"
+        printNodeCanonical n.value
+        printNodeCanonical n.body
+    } case caseexpr then {
+        print "caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        printNodeCanonical n.subject
+        ccit: n.clauses.iterate
+        for cc: ccit loop {
+            printNodeCanonical cc
+        }
+        print "  elseclause:"
+        printOptChildCanonical n.elseclause
+    } case caseclause then {
+        print "caseclause @\{n.lineno}:\{n.colno} name=\{n.name}"
+        printNodeCanonical n.matcharm
+        printNodeCanonical n.statement
+    } case functiondef then {
+        print "functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}"
+        print "  returntype:"
+        printOptChildCanonical n.returntype
+        piter: n.parameters.iterate
+        for pm: piter loop {
+            printNodeCanonical pm
+        }
+        print "  body:"
+        printOptChildCanonical n.body
+        faiter: n.asItems.iterate
+        for fam: faiter loop {
+            printNodeCanonical fam
+        }
+    } case objectdef then {
+        print "objectdef @\{n.lineno}:\{n.colno} kind=\{nodetypename n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
+        oiiter: n.isItems.iterate
+        for oim: oiiter loop {
+            printNodeCanonical oim
+        }
+        oaiter: n.asItems.iterate
+        for oam: oaiter loop {
+            printNodeCanonical oam
+        }
+    } case unitdef then {
+        print "unitdef @\{n.lineno}:\{n.colno} body=\{n.body.length}"
+        ubiter: n.body.iterate
+        for ubm: ubiter loop {
+            printNodeCanonical ubm
+        }
+    } case program then {
+        print "program @\{n.lineno}:\{n.colno} units=\{n.units.length} mainUnitName=\{n.mainUnitName}"
+        puiter: n.units.iterate
+        for pum: puiter loop {
+            printNodeCanonical pum
+        }
+    }
+}
+
 # Smoke main: construct one instance of every variant arm and
 # print a deterministic dump for the harness to compare against
 # tests/fixtures/zast_z/smoke.expected.

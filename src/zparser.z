@@ -1949,6 +1949,28 @@ runDef: function {label: StringView src: String.take} is {
 }
 
 main: function is {
+    # With a `.z` file path argument, parse its unit body and dump the
+    # canonical (id-stripped) AST for the parser differential (mirrors
+    # zlexer.z); with no argument, fall through to the inline smoke harness.
+    argv: os.args
+    hasFile: argv.length > 1.u64
+    if hasFile then {
+        path: argv.get i: 1.u64
+        r: io.readText path: path.stringview
+        match (r) case ok then {
+            p: Parser.create
+            tk: zlexer.Tokenizer.create source: r.take fsno: 0.u32
+            lx: zlexer.Lexer.create lexer: tk
+            firstTok: lx.peek
+            body: p.acceptUnitBody lex: lx
+            root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
+            zast.printNodeCanonical root
+        } case err then {
+            io.eprintln "zparser: could not read source file"
+            os.exit code: 1.i32
+        }
+        return
+    }
     runPath label: "foo" src: "foo".string
     runPath label: "a.b.c" src: "a.b.c".string
     runPath label: "string" src: "\"hello\"".string
