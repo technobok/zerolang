@@ -909,6 +909,112 @@ Parser: class {
         }
     }
 
+    # Tail of the for-header. Threads the conditions + postconditions
+    # lists and the optional body through recursion as `.take` params so
+    # nothing owned is held across a loop body (E0200). `while` before the
+    # body is a condition, after it a postcondition; `label op` is the
+    # at-most-one binding; `loop primary` is the body. `hasBody` mirrors
+    # Python's `if loop:` truthiness without inspecting the owned body.
+    forClausesTail: function {:this lex: zlexer.Lexer conditions: (List of: Node).take postconditions: (List of: Node).take body: (Option t: Node).take hasBody: bool bound: bool forLine: u32 forCol: u32} out Node is {
+        t: lex.peek
+        tt: t.toktype
+        if tt == zlexer.TT.WHILE then {
+            lex.advance
+            lex.accept tt: zlexer.TT.EOL
+            vpaths: this.operationPaths lex: lex
+            n: vpaths.length
+            if n == 0.u64 then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation (condition) for for".string)
+            }
+            op: this.operationFromPaths paths: vpaths lex: lex
+            oErr: this.isError node: op
+            if oErr then return op
+            if hasBody then {
+                postconditions.append op
+            } else {
+                cp: zast.posOf n: op
+                no: this.mkNamedOp name: (Option.none String) operation: op line: cp.line col: cp.col
+                conditions.append no
+            }
+            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: body hasBody: hasBody bound: bound forLine: forLine forCol: forCol)
+        }
+        if tt == zlexer.TT.LABEL then {
+            if hasBody then {
+                return (this.mkError tok: t code: zast.err.BADFOR msg: "Binding label not allowed after loop".string)
+            }
+            if bound then {
+                return (this.mkError tok: t code: zast.err.BADFOR msg: "for accepts at most one binding".string)
+            }
+            lblTok: lex.acceptAny
+            nm: lblTok.tokstr.copy
+            lex.accept tt: zlexer.TT.EOL
+            vpaths: this.operationPaths lex: lex
+            n: vpaths.length
+            if n == 0.u64 then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation for for binding label".string)
+            }
+            op: this.operationFromPaths paths: vpaths lex: lex
+            oErr: this.isError node: op
+            if oErr then return op
+            no: this.mkNamedOp name: (Option.some nm) operation: op line: lblTok.lineno col: lblTok.colno
+            conditions.append no
+            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: body hasBody: hasBody bound: true forLine: forLine forCol: forCol)
+        }
+        if tt == zlexer.TT.LOOP then {
+            if hasBody then {
+                bad: lex.acceptAny
+                return (this.mkError tok: bad code: zast.err.BADFOR msg: "Duplicate loop".string)
+            }
+            lex.advance
+            stmt: this.acceptPrimaryExpression lex: lex
+            sErr: this.isError node: stmt
+            if sErr then return stmt
+            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: (Option.some stmt) hasBody: true bound: bound forLine: forLine forCol: forCol)
+        }
+        empty: conditions.length == 0.u64
+        if empty then {
+            if hasBody then {
+                return (Node.forexpr (zast.ForData nodeid: this.nextId lineno: forLine colno: forCol conditions: conditions body: body postconditions: postconditions))
+            }
+            bad: lex.acceptAny
+            return (this.mkError tok: bad code: zast.err.BADFOR msg: "Require at least one condition or a loop for for".string)
+        }
+        return (Node.forexpr (zast.ForData nodeid: this.nextId lineno: forLine colno: forCol conditions: conditions body: body postconditions: postconditions))
+    }
+
+    # for-expression -> "for" [op] { "while" op } [ label op ] { "while" op }
+    #                   [ "loop" primary ] { "while" op }
+    # -> forexpr (conditions: namedoperation arms [named=binding,
+    # unnamed=while/leading], body, postconditions: bare op Nodes). The
+    # optional leading naked operation is an unnamed precondition; the rest
+    # of the header is consumed by the recursive forClausesTail.
+    acceptForExpression: function {:this lex: zlexer.Lexer} out Node is {
+        startTok: lex.peek
+        forLine: startTok.lineno
+        forCol: startTok.colno
+        forOpt: lex.accept tt: zlexer.TT.FOR
+        match (forOpt) case none then {
+            return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected for".string)
+        } case some then {
+            conditions: (List of: Node)
+            postconditions: (List of: Node)
+            paths: this.operationPaths lex: lex
+            n: paths.length
+            if n == 0.u64 then {
+                return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: (Option.none Node) hasBody: false bound: false forLine: forLine forCol: forCol)
+            }
+            op: this.operationFromPaths paths: paths lex: lex
+            oErr: this.isError node: op
+            if oErr then return op
+            cp: zast.posOf n: op
+            no: this.mkNamedOp name: (Option.none String) operation: op line: cp.line col: cp.col
+            conditions.append no
+            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: (Option.none Node) hasBody: false bound: false forLine: forLine forCol: forCol)
+        }
+    }
+
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match (t.toktype) case IF then {
@@ -917,7 +1023,10 @@ Parser: class {
             if iErr then return ifn
             return (this.wrapExpression inner: ifn)
         } case FOR then {
-            return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "for-expression not yet implemented".string)
+            forn: this.acceptForExpression lex: lex
+            fErr: this.isError node: forn
+            if fErr then return forn
+            return (this.wrapExpression inner: forn)
         } case MATCH then {
             mexpr: this.acceptMatchExpression lex: lex
             mErr: this.isError node: mexpr
@@ -1026,5 +1135,8 @@ main: function is {
     runExpr label: "match1" src: "match x case a then b".string
     runExpr label: "match2" src: "match on x case a then { p } else { q }".string
     runExpr label: "match3" src: "match x case a then p case b then q".string
+    runExpr label: "for1" src: "for ready loop a".string
+    runExpr label: "for2" src: "for i: items while more loop { a }".string
+    runExpr label: "for3" src: "for while c loop a while d".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
 }
