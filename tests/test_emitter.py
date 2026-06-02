@@ -40,6 +40,66 @@ _BUILD_EXAMPLES = sorted(
     if name not in _BUILD_SKIP
 )
 
+# Behavioral (stdout) coverage for examples that the hardcoded per-example
+# methods below don't cover. Outputs were captured by running each example;
+# they lock in known-good runtime behavior so codegen/runtime regressions are
+# caught, not just compile failures. File-I/O / non-deterministic examples
+# (io_*) stay compile-only (test_example_compiles). Keys here must NOT overlap
+# the hardcoded test_* methods (no duplicate assertions).
+_EXAMPLE_OUTPUTS = {
+    "arbprec_constants": "ok\n",
+    "atomic_call_temps": "101 101\n",
+    "autoproject": "greet = 42\n",
+    "borrowed_record": "x=7\ny=14\nz=21\n",
+    "box": "boxed 42 + 8 = 50\nb is 42\nboxed 100 * 2 = 200\ndone\n",
+    "chained_method_calls": "1112\n",
+    "class_text_protocol": "hello from class MyLabel\n",
+    "classes": "initial = 10\nafter 3 increments = 13\nd.value = 13\ne.value = 100\nafter swap: d=100 e=13\nnamed: test=42\n",
+    "compileerror": "mode ok\nbuffer ok, cap = 8\nlevel 2\n",
+    "create_null": "s.value = 42\n",
+    "dobreak": "got value\nearly exit\n30\nafter block\n100\n",
+    "equality": "points equal\npoints not equal\nresults equal\nresults differ (payload)\nresults differ (tag)\ncolors equal\ncolors not equal\nitems equal\nitems not equal\nstrings equal\nstrings not equal\nok\n",
+    "field_reassign": "done\n",
+    "forloop": "sum 1..10: 55\ndo-while count: 5\neach 5:\n  0\n  1\n  2\n  3\n  4\neach 10 from 7:\n  7\n  8\n  9\niter: 0\niter: 1\niter: 2\ngreet: hello\ngreet: world\ngreet: from zerolang\nsquares length: 5\n  0\n  1\n  4\n  9\n  16\n",
+    "generator_accepts_borrow": "a=1\nb=2\nc=42\n(none)\n",
+    "generator_bidirectional": "got: 1\ngot: 2\ngot: 99\n(none)\n",
+    "generator_chain": "v: 10\nv: 11\nv: 12\nv: 100\nv: 101\ndone\n",
+    "generator_counter": "x: 1\nx: 2\nx: 3\ndone\n",
+    "generator_intrange": "x: 10\nx: 11\nx: 12\ndone\n",
+    "generator_listiter": "Bag count: 3\niter: 10\niter: 20\niter: 30\ndone\n",
+    "generator_map_filter": "v: 6\nv: 8\nv: 10\ndone\n",
+    "genericfileunit": "add: 8\ndouble: 42\ni32 add: 30\n",
+    "genericfunctions": "ok\n",
+    "genericunit": "add: 8\ndouble: 42\ni32 add: 30\n",
+    "iterator": "Adder(10) + 5 = 15\nMultiplier(3) * 5 = 15\nowned Adder(100) + 7 = 107\nborrowed Multiplier(5) * 4 = 20\nm2 still alive: factor=5\ndone\n",
+    "linkedlist": "box i64: 42\nbox f64: 3.14\nbox string: hello\ne1: alpha=1\ne2: beta=2\nafter swap: e1=beta e2=alpha\ntaken: gamma=3\nbefore swap: x=10 y=20\nafter swap: x=20 y=10\nconsumed Entry\nEntry destroyed\ndone\n",
+    "listiter": "Bag count: 3\niter: 10\niter: 20\niter: 30\ndone\n",
+    "listview": "listview length: 4\nfirst: 10\nsecond: 20\nlast: 40\n",
+    "mapitems": "all grades:\n  alice -> 92\n  bob -> 78\n  carol -> 85\n",
+    "owned_protocol": "owned.read = 15\n",
+    "ownership": "a: alpha=1\nb: alpha=1\nafter swap: b=charlie c=alpha\nconsumed: delta=4\npeeked: echo\ne still alive: echo\nfactory: foxtrot=6\ng destroyed\nh alive: hotel\nh released early\nconsumed: india=9\ndone\n",
+    "panic": "x = 42\n",
+    "path_locks": "alice, age=31\n",
+    "result": "ok result:\n  ok\nerr result:\n  err\ntransferred result:\n  ok\noptionval.some i64 created\n  is some\noptionval.none i64 created\n  is none\noptionval.some f64 created\n  is some\ndone\n",
+    "set_uniq": "length: 4\nhas 1: 1\nhas 99: 0\ndeleted 2: 1\nlength: 3\nsum: 8\nunique names: 2\nhas alice: 1\n",
+    "string_ordering": "apple < banana\nbanana > apple\napp < apple (shorter prefix wins)\ncompare apple banana = -1\nalpha < beta (stringview)\nsame <= same\nsame >= same\nsame == same\n",
+    "strview": "hello world\n11\n111\n11\nhello world\n11\nhello world\nGreetings\n9\nGree\n4\nalice\n5\n",
+    "text_protocol": "hello from MyLabel\na plain stringview\na heap string\n",
+    "typed_data": "low: 1\nhigh: 251\nfirst prime: 2\n",
+    "visibility": "point: 3, 4\nvalue: 42\ndone\n",
+    "with_alias": "alice\n5\n30\nhello world\n",
+}
+
+# Examples that read argv (os.args): (argv, expected_stdout). os_basics also
+# reads $PATH (universally set), and exits via os.exit(0).
+_EXAMPLE_OUTPUTS_WITH_ARGS = {
+    "cli_basic": (
+        ["mypat", "myfile"],
+        "verbose=0\nignore-case=0\n(no output)\nmypat\nmyfile\n",
+    ),
+    "os_basics": ([], "argc=1\nPATH set=1\nmiss ok\n"),
+}
+
 
 def emit_source(source: str, unitname: str = "test") -> str:
     """Parse, type-check, and emit C source for a zerolang program."""
@@ -2349,6 +2409,17 @@ class TestEmitterExamples:
         # dedicated tests above; this only guards codegen, so it does not run
         # the binary (avoids argv / runtime-resource handling).
         compile_only(self._emit_example(name))
+
+    @pytest.mark.parametrize("name", sorted(_EXAMPLE_OUTPUTS))
+    def test_example_output(self, name):
+        # Run each example and assert its exact captured stdout, so a runtime
+        # regression (not just a compile failure) is caught.
+        assert compile_and_run(self._emit_example(name)) == _EXAMPLE_OUTPUTS[name]
+
+    @pytest.mark.parametrize("name", sorted(_EXAMPLE_OUTPUTS_WITH_ARGS))
+    def test_example_output_with_args(self, name):
+        argv, expected = _EXAMPLE_OUTPUTS_WITH_ARGS[name]
+        assert compile_and_run_with_args(self._emit_example(name), argv) == expected
 
 
 class TestUserMethodStringTake:
