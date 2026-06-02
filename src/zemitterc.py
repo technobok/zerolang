@@ -7540,10 +7540,18 @@ class CEmitter:
 
         if _ck == zast.CallKind.RETURN:
             return self._emit_return(call, indent)
+        # break/continue jump out of the loop body, so loop-body locals between
+        # here and the break target must be destroyed first (mirrors the bare
+        # break/continue path in _emit_expression_stmt). RETURN above self-cleans
+        # in _emit_return.
         if _ck == zast.CallKind.BREAK:
-            return self._loop_jump_target(indent, False)
+            return self._emit_break_continue_cleanup(indent) + self._loop_jump_target(
+                indent, False
+            )
         if _ck == zast.CallKind.CONTINUE:
-            return self._loop_jump_target(indent, True)
+            return self._emit_break_continue_cleanup(indent) + self._loop_jump_target(
+                indent, True
+            )
 
         # data.index call -> array access
         if (
