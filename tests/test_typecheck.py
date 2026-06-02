@@ -10687,14 +10687,12 @@ class TestIfExpression:
             '  if x > 3 then print "big" else print "small"\n'
             "}"
         )
+
     def test_if_statement_position_mismatched_branches_ok(self):
         """A statement-position if (its value discarded) need not have
         unifying branch types -- only value-position if-expressions do."""
         check_ok(
-            "main: function is {\n"
-            "  c: true\n"
-            '  if c then { print "a" } else { x: 1 }\n'
-            "}"
+            'main: function is {\n  c: true\n  if c then { print "a" } else { x: 1 }\n}'
         )
 
 
