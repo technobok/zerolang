@@ -487,6 +487,10 @@ class FunctionContext:
     return_type: "Optional[ZType]" = None
     func_ownership: "dict[str, ZParamOwnership]" = field(default_factory=dict)
     func_return_ownership: "Optional[ZParamOwnership]" = None
+    # True while checking a generator body (the original generator function or
+    # its synthesized `.call` body): a bare `return` there terminates the
+    # generator and must NOT be flagged as a missing return value.
+    in_generator_body: bool = False
     enclosing_type: "list[ZType]" = field(default_factory=list)
     body: "list[ZType]" = field(default_factory=list)
 
@@ -7207,6 +7211,15 @@ class TypeChecker:
             )
         else:
             self.func_ctx.return_type = None
+        # Mark generator bodies so a bare `return` (a terminator) isn't flagged
+        # as a missing return value: the synthesized `.call` body carries
+        # `synth_origin == "generator-call"`, the original generator function's
+        # declared return type is an iterator wrapper.
+        prev_in_generator_body = self.func_ctx.in_generator_body
+        self.func_ctx.in_generator_body = func.synth_origin == "generator-call" or (
+            self.func_ctx.return_type is not None
+            and self._is_iterator_wrapper(self.func_ctx.return_type)
+        )
         self._check_statement(func.body, func.returntype is not None)
 
         # implicit return validation: last expression type must match 'out'
@@ -7240,6 +7253,7 @@ class TypeChecker:
                     )
 
         self.func_ctx.return_type = prev_return_type
+        self.func_ctx.in_generator_body = prev_in_generator_body
         self.func_ctx.func_ownership = prev_func_ownership
         self.func_ctx.func_return_ownership = prev_func_return_ownership
         self.symtab.pop()
@@ -8156,6 +8170,22 @@ class TypeChecker:
                                 loc=path.start,
                                 err=ERR.CALLERROR,
                             )
+                # bare `return` (no value) in a value-returning function is
+                # missing its value. Void (return_type None / null) and
+                # generators (a bare return terminates them) are exempt.
+                if (
+                    t.control_kind == ZControlKind.RETURN
+                    and self.func_ctx.return_type is not None
+                    and self.func_ctx.return_type.typetype
+                    not in (ZTypeType.NULL, ZTypeType.NEVER)
+                    and not self.func_ctx.in_generator_body
+                ):
+                    self._error(
+                        f"missing return value: function expects "
+                        f"'{self.func_ctx.return_type.name}'",
+                        loc=path.start,
+                        err=ERR.TYPEERROR,
+                    )
                 _CTRL_CK = {
                     ZControlKind.RETURN: zast.CallKind.RETURN,
                     ZControlKind.ERROR: zast.CallKind.ERROR,

@@ -11170,6 +11170,46 @@ class TestControlFlowArgValidation:
         assert any("StringLike" in e.msg for e in errors)
 
 
+class TestBareReturnValue:
+    """A bare `return` (no value) in a value-returning function is a missing
+    return value; void functions and generators (where it terminates) stay
+    valid."""
+
+    def test_bare_return_in_value_function(self):
+        errors = check_errors("f: function out i64 is { return }\nmain: function is {}")
+        assert any("missing return value" in e.msg for e in errors)
+
+    def test_bare_return_in_value_function_branch(self):
+        # also caught in a branch, not just the last statement
+        errors = check_errors(
+            "f: function {x: bool} out i64 is { if x then return\n return 5 }\n"
+            "main: function is {}"
+        )
+        assert any("missing return value" in e.msg for e in errors)
+
+    def test_bare_return_in_void_function_ok(self):
+        check_ok(
+            'f: function {x: bool} is { if x then return\n print "x" }\n'
+            "main: function is {}"
+        )
+
+    def test_return_with_value_ok(self):
+        check_ok("f: function out i64 is { return 5 }\nmain: function is {}")
+
+    def test_bare_return_terminates_generator_ok(self):
+        check_ok(
+            "gen: function out (Iterator gives: i64) is { yield 1\n return\n }\n"
+            'main: function is { for x: gen loop { print "\\{x}" } }'
+        )
+
+    def test_bare_return_in_generator_branch_ok(self):
+        check_ok(
+            "gen: function {n: i64} out (Iterator gives: i64) is "
+            "{ if n > 0 then return\n yield 1\n }\n"
+            'main: function is { for x: (gen n: 0) loop { print "\\{x}" } }'
+        )
+
+
 class TestCompileTimeErrorMatch:
     """Tests for compile-time error suppression in match statements."""
 
