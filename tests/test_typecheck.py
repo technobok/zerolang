@@ -11075,9 +11075,11 @@ class TestControlFlowArgValidation:
         assert any("unknown argument 'extra'" in e.msg for e in errors)
 
     def test_error_wrong_argument_name(self):
+        # error/panic are generic over StringLike; a wrongly-named arg is
+        # flagged as unknown (it also leaves `msg` unbound, so a generic-
+        # inference note may follow, but the unknown-arg diagnostic is the point).
         errors = check_errors('main: function is { error wrong: "x" }')
         assert any("unknown argument 'wrong'" in e.msg for e in errors)
-        assert any("missing required argument 'msg'" in e.msg for e in errors)
 
     def test_break_with_argument_rejected(self):
         errors = check_errors(
@@ -11114,6 +11116,16 @@ class TestControlFlowArgValidation:
     def test_bare_return_void_ok(self):
         # bare `return` (a void early return) is NOT a control-arg error.
         check_ok('main: function {x: i32} is { if x == 0 then return\n  print "x" }')
+
+    def test_panic_non_text_message_rejected(self):
+        # error/panic are generic over StringLike; a non-text message is now
+        # rejected by the type constraint (previously accepted).
+        errors = check_errors("main: function is { panic msg: 5 }")
+        assert any("StringLike" in e.msg for e in errors)
+
+    def test_error_non_text_message_rejected(self):
+        errors = check_errors("main: function is { error msg: 5 }")
+        assert any("StringLike" in e.msg for e in errors)
 
 
 class TestCompileTimeErrorMatch:

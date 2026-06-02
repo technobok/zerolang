@@ -6749,6 +6749,21 @@ class TypeChecker:
             else:
                 value_args.append((i, arg))
 
+        # Flag named value args that match no parameter (a typo'd name, e.g.
+        # `error wrong: "x"` or `print msg: "x" extra: 1`). Done BEFORE inference
+        # so it reports clearly, rather than as a downstream "cannot infer type
+        # arguments" when the stray name leaves a generic param unbound.
+        # Positional args can't be unknown (they match by position); type-arg
+        # specifiers were already split off above.
+        value_param_names = set(param_names)
+        for _i, arg in value_args:
+            if arg.name is not None and arg.name not in value_param_names:
+                self._error(
+                    f"unknown argument '{arg.name}'",
+                    loc=arg.start,
+                    err=ERR.CALLERROR,
+                )
+
         # infer generic params from value args, and collect checked types
         checked_value_args: list[
             tuple[Optional[str], Optional[ZType], zast.NamedOperation]
@@ -6849,23 +6864,6 @@ class TypeChecker:
                 self._error(
                     f"missing required argument '{pname}' (type: {ptype.name})",
                     loc=call.start,
-                    err=ERR.CALLERROR,
-                )
-
-        # Flag unknown named value args (e.g. `print msg: "x" extra: 1`). The
-        # type-mismatch check above silently skips an arg whose name matches no
-        # parameter; the missing-required check doesn't see it either. Type-arg
-        # specifiers (`t:`) were split into generic_args earlier, so they are
-        # never counted here. (Excess positional args can't arise -- zerolang
-        # has no multi-positional call syntax.) Runs only after a successful
-        # monomorphization, so it merely adds diagnostics to otherwise-valid
-        # calls.
-        mono_param_names = {pname for pname, _ in mono_params}
-        for _param_name, _val_type, arg in checked_value_args:
-            if arg.name is not None and arg.name not in mono_param_names:
-                self._error(
-                    f"unknown argument '{arg.name}'",
-                    loc=arg.start,
                     err=ERR.CALLERROR,
                 )
 
@@ -6983,6 +6981,9 @@ class TypeChecker:
         for ga_name, ga_type in generic_args.items():
             self._set_generic_arg(mono, ga_name, ga_type)
         mono.is_native = template.is_native
+        # carry the control-flow tag (error/panic are generic now); dispatch
+        # reads it on the template today, but keep the mono consistent.
+        mono.control_kind = template.control_kind
 
         # copy internal metadata fields
         mono.meta_create = template.meta_create
@@ -8130,9 +8131,16 @@ class TypeChecker:
                         if pname == "this":
                             continue
                         if not self.typing.has_child_default(t, pname):
+                            # error/panic's `msg` is the generic param `T`; show
+                            # its constraint (StringLike) rather than the bare T.
+                            ptype_name = ptype.name
+                            if ptype.typetype == ZTypeType.GENERIC_PARAM:
+                                constraint = t.generic_params.get(ptype.name)
+                                if constraint is not None:
+                                    ptype_name = constraint.name
                             self._error(
                                 f"missing required argument '{pname}' "
-                                f"(type: {ptype.name})",
+                                f"(type: {ptype_name})",
                                 loc=path.start,
                                 err=ERR.CALLERROR,
                             )
@@ -8911,7 +8919,11 @@ class TypeChecker:
             return self._check_return_call(call)
         if ck == ZControlKind.ERROR:
             self.typing.call_kind[call.nodeid] = zast.CallKind.ERROR
-            self._check_control_call_args(call, callee_type)
+            # Validate the message against the generic StringLike signature
+            # (type constraint + arity/names) via the same path `print` uses;
+            # the monomorphized type is discarded -- error resolves to `never`.
+            if callee_type.isgeneric:
+                self._infer_generic_function_call(callee_type, call)
             # compile-time error unless suppressed (constant-false if branch)
             if self._suppress_compile_error == 0:
                 msg = self._extract_error_message(call)
@@ -8921,47 +8933,13 @@ class TypeChecker:
             return self.typing.node_type.get(call.nodeid)
         if ck == ZControlKind.PANIC:
             self.typing.call_kind[call.nodeid] = zast.CallKind.PANIC
-            self._check_control_call_args(call, callee_type)
+            # validate via the generic StringLike path (see ERROR above)
+            if callee_type.isgeneric:
+                self._infer_generic_function_call(callee_type, call)
             never = self._resolve_name("never")
             self.typing.node_type[call.nodeid] = never if never else self.t_null
             return self.typing.node_type.get(call.nodeid)
         return None
-
-    def _check_control_call_args(self, call: zast.Call, callee_type: ZType) -> None:
-        """Validate an error/panic call's arguments: type-check each value and
-        flag missing / extra / wrong-name args (the same diagnostics a regular
-        call produces). Resolves to `never`, so no call scope / `_finalize_call`.
-
-        The message's concrete type is NOT matched against the declared param:
-        error/panic accept any text-like message, and a plain literal is a
-        `StringView` while an interpolated one is a `String` — no single
-        non-generic type covers both (only the `StringLike` generic that `print`
-        uses does). So we validate arity and argument names — what a caller can
-        get wrong — not the message type."""
-        params = [
-            (k, v) for k, v in self.typing.children_of(callee_type) if k != "this"
-        ]
-        param_names = {k for k, _ in params}
-        positional = 0
-        for arg in call.arguments:
-            self._check_operation(arg.valtype)
-            if arg.name is not None:
-                if arg.name not in param_names:
-                    self._error(
-                        f"unknown argument '{arg.name}'",
-                        loc=arg.start,
-                        err=ERR.CALLERROR,
-                    )
-            else:
-                positional += 1
-                if positional > len(params):
-                    self._error(
-                        f"too many arguments: expected {len(params)}, "
-                        f"got at least {positional}",
-                        loc=arg.start,
-                        err=ERR.CALLERROR,
-                    )
-        self._check_missing_call_args(call, callee_type, params)
 
     def _dispatch_call_construction(
         self,
