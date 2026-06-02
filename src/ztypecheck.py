@@ -7922,31 +7922,19 @@ class TypeChecker:
                             break
         if t is not None:
             self.typing.node_type[expr.nodeid] = t
-            # Tag a bare return/error/panic expression with its call-kind.
-            # These resolve to their control-function type (control_kind set);
-            # break/continue instead coerce to `never` in `_check_path`, which
-            # stamps their call-kind there, so they never carry a control_kind
-            # into this branch.
-            if t.control_kind != ZControlKind.NONE:
-                _CK_MAP = {
-                    ZControlKind.RETURN: zast.CallKind.RETURN,
-                    ZControlKind.ERROR: zast.CallKind.ERROR,
-                    ZControlKind.PANIC: zast.CallKind.PANIC,
-                }
-                self.typing.expr_call_kind[expr.nodeid] = _CK_MAP.get(
-                    t.control_kind, zast.CallKind.UNKNOWN
-                )
-            elif inner.nodetype == NodeType.CALL:
-                # propagate call_kind from Call to Expression wrapper
+            # Propagate the inner node's call-kind to the Expression wrapper: the
+            # statement emitter lowers control flow off expr_call_kind, and
+            # unreachable-code detection keys off it too. All control primitives
+            # are stamped at their call/path site -- Call forms (return X /
+            # error msg: / panic msg:) in `_dispatch_call_control_flow`, bare
+            # forms (break/continue/return/error/panic and regular no-arg calls)
+            # in `_check_path` -- and resolve to `never`, so none reach here
+            # carrying a `control_kind` to re-derive.
+            if inner.nodetype == NodeType.CALL:
                 self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind.get(
                     inner.nodeid, zast.CallKind.UNKNOWN
                 )
             elif inner.nodeid in self.typing.call_kind:
-                # A bare no-arg fn (break/continue/regular) carries the
-                # call-kind marker stamped in `_check_path`; propagate it to
-                # the Expression wrapper so the statement emitter lowers it
-                # (control -> jump, REGULAR -> cname()) and so unreachable-code
-                # detection after a bare break/continue still fires.
                 self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind[
                     inner.nodeid
                 ]
@@ -8087,9 +8075,10 @@ class TypeChecker:
                     t.return_type if t.return_type is not None else self.t_null
                 )
                 self.typing.node_type[path.nodeid] = call_return
-                # Only BREAK/CONTINUE (no params) and regular (control_kind
-                # NONE) reach here -- return/panic/error have a param and fail
-                # _method_has_no_user_args, so they stay on their own paths.
+                # Only BREAK/CONTINUE (no params) and regular no-arg calls
+                # (control_kind NONE) reach here. return/error/panic have a
+                # param, fail _method_has_no_user_args, and are recognized as
+                # bare control atoms in the elif below.
                 if ctrl == ZControlKind.BREAK:
                     self.typing.call_kind[path.nodeid] = zast.CallKind.BREAK
                     if self._break_targets:
@@ -8101,6 +8090,30 @@ class TypeChecker:
                 else:
                     self.typing.call_kind[path.nodeid] = zast.CallKind.REGULAR
                 t = call_return
+            elif (
+                coerce_method_to_return
+                and coerce_bare_atom
+                and t is not None
+                and t.typetype == ZTypeType.FUNCTION
+                and t.control_kind != ZControlKind.NONE
+            ):
+                # Bare control atom: return / error / panic. They take a param
+                # (so they fail _method_has_no_user_args above), but a BARE
+                # reference -- no call, no `.take` -- IS the control jump, not a
+                # function reference. Stamp the matching call_kind and resolve to
+                # `never`, so they ride the same call_kind dispatch as
+                # break/continue (no separate control_kind recognition).
+                _CTRL_CK = {
+                    ZControlKind.RETURN: zast.CallKind.RETURN,
+                    ZControlKind.ERROR: zast.CallKind.ERROR,
+                    ZControlKind.PANIC: zast.CallKind.PANIC,
+                }
+                self.typing.call_kind[path.nodeid] = _CTRL_CK.get(
+                    t.control_kind, zast.CallKind.UNKNOWN
+                )
+                never = self._resolve_name("never")
+                self.typing.node_type[path.nodeid] = never if never else self.t_null
+                t = self.typing.node_type.get(path.nodeid)
         elif path.nodetype == NodeType.DOTTEDPATH:
             t = self._check_dotted_path(
                 cast(zast.DottedPath, path),
@@ -8849,26 +8862,20 @@ class TypeChecker:
     def _dispatch_call_control_flow(
         self, call: zast.Call, callee_type: ZType
     ) -> Optional[ZType]:
-        """If the callable is a control-flow primitive (return / break /
-        continue / error / panic), stamp the call_kind, run any
-        secondary checks, and return the call's resolved type. Returns
-        None when the callable is NOT a control-flow primitive — the
-        caller continues with the regular call dispatch."""
+        """If the callable is a control-flow primitive (return / error /
+        panic), stamp the call_kind, run any secondary checks, and return
+        the call's resolved type (`never`). Returns None when the callable
+        is NOT a control-flow primitive — the caller continues with the
+        regular call dispatch.
+
+        break / continue have no Call form: zerolang has no empty-parens
+        no-arg call syntax and they take no args, so they are recognized as
+        bare atoms in `_check_path`, never as a Call here.
+        """
         ck = callee_type.control_kind
         if ck == ZControlKind.RETURN:
             self.typing.call_kind[call.nodeid] = zast.CallKind.RETURN
             return self._check_return_call(call)
-        if ck == ZControlKind.BREAK:
-            self.typing.call_kind[call.nodeid] = zast.CallKind.BREAK
-            # flag enclosing do block if break targets it (not a for loop)
-            if self._break_targets:
-                target = self._break_targets[-1]
-                if target is not None:
-                    self.typing.do_has_break[target.nodeid] = True
-            return callee_type
-        if ck == ZControlKind.CONTINUE:
-            self.typing.call_kind[call.nodeid] = zast.CallKind.CONTINUE
-            return callee_type
         if ck == ZControlKind.ERROR:
             self.typing.call_kind[call.nodeid] = zast.CallKind.ERROR
             # type-check the message argument
@@ -8878,8 +8885,9 @@ class TypeChecker:
             if self._suppress_compile_error == 0:
                 msg = self._extract_error_message(call)
                 self._error(msg, loc=call.start)
-            self.typing.node_type[call.nodeid] = callee_type
-            return callee_type
+            never = self._resolve_name("never")
+            self.typing.node_type[call.nodeid] = never if never else self.t_null
+            return self.typing.node_type.get(call.nodeid)
         if ck == ZControlKind.PANIC:
             self.typing.call_kind[call.nodeid] = zast.CallKind.PANIC
             # type-check the message argument; no compile-time
@@ -8887,8 +8895,9 @@ class TypeChecker:
             # terminator).
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.typing.node_type[call.nodeid] = callee_type
-            return callee_type
+            never = self._resolve_name("never")
+            self.typing.node_type[call.nodeid] = never if never else self.t_null
+            return self.typing.node_type.get(call.nodeid)
         return None
 
     def _dispatch_call_construction(

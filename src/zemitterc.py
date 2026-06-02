@@ -18,7 +18,6 @@ from ztypes import (
     ZTypeType,
     ZSubType,
     ZBuiltinFunc,
-    ZControlKind,
     ZConformance,
     parse_number,
     ZParamOwnership,
@@ -7527,31 +7526,13 @@ class CEmitter:
                 return f"{indent}z_StringView_print({arg});\n"
             return f'{indent}printf("\\n");\n'
 
-        # check call_kind first, then fallback to callable type's control_kind
-        _ck = _call_kind
-        if _ck == zast.CallKind.UNKNOWN and self._node_ztype(call.callable):
-            _ctrl = cast(ZType, self._node_ztype(call.callable)).control_kind
-            if _ctrl == ZControlKind.RETURN:
-                _ck = zast.CallKind.RETURN
-            elif _ctrl == ZControlKind.BREAK:
-                _ck = zast.CallKind.BREAK
-            elif _ctrl == ZControlKind.CONTINUE:
-                _ck = zast.CallKind.CONTINUE
-
-        if _ck == zast.CallKind.RETURN:
+        # return X is the only control primitive that needs lowering here: it
+        # has a Call form (the return value is its arg) and its call_kind is
+        # stamped in `_dispatch_call_control_flow`. break/continue have no Call
+        # form; panic is lowered in `_emit_expression_stmt`; a suppressed error
+        # (dead branch) falls through to the regular call dispatch below.
+        if _call_kind == zast.CallKind.RETURN:
             return self._emit_return(call, indent)
-        # break/continue jump out of the loop body, so loop-body locals between
-        # here and the break target must be destroyed first (mirrors the bare
-        # break/continue path in _emit_expression_stmt). RETURN above self-cleans
-        # in _emit_return.
-        if _ck == zast.CallKind.BREAK:
-            return self._emit_break_continue_cleanup(indent) + self._loop_jump_target(
-                indent, False
-            )
-        if _ck == zast.CallKind.CONTINUE:
-            return self._emit_break_continue_cleanup(indent) + self._loop_jump_target(
-                indent, True
-            )
 
         # data.index call -> array access
         if (
