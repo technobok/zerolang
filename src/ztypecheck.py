@@ -7922,23 +7922,20 @@ class TypeChecker:
                             break
         if t is not None:
             self.typing.node_type[expr.nodeid] = t
-            # tag control flow expressions using resolved type's control_kind
+            # Tag a bare return/error/panic expression with its call-kind.
+            # These resolve to their control-function type (control_kind set);
+            # break/continue instead coerce to `never` in `_check_path`, which
+            # stamps their call-kind there, so they never carry a control_kind
+            # into this branch.
             if t.control_kind != ZControlKind.NONE:
                 _CK_MAP = {
                     ZControlKind.RETURN: zast.CallKind.RETURN,
-                    ZControlKind.BREAK: zast.CallKind.BREAK,
-                    ZControlKind.CONTINUE: zast.CallKind.CONTINUE,
                     ZControlKind.ERROR: zast.CallKind.ERROR,
                     ZControlKind.PANIC: zast.CallKind.PANIC,
                 }
                 self.typing.expr_call_kind[expr.nodeid] = _CK_MAP.get(
                     t.control_kind, zast.CallKind.UNKNOWN
                 )
-                # flag enclosing do block if break targets it
-                if t.control_kind == ZControlKind.BREAK and self._break_targets:
-                    target = self._break_targets[-1]
-                    if target is not None:
-                        self.typing.do_has_break[target.nodeid] = True
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
                 self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind.get(
