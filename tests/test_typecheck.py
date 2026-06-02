@@ -11040,6 +11040,71 @@ class TestCompileTimeError:
         )
 
 
+class TestControlFlowArgValidation:
+    """error / panic / break / continue are validated like any call:
+    missing, extra, and wrong-name arguments are flagged. error/panic
+    require a `msg`; break/continue take none."""
+
+    def test_bare_error_missing_message(self):
+        errors = check_errors("main: function is { error }")
+        assert any("missing required argument 'msg'" in e.msg for e in errors)
+
+    def test_bare_panic_missing_message(self):
+        errors = check_errors("main: function is { panic }")
+        assert any("missing required argument 'msg'" in e.msg for e in errors)
+
+    def test_error_extra_named_argument(self):
+        errors = check_errors('main: function is { error msg: "x" extra: 1 }')
+        assert any("unknown argument 'extra'" in e.msg for e in errors)
+
+    def test_panic_extra_named_argument(self):
+        errors = check_errors('main: function is { panic msg: "x" extra: 1 }')
+        assert any("unknown argument 'extra'" in e.msg for e in errors)
+
+    def test_error_wrong_argument_name(self):
+        errors = check_errors('main: function is { error wrong: "x" }')
+        assert any("unknown argument 'wrong'" in e.msg for e in errors)
+        assert any("missing required argument 'msg'" in e.msg for e in errors)
+
+    def test_break_with_argument_rejected(self):
+        errors = check_errors(
+            "main: function is {\n"
+            "  n: 0.u64\n"
+            "  for while n < 3.u64 loop { break 5 }\n}"
+        )
+        assert any("too many arguments" in e.msg for e in errors)
+
+    def test_continue_with_argument_rejected(self):
+        errors = check_errors(
+            "main: function is {\n"
+            "  n: 0.u64\n"
+            "  for while n < 3.u64 loop { continue 5 }\n}"
+        )
+        assert any("too many arguments" in e.msg for e in errors)
+
+    def test_panic_message_literal_ok(self):
+        check_ok('main: function is { panic msg: "boom" }')
+
+    def test_panic_message_positional_ok(self):
+        check_ok('main: function is { panic "boom" }')
+
+    def test_panic_message_interpolated_ok(self):
+        # an interpolated message is a String (not a StringView literal);
+        # both must be accepted.
+        check_ok('N: 5\nmain: function is { panic msg: "value \\{N}" }')
+
+    def test_error_message_positional_still_fires(self):
+        # a well-formed error still fires its compile-time diagnostic and
+        # produces no argument error (the `compileerror.z` pattern).
+        errors = check_errors('main: function is { error "boom" }')
+        assert any(e.msg == "boom" for e in errors)
+        assert not any("argument" in e.msg for e in errors)
+
+    def test_bare_return_void_ok(self):
+        # bare `return` (a void early return) is NOT a control-arg error.
+        check_ok('main: function {x: i32} is { if x == 0 then return\n  print "x" }')
+
+
 class TestCompileTimeErrorMatch:
     """Tests for compile-time error suppression in match statements."""
 

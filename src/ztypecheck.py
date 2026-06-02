@@ -8103,6 +8103,22 @@ class TypeChecker:
                 # function reference. Stamp the matching call_kind and resolve to
                 # `never`, so they ride the same call_kind dispatch as
                 # break/continue (no separate control_kind recognition).
+                #
+                # error/panic require a `msg` argument; a bare reference supplies
+                # none -- flag the missing required arg (the same diagnostic a
+                # call with a missing arg gets). Bare `return` (a void early
+                # return) stays valid and is not flagged.
+                if t.control_kind in (ZControlKind.ERROR, ZControlKind.PANIC):
+                    for pname, ptype in self.typing.children_of(t):
+                        if pname == "this":
+                            continue
+                        if not self.typing.has_child_default(t, pname):
+                            self._error(
+                                f"missing required argument '{pname}' "
+                                f"(type: {ptype.name})",
+                                loc=path.start,
+                                err=ERR.CALLERROR,
+                            )
                 _CTRL_CK = {
                     ZControlKind.RETURN: zast.CallKind.RETURN,
                     ZControlKind.ERROR: zast.CallKind.ERROR,
@@ -8878,9 +8894,7 @@ class TypeChecker:
             return self._check_return_call(call)
         if ck == ZControlKind.ERROR:
             self.typing.call_kind[call.nodeid] = zast.CallKind.ERROR
-            # type-check the message argument
-            for arg in call.arguments:
-                self._check_operation(arg.valtype)
+            self._check_control_call_args(call, callee_type)
             # compile-time error unless suppressed (constant-false if branch)
             if self._suppress_compile_error == 0:
                 msg = self._extract_error_message(call)
@@ -8890,15 +8904,47 @@ class TypeChecker:
             return self.typing.node_type.get(call.nodeid)
         if ck == ZControlKind.PANIC:
             self.typing.call_kind[call.nodeid] = zast.CallKind.PANIC
-            # type-check the message argument; no compile-time
-            # diagnostic (unlike error, panic is a pure runtime
-            # terminator).
-            for arg in call.arguments:
-                self._check_operation(arg.valtype)
+            self._check_control_call_args(call, callee_type)
             never = self._resolve_name("never")
             self.typing.node_type[call.nodeid] = never if never else self.t_null
             return self.typing.node_type.get(call.nodeid)
         return None
+
+    def _check_control_call_args(self, call: zast.Call, callee_type: ZType) -> None:
+        """Validate an error/panic call's arguments: type-check each value and
+        flag missing / extra / wrong-name args (the same diagnostics a regular
+        call produces). Resolves to `never`, so no call scope / `_finalize_call`.
+
+        The message's concrete type is NOT matched against the declared param:
+        error/panic accept any text-like message, and a plain literal is a
+        `StringView` while an interpolated one is a `String` — no single
+        non-generic type covers both (only the `StringLike` generic that `print`
+        uses does). So we validate arity and argument names — what a caller can
+        get wrong — not the message type."""
+        params = [
+            (k, v) for k, v in self.typing.children_of(callee_type) if k != "this"
+        ]
+        param_names = {k for k, _ in params}
+        positional = 0
+        for arg in call.arguments:
+            self._check_operation(arg.valtype)
+            if arg.name is not None:
+                if arg.name not in param_names:
+                    self._error(
+                        f"unknown argument '{arg.name}'",
+                        loc=arg.start,
+                        err=ERR.CALLERROR,
+                    )
+            else:
+                positional += 1
+                if positional > len(params):
+                    self._error(
+                        f"too many arguments: expected {len(params)}, "
+                        f"got at least {positional}",
+                        loc=arg.start,
+                        err=ERR.CALLERROR,
+                    )
+        self._check_missing_call_args(call, callee_type, params)
 
     def _dispatch_call_construction(
         self,
