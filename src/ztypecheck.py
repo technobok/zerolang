@@ -6852,6 +6852,23 @@ class TypeChecker:
                     err=ERR.CALLERROR,
                 )
 
+        # Flag unknown named value args (e.g. `print msg: "x" extra: 1`). The
+        # type-mismatch check above silently skips an arg whose name matches no
+        # parameter; the missing-required check doesn't see it either. Type-arg
+        # specifiers (`t:`) were split into generic_args earlier, so they are
+        # never counted here. (Excess positional args can't arise -- zerolang
+        # has no multi-positional call syntax.) Runs only after a successful
+        # monomorphization, so it merely adds diagnostics to otherwise-valid
+        # calls.
+        mono_param_names = {pname for pname, _ in mono_params}
+        for _param_name, _val_type, arg in checked_value_args:
+            if arg.name is not None and arg.name not in mono_param_names:
+                self._error(
+                    f"unknown argument '{arg.name}'",
+                    loc=arg.start,
+                    err=ERR.CALLERROR,
+                )
+
         return mono_ftype
 
     def _monomorphize_function(

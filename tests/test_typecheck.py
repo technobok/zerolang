@@ -8352,6 +8352,19 @@ class TestGenerics:
         )
         assert any("conflicting types" in e.msg.lower() for e in errors)
 
+    def test_generic_function_unknown_argument(self):
+        """An unknown named arg to a generic function is flagged."""
+        errors = check_errors(
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id val: 42 extra: 9 }"
+        )
+        assert any("unknown argument 'extra'" in e.msg for e in errors)
+
+    def test_generic_print_unknown_argument(self):
+        """print (generic over StringLike) flags an unknown named arg."""
+        errors = check_errors('main: function is { print msg: "x" extra: 1 }')
+        assert any("unknown argument 'extra'" in e.msg for e in errors)
+
     def test_generic_function_multiple_params_inferred(self):
         """Multiple generic params, both inferred from args."""
         program, typing = check_ok(
