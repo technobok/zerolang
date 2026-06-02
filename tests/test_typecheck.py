@@ -732,6 +732,17 @@ class TestMatchExpression:
         )
         assert any("incompatible branch types" in e.msg for e in errors)
 
+    def test_match_statement_position_mismatched_branches_ok(self):
+        """A statement-position match (its value discarded) need not have
+        unifying branch types -- only value-position match-expressions do."""
+        check_ok(
+            "st: variant { ok: null\n bad: i64 }\n"
+            "main: function is {\n"
+            "  s: st.ok\n"
+            '  match (s) case ok then { print "ok" } case bad then { x: 1 }\n'
+            "}"
+        )
+
     def test_match_empty_arm_body_unifies_with_null_sibling(self):
         """An arm with an empty body `{}` unifies cleanly with an
         arm whose tail is itself null (e.g. an `if` with no `else`).
@@ -10674,6 +10685,15 @@ class TestIfExpression:
             "main: function is {\n"
             "  x: 5\n"
             '  if x > 3 then print "big" else print "small"\n'
+            "}"
+        )
+    def test_if_statement_position_mismatched_branches_ok(self):
+        """A statement-position if (its value discarded) need not have
+        unifying branch types -- only value-position if-expressions do."""
+        check_ok(
+            "main: function is {\n"
+            "  c: true\n"
+            '  if c then { print "a" } else { x: 1 }\n'
             "}"
         )
 

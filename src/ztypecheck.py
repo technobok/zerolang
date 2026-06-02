@@ -7189,7 +7189,7 @@ class TypeChecker:
             )
         else:
             self.func_ctx.return_type = None
-        self._check_statement(func.body)
+        self._check_statement(func.body, func.returntype is not None)
 
         # implicit return validation: last expression type must match 'out'
         # — skipped for synthesised generator `.call` bodies, where the
@@ -7226,19 +7226,28 @@ class TypeChecker:
         self.func_ctx.func_return_ownership = prev_func_return_ownership
         self.symtab.pop()
 
-    def _check_statement(self, stmt: zast.Statement) -> None:
+    def _check_statement(self, stmt: zast.Statement, value_used: bool = True) -> None:
         """Type-check a statement block. Thin wrapper that builds the
-        typed mirror after the inner walks the statement lines."""
-        self._check_statement_inner(stmt)
+        typed mirror after the inner walks the statement lines.
 
-    def _check_statement_inner(self, stmt: zast.Statement) -> None:
+        `value_used` is True when the block's value (its last statement's
+        value) is consumed by the surrounding context (assignment RHS,
+        implicit return, a used if/match/do/for/with arm). It is threaded to
+        the last statement only -- an if/match used purely for side effects
+        (statement position) need not have unifying branch types."""
+        self._check_statement_inner(stmt, value_used)
+
+    def _check_statement_inner(
+        self, stmt: zast.Statement, value_used: bool = True
+    ) -> None:
         # Phase C step 2: each Statement maintains a preamble buffer for
         # synth temp Assignments hoisted out of nested calls in its
         # current StatementLine. The buffer drains *before* the
         # StatementLine that produced it, preserving source order.
         self._call_preamble.append([])
         out: List[zast.StatementLine] = []
-        for sline in stmt.statements:
+        last_idx = len(stmt.statements) - 1
+        for idx, sline in enumerate(stmt.statements):
             # dead code detection: if scope is unreachable, remaining
             # statements are dead code
             if self.symtab.is_unreachable():
@@ -7249,7 +7258,7 @@ class TypeChecker:
                 self._call_preamble.pop()
                 stmt.statements[:] = out
                 return
-            self._check_statement_line(sline)
+            self._check_statement_line(sline, value_used and idx == last_idx)
             # drain anything _check_call hoisted into the preamble during
             # this StatementLine's processing — those synth Assignments
             # belong before sline in source order.
@@ -7275,13 +7284,17 @@ class TypeChecker:
         self._call_preamble.pop()
         stmt.statements[:] = out
 
-    def _check_statement_line(self, sline: zast.StatementLine) -> None:
+    def _check_statement_line(
+        self, sline: zast.StatementLine, value_used: bool = True
+    ) -> None:
         """Type-check a statement line. Thin wrapper that builds the
         typed mirror after the inner dispatches to assignment / reassign
         / swap / expression."""
-        self._check_statement_line_inner(sline)
+        self._check_statement_line_inner(sline, value_used)
 
-    def _check_statement_line_inner(self, sline: zast.StatementLine) -> None:
+    def _check_statement_line_inner(
+        self, sline: zast.StatementLine, value_used: bool = True
+    ) -> None:
         inner = sline.statementline
         if inner.nodetype == NodeType.ASSIGNMENT:
             self._check_assignment(cast(zast.Assignment, inner))
@@ -7290,7 +7303,7 @@ class TypeChecker:
         elif inner.nodetype == NodeType.SWAP:
             self._check_swap(cast(zast.Swap, inner))
         elif inner.nodetype == NodeType.EXPRESSION:
-            self._check_expression(cast(zast.Expression, inner))
+            self._check_expression(cast(zast.Expression, inner), value_used)
         # propagate type to statement line wrapper
         inner_t = self.typing.node_type.get(inner.nodeid)
         if inner_t is not None:
@@ -7755,7 +7768,9 @@ class TypeChecker:
         if target_path:
             self._check_not_locked(target_path, f"Cannot swap {side} operand", loc)
 
-    def _check_expression(self, expr: zast.Expression) -> ZExprResult:
+    def _check_expression(
+        self, expr: zast.Expression, value_used: bool = True
+    ) -> ZExprResult:
         inner = expr.expression
         t: Optional[ZType] = None
         # borrow_target / private_access flow back from the inner CALL or
@@ -7769,9 +7784,9 @@ class TypeChecker:
             borrow_target = call_result.borrow_target
             private_access = call_result.private_access
         elif inner.nodetype == NodeType.IF:
-            t = self._check_if(cast(zast.If, inner))
+            t = self._check_if(cast(zast.If, inner), value_used)
         elif inner.nodetype == NodeType.FOR:
-            t = self._check_for(cast(zast.For, inner))
+            t = self._check_for(cast(zast.For, inner), value_used)
         elif inner.nodetype == NodeType.DO:
             inner_do = cast(zast.Do, inner)
             self.symtab.push("block")
@@ -7783,7 +7798,7 @@ class TypeChecker:
                 break_type.control_kind = ZControlKind.BREAK
                 self.symtab.define("break", break_type)
             self._break_targets.append(inner_do)
-            self._check_statement(inner_do.statement)
+            self._check_statement(inner_do.statement, value_used)
             self._break_targets.pop()
             last_type = self._last_statement_type(inner_do.statement)
             if self.typing.do_has_break.get(inner_do.nodeid, False):
@@ -7808,9 +7823,9 @@ class TypeChecker:
                 t = self.t_null
             self.symtab.pop()
         elif inner.nodetype == NodeType.WITH:
-            t = self._check_with(cast(zast.With, inner))
+            t = self._check_with(cast(zast.With, inner), value_used)
         elif inner.nodetype == NodeType.CASE:
-            t = self._check_case(cast(zast.Case, inner))
+            t = self._check_case(cast(zast.Case, inner), value_used)
         elif inner.nodetype == NodeType.DATA:
             t = None
         elif inner.nodetype == NodeType.REASSIGNMENT:
@@ -7932,7 +7947,10 @@ class TypeChecker:
         return ZExprResult(t, borrow_target, private_access)
 
     def _check_operation(
-        self, op: zast.Operation, coerce_method_to_return: bool = True
+        self,
+        op: zast.Operation,
+        coerce_method_to_return: bool = True,
+        coerce_bare_atom: bool = True,
     ) -> ZExprResult:
         """Type-check an operation. Returns a ZExprResult carrying the
         resolved ztype plus any borrow_target / private_access intent
@@ -7966,6 +7984,7 @@ class TypeChecker:
             path_result = self._check_path(
                 cast(zast.Path, op),
                 coerce_method_to_return=coerce_method_to_return,
+                coerce_bare_atom=coerce_bare_atom,
             )
             t = path_result.ztype
             borrow_target = path_result.borrow_target
@@ -7993,7 +8012,10 @@ class TypeChecker:
         return ZExprResult(t, borrow_target, private_access)
 
     def _check_path(
-        self, path: zast.Path, coerce_method_to_return: bool = True
+        self,
+        path: zast.Path,
+        coerce_method_to_return: bool = True,
+        coerce_bare_atom: bool = True,
     ) -> ZExprResult:
         """Type-check a path expression. When `coerce_method_to_return` is
         True (the default for value-position uses), a dotted path naming a
@@ -8036,6 +8058,26 @@ class TypeChecker:
             t = self.typing.node_type.get(path_str.nodeid)
         elif path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             t = self._check_atomid(cast(zast.AtomId, path))
+            # Bare no-arg unit-function name auto-calls (mirrors the
+            # dotted-path rule below): a bare `foo` is a call, `foo.take`
+            # is the reference. Gated on coerce_method_to_return (off for
+            # explicit-call callables) and coerce_bare_atom (off for the
+            # for-loop iterator-factory probe, which needs the un-coerced
+            # FUNCTION type to detect a generator factory).
+            if (
+                coerce_method_to_return
+                and coerce_bare_atom
+                and t is not None
+                and t.typetype == ZTypeType.FUNCTION
+                and t.control_kind == ZControlKind.NONE
+                and not self._is_generator_factory(t)
+                and self._method_has_no_user_args(t)
+            ):
+                call_return = (
+                    t.return_type if t.return_type is not None else self.t_null
+                )
+                self.typing.node_type[path.nodeid] = call_return
+                t = call_return
         elif path.nodetype == NodeType.DOTTEDPATH:
             t = self._check_dotted_path(
                 cast(zast.DottedPath, path),
@@ -11288,13 +11330,15 @@ class TypeChecker:
                 loc=inner.start,
             )
 
-    def _check_if(self, ifnode: zast.If) -> Optional[ZType]:
+    def _check_if(self, ifnode: zast.If, value_used: bool = True) -> Optional[ZType]:
         """Type-check an if-expression. Thin wrapper that builds the
         typed mirror after the inner walks the clauses + else branch."""
-        t = self._check_if_inner(ifnode)
+        t = self._check_if_inner(ifnode, value_used)
         return t
 
-    def _check_if_inner(self, ifnode: zast.If) -> Optional[ZType]:
+    def _check_if_inner(
+        self, ifnode: zast.If, value_used: bool = True
+    ) -> Optional[ZType]:
         if_marker = self.symtab.push_block("if")
         all_branches_diverge = True
         const_true_taken = False
@@ -11326,7 +11370,7 @@ class TypeChecker:
             )
             if all_false or const_true_taken:
                 self._suppress_compile_error += 1
-            self._check_statement(clause.statement)
+            self._check_statement(clause.statement, value_used)
             if all_false or const_true_taken:
                 self._suppress_compile_error -= 1
             if all_const and not all_false and not const_true_taken:
@@ -11367,7 +11411,7 @@ class TypeChecker:
             branch_marker = self.symtab.push_block("if_else")
             if const_true_taken:
                 self._suppress_compile_error += 1
-            self._check_statement(ifnode.elseclause)
+            self._check_statement(ifnode.elseclause, value_used)
             if const_true_taken:
                 self._suppress_compile_error -= 1
             else_diverges = self.symtab.is_unreachable()
@@ -11441,7 +11485,7 @@ class TypeChecker:
                 if all_ok:
                     result_type = first
                     self.typing.node_type[ifnode.nodeid] = first
-                else:
+                elif value_used:
                     for t in completing[1:]:
                         t_resolved = t if t is not None else self.t_null
                         if not self._types_compatible(first, t_resolved):
@@ -11711,13 +11755,35 @@ class TypeChecker:
             or self._is_optionview_type(t)
         )
 
-    def _check_for(self, fornode: zast.For) -> Optional[ZType]:
+    def _is_generator_factory(self, t: ZType) -> bool:
+        """True if `t` is a no-arg function whose return is a
+        generator/iterator factory class (a CLASS with a `.call` method
+        returning an iterator wrapper). The for/with generator machinery
+        consumes the un-coerced FUNCTION type to detect such factories, so
+        a bare reference to one must NOT auto-call (mirrors the for-loop
+        iterator-factory probe in `_check_for_inner`)."""
+        if t.typetype != ZTypeType.FUNCTION or t.return_type is None:
+            return False
+        rt = t.return_type
+        if rt.typetype != ZTypeType.CLASS or self._is_iterator_wrapper(rt):
+            return False
+        ret_call = self.typing.child_of(rt, "call")
+        return (
+            ret_call is not None
+            and ret_call.typetype == ZTypeType.FUNCTION
+            and ret_call.return_type is not None
+            and self._is_iterator_wrapper(ret_call.return_type)
+        )
+
+    def _check_for(self, fornode: zast.For, value_used: bool = True) -> Optional[ZType]:
         """Type-check a for-expression. Thin wrapper that builds the
         typed mirror after the inner walks conditions / loop / post."""
-        t = self._check_for_inner(fornode)
+        t = self._check_for_inner(fornode, value_used)
         return t
 
-    def _check_for_inner(self, fornode: zast.For) -> Optional[ZType]:
+    def _check_for_inner(
+        self, fornode: zast.For, value_used: bool = True
+    ) -> Optional[ZType]:
         self.symtab.push("for")
         # introduce break and continue bindings for this loop
         t_never = self._resolve_name("never")
@@ -11745,7 +11811,10 @@ class TypeChecker:
             if name[:1] == " ":  # ztc-string-compare-ok: while-form marker
                 continue
             cond_op = fornode.conditions[name]
-            probe_t = self._check_operation(cond_op).ztype
+            # coerce_bare_atom=False: a bare generator-factory name must keep
+            # its FUNCTION type here so the iterator-factory check below sees
+            # it (the bare-atom auto-call rule would otherwise coerce it).
+            probe_t = self._check_operation(cond_op, coerce_bare_atom=False).ztype
             self._pending_borrow_lock = None
             if (
                 probe_t is None
@@ -11928,7 +11997,7 @@ class TypeChecker:
             self._check_operation(postcond)
         elem_type = None
         if fornode.loop:
-            self._check_statement(fornode.loop)
+            self._check_statement(fornode.loop, value_used)
             # for-as-expression: if the last statement in the loop body is an
             # expression, the for-expression returns a list of that type.
             # Skip control-flow tails (break/continue/return/error/panic) and
@@ -12012,13 +12081,17 @@ class TypeChecker:
             return cast(zast.AtomId, actual).name
         return None
 
-    def _check_with(self, withnode: zast.With) -> Optional[ZType]:
+    def _check_with(
+        self, withnode: zast.With, value_used: bool = True
+    ) -> Optional[ZType]:
         """Type-check a with-expression. Thin wrapper that builds the
         typed mirror after the inner runs."""
-        t = self._check_with_inner(withnode)
+        t = self._check_with_inner(withnode, value_used)
         return t
 
-    def _check_with_inner(self, withnode: zast.With) -> Optional[ZType]:
+    def _check_with_inner(
+        self, withnode: zast.With, value_used: bool = True
+    ) -> Optional[ZType]:
         """Type-check `with name: value do doexpr`.
 
         Ownership follows function-argument rules:
@@ -12111,7 +12184,7 @@ class TypeChecker:
         # source slot is stable for the binding's lifetime.
         self.typing.with_alias_of[withnode.nodeid] = self._alias_target(withnode.value)
 
-        do_type = self._check_expression(withnode.doexpr).ztype
+        do_type = self._check_expression(withnode.doexpr, value_used).ztype
         self.symtab.pop()
         return do_type
 
@@ -12184,10 +12257,12 @@ class TypeChecker:
         self.symtab.pop()
         return result_type
 
-    def _check_case(self, casenode: zast.Case) -> Optional[ZType]:
+    def _check_case(
+        self, casenode: zast.Case, value_used: bool = True
+    ) -> Optional[ZType]:
         """Type-check a match expression. Thin wrapper that builds the
         typed mirror after the inner walks subject + clauses."""
-        t = self._check_case_inner(casenode)
+        t = self._check_case_inner(casenode, value_used)
         return t
 
     def _apply_case_take_invalidation(
@@ -12235,7 +12310,7 @@ class TypeChecker:
                 )
 
     def _compute_case_result_type(
-        self, casenode: zast.Case, is_exhaustive: bool
+        self, casenode: zast.Case, is_exhaustive: bool, value_used: bool = True
     ) -> ZType:
         """Compute the result type of a `match` expression.
 
@@ -12294,18 +12369,21 @@ class TypeChecker:
         if all_ok:
             self.typing.node_type[casenode.nodeid] = first
             return first
-        for t in completing[1:]:
-            t_resolved = t if t is not None else self.t_null
-            if not self._types_compatible(first, t_resolved):
-                self._error(
-                    f"incompatible branch types in match-expression: "
-                    f"'{first.name}' and '{t_resolved.name}'",
-                    loc=casenode.start,
-                )
-                break
+        if value_used:
+            for t in completing[1:]:
+                t_resolved = t if t is not None else self.t_null
+                if not self._types_compatible(first, t_resolved):
+                    self._error(
+                        f"incompatible branch types in match-expression: "
+                        f"'{first.name}' and '{t_resolved.name}'",
+                        loc=casenode.start,
+                    )
+                    break
         return self.t_null
 
-    def _check_case_inner(self, casenode: zast.Case) -> Optional[ZType]:
+    def _check_case_inner(
+        self, casenode: zast.Case, value_used: bool = True
+    ) -> Optional[ZType]:
         self.symtab.push("match")
 
         # Reject `.take` on the match subject. Narrowing requires the
@@ -12514,7 +12592,7 @@ class TypeChecker:
 
             if suppress_arm:
                 self._suppress_compile_error += 1
-            self._check_statement(clause.statement)
+            self._check_statement(clause.statement, value_used)
             if suppress_arm:
                 self._suppress_compile_error -= 1
 
@@ -12576,7 +12654,7 @@ class TypeChecker:
                     self.symtab.exclude(target_name, clause.match.name, subject_type)
             if const_match_taken:
                 self._suppress_compile_error += 1
-            self._check_statement(casenode.elseclause)
+            self._check_statement(casenode.elseclause, value_used)
             if const_match_taken:
                 self._suppress_compile_error -= 1
 
@@ -12664,7 +12742,9 @@ class TypeChecker:
             if not (subtypes_for_exhaust - covered_for_exhaust):
                 is_exhaustive = True
 
-        result_type = self._compute_case_result_type(casenode, is_exhaustive)
+        result_type = self._compute_case_result_type(
+            casenode, is_exhaustive, value_used
+        )
 
         self.symtab.pop()
 

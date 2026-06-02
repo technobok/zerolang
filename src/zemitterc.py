@@ -9466,6 +9466,13 @@ class CEmitter:
                 and resolved.cname
                 and not resolved.is_native
             ):
+                # A bare no-arg unit function that typecheck coerced to a
+                # call (its stamped node type is the return type, not the
+                # FUNCTION type) is invoked here; a genuine function
+                # reference (`fn` passed to a function-typed slot) keeps the
+                # bare cname. `fn.take` is a dotted path handled elsewhere.
+                if atom_ztype is not None and atom_ztype.typetype != ZTypeType.FUNCTION:
+                    return f"{resolved.cname}()"
                 return resolved.cname
             return mangle_func_name(name)
         if name in self._const_names:

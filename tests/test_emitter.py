@@ -1544,6 +1544,21 @@ class TestEmitterBasic:
         )
         assert out == "99"
 
+    def test_bare_no_arg_function_statement_invoked(self):
+        """A bare no-arg unit-function name in statement position is a call,
+        not a discarded reference (`.take` is the reference form)."""
+        out = self._build_multifile(
+            {
+                "test.z": (
+                    'side: function is { print "side" }\n'
+                    "main: function is {\n"
+                    "  side\n"
+                    "}"
+                ),
+            }
+        )
+        assert out == "side"
+
     def test_cross_unit_dependency_record(self):
         """A record defined in a dependency unit is emitted (dot-free cname),
         constructed, and field-read from main."""
