@@ -7944,6 +7944,15 @@ class TypeChecker:
                 self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind.get(
                     inner.nodeid, zast.CallKind.UNKNOWN
                 )
+            elif inner.nodeid in self.typing.call_kind:
+                # A bare no-arg fn (break/continue/regular) carries the
+                # call-kind marker stamped in `_check_path`; propagate it to
+                # the Expression wrapper so the statement emitter lowers it
+                # (control -> jump, REGULAR -> cname()) and so unreachable-code
+                # detection after a bare break/continue still fires.
+                self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind[
+                    inner.nodeid
+                ]
         return ZExprResult(t, borrow_target, private_access)
 
     def _check_operation(
@@ -8058,9 +8067,13 @@ class TypeChecker:
             t = self.typing.node_type.get(path_str.nodeid)
         elif path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             t = self._check_atomid(cast(zast.AtomId, path))
-            # Bare no-arg unit-function name auto-calls (mirrors the
-            # dotted-path rule below): a bare `foo` is a call, `foo.take`
-            # is the reference. Gated on coerce_method_to_return (off for
+            # Bare no-arg function name auto-calls (mirrors the dotted-path
+            # rule below): a bare `foo` is a call, `foo.take` is the
+            # reference. `break`/`continue` are compiler-provided no-arg
+            # functions and ride the SAME recognition here -- a uniform
+            # call-kind marker is stamped on the atom so the emitter
+            # dispatches (control_kind -> jump, REGULAR -> cname()); no AST
+            # node is synthesized. Gated on coerce_method_to_return (off for
             # explicit-call callables) and coerce_bare_atom (off for the
             # for-loop iterator-factory probe, which needs the un-coerced
             # FUNCTION type to detect a generator factory).
@@ -8069,14 +8082,27 @@ class TypeChecker:
                 and coerce_bare_atom
                 and t is not None
                 and t.typetype == ZTypeType.FUNCTION
-                and t.control_kind == ZControlKind.NONE
                 and not self._is_generator_factory(t)
                 and self._method_has_no_user_args(t)
             ):
+                ctrl = t.control_kind
                 call_return = (
                     t.return_type if t.return_type is not None else self.t_null
                 )
                 self.typing.node_type[path.nodeid] = call_return
+                # Only BREAK/CONTINUE (no params) and regular (control_kind
+                # NONE) reach here -- return/panic/error have a param and fail
+                # _method_has_no_user_args, so they stay on their own paths.
+                if ctrl == ZControlKind.BREAK:
+                    self.typing.call_kind[path.nodeid] = zast.CallKind.BREAK
+                    if self._break_targets:
+                        target = self._break_targets[-1]
+                        if target is not None:
+                            self.typing.do_has_break[target.nodeid] = True
+                elif ctrl == ZControlKind.CONTINUE:
+                    self.typing.call_kind[path.nodeid] = zast.CallKind.CONTINUE
+                else:
+                    self.typing.call_kind[path.nodeid] = zast.CallKind.REGULAR
                 t = call_return
         elif path.nodetype == NodeType.DOTTEDPATH:
             t = self._check_dotted_path(

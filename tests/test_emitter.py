@@ -527,6 +527,29 @@ class TestForBodyClassCleanup:
         )
         self._assert_asan_clean(emit_source(src), "v=leak\nv=leak\nv=leak\ndone\n")
 
+    def test_bare_call_and_break_share_no_arg_recognition(self):
+        """A bare no-arg fn call (`tick`) and `break` ride ONE no-arg-call
+        recognition: both work in the same loop body -- `tick` is invoked each
+        iteration and `break` jumps while freeing the loop-body String
+        (ASan-clean), proving break/continue are no longer a separate path."""
+        src = (
+            'tick: function is { print "tick" }\n'
+            "main: function is {\n"
+            "    n: 0.u64\n"
+            "    for while n < 5.u64 loop {\n"
+            '        s: "buf".string\n'
+            "        tick\n"
+            '        print "v=\\{s}"\n'
+            "        if n == 2.u64 then break\n"
+            "        n = n + 1.u64\n"
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        self._assert_asan_clean(
+            emit_source(src), "tick\nv=buf\ntick\nv=buf\ntick\nv=buf\ndone\n"
+        )
+
     def test_continue_frees_loop_body_string_no_leak(self):
         """A heap String local is freed on `continue` before the next iter."""
         src = (
@@ -1550,10 +1573,7 @@ class TestEmitterBasic:
         out = self._build_multifile(
             {
                 "test.z": (
-                    'side: function is { print "side" }\n'
-                    "main: function is {\n"
-                    "  side\n"
-                    "}"
+                    'side: function is { print "side" }\nmain: function is {\n  side\n}'
                 ),
             }
         )
