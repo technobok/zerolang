@@ -9631,6 +9631,28 @@ class CEmitter:
         # `_is_union_construction` for the call-with-args path.
         parent_tagged = self.typing.dp_parent_tagged_type.get(path.nodeid)
         if parent_tagged is not None:
+            # A narrowed VARIABLE field read (`a.ok`, where typecheck narrowed
+            # the local `a` to a subtype) reads the arm payload; a bare TYPE NAME
+            # (`result.none`, cross-unit `io.IoError.notfound`) constructs the
+            # null arm. typecheck makes the same distinction (it skips the
+            # outer-type override for variable parents), so mirror it here: a
+            # local carries `atom_variable_id`. Reuse the match-arm payload
+            # renderer so both narrowing modes lower identically.
+            parent_is_variable = (
+                path.parent.nodetype == NodeType.ATOMID
+                and path.parent.nodeid in self.typing.atom_variable_id
+            )
+            if parent_is_variable:
+                unwrap = self._narrow_unwrap_expr(
+                    parent_tagged,
+                    child,
+                    self.typing.dp_child_id.get(path.nodeid, -1),
+                    self._emit_path_value(path.parent),
+                )
+                if unwrap is not None:
+                    return unwrap
+                # null-payload arm: nothing to unwrap -- fall through to the
+                # null-construction below (unchanged behavior).
             if parent_tagged.typetype == ZTypeType.UNION:
                 return self._emit_union_null_construction(parent_tagged, child)
             if parent_tagged.typetype == ZTypeType.VARIANT:

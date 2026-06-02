@@ -2,6 +2,7 @@
 Tests for the C code emitter (zemitterc)
 """
 
+import glob
 import os
 import subprocess
 import tempfile
@@ -25,6 +26,19 @@ EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 # catching warnings/errors that gcc tolerates but clang doesn't (or
 # vice versa). Default keeps the gcc-based dev loop unchanged.
 _CC = os.environ.get("Z_TEST_CC", "gcc")
+
+# Every example compiled by `make build`, minus the library-only modules
+# (no `main`) the Makefile SKIP list excludes. Drives the all-examples
+# compile sweep so no example can silently stop compiling.
+_BUILD_SKIP = {"mathutil", "genmath"}
+_BUILD_EXAMPLES = sorted(
+    name
+    for name in (
+        os.path.splitext(os.path.basename(p))[0]
+        for p in glob.glob(os.path.join(EXAMPLES_DIR, "*.z"))
+    )
+    if name not in _BUILD_SKIP
+)
 
 
 def emit_source(source: str, unitname: str = "test") -> str:
@@ -148,6 +162,39 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
             raise RuntimeError(f"gcc failed:\n{comp.stderr}")
         result = subprocess.run([outpath], capture_output=True, text=True, timeout=10)
         return result.returncode, result.stdout, result.stderr
+    finally:
+        for p in (cpath, outpath):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def compile_only(csource: str) -> None:
+    """Compile C source with gcc; raise on failure. Does not run the binary
+    (mirrors `make build`), so an example needing argv or runtime resources is
+    still covered for codegen correctness."""
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+        f.write(csource)
+        cpath = f.name
+    outpath = cpath.replace(".c", "")
+    try:
+        cmd = [
+            _CC,
+            "-std=c17",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-function",
+            "-Wno-unused-parameter",
+            "-Werror=implicit-function-declaration",
+            "-Werror=implicit-int",
+            "-Werror=int-conversion",
+            "-Werror=incompatible-pointer-types",
+            "-o",
+            outpath,
+            cpath,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            raise RuntimeError(f"gcc failed:\n{result.stderr}")
     finally:
         for p in (cpath, outpath):
             if os.path.exists(p):
@@ -2284,6 +2331,24 @@ class TestEmitterExamples:
         assert "shape is point" in output
         assert "item created" in output
         assert "mode is read" in output
+
+    def test_narrowing(self):
+        # Assignment-based narrowing: `a: result.ok 42` then `print "\{a.ok}"`
+        # reads the narrowed variant field. Regression for the emitter
+        # mis-emitting `a.ok` as a tag-only variant construction (printed as an
+        # aggregate via %ld) instead of a payload read.
+        csource = self._emit_example("narrowing")
+        output = compile_and_run(csource)
+        assert output == "42\n99\n1\n10\nok\n"
+
+    @pytest.mark.parametrize("name", _BUILD_EXAMPLES)
+    def test_example_compiles(self, name):
+        # Every example emits C that gcc accepts (mirrors `make build`, so an
+        # example can't silently stop compiling -- as `narrowing` did, since it
+        # had no behavioral test here). Per-example stdout is asserted by the
+        # dedicated tests above; this only guards codegen, so it does not run
+        # the binary (avoids argv / runtime-resource handling).
+        compile_only(self._emit_example(name))
 
 
 class TestUserMethodStringTake:
