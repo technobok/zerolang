@@ -6192,6 +6192,48 @@ class TestSpecs:
         assert tc.typing.has_child(create_t, "x")
         assert not tc.typing.has_child(create_t, "helper")
 
+    def test_bare_local_function_definition_missing_args(self):
+        """A bare local function definition (no `.take`) with a required param
+        is a call missing its argument, not a reference."""
+        errors = check_errors(
+            'show: function {v: i64} is { print "\\{v}" }\nmain: function is { show }'
+        )
+        assert any("missing required argument 'v'" in e.msg for e in errors)
+
+    def test_bare_builtin_print_missing_message(self):
+        """Bare `print` (an imported builtin) needs `msg`; the message shows the
+        generic constraint name (StringLike), not the bare param `T`."""
+        errors = check_errors("main: function is { print }")
+        assert any(
+            "missing required argument 'msg' (type: StringLike)" in e.msg
+            for e in errors
+        )
+
+    def test_bare_builtin_print_as_rhs_missing_message(self):
+        errors = check_errors("main: function is { x: print }")
+        assert any("missing required argument 'msg'" in e.msg for e in errors)
+
+    def test_bare_function_valued_variable_is_clean(self):
+        """A function-VALUED variable referenced bare is a value, not a missing
+        call -- it must NOT be flagged."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is {\n"
+            "  f: add.take\n"
+            "  g: f\n"
+            "  g a: 1 b: 2\n"
+            "}"
+        )
+
+    def test_bare_function_typed_param_is_clean(self):
+        """A function-typed parameter referenced bare is a value, not a missing
+        call -- it must NOT be flagged."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "pick: function {cb: add} is { x: cb }\n"
+            "main: function is {}"
+        )
+
 
 class TestDefaults:
     def test_numeric_default_resolves_i64(self):

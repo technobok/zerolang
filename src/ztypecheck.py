@@ -7898,21 +7898,33 @@ class TypeChecker:
             inner_cv = self.typing.node_const_value.get(inner_op.nodeid)
             if inner_cv is not None:
                 self.typing.node_const_value[expr.nodeid] = inner_cv
-            # bare function name as value: all params must have defaults
-            # (skip control flow: return, break, continue, error)
-            # only check when the atom refers to a function definition, not a local var
+            # Bare function name in value position: a bare function DEFINITION or
+            # builtin (NOT a local variable/parameter) with required params is a
+            # call missing its args -- `print` alone needs `msg`. A bare name is
+            # a call; `.take` is the only reference form. A function-VALUED
+            # variable/param is a value, not a missing call, so it's excluded via
+            # `lookup_var` (the same discriminator `_check_atomid` uses). Control
+            # primitives (return/break/continue/error/panic) are handled in
+            # `_check_path` and excluded here by `control_kind == NONE`.
             if (
                 t is not None
                 and t.typetype == ZTypeType.FUNCTION
                 and t.control_kind == ZControlKind.NONE
                 and inner.nodetype == NodeType.ATOMID
                 and self.typing.child_count(t) > 0
-                and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
+                and self.symtab.lookup_var(cast(zast.AtomId, inner).name) is None
             ):
                 for pname, ptype in self.typing.children_of(t):
                     if not self.typing.has_child_default(t, pname):
+                        # a generic param (e.g. print's `msg: T`) shows its
+                        # constraint name (StringLike), not the bare `T`.
+                        ptype_name = ptype.name
+                        if ptype.typetype == ZTypeType.GENERIC_PARAM:
+                            constraint = t.generic_params.get(ptype.name)
+                            if constraint is not None:
+                                ptype_name = constraint.name
                         self._error(
-                            f"missing required argument '{pname}' (type: {ptype.name})",
+                            f"missing required argument '{pname}' (type: {ptype_name})",
                             loc=inner.start,
                             err=ERR.CALLERROR,
                         )
