@@ -1948,29 +1948,9 @@ runDef: function {label: StringView src: String.take} is {
     zast.printNode r
 }
 
-main: function is {
-    # With a `.z` file path argument, parse its unit body and dump the
-    # canonical (id-stripped) AST for the parser differential (mirrors
-    # zlexer.z); with no argument, fall through to the inline smoke harness.
-    argv: os.args
-    hasFile: argv.length > 1.u64
-    if hasFile then {
-        path: argv.get i: 1.u64
-        r: io.readText path: path.stringview
-        match (r) case ok then {
-            p: Parser.create
-            tk: zlexer.Tokenizer.create source: r.take fsno: 0.u32
-            lx: zlexer.Lexer.create lexer: tk
-            firstTok: lx.peek
-            body: p.acceptUnitBody lex: lx
-            root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
-            zast.printNodeCanonical root
-        } case err then {
-            io.eprintln "zparser: could not read source file"
-            os.exit code: 1.i32
-        }
-        return
-    }
+# Inline smoke harness: parse each snippet and dump its node tree.
+# Driven from main when no file argument is given.
+runSmoke: function is {
     runPath label: "foo" src: "foo".string
     runPath label: "a.b.c" src: "a.b.c".string
     runPath label: "string" src: "\"hello\"".string
@@ -2041,4 +2021,30 @@ main: function is {
     runDef label: "defmatch" src: "match x case a then b".string
     runDef label: "defdata" src: "data { x: 1 } out u8".string
     runPath label: "interp" src: "\"a\\{x}b\"".string
+}
+
+main: function is {
+    # With a `.z` file path argument, parse its unit body and dump the
+    # canonical (id-stripped) AST for the parser differential (mirrors
+    # zlexer.z); with no argument, run the inline smoke harness.
+    argv: os.args
+    short: argv.length < 2.u64
+    if short then {
+        runSmoke
+    } else {
+        path: argv.get i: 1.u64
+        r: io.readText path: path.stringview
+        match (r) case ok then {
+            p: Parser.create
+            tk: zlexer.Tokenizer.create source: r.take fsno: 0.u32
+            lx: zlexer.Lexer.create lexer: tk
+            firstTok: lx.peek
+            body: p.acceptUnitBody lex: lx
+            root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
+            zast.printNodeCanonical root
+        } case err then {
+            io.eprintln "zparser: could not read source file"
+            os.exit code: 1.i32
+        }
+    }
 }
