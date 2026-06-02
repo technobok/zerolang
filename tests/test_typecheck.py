@@ -11068,9 +11068,7 @@ class TestControlFlowArgValidation:
 
     def test_break_with_argument_rejected(self):
         errors = check_errors(
-            "main: function is {\n"
-            "  n: 0.u64\n"
-            "  for while n < 3.u64 loop { break 5 }\n}"
+            "main: function is {\n  n: 0.u64\n  for while n < 3.u64 loop { break 5 }\n}"
         )
         assert any("too many arguments" in e.msg for e in errors)
 
