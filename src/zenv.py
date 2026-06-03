@@ -856,12 +856,18 @@ class ZSymbolTable:
 
         Used to snapshot live variables before if/match arms so we can detect
         which variables are taken in some arms.
+
+        Each name's liveness is decided by its most recent entry, matching
+        `find`/`lookup` (last-wins within a scope, inner scope first). A
+        scope's entries are therefore scanned in reverse: a `is_taken`
+        overlay appended after a definition wins, so a consumed variable is
+        not reported as live just because its defining entry came first.
         """
         names: set = set()
         taken: set = set()
         i = len(self._scopes) - 1
         while i >= 0:
-            for entry in self._scopes[i].entries:
+            for entry in reversed(self._scopes[i].entries):
                 if entry.name in names or entry.name in taken:
                     continue
                 if entry.is_taken:

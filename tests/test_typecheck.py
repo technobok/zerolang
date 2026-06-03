@@ -12702,6 +12702,36 @@ class TestTakeInLoopBody:
             "}"
         )
 
+    def test_take_before_loop_not_flagged_by_inner_for_body_take_ok(self):
+        """A variable consumed BEFORE a for-loop must not be reported as
+        an outer-scope take inside that loop. `s` is taken up front; the
+        loop body then takes a fresh per-iteration value (`rname`, popped
+        off an owned-element list) within a nested if/match. The
+        take-in-arm reconciliation snapshots live owned variables via
+        `get_live_owned_vars`; that snapshot must decide each name by its
+        most recent scope entry, so `s`'s defining entry does not shadow
+        its later taken-overlay and `s` is correctly seen as already
+        consumed. Otherwise the reconciliation drags `s` along and emits
+        a spurious E0200 against the loop (the false-positive that forced
+        the `makeLexer` helper in src/zparser.z)."""
+        check_ok(
+            "consume: function {s: String.take} is {}\n"
+            "main: function is {\n"
+            '  s: "hi".string\n'
+            "  consume s: s\n"
+            "  raw: (List of: String)\n"
+            '  raw.append "a".string\n'
+            "  hasSub: true\n"
+            "  for while raw.length > 0.u64 loop {\n"
+            "    rname: raw.pop\n"
+            "    if hasSub then {\n"
+            "      k: 0\n"
+            "      match (k) case 0 then { consume s: rname } else { }\n"
+            "    } else { }\n"
+            "  }\n"
+            "}"
+        )
+
 
 class TestUnionLockedArm:
     """Locked union arms (W-C) — arms declared `name: t.lock` hold a
