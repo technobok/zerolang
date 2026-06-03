@@ -4543,6 +4543,126 @@ class TestEmitterUnionMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_union_narrowed_class_take_into_call_sink_diverging_arm_no_uaf(self):
+        """A union whose NARROWED payload is a heap reftype (class), moved
+        by `.take` into a function-call sink on a DIVERGING (return) arm,
+        must not be read after free. Pre-fix the arm emitted
+        `z_ures_destroy(&r); return z_sink((*(z_Box_t*)r.data));` — the
+        union destructor freed `r.data` (the heap box) before the inline
+        return expression dereferenced it (heap-use-after-free). The
+        String-payload analogue was safe only because its call is
+        force-hoisted into a temp first; the class-payload call stayed
+        inline. The fix hoists any call with a destructible arg used as a
+        value into a temp, so the read precedes scope cleanup.
+        """
+        csource = emit_source(
+            "Box: class { v: i64 }\n"
+            "ures: union { ok: Box  err: i64 }\n"
+            "sink: function {b: Box.take} out i64 is { return b.v }\n"
+            "doit: function {} out i64 is {\n"
+            "  r: ures.ok (Box v: 7)\n"
+            "  match (\n"
+            "    r\n"
+            "  ) case ok then {\n"
+            "    return (sink b: r.take)\n"
+            "  } case err then {\n"
+            "    return 0\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  v: doit\n"
+            '  print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_owned_heap_local_take_into_call_sink_return_no_double_free(self):
+        """A plain owned local that owns heap (a class with a String
+        field), moved by `.take` into a call sink and returned inline,
+        must not be double-freed. Pre-fix the caller emitted
+        `z_Box_destroy(&b)` (freeing `b.s`) BEFORE the by-value
+        `z_sink(b)` call, and `sink` then freed the same `b.s` through its
+        copy. This is the non-narrowed variant of the same
+        return-cleanup-ordering bug; the fix hoists the call result into a
+        temp before scope cleanup.
+        """
+        csource = emit_source(
+            "Box: class { s: String }\n"
+            "sink: function {b: Box.take} out i64 is { return b.s.length.i64 }\n"
+            "doit: function {} out i64 is {\n"
+            '  b: Box s: "hi".string\n'
+            "  return (sink b: b.take)\n"
+            "}\n"
+            "main: function is {\n"
+            "  v: doit\n"
+            '  print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_union_narrowed_payload_field_read_return_no_uaf(self):
+        """A NON-call return that reads a field of a narrowed heap-class
+        payload on a diverging arm must not read after free. Pre-fix
+        `case ok then { return r.v }` emitted
+        `z_ures_destroy(&r); return (*(z_Box_t*)r.data).v;` — the field is
+        dereferenced through the freed union box. There is no call to
+        hoist; the fix materializes a non-trivial valtype/numeric return
+        value into a temp before scope cleanup.
+        """
+        csource = emit_source(
+            "Box: class { v: i64 }\n"
+            "ures: union { ok: Box  err: i64 }\n"
+            "doit: function {} out i64 is {\n"
+            "  r: ures.ok (Box v: 7)\n"
+            "  match (\n"
+            "    r\n"
+            "  ) case ok then {\n"
+            "    return r.v\n"
+            "  } case err then {\n"
+            "    return 0\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  v: doit\n"
+            '  print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_union_narrowed_class_take_fallthrough_arm_clean(self):
+        """No-regression guard: a NON-diverging (fall-through) arm that
+        assigns the sink result to an outer local and returns after the
+        match was already ASan-clean (its arm-end payload zero is
+        reachable because no `return` precedes it). The fix must keep this
+        path clean.
+        """
+        csource = emit_source(
+            "Box: class { v: i64 }\n"
+            "ures: union { ok: Box  err: i64 }\n"
+            "sink: function {b: Box.take} out i64 is { return b.v }\n"
+            "doit: function {} out i64 is {\n"
+            "  r: ures.ok (Box v: 7)\n"
+            "  n: 0\n"
+            "  match (\n"
+            "    r\n"
+            "  ) case ok then {\n"
+            "    n = (sink b: r.take)\n"
+            "  } case err then {\n"
+            "    n = 0\n"
+            "  }\n"
+            "  return n\n"
+            "}\n"
+            "main: function is {\n"
+            "  v: doit\n"
+            '  print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
     def test_map_get_option_string_value_return(self):
         """Regression for two coupled bugs surfaced by PR 6a.
 

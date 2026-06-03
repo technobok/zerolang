@@ -7733,6 +7733,31 @@ class CEmitter:
             if val in self._temp.frees:
                 self._temp.frees.remove(val)
 
+            # Function-scope cleanup is inlined below, BEFORE the `return`
+            # expression is evaluated. If the return value is a non-trivial
+            # expression — a narrowed union payload deref `(*...)` or an
+            # owned local's field — and any cleanup will run, materialize it
+            # into a temp FIRST so the cleanup cannot free state the
+            # expression still reads (use-after-free). Restricted to
+            # valtype/numeric returns (a value copy is safe and complete); a
+            # bare identifier / literal is trivial and needs no temp; calls
+            # with destructible args and reftype returns are already hoisted
+            # upstream and arrive here as temps. Computed once and reused as
+            # the cleanup output below.
+            scope_cleanup = self._emit_scope_cleanup(indent, exclude_var=val)
+            if scope_cleanup and not val.replace("_", "").isalnum():
+                ret_t = self._get_operation_type(call.arguments[0].valtype)
+                if ret_t is not None and ret_t.typetype not in (
+                    ZTypeType.CLASS,
+                    ZTypeType.UNION,
+                    ZTypeType.PROTOCOL,
+                ):
+                    ret_ct = _ctype(self.typing, ret_t)
+                    if ret_ct != "void":
+                        ret_tmp = self._temp_name("ret")
+                        result += f"{indent}{ret_ct} {ret_tmp} = {val};\n"
+                        val = ret_tmp
+
             # Flush implicit-take zero-inits (from _transfer_implicit_take)
             # NOW — they must run after the construction reads its args but
             # BEFORE the function-scope cleanup, otherwise the cleanup
@@ -7761,8 +7786,8 @@ class CEmitter:
                     result += f"{indent}free({t});\n"
             self._temp.frees.clear()
 
-            # free func vars (except the return value)
-            result += self._emit_scope_cleanup(indent, exclude_var=val)
+            # free func vars (except the return value) — precomputed above
+            result += scope_cleanup
 
             result += f"{indent}return {_unwrap_outer_parens(val)};\n"
             return result
@@ -9206,6 +9231,14 @@ class CEmitter:
             self._apply_call_implicit_takes(call, indent)
             return tmp
 
+        # Non-reftype return, no string arg, emitted inline (not hoisted).
+        # Still apply implicit-take invalidation: a `.take` arg here (e.g. a
+        # class/union moved into the callee) must have its source zeroed in
+        # post_code, otherwise scope-exit / return cleanup double-frees the
+        # moved value. This adds no call reordering (post_code only), unlike
+        # hoisting the call, so stateful inline calls keep their evaluation
+        # order.
+        self._apply_call_implicit_takes(call, indent)
         return result
 
     def _emit_const_value(self, node: zast.Node) -> str:
