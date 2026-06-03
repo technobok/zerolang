@@ -13,7 +13,7 @@ from conftest import (
     make_parser_with_vfs,
     normalize_cnames,
 )
-from ztypecheck import typecheck, TypeChecker
+from ztypecheck import typecheck, TypeChecker, _make_type
 from ztypes import (
     ZTypeType,
     ZSubType,
@@ -14751,6 +14751,41 @@ class TestCrossUnitDependency:
         )
         errors = self._two_unit_program(mainsrc, depsrc)
         assert errors == [], [e.msg for e in errors]
+
+    def test_monomorphize_cross_unit_dotted_arg_name_is_dot_free(self):
+        """A generic container instantiated over a dependency unit's own
+        type carries a dotted `unit.member` ZType.name; `_monomorphize`
+        must mangle each arg name so the mono's `name`, `cname`, and
+        `cname_base` are dot-free C identifiers. Otherwise the dot flows
+        into the shell cname, synth method names, and tags, and gcc
+        rejects the output. Tested directly on `_monomorphize`: the
+        dependency-qualification that yields a dotted element-type name is
+        specific to zvfs's structure and did not reproduce in synthetic
+        two-unit programs, so the binary build is the only other guard.
+        """
+        p = make_parser(
+            'main: function is { xs: (List of: i64)\n print "ok" }',
+            unitname="test",
+            src_dir=LIB_DIR,
+        )
+        program = p.parse()
+        assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
+        tc = TypeChecker(program)
+        tc.check()
+        assert tc.typing.errors == [], [e.msg for e in tc.typing.errors]
+        list_template = tc._resolve_name("List")
+        assert list_template is not None and list_template.isgeneric
+        list_defn = tc._find_generic_defn(list_template)
+        assert list_defn is not None
+        # An element type whose name is the dotted cross-unit `unit.member`
+        # form, as a dependency unit's own type resolves when zvfs holds a
+        # `(List of: <unit>.StringNode)`.
+        dotted_arg = _make_type("zvfs.StringNode", ZTypeType.CLASS)
+        dotted_arg.destructor_name = "z_zvfs_StringNode_destroy"
+        mono = tc._monomorphize(list_template, {"of": dotted_arg}, list_defn)
+        assert "." not in mono.name, mono.name
+        assert mono.cname is not None and "." not in mono.cname, mono.cname
+        assert "." not in mono.cname_base, mono.cname_base
 
 
 class TestNarrowedPayloadRebindRejected:
