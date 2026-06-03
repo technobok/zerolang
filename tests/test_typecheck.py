@@ -13596,6 +13596,55 @@ class TestGeneratorDesugaring:
         assert field_t is not None and field_t.name == "u32", f"got {field_t!r}"
 
 
+class TestGeneratorTriggerByTypeId:
+    """The generator trigger resolves the return type's `Iterator` head
+    by *type id*, not by the lexeme `Iterator`. A user type that merely
+    shares the name is not mistaken for the stdlib protocol; an aliased
+    protocol name still is."""
+
+    def _lower(self, source: str):
+        """Parse and construct a `TypeChecker` (which lowers generators
+        in `__init__`), returning the test unit's body dict *without*
+        running `check()` — so the lowering decision is observed in
+        isolation from downstream body type-checking (the un-lowered
+        over-trigger case leaves a yield the checker would later
+        reject)."""
+        p = make_parser(source, unitname="test", src_dir=LIB_DIR)
+        program = p.parse()
+        assert isinstance(program, zast.Program), f"parse failed: {program!r}"
+        TypeChecker(program)
+        return program.units["test"].body
+
+    def test_real_iterator_protocol_is_lowered(self):
+        """Baseline: a generator returning the stdlib protocol is
+        lowered into a `<name>_iter` synth class."""
+        body = self._lower("g: function out (Iterator gives: i32) is { yield 1 }")
+        assert "g_iter" in body, f"real generator not lowered: {sorted(body)}"
+
+    def test_user_type_named_iterator_not_lowered(self):
+        """A user `record` named `Iterator` is not the stdlib protocol,
+        so a yield-bearing function returning it is left untouched. A
+        lexeme trigger keyed on the name would have wrongly lowered it
+        (and mis-synthesised a class against a non-protocol type)."""
+        body = self._lower(
+            "Iterator: record { gives: i32 }\n"
+            "g: function out (Iterator gives: 5) is { yield 1 }"
+        )
+        assert "g_iter" not in body, f"user-Iterator wrongly lowered: {sorted(body)}"
+        assert isinstance(body["g"], zast.Function)
+        assert body["Iterator"].nodetype == zast.NodeType.RECORD
+
+    def test_aliased_iterator_protocol_is_lowered(self):
+        """A local alias of the protocol resolves to the same type id,
+        so a generator declared via the alias is lowered. A lexeme
+        trigger keyed on the name `Iterator` would have missed it,
+        leaving the yield to be rejected as a non-generator."""
+        body = self._lower(
+            "MyIter: Iterator\ng: function out (MyIter gives: i32) is { yield 1 }"
+        )
+        assert "g_iter" in body, f"aliased generator not lowered: {sorted(body)}"
+
+
 class TestGeneratorAcceptsBorrow:
     """Phase 3: `accepts:` borrow-default and liveness check.
 

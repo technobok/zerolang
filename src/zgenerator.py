@@ -1,10 +1,14 @@
 """
-Generator-function desugaring (Phase G3).
+Generator-function lowering.
 
-Runs after parsing and before type resolution. Walks every parsed
-function looking for *generators* — functions whose `out` type is
-`Iterator gives: T (accepts: U)` AND whose body contains at least
-one `yield` expression. For each generator, this pass:
+Helpers the type checker calls (via `lower_generators_in_unit`) once
+unit types are registered, before bodies are checked. A *generator*
+is a function whose body contains at least one `yield` and whose
+declared return type resolves to the stdlib `Iterator` protocol —
+recognised by the resolved type's id (an injected predicate), not by
+the `Iterator` lexeme, so a user type that merely shares the name is
+not mistaken for the protocol and an aliased protocol name still is.
+For each generator the lowering:
 
   1. Validates the parameter ownership annotations (bare `.borrow` is
      rejected; `:this` on methods must be `:this.lock` or
@@ -17,21 +21,22 @@ one `yield` expression. For each generator, this pass:
      original parameters (with matching ownership) plus a `state`
      cursor, and the method body is the original function's body
      with all promoted-name references rewritten to `this.<name>`.
-  4. Rewrites the original function declaration into a *factory*
-     that calls `<synth_class>.create` on the captured parameters.
+  4. Rebinds the original function declaration to a *factory* that
+     calls `<synth_class>.create` on the captured parameters, and
+     appends the synth class to the unit body.
 
 The synthesized class's `.call` body keeps its `Yield` nodes intact.
 The typechecker tolerates yields in this position (their expression
 is type-checked against `gives`; the body's implicit-return check is
 skipped). The actual state-machine codegen — `switch (this->state) {
-case ...: goto L_resumeN; }` — is the emitter's job in G4.
+case ...: goto L_resumeN; }` — is the emitter's job.
 
 Out-only generators have `accepts` defaulted to `null`. Bidirectional
 generators (`accepts != null`) take a per-call resume value through
 the synthesised `.call(value: U)` parameter.
 """
 
-from typing import Dict, List, Optional, Set, Tuple, cast
+from typing import Callable, Dict, List, Optional, Set, Tuple, cast
 
 import zast
 from zast import (
@@ -55,50 +60,33 @@ from zlexer import Token
 _SYNTH_ORIGIN = "generator"
 
 
-def desugar_generators(program: zast.Program) -> List[zast.Error]:
-    """Top-level entry: walk `program` and desugar every generator
-    found, mutating `program.units` in place. Returns the list of
-    errors emitted during validation (empty list on success).
+def lower_generators_in_unit(
+    unit: zast.Unit,
+    errors: List[zast.Error],
+    is_iterator_return: Callable[[Function], bool],
+) -> None:
+    """Lower every generator in one unit's body, mutating `unit.body`
+    in place: each generator function is rebound to a factory and its
+    synthesized iterator class is appended.
 
-    The pass is idempotent: running it twice on the same program is
-    a no-op the second time because every generator has been
-    rewritten into a non-generator factory.
+    `is_iterator_return` is injected by the type checker and decides,
+    by resolved type id, whether a function's declared return type is
+    the stdlib iterator protocol — so the decision is type-based, not
+    a lexeme match, and survives shadowing or aliasing of the name
+    `Iterator`.
     """
-    errors: List[zast.Error] = []
-    for unit in program.units.values():
-        _desugar_unit(unit, errors)
-    return errors
-
-
-def _desugar_unit(unit: zast.Unit, errors: List[zast.Error]) -> None:
-    # The unit body holds named definitions. We collect every
-    # generator-shaped function in two passes so we can splice in
-    # the synthesized class without disturbing iteration.
     additions: Dict[str, zast.TypeDefinition] = {}
     replacements: Dict[str, Function] = {}
-    # Pre-pass: allocate every top-level generator's synth-class name
-    # so a generator that captures another generator's iterator into
-    # a promoted local can refer to the callee's synth class by name
-    # at field-type inference time (rather than seeing the structural
-    # `Iterator gives: T` return type, which the typechecker won't
-    # unify with the concrete synth class).
-    gen_synth_names: Dict[str, str] = {}
-    for name, defn in unit.body.items():
-        if defn.nodetype == NodeType.FUNCTION and _is_generator_function(
-            cast(Function, defn)
-        ):
-            gen_synth_names[name] = _synth_class_name(name, additions, unit.body)
     for name, defn in list(unit.body.items()):
         if defn.nodetype == NodeType.FUNCTION:
             func = cast(Function, defn)
-            if _is_generator_function(func):
-                synth_name = gen_synth_names[name]
+            if _is_generator_function(func, is_iterator_return):
+                synth_name = _synth_class_name(name, additions, unit.body)
                 synth_class, factory = _build_generator(
                     synth_name,
                     func,
                     errors,
                     unit_body=unit.body,
-                    gen_synth_names=gen_synth_names,
                 )
                 if synth_class is None or factory is None:
                     # validation rejected this generator; original
@@ -122,7 +110,7 @@ def _desugar_unit(unit: zast.Unit, errors: List[zast.Error]) -> None:
                 unit,
                 errors,
                 additions,
-                gen_synth_names,
+                is_iterator_return,
             )
 
     for name, fn in replacements.items():
@@ -137,7 +125,7 @@ def _desugar_object_def(
     unit: zast.Unit,
     errors: List[zast.Error],
     unit_additions: Dict[str, zast.TypeDefinition],
-    gen_synth_names: Optional[Dict[str, str]] = None,
+    is_iterator_return: Callable[[Function], bool],
 ) -> None:
     """Desugar generator methods on a type.
 
@@ -155,7 +143,7 @@ def _desugar_object_def(
             if mdefn.nodetype != NodeType.FUNCTION:
                 continue
             mfunc = cast(Function, mdefn)
-            if not _is_generator_function(mfunc):
+            if not _is_generator_function(mfunc, is_iterator_return):
                 continue
             synth_name = _synth_class_name(
                 f"{type_name}_{mname}", unit_additions, unit.body
@@ -166,7 +154,6 @@ def _desugar_object_def(
                 errors,
                 receiver_type=type_name,
                 unit_body=unit.body,
-                gen_synth_names=gen_synth_names,
             )
             if synth_class is None or factory is None:
                 continue
@@ -174,41 +161,21 @@ def _desugar_object_def(
             items_block[mname] = factory
 
 
-def _is_generator_function(func: Function) -> bool:
-    """A function is a generator iff:
-    (a) its declared return type is `Iterator gives: T (accepts: U)`,
-        recognised structurally on the parsed return-type AST, AND
-    (b) its body contains at least one `yield` expression.
+def _is_generator_function(
+    func: Function, is_iterator_return: Callable[[Function], bool]
+) -> bool:
+    """A function is a generator iff its body suspends (contains a
+    `yield`) and its declared return type resolves to the iterator
+    protocol (`is_iterator_return`, decided by resolved type id).
+
+    The cheap structural suspension check runs first so the type-id
+    resolution only fires for the functions that need it.
     """
     if func.body is None:
         return False  # spec / native — never a generator
-    if not _returntype_is_iterator(func.returntype):
+    if not _body_contains_yield(func.body):
         return False
-    return _body_contains_yield(func.body)
-
-
-def _returntype_is_iterator(rt: Optional[Path]) -> bool:
-    """The return type AST is `Iterator gives: ...` when the parsed
-    path is `Expression(Call(callable=AtomId("Iterator"), args=...))`.
-
-    The check is intentionally syntactic — it must run *before* type
-    resolution, so `Iterator` is recognised by the lexeme. Aliasing
-    `Iterator` to some other name in a non-system unit would skip
-    this branch; that's deliberate — generator synthesis is a
-    stdlib-coupled feature.
-    """
-    if rt is None or rt.nodetype != NodeType.EXPRESSION:
-        return False
-    inner = cast(Expression, rt).expression
-    if inner.nodetype != NodeType.CALL:
-        return False
-    call = cast(Call, inner)
-    if call.callable.nodetype != NodeType.ATOMID:
-        return False
-    return (
-        cast(AtomId, call.callable).name
-        == "Iterator"  # ztc-string-compare-ok: iterator marker
-    )
+    return is_iterator_return(func)
 
 
 def _body_contains_yield(stmt: zast.Node) -> bool:
@@ -228,7 +195,7 @@ def _body_contains_yield(stmt: zast.Node) -> bool:
 
 def _gives_arg(rt: Path) -> Optional[NamedOperation]:
     """Extract the `gives:` argument from an iterator return-type
-    Call. Caller must have verified `_returntype_is_iterator` first."""
+    Call. Caller must have verified the return type is an iterator form first."""
     inner = cast(Expression, rt).expression
     call = cast(Call, inner)
     for arg in call.arguments:
@@ -276,7 +243,7 @@ def _accepts_type(rt: Path) -> Optional[Path]:
     """Return the `accepts:` argument's type path if specified
     *and* non-null. Returns None for the out-only case (no
     `accepts:` argument, or `accepts: null` explicitly). Caller
-    must have verified `_returntype_is_iterator` first.
+    must have verified the return type is an iterator form first.
 
     A non-None result signals a *bidirectional* generator — the
     desugarer adds a `_resume_input` field on the synth class
@@ -542,36 +509,6 @@ def _validate_body(
         return
     for child in zast.node_children(stmt):
         _validate_body(child, errors, in_nested_fn=in_nested_fn)
-
-
-# ---- Local-name collection (promote-everything in v1) ------------
-
-
-def _collect_assigned_locals(body: Statement) -> List[str]:
-    """Walk the generator body collecting names introduced via
-    `name: <expr>` assignment statements. Order preserved.
-
-    Promote-everything mode (G3 v1): every local crossing a yield
-    *and* every local that doesn't gets promoted to a field. The
-    liveness-aware refinement is G7.
-    """
-    seen: Set[str] = set()
-    order: List[str] = []
-
-    def walk(node: zast.Node) -> None:
-        nt = node.nodetype
-        if nt == NodeType.FUNCTION:
-            return  # don't recurse into nested function literals
-        if nt == NodeType.ASSIGNMENT:
-            assn = cast(zast.Assignment, node)
-            if assn.name not in seen:
-                seen.add(assn.name)
-                order.append(assn.name)
-        for c in zast.node_children(node):
-            walk(c)
-
-    walk(body)
-    return order
 
 
 def _find_first_yield(body: Statement) -> Optional[Tuple[Yield, bool]]:
@@ -1311,7 +1248,6 @@ def _build_generator(
     errors: List[zast.Error],
     receiver_type: Optional[str] = None,
     unit_body: Optional[Dict[str, zast.TypeDefinition]] = None,
-    gen_synth_names: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[ObjectDef], Optional[Function]]:
     """Build the synthesized class and rewritten factory for one
     generator. Returns `(None, None)` if validation rejected the

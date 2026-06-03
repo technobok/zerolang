@@ -471,6 +471,7 @@ class TemplateIds:
     option: int = -1
     optionval: int = -1
     optionview: int = -1
+    iterator: int = -1
 
 
 @dataclass
@@ -548,17 +549,15 @@ class TypeChecker:
     """
 
     def __init__(self, program: zast.Program) -> None:
-        # Generator desugaring runs first, before any type
-        # resolution: it rewrites generator-shaped functions into a
-        # synthesized class + a factory function and appends any
-        # validation errors to `self.errors` below. The transformed
-        # AST flows through the rest of the typechecker unchanged.
-        gen_errors = zgenerator.desugar_generators(program)
         self.program = program
         # Typecheck-output container — holds the component tables and
         # aggregate state populated during checking.
         self.typing = ztyping.ZTyping(parsed=program)
-        self.errors: List[zast.Error] = list(gen_errors)
+        # Generator lowering (`self._lower_generators()`) runs at the
+        # end of __init__ — after unit types are registered, so the
+        # iterator-protocol trigger can resolve by type id — and
+        # appends its validation errors here.
+        self.errors: List[zast.Error] = []
         self.symtab = ZSymbolTable(typing=self.typing)
 
         # well-known types (only null/never are standalone — others come from system.z)
@@ -661,6 +660,13 @@ class TypeChecker:
             NodeType.FACET: self._resolve_facet_type,
             NodeType.UNIT: self._resolve_inline_unit_type,
         }
+
+        # Lower generator functions (suspending, iterator-returning)
+        # into a synth iterator class + factory, now that unit types
+        # are registered and the resolver is ready. Runs before
+        # check() so the rebound/appended definitions are checked by
+        # the normal demand-driven walk.
+        self._lower_generators()
 
     # Keywords used to auto-categorise errors when no explicit code is given
     _OWNERSHIP_KEYWORDS = (
@@ -11863,6 +11869,54 @@ class TypeChecker:
             if t is not None:
                 self.template_ids.optionview = t.type_id
         return self.template_ids.optionview
+
+    def _iterator_template_type_id(self) -> int:
+        """Resolve and cache the stdlib `Iterator` generic-protocol type
+        id. Resolved through the `core` unit so a user unit that shadows
+        the name `Iterator` cannot corrupt the canonical id."""
+        if self.template_ids.iterator == -1:
+            t = self._resolve_unit_name("core", "Iterator")
+            if t is not None:
+                self.template_ids.iterator = t.type_id
+        return self.template_ids.iterator
+
+    def _returntype_is_iterator_protocol(self, func: zast.Function) -> bool:
+        """True when `func`'s declared return type is `Iterator gives:
+        ...` where the `Iterator` head resolves (by type id, through any
+        alias) to the stdlib iterator protocol. Only the callable head
+        is resolved — `gives: T` may reference generic params not yet in
+        scope at lowering time.
+
+        A user type that merely shares the name `Iterator` resolves to a
+        different id and is correctly not treated as a generator; an
+        aliased protocol name resolves to the same id and is."""
+        rt = func.returntype
+        if rt is None or rt.nodetype != NodeType.EXPRESSION:
+            return False
+        inner = cast(zast.Expression, rt).expression
+        if inner.nodetype != NodeType.CALL:
+            return False
+        callable_node = cast(zast.Call, inner).callable
+        if callable_node.nodetype != NodeType.ATOMID:
+            return False
+        iter_tid = self._iterator_template_type_id()
+        if iter_tid == -1:
+            return False
+        head = self._resolve_name(cast(zast.AtomId, callable_node).name)
+        return head is not None and head.type_id == iter_tid
+
+    def _lower_generators(self) -> None:
+        """Lower every generator function in the program into a synth
+        iterator class + a factory (see `zgenerator`). Each unit is
+        lowered with its own unit context pushed so the
+        iterator-protocol trigger resolves names (including unit-local
+        aliases) the way that unit sees them."""
+        for unitname, unit in self.program.units.items():
+            self._unit_context.append((unitname, unit))
+            zgenerator.lower_generators_in_unit(
+                unit, self.errors, self._returntype_is_iterator_protocol
+            )
+            self._unit_context.pop()
 
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""
