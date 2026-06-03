@@ -24,11 +24,10 @@ To regenerate a golden (after verifying the change is intentional):
         > tests/fixtures/parser_program/<name>.expected
 
 # SKIP set -- examples that exercise a deliberately-deferred parser feature,
-# so the two parsers legitimately disagree (no golden committed):
-#   strings.z -- multi-line string `_strip_string_whitespace` (blank-line +
-#     common-prefix dedent) is implemented in the Python parser but is still
-#     the identity stub in zparser.z (deferred PR-G/G2b). Closing that gap
-#     makes the binary match and lets strings.z rejoin the differential.
+# so the two parsers legitimately disagree (no golden committed). Currently
+# empty: every example parses identically in the Python and ported parsers,
+# including strings.z (multi-line string blank-line + common-prefix dedent,
+# ported to zparser.z's stripStringWhitespace).
 """
 
 import os
@@ -48,10 +47,8 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "parser_golden"
 PROGRAM_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "parser_program")
 
 # Examples skipped because a deferred parser feature makes the two parsers
-# legitimately disagree (see module docstring).
-SKIP = {
-    "strings.z": "multi-line string stripStringWhitespace deferred in zparser.z",
-}
+# legitimately disagree (see module docstring). Currently none.
+SKIP = {}
 
 
 def _list_example_names():

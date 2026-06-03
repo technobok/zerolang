@@ -53,6 +53,72 @@ isStrChunkTok: function {tt: zlexer.TT} out bool is {
     }
 }
 
+# True if every byte of `sv` is a space or tab (matches the Python
+# _is_ws_only; not `trim`, which also strips \n \r \f \v).
+isWsOnlyView: function {sv: StringView} out bool is {
+    n: sv.length
+    i: 0.u64
+    allWs: true
+    for while i < n loop {
+        bOpt: sv.byteAt i
+        match (
+            bOpt
+        ) case some then {
+            isSp: bOpt == 32.u8
+            isTab: bOpt == 9.u8
+            if isSp then {
+            } else if isTab then {
+            } else {
+                allWs = false
+            }
+        } case none then {
+        }
+        i = i + 1.u64
+    }
+    return allWs
+}
+
+# Classify a string part for the whitespace scans:
+# 0 = not a stringchunk (interpolation) ; 1 = EOL ; 2 = STRMID ws-only ;
+# 3 = STRMID has non-ws ; 4 = STRCHR ; 5 = other stringchunk kind.
+partClass: function {n: Node} out i64 is {
+    code: 0
+    match (
+        n
+    ) case stringchunk then {
+        k: n.chunkKind
+        if k == chunkkind.eol then {
+            code = 1
+        } else if k == chunkkind.strmid then {
+            ws: isWsOnlyView sv: n.text.stringview
+            if ws then {
+                code = 2
+            } else {
+                code = 3
+            }
+        } else if k == chunkkind.strchr then {
+            code = 4
+        } else {
+            code = 5
+        }
+    } else {
+    }
+    return code
+}
+
+# True if Node `n` is a stringchunk whose text starts with `p`.
+chunkStartsWith: function {n: Node p: StringView} out bool is {
+    res: false
+    match (
+        n
+    ) case stringchunk then {
+        nv: n.text.stringview
+        res = nv.startsWith prefix: p
+    } else {
+    }
+    return res
+}
+
 # True for the keyword token types that open an inline type definition
 # (record / class / variant / union / protocol / facet / data). These are
 # rejected inside an object body -- such a type must be defined at unit
@@ -401,7 +467,202 @@ Parser: class {
     # parts unchanged; the blank-line/common-prefix trimming lands in a
     # follow-up alongside interpolation.
     stripStringWhitespace: function {:this parts: (List of: Node).take} out (List of: Node) is {
-        return parts
+        origLen: parts.length
+        if origLen == 0.u64 then return parts
+
+        # Step 1: blank first line -> startIdx (first kept index).
+        startIdx: 0.u64
+        i: 0.u64
+        stop1: false
+        for while i < origLen loop {
+            if stop1 then {
+            } else {
+                el: parts.get i: i
+                c: partClass n: el
+                if c == 1.i64 then {
+                    startIdx = i + 1.u64
+                    stop1 = true
+                } else if c == 2.i64 then {
+                } else {
+                    stop1 = true
+                }
+            }
+            i = i + 1.u64
+        }
+
+        # Step 2: blank last line -> endIdx (exclusive) + common prefix.
+        endIdx: origLen
+        lastEol: false
+        lastEolIdx: 0.u64
+        j: origLen
+        stop2: false
+        for while j > startIdx loop {
+            if stop2 then {
+            } else {
+                j2: j - 1.u64
+                el: parts.get i: j2
+                c: partClass n: el
+                if c == 1.i64 then {
+                    lastEol = true
+                    lastEolIdx = j2
+                    stop2 = true
+                } else if c == 2.i64 then {
+                } else {
+                    stop2 = true
+                }
+            }
+            j = j - 1.u64
+        }
+
+        prefix: "".string
+        if lastEol then {
+            m: lastEolIdx + 1.u64
+            for while m < origLen loop {
+                el: parts.get i: m
+                match (
+                    el
+                ) case stringchunk then {
+                    prefix.append el.text.stringview
+                } else {
+                }
+                m = m + 1.u64
+            }
+            endIdx = lastEolIdx
+        }
+
+        if startIdx >= endIdx then {
+            emptyParts: (List of: Node)
+            return emptyParts
+        }
+
+        prefixView: prefix.stringview
+        prefixLen: prefixView.length
+        needStrip: prefixLen > 0.u64
+
+        # Step 3 pre-check: every non-blank line-start STRMID must start
+        # with the prefix, else stripping is abandoned.
+        canStrip: true
+        if needStrip then {
+            atLineStart: true
+            p: startIdx
+            for while p < endIdx loop {
+                el: parts.get i: p
+                c: partClass n: el
+                if c == 1.i64 then {
+                    atLineStart = true
+                } else if c == 0.i64 then {
+                    atLineStart = false
+                } else {
+                    if atLineStart then {
+                        if c == 3.i64 then {
+                            sw: chunkStartsWith n: el p: prefixView
+                            if sw then {
+                            } else {
+                                canStrip = false
+                            }
+                        } else {
+                        }
+                    } else {
+                    }
+                    atLineStart = false
+                }
+                p = p + 1.u64
+            }
+        }
+
+        doStrip: needStrip
+        if canStrip then {
+        } else {
+            doStrip = false
+        }
+
+        # Nothing trimmed and nothing to strip -> return unchanged.
+        noTrim: startIdx == 0.u64
+        if endIdx == origLen then {
+        } else {
+            noTrim = false
+        }
+        if noTrim then {
+            if doStrip then {
+            } else {
+                return parts
+            }
+        }
+
+        # Rebuild: reverse-drain, then pop in original order with an index.
+        rev: (List of: Node)
+        for while parts.length > 0.u64 loop {
+            rev.append parts.pop
+        }
+        result: (List of: Node)
+        atLineStart2: true
+        idx: 0.u64
+        pfxLen32: prefixLen.u32
+        for while rev.length > 0.u64 loop {
+            el: rev.pop
+            inRange: idx >= startIdx
+            if idx < endIdx then {
+            } else {
+                inRange = false
+            }
+            if inRange then {
+                action: 0
+                ncNodeId: 0.u32
+                ncLine: 0.u32
+                ncCol: 0.u32
+                ncText: "".string
+                match (
+                    el
+                ) case stringchunk then {
+                    kk: el.chunkKind
+                    if kk == chunkkind.eol then {
+                        atLineStart2 = true
+                    } else if atLineStart2 then {
+                        if kk == chunkkind.strmid then {
+                            ws: isWsOnlyView sv: el.text.stringview
+                            if ws then {
+                            } else {
+                                if doStrip then {
+                                    elView: el.text.stringview
+                                    sp: elView.stripPrefix p: prefixView
+                                    match (
+                                        sp
+                                    ) case some then {
+                                        slen: sp.length
+                                        if slen > 0.u64 then {
+                                            action = 2
+                                            ncNodeId = el.nodeid
+                                            ncLine = el.lineno
+                                            ncCol = el.colno + pfxLen32
+                                            ncText = sp.string
+                                        } else {
+                                            action = 1
+                                        }
+                                    } case none then {
+                                    }
+                                } else {
+                                }
+                            }
+                        } else {
+                        }
+                        atLineStart2 = false
+                    } else {
+                        atLineStart2 = false
+                    }
+                } else {
+                    atLineStart2 = false
+                }
+                if action == 0.i64 then {
+                    result.append el
+                } else if action == 1.i64 then {
+                } else {
+                    result.append (Node.stringchunk (zast.StringChunkData nodeid: ncNodeId lineno: ncLine colno: ncCol text: ncText.take chunkKind: chunkkind.strmid))
+                }
+            } else {
+            }
+            idx = idx + 1.u64
+        }
+        return result
     }
 
     # mkBinop / mkCall / mkNamedOp / mkLabelValue: id-allocating node
