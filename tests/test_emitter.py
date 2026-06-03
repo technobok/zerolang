@@ -7516,6 +7516,61 @@ class TestStr:
         assert lines[0] == "hello"
         assert lines[1] == "5"
 
+    def test_chained_stringview_query_runs(self):
+        """A method chained directly on `s.stringview` dispatches as a
+        StringView method, not a mangled free function. Pre-fix the
+        callable path resolved to nothing and the emitter fell back to
+        `z_<root>_stringview_startsWith(...)` (undefined)."""
+        csource = emit_source(
+            "f: function {s: String p: StringView} out i64 is {\n"
+            "  res: s.stringview.startsWith prefix: p\n"
+            "  if res then return 1\n"
+            "  return 0\n"
+            "}\n"
+            "main: function is {\n"
+            '  x: "hello".string\n'
+            '  print "\\{f s: x p: "he"}"\n'
+            "}"
+        )
+        assert "z_StringView_startsWith(" in csource
+        assert "_stringview_startsWith(" not in csource.replace(
+            "z_StringView_startsWith(", ""
+        )
+        assert compile_and_run(csource).strip() == "1"
+
+    def test_chained_stringview_strip_match_asan(self):
+        """ASan: stripPrefix on `s.stringview` bound and matched."""
+        csource = emit_source(
+            "f: function {s: String pv: StringView} out u64 is {\n"
+            "  sp: s.stringview.stripPrefix p: pv\n"
+            "  r: 0.u64\n"
+            "  match (\n"
+            "    sp\n"
+            "  ) case some then { r = sp.length } case none then { }\n"
+            "  return r\n"
+            "}\n"
+            "main: function is {\n"
+            '  x: "hello".string\n'
+            '  print "\\{f s: x pv: "he"}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip() == "3"
+
+    def test_chained_stringview_noarg_method_runs(self):
+        """A no-arg value-returning final (`.length`) on a chained view."""
+        csource = emit_source(
+            "f: function {s: String} out u64 is {\n"
+            "  return s.stringview.trim.length\n"
+            "}\n"
+            "main: function is {\n"
+            '  x: "  hi  ".string\n'
+            '  print "\\{f s: x}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "2"
+
     def test_str_stringview_substring_bounds_check(self):
         """Substring form emits a runtime bounds check against s.len."""
         csource = emit_source(

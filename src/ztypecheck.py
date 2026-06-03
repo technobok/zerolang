@@ -4696,9 +4696,30 @@ class TypeChecker:
             if _is_numeric_id(pname):
                 return self._resolve_numeric(pname, loc=path.parent.start), False
             return self._resolve_name(pname), False
-        # DOTTEDPATH parent: recurse
+        # DOTTEDPATH parent: recurse. The parent of a dotted segment is
+        # itself a value position (this segment's receiver is the *result*
+        # of the parent expression). `_resolve_dotted_path` is context-free
+        # and returns a method's FUNCTION type, so a zero-user-arg
+        # auto-callable method (`s.stringview` -> `String.stringview`) must
+        # be coerced to its return type here, mirroring the value-position
+        # auto-call in `_check_dotted_path` / `_check_path`. Without it the
+        # next segment's child lookup runs against a FUNCTION and fails
+        # (`s.stringview.startsWith`, `.trim`, ... — any chain on a
+        # non-special-cased borrow/value-returning method).
         if path.parent.nodetype == NodeType.DOTTEDPATH:
-            return self._resolve_dotted_path(cast(zast.DottedPath, path.parent)), False
+            parent_t = self._resolve_dotted_path(cast(zast.DottedPath, path.parent))
+            if (
+                parent_t is not None
+                and parent_t.typetype == ZTypeType.FUNCTION
+                and not self._is_generator_factory(parent_t)
+                and self._method_has_no_user_args(parent_t)
+            ):
+                return (
+                    parent_t.return_type
+                    if parent_t.return_type is not None
+                    else self.t_null
+                ), False
+            return parent_t, False
         # EXPRESSION parent: take the expression's already-resolved
         # type, falling back to typeref resolution for type-only
         # expressions (`(list of: u8).typedef`).
@@ -7458,7 +7479,13 @@ class TypeChecker:
             borrow_target = result.borrow_target
             private_access = result.private_access
 
-            if borrow_target:
+            # A valtype result is a self-contained copy and can never hold a
+            # borrow, so a borrow_target on it is spurious (e.g. the lingering
+            # source of a `.stringview` view consumed by a value-returning
+            # `.length`/`.isEmpty`). Treat such bindings as ordinary owned
+            # values — matching the existing valtype skip for lock install
+            # below — so they are not mis-flagged as borrowed on escape.
+            if borrow_target and not _is_valtype(t):
                 # the new variable is borrowed and holds an exclusive lock
                 # on the leaf of the source path, plus SHARED on each
                 # intermediate so siblings remain accessible.

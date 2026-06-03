@@ -948,6 +948,85 @@ class TestStringLiteralTypes:
         ]
 
 
+class TestChainedMethodResolution:
+    """A method call chained directly on another method-call result
+    (`s.stringview.<method>`). The receiver of a segment is a value
+    position, so a zero-user-arg method (`.stringview`) must auto-invoke
+    and expose its return type to the next segment. Methods special-cased
+    to return their result directly (`.length`/`.pop`/`.take`) masked the
+    gap; a non-special-cased borrow/value-returning method (`.stringview`)
+    used to leave the parent typed as the method's FUNCTION, so the child
+    lookup failed and the binding's type never resolved."""
+
+    def test_chained_view_method_value_position(self):
+        check_ok(
+            "f: function {n: String p: StringView} out i64 is {\n"
+            "  res: n.stringview.startsWith prefix: p\n"
+            "  if res then return 1\n"
+            "  return 0\n"
+            "}\n"
+            'main: function is { print "m" }'
+        )
+
+    def test_chained_view_stripprefix_then_match(self):
+        check_ok(
+            "f: function {s: String pv: StringView} out u64 is {\n"
+            "  sp: s.stringview.stripPrefix p: pv\n"
+            "  r: 0.u64\n"
+            "  match (\n"
+            "    sp\n"
+            "  ) case some then { r = sp.length } case none then { }\n"
+            "  return r\n"
+            "}\n"
+            'main: function is { print "m" }'
+        )
+
+    def test_chained_view_double_noarg_method(self):
+        check_ok(
+            "f: function {s: String} out u64 is {\n"
+            "  n: s.stringview.trim.length\n"
+            "  return n\n"
+            "}\n"
+            'main: function is { print "m" }'
+        )
+
+    def test_chained_view_value_result_not_borrowed(self):
+        """The chained intermediate (`.stringview`/`.trim`) borrows the
+        source, but a value-returning final (`.length`, a u64) produces a
+        self-contained value that must NOT inherit that borrow — binding
+        it and returning the binding is safe."""
+        check_ok(
+            "f: function {s: String} out u64 is {\n"
+            "  n: s.stringview.length\n"
+            "  return n\n"
+            "}\n"
+            'main: function is { print "m" }'
+        )
+
+    def test_chained_view_returned_view_still_rejected(self):
+        """Safety preserved: a borrow-returning final (`.trim`, a
+        StringView) genuinely borrows the source, so binding it and
+        returning it must still be rejected (the view would dangle)."""
+        errors = check_errors(
+            "f: function {s: String} out StringView is {\n"
+            "  v: s.stringview.trim\n"
+            "  return v\n"
+            "}\n"
+            'main: function is { print "m" }'
+        )
+        assert any("borrow" in e.msg.lower() for e in errors), [e.msg for e in errors]
+
+    def test_chained_str_record_view_method(self):
+        check_ok(
+            "f: function {} out u64 is {\n"
+            '  s: "hello".str to: 32\n'
+            "  n: s.stringview.length\n"
+            "  return n\n"
+            "}\n"
+            'main: function is { print "m" }'
+        )
+
+
 class TestDemandDriven:
     """Test demand-driven resolution behavior."""
 
