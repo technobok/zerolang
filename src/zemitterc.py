@@ -11711,6 +11711,10 @@ class CEmitter:
         each_bindings: List[Tuple[str, str, str, str]] = []
 
         for name, cond_op in fornode.conditions.items():
+            # Overlay the no-arg-generator auto-invoke Call recorded by
+            # the typechecker (`for_iter_call`, keyed by the parsed
+            # condition's nodeid); a no-op for ordinary / while conds.
+            cond_op = self.typing.for_iter_call.get(cond_op.nodeid, cond_op)
             if name.startswith(" "):
                 cond_exprs.append(self._emit_operation_value(cond_op))
             elif name in _for_iter_bindings:

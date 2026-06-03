@@ -12075,7 +12075,10 @@ class TypeChecker:
             )
             self.typing.node_type[synth_call.nodeid] = probe_t.return_type
             self.typing.node_type[synth_expr.nodeid] = probe_t.return_type
-            fornode.conditions[name] = synth_expr
+            # Record the auto-invoke against the parsed condition's
+            # nodeid instead of mutating the frozen For node's
+            # conditions; the 2nd pass below and the emitter overlay it.
+            self.typing.for_iter_call[cond_op.nodeid] = synth_expr
 
         # C-style for-init (`for i: 0 while i < 10 loop { ... }`) is
         # only legal when paired with a while-clause; a bare binding
@@ -12087,6 +12090,11 @@ class TypeChecker:
         )
 
         for name, cond_op in fornode.conditions.items():
+            # Overlay the no-arg-generator auto-invoke Call recorded by
+            # the pass above (`for_iter_call`, keyed by the parsed
+            # condition's nodeid) so the check sees the call, not the
+            # bare 0-arg factory ref. No-op for ordinary / while conds.
+            cond_op = self.typing.for_iter_call.get(cond_op.nodeid, cond_op)
             # While-form cond (`for while EXPR loop ...`): push a fresh
             # preamble layer so any synth Assignments `_hoist_arg`
             # creates for the cond's args land HERE rather than the

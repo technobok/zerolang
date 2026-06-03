@@ -178,6 +178,12 @@ class ZTyping:
     # decls; if (!cond) break; body }` shape so the cond re-evaluates
     # each iteration. Empty for trivial conds (no hoist needed).
     for_cond_preamble: Dict[int, "list"] = field(default_factory=dict, init=False)
+    # Per-For no-arg-generator iterable: maps the parsed condition
+    # expression's nodeid to a synthesised auto-invoke `Call()`
+    # Expression for a 0-arg generator factory. The typecheck for-loop
+    # pass and the emitter overlay this onto the parsed condition instead
+    # of mutating the frozen For node's conditions dict.
+    for_iter_call: Dict[int, "zast.Operation"] = field(default_factory=dict, init=False)
     # Per-If / per-Case post-block ownership cleanup.
     if_taken_vars: Dict[int, "list[tuple[str, Optional[ZType]]]"] = field(
         default_factory=dict, init=False
