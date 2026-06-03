@@ -5357,7 +5357,14 @@ class TypeChecker:
 
         self._check_mono_constraints(template_type, generic_args)
 
-        arg_names = [generic_args[k].name for k in template_type.generic_params]
+        # Mangle each arg's name so a cross-unit element type (whose name is
+        # the dotted `unit.member`) yields a dot-free mangled name; the mangled
+        # name flows into the mono shell cname, synth method names, and tags,
+        # which embed it verbatim. _mangle_name is a no-op for plain names.
+        arg_names = [
+            self._mangle_name(generic_args[k].name)
+            for k in template_type.generic_params
+        ]
         mangled = f"{template_type.name}_{'_'.join(arg_names)}"
 
         mono = self._make_mono_shell(template_type, generic_args, mangled, is_partial)
@@ -6973,10 +6980,11 @@ class TypeChecker:
                             hint=hint,
                         )
 
-        # build mangled name
+        # build mangled name; mangle each arg's name so a cross-unit type
+        # (dotted `unit.member` name) yields a dot-free C identifier fragment.
         arg_names: list[str] = []
         for k in template.generic_params:
-            arg_names.append(generic_args[k].name)
+            arg_names.append(self._mangle_name(generic_args[k].name))
         mangled = f"{template.name}_{'_'.join(arg_names)}"
 
         # create monomorphized function type
