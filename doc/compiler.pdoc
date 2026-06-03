@@ -132,21 +132,27 @@ attempt to reset and continue compilation.
 
 #--: Generator Desugaring
 
-A function whose declared return type is
-#~"Iterator gives: T (accepts: U)" and whose body contains at least
-one #~"yield" is a #b:"generator". The
-generator desugaring pass (#~"src/zgenerator.py") rewrites every such
+A function whose body contains at least one #~"yield" and whose
+declared return type resolves to the stdlib #~"Iterator" protocol is a
+#b:"generator". Generator lowering (helpers in #~"src/zgenerator.py",
+driven by #~"TypeChecker._lower_generators") rewrites every such
 function into a pair: a synthesised class implementing the iterator
 protocol and a factory function that constructs an instance with all
-parameters captured. The pass runs as the first step of
-#~"TypeChecker.__init__" -- it operates on the parsed AST before
-resolution -- so the rest of the typechecker sees only ordinary
-class + function code.
+parameters captured. The lowering runs inside #~"TypeChecker.__init__",
+after unit types are registered and before bodies are checked, so the
+rest of the typechecker sees only ordinary class + function code.
+
+The trigger resolves the return type's #~"Iterator" head by #b:"type
+id" -- it must be the stdlib protocol, not merely a name match -- so a
+user type that shadows the name #~"Iterator" is not mistaken for a
+generator, and an aliased protocol name still is. Lowering rebinds the
+original function to its factory and appends the synth class to the
+unit body; frozen AST nodes are never mutated.
 
 Pipeline placement:
 
 #code: """
-  Lex -> Parse -> [Generator desugaring] -> Typecheck -> Emit
+  Lex -> Parse -> Typecheck (lower generators, then resolve + check) -> Emit
 """
 
 #---: Synthesised class shape

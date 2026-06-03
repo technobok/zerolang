@@ -1597,8 +1597,8 @@ class TypeChecker:
             if (
                 rt
                 and rt.generic_origin is not None
-                and rt.generic_origin.name
-                == "Iterator"  # ztc-string-compare-ok: stdlib iterator protocol marker
+                and not rt.is_tag_generic_origin
+                and rt.generic_origin.type_id == self._iterator_template_type_id()
             ):
                 self._validate_iterator_gives_form(func)
         for pname, ppath in func.parameters.items():
