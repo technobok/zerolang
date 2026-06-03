@@ -9599,7 +9599,7 @@ class TypeChecker:
             # see a bare name through the simple-path codepath. Trivial
             # args (bare AtomId / literal) bypass — no temp needed.
             if arg_type is not None and not self._arg_is_trivial(arg):
-                self._hoist_arg(arg, arg_type, arg_borrow_path)
+                arg = self._hoist_arg(call, arg, arg_type, arg_borrow_path)
 
             if arg_type and arg.name and params:
                 # named argument: match by parameter name
@@ -9979,10 +9979,11 @@ class TypeChecker:
 
     def _hoist_arg(
         self,
+        call: zast.Call,
         arg: zast.NamedOperation,
         arg_type: ZType,
         arg_borrow_path: Optional[Tuple[str, ...]],
-    ) -> str:
+    ) -> zast.NamedOperation:
         """Hoist a non-trivial call argument into a fresh synth temp.
 
         Side effects, in order:
@@ -9997,11 +9998,14 @@ class TypeChecker:
              source path captured by `.borrow`/`.lock`/protocol-projection
              handling so the metadata-driven aggregate-escape check
              (commit bde6411) fires on hoisted lock-bearing projections.
-          4. Mutate `arg.valtype` in-place to `AtomId(name)` so subsequent
-             type-matching, TAKE-application, and lock installation see a
-             bare name through the simple-path codepath.
+          4. Replace `arg` in `call.arguments` with a fresh
+             `NamedOperation` whose value is `AtomId(name)`, so
+             subsequent type-matching, TAKE-application, and lock
+             installation see a bare name through the simple-path
+             codepath. The parsed node is never mutated.
 
-        Returns the synth temp's name (caller may already discard it).
+        Returns the fresh NamedOperation; callers rebind their local to
+        it so their own post-hoist reads see the hoisted atom.
         """
         temp_name = self._fresh_namer.next()
         # Build the synth Assignment binding the temp to the original
@@ -10130,18 +10134,22 @@ class TypeChecker:
             )
         if orig_cv is not None:
             self.typing.node_const_value[atom.nodeid] = orig_cv
-        # `NamedOperation` is frozen post-Step 7; this is the
-        # last in-place mutation needed for atomic-call hoisting
-        # (rebuilding the parent Call's arguments list with a fresh
-        # NamedOperation would require threading the parent through
-        # every hoist site, which doesn't scale). Use the documented
-        # frozen-dataclass escape hatch.
-        object.__setattr__(arg, "valtype", atom)
-        # Build the typed mirror for the synth atom so the wrapping
-        # _build_typed_call can resolve the argument's typed counterpart
-        # via by_parsed_id. The synth atom doesn't go through
-        # _check_atomid (it's constructed and pre-typed here).
-        return temp_name
+        # Replace the argument in the parent Call with a fresh
+        # NamedOperation whose value is the hoisted `atom`. The parsed
+        # NamedOperation is frozen and never mutated — rebinding the
+        # entry in the (mutable) arguments list is the same mint-and-
+        # rebind the rest of the typechecker uses. The synth atom does
+        # not go through `_check_atomid` (it's constructed and pre-typed
+        # here); its typed mirror lets `_build_typed_call` resolve the
+        # argument via by_parsed_id.
+        new_arg = zast.NamedOperation(
+            name=arg.name,
+            valtype=atom,
+            start=arg.start,
+            synth_origin=arg.synth_origin,
+        )
+        call.arguments[call.arguments.index(arg)] = new_arg
+        return new_arg
 
     def _current_call_holder(self) -> ZLockHolder:
         """Holder for locks installed during the topmost in-flight call.
@@ -10847,7 +10855,7 @@ class TypeChecker:
         if own == ZParamOwnership.TAKE:
             arg_borrow_path = arg_result.borrow_target
             if not self._arg_is_trivial(from_arg):
-                self._hoist_arg(from_arg, arg_type, arg_borrow_path)
+                from_arg = self._hoist_arg(call, from_arg, arg_type, arg_borrow_path)
             self._apply_take_to_arg(from_arg, "from")
 
         self.typing.node_type[call.nodeid] = proto_type
@@ -10945,7 +10953,7 @@ class TypeChecker:
         # operates on a bare AtomId.
         arg_borrow_path = arg_result.borrow_target
         if not self._arg_is_trivial(from_arg):
-            self._hoist_arg(from_arg, arg_type, arg_borrow_path)
+            from_arg = self._hoist_arg(call, from_arg, arg_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
 
         self.typing.node_type[call.nodeid] = typedef_type
@@ -11816,7 +11824,7 @@ class TypeChecker:
         # root name and are unaffected.
         arg_borrow_path = inner_result.borrow_target
         if not self._arg_is_trivial(from_arg):
-            self._hoist_arg(from_arg, inner_type, arg_borrow_path)
+            from_arg = self._hoist_arg(call, from_arg, inner_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
 
         # With stack-allocated classes and unions, all user-defined types

@@ -139,6 +139,14 @@ bootstrap-lint:
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -nE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' src/zemitterc.py | tail -5; fail=1; \
 	fi; \
+	count=$$(grep -rn 'object\.__setattr__' src/*.py | wc -l); \
+	if [ $$count -gt 0 ]; then \
+		echo "ERROR: object.__setattr__ usage increased ($$count > 0 baseline)"; \
+		echo "  Frozen AST nodes are immutable: mint a fresh node and rebind a"; \
+		echo "  parent dict/list entry instead of mutating a frozen field."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -rn 'object\.__setattr__' src/*.py | tail -5; fail=1; \
+	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail
 

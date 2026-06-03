@@ -2462,11 +2462,8 @@ class TestSwapOwnership:
 
 
 class TestArgHoistInfrastructure:
-    """Phase C step 2 commit 1: dormant preamble + hoist helper.
-
-    Helpers are not yet wired into _check_call; these tests exercise
-    `_arg_is_trivial` and `_hoist_arg` directly to pin their shape
-    before commit 2 turns the wiring on.
+    """Unit tests for `_arg_is_trivial` and `_hoist_arg`, exercised
+    directly to pin their shape.
     """
 
     def _fresh_checker(self):
@@ -2510,8 +2507,9 @@ class TestArgHoistInfrastructure:
 
     def test_hoist_appends_to_preamble_and_rewrites_arg(self):
         """_hoist_arg pushes a synth Assignment into the topmost
-        preamble entry, registers a ZVariable, and rewrites
-        arg.valtype to an AtomId."""
+        preamble entry, registers a ZVariable, and returns a fresh
+        NamedOperation (spliced into the parent Call) whose value is an
+        AtomId — the parsed arg node is left untouched."""
         tc = self._fresh_checker()
         tc._call_preamble.append([])
         # build a non-trivial arg: Expression(DottedPath(obj.field))
@@ -2522,18 +2520,29 @@ class TestArgHoistInfrastructure:
         )
         original_expr = zast.Expression(expression=dp, start=None)
         arg = zast.NamedOperation(name="a", valtype=original_expr, start=None)
+        call = zast.Call(
+            callable=zast.AtomId(name="f", start=None),
+            arguments=[arg],
+            start=None,
+        )
         # any ZType works for the test — just assert plumbing
         u64 = tc._resolve_name("u64")
         assert u64 is not None
-        name = tc._hoist_arg(arg, u64, arg_borrow_path=None)
+        new_arg = tc._hoist_arg(call, arg, u64, arg_borrow_path=None)
         # 1) preamble grew
         assert len(tc._call_preamble[-1]) == 1
         synth_line = tc._call_preamble[-1][0]
         assert synth_line.synth_origin == "anf"
-        # 2) arg.valtype was rewritten to an AtomId pointing at the temp
-        assert arg.valtype.nodetype == NodeType.ATOMID
-        assert arg.valtype.name == name
-        assert arg.valtype.synth_origin == "anf"
+        # 2) a fresh NamedOperation was spliced into the Call; its value
+        #    is an AtomId pointing at the temp, and the parsed arg is
+        #    unchanged (no in-place mutation)
+        assert call.arguments[0] is new_arg
+        assert new_arg is not arg
+        assert new_arg.name == "a"
+        assert new_arg.valtype.nodetype == NodeType.ATOMID
+        assert new_arg.valtype.synth_origin == "anf"
+        assert arg.valtype is original_expr
+        name = new_arg.valtype.name
         # 3) the temp is registered in the symtab as an OWNED variable
         var = tc.symtab.lookup_var(name)
         assert var is not None
@@ -2552,9 +2561,15 @@ class TestArgHoistInfrastructure:
         )
         original_expr = zast.Expression(expression=dp, start=None)
         arg = zast.NamedOperation(name=None, valtype=original_expr, start=None)
+        call = zast.Call(
+            callable=zast.AtomId(name="f", start=None),
+            arguments=[arg],
+            start=None,
+        )
         u64 = tc._resolve_name("u64")
         assert u64 is not None
-        name = tc._hoist_arg(arg, u64, arg_borrow_path=("src",))
+        new_arg = tc._hoist_arg(call, arg, u64, arg_borrow_path=("src",))
+        name = new_arg.valtype.name
         var = tc.symtab.lookup_var(name)
         assert var is not None
         assert var.ownership == ZOwnership.BORROWED
