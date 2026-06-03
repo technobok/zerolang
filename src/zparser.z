@@ -89,6 +89,45 @@ reverseNodes: function {src: (List of: Node).take} out (List of: Node) is {
     return output
 }
 
+# True when byte `b` is NOT permitted at position `first?` of a unit name.
+# Valid names start with a lowercase ascii letter, then lowercase letters,
+# digits, or underscores (zlexer.isvalidunitname). Returns the negative so
+# the scanner can early-return on the first bad byte.
+unitNameCharBad: function {b: u8 first: bool} out bool is {
+    if first then {
+        if b >= 97.u8 when b <= 122.u8 then return false
+        return true
+    }
+    if b >= 97.u8 when b <= 122.u8 then return false
+    if b >= 48.u8 when b <= 57.u8 then return false
+    if b == 95.u8 then return false
+    return true
+}
+
+# Port of zlexer.isvalidunitname: a unit (file) name is a lowercase ascii
+# letter followed by lowercase letters, digits, or underscores. Used by
+# parseUnitFile to reject malformed names and by collectExterns to keep
+# only loadable references in the extern set.
+isValidUnitName: function {name: StringView} out bool is {
+    n: name.length
+    if n == 0.u64 then return false
+    i: 0.u64
+    for while i < n loop {
+        b: name.byteAt i
+        match (
+            b
+        ) case some then {
+            isFirst: i == 0.u64
+            bad: unitNameCharBad b: b first: isFirst
+            if bad then return false
+        } case none then {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
 Parser: class {
     # Monotonic source-node id, assigned in parse order.
     nextNodeId: u32
@@ -1860,6 +1899,473 @@ Parser: class {
             return (Option.none Node)
         }
     }
+
+    # True when `node` is an `error` arm carrying FILENOTFOUND. Used to
+    # tell "this reference is not a subunit/unit file" (benign -- resolve
+    # elsewhere) from a real parse error (propagate).
+    isFileNotFound: function {node: Node} out bool is {
+        match (
+            node
+        ) case error then {
+            match (
+                node.err
+            ) case FILENOTFOUND then {
+                return true
+            } else {
+                return false
+            }
+        } else {
+            return false
+        }
+    }
+
+    # Build a Lexer over open-file `text`. Isolated from loadUnit so the
+    # move of the tokenizer into the lexer happens in a loop-free scope:
+    # the E0200 loop-transfer check otherwise flags this take (which
+    # precedes loadUnit's resolve loop) even though the value is never
+    # used in the loop.
+    makeLexer: function {:this text: String.take fsno: u32} out zlexer.Lexer is {
+        tk: zlexer.Tokenizer.create source: text fsno: fsno
+        lx: zlexer.Lexer.create lexer: tk
+        return lx
+    }
+
+    # Load and parse the unit file `<unitname>.z` under `parentid`, mirroring
+    # zparser.py:_accept_unitfile. On success appends namedoperation(name,
+    # unitdef) into `outBody`, this unit's top-level def names into `outNames`,
+    # and its unresolved externs into `outExterns`; recursively loads any
+    # subunit found in a same-named subdirectory (attaching them into this
+    # unit's body and folding their externs back into this resolve loop).
+    # Returns an `error` Node on failure (FILENOTFOUND distinguishable via
+    # isFileNotFound) or a benign `atomid` "ok" sentinel on success -- so a
+    # bare Node return avoids disassembling an owned result carrier.
+    loadUnit: function {:this vfs: zvfs.ZVfs parentid: u32 unitname: String coreNames: (List of: String) outBody: (List of: Node) outExterns: (List of: String) outNames: (List of: String)} out Node is {
+        valid: isValidUnitName name: unitname.stringview
+        if valid then {
+        } else {
+            return (Node.error (zast.ErrorData nodeid: this.nextId lineno: 0.u32 colno: 0.u32 err: zast.err.BADUNITNAME msg: "Invalid unit name".string))
+        }
+        fn: "\{unitname.stringview}.z".string
+        fsid: vfs.walk parent: parentid name: fn.stringview
+        fkind: vfs.arm dentryid: fsid
+        isNF: false
+        match (
+            fkind
+        ) case notfound then {
+            isNF = true
+        } case dir then {
+        } case file then {
+        }
+        if isNF then {
+            return (Node.error (zast.ErrorData nodeid: this.nextId lineno: 0.u32 colno: 0.u32 err: zast.err.FILENOTFOUND msg: "Unit file not found".string))
+        }
+        r: vfs.open dentryid: fsid
+        match (
+            r
+        ) case err then {
+            return (Node.error (zast.ErrorData nodeid: this.nextId lineno: 0.u32 colno: 0.u32 err: zast.err.IOERROR msg: "Could not open unit file".string))
+        } case ok then {
+            lx: this.makeLexer text: r.copy fsno: fsid
+            firstTok: lx.peek
+            body: this.acceptUnitBody lex: lx
+            bn: body.length
+            if bn > 0.u64 then {
+                last: body.pop
+                le: this.isError node: last
+                if le then return last
+                body.append last
+            }
+            eofOpt: lx.accept tt: zlexer.TT.EOF
+            match (
+                eofOpt
+            ) case none then {
+                bad: lx.peek
+                return (this.mkError tok: bad code: zast.err.BADUNIT msg: "Expected EOF at end of unit file".string)
+            } case some then {
+            }
+            ewBindNames scope: outNames items: body
+            raw: collectExterns body: body
+            dirid: vfs.walk parent: parentid name: unitname.stringview
+            dkind: vfs.arm dentryid: dirid
+            hasSubdir: false
+            match (
+                dkind
+            ) case dir then {
+                hasSubdir = true
+            } case file then {
+            } case notfound then {
+            }
+            for while raw.length > 0.u64 loop {
+                rname: raw.pop
+                inCore: coreNames.contains item: rname
+                if inCore then {
+                } else {
+                    handled: false
+                    if hasSubdir then {
+                        subNames: (List of: String)
+                        sub: this.loadUnit vfs: vfs parentid: dirid unitname: rname coreNames: coreNames outBody: body outExterns: raw outNames: subNames
+                        subErr: this.isError node: sub
+                        if subErr then {
+                            nf: this.isFileNotFound node: sub
+                            if nf then {
+                            } else {
+                                return sub
+                            }
+                        } else {
+                            handled = true
+                        }
+                    }
+                    if handled then {
+                    } else {
+                        outExterns.append rname.copy
+                    }
+                }
+            }
+            root: Node.unitdef (zast.UnitData nodeid: this.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
+            outBody.append (this.mkNamedOp name: (Option.some unitname.copy) operation: root line: firstTok.lineno col: firstTok.colno)
+            return (Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: 0.u32 colno: 0.u32 name: "ok".string))
+        }
+    }
+
+    # Top-level entry: load the main unit and every transitively-referenced
+    # unit, returning a `program` Node (or an `error` arm). Mirrors
+    # zparser.py:parse. core is loaded first so its definitions suppress
+    # externs; the worklist is drained LIFO via List.pop (matching Python's
+    # dict popitem). Definitions/queue are parallel String/Node lists (no
+    # reftype-valued Map).
+    parse: function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node is {
+        units: (List of: Node)
+        coreNames: (List of: String)
+        coreNamesOut: (List of: String)
+        coreExterns: (List of: String)
+        coreRes: this.loadUnit vfs: vfs parentid: rootid unitname: "core".string coreNames: coreNames outBody: units outExterns: coreExterns outNames: coreNamesOut
+        coreErr: this.isError node: coreRes
+        coreOk: false
+        if coreErr then {
+            coreNF: this.isFileNotFound node: coreRes
+            if coreNF then {
+            } else {
+                return coreRes
+            }
+        } else {
+            coreOk = true
+        }
+        defNames: (List of: String)
+        if coreOk then {
+            defNames.append "core".string
+            cnIt: coreNamesOut.iterate
+            for cn: cnIt loop {
+                coreNames.append cn.copy
+            }
+        }
+        loadQueue: (List of: String)
+        loadQueue.append mainUnitName.copy
+        ceIt: coreExterns.iterate
+        for ce: ceIt loop {
+            enqueueUnit queue: loadQueue defNames: defNames name: ce.copy
+        }
+        for while loadQueue.length > 0.u64 loop {
+            name: loadQueue.pop
+            already: defNames.contains item: name
+            if already then {
+            } else {
+                unitExterns: (List of: String)
+                throwNames: (List of: String)
+                res: this.loadUnit vfs: vfs parentid: rootid unitname: name coreNames: coreNames outBody: units outExterns: unitExterns outNames: throwNames
+                rErr: this.isError node: res
+                if rErr then {
+                    nf: this.isFileNotFound node: res
+                    if nf then {
+                        return (Node.error (zast.ErrorData nodeid: this.nextId lineno: 0.u32 colno: 0.u32 err: zast.err.BADREFERENCE msg: "Unknown reference".string))
+                    } else {
+                        return res
+                    }
+                } else {
+                    defNames.append name.copy
+                    eIt: unitExterns.iterate
+                    for e: eIt loop {
+                        enqueueUnit queue: loadQueue defNames: defNames name: e.copy
+                    }
+                }
+            }
+        }
+        return (Node.program (zast.ProgramData nodeid: this.nextId lineno: 1.u32 colno: 1.u32 units: units mainUnitName: mainUnitName.copy))
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Extern (free-variable) walk.
+#
+# The ported parsers do not thread externs during parsing (the .z AST has
+# no extern field). Instead this single post-parse walk recovers the set
+# of referenced names not bound within a unit, mirroring zast.printNode's
+# arms and child order. Only valid, loadable unit names are kept
+# (operators, numbers, and dotted-member selectors never name a unit), so
+# the set drives which sibling units and subunits parse() loads.
+#
+# `externs` and `scope` are threaded as borrowed list params (appending to
+# a borrowed reftype mutates the caller's list -- the lib `extendraw`
+# pattern), so the child loops never move an owned accumulator across an
+# iteration (no E0200) and collectExterns returns a plain owned local.
+#
+# Bias: keep a name unless it is provably bound. A spurious extern fails
+# to resolve to a file and is harmless; a missed extern would drop a unit.
+# ---------------------------------------------------------------------------
+
+# Record `name` as an extern unless it is bound, not a valid unit name, or
+# already recorded.
+ewEmit: function {externs: (List of: String) scope: (List of: String) name: String.take} is {
+    inScope: scope.contains item: name
+    if inScope then return
+    valid: isValidUnitName name: name.stringview
+    if valid then {
+        dup: externs.contains item: name
+        if dup then return
+        externs.append name
+    }
+}
+
+# Push an optional bound name (a namedoperation / param / loop label).
+ewBindOptName: function {scope: (List of: String) o: (Option t: String)} is {
+    match (
+        o
+    ) case some then {
+        scope.append o.copy
+    } case none then {
+    }
+}
+
+# Bind one namedoperation arm's name. `item` is taken by value (like
+# zast.printNode's node param) so reading its `name` Option does not free
+# a field still owned by the parent list -- extracting an Option field
+# directly from a borrowed list-iterator element frees the shallow temp.
+ewBindOneName: function {scope: (List of: String) item: Node} is {
+    match (
+        item
+    ) case namedoperation then {
+        ewBindOptName scope: scope o: item.name
+    } else {
+    }
+}
+
+# Bind the names of a namedoperation-arm list (params, as-items, object
+# members) before their bodies are walked.
+ewBindNames: function {scope: (List of: String) items: (List of: Node)} is {
+    it: items.iterate
+    for el: it loop {
+        ewBindOneName scope: scope item: el
+    }
+}
+
+# Drop bindings introduced since depth `n` (block / scope exit).
+ewTruncate: function {scope: (List of: String) n: u64} is {
+    for while scope.length > n loop {
+        scope.pop
+    }
+}
+
+# Walk an optional child node if present.
+ewWalkOpt: function {externs: (List of: String) scope: (List of: String) o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        ewWalk externs: externs scope: scope node: o
+    } case none then {
+    }
+}
+
+# Walk a list of child nodes.
+ewWalkList: function {externs: (List of: String) scope: (List of: String) items: (List of: Node)} is {
+    it: items.iterate
+    for el: it loop {
+        ewWalk externs: externs scope: scope node: el
+    }
+}
+
+# A statement-block line. Block lines are `statementline` nodes wrapping
+# the real form (assignment / reassignment / swap / bare expression);
+# unwrap one level, then dispatch. An assignment binds its name for the
+# lines that follow (but not for its own value).
+ewWalkLine: function {externs: (List of: String) scope: (List of: String) line: Node} is {
+    match (
+        line
+    ) case statementline then {
+        ewWalkStmtInner externs: externs scope: scope inner: line.statementline
+    } else {
+        ewWalkStmtInner externs: externs scope: scope inner: line
+    }
+}
+
+# The unwrapped statement form. `inner` is taken by value so reading its
+# fields does not free anything still owned by the enclosing statement.
+ewWalkStmtInner: function {externs: (List of: String) scope: (List of: String) inner: Node} is {
+    match (
+        inner
+    ) case assignment then {
+        ewWalk externs: externs scope: scope node: inner.value
+        scope.append inner.name.copy
+    } case reassignment then {
+        ewWalk externs: externs scope: scope node: inner.topath
+        ewWalk externs: externs scope: scope node: inner.value
+    } case swapstmt then {
+        ewWalk externs: externs scope: scope node: inner.lhs
+        ewWalk externs: externs scope: scope node: inner.rhs
+    } else {
+        ewWalk externs: externs scope: scope node: inner
+    }
+}
+
+# A for-loop condition arm: a named arm (`label op`) binds the loop
+# variable for the body after its iterable is walked; an unnamed arm
+# (a `while` / leading condition) is just walked.
+ewWalkForCond: function {externs: (List of: String) scope: (List of: String) cond: Node} is {
+    match (
+        cond
+    ) case namedoperation then {
+        ewWalk externs: externs scope: scope node: cond.operation
+        ewBindOptName scope: scope o: cond.name
+    } else {
+        ewWalk externs: externs scope: scope node: cond
+    }
+}
+
+# The core recursive walk: same arms and child order as zast.printNode.
+# Emits atomid references; threads the bound scope through nested
+# definitions and blocks.
+ewWalk: function {externs: (List of: String) scope: (List of: String) node: Node} is {
+    match (
+        node
+    ) case error then {
+    } case atomid then {
+        ewEmit externs: externs scope: scope name: node.name.copy
+    } case labelvalue then {
+    } case stringchunk then {
+    } case binop then {
+        ewWalk externs: externs scope: scope node: node.lhs
+        ewWalk externs: externs scope: scope node: node.operator
+        ewWalk externs: externs scope: scope node: node.rhs
+    } case atomstring then {
+        ewWalkList externs: externs scope: scope items: node.stringparts
+    } case dottedpath then {
+        ewWalk externs: externs scope: scope node: node.parent
+    } case call then {
+        ewWalk externs: externs scope: scope node: node.callable
+        ewWalkList externs: externs scope: scope items: node.arguments
+    } case typeofexpr then {
+        ewWalk externs: externs scope: scope node: node.source
+    } case namedoperation then {
+        ewWalk externs: externs scope: scope node: node.operation
+    } case datablock then {
+        ewWalkList externs: externs scope: scope items: node.elements
+        ewWalkOpt externs: externs scope: scope o: node.outType
+    } case yieldexpr then {
+        ewWalk externs: externs scope: scope node: node.expr
+    } case statement then {
+        base: scope.length
+        sit: node.statements.iterate
+        for line: sit loop {
+            ewWalkLine externs: externs scope: scope line: line
+        }
+        ewTruncate scope: scope n: base
+    } case statementline then {
+        ewWalk externs: externs scope: scope node: node.statementline
+    } case assignment then {
+        ewWalk externs: externs scope: scope node: node.value
+    } case reassignment then {
+        ewWalk externs: externs scope: scope node: node.topath
+        ewWalk externs: externs scope: scope node: node.value
+    } case swapstmt then {
+        ewWalk externs: externs scope: scope node: node.lhs
+        ewWalk externs: externs scope: scope node: node.rhs
+    } case expression then {
+        ewWalk externs: externs scope: scope node: node.expression
+    } case ifexpr then {
+        ewWalkList externs: externs scope: scope items: node.clauses
+        ewWalkOpt externs: externs scope: scope o: node.elseclause
+    } case ifclause then {
+        ewWalkList externs: externs scope: scope items: node.conditions
+        ewWalk externs: externs scope: scope node: node.statement
+    } case forexpr then {
+        base: scope.length
+        fit: node.conditions.iterate
+        for fc: fit loop {
+            ewWalkForCond externs: externs scope: scope cond: fc
+        }
+        ewWalkOpt externs: externs scope: scope o: node.body
+        ewWalkList externs: externs scope: scope items: node.postconditions
+        ewTruncate scope: scope n: base
+    } case doexpr then {
+        ewWalk externs: externs scope: scope node: node.statement
+    } case withexpr then {
+        base: scope.length
+        ewWalk externs: externs scope: scope node: node.value
+        scope.append node.name.copy
+        ewWalk externs: externs scope: scope node: node.body
+        ewTruncate scope: scope n: base
+    } case caseexpr then {
+        ewWalk externs: externs scope: scope node: node.subject
+        ewWalkList externs: externs scope: scope items: node.clauses
+        ewWalkOpt externs: externs scope: scope o: node.elseclause
+    } case caseclause then {
+        ewWalk externs: externs scope: scope node: node.statement
+    } case functiondef then {
+        base: scope.length
+        ewBindNames scope: scope items: node.parameters
+        ewBindNames scope: scope items: node.asItems
+        ewWalkOpt externs: externs scope: scope o: node.returntype
+        ewWalkList externs: externs scope: scope items: node.parameters
+        ewWalkOpt externs: externs scope: scope o: node.body
+        ewWalkList externs: externs scope: scope items: node.asItems
+        ewTruncate scope: scope n: base
+    } case objectdef then {
+        base: scope.length
+        scope.append "this".string
+        scope.append "type".string
+        scope.append "meta".string
+        ewBindNames scope: scope items: node.isItems
+        ewBindNames scope: scope items: node.asItems
+        ewWalkList externs: externs scope: scope items: node.isItems
+        ewWalkList externs: externs scope: scope items: node.asItems
+        ewTruncate scope: scope n: base
+    } case unitdef then {
+        base: scope.length
+        scope.append "this".string
+        scope.append "type".string
+        scope.append "meta".string
+        ewBindNames scope: scope items: node.body
+        ewWalkList externs: externs scope: scope items: node.body
+        ewTruncate scope: scope n: base
+    } case program then {
+    }
+}
+
+# Recover the extern (free-reference) set of a parsed unit body. Seeds the
+# scope with {this,type,meta} and every top-level definition name (so
+# forward references resolve), then walks the body. Returns the deduped
+# extern names in source-reference order; parse() loads them as units.
+collectExterns: function {body: (List of: Node)} out (List of: String) is {
+    externs: (List of: String)
+    scope: (List of: String)
+    scope.append "this".string
+    scope.append "type".string
+    scope.append "meta".string
+    ewBindNames scope: scope items: body
+    ewWalkList externs: externs scope: scope items: body
+    return externs
+}
+
+# Enqueue `name` as a unit to load unless it is already loaded
+# (defNames) or already queued. Consumes `name` (appends it or frees it).
+enqueueUnit: function {queue: (List of: String) defNames: (List of: String) name: String.take} is {
+    inDef: defNames.contains item: name
+    if inDef then {
+    } else {
+        inQ: queue.contains item: name
+        if inQ then {
+        } else {
+            queue.append name
+        }
+    }
 }
 
 # Smoke harness: parse each inline snippet and dump the resulting node
@@ -2024,27 +2530,49 @@ runSmoke: function is {
 }
 
 main: function is {
-    # With a `.z` file path argument, parse its unit body and dump the
-    # canonical (id-stripped) AST for the parser differential (mirrors
-    # zlexer.z); with no argument, run the inline smoke harness.
+    # Three modes: no argument -> inline smoke harness; a single `.z` path
+    # -> parse that file's unit body and dump the canonical (id-stripped)
+    # AST (the per-file parser differential, mirrors zlexer.z); `--program
+    # <dir> <mainunit>` -> load the whole program over a filesystem VFS
+    # rooted at <dir> and dump the canonical Program (the multi-unit
+    # differential).
     argv: os.args
-    short: argv.length < 2.u64
-    if short then {
+    n: argv.length
+    if n < 2.u64 then {
         runSmoke
     } else {
-        path: argv.get i: 1.u64
-        r: io.readText path: path.stringview
-        match (r) case ok then {
+        a1: argv.get i: 1.u64
+        isProg: a1.stringview == "--program"
+        if isProg then {
+            if n < 4.u64 then {
+                io.eprintln "usage: zparser --program <dir> <mainunit>"
+                os.exit code: 2.i32
+            }
+            dir: argv.get i: 2.u64
+            mainName: argv.get i: 3.u64
+            vfs: zvfs.ZVfs providers: (List of: zvfs.ProviderBox) entrytable: (zvfs.DentryTable entries: (List of: zvfs.dentry)) file_names: (List of: String) walk_cache: (Map key: String value: u32) rootid: 0.u32
+            rootid: vfs.registerFS rootpath: dir.copy parentpath: "".string
+            vfs.rootid = rootid
             p: Parser.create
-            tk: zlexer.Tokenizer.create source: r.take fsno: 0.u32
-            lx: zlexer.Lexer.create lexer: tk
-            firstTok: lx.peek
-            body: p.acceptUnitBody lex: lx
-            root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
-            zast.printNodeCanonical root
-        } case err then {
-            io.eprintln "zparser: could not read source file"
-            os.exit code: 1.i32
+            prog: p.parse vfs: vfs rootid: rootid mainUnitName: mainName
+            zast.printNodeCanonical prog
+        } else {
+            path: argv.get i: 1.u64
+            r: io.readText path: path.stringview
+            match (
+                r
+            ) case ok then {
+                p: Parser.create
+                tk: zlexer.Tokenizer.create source: r.take fsno: 0.u32
+                lx: zlexer.Lexer.create lexer: tk
+                firstTok: lx.peek
+                body: p.acceptUnitBody lex: lx
+                root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
+                zast.printNodeCanonical root
+            } case err then {
+                io.eprintln "zparser: could not read source file"
+                os.exit code: 1.i32
+            }
         }
     }
 }

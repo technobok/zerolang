@@ -21,7 +21,7 @@ from typing import cast
 
 import zast
 from zlexer import Tokenizer, Lexer
-from zvfs import ZVfsOpenFile, DEntryID, ZVfs
+from zvfs import ZVfsOpenFile, DEntryID, ZVfs, FSProvider
 from zparser import Parser, NodeX
 from zast import NodeType
 
@@ -218,4 +218,34 @@ def dump_ast(source: str, fsno: int = 0) -> str:
         _emit(result, out)
     else:
         _emit(cast(NodeX[zast.Unit], result).node, out)
+    return "\n".join(out) + "\n"
+
+
+def dump_program(root_dir: str, mainunitname: str = "main") -> str:
+    """Load a whole program over a filesystem VFS rooted at `root_dir` and
+    return the canonical Program dump, matching `out/zparser --program`.
+
+    Units are dumped in `Program.units` insertion order (core first, then
+    main, then each transitively-referenced unit in resolution order), each
+    as a synthesized `namedoperation` wrapping the unit's `unitdef` — the
+    `.z` `ProgramData.units` list stores the same namedoperation arms. The
+    program line carries no source position (`@1:1` on both sides; a Program
+    has no token), matching `ProgramData`'s fixed lineno/colno.
+    """
+    vfs = ZVfs()
+    pid = vfs.register(FSProvider(rootpath=root_dir, parentpath=""))
+    rootid = vfs.walk()
+    vfs.bind(parentid=rootid, name=None, newid=pid)
+    parser = Parser(vfs, mainunitname)
+    result = parser.parse()
+    out: list[str] = []
+    if result.is_error:
+        _emit(result, out)
+    else:
+        prog = cast(zast.Program, result)
+        out.append(
+            f"program @1:1 units={len(prog.units)} mainUnitName={prog.mainunitname}"
+        )
+        for name, unit in prog.units.items():
+            _synth_namedop(name, unit, out)
     return "\n".join(out) + "\n"

@@ -10,13 +10,18 @@ Two parametrizations over examples/*.z:
   produce the same output. Closes the parser-parity loop. Marked
   `emitter` so it skips cleanly without a C compiler.
 
-The dump is the per-file unit body (parser._accept_unitbody), id-stripped
-and canonicalised; multi-unit loading is a later slice.
+The per-file dump is the unit body (parser._accept_unitbody), id-stripped
+and canonicalised. Two further parametrizations over fixtures/parser_program/
+exercise whole-program loading (parser.parse): extern resolution of sibling
+units and same-named-subdirectory subunits. The example corpus has no
+filesystem subunits, so those fixtures are synthetic.
 
 To regenerate a golden (after verifying the change is intentional):
 
     python tools/astdump.py examples/<name>.z \
         > tests/fixtures/parser_golden/<name>.ast
+    python tools/astdump.py --program <abs-tree-dir> main \
+        > tests/fixtures/parser_program/<name>.expected
 
 # SKIP set -- examples that exercise a deliberately-deferred parser feature,
 # so the two parsers legitimately disagree (no golden committed):
@@ -27,11 +32,12 @@ To regenerate a golden (after verifying the change is intentional):
 """
 
 import os
+import shutil
 import subprocess
 
 import pytest
 
-from zastdump import dump_ast
+from zastdump import dump_ast, dump_program
 
 
 pytestmark = pytest.mark.parser
@@ -39,6 +45,7 @@ pytestmark = pytest.mark.parser
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 EXAMPLES_DIR = os.path.join(REPO_ROOT, "examples")
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "parser_golden")
+PROGRAM_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "parser_program")
 
 # Examples skipped because a deferred parser feature makes the two parsers
 # legitimately disagree (see module docstring).
@@ -52,6 +59,14 @@ def _list_example_names():
     for name in sorted(os.listdir(EXAMPLES_DIR)):
         if name.endswith(".z"):
             names.append(name)
+    return names
+
+
+def _list_program_fixtures():
+    names = []
+    for name in sorted(os.listdir(PROGRAM_DIR)):
+        if name.endswith(".tree"):
+            names.append(name[:-5])
     return names
 
 
@@ -113,4 +128,57 @@ def test_zparser_binary_matches_golden(example_name, zparser_binary):
         pytest.fail(
             f"out/zparser output diverged from golden for {example_name}.\n"
             f"--- expected ---\n{expected}--- actual ---\n{actual}"
+        )
+
+
+@pytest.mark.parametrize("fixture", _list_program_fixtures())
+def test_python_program_matches_golden(fixture, tmp_path):
+    """Reference whole-program dump must match the checked-in golden.
+
+    The tree is copied into tmp_path so the FSProvider sees a stable root;
+    the canonical dump carries no absolute paths, so the golden is
+    path-independent.
+    """
+    root = tmp_path / "root"
+    shutil.copytree(os.path.join(PROGRAM_DIR, fixture + ".tree"), root)
+    actual = dump_program(str(root), "main")
+
+    expected_path = os.path.join(PROGRAM_DIR, fixture + ".expected")
+    with open(expected_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+
+    if actual != expected:
+        pytest.fail(
+            f"program dump diverged from golden for {fixture}.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{actual}"
+        )
+
+
+@pytest.mark.emitter
+@pytest.mark.parametrize("fixture", _list_program_fixtures())
+def test_zparser_program_matches_golden(fixture, zparser_binary, tmp_path):
+    """Self-hosted whole-program load (out/zparser --program <dir> main) must
+    match the golden too -- exercises parser.parse, extern resolution, and
+    subunit recursion that the per-file dump cannot reach."""
+    root = tmp_path / "root"
+    shutil.copytree(os.path.join(PROGRAM_DIR, fixture + ".tree"), root)
+    proc = subprocess.run(
+        [zparser_binary, "--program", str(root), "main"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            f"out/zparser --program exited {proc.returncode} on {fixture}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+
+    expected_path = os.path.join(PROGRAM_DIR, fixture + ".expected")
+    with open(expected_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+
+    if proc.stdout != expected:
+        pytest.fail(
+            f"out/zparser --program output diverged from golden for {fixture}.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
         )
