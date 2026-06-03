@@ -4509,6 +4509,40 @@ class TestEmitterUnionMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
+    def test_union_narrowed_take_into_call_sink_diverging_arm_no_double_free(self):
+        """A user union's narrowed payload moved by `.take` into a
+        function-call sink, on a DIVERGING (return) arm, must not be
+        double-freed. The payload is hoisted to a boxed-deref alias
+        whose explicit/implicit take invalidation is skipped (a
+        non-trivial deref), so the box-zero used to be emitted only at
+        the arm's end — dead code after the arm's `return`, which means
+        the arm's subject destructor freed the buffer the sink already
+        owned. The zero must instead be emitted right after the sink
+        reads the value (before the arm/return destructor). A
+        fall-through arm zeroed correctly because its arm-end zero was
+        reachable; only the diverging arm regressed.
+        """
+        csource = emit_source(
+            "myresult: union { ok: String  err: i64 }\n"
+            "sink: function {x: String.take} out i64 is { return x.length.i64 }\n"
+            "doit: function {} out i64 is {\n"
+            '  r: myresult.ok "hello".string\n'
+            "  match (\n"
+            "    r\n"
+            "  ) case ok then {\n"
+            "    return (sink x: r.take)\n"
+            "  } case err then {\n"
+            "    return 0\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  v: doit\n"
+            '  print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
     def test_map_get_option_string_value_return(self):
         """Regression for two coupled bugs surfaced by PR 6a.
 

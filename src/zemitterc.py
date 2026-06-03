@@ -10667,6 +10667,24 @@ class CEmitter:
             is_explicit_take = explicit_own == ZParamOwnership.TAKE
             if is_string or (is_explicit_take and self._needs_implicit_take(arg_type)):
                 self._transfer_implicit_take(emitted_vals[i], arg.valtype, indent)
+                # A narrowed match-subject's payload moved by `.take` is
+                # hoisted to an alias temp whose emitted value is the boxed
+                # payload deref `(*(T*)subj.data)`. Neither the explicit
+                # (`_get_take_var`) nor the implicit (`_get_implicit_take_var`)
+                # invalidation zeroes such a non-trivial deref — both defer to
+                # the arm-end `case_subject_taken_arms` zero, which is dead
+                # code on a diverging arm (the `return` runs first). Clear the
+                # box here in post_code so it is zeroed after the callee reads
+                # the value but before the arm/return destructor frees the
+                # subject, which would otherwise double-free the moved payload.
+                if (
+                    emitted_vals[i][:2] == "(*"
+                    and self._get_take_var(arg.valtype) is None
+                    and self._get_implicit_take_var(arg.valtype) is None
+                ):
+                    self._temp.post_code.append(
+                        self._emit_take_invalidation(emitted_vals[i], arg_type, indent)
+                    )
 
     def _is_borrow_return_call(self, expr: zast.Expression) -> bool:
         """True if ``expr`` is a call whose callee returns a borrowed value.
