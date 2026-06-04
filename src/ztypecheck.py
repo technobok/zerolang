@@ -7572,6 +7572,40 @@ class TypeChecker:
                 var = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
                 var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
+                # Binding a new local from a bare owned reftype name (`b: m`)
+                # is a move, identical to reassignment: the struct is pointer-
+                # copied into the new local, so the source must be invalidated
+                # or its scope-exit destructor double-frees the heap the copy
+                # now shares. Gated to a bare-atom RHS with a heap-owning type
+                # — `.take`/`.borrow` invalidate/alias through their own paths,
+                # `.copy` is a fresh value, and valtypes are self-contained
+                # copies. Mirrors `_check_reassignment_inner`.
+                _rhs_atom = assign.value.expression
+                if (
+                    _rhs_atom.nodetype == NodeType.ATOMID
+                    and not _is_valtype(t)
+                    and t.destructor_name is not None
+                ):
+                    rhs_root = cast(zast.AtomId, _rhs_atom).name
+                    rhs_var = self.symtab.lookup_var(rhs_root)
+                    if rhs_var is not None and rhs_var.ownership == ZOwnership.BORROWED:
+                        self._error(
+                            f"Cannot move borrowed variable '{rhs_root}' into an "
+                            f"owned binding — borrowed names stay bound to their "
+                            f"source for the full scope",
+                            loc=assign.start,
+                            err=ERR.OWNERERROR,
+                        )
+                    elif rhs_var is not None:
+                        take_loc = (
+                            (assign.start.lineno, assign.start.colno, assign.start.fsno)
+                            if assign.start
+                            else None
+                        )
+                        self.symtab.release_held_locks(
+                            ZLockHolder(ZLockHolderKind.VAR, rhs_var.variable_id)
+                        )
+                        self.symtab.invalidate(rhs_root, loc=take_loc)
             self.typing.node_type[assign.nodeid] = t
             # Stamp the assignment node so the emitter reads the local's C name
             # from `variable_cname` at the declaration site (both branches bind

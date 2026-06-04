@@ -6887,12 +6887,18 @@ class CEmitter:
         ):
             ctype = _cname_of(inner_resolved, cast(zast.AtomId, inner).name)
         result = f"{indent}{ctype} {cname} = {val};\n"
-        # invalidate source on .take for reftypes
-        take_var = self._get_take_var_from_expr(assign.value)
-        if take_var:
-            result += self._emit_take_invalidation(
-                take_var, self._node_ztype(assign.value), indent
-            )
+        # Invalidate the source for a reftype move: an explicit `.take` or a
+        # bare-atom binding (`b: m`). The implicit take does a struct copy, so
+        # the source must be zeroed or its scope-exit destructor double-frees the
+        # heap the copy now shares. Mirrors _emit_reassignment; a borrow
+        # projection RHS (a dotted path that is not `.take`) yields no take_var,
+        # so borrowed bindings are left intact.
+        if _assign_ztype and (_assign_ztype.destructor_name is not None):
+            take_var = self._get_take_var_from_expr(assign.value)
+            if take_var is None and inner.nodetype == NodeType.ATOMID:
+                take_var = self._get_implicit_take_var(cast(zast.Operation, inner))
+            if take_var is not None:
+                result += self._emit_take_invalidation(take_var, _assign_ztype, indent)
         return result
 
     def _emit_reassignment(self, reassign: zast.Reassignment) -> str:
@@ -7885,16 +7891,13 @@ class CEmitter:
         arg before hoisting.
         """
         if op.nodetype == NodeType.ATOMID:
-            name = cast(zast.AtomId, op).name
-            udt = self._unit_def_ztype(op)
-            if (
-                not _is_numeric_id(name)
-                and (
-                    udt is None
-                    or udt.typetype not in (ZTypeType.FUNCTION, ZTypeType.DATA)
-                )
-                and name not in self._const_names
-            ):
+            atom = cast(zast.AtomId, op)
+            name = atom.name
+            # Only a real local is movable storage. A bare name that binds to a
+            # unit-level definition (function, type construction, data block) or
+            # a constant macro is not a variable — zeroing it would emit an
+            # assignment to the undeclared type/def identifier (`Bytes = ...`).
+            if not _is_numeric_id(name) and not self._is_definition_ref(atom):
                 # If this name is an alias, redirect implicit-take to
                 # the alias's storage:
                 # - trivial target (a bare C identifier) -> invalidate that;

@@ -820,6 +820,67 @@ class TestTakeReturnNoUseAfterFree:
         assert result.stdout == "got=loaded\n"
 
 
+class TestBareReftypeBindNoUseAfterFree:
+    """Pin: binding a new local from a bare owned reftype name (`b: m`) is
+    a move (drop-and-transfer), identical to reassignment — the struct is
+    pointer-copied into the new local, so the source must be zeroed or its
+    scope-exit destructor double-frees the heap the copy now shares.
+
+    Was a double-free (class with a heap field) / use-after-free (union):
+    only the reassignment path and the explicit `.take` invalidated the
+    source, so a plain `b: m` shallow-copied the struct and left `m` live —
+    both `b` and `m` then destroyed the same buffer. Fix:
+    `_check_assignment_inner` invalidates the bare-atom reftype source
+    (use-after-move now errors) and `_emit_assignment` zeroes it.
+    """
+
+    _CLASS_SRC = (
+        "Holder: class { items: (List of: i64) }\n"
+        "main: function is {\n"
+        "  m: Holder items: (List of: i64)\n"
+        "  m.items.append from: 1\n"
+        "  m.items.append from: 2\n"
+        "  b: m\n"
+        '  print "len \\{b.items.length}"\n'
+        "}"
+    )
+
+    _UNION_SRC = (
+        "Payload: class { items: (List of: i64) }\n"
+        "U: union { one: Payload  two: null }\n"
+        "main: function is {\n"
+        "  u: U.one (Payload items: (List of: i64))\n"
+        "  b: u\n"
+        "  match (\n"
+        "    b\n"
+        "  ) case one then {\n"
+        '    print "len \\{b.items.length}"\n'
+        "  } case two then {\n"
+        '    print "two"\n'
+        "  }\n"
+        "}"
+    )
+
+    def test_bare_bind_class_is_asan_clean(self):
+        csource = emit_source(self._CLASS_SRC)
+        # The bare bind zeroes the moved-from source struct.
+        assert "Holder_t){0};" in csource
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "len 2\n"
+
+    def test_bare_bind_union_is_asan_clean(self):
+        csource = emit_source(self._UNION_SRC)
+        assert "U_t){0};" in csource
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "len 0\n"
+
+
 class TestForWhileCallCondReEvaluates:
     """Pin: a for-loop's `while` condition that wraps a function call
     on per-iteration mutable state must re-evaluate each iteration.

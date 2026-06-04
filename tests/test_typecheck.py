@@ -2403,6 +2403,33 @@ class TestTakeBorrowCompilerMethods:
             "}"
         )
 
+    def test_bare_reftype_bind_moves_source(self):
+        """Binding a new local from a bare owned reftype name (`b: m`) is a
+        move — the struct is pointer-copied, so the source is invalidated
+        and a later use of it errors (mirrors `.take` and reassignment)."""
+        errors = check_errors(
+            "Holder: class { items: (List of: i64) }\n"
+            "main: function is {\n"
+            "  m: Holder items: (List of: i64)\n"
+            "  b: m\n"
+            "  z: m.items.length\n"
+            "}"
+        )
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
+
+    def test_bare_reftype_bind_then_use_binding_ok(self):
+        """The moved-to binding is live and usable after a bare-name move."""
+        check_ok(
+            "Holder: class { items: (List of: i64) }\n"
+            "main: function is {\n"
+            "  m: Holder items: (List of: i64)\n"
+            "  b: m\n"
+            "  z: b.items.length\n"
+            "}"
+        )
+
 
 class TestReleaseCompilerMethod:
     """.release compiler method."""
