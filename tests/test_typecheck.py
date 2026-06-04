@@ -1584,6 +1584,32 @@ class TestOwnershipReturnChecking:
             "main: function is {}"
         )
 
+    def test_return_narrowed_payload_rejected(self):
+        """Returning a narrowed match-some payload bare is a borrow into the
+        matched subject, which is freed when the subject is destroyed."""
+        errors = check_errors(
+            "f: function {} out String is {\n"
+            '    o: (Option.some "x".string)\n'
+            "    match (o) case some then { return o } "
+            'case none then { return "y".string }\n'
+            "}\n"
+            "main: function is {}"
+        )
+        assert any("narrowed value" in e.msg and "'o'" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_return_copy_of_narrowed_payload_allowed(self):
+        """`.copy` returns a fresh owned duplicate of the narrowed payload."""
+        check_ok(
+            "f: function {} out String is {\n"
+            '    o: (Option.some "x".string)\n'
+            "    match (o) case some then { return o.copy } "
+            'case none then { return "y".string }\n'
+            "}\n"
+            "main: function is {}"
+        )
+
     def test_return_construction_field_args_typechecked(self):
         """`return (Type field: val)` routes through the regular call
         pipeline, which type-checks every field-arg. Nested paths like

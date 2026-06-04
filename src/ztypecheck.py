@@ -11215,6 +11215,33 @@ class TypeChecker:
                             "with a `.lock` parameter to return a borrow"
                         ),
                     )
+                else:
+                    # A match-arm (shadow) narrowing resolves the name to the
+                    # unwrapped payload: `original_ztype` is the outer union and
+                    # the returned type is the payload (different from it). That
+                    # payload is a borrowed view into the matched subject, whose
+                    # C storage is freed when the subject is destroyed at scope
+                    # exit. An assignment-narrowed name keeps the outer union
+                    # type and has no `original_ztype`, so returning the whole
+                    # owned union (e.g. `x: U.arm v` then `return x`) is fine.
+                    nentry = self.symtab.lookup_entry(bare_name)
+                    if (
+                        nentry is not None
+                        and nentry.original_ztype is not None
+                        and ret_type.type_id != nentry.original_ztype.type_id
+                    ):
+                        self._error(
+                            f"Cannot return narrowed value '{bare_name}': it is "
+                            f"a borrowed view of the matched "
+                            f"'{nentry.narrowed_subtype}' payload, freed when "
+                            f"the match subject is destroyed.",
+                            loc=call.start,
+                            err=ERR.OWNERERROR,
+                            hint=(
+                                f"use `{bare_name}.copy` to return an owned "
+                                f"duplicate of the payload"
+                            ),
+                        )
 
         # return has type 'never' (control flow doesn't continue)
         never = self._resolve_name("never")
