@@ -1,0 +1,829 @@
+# ZTyping -- the typecheck-output container.
+#
+# The parser produces a frozen zast.Program; the type checker consumes it
+# and produces a ZTyping: every typecheck-derived datum the downstream
+# consumers (emitter, SQL dumper) read. This is the data module, separate
+# from the producer, mirroring the zast / zparser split. References ztypes.z
+# for ZType + the shared enums (a multi-unit reference, like zparser -> zast).
+#
+# Representation is id-first and relational: cross-type references are
+# stored as u64 type ids (resolved through the registry by the producer),
+# the per-(parent,child) edges live in append-only row tables, and the
+# mutable per-edge sidecars live in id-keyed Maps. Every mutator runs on
+# :this -- a container that owns all of its state -- so mutations persist.
+# child-name ids are minted by ZTyping itself (the registry's id space is
+# for ZType ids); the memo keeps the mint idempotent per (parent, name).
+
+ZType: ztypes.ZType
+
+# --- relational row carriers ---
+
+# One edge of the children table: a (parent, child-name) -> child-type
+# link. Append-only; the mutable child-type id and the sidecars live in
+# id-keyed Maps on ZTyping, keyed by childNameId.
+ZTypeChild: class {
+    parentTypeId: u64
+    childName:    String
+    childNameId:  u64
+    position:     u64
+}
+
+# One edge of the generic-args table: a (parent, param-name) link. The
+# mutable arg-type id lives in genericArgTypeBy, keyed by parentTypeId +
+# paramName.
+ZTypeGenericArg: class {
+    parentTypeId: u64
+    paramName:    String
+    position:     u64
+}
+
+# Per-node compile-time constant value, carried via the shared ZConst
+# (kind/ival/fval/sval). bool consts fold onto IVAL until the producer
+# slice needs a distinct encoding.
+NodeConstRow: class {
+    nodeid: u64
+    value:  ztypes.ZConst
+}
+
+# One (node -> (name, optional type)) row: the relational form of the
+# if/case post-block ownership-cleanup lists. Order-significant (append).
+TakenVarRow: class {
+    nodeid: u64
+    name:   String
+    typeId: (optionval t: u64)
+}
+
+# One (node -> name) row: the relational form of the set-valued node
+# stamps (generic-param names, taken-arm names, for-iterator bindings).
+NodeNameRow: class {
+    nodeid: u64
+    name:   String
+}
+
+# Per-argument protocol-projection stamp. Empty label means absent.
+ProjectedArgRow: class {
+    nodeid:       u64
+    typeId:       (optionval t: u64)
+    borrowLabel:  String
+    privateLabel: String
+}
+
+# One monomorphized (mono-type, originating-AST-node) pair.
+MonoRow: class {
+    monoTypeId: u64
+    astNodeId:  u64
+}
+
+# One cloned method on a mono type: mono-type name -> method name ->
+# cloned-function node id.
+ClonedMethodRow: class {
+    monoName:   String
+    methodName: String
+    funcNodeId: u64
+}
+
+ZTyping: class {
+    # child-name id minting (ztyping-local id space)
+    nextChildId: u64
+    childIdMemo: (Map key: String value: u64)
+
+    # flat edge tables
+    typeChild:      (List of: ZTypeChild)
+    typeGenericArg: (List of: ZTypeGenericArg)
+
+    # per-edge mutable state, keyed by childNameId
+    childTypeById:  (Map key: u64 value: u64)
+    childPrivate:   (Map key: u64 value: bool)
+    childLockField: (Map key: u64 value: bool)
+    childLockArm:   (Map key: u64 value: bool)
+    childDefault:   (Map key: u64 value: String)
+    childOwnership: (Map key: u64 value: ztypes.zparamownership)
+    # generic arg-type id, keyed by "parentTypeId:paramName"
+    genericArgTypeBy: (Map key: String value: u64)
+
+    # per-node single-valued stamps, keyed by parsed-AST nodeid
+    nodeType:            (Map key: u64 value: u64)
+    nodeLiteralBase:     (Map key: u64 value: ztypes.numbase)
+    callKind:            (Map key: u64 value: zast.callkind)
+    callCallableTypeId:  (Map key: u64 value: u64)
+    exprCallKind:        (Map key: u64 value: zast.callkind)
+    doHasBreak:          (Map key: u64 value: bool)
+    caseSubjectTaken:    (Map key: u64 value: bool)
+    atomNarrowedSubtype: (Map key: u64 value: String)
+    atomOriginalZtype:   (Map key: u64 value: u64)
+    atomChildId:         (Map key: u64 value: u64)
+    atomVariableId:      (Map key: u64 value: u64)
+    variableCname:       (Map key: u64 value: String)
+    defVariableId:       (Map key: u64 value: u64)
+    aliasRootVariableId: (Map key: u64 value: u64)
+    atomUnitDefTypeId:   (Map key: u64 value: u64)
+    dpParentTaggedType:  (Map key: u64 value: u64)
+    dpChildId:           (Map key: u64 value: u64)
+    dpUnitTypeId:        (Map key: u64 value: u64)
+    withOwnership:       (Map key: u64 value: ztypes.zownership)
+    withAliasOf:         (Map key: u64 value: String)
+    assignAliasOf:       (Map key: u64 value: String)
+
+    # per-node collection-valued stamps, flattened to append-only rows
+    nodeConst:             (List of: NodeConstRow)
+    ifTakenVars:           (List of: TakenVarRow)
+    caseTakenVars:         (List of: TakenVarRow)
+    callGenericParamNames: (List of: NodeNameRow)
+    caseSubjectTakenArms:  (List of: NodeNameRow)
+    forIterBindings:       (List of: NodeNameRow)
+    projectedArgs:         (List of: ProjectedArgRow)
+
+    # aggregate typecheck state
+    conformance:        (List of: ztypes.ZConformance)
+    monoTypes:          (List of: MonoRow)
+    monoFunctions:      (List of: MonoRow)
+    clonedMethods:      (List of: ClonedMethodRow)
+    resolved:           (Map key: String value: u64)
+    canonicalCnameBase: (Map key: String value: String)
+    unitTypesById:      (Map key: u64 value: u64)
+    funcAliases:        (Map key: String value: String)
+    isError:            bool
+} as {
+    # --- children table ---
+
+    # Monotonic child-name id for (parentTypeId, name), minted from the
+    # local counter and memoized so repeat calls return the same id.
+    childIdFor: function {:this parentTypeId: u64 name: StringView} out u64 is {
+        memokey: "\{parentTypeId}:\{name}".string
+        existing: this.childIdMemo.get key: memokey.copy
+        match (
+            existing
+        ) case some then {
+            return existing
+        } case none then {
+            newId: this.nextChildId
+            this.nextChildId = this.nextChildId + 1.u64
+            stored: newId
+            this.childIdMemo.set key: memokey.take value: stored
+            return newId
+        }
+    }
+
+    # Resolve the childNameId of an existing (parent, name) edge.
+    childNameIdOf: function {:this parentTypeId: u64 name: StringView} out (optionval t: u64) is {
+        iter: this.typeChild.iterate
+        for row: iter loop {
+            if row.parentTypeId == parentTypeId then {
+                if row.childName.stringview == name then {
+                    return (optionval.some row.childNameId)
+                }
+            }
+        }
+        return (optionval.none u64)
+    }
+
+    # Record a (parent, name) -> child-type edge. Idempotent on the key:
+    # a repeat call updates the child-type id in place.
+    setChild: function {:this parentTypeId: u64 childName: StringView childTypeId: u64} is {
+        existing: this.childNameIdOf parentTypeId: parentTypeId name: childName
+        match (
+            existing
+        ) case some then {
+            sv: childTypeId
+            this.childTypeById.set key: existing value: sv
+        } case none then {
+            cid: this.childIdFor parentTypeId: parentTypeId name: childName
+            pos: this.typeChild.length
+            this.typeChild.append (ZTypeChild parentTypeId: parentTypeId childName: childName.string childNameId: cid position: pos)
+            sv: childTypeId
+            this.childTypeById.set key: cid value: sv
+        }
+    }
+
+    childOf: function {:this parentTypeId: u64 name: StringView} out (optionval t: u64) is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childTypeById.get key: idopt
+            match (
+                r
+            ) case some then {
+                return (optionval.some r)
+            } case none then {
+                return (optionval.none u64)
+            }
+        } case none then {
+            return (optionval.none u64)
+        }
+    }
+
+    childByIdValue: function {:this childNameId: u64} out (optionval t: u64) is {
+        r: this.childTypeById.get key: childNameId
+        match (
+            r
+        ) case some then {
+            return (optionval.some r)
+        } case none then {
+            return (optionval.none u64)
+        }
+    }
+
+    hasChild: function {:this parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    }
+
+    childCount: function {:this parentTypeId: u64} out u64 is {
+        c: 0.u64
+        iter: this.typeChild.iterate
+        for row: iter loop {
+            if row.parentTypeId == parentTypeId then {
+                c = c + 1.u64
+            }
+        }
+        return c
+    }
+
+    # --- bool sidecars (private / lock-field / lock-arm) ---
+
+    setChildPrivate: function {:this parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            this.childPrivate.set key: idopt value: true
+        } case none then { }
+    }
+
+    isChildPrivate: function {:this parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childPrivate.get key: idopt
+            match (
+                r
+            ) case some then {
+                return r
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+    }
+
+    setChildLockField: function {:this parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            this.childLockField.set key: idopt value: true
+        } case none then { }
+    }
+
+    isChildLockField: function {:this parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childLockField.get key: idopt
+            match (
+                r
+            ) case some then {
+                return r
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+    }
+
+    hasAnyLockField: function {:this parentTypeId: u64} out bool is {
+        iter: this.typeChild.iterate
+        for row: iter loop {
+            if row.parentTypeId == parentTypeId then {
+                r: this.childLockField.get key: row.childNameId
+                match (
+                    r
+                ) case some then {
+                    if r then {
+                        return true
+                    }
+                } case none then { }
+            }
+        }
+        return false
+    }
+
+    setChildLockArm: function {:this parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            this.childLockArm.set key: idopt value: true
+        } case none then { }
+    }
+
+    isChildLockArm: function {:this parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childLockArm.get key: idopt
+            match (
+                r
+            ) case some then {
+                return r
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+    }
+
+    hasAnyLockArm: function {:this parentTypeId: u64} out bool is {
+        iter: this.typeChild.iterate
+        for row: iter loop {
+            if row.parentTypeId == parentTypeId then {
+                r: this.childLockArm.get key: row.childNameId
+                match (
+                    r
+                ) case some then {
+                    if r then {
+                        return true
+                    }
+                } case none then { }
+            }
+        }
+        return false
+    }
+
+    # --- default sidecar ---
+
+    setChildDefault: function {:this parentTypeId: u64 name: StringView default: StringView} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            d: default.string
+            this.childDefault.set key: idopt value: d
+        } case none then { }
+    }
+
+    setDefaultNumeric: function {:this parentTypeId: u64 name: StringView value: i64} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            d: "\{value}".string
+            this.childDefault.set key: idopt value: d
+        } case none then { }
+    }
+
+    setDefaultFunction: function {:this parentTypeId: u64 name: StringView funcname: StringView} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            d: "#function:\{funcname}".string
+            this.childDefault.set key: idopt value: d
+        } case none then { }
+    }
+
+    setDefaultVariantArm: function {:this parentTypeId: u64 name: StringView armName: StringView} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            d: "#variant:\{armName}".string
+            this.childDefault.set key: idopt value: d
+        } case none then { }
+    }
+
+    # Default text for (parent, name), or "" when none. `.copy` returns an
+    # owned deep copy of the map's String (the map keeps its own); `.string`
+    # on an already-owned String is an identity that would alias the Option
+    # payload destroyed at return.
+    childDefaultText: function {:this parentTypeId: u64 name: StringView} out String is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childDefault.get key: idopt
+            match (
+                r
+            ) case some then {
+                return r.copy
+            } case none then {
+                return "".string
+            }
+        } case none then {
+            return "".string
+        }
+    }
+
+    hasChildDefault: function {:this parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childDefault.get key: idopt
+            match (
+                r
+            ) case some then {
+                return true
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+    }
+
+    # --- ownership sidecar ---
+
+    setChildOwnership: function {:this parentTypeId: u64 name: StringView ownership: ztypes.zparamownership} is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            oc: ownership
+            this.childOwnership.set key: idopt value: oc
+        } case none then { }
+    }
+
+    # Ownership name for (parent, name), or "none" when unset.
+    childOwnershipText: function {:this parentTypeId: u64 name: StringView} out String is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childOwnership.get key: idopt
+            match (
+                r
+            ) case some then {
+                return (ztypes.zparamownershipName r)
+            } case none then {
+                return "none".string
+            }
+        } case none then {
+            return "none".string
+        }
+    }
+
+    hasChildOwnership: function {:this parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf parentTypeId: parentTypeId name: name
+        match (
+            idopt
+        ) case some then {
+            r: this.childOwnership.get key: idopt
+            match (
+                r
+            ) case some then {
+                return true
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+    }
+
+    # --- generic args ---
+
+    hasGenericArgNamed: function {:this parentTypeId: u64 paramName: StringView} out bool is {
+        iter: this.typeGenericArg.iterate
+        for row: iter loop {
+            if row.parentTypeId == parentTypeId then {
+                if row.paramName.stringview == paramName then {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    setGenericArg: function {:this parentTypeId: u64 paramName: StringView argTypeId: u64} is {
+        present: this.hasGenericArgNamed parentTypeId: parentTypeId paramName: paramName
+        if present == false then {
+            pos: this.typeGenericArg.length
+            this.typeGenericArg.append (ZTypeGenericArg parentTypeId: parentTypeId paramName: paramName.string position: pos)
+        }
+        memokey: "\{parentTypeId}:\{paramName}".string
+        sv: argTypeId
+        this.genericArgTypeBy.set key: memokey.take value: sv
+    }
+
+    genericArgOf: function {:this parentTypeId: u64 paramName: StringView} out (optionval t: u64) is {
+        memokey: "\{parentTypeId}:\{paramName}".string
+        r: this.genericArgTypeBy.get key: memokey.take
+        match (
+            r
+        ) case some then {
+            return (optionval.some r)
+        } case none then {
+            return (optionval.none u64)
+        }
+    }
+
+    hasGenericArgs: function {:this parentTypeId: u64} out bool is {
+        iter: this.typeGenericArg.iterate
+        for row: iter loop {
+            if row.parentTypeId == parentTypeId then {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+newTyping: function {} out ZTyping is {
+    return (ZTyping
+        nextChildId: 0.u64
+        childIdMemo: (Map key: String value: u64)
+        typeChild: (List of: ZTypeChild)
+        typeGenericArg: (List of: ZTypeGenericArg)
+        childTypeById: (Map key: u64 value: u64)
+        childPrivate: (Map key: u64 value: bool)
+        childLockField: (Map key: u64 value: bool)
+        childLockArm: (Map key: u64 value: bool)
+        childDefault: (Map key: u64 value: String)
+        childOwnership: (Map key: u64 value: ztypes.zparamownership)
+        genericArgTypeBy: (Map key: String value: u64)
+        nodeType: (Map key: u64 value: u64)
+        nodeLiteralBase: (Map key: u64 value: ztypes.numbase)
+        callKind: (Map key: u64 value: zast.callkind)
+        callCallableTypeId: (Map key: u64 value: u64)
+        exprCallKind: (Map key: u64 value: zast.callkind)
+        doHasBreak: (Map key: u64 value: bool)
+        caseSubjectTaken: (Map key: u64 value: bool)
+        atomNarrowedSubtype: (Map key: u64 value: String)
+        atomOriginalZtype: (Map key: u64 value: u64)
+        atomChildId: (Map key: u64 value: u64)
+        atomVariableId: (Map key: u64 value: u64)
+        variableCname: (Map key: u64 value: String)
+        defVariableId: (Map key: u64 value: u64)
+        aliasRootVariableId: (Map key: u64 value: u64)
+        atomUnitDefTypeId: (Map key: u64 value: u64)
+        dpParentTaggedType: (Map key: u64 value: u64)
+        dpChildId: (Map key: u64 value: u64)
+        dpUnitTypeId: (Map key: u64 value: u64)
+        withOwnership: (Map key: u64 value: ztypes.zownership)
+        withAliasOf: (Map key: u64 value: String)
+        assignAliasOf: (Map key: u64 value: String)
+        nodeConst: (List of: NodeConstRow)
+        ifTakenVars: (List of: TakenVarRow)
+        caseTakenVars: (List of: TakenVarRow)
+        callGenericParamNames: (List of: NodeNameRow)
+        caseSubjectTakenArms: (List of: NodeNameRow)
+        forIterBindings: (List of: NodeNameRow)
+        projectedArgs: (List of: ProjectedArgRow)
+        conformance: (List of: ztypes.ZConformance)
+        monoTypes: (List of: MonoRow)
+        monoFunctions: (List of: MonoRow)
+        clonedMethods: (List of: ClonedMethodRow)
+        resolved: (Map key: String value: u64)
+        canonicalCnameBase: (Map key: String value: String)
+        unitTypesById: (Map key: u64 value: u64)
+        funcAliases: (Map key: String value: String)
+        isError: false)
+}
+
+boolText: function {b: bool} out String is {
+    match (
+        b
+    ) case true then {
+        return "true".string
+    } case false then {
+        return "false".string
+    }
+}
+
+# Render an (optionval u64) as its value text or "none".
+optU64Text: function {o: (optionval t: u64)} out String is {
+    match (
+        o
+    ) case some then {
+        return "\{o}".string
+    } case none then {
+        return "none".string
+    }
+}
+
+# --- smoke harness ---
+# Every name-bearing query goes through a helper that takes the name as a
+# param (a string literal cannot be nested inside an interpolation), and the
+# raw Map.get stamp reads are matched inline (the get result type is the
+# native Map option, distinct from the methods' (optionval t: u64)).
+
+main: function is {
+    reg: ztypes.newRegistry
+    tPoint: reg.newType name: "point" typetype: ztypes.ztypetype.RECORD
+    tInt: reg.newType name: "i64" typetype: ztypes.ztypetype.RECORD
+    tStr: reg.newType name: "String" typetype: ztypes.ztypetype.CLASS
+    tList: reg.newType name: "List" typetype: ztypes.ztypetype.CLASS
+    pid: tPoint.typeId
+    lid: tList.typeId
+
+    ty: newTyping
+
+    print "=== children ==="
+    ty.setChild parentTypeId: pid childName: "x" childTypeId: tInt.typeId
+    ty.setChild parentTypeId: pid childName: "y" childTypeId: tInt.typeId
+    ty.setChild parentTypeId: pid childName: "label" childTypeId: tStr.typeId
+    ty.setChild parentTypeId: pid childName: "x" childTypeId: tInt.typeId
+
+    print "childCount point -> \{ty.childCount parentTypeId: pid}"
+    smokeHasChild ty: ty pid: pid name: "x"
+    smokeHasChild ty: ty pid: pid name: "z"
+    smokeChildOf ty: ty pid: pid name: "x"
+    smokeChildOf ty: ty pid: pid name: "label"
+    smokeChildOf ty: ty pid: pid name: "z"
+    dumpChildren ty: ty parentTypeId: pid
+
+    print "=== sidecars ==="
+    ty.setChildPrivate parentTypeId: pid name: "x"
+    ty.setChildLockField parentTypeId: pid name: "y"
+    ty.setChildLockArm parentTypeId: pid name: "label"
+    ty.setDefaultNumeric parentTypeId: pid name: "x" value: 7.i64
+    ty.setDefaultFunction parentTypeId: pid name: "y" funcname: "makeY"
+    ty.setDefaultVariantArm parentTypeId: pid name: "label" armName: "none"
+    ty.setChildOwnership parentTypeId: pid name: "x" ownership: ztypes.zparamownership.TAKE
+    ty.setChildOwnership parentTypeId: pid name: "y" ownership: ztypes.zparamownership.BORROW
+
+    smokeIsPrivate ty: ty pid: pid name: "x"
+    smokeIsPrivate ty: ty pid: pid name: "y"
+    smokeIsLockField ty: ty pid: pid name: "y"
+    print "hasAnyLockField point -> \{boolText (ty.hasAnyLockField parentTypeId: pid)}"
+    smokeIsLockArm ty: ty pid: pid name: "label"
+    smokeDefault ty: ty pid: pid name: "x"
+    smokeDefault ty: ty pid: pid name: "y"
+    smokeDefault ty: ty pid: pid name: "label"
+    smokeOwn ty: ty pid: pid name: "x"
+    smokeOwn ty: ty pid: pid name: "y"
+    smokeOwn ty: ty pid: pid name: "label"
+
+    print "=== generic args ==="
+    ty.setGenericArg parentTypeId: lid paramName: "of" argTypeId: tInt.typeId
+    ty.setGenericArg parentTypeId: lid paramName: "of" argTypeId: tStr.typeId
+    smokeGenericArg ty: ty pid: lid name: "of"
+    print "hasGenericArgs List -> \{boolText (ty.hasGenericArgs parentTypeId: lid)}"
+    print "hasGenericArgs point -> \{boolText (ty.hasGenericArgs parentTypeId: pid)}"
+
+    print "=== node stamps ==="
+    ty.nodeType.set key: 100.u64 value: tStr.typeId
+    nt: ty.nodeType.get key: 100.u64
+    match (
+        nt
+    ) case some then {
+        print "nodeType[100] -> \{nt}"
+    } case none then {
+        print "nodeType[100] -> none"
+    }
+    ty.callKind.set key: 101.u64 value: zast.callkind.RECORD_CREATE
+    ck: ty.callKind.get key: 101.u64
+    match (
+        ck
+    ) case some then {
+        print "callKind[101] -> \{zast.callkindname ck}"
+    } case none then {
+        print "callKind[101] -> none"
+    }
+    ty.withOwnership.set key: 102.u64 value: ztypes.zownership.BORROWED
+    wo: ty.withOwnership.get key: 102.u64
+    match (
+        wo
+    ) case some then {
+        print "withOwnership[102] -> \{ztypes.zownershipName wo}"
+    } case none then {
+        print "withOwnership[102] -> none"
+    }
+    ty.atomVariableId.set key: 103.u64 value: 42.u64
+    av: ty.atomVariableId.get key: 103.u64
+    match (
+        av
+    ) case some then {
+        print "atomVariableId[103] -> \{av}"
+    } case none then {
+        print "atomVariableId[103] -> none"
+    }
+    ty.nodeLiteralBase.set key: 104.u64 value: ztypes.numbase.NONDEC
+    nb: ty.nodeLiteralBase.get key: 104.u64
+    match (
+        nb
+    ) case some then {
+        print "nodeLiteralBase[104] -> \{ztypes.numbaseName nb}"
+    } case none then {
+        print "nodeLiteralBase[104] -> none"
+    }
+
+    print "=== node tables ==="
+    k0: ztypes.makeIntConst 1024.i64
+    ty.nodeConst.append (NodeConstRow nodeid: 200.u64 value: k0)
+    dumpNodeConst ty: ty
+    ty.ifTakenVars.append (TakenVarRow nodeid: 300.u64 name: "tmp".string typeId: (optionval.some tStr.typeId))
+    ty.ifTakenVars.append (TakenVarRow nodeid: 300.u64 name: "scratch".string typeId: (optionval.none u64))
+    dumpTakenVars ty: ty
+    ty.caseSubjectTakenArms.append (NodeNameRow nodeid: 400.u64 name: "ok".string)
+    ty.caseSubjectTakenArms.append (NodeNameRow nodeid: 400.u64 name: "err".string)
+    print "  takenArms count=\{ty.caseSubjectTakenArms.length}"
+
+    print "=== aggregates ==="
+    cf: reg.newConformance implTypeId: pid specTypeId: lid label: "drawable" isFacet: false
+    ty.conformance.append cf
+    dumpConformance ty: ty
+    ty.resolved.set key: "test.point".string value: tPoint.typeId
+    rp: ty.resolved.get key: "test.point".string
+    match (
+        rp
+    ) case some then {
+        print "resolved[test.point] -> \{rp}"
+    } case none then {
+        print "resolved[test.point] -> none"
+    }
+    ty.monoTypes.append (MonoRow monoTypeId: tList.typeId astNodeId: 600.u64)
+    print "monoTypes count -> \{ty.monoTypes.length}"
+    print "isError -> \{boolText ty.isError}"
+}
+
+smokeHasChild: function {ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.hasChild parentTypeId: pid name: name
+    print "hasChild point.\{name} -> \{boolText b}"
+}
+
+smokeChildOf: function {ty: ZTyping pid: u64 name: StringView} is {
+    r: ty.childOf parentTypeId: pid name: name
+    print "childOf point.\{name} -> \{optU64Text r}"
+}
+
+smokeIsPrivate: function {ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.isChildPrivate parentTypeId: pid name: name
+    print "isPrivate point.\{name} -> \{boolText b}"
+}
+
+smokeIsLockField: function {ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.isChildLockField parentTypeId: pid name: name
+    print "isLockField point.\{name} -> \{boolText b}"
+}
+
+smokeIsLockArm: function {ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.isChildLockArm parentTypeId: pid name: name
+    print "isLockArm point.\{name} -> \{boolText b}"
+}
+
+smokeDefault: function {ty: ZTyping pid: u64 name: StringView} is {
+    d: ty.childDefaultText parentTypeId: pid name: name
+    print "default point.\{name} -> \{d}"
+}
+
+smokeOwn: function {ty: ZTyping pid: u64 name: StringView} is {
+    o: ty.childOwnershipText parentTypeId: pid name: name
+    print "ownership point.\{name} -> \{o}"
+}
+
+smokeGenericArg: function {ty: ZTyping pid: u64 name: StringView} is {
+    r: ty.genericArgOf parentTypeId: pid paramName: name
+    print "genericArg List.\{name} -> \{optU64Text r}"
+}
+
+dumpChildren: function {ty: ZTyping parentTypeId: u64} is {
+    iter: ty.typeChild.iterate
+    for row: iter loop {
+        if row.parentTypeId == parentTypeId then {
+            ctOpt: ty.childTypeById.get key: row.childNameId
+            match (
+                ctOpt
+            ) case some then {
+                print "  child \{row.position} \{row.childName} -> \{ctOpt}"
+            } case none then {
+                print "  child \{row.position} \{row.childName} -> none"
+            }
+        }
+    }
+}
+
+dumpNodeConst: function {ty: ZTyping} is {
+    iter: ty.nodeConst.iterate
+    for row: iter loop {
+        print "  const node=\{row.nodeid} kind=\{ztypes.zconstkindName row.value.kind} ival=\{row.value.ival}"
+    }
+}
+
+dumpTakenVars: function {ty: ZTyping} is {
+    iter: ty.ifTakenVars.iterate
+    for row: iter loop {
+        print "  ifTaken node=\{row.nodeid} name=\{row.name} type=\{optU64Text row.typeId}"
+    }
+}
+
+dumpConformance: function {ty: ZTyping} is {
+    iter: ty.conformance.iterate
+    for row: iter loop {
+        print "  conf id=\{row.conformanceId} impl=\{row.implTypeId} spec=\{row.specTypeId} label=\{row.label}"
+    }
+}
