@@ -987,6 +987,25 @@ class TestKeywordIdentifierRejection:
         assert isinstance(result, zast.Error), (
             f"expected error for `{word}: i64`, got {result!r}"
         )
+        assert "reserved word" in result.msg and word in result.msg
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "Probe: class { flag: i64 }",  # class field name
+            "p: record { view: i64 }",  # record field name
+            "f: function { cell: i64 } is { }",  # parameter name
+            "goto: i64",  # top-level definition name
+        ],
+    )
+    def test_reserved_word_diagnostic_names_the_word(self, source):
+        """A reserved word in identifier position reports a clear
+        'reserved word ... cannot be used as an identifier' message,
+        not a generic 'Expected a label'."""
+        result = parse_unit(source)
+        assert isinstance(result, zast.Error)
+        assert "reserved word" in result.msg
+        assert "cannot be used as an identifier" in result.msg
 
     def test_keyword_in_function_body_rejected(self):
         """The lexer-port's likely friction site: a local binding

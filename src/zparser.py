@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Union, TypeVar, Generic, Set, cast
 from dataclasses import dataclass, field
 from zvfs import ZVfs, DEntryID, DEntryType, ZVfsOpenFile
 from zlexer import Lexer, Tokenizer, Token, isvalidunitname
-from ztokentype import TT
+from ztokentype import TT, TTRESERVED
 import zast
 from zast import ERR, NodeType, _ERROR_TOKEN
 
@@ -558,7 +558,10 @@ class Parser:
                 label = lex.accept(TT.LABELPRE)
                 is_label_value = True
             if not label:
-                break  # no definition
+                reserved = self._reserved_word_label_error(lex.peek())
+                if reserved is not None:
+                    error = reserved
+                break  # no definition (or a reserved word used as one)
 
             if is_label_value:
                 lvx = self._make_label_value(label)
@@ -1080,6 +1083,9 @@ class Parser:
             block.localparam.add(paramname)
 
         if not lex.accept(TT.BRACECLOSE):
+            reserved = self._reserved_word_label_error(lex.peek())
+            if reserved is not None:
+                return reserved
             msg = "Expected closing brace '}' after function parameters"
             return zast.Error(start=lex.peek(), err=ERR.BADPARAMETERBLOCK, msg=msg)
 
@@ -1476,6 +1482,20 @@ class Parser:
 
         return is_body, as_body, extern, None, is_native
 
+    def _reserved_word_label_error(self, tok: Token) -> Optional[zast.Error]:
+        """If `tok` is a reserved word the lexer flagged as an error token
+        (it appears where an identifier/label is expected), return a
+        targeted diagnostic; otherwise None. The lexer emits a bare
+        `TT.ERR` for a reserved word in identifier position, which would
+        otherwise surface as a generic "expected a label" message."""
+        if tok.toktype == TT.ERR and tok.tokstr in TTRESERVED:
+            return zast.Error(
+                start=tok,
+                err=ERR.BADITEM,
+                msg=f"reserved word '{tok.tokstr}' cannot be used as an identifier",
+            )
+        return None
+
     def _get_object_body(
         self,
         lex: Lexer,
@@ -1600,8 +1620,12 @@ class Parser:
                             )
 
             else:
+                bad = lex.acceptany()
+                reserved = self._reserved_word_label_error(bad)
+                if reserved is not None:
+                    return reserved
                 msg = "Expected a label or closing brace"
-                return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
+                return zast.Error(start=bad, err=ERR.BADITEM, msg=msg)
 
         # extern - add extern from items (skipping locals) since these can be self referntial
         promoteexterns(addto=extern, addfrom=externitems, local=local)

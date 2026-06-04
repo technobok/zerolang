@@ -6576,6 +6576,71 @@ class TestDefaults:
         )
         assert any("not defaultable" in e.msg for e in errors), [e.msg for e in errors]
 
+    def test_bare_bool_alias_default_on_field(self):
+        """A bare name aliased to a null-payload subtype (core's
+        `false: bool.false`) works as a field default -- the field type
+        resolves to the variant and the arm becomes the default."""
+        program, typing = check_ok(
+            "cfg: class {\n    enabled: false\n}\nmain: function is { c: cfg }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "cfg")
+        assert t is not None
+        enabled_t = tc.typing.child_of(t, "enabled")
+        assert enabled_t is not None and enabled_t.name == "bool"
+        assert tc.typing.child_default(t, "enabled") == "#variant:false"
+
+    def test_bare_bool_alias_default_on_param(self):
+        """The bare-alias default also works on a function parameter."""
+        program, typing = check_ok(
+            "doit: function {verbose: true} out i64 is { return 0 }\n"
+            "main: function is { x: doit }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        f = tc._resolve_unit_name("test", "doit")
+        assert f is not None
+        c_t = tc.typing.child_of(f, "verbose")
+        assert c_t is not None and c_t.name == "bool"
+        assert tc.typing.child_default(f, "verbose") == "#variant:true"
+
+    def test_bare_user_alias_default(self):
+        """A user-defined alias of a subtype (`n: direction.north`) is a
+        valid bare default, equivalent to the qualified form."""
+        program, typing = check_ok(
+            "direction: variant {\n    north: null\n    south: null\n"
+            "} as { tag: u8.tag }\n"
+            "n: direction.north\n"
+            "mystate: record {\n    dir: n\n}\n"
+            "main: function is { s: mystate }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "mystate")
+        assert t is not None
+        dir_t = tc.typing.child_of(t, "dir")
+        assert dir_t is not None and dir_t.name == "direction"
+        assert tc.typing.child_default(t, "dir") == "#variant:north"
+
+    def test_bare_alias_to_payload_arm_is_plain_type(self):
+        """The bare-alias default is scoped to NULL-payload subtypes. A
+        bare alias of a payload-carrying arm is not a default -- it simply
+        resolves to its payload type, no default and no error (only the
+        explicit qualified `result.ok` form rejects a payload arm)."""
+        program, typing = check_ok(
+            "result: variant {\n    ok: i64\n    fail: null\n} as { tag: u8.tag }\n"
+            "okalias: result.ok\n"
+            "myrec: record {\n    r: okalias\n}\n"
+            "main: function is { v: myrec }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "myrec")
+        r_t = tc.typing.child_of(t, "r")
+        assert r_t is not None and r_t.name == "i64"
+        assert tc.typing.child_default(t, "r") is None
+
 
 class TestNumericCasting:
     def test_dotted_numeric_u32(self):

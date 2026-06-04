@@ -1436,10 +1436,10 @@ class TypeChecker:
         null-payload arm of `T`, return `(T, subtype_name)`. Otherwise
         return `None`.
 
-        Used by the field / param default-detection paths to recognise
-        the case-A form: `direction: myenum.north`. The caller substitutes
-        the field's stored type with `T` and stores `#variant:<arm>` as
-        the default.
+        Recognises the qualified case-A form `direction: myenum.north`;
+        the bare-alias form (`enabled: false`) is layered on by
+        `_detect_subtype_default`. The caller substitutes the field's
+        stored type with `T` and stores `#variant:<arm>` as the default.
 
         Rejects non-null-payload arms with a typecheck error so users get
         a clear "this arm carries data, cannot default" message instead
@@ -1482,6 +1482,58 @@ class TypeChecker:
             )
             return None
         return (parent_type, arm_name)
+
+    def _lookup_definition_node(self, name: str) -> "Optional[zast.Node]":
+        """The AST definition node bound to a unit-level `name`, searched
+        across the inline-unit context, the current unit, then core -- the
+        node-level analogue of `_resolve_name`'s type lookup."""
+        for _uname, unode in reversed(self._unit_context):
+            defn = unode.body.get(name)
+            if defn is not None:
+                return defn
+        current = self._current_unit_name()
+        cunit = self.program.units.get(current)
+        if cunit is not None and name in cunit.body:
+            return cunit.body[name]
+        core = self.program.units.get("core")
+        if core is not None and name in core.body:
+            return core.body[name]
+        return None
+
+    def _detect_bare_subtype_alias_default(
+        self, name: str
+    ) -> "Optional[tuple[ZType, str]]":
+        """If a bare `name` is a unit-level alias of a null-payload variant
+        or union subtype (e.g. `false`, defined as `bool.false` in core),
+        return `(parent_type, arm_name)` -- the same shape the qualified
+        `<Type>.<arm>` form yields. Delegates the arm check (and the
+        payload-arm rejection) to `_detect_variant_subtype_default`."""
+        defn = self._lookup_definition_node(name)
+        if defn is None or defn.nodetype != NodeType.DOTTEDPATH:
+            return None
+        return self._detect_variant_subtype_default(cast(zast.DottedPath, defn))
+
+    def _detect_subtype_default(
+        self, stripped_path: zast.Operation, resolved_type: "Optional[ZType]"
+    ) -> "Optional[tuple[ZType, str]]":
+        """Variant/union null-payload subtype default, from the qualified
+        `T.arm` form or -- when the field/param already resolves to a
+        variant/union -- a bare name aliased to one of its arms
+        (`enabled: false`). The resolved-type guard keeps the bare-alias
+        lookup off the hot path: it only fires when the declared type is
+        itself a variant/union, so plain `i64`/`String`/class fields skip
+        it entirely."""
+        vd = self._detect_variant_subtype_default(stripped_path)
+        if (
+            vd is None
+            and resolved_type is not None
+            and resolved_type.typetype in (ZTypeType.VARIANT, ZTypeType.UNION)
+            and stripped_path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+        ):
+            vd = self._detect_bare_subtype_alias_default(
+                cast(zast.AtomId, stripped_path).name
+            )
+        return vd
 
     def _resolve_function_type(
         self, unitname: str, name: str, func: zast.Function
@@ -1610,7 +1662,7 @@ class TypeChecker:
             # before the non-runtime-type check fires. The arm's type
             # would otherwise look like a bare `null` and trip
             # `_check_non_runtime_type`.
-            variant_default = self._detect_variant_subtype_default(stripped_ppath)
+            variant_default = self._detect_subtype_default(stripped_ppath, pt)
             if variant_default is not None:
                 pt = variant_default[0]
                 self.typing.node_type[stripped_ppath.nodeid] = pt
@@ -1985,8 +2037,8 @@ class TypeChecker:
                 # name as the default. Re-stamp the path's node_type so
                 # the emitter's `_collect_field_params` sees the variant
                 # type, not the original arm subtype.
-                variant_default = self._detect_variant_subtype_default(
-                    cast(zast.Path, stripped_fpath)
+                variant_default = self._detect_subtype_default(
+                    cast(zast.Path, stripped_fpath), ft
                 )
                 if variant_default is not None:
                     ft = variant_default[0]
@@ -2975,8 +3027,8 @@ class TypeChecker:
                 # name as the default. Re-stamp the path's node_type so
                 # the emitter's `_collect_field_params` sees the variant
                 # type, not the original arm subtype.
-                variant_default = self._detect_variant_subtype_default(
-                    cast(zast.Path, stripped_fpath)
+                variant_default = self._detect_subtype_default(
+                    cast(zast.Path, stripped_fpath), ft
                 )
                 if variant_default is not None:
                     ft = variant_default[0]
@@ -7211,7 +7263,7 @@ class TypeChecker:
             # stored the override on `ftype`'s child; re-resolving here
             # via `_resolve_typeref` would otherwise stamp the arm
             # subtype back onto `node_type[ppath.nodeid]`.
-            variant_default = self._detect_variant_subtype_default(stripped_ppath)
+            variant_default = self._detect_subtype_default(stripped_ppath, pt)
             if variant_default is not None:
                 pt = variant_default[0]
                 self.typing.node_type[stripped_ppath.nodeid] = pt
