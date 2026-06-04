@@ -1748,17 +1748,20 @@ class TypeChecker:
                 ftype.this_param_name = pname
                 break
 
-        # Phase A default: unannotated stack-reftype params (string, file,
-        # bufreader, user classes — needs_destructor and not heap-allocated)
-        # default to BORROW. The C ABI then passes them by pointer so
-        # mutation through the param lands in the caller's storage, and the
-        # implicit-take logic at call sites naturally skips them (caller
-        # retains ownership). Heap-allocated reftypes (`box`, nullable
-        # pointers) are already pointer-typed at the C level. Applies
-        # uniformly to user code AND natives — native runtime bodies in
-        # src/zemitterc_runtime.py have been migrated to match (read-only
-        # natives use stringview directly; store-into-receiver natives
-        # carry `.take` annotations).
+        # Unannotated stack reftype params default to BORROW. The C ABI
+        # then passes them by pointer so mutation through the param lands in
+        # the caller's storage, and the implicit-take logic at call sites
+        # naturally skips them (caller retains ownership). A user-defined
+        # class/union is a reference to the caller's object regardless of
+        # whether it owns heap data, so it always passes by pointer (field
+        # writes and mutating method calls on it must persist). Native
+        # value-view types (StringView, ListView, OptionView, the iterators:
+        # not heap-allocated, no destructor) are copyable views over shared
+        # storage and stay value-passed. Heap-allocated reftypes (`box`,
+        # nullable pointers, String/List/Map) are already pointer-typed at the
+        # C level. Native runtime bodies in src/zemitterc_runtime.py match
+        # (read-only natives use stringview directly; store-into-receiver
+        # natives carry `.take` annotations).
         for pname in func.parameters:
             if self.typing.has_child_ownership(ftype, pname):
                 continue
@@ -1767,7 +1770,7 @@ class TypeChecker:
                 pt is not None
                 and pt.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
                 and not pt.is_heap_allocated
-                and (pt.destructor_name is not None)
+                and (pt.destructor_name is not None or not pt.is_native)
             ):
                 self.typing.set_child_ownership(ftype, pname, ZParamOwnership.BORROW)
 

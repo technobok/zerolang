@@ -1356,7 +1356,9 @@ class TestOwnershipParsing:
         assert not typing.has_child_ownership(ftype, "a")
 
     def test_mixed_params(self):
-        """Mix of annotated and unannotated parameters."""
+        """Mix of annotated and unannotated parameters. An unannotated
+        class param defaults to BORROW (passed by reference), so its
+        ownership is stamped the same as an explicit `.borrow`."""
         program, typing = check_ok(
             "MyClass: class { value: 0 }\n"
             "f: function {a: MyClass.take b: MyClass c: MyClass.borrow} is {}\n"
@@ -1364,7 +1366,7 @@ class TestOwnershipParsing:
         )
         ftype = typing.resolved["test.f"]
         assert typing.child_ownership(ftype, "a") == ZParamOwnership.TAKE
-        assert not typing.has_child_ownership(ftype, "b")
+        assert typing.child_ownership(ftype, "b") == ZParamOwnership.BORROW
         assert typing.child_ownership(ftype, "c") == ZParamOwnership.BORROW
 
     def test_return_type_borrow(self):
