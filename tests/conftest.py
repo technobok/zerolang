@@ -132,6 +132,12 @@ def zparser_binary(tmp_path_factory):
     return _build_zerolang_unit("zparser", tmp_path_factory)
 
 
+@pytest.fixture(scope="session")
+def ztypes_binary(tmp_path_factory):
+    """Build the self-hosted type-model skeleton (src/ztypes.z) once per session."""
+    return _build_zerolang_unit("ztypes", tmp_path_factory)
+
+
 def make_tokenizer(source: str) -> Tokenizer:
     """Create a Tokenizer from a source String."""
     fh = io.StringIO(source)
