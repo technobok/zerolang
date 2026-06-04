@@ -7745,7 +7745,31 @@ class CEmitter:
             # upstream and arrive here as temps. Computed once and reused as
             # the cleanup output below.
             scope_cleanup = self._emit_scope_cleanup(indent, exclude_var=val)
-            if scope_cleanup and not val.replace("_", "").isalnum():
+            take_parent = self._take_parent_atom_name(call.arguments[0].valtype)
+            if (
+                scope_cleanup
+                and not val.replace("_", "").isalnum()
+                and take_parent is not None
+                and take_parent in self._alias_map
+            ):
+                # `return <shadow-narrowed>.take`: `.take` moves the payload out,
+                # but its source-invalidation (the per-arm payload zero) fires at
+                # end-of-arm, which this diverging return skips -- so the scope
+                # cleanup below would destroy the still-live narrowed subject
+                # while `val` aliases its payload. Capture the moved-out value
+                # into a temp, then zero the source so the subject's destructor
+                # walks a null payload. (`val` is that deref, distinct from the
+                # subject's cname, so `exclude_var` above does not protect it.)
+                ret_t = self._get_operation_type(call.arguments[0].valtype)
+                ret_ct = _ctype(self.typing, ret_t) if ret_t is not None else "void"
+                if ret_ct != "void":
+                    ret_tmp = self._temp_name("ret")
+                    result += f"{indent}{ret_ct} {ret_tmp} = {val};\n"
+                    result += (
+                        f"{indent}{self._alias_map[take_parent]} = ({ret_ct}){{0}};\n"
+                    )
+                    val = ret_tmp
+            elif scope_cleanup and not val.replace("_", "").isalnum():
                 ret_t = self._get_operation_type(call.arguments[0].valtype)
                 if ret_t is not None and ret_t.typetype not in (
                     ZTypeType.CLASS,
@@ -7832,6 +7856,21 @@ class CEmitter:
                     if name in self._alias_map:
                         return self._alias_map[name]
                     return mangle_var_name(name)
+        return None
+
+    def _take_parent_atom_name(self, op: zast.Operation) -> Optional[str]:
+        """For a `<atom>.take` expression (optionally Expression-wrapped),
+        return the parent atom's name, else None. A name in `_alias_map`
+        marks a shadow-narrowed match binding, whose `.take` source is the
+        boxed-inner deref."""
+        if op.nodetype == NodeType.EXPRESSION:
+            return self._take_parent_atom_name(
+                cast(zast.Operation, cast(zast.Expression, op).expression)
+            )
+        if op.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, op)
+            if dp.child.name == "take" and dp.parent.nodetype == NodeType.ATOMID:
+                return cast(zast.AtomId, dp.parent).name
         return None
 
     def _get_implicit_take_var(self, op: zast.Operation) -> Optional[str]:

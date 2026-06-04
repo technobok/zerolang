@@ -777,6 +777,49 @@ class TestUnionTakeInArmNoDoubleFree:
         assert result.stdout == "src=loaded\nok\n"
 
 
+class TestTakeReturnNoUseAfterFree:
+    """Pin: `return <shadow-narrowed>.take` moves the payload out and
+    invalidates the source before the return-site scope cleanup destroys the
+    matched subject. The per-arm payload zero fires at end-of-arm (before the
+    break), which a diverging `return` skips -- so `_emit_return` materializes
+    the moved-out value and zeroes the source itself. Was a use-after-free: the
+    cleanup destroyed the still-live union/Option and the returned deref aliased
+    its freed payload.
+    """
+
+    _SRC = (
+        "StrRes: union { ok: String  err: String }\n"
+        "make: function {b: bool} out StrRes is {\n"
+        "  if b then {\n"
+        '    return (StrRes.ok "loaded".string)\n'
+        "  }\n"
+        '  return (StrRes.err "failed".string)\n'
+        "}\n"
+        "get: function {b: bool} out String is {\n"
+        "  res: make b: b\n"
+        "  match (\n"
+        "    res\n"
+        "  ) case ok then {\n"
+        "    return res.take\n"
+        "  } case err then {\n"
+        "    return res.take\n"
+        "  }\n"
+        "}\n"
+        "main: function is {\n"
+        "  d: get b: true\n"
+        '  print "got=\\{d}"\n'
+        "}"
+    )
+
+    def test_take_return_is_asan_clean(self):
+        csource = emit_source(self._SRC)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "got=loaded\n"
+
+
 class TestForWhileCallCondReEvaluates:
     """Pin: a for-loop's `while` condition that wraps a function call
     on per-iteration mutable state must re-evaluate each iteration.
