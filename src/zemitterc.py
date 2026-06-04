@@ -9890,13 +9890,22 @@ class CEmitter:
             sname = self._emit_path_value(path.parent)
             result = f"z_String_from_view({sname})"
             return self._alloc_temp(result)
-        # string: .string identity (no-op for already-owned strings)
+        # string: .string / .copy — both produce a fresh owned deep copy.
+        # `.string` is declared `out String` (an owned return), so on an
+        # already-owned String it must copy, exactly like `.copy`. An identity
+        # alias would hand out an owned-typed value pointing into the receiver's
+        # storage, which use-after-frees when the receiver is a borrowed narrowed
+        # payload (e.g. a Map.get Option-some) destroyed at the use site.
         if (
             parent_type_dp
             and parent_type_dp.subtype == ZSubType.STRING
-            and child == "string"
+            and child in ("string", "copy")
         ):
-            return self._emit_path_value(path.parent)
+            self.needs_string = True
+            self.needs_stdlib = True
+            parent = self._emit_path_value(path.parent)
+            arg = parent if self._is_class_pointer_path(path.parent) else f"&{parent}"
+            return self._alloc_temp(f"z_String_copy({arg})")
         # string: .length field access
         if (
             parent_type_dp
@@ -9906,17 +9915,6 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"{parent}{acc}size"
-        # string: .copy — deep copy producing a fresh owned string
-        if (
-            parent_type_dp
-            and parent_type_dp.subtype == ZSubType.STRING
-            and child == "copy"
-        ):
-            self.needs_string = True
-            self.needs_stdlib = True
-            parent = self._emit_path_value(path.parent)
-            arg = parent if self._is_class_pointer_path(path.parent) else f"&{parent}"
-            return self._alloc_temp(f"z_String_copy({arg})")
         # string: .hash — SipHash-1-3 of the byte contents (per-process seed)
         # fmt: off
         if (

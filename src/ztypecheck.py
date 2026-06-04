@@ -4999,7 +4999,8 @@ class TypeChecker:
         # for stringview types: .string returns the string type directly
         if _is_stringview_type(parent_type) and child_name == "string":
             return self._resolve_name("String")
-        # for string class: .string returns the same string type (no-op identity)
+        # for string class: .string returns an owned String (a fresh deep copy,
+        # like .copy; the emitter materializes it).
         if parent_type.subtype == ZSubType.STRING and child_name == "string":
             return self._resolve_name("String")
         # for string class: .length and .capacity return u64 directly
