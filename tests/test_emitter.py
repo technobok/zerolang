@@ -12961,3 +12961,48 @@ class TestBorrowedFieldArgNoOverFree:
             f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
         )
         assert result.stdout == "tag=a\ntag=b\n"
+
+
+class TestPositionalStringArgNoLeak:
+    """Regression: a String argument passed POSITIONALLY (no `name:` label)
+    to a borrow-default String parameter was mis-transferred -- the call site
+    zeroed the source String without freeing it, leaking its heap. The named
+    form resolved the param's BORROW ownership and did not transfer; the
+    positional form left `arg.name` unset, so the lookup returned None and fell
+    through to the always-transfer path. Positional args now resolve the
+    param's ownership by position. Surfaced porting the symbol table."""
+
+    def test_positional_string_arg_freed_under_asan(self):
+        csource = emit_source(
+            "useit: function {s: String} out u64 is { return s.length }\n"
+            "main: function is {\n"
+            '    r: "hello".string\n'
+            "    n: useit r\n"
+            '    print "n=\\{n}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "n=5\n"
+
+    def test_positional_string_arg_in_loop_no_leak_under_asan(self):
+        # The leak compounded per iteration when the call sat in a loop.
+        csource = emit_source(
+            "useit: function {s: String} out u64 is { return s.length }\n"
+            "main: function is {\n"
+            "    i: 0.u64\n"
+            "    for while i < 3.u64 loop {\n"
+            '        r: "ab".string\n'
+            "        n: useit r\n"
+            '        print "n=\\{n}"\n'
+            "        i = i + 1.u64\n"
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "n=2\nn=2\nn=2\n"

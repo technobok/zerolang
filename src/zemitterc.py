@@ -10849,6 +10849,22 @@ class CEmitter:
                 if ftype and arg.name
                 else None
             )
+            if explicit_own is None and ftype and not arg.name:
+                # Positional argument: `arg.name` is unset, so resolve the
+                # param's ownership by position (calls allow at most one
+                # positional arg, which fills the first non-`this` param). A
+                # String arg defaults to BORROW like any reftype; without this
+                # it falls through to the always-transfer branch below and the
+                # source String is zeroed but never freed -> leak.
+                names = self.typing.child_names_of(ftype)
+                offset = (
+                    1
+                    if (names and names[0] == "this")  # ztc-string-compare-ok
+                    else 0
+                )
+                pi = i + offset
+                if 0 <= pi < len(names):
+                    explicit_own = self.typing.child_ownership(ftype, names[pi])
             if explicit_own in (ZParamOwnership.BORROW, ZParamOwnership.LOCK):
                 continue
             is_string = arg_type.subtype == ZSubType.STRING
