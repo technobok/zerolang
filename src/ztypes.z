@@ -508,8 +508,10 @@ ZEntry: class {
 
 # --- registry: the home for the monotonic id counters shared across
 # all type-model entities. The by-id type/conformance tables live with
-# their consumer (the symbol table / type checker) and arrive in a
-# later slice; this slice needs only the allocators. ---
+# all type-model entities, plus the by-id type table (typeById): every
+# type id resolves to its ZType here. newType files each type and
+# returns its id; the symbol table / type checker read type metadata by
+# id. The by-id conformance table arrives with a later slice. ---
 
 ZTypeRegistry: class {
     nextTypeId:        u64
@@ -518,6 +520,7 @@ ZTypeRegistry: class {
     nextScopeId:       u64
     nextEntryId:       u64
     nextConformanceId: u64
+    typeById:          (Map key: u64 value: ZType)
 } as {
     allocType: function {:this} out u64 is {
         r: this.nextTypeId
@@ -555,10 +558,10 @@ ZTypeRegistry: class {
     # fields afterward. They are registry methods (not free functions)
     # so the id-counter bump persists through the `:this` receiver -- a
     # bump through a plain borrowed param does not propagate back.
-    newType: function {:this name: StringView typetype: ztypetype} out ZType is {
+    newType: function {:this name: StringView typetype: ztypetype} out u64 is {
         id: this.nextTypeId
         this.nextTypeId = this.nextTypeId + 1.u64
-        return (ZType
+        t: (ZType
         typeId: id
         name: name.string
         typetype: typetype
@@ -601,6 +604,9 @@ ZTypeRegistry: class {
         runtimeIndexed: false
         cname: "".string
         cnameBase: "".string)
+        idForKey: id
+        this.typeById.set key: idForKey value: t
+        return id
     }
 
     newVariable: function {:this ztypeId: u64 ownership: zownership} out ZVariable is {
@@ -650,10 +656,84 @@ ZTypeRegistry: class {
             createOwnedCname: "".string
             destroyCname: "".string)
     }
+
+    # --- by-id type metadata: resolve a type id to the stored ZType's
+    # scalar facts. The symbol table reads these for narrowing,
+    # exclusion, and live-owned-var detection. ---
+    hasType: function {:this typeId: u64} out bool is {
+        got: this.typeById.get key: typeId
+        match (
+            got
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    }
+
+    typetypeOf: function {:this typeId: u64} out ztypetype is {
+        got: this.typeById.get key: typeId
+        match (
+            got
+        ) case some then {
+            return got.typetype
+        } case none then {
+            return ztypetype.NULL
+        }
+    }
+
+    isTagGenericOriginOf: function {:this typeId: u64} out bool is {
+        got: this.typeById.get key: typeId
+        match (
+            got
+        ) case some then {
+            return got.isTagGenericOrigin
+        } case none then {
+            return false
+        }
+    }
+
+    hasDestructorName: function {:this typeId: u64} out bool is {
+        got: this.typeById.get key: typeId
+        match (
+            got
+        ) case some then {
+            match (
+                got.destructorName
+            ) case some then {
+                return true
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+    }
+
+    # --- post-construction metadata stamps: mutate the stored ZType in
+    # place through the by-id table. ---
+    setDestructorName: function {:this typeId: u64 name: StringView} is {
+        got: this.typeById.get key: typeId
+        match (
+            got
+        ) case some then {
+            got.destructorName = (Option.some name.string)
+        } case none then { }
+    }
+
+    setTagGenericOrigin: function {:this typeId: u64} is {
+        got: this.typeById.get key: typeId
+        match (
+            got
+        ) case some then {
+            got.isTagGenericOrigin = true
+        } case none then { }
+    }
+
 }
 
 newRegistry: function {} out ZTypeRegistry is {
-    return (ZTypeRegistry nextTypeId: 0.u64 nextChildId: 0.u64 nextVariableId: 0.u64 nextScopeId: 0.u64 nextEntryId: 0.u64 nextConformanceId: 0.u64)
+    return (ZTypeRegistry nextTypeId: 0.u64 nextChildId: 0.u64 nextVariableId: 0.u64 nextScopeId: 0.u64 nextEntryId: 0.u64 nextConformanceId: 0.u64 typeById: (Map key: u64 value: ZType))
 }
 
 makeIntConst: function {v: i64} out ZConst is {
@@ -1149,21 +1229,28 @@ main: function is {
     print "=== carriers ==="
     reg: newRegistry
     t0: reg.newType name: "point" typetype: ztypetype.RECORD
-    t0.cname = "z_point_t".string
-    t0.cnameBase = "z_point".string
-    t0.isgeneric = true
-    print "type id=\{t0.typeId} name=\{t0.name} typetype=\{ztypetypeName t0.typetype} cname=\{t0.cname} generic=\{boolText t0.isgeneric}"
+    reg.setDestructorName typeId: t0 name: "z_point_destroy"
+    tt0: reg.typetypeOf typeId: t0
+    ht0: reg.hasType typeId: t0
+    hd0: reg.hasDestructorName typeId: t0
+    print "type id=\{t0} typetype=\{ztypetypeName tt0} hasType=\{boolText ht0} hasDtor=\{boolText hd0}"
 
     t1: reg.newType name: "List" typetype: ztypetype.CLASS
-    print "type id=\{t1.typeId} name=\{t1.name} typetype=\{ztypetypeName t1.typetype}"
+    reg.setTagGenericOrigin typeId: t1
+    tt1: reg.typetypeOf typeId: t1
+    tg1: reg.isTagGenericOriginOf typeId: t1
+    print "type id=\{t1} typetype=\{ztypetypeName tt1} tagGenOrigin=\{boolText tg1}"
 
-    v0: reg.newVariable ztypeId: t0.typeId ownership: zownership.OWNED
+    miss: reg.typetypeOf typeId: 99.u64
+    print "miss typetype=\{ztypetypeName miss} hasType=\{boolText (reg.hasType typeId: 99.u64)}"
+
+    v0: reg.newVariable ztypeId: t0 ownership: zownership.OWNED
     print "var id=\{v0.variableId} ztypeId=\{v0.ztypeId} ownership=\{zownershipName v0.ownership}"
 
-    e0: reg.newEntry name: "x" ztypeId: t0.typeId isDefinition: true
+    e0: reg.newEntry name: "x" ztypeId: t0 isDefinition: true
     print "entry id=\{e0.entryId} name=\{e0.name} ztypeId=\{e0.ztypeId} def=\{boolText e0.isDefinition} taken=\{boolText e0.isTaken}"
 
-    cf0: reg.newConformance implTypeId: t0.typeId specTypeId: t1.typeId label: "drawable" isFacet: false
+    cf0: reg.newConformance implTypeId: t0 specTypeId: t1 label: "drawable" isFacet: false
     print "conf id=\{cf0.conformanceId} impl=\{cf0.implTypeId} spec=\{cf0.specTypeId} label=\{cf0.label} facet=\{boolText cf0.isFacet}"
 
     k0: makeIntConst 1024.i64
