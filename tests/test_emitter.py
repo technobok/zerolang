@@ -12921,3 +12921,43 @@ class TestInlineForLoopIterator:
             f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
         )
         assert result.stdout == "z=1\nz=2\n"
+
+
+class TestBorrowedFieldArgNoOverFree:
+    """Regression: passing a class FIELD (a heap-owning reftype, e.g. a
+    `(Set of: String)`) as a borrowed argument hoisted the field into an alias
+    temp (`_t = e.tags`) that was registered for scope-exit destruction. When
+    the field's owner then moved into a container via the same call sequence,
+    that destroy double-freed the field (use-after-free on later reads). The
+    alias temp is now routed past cleanup. Surfaced porting zenv.z exclude."""
+
+    def test_field_passed_to_borrowed_helper_no_uaf(self):
+        csource = emit_source(
+            "Inner: class { tags: (Set of: String) }\n"
+            "Holder: class { items: (List of: Inner) } as {\n"
+            "    build: function {:this} is {\n"
+            "        e: (Inner tags: (Set of: String))\n"
+            "        fillset dst: e.tags\n"
+            "        this.items.append e\n"
+            "    }\n"
+            "    readback: function {:this} is {\n"
+            "        cur: this.items.get i: 0.u64\n"
+            "        it: cur.tags.iterate\n"
+            '        for s: it loop { print "tag=\\{s}" }\n'
+            "    }\n"
+            "}\n"
+            "fillset: function {dst: (Set of: String)} is {\n"
+            '    dst.add item: "a".string\n'
+            '    dst.add item: "b".string\n'
+            "}\n"
+            "main: function is {\n"
+            "    h: (Holder items: (List of: Inner))\n"
+            "    h.build\n"
+            "    h.readback\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "tag=a\ntag=b\n"

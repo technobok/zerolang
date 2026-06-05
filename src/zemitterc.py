@@ -6972,9 +6972,11 @@ class CEmitter:
             # pointer, so destroying the LHS would free memory still
             # owned by the borrowed source.
             assign_vid = self._def_vid(assign)
-            if self._is_borrow_return_call(
-                assign.value
-            ) or self._rhs_is_borrowed_projection(assign.value):
+            if (
+                self._is_borrow_return_call(assign.value)
+                or self._rhs_is_borrowed_projection(assign.value)
+                or self._is_anf_field_alias(assign)
+            ):
                 if assign_vid is not None:
                     self._scope.borrowed_vars.add(assign_vid)
             elif assign_vid is not None:
@@ -10903,6 +10905,39 @@ class CEmitter:
         # The projection's root local; borrowed-ness is an identity property.
         vid = self._root_atom_vid(inner)
         return vid is not None and vid in self._scope.borrowed_vars
+
+    def _is_anf_field_alias(self, assign: zast.Assignment) -> bool:
+        """True if ``assign`` is an ANF call-arg-hoist temp that aliases a
+        heap-owning FIELD of a struct (e.g. ``_t: e.tags`` for a borrowed
+        ``(Set of: String)`` argument). The temp is a pointer copy of a field
+        the struct still owns; destroying it at scope exit double-frees the
+        field — whose owner may have moved into a container via the very call
+        the temp feeds. Routing it to ``borrowed_vars`` skips that cleanup.
+
+        Gated on the synth ``anf`` origin so a user move ``x: e.f`` (which
+        invalidates the source and genuinely transfers ownership) is untouched.
+        """
+        if assign.synth_origin != "anf":
+            return False
+        inner = assign.value.expression
+        if inner.nodetype != NodeType.DOTTEDPATH:
+            return False
+        dp = cast(zast.DottedPath, inner)
+        parent_t = self._node_ztype(dp.parent)
+        if parent_t is None:
+            return False
+        member = self.typing.child_of(parent_t, dp.child.name)
+        # Only a heap-allocated reftype field (e.g. a Set / List / class,
+        # stored as a POINTER the parent owns) yields a pointer-alias temp
+        # that must not be freed here. A protocol/facet projection or any
+        # stack-stored member synthesises a FRESH owned value the temp does
+        # own — leave those on the normal cleanup path.
+        return (
+            member is not None
+            and member.typetype != ZTypeType.FUNCTION
+            and member.destructor_name is not None
+            and member.is_heap_allocated
+        )
 
     def _call_has_string_arg(self, call: zast.Call) -> bool:
         """True if any arg to ``call`` is a string (needs post-call ordering)."""
