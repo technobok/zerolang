@@ -2077,6 +2077,37 @@ class CEmitter:
                     changed = True
         return late
 
+    def _late_deps_of_mono(
+        self, mono_type: "ZType", group_names: "set[str]"
+    ) -> "set[str]":
+        """Names in `group_names` that `mono_type`'s layout references.
+
+        A mono embeds its element/key/value types (Map, array) by value
+        and its destructor calls their destructors (List, Option, ...),
+        so any referenced group member's definition must precede this
+        mono. Walks `child_types` + `generic_args` (recursively through
+        nested generic args), the same shape `_mono_depends_on_user`
+        tests, collecting the names that fall in the late group."""
+        found: set[str] = set()
+        seen: set[int] = set()
+
+        def walk(t: "Optional[ZType]") -> None:
+            if t is None or id(t) in seen:
+                return
+            seen.add(id(t))
+            if t.typetype == ZTypeType.FUNCTION:
+                return
+            if t.name in group_names:
+                found.add(t.name)
+            for _, ga in self.typing.generic_args_of(t):
+                walk(ga)
+
+        for child in self.typing.child_types_of(mono_type):
+            walk(child)
+        for _, ga in self.typing.generic_args_of(mono_type):
+            walk(ga)
+        return found
+
     def _io_record_referenced(self, name: str) -> bool:
         """True when a system io record is used by the program (e.g.
         as the ok-arm payload of a monomorphized result). Avoids
@@ -2475,18 +2506,83 @@ class CEmitter:
             )
         self._emit_unit_definitions("", mainunit.body, defn_filter=_is_early_user)
 
-        # late mono types (their layouts reference early-user types,
-        # which are now emitted)
-        for mono_type, template_defn in late_monos:
-            self._current_node_id = template_defn.nodeid
-            self._emit_mono_type(mono_type, template_defn)
+        # Emit late monos and late-user TYPE defs in one dependency
+        # order. The early/late split alone is too coarse: a late mono
+        # can embed a late-USER type by value (`Map<u64, C>` embeds `C`),
+        # while that user type embeds late monos — the chain alternates
+        # (`Option<X>` -> a class embedding it -> `Map<., class>` -> a
+        # class embedding that map). Emit by fixpoint: a type goes out
+        # once every late-group member it references is already out.
+        # Functions follow (they use types, never embed them by value).
+        late_group_names: "set[str]" = set(late_mono_names)
+        late_user_items: list = []  # (root_label, root_body, name, defn, tname)
 
-        # second pass (b): late-user defs (reference late monos in fields)
+        def _collect_late_users(label: str, body: dict) -> None:
+            for nm, dfn in body.items():
+                if dfn.nodetype == NodeType.UNIT:
+                    _collect_late_users(label, cast(zast.Unit, dfn).body)
+                    continue
+                if _is_late_user_type(nm, dfn):
+                    zt = self._node_ztype(dfn)
+                    if zt is not None:
+                        late_group_names.add(zt.name)
+                        late_user_items.append((label, body, nm, dfn, zt.name))
+
         for dep_name, dep_unit in dep_units:
-            self._emit_unit_definitions(
-                dep_name, dep_unit.body, defn_filter=_is_late_user_type
-            )
-        self._emit_unit_definitions("", mainunit.body, defn_filter=_is_late_user)
+            _collect_late_users(dep_name, dep_unit.body)
+        _collect_late_users("", mainunit.body)
+
+        def _emit_late_user_type(label: str, body: dict, target_id: int) -> None:
+            def _is_target(n, d) -> bool:
+                return d.nodeid == target_id
+
+            self._emit_unit_definitions(label, body, defn_filter=_is_target)
+
+        emitted_late: "set[str]" = set()
+        pend_monos = list(late_monos)
+        pend_users = list(late_user_items)
+        while pend_monos or pend_users:
+            progressed = False
+            keep_m: list = []
+            for mono_type, template_defn in pend_monos:
+                if self._late_deps_of_mono(mono_type, late_group_names) <= emitted_late:
+                    self._current_node_id = template_defn.nodeid
+                    self._emit_mono_type(mono_type, template_defn)
+                    emitted_late.add(mono_type.name)
+                    progressed = True
+                else:
+                    keep_m.append((mono_type, template_defn))
+            pend_monos = keep_m
+            keep_u: list = []
+            for label, body, nm, dfn, tname in pend_users:
+                unemitted = late_group_names - emitted_late
+                if not self._user_defn_references_type(nm, dfn, unemitted):
+                    _emit_late_user_type(label, body, dfn.nodeid)
+                    emitted_late.add(tname)
+                    progressed = True
+                else:
+                    keep_u.append((label, body, nm, dfn, tname))
+            pend_users = keep_u
+            if not progressed:
+                # Valid by-value graphs are acyclic (recursive types box),
+                # so this is defensive: flush the remainder in original
+                # order, surfacing any missed edge as a compile error
+                # rather than a hang.
+                for mono_type, template_defn in pend_monos:
+                    self._current_node_id = template_defn.nodeid
+                    self._emit_mono_type(mono_type, template_defn)
+                for label, body, nm, dfn, tname in pend_users:
+                    _emit_late_user_type(label, body, dfn.nodeid)
+                break
+
+        # main-unit late-user FUNCTIONS — after every late type, so their
+        # bodies see complete declarations.
+        def _is_late_user_function(n, d) -> bool:
+            return d.nodetype == NodeType.FUNCTION and _is_late_user(n, d)
+
+        self._emit_unit_definitions(
+            "", mainunit.body, defn_filter=_is_late_user_function
+        )
 
         # third pass: emit facets (must come after all conforming types are defined)
         for dep_name, dep_unit in dep_units:

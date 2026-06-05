@@ -4861,6 +4861,30 @@ class TestEmitterUnionMemorySafety:
         assert "x=7" in result.stdout, result.stdout
         assert "miss=none" in result.stdout, result.stdout
 
+    def test_mono_over_late_user_type_struct_order(self):
+        """Regression: a mono (`Map<u64, C>`) embeds a *late* user type
+        `C` by value. `C` is late because it embeds `Option<D>` (a mono
+        over a user reftype), so it must be emitted after that mono —
+        which in turn pushes `C` after the map mono that embeds it. The
+        chain alternates mono/user, so the late group must be emitted in
+        dependency order, not as "all monos then all user defs" (that
+        emitted `Map<u64, C>` before `C`'s struct/destructor → the C
+        compiler saw an undeclared type and an implicit destructor).
+        """
+        csource = emit_source(
+            "D: class { v: u64 }\n"
+            "C: class { x: u64 d: (Option t: D) }\n"
+            "main: function is {\n"
+            "    m: (Map key: u64 value: C)\n"
+            "    cc: (C x: 5.u64 d: (Option.none D))\n"
+            "    m.set key: 0.u64 value: cc\n"
+            '    print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "ok" in result.stdout, result.stdout
+
     def test_example_unions_asan(self):
         from zvfs import ZVfs, FSProvider, BindType
 
