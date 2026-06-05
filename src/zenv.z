@@ -926,34 +926,27 @@ ZSymbolTable: class {
     # when one excludable subtype remains; marks the scope unreachable when
     # none remain.
     exclude: function {:this name: StringView subtypeName: StringView fullTypeId: u64} is {
-        # Phase 1: snapshot the child edges for fullTypeId. The child-table
-        # iterator locks this.typing for its lifetime, so the collection runs
-        # inside ZTyping and releases the lock on return -- the child-type
-        # resolution below re-reads this.typing.
-        edgeNames: (List of: String)
-        edgeIds: (List of: u64)
-        this.typing.collectChildEdges parentTypeId: fullTypeId outNames: edgeNames outIds: edgeIds
-        # Phase 2: resolve each edge's child type and keep the excludable arms.
+        # The excludable arms of fullTypeId: iterate the child edges and keep
+        # each data-bearing arm. Reading childTypeById (a sibling field) and
+        # the registry while iterating typeChild is sound sibling-field access
+        # through a locked parent.
         allSubs: (List of: String)
-        ne: edgeIds.length
-        ei: 0.u64
-        for while ei < ne loop {
-            cidv: edgeIds.get i: ei
-            cnm: edgeNames.get i: ei
-            ctOpt: this.typing.childTypeById.get key: cidv
-            match (
-                ctOpt
-            ) case some then {
-                childTypeId: ctOpt
-                kind: this.reg.typetypeOf typeId: childTypeId
-                if (isExcludableKind kind) then {
-                    isOrigin: this.reg.isTagGenericOriginOf typeId: childTypeId
-                    if isOrigin == false then {
-                        allSubs.append cnm.copy
+        for row: this.typing.typeChild.iterate loop {
+            if row.parentTypeId == fullTypeId then {
+                ctOpt: this.typing.childTypeById.get key: row.childNameId
+                match (
+                    ctOpt
+                ) case some then {
+                    childTypeId: ctOpt
+                    kind: this.reg.typetypeOf typeId: childTypeId
+                    if (isExcludableKind kind) then {
+                        isOrigin: this.reg.isTagGenericOriginOf typeId: childTypeId
+                        if isOrigin == false then {
+                            allSubs.append row.childName.copy
+                        }
                     }
-                }
-            } case none then { }
-            ei = ei + 1.u64
+                } case none then { }
+            }
         }
 
         prevExcl: (Set of: String)

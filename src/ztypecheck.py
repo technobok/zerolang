@@ -597,6 +597,11 @@ class TypeChecker:
         # ZExprResult.borrow_target so it cannot leak between statements. Stored
         # as the addressable path tuple `(root, f1, f2, ...)`.
         self._pending_borrow_lock: Optional[Tuple[str, ...]] = None
+        # Re-entrancy depth for `_check_dotted_path`: a dotted path resolves
+        # its parent through the same entry, so only depth 1 is the actual
+        # access target. Borrow-scoped lock enforcement runs against the full
+        # leaf path at that level, never an intermediate prefix.
+        self._dp_access_depth: int = 0
         # pending private access: set by .private, captured and cleared by
         # _check_expression into ZExprResult.private_access.
         self._pending_private_access: bool = False
@@ -8376,7 +8381,22 @@ class TypeChecker:
         is skipped when the parent has no typed counterpart yet (e.g.
         it's an AtomString or interpolation Expression — both
         scheduled for later sub-steps)."""
+        # A dotted path resolves its parent through this same entry, so only
+        # depth 1 is the actual access target. Type resolution never raises
+        # (it collects errors), so a plain increment/decrement balances.
+        self._dp_access_depth += 1
         t = self._check_dotted_path_inner(path, coerce_method_to_return)
+        # Borrow-scoped lock enforcement on the FULL access path, at the
+        # outermost level only (a parent resolution is just traversal).
+        # Checking the leaf -- not an intermediate prefix -- lets a sibling-
+        # field read through a locked parent proceed (iterate `this.x.rows`
+        # while reading `this.x.lookup`), while still rejecting the locked
+        # leaf, its descendants, and a whole-value access of an ancestor.
+        if self._dp_access_depth == 1:
+            target_path = self._get_dotted_path_tuple(path)
+            if target_path and self.symtab.lookup_var(target_path[0]):
+                self._check_not_locked(target_path, "Cannot access", path.start)
+        self._dp_access_depth -= 1
         return t
 
     def _check_dp_take(self, path: zast.DottedPath) -> Optional[ZType]:
@@ -8715,15 +8735,9 @@ class TypeChecker:
                         self.typing.atom_child_id[parent_atom.nodeid] = (
                             entry.original_ztype.child_id_for(entry.narrowed_subtype)
                         )
-                # Borrow-scoped lock enforcement: locked paths are completely
-                # unavailable (reads AND writes). Check the full path being
-                # accessed so sibling-path reads aren't blocked.
-                if self.symtab.lookup_var(parent_atom.name):
-                    target_path = self._get_dotted_path_tuple(
-                        cast(zast.Operation, path)
-                    )
-                    if target_path:
-                        self._check_not_locked(target_path, "Cannot access", path.start)
+                # Borrow-scoped lock enforcement runs in `_check_dotted_path`
+                # against the full leaf path (an intermediate prefix here would
+                # reject sibling-field reads through a locked parent).
                 # Typed mirror: this branch sets parent_atom.type without
                 # routing through `_check_atomid`, so build the TypedAtomId
                 # here so the wrapping `_check_dotted_path` can find a

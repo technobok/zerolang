@@ -853,6 +853,64 @@ class TestMatchExpression:
         check_ok(src)
 
 
+class TestNestedFieldIterationLock:
+    """Borrow-scoped lock enforcement is checked against the FULL access
+    path, not an intermediate prefix. Iterating a nested field
+    (`this.inner.rows`) then reading a SIBLING nested field
+    (`this.inner.lookup`) must type-check -- the sibling does not overlap
+    the locked leaf. The locked leaf itself, and a whole-value access of the
+    common ancestor, must still be rejected."""
+
+    SRC = (
+        "Inner: class { rows: (List of: u64) lookup: (Map key: u64 value: u64) }\n"
+        "Outer: class { inner: Inner } as {\n"
+        "    scan: function {:this} is {\n"
+        "        iter: this.inner.rows.iterate\n"
+        "        for row: iter loop {\n"
+        "BODY"
+        "        }\n"
+        "    }\n"
+        "}\n"
+        "main: function is {\n"
+        "    o: (Outer inner: (Inner rows: (List of: u64) "
+        "lookup: (Map key: u64 value: u64)))\n"
+        "    o.scan\n"
+        "}\n"
+    )
+
+    def test_sibling_nested_field_read_ok(self):
+        body = (
+            "            got: this.inner.lookup.get key: row\n"
+            "            match (got) case some then "
+            '{ print "\\{got}" } case none then { print "n" }\n'
+        )
+        check_ok(self.SRC.replace("BODY", body))
+
+    def test_locked_leaf_read_rejected(self):
+        body = '            n: this.inner.rows.length\n            print "\\{n}"\n'
+        errors = check_errors(self.SRC.replace("BODY", body))
+        assert any("has exclusive lock" in e.msg for e in errors)
+
+    def test_whole_value_ancestor_access_rejected(self):
+        src = (
+            "Inner: class { rows: (List of: u64) lookup: (Map key: u64 value: u64) }\n"
+            'sink: function {i: Inner} is { print "x" }\n'
+            "Outer: class { inner: Inner } as {\n"
+            "    scan: function {:this} is {\n"
+            "        iter: this.inner.rows.iterate\n"
+            "        for row: iter loop { sink i: this.inner }\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    o: (Outer inner: (Inner rows: (List of: u64) "
+            "lookup: (Map key: u64 value: u64)))\n"
+            "    o.scan\n"
+            "}\n"
+        )
+        errors = check_errors(src)
+        assert any("has exclusive lock" in e.msg for e in errors)
+
+
 class TestStringInterpolation:
     def test_interpolation_checks_expressions(self):
         check_ok('main: function is {\n  x: 42\n  print "value = \\{x}"\n}')
