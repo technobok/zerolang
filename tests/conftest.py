@@ -144,6 +144,12 @@ def ztyping_binary(tmp_path_factory):
     return _build_zerolang_unit("ztyping", tmp_path_factory)
 
 
+@pytest.fixture(scope="session")
+def zenv_binary(tmp_path_factory):
+    """Build the self-hosted symbol table (src/zenv.z) once per session."""
+    return _build_zerolang_unit("zenv", tmp_path_factory)
+
+
 def make_tokenizer(source: str) -> Tokenizer:
     """Create a Tokenizer from a source String."""
     fh = io.StringIO(source)

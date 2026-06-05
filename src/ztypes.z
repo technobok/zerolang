@@ -395,14 +395,6 @@ ZVariable: class {
     synthOrigin:     (Option t: String)
 }
 
-# Lock state on a scope entry. `path` is the addressable target
-# (root, f1, f2, ...); path[0] equals the entry name.
-ZLockInfo: class {
-    lockType: zlockstate
-    holder:   zlockholder
-    path:     (List of: String)
-}
-
 # Result of checking an expression: the resolved type id plus any
 # pending borrow/private intent for the enclosing assignment to
 # consume. An empty borrowTarget means no borrow is pending.
@@ -489,21 +481,29 @@ ZType: class {
 }
 
 # A single environment entry: a definition (introduces a name) or a
-# shadow/overlay (modifies an outer name's state).
+# shadow/overlay (modifies an outer name's state). Overlay state is held
+# in flat, borrow-readable columns rather than nested reftype options: a
+# scope walk reads an entry through a borrowed list view, and a borrowed
+# `(Option reftype)` field's payload cannot be reached without moving it
+# out. `varId` some marks a runtime-variable binding; the lock columns are
+# live only when `hasLock`; `narrowedSubtype` is "" when not narrowed.
 ZEntry: class {
-    entryId:           u64
-    name:              String
-    ztypeId:           u64
-    isDefinition:      bool
-    var:               (Option t: ZVariable)
-    lock:              (Option t: ZLockInfo)
-    narrowedSubtype:   (Option t: String)
-    narrowedSubtypeId: (optionval t: u64)
-    excludedSubtypes:  (Set of: String)
+    entryId:            u64
+    name:               String
+    ztypeId:            u64
+    isDefinition:       bool
+    varId:              (optionval t: u64)
+    hasLock:            bool
+    lockType:           zlockstate
+    lockHolder:         zlockholder
+    lockPath:           (List of: String)
+    narrowedSubtype:    String
+    narrowedSubtypeId:  (optionval t: u64)
+    excludedSubtypes:   (Set of: String)
     excludedSubtypeIds: (Set of: u64)
-    originalZtypeId:   (optionval t: u64)
-    isTaken:           bool
-    takenAt:           (optionval t: zsrcpos)
+    originalZtypeId:    (optionval t: u64)
+    isTaken:            bool
+    takenAt:            (optionval t: zsrcpos)
 }
 
 # --- registry: the home for the monotonic id counters shared across
@@ -630,9 +630,12 @@ ZTypeRegistry: class {
             name: name.string
             ztypeId: ztypeId
             isDefinition: isDefinition
-            var: (Option.none ZVariable)
-            lock: (Option.none ZLockInfo)
-            narrowedSubtype: (Option.none String)
+            varId: (optionval.none u64)
+            hasLock: false
+            lockType: zlockstate.SHARED
+            lockHolder: (zlockholder kind: zlockholderkind.VAR id: 0.u64)
+            lockPath: (List of: String)
+            narrowedSubtype: "".string
             narrowedSubtypeId: (optionval.none u64)
             excludedSubtypes: (Set of: String)
             excludedSubtypeIds: (Set of: u64)

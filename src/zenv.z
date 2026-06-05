@@ -1,0 +1,1356 @@
+# ZeroLang scoped symbol table for the type checker.
+#
+# The representation is id-first and relational. Entries live in one flat
+# list -- `this.entries`, every live binding/overlay across all scopes in
+# push order -- rather than nested inside per-scope frames. A scope is
+# metadata plus the index where its entries begin (`entryStart`); a name
+# resolution is a single reverse walk (last-wins shadowing), and a pop
+# truncates the flat list back to the scope's boundary.
+#
+# The flat shape is forced by the language's value semantics as much as
+# chosen for relational cleanliness: `this.entries` is reached through a
+# borrowed receiver, so `List.get` yields a COPY -- fine to read, but a
+# mutation written back with `List.set` frees heap fields the copy still
+# aliases. Every mutation therefore goes through `append` / `pop` on the
+# field list directly (which persist without copying); per-scope flags
+# that would need in-place edits (`unreachable`, a log row's close seq)
+# live in id-keyed side tables instead.
+#
+# An entry stores a u64 type id (never a live type); type metadata is read
+# through the owned registry (`this.reg`) and child/narrowing edges
+# through the owned typecheck-output container (`this.typing`).
+
+ZVariable: ztypes.ZVariable
+ZEntry:    ztypes.ZEntry
+ZTyping:   ztyping.ZTyping
+
+# --- pure helpers ---
+
+boolText: function {b: bool} out String is {
+    match (
+        b
+    ) case true then {
+        return "true".string
+    } case false then {
+        return "false".string
+    }
+}
+
+optU64Text: function {o: (optionval t: u64)} out String is {
+    match (
+        o
+    ) case some then {
+        return "\{o}".string
+    } case none then {
+        return "none".string
+    }
+}
+
+# Two lock paths are equal iff same length and every segment matches.
+pathsEqual: function {a: (List of: String) b: (List of: String)} out bool is {
+    if a.length != b.length then {
+        return false
+    }
+    n: a.length
+    i: 0.u64
+    for while i < n loop {
+        av: a.get i: i
+        bv: b.get i: i
+        if av.stringview != bv.stringview then {
+            return false
+        }
+        i = i + 1.u64
+    }
+    return true
+}
+
+# True iff `p` is a (non-strict) prefix of `whole`.
+isPrefix: function {p: (List of: String) whole: (List of: String)} out bool is {
+    pn: p.length
+    wn: whole.length
+    if pn > wn then {
+        return false
+    }
+    i: 0.u64
+    for while i < pn loop {
+        pv: p.get i: i
+        wv: whole.get i: i
+        if pv.stringview != wv.stringview then {
+            return false
+        }
+        i = i + 1.u64
+    }
+    return true
+}
+
+# Two paths overlap iff one is a (non-strict) prefix of the other:
+# compare the shared leading run.
+pathsOverlap: function {a: (List of: String) b: (List of: String)} out bool is {
+    an: a.length
+    bn: b.length
+    n: an
+    if bn < an then {
+        n = bn
+    }
+    i: 0.u64
+    for while i < n loop {
+        av: a.get i: i
+        bv: b.get i: i
+        if av.stringview != bv.stringview then {
+            return false
+        }
+        i = i + 1.u64
+    }
+    return true
+}
+
+holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
+    if a.kind == b.kind then {
+        if a.id == b.id then {
+            return true
+        }
+    }
+    return false
+}
+
+# Multi-granularity conflict for a NEW lock acquisition. Both paths share
+# the same root (caller filters by entry name). Same path: conflict iff
+# either side is EXCLUSIVE. Strict-ancestor existing: conflict iff that
+# ancestor is EXCLUSIVE. Strict-ancestor requested: conflict iff the
+# request is EXCLUSIVE. Siblings never conflict.
+lockAcquireConflict: function {existingType: ztypes.zlockstate existingPath: (List of: String) reqType: ztypes.zlockstate reqPath: (List of: String)} out bool is {
+    eq: pathsEqual a: existingPath b: reqPath
+    if eq then {
+        if existingType == ztypes.zlockstate.EXCLUSIVE then {
+            return true
+        }
+        if reqType == ztypes.zlockstate.EXCLUSIVE then {
+            return true
+        }
+        return false
+    }
+    eLen: existingPath.length
+    rLen: reqPath.length
+    if eLen < rLen then {
+        anc: isPrefix p: existingPath whole: reqPath
+        if anc then {
+            return (existingType == ztypes.zlockstate.EXCLUSIVE)
+        }
+    }
+    if rLen < eLen then {
+        anc2: isPrefix p: reqPath whole: existingPath
+        if anc2 then {
+            return (reqType == ztypes.zlockstate.EXCLUSIVE)
+        }
+    }
+    return false
+}
+
+# A subtype participates in exclusion narrowing only if it is a real
+# data-bearing arm (not a function / data block / tag / enum member).
+isExcludableKind: function {k: ztypes.ztypetype} out bool is {
+    if k == ztypes.ztypetype.FUNCTION then {
+        return false
+    }
+    if k == ztypes.ztypetype.DATA then {
+        return false
+    }
+    if k == ztypes.ztypetype.TAG then {
+        return false
+    }
+    if k == ztypes.ztypetype.ENUM then {
+        return false
+    }
+    return true
+}
+
+zlockstateNameLower: function {t: ztypes.zlockstate} out String is {
+    match (
+        t
+    ) case EXCLUSIVE then {
+        return "exclusive".string
+    } case SHARED then {
+        return "shared".string
+    }
+}
+
+formatPath: function {path: (List of: String)} out String is {
+    if path.length == 0.u64 then {
+        return "<unknown>".string
+    }
+    return (stringJoin parts: path sep: ".")
+}
+
+# --- carriers ---
+
+# One scope frame's metadata. `entryStart` is the index into the symbol
+# table's flat entry list where this scope's entries begin; the scope owns
+# `entries[entryStart .. nextScopeStart)`.
+ZScope: class {
+    scopeId:    u64
+    kind:       ztypes.zscopekind
+    name:       String
+    entryStart: u64
+}
+
+# One row of the append-only scope log: a push stamped with its parent and
+# open seq. The close seq lives in the symbol table's scopeClose map (a row
+# is an immutable record once appended). The SQL dump joins the two by
+# scopeId to recover the full open/close ordering.
+ZScopeLogRow: class {
+    scopeId:     u64
+    parentId:    (optionval t: u64)
+    kind:        ztypes.zscopekind
+    name:        String
+    openedAtSeq: u64
+}
+
+# Scoped symbol table. Owns the id registry and the typecheck-output
+# container outright (a reftype class field is moved in at construction),
+# so every method reads metadata via `this.reg` / `this.typing` without
+# threading them through calls.
+ZSymbolTable: class {
+    scopes:     (List of: ZScope)
+    entries:    (List of: ZEntry)
+    history:    (List of: ZScope)
+    scopeLog:   (List of: ZScopeLogRow)
+    scopeClose: (Map key: u64 value: u64)
+    unreachableScopes: (Set of: u64)
+    seqCounter: u64
+    reg:        ztypes.ZTypeRegistry
+    typing:     ZTyping
+} as {
+    # --- scope log ---
+
+    # Append a log row for the freshly-pushed top scope. Parent is the
+    # previous top (the actual enclosing scope), or none for the root.
+    logPush: function {:this} is {
+        n: this.scopes.length
+        if n > 0.u64 then {
+            topIdx: n - 1.u64
+            top: this.scopes.get i: topIdx
+            sid: top.scopeId
+            tkind: top.kind
+            parentId: (optionval.none u64)
+            if n >= 2.u64 then {
+                pIdx: n - 2.u64
+                prev: this.scopes.get i: pIdx
+                parentId = (optionval.some prev.scopeId)
+            }
+            seq: this.seqCounter
+            this.scopeLog.append (ZScopeLogRow scopeId: sid parentId: parentId kind: tkind name: top.name.copy openedAtSeq: seq)
+            this.seqCounter = this.seqCounter + 1.u64
+        }
+    }
+
+    # Record the close seq for `scopeId` in the side table.
+    logPop: function {:this scopeId: u64} is {
+        sc: this.seqCounter
+        sk: scopeId
+        this.scopeClose.set key: sk value: sc
+        this.seqCounter = this.seqCounter + 1.u64
+    }
+
+    closeSeqOf: function {:this scopeId: u64} out (optionval t: u64) is {
+        r: this.scopeClose.get key: scopeId
+        match (
+            r
+        ) case some then {
+            return (optionval.some r)
+        } case none then {
+            return (optionval.none u64)
+        }
+    }
+
+    # --- scope management ---
+
+    push: function {:this name: StringView} out u64 is {
+        sid: this.reg.allocScope
+        start: this.entries.length
+        this.scopes.append (ZScope scopeId: sid kind: ztypes.zscopekind.BLOCK name: name.string entryStart: start)
+        this.logPush
+        return sid
+    }
+
+    pushBlock: function {:this name: StringView} out u64 is {
+        marker: this.scopes.length
+        sid: this.reg.allocScope
+        start: this.entries.length
+        this.scopes.append (ZScope scopeId: sid kind: ztypes.zscopekind.BLOCK name: name.string entryStart: start)
+        this.logPush
+        return marker
+    }
+
+    pushOverlay: function {:this} out u64 is {
+        sid: this.reg.allocScope
+        start: this.entries.length
+        this.scopes.append (ZScope scopeId: sid kind: ztypes.zscopekind.OVERLAY name: "".string entryStart: start)
+        this.logPush
+        return sid
+    }
+
+    pushCall: function {:this} out u64 is {
+        marker: this.scopes.length
+        sid: this.reg.allocScope
+        start: this.entries.length
+        this.scopes.append (ZScope scopeId: sid kind: ztypes.zscopekind.CALL name: "".string entryStart: start)
+        this.logPush
+        return marker
+    }
+
+    # First entry index owned by the top scope (entries length when empty).
+    currentScopeStart: function {:this} out u64 is {
+        n: this.scopes.length
+        if n == 0.u64 then {
+            return 0.u64
+        }
+        idx: n - 1.u64
+        top: this.scopes.get i: idx
+        return top.entryStart
+    }
+
+    currentScopeId: function {:this} out (optionval t: u64) is {
+        n: this.scopes.length
+        if n == 0.u64 then {
+            return (optionval.none u64)
+        }
+        idx: n - 1.u64
+        top: this.scopes.get i: idx
+        return (optionval.some top.scopeId)
+    }
+
+    # Pop the top scope. Its entries are truncated off the flat list; take
+    # overlays are merged into the parent so the error persists -- except
+    # when the taken name was DEFINED in the popped scope (no binding to
+    # persist against) or is already taken above.
+    pop: function {:this} out u64 is {
+        n: this.scopes.length
+        if n == 0.u64 then {
+            return 0.u64
+        }
+        topIdx: n - 1.u64
+        top: this.scopes.get i: topIdx
+        topId: top.scopeId
+        start: top.entryStart
+        endIdx: this.entries.length
+
+        localDefs: (Set of: String)
+        p: start
+        for while p < endIdx loop {
+            e: this.entries.get i: p
+            if e.isDefinition then {
+                localDefs.add item: e.name.copy
+            }
+            p = p + 1.u64
+        }
+
+        mNames: (List of: String)
+        mTypes: (List of: u64)
+        mLocs: (List of: ztypes.zsrcpos)
+        p2: start
+        for while p2 < endIdx loop {
+            e: this.entries.get i: p2
+            if e.isTaken then {
+                taOpt: e.takenAt
+                match (
+                    taOpt
+                ) case some then {
+                    nm: e.name
+                    if (localDefs.has item: nm) == false then {
+                        zt: e.ztypeId
+                        mNames.append e.name.copy
+                        mTypes.append zt
+                        mLocs.append taOpt
+                    }
+                } case none then { }
+            }
+            p2 = p2 + 1.u64
+        }
+
+        for while this.entries.length > start loop {
+            gone: this.entries.pop
+        }
+
+        popped: this.scopes.pop
+        this.history.append popped
+        this.unreachableScopes.delete item: topId
+
+        mc: mNames.length
+        mi: 0.u64
+        for while mi < mc loop {
+            nm: mNames.get i: mi
+            zt: mTypes.get i: mi
+            already: this.isTakenName name: nm.stringview
+            if already == false then {
+                te: this.reg.newEntry name: nm.stringview ztypeId: zt isDefinition: false
+                te.isTaken = true
+                te.takenAt = (optionval.some (mLocs.get i: mi))
+                this.entries.append te
+            }
+            mi = mi + 1.u64
+        }
+
+        this.logPop scopeId: topId
+        return topId
+    }
+
+    popTo: function {:this marker: u64} is {
+        for while this.scopes.length > marker loop {
+            this.pop
+        }
+    }
+
+    depth: function {:this} out u64 is {
+        return this.scopes.length
+    }
+
+    # --- entry insertion ---
+
+    define: function {:this name: StringView ztypeId: u64} is {
+        e: this.reg.newEntry name: name ztypeId: ztypeId isDefinition: true
+        this.entries.append e
+    }
+
+    # Define a runtime variable with ownership tracking. Assigns the C
+    # identifier here -- the single chokepoint every binding flows through
+    # -- so the emitter reads `variableCname` instead of re-mangling.
+    defineVar: function {:this name: StringView var: ZVariable} is {
+        if var.cname.length == 0.u64 then {
+            var.cname = ztypes.mangleVarName name
+        }
+        vid: var.variableId
+        this.typing.variableCname.set key: vid value: var.cname.copy
+        e: this.reg.newEntry name: name ztypeId: var.ztypeId isDefinition: true
+        e.varId = (optionval.some var.variableId)
+        this.entries.append e
+    }
+
+    # --- name resolution ---
+
+    # Index of the effective (most-recent) entry for `name`, or none.
+    effectiveIndex: function {:this name: StringView} out (optionval t: u64) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                return (optionval.some j2)
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none u64)
+    }
+
+    # Resolve a name to its type id, or none (also none when taken).
+    lookup: function {:this name: StringView} out (optionval t: u64) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                if e.isTaken then {
+                    return (optionval.none u64)
+                }
+                return (optionval.some e.ztypeId)
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none u64)
+    }
+
+    # Variable id bound to `name`, skipping lock/narrow overlays; none if
+    # taken or unbound.
+    lookupVarId: function {:this name: StringView} out (optionval t: u64) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                if e.isTaken then {
+                    return (optionval.none u64)
+                }
+                vidOpt: e.varId
+                match (
+                    vidOpt
+                ) case some then {
+                    return (optionval.some vidOpt)
+                } case none then { }
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none u64)
+    }
+
+    # Name of the defining entry whose variable id is `vid`, or none.
+    lookupVarNameById: function {:this vid: u64} out (Option t: String) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.isDefinition then {
+                vidOpt: e.varId
+                match (
+                    vidOpt
+                ) case some then {
+                    if vidOpt == vid then {
+                        return (Option.some e.name.copy)
+                    }
+                } case none then { }
+            }
+            j = j - 1.u64
+        }
+        return (Option.none String)
+    }
+
+    # --- invalidation (take) ---
+
+    invalidate: function {:this name: StringView loc: (optionval t: ztypes.zsrcpos)} out bool is {
+        idxOpt: this.effectiveIndex name: name
+        match (
+            idxOpt
+        ) case some then {
+            e: this.entries.get i: idxOpt
+            zt: e.ztypeId
+            te: this.reg.newEntry name: name ztypeId: zt isDefinition: false
+            te.isTaken = true
+            te.takenAt = loc
+            this.entries.append te
+            return true
+        } case none then {
+            return false
+        }
+    }
+
+    getTakenLocation: function {:this name: StringView} out (optionval t: ztypes.zsrcpos) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                if e.isTaken then {
+                    return e.takenAt
+                }
+                return (optionval.none ztypes.zsrcpos)
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none ztypes.zsrcpos)
+    }
+
+    isTakenName: function {:this name: StringView} out bool is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                return e.isTaken
+            }
+            j = j - 1.u64
+        }
+        return false
+    }
+
+    # Index of the most-recent taken entry for `name`, or none.
+    takenIndex: function {:this name: StringView} out (optionval t: u64) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                if e.isTaken then {
+                    return (optionval.some j2)
+                }
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none u64)
+    }
+
+    # Rebuild the flat entry list omitting the slot at `dropIdx`.
+    removeEntryAt: function {:this dropIdx: u64} is {
+        rev: (List of: ZEntry)
+        for while this.entries.length > 0.u64 loop {
+            rev.append this.entries.pop
+        }
+        pos: 0.u64
+        for while rev.length > 0.u64 loop {
+            e: rev.pop
+            if pos == dropIdx then { } else {
+                this.entries.append e
+            }
+            pos = pos + 1.u64
+        }
+    }
+
+    # Remove the innermost taken record for `name` (match/case restore).
+    clearTaken: function {:this name: StringView} is {
+        kOpt: this.takenIndex name: name
+        match (
+            kOpt
+        ) case some then {
+            this.removeEntryAt dropIdx: kOpt
+        } case none then { }
+    }
+
+    # Drop every taken overlay from the innermost scope (diverging arm).
+    discardTakenInCurrentScope: function {:this} is {
+        start: this.currentScopeStart
+        rev: (List of: ZEntry)
+        for while this.entries.length > 0.u64 loop {
+            rev.append this.entries.pop
+        }
+        pos: 0.u64
+        for while rev.length > 0.u64 loop {
+            e: rev.pop
+            drop: false
+            if pos >= start then {
+                if e.isTaken then {
+                    drop = true
+                }
+            }
+            if drop then { } else {
+                this.entries.append e
+            }
+            pos = pos + 1.u64
+        }
+    }
+
+    setTakenLocation: function {:this name: StringView loc: ztypes.zsrcpos} is {
+        kOpt: this.takenIndex name: name
+        match (
+            kOpt
+        ) case some then {
+            rev: (List of: ZEntry)
+            for while this.entries.length > 0.u64 loop {
+                rev.append this.entries.pop
+            }
+            pos: 0.u64
+            for while rev.length > 0.u64 loop {
+                e: rev.pop
+                if pos == kOpt then {
+                    lc: loc
+                    e.takenAt = (optionval.some lc)
+                }
+                this.entries.append e
+                pos = pos + 1.u64
+            }
+        } case none then { }
+    }
+
+    # --- lock holder formatting ---
+
+    formatLockHolder: function {:this holder: ztypes.zlockholder} out String is {
+        k: holder.kind
+        match (
+            k
+        ) case VAR then {
+            nmOpt: this.lookupVarNameById vid: holder.id
+            match (
+                nmOpt
+            ) case some then {
+                return nmOpt.copy
+            } case none then {
+                return "<var:\{holder.id}>".string
+            }
+        } case CALL then {
+            return "call:\{holder.id}".string
+        } case FOR then {
+            return "__for".string
+        }
+    }
+
+    formatLockConflict: function {:this reqPath: (List of: String) reqType: ztypes.zlockstate existingType: ztypes.zlockstate existingPath: (List of: String) existingHolder: ztypes.zlockholder} out String is {
+        rootStr: reqPath.get i: 0.u64
+        rootView: rootStr.stringview
+        reqKind: zlockstateNameLower reqType
+        heldKind: zlockstateNameLower existingType
+        reqDetail: "".string
+        if reqPath.length > 1.u64 then {
+            rp: formatPath reqPath
+            reqDetail = " on '\{rp}'".string
+        }
+        heldDetail: "".string
+        same: pathsEqual a: existingPath b: reqPath
+        if same == false then {
+            hp: formatPath existingPath
+            heldDetail = " on '\{hp}'".string
+        }
+        holderName: this.formatLockHolder existingHolder
+        return "Cannot take \{reqKind} lock on '\{rootView}'\{reqDetail}: already has \{heldKind} lock\{heldDetail} held by '\{holderName}'".string
+    }
+
+    # --- lock operations ---
+
+    # Try to take a lock on `path`. Returns "" on success, else an error
+    # message. `path[0]` must resolve to a known variable. `hasSelfHolder`
+    # marks locks installed by the current operation so a call can install
+    # receiver + arg locks under one identity without self-conflict.
+    tryLock: function {:this path: (List of: String) lockType: ztypes.zlockstate holder: ztypes.zlockholder hasSelfHolder: bool selfHolder: ztypes.zlockholder} out String is {
+        if path.length == 0.u64 then {
+            return "".string
+        }
+        rootStr: path.get i: 0.u64
+        rootView: rootStr.stringview
+        varOpt: this.lookupVarId name: rootView
+        hasVar: false
+        match (
+            varOpt
+        ) case some then {
+            hasVar = true
+        } case none then { }
+        if hasVar == false then {
+            return "".string
+        }
+
+        idempotent: false
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == rootView then {
+                if e.hasLock then {
+                    sameCall: false
+                    if hasSelfHolder then {
+                        if (holderEq a: e.lockHolder b: selfHolder) then {
+                            sameCall = true
+                        }
+                    }
+                    if sameCall == false then {
+                        conflict: lockAcquireConflict existingType: e.lockType existingPath: e.lockPath reqType: lockType reqPath: path
+                        if conflict then {
+                            return (this.formatLockConflict reqPath: path reqType: lockType existingType: e.lockType existingPath: e.lockPath existingHolder: e.lockHolder)
+                        }
+                    }
+                    same: pathsEqual a: e.lockPath b: path
+                    if same then {
+                        eShared: e.lockType == ztypes.zlockstate.SHARED
+                        rShared: lockType == ztypes.zlockstate.SHARED
+                        if eShared then {
+                            if rShared then {
+                                idempotent = true
+                            }
+                        }
+                    }
+                }
+            }
+            j = j - 1.u64
+        }
+        if idempotent then {
+            return "".string
+        }
+
+        le: this.reg.newEntry name: rootView ztypeId: 0.u64 isDefinition: false
+        idxOpt: this.effectiveIndex name: rootView
+        match (
+            idxOpt
+        ) case some then {
+            cur: this.entries.get i: idxOpt
+            le.ztypeId = cur.ztypeId
+            le.narrowedSubtype = cur.narrowedSubtype.copy
+            le.narrowedSubtypeId = cur.narrowedSubtypeId
+            le.originalZtypeId = cur.originalZtypeId
+            cit: cur.excludedSubtypes.iterate
+            for s: cit loop {
+                le.excludedSubtypes.add item: s.copy
+            }
+            ciit: cur.excludedSubtypeIds.iterate
+            for sid: ciit loop {
+                sc: sid
+                le.excludedSubtypeIds.add item: sc
+            }
+        } case none then { }
+        le.hasLock = true
+        le.lockType = lockType
+        le.lockHolder = holder
+        pli: 0.u64
+        for while pli < path.length loop {
+            seg: path.get i: pli
+            le.lockPath.append seg.copy
+            pli = pli + 1.u64
+        }
+        this.entries.append le
+        return "".string
+    }
+
+    findLock: function {:this name: StringView} out (optionval t: ztypes.zlockstate) is {
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == name then {
+                if e.hasLock then {
+                    return (optionval.some e.lockType)
+                }
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none ztypes.zlockstate)
+    }
+
+    # Holder of an EXCLUSIVE lock prefix-overlapping `path`, or none.
+    findExclusiveLock: function {:this path: (List of: String)} out (optionval t: ztypes.zlockholder) is {
+        if path.length == 0.u64 then {
+            return (optionval.none ztypes.zlockholder)
+        }
+        rootStr: path.get i: 0.u64
+        rootView: rootStr.stringview
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == rootView then {
+                if e.hasLock then {
+                    if e.lockType == ztypes.zlockstate.EXCLUSIVE then {
+                        ov: pathsOverlap a: e.lockPath b: path
+                        if ov then {
+                            return (optionval.some e.lockHolder)
+                        }
+                    }
+                }
+            }
+            j = j - 1.u64
+        }
+        return (optionval.none ztypes.zlockholder)
+    }
+
+    # Any lock (SHARED or EXCLUSIVE) prefix-overlapping `path`?
+    isPathLocked: function {:this path: (List of: String)} out bool is {
+        if path.length == 0.u64 then {
+            return false
+        }
+        rootStr: path.get i: 0.u64
+        rootView: rootStr.stringview
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            if e.name.stringview == rootView then {
+                if e.hasLock then {
+                    ov: pathsOverlap a: e.lockPath b: path
+                    if ov then {
+                        return true
+                    }
+                }
+            }
+            j = j - 1.u64
+        }
+        return false
+    }
+
+    # Release all locks held by `holder` (rebuild omitting them).
+    releaseHeldLocks: function {:this holder: ztypes.zlockholder} is {
+        rev: (List of: ZEntry)
+        for while this.entries.length > 0.u64 loop {
+            rev.append this.entries.pop
+        }
+        for while rev.length > 0.u64 loop {
+            e: rev.pop
+            drop: false
+            if e.hasLock then {
+                if (holderEq a: e.lockHolder b: holder) then {
+                    drop = true
+                }
+            }
+            if drop then { } else {
+                this.entries.append e
+            }
+        }
+    }
+
+    # --- narrowing ---
+
+    # Narrow `name` to a subtype. shadow=true (match-arm): the entry's type
+    # id becomes the narrowed PAYLOAD type (null/missing payload keeps the
+    # outer), and the outer is stashed in originalZtypeId for the emitter's
+    # C-level unwrap. shadow=false (assignment): the type id stays the outer
+    # union; only the subtype name is recorded.
+    narrow: function {:this name: StringView toTypeId: u64 subtypeName: StringView shadow: bool} is {
+        originalTypeId: toTypeId
+        idxOpt: this.effectiveIndex name: name
+        match (
+            idxOpt
+        ) case some then {
+            cur: this.entries.get i: idxOpt
+            originalTypeId = cur.ztypeId
+        } case none then { }
+
+        entryZtype: originalTypeId
+        hasSubtype: subtypeName.length > 0.u64
+        if shadow then {
+            if hasSubtype then {
+                payloadOpt: this.typing.childOf parentTypeId: originalTypeId name: subtypeName
+                match (
+                    payloadOpt
+                ) case some then {
+                    pt: this.reg.typetypeOf typeId: payloadOpt
+                    if pt == ztypes.ztypetype.NULL then { } else {
+                        entryZtype = payloadOpt
+                    }
+                } case none then { }
+            }
+        }
+
+        nsId: (optionval.none u64)
+        nsName: "".string
+        if hasSubtype then {
+            cid: this.typing.childIdFor parentTypeId: originalTypeId name: subtypeName
+            nsId = (optionval.some cid)
+            sn: subtypeName.string
+            nsName = sn
+        }
+        origOpt: (optionval.none u64)
+        if shadow then {
+            oc: originalTypeId
+            origOpt = (optionval.some oc)
+        }
+
+        e: this.reg.newEntry name: name ztypeId: entryZtype isDefinition: false
+        e.narrowedSubtype = nsName
+        e.narrowedSubtypeId = nsId
+        e.originalZtypeId = origOpt
+        this.entries.append e
+    }
+
+    # Exclude `subtypeName` from `name`'s type. Collapses to a narrowing
+    # when one excludable subtype remains; marks the scope unreachable when
+    # none remain.
+    exclude: function {:this name: StringView subtypeName: StringView fullTypeId: u64} is {
+        # Phase 1: snapshot the child edges for fullTypeId. The child-table
+        # iterator locks this.typing for its lifetime, so the collection runs
+        # inside ZTyping and releases the lock on return -- the child-type
+        # resolution below re-reads this.typing.
+        edgeNames: (List of: String)
+        edgeIds: (List of: u64)
+        this.typing.collectChildEdges parentTypeId: fullTypeId outNames: edgeNames outIds: edgeIds
+        # Phase 2: resolve each edge's child type and keep the excludable arms.
+        allSubs: (List of: String)
+        ne: edgeIds.length
+        ei: 0.u64
+        for while ei < ne loop {
+            cidv: edgeIds.get i: ei
+            cnm: edgeNames.get i: ei
+            ctOpt: this.typing.childTypeById.get key: cidv
+            match (
+                ctOpt
+            ) case some then {
+                childTypeId: ctOpt
+                kind: this.reg.typetypeOf typeId: childTypeId
+                if (isExcludableKind kind) then {
+                    isOrigin: this.reg.isTagGenericOriginOf typeId: childTypeId
+                    if isOrigin == false then {
+                        allSubs.append cnm.copy
+                    }
+                }
+            } case none then { }
+            ei = ei + 1.u64
+        }
+
+        prevExcl: (Set of: String)
+        this.collectExcluded name: name into: prevExcl
+        newExcl: (Set of: String)
+        pit: prevExcl.iterate
+        for ps: pit loop {
+            newExcl.add item: ps.copy
+        }
+        newExcl.add item: subtypeName.string
+
+        remaining: (List of: String)
+        rn: allSubs.length
+        ri: 0.u64
+        for while ri < rn loop {
+            nm: allSubs.get i: ri
+            isExcl: newExcl.has item: nm
+            if isExcl == false then {
+                remaining.append nm.copy
+            }
+            ri = ri + 1.u64
+        }
+
+        if remaining.length == 0.u64 then {
+            this.markUnreachable
+        } else {
+            narrowedSub: "".string
+            if remaining.length == 1.u64 then {
+                sole: remaining.get i: 0.u64
+                narrowedSub = sole.copy
+            }
+            nsId: (optionval.none u64)
+            if narrowedSub.length > 0.u64 then {
+                cid: this.typing.childIdFor parentTypeId: fullTypeId name: narrowedSub.stringview
+                nsId = (optionval.some cid)
+            }
+            e: this.reg.newEntry name: name ztypeId: fullTypeId isDefinition: false
+            e.narrowedSubtype = narrowedSub.copy
+            e.narrowedSubtypeId = nsId
+            eit: newExcl.iterate
+            for s: eit loop {
+                e.excludedSubtypes.add item: s.copy
+                cid2: this.typing.childIdFor parentTypeId: fullTypeId name: s.stringview
+                e.excludedSubtypeIds.add item: cid2
+            }
+            this.entries.append e
+        }
+    }
+
+    # Copy the current exclusion set for `name` into `into`.
+    collectExcluded: function {:this name: StringView into: (Set of: String)} is {
+        idxOpt: this.effectiveIndex name: name
+        match (
+            idxOpt
+        ) case some then {
+            e: this.entries.get i: idxOpt
+            it: e.excludedSubtypes.iterate
+            for s: it loop {
+                into.add item: s.copy
+            }
+        } case none then { }
+    }
+
+    resetNarrowing: function {:this name: StringView} is {
+        ne: this.entries.length
+        j: ne
+        done: false
+        for while j > 0.u64 loop {
+            if done == false then {
+                j2: j - 1.u64
+                e: this.entries.get i: j2
+                if e.name.stringview == name then {
+                    if e.isDefinition then {
+                        zt: e.ztypeId
+                        re: this.reg.newEntry name: name ztypeId: zt isDefinition: false
+                        this.entries.append re
+                        done = true
+                    }
+                }
+            }
+            j = j - 1.u64
+        }
+    }
+
+    isExcluded: function {:this name: StringView subtypeName: StringView} out bool is {
+        tmp: (Set of: String)
+        this.collectExcluded name: name into: tmp
+        q: subtypeName.string
+        return (tmp.has item: q)
+    }
+
+    getSubtypeName: function {:this name: StringView} out String is {
+        idxOpt: this.effectiveIndex name: name
+        match (
+            idxOpt
+        ) case some then {
+            e: this.entries.get i: idxOpt
+            return e.narrowedSubtype.copy
+        } case none then {
+            return "".string
+        }
+    }
+
+    markUnreachable: function {:this} is {
+        sidOpt: this.currentScopeId
+        match (
+            sidOpt
+        ) case some then {
+            this.unreachableScopes.add item: sidOpt
+        } case none then { }
+    }
+
+    isUnreachable: function {:this} out bool is {
+        sidOpt: this.currentScopeId
+        match (
+            sidOpt
+        ) case some then {
+            return (this.unreachableScopes.has item: sidOpt)
+        } case none then {
+            return false
+        }
+    }
+
+    # --- utility ---
+
+    # All defined, non-taken names inner->outer (dedup), for did-you-mean.
+    # Walk scopes top->bottom; within a scope, entries in push order.
+    allNames: function {:this} out (List of: String) is {
+        names: (List of: String)
+        seen: (Set of: String)
+        ns: this.scopes.length
+        si: ns
+        for while si > 0.u64 loop {
+            si2: si - 1.u64
+            scope: this.scopes.get i: si2
+            start: scope.entryStart
+            endIdx: this.entries.length
+            if si2 + 1.u64 < ns then {
+                nxt: this.scopes.get i: (si2 + 1.u64)
+                endIdx = nxt.entryStart
+            }
+            p: start
+            for while p < endIdx loop {
+                e: this.entries.get i: p
+                already: seen.has item: e.name
+                if already == false then {
+                    if e.isTaken == false then {
+                        names.append e.name.copy
+                        seen.add item: e.name.copy
+                    }
+                }
+                p = p + 1.u64
+            }
+            si = si - 1.u64
+        }
+        return names
+    }
+
+    # Live (defined, not taken) variable names whose type needs a
+    # destructor -- owned resources to snapshot before if/match arms. Each
+    # name's liveness is decided by its most-recent entry (a full reverse
+    # walk), so a take overlay wins over an earlier definition.
+    getLiveOwnedVars: function {:this} out (Set of: String) is {
+        names: (Set of: String)
+        taken: (Set of: String)
+        ne: this.entries.length
+        j: ne
+        for while j > 0.u64 loop {
+            j2: j - 1.u64
+            e: this.entries.get i: j2
+            seenHere: false
+            if (names.has item: e.name) then {
+                seenHere = true
+            }
+            if (taken.has item: e.name) then {
+                seenHere = true
+            }
+            if seenHere == false then {
+                if e.isTaken then {
+                    taken.add item: e.name.copy
+                } else {
+                    hasVar: false
+                    vidOpt: e.varId
+                    match (
+                        vidOpt
+                    ) case some then {
+                        hasVar = true
+                    } case none then { }
+                    if hasVar then {
+                        if (this.reg.hasDestructorName typeId: e.ztypeId) then {
+                            names.add item: e.name.copy
+                        }
+                    }
+                }
+            }
+            j = j - 1.u64
+        }
+        return names
+    }
+}
+
+newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
+    return (ZSymbolTable
+        scopes: (List of: ZScope)
+        entries: (List of: ZEntry)
+        history: (List of: ZScope)
+        scopeLog: (List of: ZScopeLogRow)
+        scopeClose: (Map key: u64 value: u64)
+        unreachableScopes: (Set of: u64)
+        seqCounter: 0.u64
+        reg: reg
+        typing: typing)
+}
+
+# --- smoke harness ---
+
+main: function is {
+    reg: ztypes.newRegistry
+    tResult: reg.newType name: "result" typetype: ztypes.ztypetype.UNION
+    tOk: reg.newType name: "ok" typetype: ztypes.ztypetype.RECORD
+    tErr: reg.newType name: "err" typetype: ztypes.ztypetype.RECORD
+    tNone: reg.newType name: "none" typetype: ztypes.ztypetype.NULL
+    tBuf: reg.newType name: "buf" typetype: ztypes.ztypetype.CLASS
+    tI64: reg.newType name: "i64" typetype: ztypes.ztypetype.RECORD
+    reg.setDestructorName typeId: tBuf name: "z_buf_destroy"
+
+    ty: ztyping.newTyping
+    ty.setChild parentTypeId: tResult childName: "ok" childTypeId: tOk
+    ty.setChild parentTypeId: tResult childName: "err" childTypeId: tErr
+    ty.setChild parentTypeId: tResult childName: "none" childTypeId: tNone
+
+    st: newSymbolTable reg: reg typing: ty
+
+    print "=== scopes ==="
+    s0: st.push name: "func"
+    print "push func -> scopeId=\{s0} depth=\{st.depth}"
+
+    vx: st.reg.newVariable ztypeId: tBuf ownership: ztypes.zownership.OWNED
+    vidX: vx.variableId
+    st.defineVar name: "x" var: vx
+    vy: st.reg.newVariable ztypeId: tI64 ownership: ztypes.zownership.OWNED
+    st.defineVar name: "y" var: vy
+    st.define name: "MyType" ztypeId: tResult
+
+    print "=== lookup ==="
+    smokeLookup st: st name: "x"
+    smokeLookup st: st name: "y"
+    smokeLookup st: st name: "MyType"
+    smokeLookup st: st name: "z"
+    smokeVarId st: st name: "x"
+    smokeVarId st: st name: "MyType"
+
+    print "=== live owned vars ==="
+    live: st.getLiveOwnedVars
+    qLiveX: "x".string
+    print "live has x -> \{boolText (live.has item: qLiveX)}"
+    qLiveY: "y".string
+    print "live has y -> \{boolText (live.has item: qLiveY)}"
+
+    print "=== locks ==="
+    px: (List of: String)
+    px.append "x".string
+    holderX: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vidX)
+    r1: st.tryLock path: px lockType: ztypes.zlockstate.EXCLUSIVE holder: holderX hasSelfHolder: false selfHolder: holderX
+    print "lock x EXCLUSIVE -> \{smokeErr r1.stringview}"
+
+    px2: (List of: String)
+    px2.append "x".string
+    holderC: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: 99.u64)
+    r2: st.tryLock path: px2 lockType: ztypes.zlockstate.SHARED holder: holderC hasSelfHolder: false selfHolder: holderC
+    print "lock x SHARED -> \{smokeErr r2.stringview}"
+
+    pxq: (List of: String)
+    pxq.append "x".string
+    print "isPathLocked x -> \{boolText (st.isPathLocked path: pxq)}"
+    pyq: (List of: String)
+    pyq.append "y".string
+    print "isPathLocked y -> \{boolText (st.isPathLocked path: pyq)}"
+
+    pxe: (List of: String)
+    pxe.append "x".string
+    exc: st.findExclusiveLock path: pxe
+    match (
+        exc
+    ) case some then {
+        print "exclusive holder of x -> \{st.formatLockHolder exc}"
+    } case none then {
+        print "exclusive holder of x -> none"
+    }
+    st.releaseHeldLocks holder: holderX
+    pxr: (List of: String)
+    pxr.append "x".string
+    print "isPathLocked x after release -> \{boolText (st.isPathLocked path: pxr)}"
+    print "findLock x after release -> \{smokeLockState (st.findLock name: "x")}"
+
+    print "=== invalidate ==="
+    loc: (optionval.some (ztypes.zsrcpos fsno: 0.u32 lineno: 12.u32 colno: 4.u32))
+    inv: st.invalidate name: "y" loc: loc
+    print "invalidate y -> \{boolText inv}"
+    smokeLookup st: st name: "y"
+    tl: st.getTakenLocation name: "y"
+    match (
+        tl
+    ) case some then {
+        print "taken y at line -> \{tl.lineno}"
+    } case none then {
+        print "taken y at line -> none"
+    }
+    st.setTakenLocation name: "y" loc: (ztypes.zsrcpos fsno: 0.u32 lineno: 99.u32 colno: 1.u32)
+    tl2: st.getTakenLocation name: "y"
+    match (
+        tl2
+    ) case some then {
+        print "taken y relocated -> \{tl2.lineno}"
+    } case none then {
+        print "taken y relocated -> none"
+    }
+    st.clearTaken name: "y"
+    print "after clearTaken:"
+    smokeLookup st: st name: "y"
+
+    print "=== narrowing ==="
+    vr: st.reg.newVariable ztypeId: tResult ownership: ztypes.zownership.OWNED
+    st.defineVar name: "r" var: vr
+    st.narrow name: "r" toTypeId: tResult subtypeName: "ok" shadow: true
+    smokeLookup st: st name: "r"
+    print "subtype r -> \{st.getSubtypeName name: "r"}"
+    st.resetNarrowing name: "r"
+    print "after reset subtype r -> \{st.getSubtypeName name: "r"}"
+    smokeLookup st: st name: "r"
+
+    print "=== exclude ==="
+    st.exclude name: "r" subtypeName: "ok" fullTypeId: tResult
+    print "subtype r (excl ok) -> \{st.getSubtypeName name: "r"}"
+    print "isExcluded r.ok -> \{boolText (st.isExcluded name: "r" subtypeName: "ok")}"
+    print "isExcluded r.err -> \{boolText (st.isExcluded name: "r" subtypeName: "err")}"
+    st.exclude name: "r" subtypeName: "none" fullTypeId: tResult
+    print "subtype r (excl ok,none) -> \{st.getSubtypeName name: "r"}"
+    print "unreachable -> \{boolText st.isUnreachable}"
+    st.exclude name: "r" subtypeName: "err" fullTypeId: tResult
+    print "unreachable after excl all -> \{boolText st.isUnreachable}"
+
+    print "=== all names ==="
+    names: st.allNames
+    dumpNames names: names
+
+    print "=== scope log + pop ==="
+    s1: st.push name: "inner"
+    print "push inner -> scopeId=\{s1} depth=\{st.depth}"
+    st.pop
+    print "after pop depth=\{st.depth}"
+    st.pop
+    print "after pop depth=\{st.depth}"
+    dumpScopeLog st: st
+}
+
+smokeLockState: function {o: (optionval t: ztypes.zlockstate)} out String is {
+    match (
+        o
+    ) case some then {
+        return (ztypes.zlockstateName o)
+    } case none then {
+        return "none".string
+    }
+}
+
+smokeLookup: function {st: ZSymbolTable name: StringView} is {
+    r: st.lookup name: name
+    print "lookup \{name} -> \{optU64Text r}"
+}
+
+smokeVarId: function {st: ZSymbolTable name: StringView} is {
+    r: st.lookupVarId name: name
+    print "varId \{name} -> \{optU64Text r}"
+}
+
+smokeErr: function {s: StringView} out String is {
+    if s.length == 0.u64 then {
+        return "ok".string
+    }
+    return s.string
+}
+
+dumpNames: function {names: (List of: String)} is {
+    iter: names.iterate
+    for nm: iter loop {
+        print "  name \{nm}"
+    }
+}
+
+dumpScopeLog: function {st: ZSymbolTable} is {
+    n: st.scopeLog.length
+    k: 0.u64
+    for while k < n loop {
+        row: st.scopeLog.get i: k
+        closed: st.closeSeqOf scopeId: row.scopeId
+        print "  log scope=\{row.scopeId} parent=\{optU64Text row.parentId} kind=\{ztypes.zscopekindName row.kind} name=\{row.name} opened=\{row.openedAtSeq} closed=\{optU64Text closed}"
+        k = k + 1.u64
+    }
+}
