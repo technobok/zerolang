@@ -4821,6 +4821,46 @@ class TestEmitterUnionMemorySafety:
         assert "1: world" in result.stdout, result.stdout
         assert "99: none" in result.stdout, result.stdout
 
+    def test_map_get_reftype_value_no_double_free(self):
+        """Regression: `Map<u64, C>.get` where the value is a user class
+        with a destructor.
+
+        The synthesized get-wrapper for a reftype value is `OptionView`
+        (a borrowed view into the map), not an owned `Option`: the `some`
+        payload aliases the live entry and the view's destructor is a
+        no-op, so the map frees the value exactly once. Before the fix the
+        get returned an owned `Option<C>` boxing a shallow copy whose heap
+        fields aliased the map, double-freeing at scope exit.
+        """
+        csource = emit_source(
+            "Holder: class { x: u64 bag: (Map key: String value: u64) }\n"
+            "main: function is {\n"
+            "    m: (Map key: u64 value: Holder)\n"
+            "    h: (Holder x: 7.u64 bag: (Map key: String value: u64))\n"
+            "    m.set key: 0.u64 value: h\n"
+            "    got: m.get key: 0.u64\n"
+            "    match (\n"
+            "        got\n"
+            "    ) case some then {\n"
+            '        print "x=\\{got.x}"\n'
+            "    } case none then {\n"
+            '        print "x=none"\n'
+            "    }\n"
+            "    miss: m.get key: 9.u64\n"
+            "    match (\n"
+            "        miss\n"
+            "    ) case some then {\n"
+            '        print "miss=hit"\n'
+            "    } case none then {\n"
+            '        print "miss=none"\n'
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "x=7" in result.stdout, result.stdout
+        assert "miss=none" in result.stdout, result.stdout
+
     def test_example_unions_asan(self):
         from zvfs import ZVfs, FSProvider, BindType
 

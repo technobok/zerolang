@@ -101,6 +101,20 @@ def is_listview_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "ListView"
 
 
+def is_optionview_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized OptionView (borrowed-view option).
+
+    OptionView is non-owning: its destructor is a no-op and its `some`
+    payload aliases borrowed storage. `Map.get` over a reftype value returns
+    one (the map keeps ownership), so the result needs no temp free."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None and ztype.generic_origin.name == "OptionView"
+    )
+
+
 def listview_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the element type of a listview type."""
     base = _unwrap_typedef(ztype)

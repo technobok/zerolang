@@ -37,6 +37,7 @@ from ztypeutil import (
     is_list_type as _is_list_type,
     list_element_type as _list_element_type,
     is_listview_type as _is_listview_type,
+    is_optionview_type as _is_optionview_type,
     listview_element_type as _listview_element_type,
     is_listiter_type as _is_listiter_type,
     is_mapkeyiter_type as _is_mapkeyiter_type,
@@ -5299,6 +5300,12 @@ class CEmitter:
                 lines.append(f"    {opt_struct} _r = {{0}};\n")
                 lines.append("    if (idx >= 0) {\n")
                 lines.append(f"        _r.tag = {some_tag};\n")
+                # A borrowed-view return (OptionView, synthesized for reftype
+                # values) aliases the live entry: the view is non-owning (its
+                # destructor is a no-op), so the Map frees the value exactly
+                # once. An owned Option carries its own storage (a deep-copied
+                # String, or a boxed copy).
+                ret_is_view = _is_optionview_type(ret_type)
                 if val_is_string:
                     # String values are stack structs that own a heap data
                     # buffer. A shallow struct copy aliases the buffer and
@@ -5320,13 +5327,15 @@ class CEmitter:
                     )
                     lines.append("        _copy->data[_copy->size] = '\\0';\n")
                     lines.append("        _r.data = _copy;\n")
+                elif ret_is_view:
+                    # Borrowed view: alias the live entry. A pointer-stored
+                    # reftype IS already the borrow; a by-value entry is
+                    # addressed (&value).
+                    if val_is_reftype:
+                        lines.append("        _r.data = _this->entries[idx].value;\n")
+                    else:
+                        lines.append("        _r.data = &_this->entries[idx].value;\n")
                 elif val_is_reftype:
-                    # Heap-allocated reftype: the stored value IS a pointer;
-                    # alias it into the Option's data slot. (Note: this is
-                    # a borrowed pattern — destroying both Map and Option
-                    # will double-free. Revisit when Map.get's ownership
-                    # model is settled; for now Map<reftype-other-than-
-                    # String> remains untested in the tree.)
                     lines.append("        _r.data = _this->entries[idx].value;\n")
                 else:
                     lines.append(
@@ -9060,6 +9069,14 @@ class CEmitter:
                         # optionval variant: no temp tracking needed (value type)
                         return result
                     if ret_type and ret_type.typetype == ZTypeType.UNION:
+                        if _is_optionview_type(ret_type):
+                            # Borrowed view into the map (OptionView, for
+                            # reftype values): the struct is value-copied and
+                            # non-owning (its destructor is a no-op), so it
+                            # needs no temp tracking or free — like the
+                            # optionval (valtype) case above. The Map frees
+                            # the value exactly once.
+                            return result
                         # Value-returned union: must match the function's
                         # declared return type (e.g. `z_Option_String_t`
                         # for `Map<u32, String>.get`). Heap-allocated

@@ -5963,13 +5963,21 @@ class TypeChecker:
                 self.typing.set_child_ownership(set_type, "key", ZParamOwnership.TAKE)
                 self.typing.set_child_ownership(set_type, "value", ZParamOwnership.TAKE)
                 self._set_child(mono, "set", set_type)
-                # synthesize .get method: function {key: K} out option/optionval of: V
+                # synthesize .get method: function {key: K} out wrapper of: V.
+                # Wrapper by value kind:
+                #   valtype  -> optionval (copy-out; ownership is a no-op)
+                #   String   -> Option    (deep-copied owned value)
+                #   reftype  -> OptionView (borrowed view into the map; an
+                #               owned Option would free the map's value at
+                #               scope exit and double-free with the map)
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
                 self._set_child(get_type, "key", key_type)
                 if _is_valtype(value_type):
                     opt_template = self._resolve_name("optionval")
-                else:
+                elif value_type.subtype == ZSubType.STRING:
                     opt_template = self._resolve_name("Option")
+                else:
+                    opt_template = self._resolve_name("OptionView")
                 if opt_template and opt_template.isgeneric:
                     opt_defn = self._find_generic_defn(opt_template)
                     if opt_defn:
