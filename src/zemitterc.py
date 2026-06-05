@@ -12022,6 +12022,30 @@ class CEmitter:
                 cond_str = _unwrap_outer_parens(cond_exprs[0])
             else:
                 cond_str = " && ".join(cond_exprs)
+            # Materialise each class-iterator source into a stable local
+            # BEFORE the loop, so the per-iteration `.call(&src)` advances ONE
+            # iterator. A bound variable, or a construction the arg machinery
+            # already hoisted (e.g. a generator with args), emits as a stable
+            # lvalue and is used directly. An inline `.iterate` emits as a call
+            # rvalue: without hoisting it would be `&<rvalue>` (invalid C) and
+            # re-created every pass — so it is bound to `__itersrc_<name>` here.
+            iter_src: Dict[str, str] = {}
+            for iname, iop, _oc, _ec, _on, callable_ztype, _ot, _et in iter_bindings:
+                if callable_ztype is None:
+                    continue
+                src = self._emit_operation_value(iop)
+                needs_ptr = callable_ztype.typetype == ZTypeType.CLASS
+                if "(" in src:
+                    src_local = f"__itersrc_{mangle_var_name(iname)}"
+                    parts.append(
+                        f"{indent}{_ctype(self.typing, callable_ztype)} "
+                        f"{src_local} = {src};\n"
+                    )
+                    iter_src[iname] = f"&{src_local}" if needs_ptr else src_local
+                elif needs_ptr and not src.startswith("&"):
+                    iter_src[iname] = f"&{src}"
+                else:
+                    iter_src[iname] = src
             parts.append(f"{indent}while ({cond_str}) {{\n")
             self.indent_level += 1
             inner = self._indent()
@@ -12048,23 +12072,15 @@ class CEmitter:
                 elem_type,
             ) in iter_bindings:
                 if callable_ztype is not None:
-                    obj_val = self._emit_operation_value(iop)
                     _cm = self.typing.child_of(callable_ztype, "call")
                     call_fn = (
                         _cm.cname
                         if _cm is not None and _cm.cname
                         else mangle_func_name(f"{callable_ztype.name}.call")
                     )
-                    # Class iterators take a pointer receiver since 'this' is
-                    # always a pointer.
-                    rec_t = callable_ztype
-                    if (
-                        rec_t is not None
-                        and rec_t.typetype == ZTypeType.CLASS
-                        and not obj_val.startswith("&")
-                    ):
-                        obj_val = f"&{obj_val}"
-                    iter_val = f"{call_fn}({obj_val})"
+                    # Receiver is the iterator materialised above (a pointer
+                    # for class iterators since 'this' is always a pointer).
+                    iter_val = f"{call_fn}({iter_src[iname]})"
                 else:
                     iter_val = self._emit_operation_value(iop)
                 tmp = f"__iter_{mangle_var_name(iname)}"

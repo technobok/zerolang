@@ -12878,3 +12878,46 @@ class TestGeneratorEmitter:
         # 1 (first yield), 2 (second yield), 42 (bag.x via the locked
         # pointer alias on the third call's resume into yield b.x).
         assert result.stdout == "a=1\nb=2\nc=42\n"
+
+
+class TestInlineForLoopIterator:
+    """Regression: an inline class-iterator source in a for-loop
+    (`for z: nums.iterate loop`) was emitted as `&<call rvalue>` — invalid C
+    ("lvalue required") and, structurally, a fresh iterator every pass (an
+    infinite loop). The source is now materialised into a stable local before
+    the loop, so the per-iteration `.call(&src)` advances one iterator and the
+    loop terminates."""
+
+    def test_inline_list_iterate_runs_and_terminates(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    nums: (List of: u64)\n"
+            "    nums.append 10.u64\n"
+            "    nums.append 20.u64\n"
+            "    nums.append 30.u64\n"
+            "    for z: nums.iterate loop {\n"
+            '        print "z=\\{z}"\n'
+            "    }\n"
+            '    print "done"\n'
+            "}"
+        )
+        # compile_and_run has a 10s timeout: an infinite loop (the pre-fix
+        # behaviour) would raise here.
+        assert compile_and_run(csource) == "z=10\nz=20\nz=30\ndone\n"
+
+    def test_inline_list_iterate_no_uaf_under_asan(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    nums: (List of: u64)\n"
+            "    nums.append 1.u64\n"
+            "    nums.append 2.u64\n"
+            "    for z: nums.iterate loop {\n"
+            '        print "z=\\{z}"\n'
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "z=1\nz=2\n"
