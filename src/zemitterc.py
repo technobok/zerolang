@@ -12112,6 +12112,11 @@ class CEmitter:
             # below. Collect (name, prev_alias) so multi-binding loops
             # restore each correctly.
             optionview_aliases: List[Tuple[str, Optional[str]]] = []
+            # variable_ids of borrowed-view reftype bindings registered in
+            # `borrowed_vars` for the body (so a field projection of the
+            # binding isn't freed at the call site it feeds); discarded after
+            # the body since the binding is loop-scoped.
+            optionview_borrow_vids: List[int] = []
             for (
                 iname,
                 iop,
@@ -12182,6 +12187,13 @@ class CEmitter:
                         prev_alias = self._alias_map.get(iname)
                         self._alias_map[iname] = f"(*{ptr_name})"
                         optionview_aliases.append((iname, prev_alias))
+                        bind_vid = self._def_vid(iop)
+                        if (
+                            bind_vid is not None
+                            and bind_vid not in self._scope.borrowed_vars
+                        ):
+                            self._scope.borrowed_vars.add(bind_vid)
+                            optionview_borrow_vids.append(bind_vid)
                 else:
                     # Tagged-union `option t: ref`: the payload is a heap-
                     # boxed value whose destructor would free the inner
@@ -12221,6 +12233,8 @@ class CEmitter:
                     self._alias_map.pop(alias_name, None)
                 else:
                     self._alias_map[alias_name] = prev_alias
+            for bvid in optionview_borrow_vids:
+                self._scope.borrowed_vars.discard(bvid)
         elif has_post and not has_pre:
             # pure post-condition: do { body } while (postcond);
             parts.append(f"{indent}do {{\n")

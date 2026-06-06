@@ -31,25 +31,10 @@ unitdefNodeId: function {n: Node} out u32 is {
     }
 }
 
-# registerUnit -- mint a UNIT type for one unit namedoperation and record
-# it in unitTypesById, keyed by the unit node's nodeid. Takes the whole
-# namedoperation by value so its name / operation field projections read
-# through a borrowed parameter (the field-projection-of-a-loop-binding
-# path over-frees).
-registerUnit: function {u: Node reg: ztypes.ZTypeRegistry ty: ztyping.ZTyping} is {
-    match (
-        u
-    ) case namedoperation then {
-        nm: unitLabel o: u.name
-        uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
-        opid: unitdefNodeId n: u.operation
-        ty.unitTypesById.set key: opid.u64 value: uid
-    } else {}
-}
-
 # typecheck -- entry point. Builds the typecheck-output container and
-# registers a UNIT type per unit. The registry is local: only the minted
-# ids are recorded (in the container), so it is freed at scope exit.
+# registers a UNIT type per unit, keyed in unitTypesById by the unit
+# node's nodeid. The registry is local: only the minted ids are recorded
+# (in the container), so it is freed at scope exit.
 typecheck: function {program: Node} out ztyping.ZTyping is {
     reg: ztypes.newRegistry
     ty: ztyping.newTyping
@@ -60,7 +45,14 @@ typecheck: function {program: Node} out ztyping.ZTyping is {
     ) case program then {
         uiter: program.units.iterate
         for u: uiter loop {
-            registerUnit u: u reg: reg ty: ty
+            match (
+                u
+            ) case namedoperation then {
+                nm: unitLabel o: u.name
+                uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
+                opid: unitdefNodeId n: u.operation
+                ty.unitTypesById.set key: opid.u64 value: uid
+            } else {}
         }
     } else {}
     return ty

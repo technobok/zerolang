@@ -12338,6 +12338,13 @@ class TypeChecker:
                     )
                     var.borrow_origin = src_name
                     self.symtab.define_var(name, var)
+                    # Stamp the borrowed-view binding's variable_id so the
+                    # emitter can register it in `borrowed_vars`: a field
+                    # projection of the binding (e.g. `u.operation`) aliases
+                    # the source's heap data and must not be freed at the
+                    # call site it feeds. Keyed by the (post-overlay) cond_op
+                    # the emitter reads back via `_def_vid(iop)`.
+                    self.typing.def_variable_id[cond_op.nodeid] = var.variable_id
                 else:
                     self.symtab.define(name, t)
                 # lock the iteration target to prevent mutation in body.
