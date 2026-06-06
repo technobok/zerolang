@@ -70,6 +70,7 @@ TYPES_SMOKE = [
     "multimod",
     "data",
     "vector",
+    "records",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

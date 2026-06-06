@@ -38,44 +38,87 @@ unitdefNodeId: function {n: Node} out u32 is {
     }
 }
 
+# resolveAtomType -- map a type-atom name to a SHALLOW shell type id. `this`
+# resolves to the enclosing record (passed as thisName); a leading-digit name is
+# a numeric-literal field/param default and resolves to f64 (has a dot) or i64;
+# otherwise the name is taken verbatim. Shells carry no members, no definedInUnit.
+resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: StringView} out u64 is {
+    if nm == "this" then {
+        return (reg.newType name: thisName typetype: ztypes.ztypetype.RECORD)
+    } else {}
+    b0: nm.byteAt 0.u64
+    isnum: false
+    match (
+        b0
+    ) case some then {
+        if b0 >= 48.u8 when b0 <= 57.u8 then {
+            isnum = true
+        } else {}
+    } case none then {}
+    if isnum then {
+        if (nm.contains ".") then {
+            return (reg.newType name: "f64" typetype: ztypes.ztypetype.RECORD)
+        } else {}
+        return (reg.newType name: "i64" typetype: ztypes.ztypetype.RECORD)
+    } else {}
+    return (reg.newType name: nm typetype: ztypes.ztypetype.RECORD)
+}
+
 # resolveTyperefShell -- register a SHALLOW named shell for a referenced type
-# (e.g. the `i64` in `n: i64`). The name is read straight off the atom; the
-# shell carries no members. Source-type rows never include these shells (they
-# fall outside `defined_in_unit`), but a `type_children` row joins to the
-# shell's name. Returns the shell's type id.
-resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node} out u64 is {
+# (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
+# `this`/numeric-default atoms resolve correctly. Source-type rows never include
+# these shells (they fall outside `defined_in_unit`), but a `type_children` row
+# joins to the shell's name. Returns the shell's type id.
+resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
     ) case atomid then {
-        return (reg.newType name: typeExpr.name.stringview typetype: ztypes.ztypetype.RECORD)
+        return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
     } case labelvalue then {
-        return (reg.newType name: typeExpr.name.stringview typetype: ztypes.ztypetype.RECORD)
+        return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
     }
 }
 
 # resolveFunction -- resolve a function definition signature into a FUNCTION
-# type: add one child per parameter (param name -> its type-ref shell), record
-# its defining unit (source-types filter), then register it under
-# `{unit}.{name}` in the resolved name-view. The two map `set`s each TAKE the
-# u64, so a copy is threaded and `resolved.set` is the last use of `fid`.
-resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData} is {
+# type: a child per parameter (param name -> type-ref shell, `this` params bound
+# to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
+# entry in the resolved name-view. Returns the FUNCTION type id (a record method
+# binds it as a child; a free function discards it). The map `set`s TAKE the u64,
+# so copies are threaded for `definedInUnit.set` and the returned id.
+resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView} out u64 is {
     fid: reg.newType name: defName typetype: ztypes.ztypetype.FUNCTION
     dfid: fid
+    rfid: fid
     piter: fnode.parameters.iterate
     for pm: piter loop {
         match (
             pm
         ) case namedoperation then {
             pname: unitLabel o: pm.name
-            cid: resolveTyperefShell reg: reg typeExpr: pm.operation
+            cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
             ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
         } else {}
     }
     ty.definedInUnit.set key: dfid value: unitName.string
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: fid
+    return rfid
+}
+
+# resolveMethodFn -- resolve one record-method as-item (a namedoperation whose
+# operation is a functiondef) into a qualified `{record}.{method}` FUNCTION type,
+# `this` params bound to thisName (the record). Returns its type id, or none for a
+# non-function as-item (tag spec / generic param), which the caller skips.
+resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView qname: StringView thisName: StringView op: Node} out (optionval t: u64) is {
+    match (
+        op
+    ) case functiondef then {
+        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName))
+    } else {
+        return (optionval.none u64)
+    }
 }
 
 # resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
@@ -102,11 +145,11 @@ resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: S
     ty.resolved.set key: key value: did
 }
 
-# resolveRecord -- resolve a record ObjectDef into a RECORD valtype: one child per
-# field (field name -> its type-ref shell), then the synthesized constructor /
-# equality children `create`/`==`/`!=` (shallow FUNCTION shells, JOIN-only -- they
-# carry no definedInUnit). Methods, parameterized / typedef fields, and generics
-# arrive in later slices.
+# resolveRecord -- resolve a record ObjectDef into a RECORD valtype: a child per
+# field (field name -> type-ref shell), then a child per as-block method
+# (`{record}.{method}` FUNCTION, `this` params bound to the record), then the
+# synthesized `create`/`==`/`!=` children (shallow FUNCTION shells, JOIN-only).
+# Parameterized / typedef fields and generics arrive in later slices.
 resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
     rid: reg.newType name: defName typetype: ztypes.ztypetype.RECORD
     rrid: rid
@@ -117,8 +160,23 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
             fm
         ) case namedoperation then {
             fname: unitLabel o: fm.name
-            cid: resolveTyperefShell reg: reg typeExpr: fm.operation
+            cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+        } else {}
+    }
+    aiter: rnode.asItems.iterate
+    for am: aiter loop {
+        match (
+            am
+        ) case namedoperation then {
+            mname: unitLabel o: am.name
+            qname: "\{defName}.\{mname}".string
+            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            match (
+                mido
+            ) case some then {
+                ty.setChild parentTypeId: rid childName: mname.stringview childTypeId: mido
+            } else {}
         } else {}
     }
     createName: "\{defName}.create".string
@@ -143,7 +201,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
     match (
         defn
     ) case functiondef then {
-        resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn
+        resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: ""
     } case expression then {
         resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
     } case datablock then {
