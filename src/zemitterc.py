@@ -10061,7 +10061,28 @@ class CEmitter:
             self.needs_string = True
             self.needs_stdlib = True
             parent = self._emit_path_value(path.parent)
-            arg = parent if self._is_class_pointer_path(path.parent) else f"&{parent}"
+            _pp = path.parent
+            while _pp.nodetype == NodeType.EXPRESSION:
+                _pp = cast(zast.Expression, _pp).expression
+            if self._is_class_pointer_path(path.parent):
+                arg = parent
+            elif _pp.nodetype == NodeType.CALL:
+                # `&parent` needs an lvalue, but a call result is an rvalue.
+                # Materialise it into a temp first. A borrow-return call (e.g.
+                # `List.get` over a String) yields a non-owning view, so the
+                # temp must not be freed; an owned return is freed after the
+                # deep copy so it does not leak.
+                tmp = self._temp_name("t")
+                self._temp.decls.append(
+                    f"{self._indent()}{self._string_cname()} {tmp} = {parent};\n"
+                )
+                _cf = self._node_ztype(cast(zast.Call, _pp).callable)
+                if not (_cf and _cf.return_ownership == ZParamOwnership.BORROW):
+                    self._temp.frees.append(tmp)
+                    self._temp.string_set.add(tmp)
+                arg = f"&{tmp}"
+            else:
+                arg = f"&{parent}"
             return self._alloc_temp(f"z_String_copy({arg})")
         # string: .length field access
         if (
@@ -10173,6 +10194,16 @@ class CEmitter:
                 if method_fn.cname and not method_fn.is_native
                 else mangle_func_name(f"{cls_name}.{child}")
             )
+            # A user static method (no `:this` receiver param, e.g. a `create`
+            # constructor) takes no receiver — `path.parent` names the type,
+            # not an instance. The 2-segment form returns earlier (the
+            # type-name branch); this catches the 3-segment cross-unit form
+            # (`unit.Type.create`) whose parent is a dotted path. Native
+            # methods are excluded: their receiver isn't modelled as a
+            # `this_param_name` but they still take the parent as a receiver
+            # (e.g. `list.pop`).
+            if not method_fn.is_native and not method_fn.this_param_name:
+                return f"{method_cn}()"
             return f"{method_cn}({parent})"
 
         # io.file: protocol projection. `f.closer` / `f.seeker` emit
