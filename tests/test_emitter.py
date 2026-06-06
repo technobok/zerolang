@@ -13006,3 +13006,104 @@ class TestPositionalStringArgNoLeak:
             f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
         )
         assert result.stdout == "n=2\nn=2\nn=2\n"
+
+
+class TestOwningAutocallArgNoLeak:
+    """Regression: a bare no-arg function reference returning an owned String,
+    passed as a call argument (`s.has item: mk`), was treated as a trivial
+    atom and emitted inline (`z_has(s, z_mk())`) with no temp -- the returned
+    String was never bound to a freeable local and leaked (and for a
+    user-function consumer it produced an `&z_mk()` lvalue compile error). An
+    owning auto-call atom now hoists into a synth temp like any other
+    non-trivial arg, so scope cleanup frees it. Query collection methods
+    (has/delete/get/contains) borrow their argument and so leaked; store
+    methods (add/set/append) consumed the value and did not. The query params
+    also carry explicit BORROW ownership so their borrow intent is modelled."""
+
+    def test_set_query_owning_autocall_no_leak(self):
+        csource = emit_source(
+            'mk: function out String is { return "a".string }\n'
+            "main: function is {\n"
+            "    s: (Set of: String)\n"
+            '    s.add item: "a".string\n'
+            '    print "has: \\{s.has item: mk}"\n'
+            '    print "del: \\{s.delete item: mk}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "has: 1\ndel: 1\n"
+
+    def test_map_query_owning_autocall_no_leak(self):
+        csource = emit_source(
+            'mk: function out String is { return "k".string }\n'
+            "main: function is {\n"
+            "    m: (Map key: String value: u64)\n"
+            '    m.set key: "k".string value: 7.u64\n'
+            '    print "has: \\{m.has key: mk}"\n'
+            "    r: m.get key: mk\n"
+            '    match r case some then { print "got" } '
+            'case none then { print "miss" }\n'
+            '    print "del: \\{m.delete key: mk}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "has: 1\ngot\ndel: 1\n"
+
+    def test_list_contains_owning_autocall_no_leak(self):
+        csource = emit_source(
+            'mk: function out String is { return "x".string }\n'
+            "main: function is {\n"
+            "    l: (List of: String)\n"
+            '    l.append from: "x".string\n'
+            '    print "has: \\{l.contains item: mk}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "has: 1\n"
+
+    def test_owning_autocall_arg_to_user_fn_no_leak(self):
+        # The same inline owning auto-call produced an `&z_mk()` lvalue
+        # compile error when passed to a user function; hoisting fixes
+        # both the error and the leak.
+        csource = emit_source(
+            'mk: function out String is { return "abc".string }\n'
+            "useit: function {s: String} out u64 is { return s.length }\n"
+            "main: function is {\n"
+            "    n: useit s: mk\n"
+            '    print "n: \\{n}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "n: 3\n"
+
+    def test_owning_autocall_arg_in_loop_no_leak(self):
+        # The leak compounded per iteration when the call sat in a loop.
+        csource = emit_source(
+            'mk: function out String is { return "a".string }\n'
+            "main: function is {\n"
+            "    s: (Set of: String)\n"
+            '    s.add item: "a".string\n'
+            "    i: 0.u64\n"
+            "    for while i < 3.u64 loop {\n"
+            '        print "has: \\{s.has item: mk}"\n'
+            "        i = i + 1.u64\n"
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "has: 1\nhas: 1\nhas: 1\n"

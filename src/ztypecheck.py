@@ -5808,6 +5808,9 @@ class TypeChecker:
                         f"{mangled}.contains", ZTypeType.FUNCTION
                     )
                     self._set_child(contains_type, "item", elem_type)
+                    self.typing.set_child_ownership(
+                        contains_type, "item", ZParamOwnership.BORROW
+                    )
                     contains_type.return_type = t_bool
                     self._set_child(mono, "contains", contains_type)
                 # synthesize .sort method: function {:this}. Stable
@@ -5914,11 +5917,17 @@ class TypeChecker:
                 # synthesize .has method: function {item: of} out bool
                 has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
                 self._set_child(has_type, "item", elem_type)
+                self.typing.set_child_ownership(
+                    has_type, "item", ZParamOwnership.BORROW
+                )
                 has_type.return_type = t_bool
                 self._set_child(mono, "has", has_type)
                 # synthesize .delete method: function {item: of} out bool
                 delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
                 self._set_child(delete_type, "item", elem_type)
+                self.typing.set_child_ownership(
+                    delete_type, "item", ZParamOwnership.BORROW
+                )
                 delete_type.return_type = t_bool
                 self._set_child(mono, "delete", delete_type)
                 # synthesize .iterate method: function {:this} out
@@ -5977,6 +5986,7 @@ class TypeChecker:
                 #               scope exit and double-free with the map)
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
                 self._set_child(get_type, "key", key_type)
+                self.typing.set_child_ownership(get_type, "key", ZParamOwnership.BORROW)
                 if _is_valtype(value_type):
                     opt_template = self._resolve_name("optionval")
                 elif value_type.subtype == ZSubType.STRING:
@@ -5994,11 +6004,15 @@ class TypeChecker:
                 # synthesize .delete method: function {key: K} out bool
                 delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
                 self._set_child(delete_type, "key", key_type)
+                self.typing.set_child_ownership(
+                    delete_type, "key", ZParamOwnership.BORROW
+                )
                 delete_type.return_type = t_bool
                 self._set_child(mono, "delete", delete_type)
                 # synthesize .has method: function {key: K} out bool
                 has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
                 self._set_child(has_type, "key", key_type)
+                self.typing.set_child_ownership(has_type, "key", ZParamOwnership.BORROW)
                 has_type.return_type = t_bool
                 self._set_child(mono, "has", has_type)
                 # synthesize .iterate method: function {:this} out
@@ -10095,15 +10109,34 @@ class TypeChecker:
         if err:
             self._error(err, loc=loc)
 
+    def _atom_owning_autocall(self, op: zast.Operation) -> bool:
+        """True if `op` is a bare AtomId that auto-calls a no-arg function
+        returning a heap-owning value (String / reftype).
+
+        Such an atom is syntactically an identifier but semantically a call
+        producing a fresh owned value (`call_kind == REGULAR` is stamped on
+        the atom by the auto-call rule in `_check_path`). Treating it as
+        trivial would skip the per-arg hoist and emit the call inline
+        (`z_has(s, z_mk())`); a borrow-param callee then reads the result and
+        it is never bound to a freeable temp -> leak. A plain variable read
+        carries no call_kind and stays trivial.
+        """
+        if self.typing.call_kind.get(op.nodeid) != zast.CallKind.REGULAR:
+            return False
+        rt = self.typing.node_type.get(op.nodeid)
+        return rt is not None and rt.destructor_name is not None
+
     def _arg_is_trivial(self, arg: zast.NamedOperation) -> bool:
         """True iff `arg` is a hoisting-no-op: a bare AtomId (variable or
         numeric literal), a LabelValue, or an AtomString without
         interpolation. Anything else (Call, BinOp, DottedPath,
-        interpolated string) hoists into a synth temp.
+        interpolated string) hoists into a synth temp. A bare AtomId that
+        auto-calls a heap-owning no-arg function is NOT trivial -- it must
+        hoist so its result lands in a freeable temp.
         """
         op = arg.valtype
         if op.nodetype == NodeType.ATOMID:
-            return True
+            return not self._atom_owning_autocall(op)
         if op.nodetype == NodeType.LABELVALUE:
             return True
         if op.nodetype == NodeType.ATOMSTRING:
@@ -10115,7 +10148,7 @@ class TypeChecker:
         if op.nodetype == NodeType.EXPRESSION:
             inner = cast(zast.Expression, op).expression
             if inner.nodetype == NodeType.ATOMID:
-                return True
+                return not self._atom_owning_autocall(cast(zast.Operation, inner))
             if inner.nodetype == NodeType.LABELVALUE:
                 return True
         return False
