@@ -60,7 +60,7 @@ PROJECTIONS = {
 }
 
 # Examples whose types / type_children are compared. The .z typechecker resolves
-# the MAIN unit's FUNCTION and DATA definition signatures.
+# the MAIN unit's FUNCTION, DATA, and RECORD definition signatures.
 TYPES_SMOKE = [
     "hello",
     "factorial",
@@ -69,6 +69,7 @@ TYPES_SMOKE = [
     "swap",
     "multimod",
     "data",
+    "vector",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

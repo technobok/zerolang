@@ -102,10 +102,43 @@ resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: S
     ty.resolved.set key: key value: did
 }
 
-# resolveDef -- dispatch a main-unit definition by kind. Resolves functions and
-# data blocks; a top-level data block parses as an `expression` wrapping a
-# `datablock`, so unwrap one level and re-dispatch. Aggregate kinds arrive in
-# later slices.
+# resolveRecord -- resolve a record ObjectDef into a RECORD valtype: one child per
+# field (field name -> its type-ref shell), then the synthesized constructor /
+# equality children `create`/`==`/`!=` (shallow FUNCTION shells, JOIN-only -- they
+# carry no definedInUnit). Methods, parameterized / typedef fields, and generics
+# arrive in later slices.
+resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
+    rid: reg.newType name: defName typetype: ztypes.ztypetype.RECORD
+    rrid: rid
+    reg.setValtype typeId: rid value: true
+    fiter: rnode.isItems.iterate
+    for fm: fiter loop {
+        match (
+            fm
+        ) case namedoperation then {
+            fname: unitLabel o: fm.name
+            cid: resolveTyperefShell reg: reg typeExpr: fm.operation
+            ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+        } else {}
+    }
+    createName: "\{defName}.create".string
+    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: rid childName: "create" childTypeId: createId
+    eqName: "\{defName}.==".string
+    eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
+    neqName: "\{defName}.!=".string
+    neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+    ty.definedInUnit.set key: rrid value: unitName.string
+    key: "\{unitName}.\{defName}".string
+    ty.resolved.set key: key value: rid
+}
+
+# resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
+# blocks and records; a top-level data block parses as an `expression` wrapping a
+# `datablock`, so unwrap one level and re-dispatch. The other aggregate kinds arrive
+# in later slices.
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
@@ -115,6 +148,12 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
         resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
     } case datablock then {
         resolveData ty: ty reg: reg unitName: unitName defName: defName dnode: defn
+    } case objectdef then {
+        match (
+            defn.kind
+        ) case RECORD then {
+            resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+        } else {}
     } else {}
 }
 

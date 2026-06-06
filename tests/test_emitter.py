@@ -86,6 +86,7 @@ _EXAMPLE_OUTPUTS = {
     "strview": "hello world\n11\n111\n11\nhello world\n11\nhello world\nGreetings\n9\nGree\n4\nalice\n5\n",
     "text_protocol": "hello from MyLabel\na plain stringview\na heap string\n",
     "typed_data": "low: 1\nhigh: 251\nfirst prime: 2\n",
+    "vector": "vec = (3, 4)\n",
     "visibility": "point: 3, 4\nvalue: 42\ndone\n",
     "with_alias": "alice\n5\n30\nhello world\n",
 }
