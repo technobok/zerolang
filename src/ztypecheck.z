@@ -78,13 +78,43 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     ty.resolved.set key: key value: fid
 }
 
-# resolveDef -- dispatch a main-unit definition by kind. 4.5a resolves
-# functions; data blocks and the aggregate kinds arrive in later slices.
+# resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
+# child per element (ordinal name) plus a `tag` child typed `tag__i64`, mark it a
+# non-valtype, then record its defining unit + `{unit}.{name}` view. Untyped-int
+# elements only; typed / float / named / `out T` elements arrive with the examples
+# that exercise them.
+resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView dnode: zast.DataBlockData} is {
+    did: reg.newType name: defName typetype: ztypes.ztypetype.DATA
+    ddid: did
+    reg.setValtype typeId: did value: false
+    litId: reg.newType name: "literal_int" typetype: ztypes.ztypetype.RECORD
+    n: dnode.elements.length
+    ordinal: 0.u64
+    for while ordinal < n loop {
+        ename: "\{ordinal}".string
+        ty.setChild parentTypeId: did childName: ename.stringview childTypeId: litId
+        ordinal = ordinal + 1.u64
+    }
+    tagId: reg.newType name: "tag__i64" typetype: ztypes.ztypetype.RECORD
+    ty.setChild parentTypeId: did childName: "tag" childTypeId: tagId
+    ty.definedInUnit.set key: ddid value: unitName.string
+    key: "\{unitName}.\{defName}".string
+    ty.resolved.set key: key value: did
+}
+
+# resolveDef -- dispatch a main-unit definition by kind. Resolves functions and
+# data blocks; a top-level data block parses as an `expression` wrapping a
+# `datablock`, so unwrap one level and re-dispatch. Aggregate kinds arrive in
+# later slices.
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
     ) case functiondef then {
         resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn
+    } case expression then {
+        resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
+    } case datablock then {
+        resolveData ty: ty reg: reg unitName: unitName defName: defName dnode: defn
     } else {}
 }
 

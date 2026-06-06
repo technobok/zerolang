@@ -59,10 +59,17 @@ PROJECTIONS = {
     "unit": "SELECT name, is_main FROM unit ORDER BY name",
 }
 
-# Examples whose types / type_children are compared. The .z typechecker
-# resolves only the MAIN unit's own FUNCTION definitions so far, so these are
-# the function-only examples; `data` joins once its resolver lands.
-TYPES_SMOKE = ["hello", "factorial", "fibonacci", "mathutil", "swap", "multimod"]
+# Examples whose types / type_children are compared. The .z typechecker resolves
+# the MAIN unit's FUNCTION and DATA definition signatures.
+TYPES_SMOKE = [
+    "hello",
+    "factorial",
+    "fibonacci",
+    "mathutil",
+    "swap",
+    "multimod",
+    "data",
+]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
 # example's own unit, NOT the (monolithic ~500-type) system closure any
