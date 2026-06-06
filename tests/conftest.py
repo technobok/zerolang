@@ -150,6 +150,15 @@ def zenv_binary(tmp_path_factory):
     return _build_zerolang_unit("zenv", tmp_path_factory)
 
 
+@pytest.fixture(scope="session")
+def zc_binary(tmp_path_factory):
+    """Build the self-hosted compiler driver (src/zc.z) once per session.
+
+    This is the first build of the entire ported pipeline as one binary
+    (zparser + ztypecheck + zsqldump over the lexer/VFS/AST/type model)."""
+    return _build_zerolang_unit("zc", tmp_path_factory)
+
+
 def make_tokenizer(source: str) -> Tokenizer:
     """Create a Tokenizer from a source String."""
     fh = io.StringIO(source)

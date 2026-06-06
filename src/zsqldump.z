@@ -1,0 +1,385 @@
+# SQL dump of compiler state, ported from src/zsqldump.py.
+#
+# Serialises the parsed program and the typecheck output as SQL (schema
+# DDL, then INSERT rows) for the differential oracle. This slice emits the
+# parse-derived tables a skeleton typecheck can populate -- files,
+# ast_nodes and unit. The type / typed_node / symbol-table / conformance
+# stages arrive as the typechecker port grows.
+#
+# The ported AST carries no token or fsno linkage, so the tokens table and
+# the ast_nodes token_id / file_id columns are emitted empty / NULL (token
+# and node identity are already covered by the lexer and parser
+# differentials). There is no emitter dependency: the emitted_lines stage
+# is omitted. Only the three populated tables are declared in the schema;
+# the dump is compared by loading it into SQLite and projecting each table
+# id-independently, so the declarations need only carry the queried
+# columns.
+#
+# Output is accumulated on the ZDumper's `acc` field: every emitter is a
+# method that appends to it and recurses through `this`, mirroring the
+# parser's method-recursion style (an owned-String accumulator threaded by
+# return value runs into self-reassignment ownership errors).
+
+Node: zast.Node
+
+# --- SQL value formatting (stateless) ---
+
+# sqlStr -- `s` as a SQL single-quoted string literal, embedded quotes doubled.
+sqlStr: function {s: StringView} out String is {
+    inner: s.replace needle: "'" replacement: "''"
+    acc: "'".string
+    acc.append s: inner.stringview
+    acc.append s: "'"
+    return acc
+}
+
+# optLabel -- a namedoperation label as an owned String ("" when absent).
+optLabel: function {o: (Option t: String)} out String is {
+    match (
+        o
+    ) case some then {
+        return o.string
+    } case none then {
+        return "".string
+    }
+}
+
+# boolNum -- SQL integer boolean.
+boolNum: function {b: bool} out String is {
+    match (
+        b
+    ) case true then {
+        return "1".string
+    } case false then {
+        return "0".string
+    }
+}
+
+# optIdStr -- an optional id as decimal text, or "NULL".
+optIdStr: function {o: (optionval t: u64)} out String is {
+    match (
+        o
+    ) case some then {
+        return "\{o}".string
+    } case none then {
+        return "NULL".string
+    }
+}
+
+# unitdefNodeId -- the nodeid of a unitdef Node (0 when not a unitdef).
+unitdefNodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case unitdef then {
+        return n.nodeid
+    } else {
+        return 0.u32
+    }
+}
+
+# schemaSql -- DDL for the populated tables. SQLite ignores the unused
+# REFERENCES/DEFAULT decoration the reference carries, so only the columns
+# the projections read are declared.
+schemaSql: function {} out String is {
+    acc: "".string
+    acc.append s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
+    return acc
+}
+
+# --- the dumper ---
+
+ZDumper: class {
+    acc: String
+} as {
+    # emit -- one ast_nodes row. token_id and file_id are NULL (no token
+    # linkage in the ported AST); synth_origin is NULL (the parser sets
+    # none). nameSql is the pre-escaped context label.
+    emit: function {:this id: u32 line: u32 col: u32 kind: StringView nameSql: StringView} is {
+        row: "INSERT INTO ast_nodes VALUES (\{id}, '\{kind}', NULL, \{nameSql}, NULL, \{line}, \{col}, NULL);\n"
+        this.acc.append s: row.stringview
+    }
+
+    # files stage.
+    appendFiles: function {:this vfs: zvfs.ZVfs} is {
+        ids: (List of: u32)
+        paths: (List of: String)
+        vfs.fileTable outIds: ids outPaths: paths
+        i: 0.u64
+        n: ids.length
+        for while i < n loop {
+            fid: ids.get i: i
+            p: paths.get i: i
+            ps: sqlStr s: p.stringview
+            row: "INSERT INTO files VALUES (\{fid}, \{ps});\n"
+            this.acc.append s: row.stringview
+            i = i + 1.u64
+        }
+    }
+
+    # walkOpt -- walk an optional child when present.
+    walkOpt: function {:this o: (Option t: Node) nameSql: StringView} is {
+        match (
+            o
+        ) case some then {
+            this.walkNode node: o nameSql: nameSql
+        } case none then {}
+    }
+
+    # walkUnwrapped -- walk a namedoperation child's wrapped operation, not
+    # the wrapper. Used in the positions the reference stores as name->node
+    # maps (unit body, function parameters / as-items, object members, if /
+    # for conditions): node_children yields the values, so the wrapper
+    # produces no ast_nodes row.
+    walkUnwrapped: function {:this wrapper: Node nameSql: StringView} is {
+        match (
+            wrapper
+        ) case namedoperation then {
+            this.walkNode node: wrapper.operation nameSql: nameSql
+        } else {
+            this.walkNode node: wrapper nameSql: nameSql
+        }
+    }
+
+    # walkNode -- emit `node`'s row (labelled nameSql) and recurse. Mirrors
+    # the reference node_children: wrapper positions unwrap (walkUnwrapped),
+    # list positions (call arguments, data elements, for postconditions, if
+    # / case clauses, statements, string parts) keep their child nodes.
+    walkNode: function {:this node: Node nameSql: StringView} is {
+        match (
+            node
+        ) case error then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Error" nameSql: nameSql
+        } case atomid then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "AtomId" nameSql: nameSql
+        } case labelvalue then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "LabelValue" nameSql: nameSql
+        } case stringchunk then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "StringChunk" nameSql: nameSql
+        } case binop then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "BinOp" nameSql: nameSql
+            this.walkNode node: node.lhs nameSql: nameSql
+            this.walkNode node: node.operator nameSql: nameSql
+            this.walkNode node: node.rhs nameSql: nameSql
+        } case atomstring then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "AtomString" nameSql: nameSql
+            spiter: node.stringparts.iterate
+            for sp: spiter loop {
+                this.walkNode node: sp nameSql: nameSql
+            }
+        } case dottedpath then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "DottedPath" nameSql: nameSql
+            this.walkNode node: node.parent nameSql: nameSql
+            this.walkNode node: node.child nameSql: nameSql
+        } case call then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Call" nameSql: nameSql
+            this.walkNode node: node.callable nameSql: nameSql
+            aiter: node.arguments.iterate
+            for arg: aiter loop {
+                this.walkNode node: arg nameSql: nameSql
+            }
+        } case typeofexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "TypeOfExpr" nameSql: nameSql
+            this.walkNode node: node.source nameSql: nameSql
+        } case namedoperation then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "NamedOperation" nameSql: nameSql
+            this.walkNode node: node.operation nameSql: nameSql
+        } case datablock then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Data" nameSql: nameSql
+            eiter: node.elements.iterate
+            for el: eiter loop {
+                this.walkNode node: el nameSql: nameSql
+            }
+            this.walkOpt o: node.outType nameSql: nameSql
+        } case yieldexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Yield" nameSql: nameSql
+            this.walkNode node: node.expr nameSql: nameSql
+        } case statement then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Statement" nameSql: nameSql
+            sliter: node.statements.iterate
+            for ln: sliter loop {
+                this.walkNode node: ln nameSql: nameSql
+            }
+        } case statementline then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "StatementLine" nameSql: nameSql
+            this.walkNode node: node.statementline nameSql: nameSql
+        } case assignment then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Assignment" nameSql: nameSql
+            this.walkNode node: node.value nameSql: nameSql
+        } case reassignment then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Reassignment" nameSql: nameSql
+            this.walkNode node: node.topath nameSql: nameSql
+            this.walkNode node: node.value nameSql: nameSql
+        } case swapstmt then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Swap" nameSql: nameSql
+            this.walkNode node: node.lhs nameSql: nameSql
+            this.walkNode node: node.rhs nameSql: nameSql
+        } case expression then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Expression" nameSql: nameSql
+            this.walkNode node: node.expression nameSql: nameSql
+        } case ifexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "If" nameSql: nameSql
+            cliter: node.clauses.iterate
+            for cl: cliter loop {
+                this.walkNode node: cl nameSql: nameSql
+            }
+            this.walkOpt o: node.elseclause nameSql: nameSql
+        } case ifclause then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "IfClause" nameSql: nameSql
+            coiter: node.conditions.iterate
+            for co: coiter loop {
+                this.walkUnwrapped wrapper: co nameSql: nameSql
+            }
+            this.walkNode node: node.statement nameSql: nameSql
+        } case forexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "For" nameSql: nameSql
+            fciter: node.conditions.iterate
+            for fc: fciter loop {
+                this.walkUnwrapped wrapper: fc nameSql: nameSql
+            }
+            this.walkOpt o: node.body nameSql: nameSql
+            fpiter: node.postconditions.iterate
+            for fp: fpiter loop {
+                this.walkNode node: fp nameSql: nameSql
+            }
+        } case doexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Do" nameSql: nameSql
+            this.walkNode node: node.statement nameSql: nameSql
+        } case withexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "With" nameSql: nameSql
+            this.walkNode node: node.value nameSql: nameSql
+            this.walkNode node: node.body nameSql: nameSql
+        } case caseexpr then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Case" nameSql: nameSql
+            this.walkNode node: node.subject nameSql: nameSql
+            cciter: node.clauses.iterate
+            for cc: cciter loop {
+                this.walkNode node: cc nameSql: nameSql
+            }
+            this.walkOpt o: node.elseclause nameSql: nameSql
+        } case caseclause then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "CaseClause" nameSql: nameSql
+            this.walkNode node: node.matcharm nameSql: nameSql
+            this.walkNode node: node.statement nameSql: nameSql
+        } case functiondef then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Function" nameSql: nameSql
+            this.walkOpt o: node.returntype nameSql: nameSql
+            piter: node.parameters.iterate
+            for pm: piter loop {
+                this.walkUnwrapped wrapper: pm nameSql: nameSql
+            }
+            this.walkOpt o: node.body nameSql: nameSql
+            faiter: node.asItems.iterate
+            for am: faiter loop {
+                this.walkUnwrapped wrapper: am nameSql: nameSql
+            }
+        } case objectdef then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "ObjectDef" nameSql: nameSql
+            oiiter: node.isItems.iterate
+            for oi: oiiter loop {
+                this.walkUnwrapped wrapper: oi nameSql: nameSql
+            }
+            oaiter: node.asItems.iterate
+            for oa: oaiter loop {
+                this.walkUnwrapped wrapper: oa nameSql: nameSql
+            }
+        } case unitdef then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Unit" nameSql: nameSql
+            ubiter: node.body.iterate
+            for ub: ubiter loop {
+                this.walkUnwrapped wrapper: ub nameSql: nameSql
+            }
+        } case program then {
+            this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Program" nameSql: nameSql
+        }
+    }
+
+    # appendUnitDefAndBody -- the unit's own ast_nodes row (labelled with
+    # the unit name), then each body definition's subtree labelled
+    # "<unit>.<def>". Mirrors the reference _collect_ast_nodes: the unit
+    # node is emitted directly and each definition subtree is walked under
+    # its own label.
+    appendUnitDefAndBody: function {:this unitdef: Node uname: StringView} is {
+        match (
+            unitdef
+        ) case unitdef then {
+            unameSql: sqlStr s: uname
+            this.emit id: unitdef.nodeid line: unitdef.lineno col: unitdef.colno kind: "Unit" nameSql: unameSql.stringview
+            biter: unitdef.body.iterate
+            for bm: biter loop {
+                this.appendBodyMember member: bm uname: uname
+            }
+        } else {}
+    }
+
+    appendBodyMember: function {:this member: Node uname: StringView} is {
+        match (
+            member
+        ) case namedoperation then {
+            dname: optLabel o: member.name
+            label: "\{uname}.\{dname}".string
+            labelSql: sqlStr s: label.stringview
+            this.walkNode node: member.operation nameSql: labelSql.stringview
+        } else {}
+    }
+
+    appendNodes: function {:this program: Node} is {
+        match (
+            program
+        ) case program then {
+            uiter: program.units.iterate
+            for u: uiter loop {
+                this.appendUnitFromNamedOp unitNamedOp: u
+            }
+        } else {}
+    }
+
+    appendUnitFromNamedOp: function {:this unitNamedOp: Node} is {
+        match (
+            unitNamedOp
+        ) case namedoperation then {
+            uname: optLabel o: unitNamedOp.name
+            this.appendUnitDefAndBody unitdef: unitNamedOp.operation uname: uname.stringview
+        } else {}
+    }
+
+    # unit stage.
+    appendUnits: function {:this program: Node typing: ztyping.ZTyping} is {
+        match (
+            program
+        ) case program then {
+            mainName: program.mainUnitName.string
+            uiter: program.units.iterate
+            for u: uiter loop {
+                this.appendUnitRow unitNamedOp: u mainName: mainName.stringview typing: typing
+            }
+        } else {}
+    }
+
+    appendUnitRow: function {:this unitNamedOp: Node mainName: StringView typing: ztyping.ZTyping} is {
+        match (
+            unitNamedOp
+        ) case namedoperation then {
+            uname: optLabel o: unitNamedOp.name
+            uid: unitdefNodeId n: unitNamedOp.operation
+            isMain: uname.stringview == mainName
+            unameSql: sqlStr s: uname.stringview
+            isMainStr: boolNum b: isMain
+            utidStr: optIdStr o: (typing.unitTypesById.get key: uid.u64)
+            row: "INSERT INTO unit VALUES (\{uid}, \{unameSql}, \{isMainStr}, \{utidStr});\n"
+            this.acc.append s: row.stringview
+        } else {}
+    }
+}
+
+# --- entry point ---
+
+# dumpSql -- the full dump: schema, then files, ast_nodes and unit rows.
+dumpSql: function {program: Node vfs: zvfs.ZVfs typing: ztyping.ZTyping} out String is {
+    d: ZDumper acc: schemaSql
+    d.appendFiles vfs: vfs
+    d.appendNodes program: program
+    d.appendUnits program: program typing: typing
+    return d.acc.copy
+}

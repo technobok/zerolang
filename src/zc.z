@@ -1,0 +1,79 @@
+# zerolang compiler driver, ported from src/zc.py.
+#
+# This slice wires the self-hosted pipeline far enough to dump SQL: it
+# parses a unit (over a stdlib + source VFS, like zc.py), runs the
+# skeleton typechecker, and writes the SQL dump. C emission is not wired
+# yet (the emitter is unported), so only --dump-sql is honoured.
+
+Node: zast.Node
+Parser: zparser.Parser
+
+main: function is {
+    argv: os.args
+    n: argv.length
+    if n < 2.u64 then {
+        io.eprintln "usage: zc <unitname> [--src DIR] [--system DIR] [--dump-sql FILE]"
+        os.exit code: 2.i32
+    }
+    u1: argv.get i: 1.u64
+    unitname: u1.copy
+    srcdir: ".".string
+    systemdir: "lib/system".string
+    dumpTarget: "-".string
+
+    # parse flags after the unit name; flag values are copied out of the
+    # (non-owning) argv element views.
+    i: 2.u64
+    for while i < n loop {
+        a: argv.get i: i
+        av: a.stringview
+        if av == "--src" then {
+            i = i + 1.u64
+            sv: argv.get i: i
+            srcdir = sv.copy
+        } else if av == "--system" then {
+            i = i + 1.u64
+            sv: argv.get i: i
+            systemdir = sv.copy
+        } else if av == "--dump-sql" then {
+            i = i + 1.u64
+            sv: argv.get i: i
+            dumpTarget = sv.copy
+        } else {}
+        i = i + 1.u64
+    }
+
+    # stdlib + source VFS: source is searched before the system library
+    # (mirrors zc.py's register/bind sequence). registerNull seeds the
+    # bare root the binds replace.
+    vfs: zvfs.ZVfs providers: (List of: zvfs.ProviderBox) entrytable: (zvfs.DentryTable entries: (List of: zvfs.dentry)) file_names: (List of: String) walk_cache: (Map key: String value: u32) rootid: 0.u32
+    nullRoot: vfs.registerNull
+    systemid: vfs.registerFS rootpath: systemdir.copy parentpath: "".string
+    srcid: vfs.registerFS rootpath: srcdir.copy parentpath: "".string
+    sysRoot: vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
+    rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+
+    p: Parser.create
+    prog: p.parse vfs: vfs rootid: rootid mainUnitName: unitname
+
+    match (
+        prog
+    ) case error then {
+        io.eprintln "zc: parse failed"
+        os.exit code: 1.i32
+    } else {
+        ty: ztypecheck.typecheck program: prog
+        sql: zsqldump.dumpSql program: prog vfs: vfs typing: ty
+        if dumpTarget.stringview == "-" then {
+            print sql.stringview
+        } else {
+            wr: io.writeText path: dumpTarget.stringview content: sql.stringview
+            match (
+                wr
+            ) case ok then {} case err then {
+                io.eprintln "zc: could not write SQL dump"
+                os.exit code: 1.i32
+            }
+        }
+    }
+}

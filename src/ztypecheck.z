@@ -1,0 +1,67 @@
+# Type checker, ported from src/ztypecheck.py.
+#
+# This slice is the walking skeleton: it consumes a frozen zast program
+# and produces a ztyping.ZTyping, registering one UNIT type per unit --
+# the first act of the reference TypeChecker, and the only typecheck
+# state the SQL `unit` table reads. Name resolution, body checking and
+# monomorphisation arrive as later slices fill in the method clusters.
+
+Node: zast.Node
+
+# unitLabel -- a unit/definition namedoperation label as an owned String
+# ("" when the operation carries no label).
+unitLabel: function {o: (Option t: String)} out String is {
+    match (
+        o
+    ) case some then {
+        return o.string
+    } case none then {
+        return "".string
+    }
+}
+
+# unitdefNodeId -- the nodeid of a unitdef Node (0 when not a unitdef).
+unitdefNodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case unitdef then {
+        return n.nodeid
+    } else {
+        return 0.u32
+    }
+}
+
+# registerUnit -- mint a UNIT type for one unit namedoperation and record
+# it in unitTypesById, keyed by the unit node's nodeid. Takes the whole
+# namedoperation by value so its name / operation field projections read
+# through a borrowed parameter (the field-projection-of-a-loop-binding
+# path over-frees).
+registerUnit: function {u: Node reg: ztypes.ZTypeRegistry ty: ztyping.ZTyping} is {
+    match (
+        u
+    ) case namedoperation then {
+        nm: unitLabel o: u.name
+        uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
+        opid: unitdefNodeId n: u.operation
+        ty.unitTypesById.set key: opid.u64 value: uid
+    } else {}
+}
+
+# typecheck -- entry point. Builds the typecheck-output container and
+# registers a UNIT type per unit. The registry is local: only the minted
+# ids are recorded (in the container), so it is freed at scope exit.
+typecheck: function {program: Node} out ztyping.ZTyping is {
+    reg: ztypes.newRegistry
+    ty: ztyping.newTyping
+    # null is the reference's first registered type.
+    reg.newType name: "null" typetype: ztypes.ztypetype.NULL
+    match (
+        program
+    ) case program then {
+        uiter: program.units.iterate
+        for u: uiter loop {
+            registerUnit u: u reg: reg ty: ty
+        }
+    } else {}
+    return ty
+}
