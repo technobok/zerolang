@@ -1,10 +1,17 @@
 # Type checker, ported from src/ztypecheck.py.
 #
-# This slice is the walking skeleton: it consumes a frozen zast program
-# and produces a ztyping.ZTyping, registering one UNIT type per unit --
-# the first act of the reference TypeChecker, and the only typecheck
-# state the SQL `unit` table reads. Name resolution, body checking and
-# monomorphisation arrive as later slices fill in the method clusters.
+# Slice 4.5a: registers one UNIT type per unit (the `unit` table) and resolves
+# the MAIN unit's top-level FUNCTION definition signatures into the type
+# registry -- each function plus its parameter children, with referenced
+# parameter types registered as shallow named shells. Mirrors the reference
+# `resolve_only_main` capability (no body walk, no generics, no system-wide
+# resolution); the SQL `types` / `type_children` tables read the result,
+# filtered to the example's own unit. Data blocks, records, variants, classes,
+# generics and body checking arrive in later slices.
+#
+# The registry is created by the caller and threaded in (not stored on the
+# ZTyping container), mirroring the reference's module-level type table: the
+# SQL dumper reads it as a separate argument.
 
 Node: zast.Node
 
@@ -31,18 +38,84 @@ unitdefNodeId: function {n: Node} out u32 is {
     }
 }
 
-# typecheck -- entry point. Builds the typecheck-output container and
-# registers a UNIT type per unit, keyed in unitTypesById by the unit
-# node's nodeid. The registry is local: only the minted ids are recorded
-# (in the container), so it is freed at scope exit.
-typecheck: function {program: Node} out ztyping.ZTyping is {
-    reg: ztypes.newRegistry
+# resolveTyperefShell -- register a SHALLOW named shell for a referenced type
+# (e.g. the `i64` in `n: i64`). The name is read straight off the atom; the
+# shell carries no members. Source-type rows never include these shells (they
+# fall outside `defined_in_unit`), but a `type_children` row joins to the
+# shell's name. Returns the shell's type id.
+resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node} out u64 is {
+    match (
+        typeExpr
+    ) case atomid then {
+        return (reg.newType name: typeExpr.name.stringview typetype: ztypes.ztypetype.RECORD)
+    } case labelvalue then {
+        return (reg.newType name: typeExpr.name.stringview typetype: ztypes.ztypetype.RECORD)
+    } else {
+        return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
+    }
+}
+
+# resolveFunction -- resolve a function definition signature into a FUNCTION
+# type: add one child per parameter (param name -> its type-ref shell), record
+# its defining unit (source-types filter), then register it under
+# `{unit}.{name}` in the resolved name-view. The two map `set`s each TAKE the
+# u64, so a copy is threaded and `resolved.set` is the last use of `fid`.
+resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData} is {
+    fid: reg.newType name: defName typetype: ztypes.ztypetype.FUNCTION
+    dfid: fid
+    piter: fnode.parameters.iterate
+    for pm: piter loop {
+        match (
+            pm
+        ) case namedoperation then {
+            pname: unitLabel o: pm.name
+            cid: resolveTyperefShell reg: reg typeExpr: pm.operation
+            ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
+        } else {}
+    }
+    ty.definedInUnit.set key: dfid value: unitName.string
+    key: "\{unitName}.\{defName}".string
+    ty.resolved.set key: key value: fid
+}
+
+# resolveDef -- dispatch a main-unit definition by kind. 4.5a resolves
+# functions; data blocks and the aggregate kinds arrive in later slices.
+resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
+    match (
+        defn
+    ) case functiondef then {
+        resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn
+    } else {}
+}
+
+# resolveUnitBody -- resolve every top-level definition signature in a unit.
+resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                defName: unitLabel o: bm.name
+                resolveDef ty: ty reg: reg unitName: unitName defName: defName.stringview defn: bm.operation
+            } else {}
+        }
+    } else {}
+}
+
+# typecheck -- entry point. Registers a UNIT type per unit (the `unit` table)
+# and resolves the main unit's definition signatures into the registry. The
+# registry is supplied by the caller and read by the SQL dumper.
+typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTyping is {
     ty: ztyping.newTyping
     # null is the reference's first registered type.
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
     match (
         program
     ) case program then {
+        mainName: program.mainUnitName.stringview
         uiter: program.units.iterate
         for u: uiter loop {
             match (
@@ -52,6 +125,9 @@ typecheck: function {program: Node} out ztyping.ZTyping is {
                 uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
                 opid: unitdefNodeId n: u.operation
                 ty.unitTypesById.set key: opid.u64 value: uid
+                if nm.stringview == mainName then {
+                    resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: u.operation
+                } else {}
             } else {}
         }
     } else {}

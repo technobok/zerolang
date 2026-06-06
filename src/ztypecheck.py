@@ -13217,6 +13217,34 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.ZTyping:
     return tc.typing
 
 
+def resolve_only_main(program: zast.Program) -> ztyping.ZTyping:
+    """Resolve every top-level definition SIGNATURE in the main unit, with no
+    function-body walk, no demand-driven expansion into other units, and no
+    monomorphization.
+
+    This is the matched oracle for the typechecker-port definition-resolution
+    differential (tests/test_dumpsql_z.py): the ported `ztypecheck.z` runs the
+    identical pass, so both build the same id-independent `types` /
+    `type_children` closure. It sits strictly between `TypeChecker.__init__`
+    (unit-type registration only) and a full `check()` (which walks bodies).
+    """
+    tc = TypeChecker(program)
+    mainunit = program.units.get(program.mainunitname)
+    if mainunit is not None:
+        tc._link_literal_typedefs()
+        main_func = mainunit.body.get("main")
+        if main_func is not None and main_func.nodetype == NodeType.FUNCTION:
+            tc._resolve_unit_name(program.mainunitname, "main")
+        for name in mainunit.body:
+            if name == "main":
+                continue
+            tc._resolve_unit_name(program.mainunitname, name)
+    tc._resolve_literal_defaults()
+    tc.typing.resolved = tc._build_resolved_name_view()
+    tc.typing.unit_types_by_id = dict(tc.unit_types_by_id)
+    return tc.typing
+
+
 def audit_type_annotations(typing: ztyping.ZTyping) -> List[str]:
     """Post-type-check validation: find Path nodes missing .type annotations.
 

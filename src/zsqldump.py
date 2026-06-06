@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS types (
     needs_destructor  BOOLEAN,
     destructor_name   TEXT,
     is_heap_allocated BOOLEAN,
-    cname             TEXT
+    cname             TEXT,
+    defined_in_unit   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS type_children (
@@ -362,6 +363,16 @@ def dump_sql(
         if n_ztype is not None:
             _register_type(n_ztype)
 
+    # defined_in_unit: the source unit a type is defined in, taken from the
+    # first segment of its qualified `{unit}.{member}` resolved-name-view key.
+    # Types pulled in only transitively (no name-view key), monomorphizations,
+    # and literal shells get NULL. The typechecker-port differential filters
+    # source types by this column.
+    defined_in: dict[int, str] = {}
+    for _rkey, _rzt in typing.resolved.items():
+        if "." in _rkey:
+            defined_in.setdefault(_rzt.type_id, _rkey.split(".", 1)[0])
+
     for ztype in all_types.values():
         # bound_id (GENERIC_PARAM markers) and data_owner_id (tag RECORDs)
         # are mutually exclusive by typetype; emit whichever is set under
@@ -387,7 +398,8 @@ def dump_sql(
             f"{_sql_bool((ztype.destructor_name is not None))}, "
             f"{_sql_str(ztype.destructor_name)}, "
             f"{_sql_bool(ztype.is_heap_allocated)}, "
-            f"{_sql_str(ztype.cname if ztype.cname else None)});"
+            f"{_sql_str(ztype.cname if ztype.cname else None)}, "
+            f"{_sql_str(defined_in.get(ztype.type_id))});"
         )
 
     # type_children: dumped directly from the flat typing.type_child

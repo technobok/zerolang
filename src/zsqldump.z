@@ -85,7 +85,63 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, typedef_base_id INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS type_children (type_id INTEGER, child_name TEXT NOT NULL, child_type_id INTEGER, position INTEGER, child_id INTEGER, is_private INTEGER, is_lock_field INTEGER, is_lock_arm INTEGER, default_expr TEXT, param_ownership INTEGER);\n"
     return acc
+}
+
+# optBoolSql -- an optional bool as SQL "1"/"0", or "NULL".
+optBoolSql: function {o: (optionval t: bool)} out String is {
+    match (
+        o
+    ) case some then {
+        return (boolNum b: o)
+    } case none then {
+        return "NULL".string
+    }
+}
+
+# parentIdSql -- the `parent_type_id` column: bound id if set, else data-owner
+# id, else NULL (mutually exclusive by typetype in the reference).
+parentIdSql: function {boundId: (optionval t: u64) ownerId: (optionval t: u64)} out String is {
+    match (
+        boundId
+    ) case some then {
+        return "\{boundId}".string
+    } case none then {
+        return (optIdStr o: ownerId)
+    }
+}
+
+# optStrSql -- an optional String as a SQL string literal, or "NULL".
+optStrSql: function {o: (Option t: String)} out String is {
+    match (
+        o
+    ) case some then {
+        return (sqlStr s: o.stringview)
+    } case none then {
+        return "NULL".string
+    }
+}
+
+# optStrSome -- "1" if the optional String is set, else "0" (needs_destructor).
+optStrSome: function {o: (Option t: String)} out String is {
+    match (
+        o
+    ) case some then {
+        return "1".string
+    } case none then {
+        return "0".string
+    }
+}
+
+# cnameSql -- a cname as a SQL string literal, or "NULL" when empty.
+cnameSql: function {c: StringView} out String is {
+    if c.length == 0.u64 then {
+        return "NULL".string
+    } else {
+        return (sqlStr s: c)
+    }
 }
 
 # --- the dumper ---
@@ -370,15 +426,62 @@ ZDumper: class {
             this.acc.append s: row.stringview
         } else {}
     }
+
+    # appendTypes -- one row per registered type, read by sequential id from
+    # the registry. The dumper emits the full (small) registry; the
+    # differential filters to the example's own unit via defined_in_unit.
+    appendTypes: function {:this reg: ztypes.ZTypeRegistry typing: ztyping.ZTyping} is {
+        n: reg.nextTypeId
+        tid: 0.u64
+        for while tid < n loop {
+            zt: reg.typeById.get key: tid
+            match (
+                zt
+            ) case some then {
+                nameSql: sqlStr s: zt.name.stringview
+                ttName: ztypes.ztypetypeName t: zt.typetype
+                ttSql: sqlStr s: ttName.stringview
+                parentSql: parentIdSql boundId: zt.boundId ownerId: zt.dataOwnerId
+                valSql: optBoolSql o: zt.isValtype
+                genSql: boolNum b: zt.isgeneric
+                tbSql: optIdStr o: zt.typedefBaseId
+                goSql: optIdStr o: zt.genericOriginId
+                ndSql: optStrSome o: zt.destructorName
+                dnSql: optStrSql o: zt.destructorName
+                heapSql: boolNum b: zt.isHeapAllocated
+                cnSql: cnameSql c: zt.cname.stringview
+                duSql: optStrSql o: (typing.definedInUnit.get key: tid)
+                row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{parentSql}, \{valSql}, \{genSql}, \{tbSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
+                this.acc.append s: row.stringview
+            } case none then {}
+            tid = tid + 1.u64
+        }
+    }
+
+    # appendTypeChildren -- one row per parent->child edge (function params).
+    # The private/lock/default columns are constant for SMOKE and
+    # param_ownership is NULL until ownership-annotated params land.
+    appendTypeChildren: function {:this typing: ztyping.ZTyping} is {
+        citer: typing.typeChild.iterate
+        for crow: citer loop {
+            cidSql: optIdStr o: (typing.childTypeById.get key: crow.childNameId)
+            cnSql: sqlStr s: crow.childName.stringview
+            line: "INSERT OR IGNORE INTO type_children VALUES (\{crow.parentTypeId}, \{cnSql}, \{cidSql}, \{crow.position}, \{crow.childNameId}, 0, 0, 0, NULL, NULL);\n"
+            this.acc.append s: line.stringview
+        }
+    }
+
 }
 
 # --- entry point ---
 
 # dumpSql -- the full dump: schema, then files, ast_nodes and unit rows.
-dumpSql: function {program: Node vfs: zvfs.ZVfs typing: ztyping.ZTyping} out String is {
+dumpSql: function {program: Node vfs: zvfs.ZVfs typing: ztyping.ZTyping reg: ztypes.ZTypeRegistry} out String is {
     d: ZDumper acc: schemaSql
     d.appendFiles vfs: vfs
     d.appendNodes program: program
     d.appendUnits program: program typing: typing
+    d.appendTypes reg: reg typing: typing
+    d.appendTypeChildren typing: typing
     return d.acc.copy
 }
