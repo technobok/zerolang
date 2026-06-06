@@ -7675,6 +7675,19 @@ class TypeChecker:
                 return dp.child.name
         return None
 
+    def _reassign_rhs_is_borrow_return_call(self, expr: zast.Expression) -> bool:
+        """True if the reassignment RHS is a call whose callee returns a
+        borrowed (non-owning) value — e.g. `List.get` / `Map.get` over a
+        reftype, or any `out T.borrow` function. The result aliases storage
+        the callee still owns; storing it in an owned reassignment target
+        would double-free it at scope / owner destruction. Reads the callable
+        type the RHS check already stamped on `node_type`."""
+        op = expr.expression
+        if op.nodetype != NodeType.CALL:
+            return False
+        t = self.typing.node_type.get(cast(zast.Call, op).callable.nodeid)
+        return t is not None and t.return_ownership == ZParamOwnership.BORROW
+
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
         """Type-check a `path = expr` reassignment. Thin wrapper that
         builds the typed mirror after the inner runs."""
@@ -7742,7 +7755,25 @@ class TypeChecker:
         # that doesn't alias the source, so the source neither needs
         # invalidation nor gets rejected when borrowed.
         if existing and not _is_valtype(existing):
-            rhs_root = self._get_arg_root_name(reassign.value)
+            # A borrow-return call RHS (a non-owning view, e.g. List.get /
+            # Map.get over a reftype) cannot be stored in an owned target —
+            # the view double-frees when the target's storage is destroyed.
+            # Reject it; `.copy` is the escape hatch (`(call).copy` is a
+            # projection, not a CALL, so it is exempt below).
+            _rhs_borrow_call = self._reassign_rhs_is_borrow_return_call(reassign.value)
+            if _rhs_borrow_call:
+                self._error(
+                    "Cannot reassign to a borrow-return value (a non-owning "
+                    "view, e.g. a `List.get` / `Map.get` result over a "
+                    "reftype) — it would be double-freed when the target's "
+                    "storage is destroyed",
+                    loc=reassign.start,
+                    err=ERR.OWNERERROR,
+                    hint="copy it with `.copy` (e.g. `x = (list.get i: i).copy`)",
+                )
+            rhs_root = (
+                None if _rhs_borrow_call else self._get_arg_root_name(reassign.value)
+            )
             rhs_is_copy = self._rhs_is_copy_projection(reassign.value)
             if rhs_root and not rhs_is_copy:
                 rhs_var = self.symtab.lookup_var(rhs_root)

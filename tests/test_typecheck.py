@@ -261,6 +261,46 @@ class TestAssignment:
         )
         assert any("borrow" in e.msg.lower() for e in errors), [e.msg for e in errors]
 
+    def test_reassign_owned_local_to_borrow_return_rejected(self):
+        """An owned local reassigned to a borrow-return call (a `List.get`
+        over a reftype is a non-owning view) would double-free at scope exit
+        — rejected; the user must `.copy`."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  items: (List of: String)\n"
+            '  items.append "a".string\n'
+            '  s: "x".string\n'
+            "  s = items.get i: 0.u64\n"
+            "}\n"
+        )
+        assert any(
+            "reassign" in e.msg.lower() and "borrow" in e.msg.lower() for e in errors
+        ), [e.msg for e in errors]
+
+    def test_reassign_owned_local_to_borrow_return_dot_copy_ok(self):
+        """`.copy` on the borrow-return makes a fresh owned value — allowed."""
+        check_ok(
+            "main: function is {\n"
+            "  items: (List of: String)\n"
+            '  items.append "a".string\n'
+            '  s: "x".string\n'
+            "  s = (items.get i: 0.u64).copy\n"
+            "}\n"
+        )
+
+    def test_reassign_reftype_field_to_borrow_return_rejected(self):
+        """The same rule for a reftype field target (a class field is owned)."""
+        errors = check_errors(
+            "h: class { msg: String }\n"
+            "main: function is {\n"
+            "  items: (List of: String)\n"
+            '  items.append "a".string\n'
+            '  a: h msg: "init".string\n'
+            "  a.msg = items.get i: 0.u64\n"
+            "}\n"
+        )
+        assert any("borrow" in e.msg.lower() for e in errors), [e.msg for e in errors]
+
     def test_reftype_field_reassign_with_inline_copy_keeps_source_live(self):
         """A `.copy` projection on the RHS produces a fresh owned value;
         the source stays live so subsequent uses must succeed. Was
