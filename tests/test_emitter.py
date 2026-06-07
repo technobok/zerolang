@@ -882,6 +882,56 @@ class TestBareReftypeBindNoUseAfterFree:
         assert result.stdout == "len 0\n"
 
 
+class TestBorrowedViewFieldProjectionNoDoubleFree:
+    """Pin: reading an owning struct FIELD off a borrowed `Map.get`
+    `OptionView` and passing it to a borrow parameter must not free the
+    field at scope exit.
+
+    `m.get` over a reftype value returns a non-owning `OptionView`; a plain
+    field read off it (`got.note`, an `Option<String>`) is a shallow struct
+    copy aliasing the map-owned heap. The synth call-arg-hoist temp must
+    route to `borrowed_vars` so scope cleanup skips it — otherwise its
+    destructor frees a buffer the map still owns (use-after-free / double
+    free). The field is a stack-stored owning struct (`is_heap_allocated`
+    false), the case the heap-only field-alias gate missed.
+    """
+
+    _SRC = (
+        "Holder: class {\n"
+        "    note: (Option t: String)\n"
+        "}\n"
+        "peek: function {o: (Option t: String)} is {\n"
+        "    match (\n"
+        "        o\n"
+        "    ) case some then {\n"
+        '        print "has"\n'
+        "    } case none then {\n"
+        '        print "none"\n'
+        "    }\n"
+        "}\n"
+        "main: function is {\n"
+        "    m: (Map key: u64 value: Holder)\n"
+        '    h: Holder note: (Option.some "hi".string)\n'
+        "    m.set key: 1 value: h\n"
+        "    got: m.get key: 1\n"
+        "    match (\n"
+        "        got\n"
+        "    ) case some then {\n"
+        "        peek o: got.note\n"
+        "    } case none then {}\n"
+        '    print "done"\n'
+        "}"
+    )
+
+    def test_optionview_field_projection_is_asan_clean(self):
+        csource = emit_source(self._SRC)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "has\ndone\n"
+
+
 class TestForWhileCallCondReEvaluates:
     """Pin: a for-loop's `while` condition that wraps a function call
     on per-iteration mutable state must re-evaluate each iteration.

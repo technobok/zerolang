@@ -10974,16 +10974,20 @@ class CEmitter:
         if parent_t is None:
             return False
         member = self.typing.child_of(parent_t, dp.child.name)
-        # Only a heap-allocated reftype field (e.g. a Set / List / class,
-        # stored as a POINTER the parent owns) yields a pointer-alias temp
-        # that must not be freed here. A protocol/facet projection or any
-        # stack-stored member synthesises a FRESH owned value the temp does
-        # own — leave those on the normal cleanup path.
+        # A plain field read (`(*parent).field`) is always a shallow struct
+        # copy: the temp aliases the parent's owned heap data, so destroying
+        # it double-frees the field (whose owner may have moved into a
+        # container via the very call the temp feeds). This holds for a
+        # heap-allocated reftype field (Set / List / class — a pointer the
+        # parent owns) AND for a stack-stored owning struct (e.g. an
+        # `Option<String>` field read off a borrowed `Map.get` view). Only a
+        # protocol/facet projection synthesises a FRESH wrapper the temp
+        # genuinely owns — leave those on the normal cleanup path.
         return (
             member is not None
-            and member.typetype != ZTypeType.FUNCTION
+            and member.typetype
+            not in (ZTypeType.FUNCTION, ZTypeType.PROTOCOL, ZTypeType.FACET)
             and member.destructor_name is not None
-            and member.is_heap_allocated
         )
 
     def _call_has_string_arg(self, call: zast.Call) -> bool:
