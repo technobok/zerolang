@@ -83,6 +83,8 @@ TYPES_SMOKE = [
     "unions",
     "classes",
     "path_locks",
+    "create_null",
+    "constructors",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
