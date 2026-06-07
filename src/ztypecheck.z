@@ -131,6 +131,27 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             pname: unitLabel o: pm.name
             cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
             ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
+            tn: atomName n: pm.operation
+            if tn.length == 0.u64 then {} else {
+                rkey: "\{unitName}.\{tn}".string
+                rr: ty.resolved.get key: rkey
+                match (
+                    rr
+                ) case some then {
+                    tt: reg.typetypeOf typeId: rr
+                    isref: false
+                    match (
+                        tt
+                    ) case UNION then {
+                        isref = true
+                    } case CLASS then {
+                        isref = true
+                    } else {}
+                    if isref then {
+                        ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
+                    } else {}
+                } case none then {}
+            }
         } else {}
     }
     ty.definedInUnit.set key: dfid value: unitName.string
@@ -313,6 +334,59 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
     ty.resolved.set key: key value: vid
 }
 
+# resolveUnion -- resolve a union ObjectDef into a UNION reference type: a child
+# per arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell),
+# a synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), then any
+# as-block methods. Unions are reference types (is_valtype false); they have no
+# `create` (bare construction is disabled) and no `==`/`!=`. A union keeps a
+# destructor unless every arm is `null` (Priority elides it; IntResult/Result/Typed
+# keep it). Custom-DATA tags + generics arrive later.
+resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
+    uid: reg.newType name: defName typetype: ztypes.ztypetype.UNION
+    uuid: uid
+    reg.setValtype typeId: uid value: false
+    allNull: true
+    fiter: vnode.isItems.iterate
+    for fm: fiter loop {
+        match (
+            fm
+        ) case namedoperation then {
+            aname: unitLabel o: fm.name
+            an: atomName n: fm.operation
+            if an.stringview == "null" then {} else {
+                allNull = false
+            }
+            cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+            ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
+        } else {}
+    }
+    tagName: "\{defName}:tag:data".string
+    tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+    ty.setChild parentTypeId: uid childName: "tag" childTypeId: tagId
+    aiter: vnode.asItems.iterate
+    for am: aiter loop {
+        match (
+            am
+        ) case namedoperation then {
+            mname: unitLabel o: am.name
+            qname: "\{defName}.\{mname}".string
+            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            match (
+                mido
+            ) case some then {
+                ty.setChild parentTypeId: uid childName: mname.stringview childTypeId: mido
+            } else {}
+        } else {}
+    }
+    if allNull then {} else {
+        dn: "\{defName}_destroy".string
+        reg.setDestructorName typeId: uid name: dn.stringview
+    }
+    ty.definedInUnit.set key: uuid value: unitName.string
+    key: "\{unitName}.\{defName}".string
+    ty.resolved.set key: key value: uid
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
 # blocks, records and variants; a top-level data block parses as an `expression`
 # wrapping a `datablock`, so unwrap one level and re-dispatch. The other aggregate
@@ -333,6 +407,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
         } case VARIANT then {
             resolveVariant ty: ty reg: reg unitName: unitName defName: defName vnode: defn
+        } case UNION then {
+            resolveUnion ty: ty reg: reg unitName: unitName defName: defName vnode: defn
         } else {}
     } else {}
 }
