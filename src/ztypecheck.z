@@ -80,6 +80,63 @@ resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: St
     return (reg.newType name: nm typetype: ztypes.ztypetype.RECORD)
 }
 
+# isStripMarker -- true for a dotted-path leaf that is an ownership or access marker
+# (`.lock`/`.borrow`/`.take`/`.private`/`.public`); a type reference peels these to
+# reach the underlying base type.
+isStripMarker: function {name: StringView} out bool is {
+    if name == "lock" then { return true } else {}
+    if name == "borrow" then { return true } else {}
+    if name == "take" then { return true } else {}
+    if name == "private" then { return true } else {}
+    if name == "public" then { return true } else {}
+    return false
+}
+
+# pathOwnership -- the ownership a param/field type expr declares via a `.lock`/
+# `.borrow`/`.take` dotted-path leaf, or none. (Only `.lock` is valid on a field; all
+# three on a param.)
+pathOwnership: function {n: Node} out (optionval t: ztypes.zparamownership) is {
+    match (
+        n
+    ) case dottedpath then {
+        cn: atomName n: n.child
+        if cn.stringview == "lock" then {
+            return (optionval.some ztypes.zparamownership.LOCK)
+        } else {}
+        if cn.stringview == "borrow" then {
+            return (optionval.some ztypes.zparamownership.BORROW)
+        } else {}
+        if cn.stringview == "take" then {
+            return (optionval.some ztypes.zparamownership.TAKE)
+        } else {}
+        return (optionval.none ztypes.zparamownership)
+    } else {
+        return (optionval.none ztypes.zparamownership)
+    }
+}
+
+# baseTypeName -- the underlying base type name of a type expr, peeling `.lock`/
+# `.private`/etc. dotted-path markers (`Container.private.lock` -> `Container`,
+# `this.lock` -> `this`); the atom name for a bare atom; "" otherwise.
+baseTypeName: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.string
+    } case labelvalue then {
+        return n.name.string
+    } case dottedpath then {
+        cn: atomName n: n.child
+        if (isStripMarker name: cn.stringview) then {
+            return (baseTypeName n: n.parent)
+        } else {
+            return "".string
+        }
+    } else {
+        return "".string
+    }
+}
+
 # resolveTyperefShell -- register a SHALLOW named shell for a referenced type
 # (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
 # `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
@@ -108,6 +165,13 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
             } else {}
         }
         return (reg.newType name: suffix.stringview typetype: ztypes.ztypetype.RECORD)
+    } case dottedpath then {
+        cm: atomName n: typeExpr.child
+        if (isStripMarker name: cm.stringview) then {
+            return (resolveTyperefShell reg: reg typeExpr: typeExpr.parent thisName: thisName)
+        } else {
+            return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
+        }
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
     }
@@ -157,18 +221,25 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             pname: unitLabel o: pm.name
             cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
             ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
-            tn: atomName n: pm.operation
-            isref: false
-            if tn.stringview == "this" then {
-                isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
-            } else {
-                if tn.length == 0.u64 then {} else {
-                    isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
+            pown: pathOwnership n: pm.operation
+            match (
+                pown
+            ) case some then {
+                ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: pown
+            } case none then {
+                tn: atomName n: pm.operation
+                isref: false
+                if tn.stringview == "this" then {
+                    isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
+                } else {
+                    if tn.length == 0.u64 then {} else {
+                        isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
+                    }
                 }
+                if isref then {
+                    ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
+                } else {}
             }
-            if isref then {
-                ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
-            } else {}
         } else {}
     }
     ty.definedInUnit.set key: dfid value: unitName.string
@@ -476,17 +547,27 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     ty.resolved.set key: key value: uid
 }
 
-# fieldTypeNeedsCleanup -- true when a class field of the named type owns heap data
-# (so the holder needs a destructor): a native heap type (String/List/Map/Set) or an
-# in-unit reference type (class/union; a reftype field is owned). Scalars, valtypes,
-# and names that don't resolve to an in-unit reftype need no cleanup. A scaffold-stage
-# name check for the natives -- system types carry no real id under resolve-only-main.
-fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView} out bool is {
+# fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder keeps
+# a destructor): a `.lock` field (its borrow is released at scope exit), a native heap
+# type (String/List/Map/Set), or an in-unit type that itself HAS a destructor
+# (`reg.hasDestructorName`). A scalar field, or an owned class/union field whose type
+# has no destructor, needs none. Name check for the natives is a scaffold-stage
+# approximation (system types carry no real id under resolve-only-main).
+fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView isLock: bool} out bool is {
+    if isLock then { return true } else {}
     if name == "String" then { return true } else {}
     if name == "List" then { return true } else {}
     if name == "Map" then { return true } else {}
     if name == "Set" then { return true } else {}
-    return (nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: name)
+    rkey: "\{unitName}.\{name}".string
+    rr: ty.resolved.get key: rkey
+    match (
+        rr
+    ) case some then {
+        return (reg.hasDestructorName typeId: rr)
+    } case none then {
+        return false
+    }
 }
 
 # resolveClass -- resolve a class ObjectDef into a CLASS reference type: a child per
@@ -509,8 +590,15 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             fm
         ) case namedoperation then {
             fname: unitLabel o: fm.name
-            ftn: atomName n: fm.operation
-            if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview) then {
+            ftn: baseTypeName n: fm.operation
+            flock: pathOwnership n: fm.operation
+            isLock: false
+            match (
+                flock
+            ) case some then {
+                isLock = true
+            } case none then {}
+            if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
                 needsDtor = true
             } else {}
             cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
