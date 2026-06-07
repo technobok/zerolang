@@ -175,20 +175,29 @@ resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
 }
 
 # resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
-# child per element (ordinal name) plus a `tag` child typed `tag__i64`, mark it a
-# non-valtype, then record its defining unit + `{unit}.{name}` view. Untyped-int
-# elements only; typed / float / named / `out T` elements arrive with the examples
-# that exercise them.
+# child per element (the element's own label when present, else its ordinal) plus a
+# `tag` child typed `tag__i64`, mark it a non-valtype, then record its defining unit
+# + `{unit}.{name}` view. Untyped-int elements only; typed / float / `out T`
+# elements arrive with the examples that exercise them.
 resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView dnode: zast.DataBlockData} is {
     did: reg.newType name: defName typetype: ztypes.ztypetype.DATA
     ddid: did
     reg.setValtype typeId: did value: false
     litId: reg.newType name: "literal_int" typetype: ztypes.ztypetype.RECORD
-    n: dnode.elements.length
     ordinal: 0.u64
-    for while ordinal < n loop {
-        ename: "\{ordinal}".string
-        ty.setChild parentTypeId: did childName: ename.stringview childTypeId: litId
+    eiter: dnode.elements.iterate
+    for el: eiter loop {
+        match (
+            el
+        ) case namedoperation then {
+            nm: unitLabel o: el.name
+            if nm.length == 0.u64 then {
+                ord: "\{ordinal}".string
+                ty.setChild parentTypeId: did childName: ord.stringview childTypeId: litId
+            } else {
+                ty.setChild parentTypeId: did childName: nm.stringview childTypeId: litId
+            }
+        } else {}
         ordinal = ordinal + 1.u64
     }
     tagId: reg.newType name: "tag__i64" typetype: ztypes.ztypetype.RECORD
@@ -334,13 +343,62 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
     ty.resolved.set key: key value: vid
 }
 
+# dottedParentName -- the parent atom name of a `parent.child` dottedpath Node, ""
+# for anything else. Matching the Node param narrows it cleanly.
+dottedParentName: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomName n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+# unionCustomTagId -- a union's custom DATA tag, if any: an `as { tag: <data>.tag }`
+# item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
+# none when absent or not a DATA (the union then synthesizes its own tag wrapper).
+unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView asItems: (List of: Node)} out (optionval t: u64) is {
+    iter: asItems.iterate
+    for am: iter loop {
+        match (
+            am
+        ) case namedoperation then {
+            nm: unitLabel o: am.name
+            if nm.stringview == "tag" then {
+                pn: dottedParentName n: am.operation
+                if pn.length == 0.u64 then {} else {
+                    rkey: "\{unitName}.\{pn}".string
+                    rr: ty.resolved.get key: rkey
+                    match (
+                        rr
+                    ) case some then {
+                        tt: reg.typetypeOf typeId: rr
+                        isdata: false
+                        match (
+                            tt
+                        ) case DATA then {
+                            isdata = true
+                        } else {}
+                        if isdata then {
+                            return (optionval.some rr)
+                        } else {}
+                    } case none then {}
+                }
+            } else {}
+        } else {}
+    }
+    return (optionval.none u64)
+}
+
 # resolveUnion -- resolve a union ObjectDef into a UNION reference type: a child
 # per arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell),
 # a synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), then any
 # as-block methods. Unions are reference types (is_valtype false); they have no
 # `create` (bare construction is disabled) and no `==`/`!=`. A union keeps a
 # destructor unless every arm is `null` (Priority elides it; IntResult/Result/Typed
-# keep it). Custom-DATA tags + generics arrive later.
+# keep it). A custom DATA tag (`as { tag: <data>.tag }`) becomes the `tag` child in
+# place of the synth wrapper; generics arrive later.
 resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
     uid: reg.newType name: defName typetype: ztypes.ztypetype.UNION
     uuid: uid
@@ -360,8 +418,16 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
         } else {}
     }
-    tagName: "\{defName}:tag:data".string
-    tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+    customTag: unionCustomTagId ty: ty reg: reg unitName: unitName asItems: vnode.asItems
+    tagId: 0.u64
+    match (
+        customTag
+    ) case some then {
+        tagId = customTag
+    } case none then {
+        tagName: "\{defName}:tag:data".string
+        tagId = reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+    }
     ty.setChild parentTypeId: uid childName: "tag" childTypeId: tagId
     aiter: vnode.asItems.iterate
     for am: aiter loop {

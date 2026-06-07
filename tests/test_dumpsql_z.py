@@ -79,6 +79,7 @@ TYPES_SMOKE = [
     "variants",
     "equality",
     "result",
+    "unions",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
