@@ -209,7 +209,7 @@ nameIsInUnitReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
 # entry in the resolved name-view. Returns the FUNCTION type id (a record method
 # binds it as a child; a free function discards it). The map `set`s TAKE the u64,
 # so copies are threaded for `definedInUnit.set` and the returned id.
-resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView} out u64 is {
+resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView skipThisType: bool} out u64 is {
     fid: reg.newType name: defName typetype: ztypes.ztypetype.FUNCTION
     dfid: fid
     rfid: fid
@@ -218,27 +218,36 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
         match (
             pm
         ) case namedoperation then {
-            pname: unitLabel o: pm.name
-            cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
-            ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
-            pown: pathOwnership n: pm.operation
-            match (
-                pown
-            ) case some then {
-                ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: pown
-            } case none then {
-                tn: atomName n: pm.operation
-                isref: false
-                if tn.stringview == "this" then {
-                    isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
-                } else {
-                    if tn.length == 0.u64 then {} else {
-                        isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
-                    }
-                }
-                if isref then {
-                    ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
+            skipParam: false
+            if skipThisType then {
+                ptn: atomName n: pm.operation
+                if ptn.stringview == "this" then {
+                    skipParam = true
                 } else {}
+            } else {}
+            if skipParam then {} else {
+                pname: unitLabel o: pm.name
+                cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
+                ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
+                pown: pathOwnership n: pm.operation
+                match (
+                    pown
+                ) case some then {
+                    ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: pown
+                } case none then {
+                    tn: atomName n: pm.operation
+                    isref: false
+                    if tn.stringview == "this" then {
+                        isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
+                    } else {
+                        if tn.length == 0.u64 then {} else {
+                            isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
+                        }
+                    }
+                    if isref then {
+                        ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
+                    } else {}
+                }
             }
         } else {}
     }
@@ -256,10 +265,105 @@ resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     match (
         op
     ) case functiondef then {
-        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName))
+        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: false))
     } else {
         return (optionval.none u64)
     }
+}
+
+# resolveSpecFn -- resolve one facet/protocol is-block spec method (a namedoperation
+# whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
+# resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
+# nothing (the reference returns no type), so the spec keeps only its real params.
+resolveSpecFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView qname: StringView thisName: StringView op: Node} out (optionval t: u64) is {
+    match (
+        op
+    ) case functiondef then {
+        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: true))
+    } else {
+        return (optionval.none u64)
+    }
+}
+
+# markerTargetId -- the FACET/PROTOCOL type a conformance as-item points at
+# (`m: measurable` / `myreader: Reader`), or none for a method / `create: null` /
+# any other as-item. The target must already be resolved (defined earlier in the unit).
+markerTargetId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView op: Node} out (optionval t: u64) is {
+    tn: atomName n: op
+    if tn.length == 0.u64 then {
+        return (optionval.none u64)
+    } else {}
+    rkey: "\{unitName}.\{tn}".string
+    rr: ty.resolved.get key: rkey
+    match (
+        rr
+    ) case some then {
+        tt: reg.typetypeOf typeId: rr
+        match (
+            tt
+        ) case FACET then {
+            return (optionval.some rr)
+        } case PROTOCOL then {
+            return (optionval.some rr)
+        } else {
+            return (optionval.none u64)
+        }
+    } case none then {
+        return (optionval.none u64)
+    }
+}
+
+# attachMethods -- resolve an as-block's method items (namedoperation -> functiondef)
+# as children of `parentId`, returning whether one is named `create` (so the caller
+# skips the synth create). Takes the item list by value so its iterator's lock is
+# released on return -- letting attachMarkers re-scan the same list (cf. resolveUnion).
+attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView parentId: u64 asItems: (List of: Node)} out bool is {
+    hasCreate: false
+    aiter: asItems.iterate
+    for am: aiter loop {
+        match (
+            am
+        ) case namedoperation then {
+            mname: unitLabel o: am.name
+            if mname.stringview == "create" then {
+                hasCreate = true
+            } else {}
+            qname: "\{defName}.\{mname}".string
+            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            match (
+                mido
+            ) case some then {
+                ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: mido
+            } else {}
+        } else {}
+    }
+    return hasCreate
+}
+
+# attachMarkers -- resolve an as-block's facet/protocol conformance markers
+# (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
+# methods so markers take later positions. Returns whether any marker target owns a
+# destructor (a protocol), so a class holder keeps its own.
+attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView parentId: u64 asItems: (List of: Node)} out bool is {
+    needsDtor: false
+    miter: asItems.iterate
+    for mm: miter loop {
+        match (
+            mm
+        ) case namedoperation then {
+            mtid: markerTargetId ty: ty reg: reg unitName: unitName op: mm.operation
+            match (
+                mtid
+            ) case some then {
+                mlbl: unitLabel o: mm.name
+                ty.setChild parentTypeId: parentId childName: mlbl.stringview childTypeId: mtid
+                if (reg.hasDestructorName typeId: mtid) then {
+                    needsDtor = true
+                } else {}
+            } else {}
+        } else {}
+    }
+    return needsDtor
 }
 
 # resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
@@ -348,25 +452,8 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
             } else {}
         }
     }
-    hasCreate: false
-    aiter: rnode.asItems.iterate
-    for am: aiter loop {
-        match (
-            am
-        ) case namedoperation then {
-            mname: unitLabel o: am.name
-            if mname.stringview == "create" then {
-                hasCreate = true
-            } else {}
-            qname: "\{defName}.\{mname}".string
-            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
-            match (
-                mido
-            ) case some then {
-                ty.setChild parentTypeId: rid childName: mname.stringview childTypeId: mido
-            } else {}
-        } else {}
-    }
+    hasCreate: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: rid asItems: rnode.asItems
+    attachMarkers ty: ty reg: reg unitName: unitName parentId: rid asItems: rnode.asItems
     if hasCreate then {} else {
         createName: "\{defName}.create".string
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
@@ -636,15 +723,50 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     ty.definedInUnit.set key: ccid value: unitName.string
 }
 
+# resolveFacet -- resolve a facet ObjectDef into a FACET valtype: a child per
+# is-block spec method (the `:this` receiver dropped), then synthesized `create` +
+# `borrow` FUNCTION shells (JOIN-only, no own row). Facets are value types
+# (is_valtype true), no destructor, no `==`/`!=`. Generic facets arrive later.
+resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
+    fid: reg.newType name: defName typetype: ztypes.ztypetype.FACET
+    ffid: fid
+    rfid: fid
+    reg.setValtype typeId: fid value: true
+    rkey: "\{unitName}.\{defName}".string
+    ty.resolved.set key: rkey value: rfid
+    siter: fnode.isItems.iterate
+    for sm: siter loop {
+        match (
+            sm
+        ) case namedoperation then {
+            mname: unitLabel o: sm.name
+            qname: "\{defName}.\{mname}".string
+            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: sm.operation
+            match (
+                sido
+            ) case some then {
+                ty.setChild parentTypeId: fid childName: mname.stringview childTypeId: sido
+            } else {}
+        } else {}
+    }
+    createName: "\{defName}.create".string
+    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: fid childName: "create" childTypeId: createId
+    borrowName: "\{defName}.borrow".string
+    borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: fid childName: "borrow" childTypeId: borrowId
+    ty.definedInUnit.set key: ffid value: unitName.string
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
-# blocks, records, variants, unions and classes; a top-level data block parses as an
-# `expression` wrapping a `datablock`, so unwrap one level and re-dispatch. Protocols,
-# facets, enums and generics arrive in later slices.
+# blocks, records, variants, unions, classes and facets; a top-level data block parses
+# as an `expression` wrapping a `datablock`, so unwrap one level and re-dispatch.
+# Protocols, enums and generics arrive in later slices.
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
     ) case functiondef then {
-        resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: ""
+        resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: "" skipThisType: false
     } case expression then {
         resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
     } case datablock then {
@@ -660,6 +782,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             resolveUnion ty: ty reg: reg unitName: unitName defName: defName vnode: defn
         } case CLASS then {
             resolveClass ty: ty reg: reg unitName: unitName defName: defName cnode: defn
+        } case FACET then {
+            resolveFacet ty: ty reg: reg unitName: unitName defName: defName fnode: defn
         } else {}
     } else {}
 }

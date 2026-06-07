@@ -86,6 +86,7 @@ TYPES_SMOKE = [
     "create_null",
     "constructors",
     "borrowed_record",
+    "facets",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
