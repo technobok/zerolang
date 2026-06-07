@@ -75,6 +75,9 @@ TYPES_SMOKE = [
     "str",
     "with_alias",
     "typedefs",
+    "narrowing",
+    "variants",
+    "equality",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

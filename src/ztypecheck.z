@@ -265,10 +265,58 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     ty.resolved.set key: key value: rid
 }
 
+# resolveVariant -- resolve a variant ObjectDef into a VARIANT valtype: a child per
+# arm (arm name -> payload type-ref shell; a `null` arm -> the `null` shell), a
+# synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), any as-block
+# methods, then synthesized `==`/`!=`. Variants have no `create` (bare construction is
+# disabled). Custom-DATA tags + generics arrive later.
+resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
+    vid: reg.newType name: defName typetype: ztypes.ztypetype.VARIANT
+    vvid: vid
+    reg.setValtype typeId: vid value: true
+    fiter: vnode.isItems.iterate
+    for fm: fiter loop {
+        match (
+            fm
+        ) case namedoperation then {
+            aname: unitLabel o: fm.name
+            cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+            ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
+        } else {}
+    }
+    tagName: "\{defName}:tag:data".string
+    tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+    ty.setChild parentTypeId: vid childName: "tag" childTypeId: tagId
+    aiter: vnode.asItems.iterate
+    for am: aiter loop {
+        match (
+            am
+        ) case namedoperation then {
+            mname: unitLabel o: am.name
+            qname: "\{defName}.\{mname}".string
+            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            match (
+                mido
+            ) case some then {
+                ty.setChild parentTypeId: vid childName: mname.stringview childTypeId: mido
+            } else {}
+        } else {}
+    }
+    eqName: "\{defName}.==".string
+    eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: vid childName: "==" childTypeId: eqId
+    neqName: "\{defName}.!=".string
+    neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: vid childName: "!=" childTypeId: neqId
+    ty.definedInUnit.set key: vvid value: unitName.string
+    key: "\{unitName}.\{defName}".string
+    ty.resolved.set key: key value: vid
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
-# blocks and records; a top-level data block parses as an `expression` wrapping a
-# `datablock`, so unwrap one level and re-dispatch. The other aggregate kinds arrive
-# in later slices.
+# blocks, records and variants; a top-level data block parses as an `expression`
+# wrapping a `datablock`, so unwrap one level and re-dispatch. The other aggregate
+# kinds arrive in later slices.
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
@@ -283,6 +331,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             defn.kind
         ) case RECORD then {
             resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+        } case VARIANT then {
+            resolveVariant ty: ty reg: reg unitName: unitName defName: defName vnode: defn
         } else {}
     } else {}
 }
