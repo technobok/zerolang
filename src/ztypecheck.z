@@ -177,24 +177,58 @@ resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: S
     ty.resolved.set key: key value: did
 }
 
-# resolveRecord -- resolve a record ObjectDef into a RECORD valtype: a child per
-# field (field name -> type-ref shell), then a child per as-block method
-# (`{record}.{method}` FUNCTION, `this` params bound to the record), then the
-# synthesized `create`/`==`/`!=` children (shallow FUNCTION shells, JOIN-only).
-# Parameterized / typedef fields and generics arrive in later slices.
-resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
-    rid: reg.newType name: defName typetype: ztypes.ztypetype.RECORD
-    rrid: rid
-    reg.setValtype typeId: rid value: true
+# isTypedefField -- true when a type-expr Node is an `X.typedef` dottedpath (the
+# marker that makes a record a zero-overhead typedef wrapper). Matching the Node
+# param narrows it cleanly.
+isTypedefField: function {n: Node} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        cn: atomName n: n.child
+        return (cn.stringview == "typedef")
+    } else {
+        return false
+    }
+}
+
+# recordIsTypedef -- true when a record's `is` body carries a single `X.typedef`
+# field. Such a record gets no field child and synthesizes `create`+`borrow`
+# instead of `create`/`==`/`!=`.
+recordIsTypedef: function {rnode: zast.ObjectDefData} out bool is {
     fiter: rnode.isItems.iterate
     for fm: fiter loop {
         match (
             fm
         ) case namedoperation then {
-            fname: unitLabel o: fm.name
-            cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
-            ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+            if (isTypedefField n: fm.operation) then {
+                return true
+            } else {}
         } else {}
+    }
+    return false
+}
+
+# resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
+# record: a child per field (field name -> type-ref shell), a child per as-block
+# method, then synthesized `create`/`==`/`!=`. A typedef record (single
+# `X.typedef` field): no field child, the methods, then `create`+`borrow`. Synth
+# children are shallow FUNCTION shells (JOIN-only). Generics arrive later.
+resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
+    rid: reg.newType name: defName typetype: ztypes.ztypetype.RECORD
+    rrid: rid
+    reg.setValtype typeId: rid value: true
+    istd: recordIsTypedef rnode: rnode
+    if istd then {} else {
+        fiter: rnode.isItems.iterate
+        for fm: fiter loop {
+            match (
+                fm
+            ) case namedoperation then {
+                fname: unitLabel o: fm.name
+                cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+            } else {}
+        }
     }
     aiter: rnode.asItems.iterate
     for am: aiter loop {
@@ -214,12 +248,18 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     createName: "\{defName}.create".string
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
     ty.setChild parentTypeId: rid childName: "create" childTypeId: createId
-    eqName: "\{defName}.==".string
-    eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
-    neqName: "\{defName}.!=".string
-    neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+    if istd then {
+        borrowName: "\{defName}.borrow".string
+        borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: rid childName: "borrow" childTypeId: borrowId
+    } else {
+        eqName: "\{defName}.==".string
+        eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
+        neqName: "\{defName}.!=".string
+        neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+    }
     ty.definedInUnit.set key: rrid value: unitName.string
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: rid
