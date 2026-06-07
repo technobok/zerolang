@@ -113,6 +113,32 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
     }
 }
 
+# nameIsInUnitReftype -- true when a type name resolves to an in-unit reference type
+# (class or union). Drives the reftype-param BORROW default and class field cleanup.
+# Native heap params (String/List/Map) are pointer-typed already and get no BORROW
+# default (mirrors the reference's `not is_heap_allocated` guard), so they are NOT
+# matched here -- only user class/union types defined in this unit.
+nameIsInUnitReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView} out bool is {
+    rkey: "\{unitName}.\{name}".string
+    rr: ty.resolved.get key: rkey
+    match (
+        rr
+    ) case some then {
+        tt: reg.typetypeOf typeId: rr
+        match (
+            tt
+        ) case CLASS then {
+            return true
+        } case UNION then {
+            return true
+        } else {
+            return false
+        }
+    } case none then {
+        return false
+    }
+}
+
 # resolveFunction -- resolve a function definition signature into a FUNCTION
 # type: a child per parameter (param name -> type-ref shell, `this` params bound
 # to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
@@ -132,26 +158,17 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
             ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
             tn: atomName n: pm.operation
-            if tn.length == 0.u64 then {} else {
-                rkey: "\{unitName}.\{tn}".string
-                rr: ty.resolved.get key: rkey
-                match (
-                    rr
-                ) case some then {
-                    tt: reg.typetypeOf typeId: rr
-                    isref: false
-                    match (
-                        tt
-                    ) case UNION then {
-                        isref = true
-                    } case CLASS then {
-                        isref = true
-                    } else {}
-                    if isref then {
-                        ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
-                    } else {}
-                } case none then {}
+            isref: false
+            if tn.stringview == "this" then {
+                isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
+            } else {
+                if tn.length == 0.u64 then {} else {
+                    isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
+                }
             }
+            if isref then {
+                ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
+            } else {}
         } else {}
     }
     ty.definedInUnit.set key: dfid value: unitName.string
@@ -453,10 +470,76 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     ty.resolved.set key: key value: uid
 }
 
+# fieldTypeNeedsCleanup -- true when a class field of the named type owns heap data
+# (so the holder needs a destructor): a native heap type (String/List/Map/Set) or an
+# in-unit reference type (class/union; a reftype field is owned). Scalars, valtypes,
+# and names that don't resolve to an in-unit reftype need no cleanup. A scaffold-stage
+# name check for the natives -- system types carry no real id under resolve-only-main.
+fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView} out bool is {
+    if name == "String" then { return true } else {}
+    if name == "List" then { return true } else {}
+    if name == "Map" then { return true } else {}
+    if name == "Set" then { return true } else {}
+    return (nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: name)
+}
+
+# resolveClass -- resolve a class ObjectDef into a CLASS reference type: a child per
+# field (field name -> type-ref shell), a child per as-block method, then a synthesized
+# `create` child (LAST). Classes are reference types (is_valtype false); they get
+# `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
+# owns heap data (fieldTypeNeedsCleanup), else none. Plain-atom fields only; `.lock` /
+# owned / parameterized fields, custom / `null` create, generics + protocols come later.
+resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView cnode: zast.ObjectDefData} is {
+    cid: reg.newType name: defName typetype: ztypes.ztypetype.CLASS
+    ccid: cid
+    rcid: cid
+    reg.setValtype typeId: cid value: false
+    rkey: "\{unitName}.\{defName}".string
+    ty.resolved.set key: rkey value: rcid
+    needsDtor: false
+    fiter: cnode.isItems.iterate
+    for fm: fiter loop {
+        match (
+            fm
+        ) case namedoperation then {
+            fname: unitLabel o: fm.name
+            ftn: atomName n: fm.operation
+            if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview) then {
+                needsDtor = true
+            } else {}
+            cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+            ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+        } else {}
+    }
+    aiter: cnode.asItems.iterate
+    for am: aiter loop {
+        match (
+            am
+        ) case namedoperation then {
+            mname: unitLabel o: am.name
+            qname: "\{defName}.\{mname}".string
+            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            match (
+                mido
+            ) case some then {
+                ty.setChild parentTypeId: cid childName: mname.stringview childTypeId: mido
+            } else {}
+        } else {}
+    }
+    createName: "\{defName}.create".string
+    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: cid childName: "create" childTypeId: createId
+    if needsDtor then {
+        dn: "\{defName}_destroy".string
+        reg.setDestructorName typeId: cid name: dn.stringview
+    } else {}
+    ty.definedInUnit.set key: ccid value: unitName.string
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
-# blocks, records and variants; a top-level data block parses as an `expression`
-# wrapping a `datablock`, so unwrap one level and re-dispatch. The other aggregate
-# kinds arrive in later slices.
+# blocks, records, variants, unions and classes; a top-level data block parses as an
+# `expression` wrapping a `datablock`, so unwrap one level and re-dispatch. Protocols,
+# facets, enums and generics arrive in later slices.
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
@@ -475,6 +558,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             resolveVariant ty: ty reg: reg unitName: unitName defName: defName vnode: defn
         } case UNION then {
             resolveUnion ty: ty reg: reg unitName: unitName defName: defName vnode: defn
+        } case CLASS then {
+            resolveClass ty: ty reg: reg unitName: unitName defName: defName cnode: defn
         } else {}
     } else {}
 }
