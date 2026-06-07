@@ -38,6 +38,22 @@ unitdefNodeId: function {n: Node} out u32 is {
     }
 }
 
+# atomName -- the name of an atom Node (atomid / labelvalue) as an owned String,
+# "" for anything else. Matching the Node param narrows it cleanly (the proven
+# simple-param pattern), so callers pass a field/arg projection without worrying
+# about path-subject narrowing.
+atomName: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.string
+    } case labelvalue then {
+        return n.name.string
+    } else {
+        return "".string
+    }
+}
+
 # resolveAtomType -- map a type-atom name to a SHALLOW shell type id. `this`
 # resolves to the enclosing record (passed as thisName); a leading-digit name is
 # a numeric-literal field/param default and resolves to f64 (has a dot) or i64;
@@ -66,9 +82,10 @@ resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: St
 
 # resolveTyperefShell -- register a SHALLOW named shell for a referenced type
 # (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
-# `this`/numeric-default atoms resolve correctly. Source-type rows never include
-# these shells (they fall outside `defined_in_unit`), but a `type_children` row
-# joins to the shell's name. Returns the shell's type id.
+# `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
+# type `(T arg: N)` (an expression wrapping a call) mangles to a `T_N` shell.
+# Source-type rows never include these shells (they fall outside `defined_in_unit`),
+# but a `type_children` row joins to the shell's name. Returns the shell's type id.
 resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
@@ -76,6 +93,21 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
         return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
     } case labelvalue then {
         return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
+    } case expression then {
+        return (resolveTyperefShell reg: reg typeExpr: typeExpr.expression thisName: thisName)
+    } case call then {
+        suffix: atomName n: typeExpr.callable
+        aiter: typeExpr.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                an: atomName n: arg.operation
+                suffix.append "_"
+                suffix.append an.stringview
+            } else {}
+        }
+        return (reg.newType name: suffix.stringview typetype: ztypes.ztypetype.RECORD)
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
     }

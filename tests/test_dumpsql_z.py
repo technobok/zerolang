@@ -71,6 +71,9 @@ TYPES_SMOKE = [
     "data",
     "vector",
     "records",
+    "strview",
+    "str",
+    "with_alias",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
