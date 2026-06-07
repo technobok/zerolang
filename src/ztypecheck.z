@@ -692,25 +692,11 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
         } else {}
     }
-    hasCreate: false
-    aiter: cnode.asItems.iterate
-    for am: aiter loop {
-        match (
-            am
-        ) case namedoperation then {
-            mname: unitLabel o: am.name
-            if mname.stringview == "create" then {
-                hasCreate = true
-            } else {}
-            qname: "\{defName}.\{mname}".string
-            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
-            match (
-                mido
-            ) case some then {
-                ty.setChild parentTypeId: cid childName: mname.stringview childTypeId: mido
-            } else {}
-        } else {}
-    }
+    hasCreate: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: cid asItems: cnode.asItems
+    mNeedsDtor: attachMarkers ty: ty reg: reg unitName: unitName parentId: cid asItems: cnode.asItems
+    if mNeedsDtor then {
+        needsDtor = true
+    } else {}
     if hasCreate then {} else {
         createName: "\{defName}.create".string
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
@@ -758,10 +744,47 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     ty.definedInUnit.set key: ffid value: unitName.string
 }
 
+# resolveProtocol -- resolve a protocol ObjectDef into a PROTOCOL reftype: a child
+# per is-block spec method (the `:this` receiver dropped), then synth `create` +
+# `borrow` FUNCTION shells, then an unconditional destructor (a protocol wraps heap
+# data). Reference type (is_valtype false), no `==`/`!=`. Generic protocols arrive later.
+resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
+    pid: reg.newType name: defName typetype: ztypes.ztypetype.PROTOCOL
+    ppid: pid
+    rpid: pid
+    reg.setValtype typeId: pid value: false
+    rkey: "\{unitName}.\{defName}".string
+    ty.resolved.set key: rkey value: rpid
+    siter: fnode.isItems.iterate
+    for sm: siter loop {
+        match (
+            sm
+        ) case namedoperation then {
+            mname: unitLabel o: sm.name
+            qname: "\{defName}.\{mname}".string
+            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: sm.operation
+            match (
+                sido
+            ) case some then {
+                ty.setChild parentTypeId: pid childName: mname.stringview childTypeId: sido
+            } else {}
+        } else {}
+    }
+    createName: "\{defName}.create".string
+    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: pid childName: "create" childTypeId: createId
+    borrowName: "\{defName}.borrow".string
+    borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: pid childName: "borrow" childTypeId: borrowId
+    dn: "\{defName}_destroy".string
+    reg.setDestructorName typeId: pid name: dn.stringview
+    ty.definedInUnit.set key: ppid value: unitName.string
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
-# blocks, records, variants, unions, classes and facets; a top-level data block parses
-# as an `expression` wrapping a `datablock`, so unwrap one level and re-dispatch.
-# Protocols, enums and generics arrive in later slices.
+# blocks, records, variants, unions, classes, facets and protocols; a top-level data
+# block parses as an `expression` wrapping a `datablock`, so unwrap one level and
+# re-dispatch. Enums and generics arrive in later slices.
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
@@ -784,6 +807,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             resolveClass ty: ty reg: reg unitName: unitName defName: defName cnode: defn
         } case FACET then {
             resolveFacet ty: ty reg: reg unitName: unitName defName: defName fnode: defn
+        } case PROTOCOL then {
+            resolveProtocol ty: ty reg: reg unitName: unitName defName: defName fnode: defn
         } else {}
     } else {}
 }

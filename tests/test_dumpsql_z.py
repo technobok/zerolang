@@ -87,6 +87,8 @@ TYPES_SMOKE = [
     "constructors",
     "borrowed_record",
     "facets",
+    "protocols",
+    "owned_protocol",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
