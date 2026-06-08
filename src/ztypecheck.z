@@ -268,6 +268,40 @@ nameIsInUnitReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
     }
 }
 
+# paramTypeBaseName -- the base type name of a (possibly parameterized) param type
+# expression: an atom name directly, or the callable of a parenthesized
+# `(List of: i64)` form (an expression wrapping a call). "" for anything else.
+paramTypeBaseName: function {op: Node} out String is {
+    match (
+        op
+    ) case atomid then {
+        return op.name.string
+    } case labelvalue then {
+        return op.name.string
+    } case expression then {
+        return (paramTypeBaseName op: op.expression)
+    } case call then {
+        return (atomName n: op.callable)
+    } else {
+        return "".string
+    }
+}
+
+# isBorrowReftypeCollection -- true for a parameterized collection whose mono is a
+# non-heap-allocated reftype, which takes the reftype-param BORROW default: List and
+# ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
+# the native iterator views have no destructor (no BORROW); str/array are valtypes.
+# Mirrors the is_heap_allocated the reference stamps on collection monos.
+isBorrowReftypeCollection: function {name: StringView} out bool is {
+    if name == "List" then {
+        return true
+    } else {}
+    if name == "ListView" then {
+        return true
+    } else {}
+    return false
+}
+
 # resolveFunction -- resolve a function definition signature into a FUNCTION
 # type: a child per parameter (param name -> type-ref shell, `this` params bound
 # to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
@@ -313,7 +347,10 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                     if tn.stringview == "this" then {
                         isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
                     } else {
-                        if tn.length == 0.u64 then {} else {
+                        if tn.length == 0.u64 then {
+                            base: paramTypeBaseName op: pm.operation
+                            isref = isBorrowReftypeCollection name: base.stringview
+                        } else {
                             isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
                         }
                     }
@@ -1126,6 +1163,10 @@ resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
 seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
     if (reg.isDemanded name: "Set") then {
         reg.recordDemand name: "SetIter"
+    } else {}
+    if (reg.isDemanded name: "List") then {
+        reg.recordDemand name: "ListIter"
+        reg.recordDemand name: "ListView"
     } else {}
 }
 
