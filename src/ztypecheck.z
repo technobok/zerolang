@@ -1032,6 +1032,21 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     ty.definedInUnit.set key: ppid value: unitName.string
 }
 
+# registerEmptyType -- register a native bottom type (null -> NULL, never -> NEVER) as a
+# valtype with a single synth `create` child. The reference special-cases these: they are
+# `record is native` in source but carry a distinct typetype and only a create child.
+registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView tt: ztypes.ztypetype} is {
+    nid: reg.newType name: name typetype: tt
+    nnid: nid
+    reg.setValtype typeId: nid value: true
+    ccname: "\{name}.create".string
+    ccid: reg.newType name: ccname.stringview typetype: ztypes.ztypetype.FUNCTION
+    ty.setChild parentTypeId: nid childName: "create" childTypeId: ccid
+    ty.definedInUnit.set key: nnid value: unitName.string
+    rk: "\{unitName}.\{name}".string
+    ty.resolved.set key: rk value: nid
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
 # blocks, records, variants, unions, classes, facets and protocols; a top-level data
 # block parses as an `expression` wrapping a `datablock`, so unwrap one level and
@@ -1050,16 +1065,13 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             defn.kind
         ) case RECORD then {
             if defName == "null" then {
-                nid: reg.newType name: "null" typetype: ztypes.ztypetype.NULL
-                nnid: nid
-                reg.setValtype typeId: nid value: true
-                ncid: reg.newType name: "null.create" typetype: ztypes.ztypetype.FUNCTION
-                ty.setChild parentTypeId: nid childName: "create" childTypeId: ncid
-                ty.definedInUnit.set key: nnid value: unitName.string
-                rk: "\{unitName}.null".string
-                ty.resolved.set key: rk value: nid
+                registerEmptyType ty: ty reg: reg unitName: unitName name: "null" tt: ztypes.ztypetype.NULL
             } else {
-                resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+                if defName == "never" then {
+                    registerEmptyType ty: ty reg: reg unitName: unitName name: "never" tt: ztypes.ztypetype.NEVER
+                } else {
+                    resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+                }
             }
         } case VARIANT then {
             resolveVariant ty: ty reg: reg unitName: unitName defName: defName vnode: defn
@@ -1123,7 +1135,7 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
 # resolveDemandedUnitBody -- resolve the definitions of a non-main unit that a
 # main-unit signature referenced (reg.isDemanded) and that aren't resolved yet,
 # stamping them with that unit's name (mirrors the oracle's on-demand resolution).
-resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} out bool is {
+resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView shadowUnit: StringView unitdef: Node} out bool is {
     anyDemanded: false
     match (
         unitdef
@@ -1135,13 +1147,25 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             ) case namedoperation then {
                 dn: unitLabel o: bm.name
                 if (reg.isDemanded name: dn.stringview) then {
-                    anyDemanded = true
-                    rkey: "\{unitName}.\{dn}".string
-                    got: ty.resolved.get key: rkey
-                    match (
-                        got
-                    ) case some then {} case none then {
-                        resolveDef ty: ty reg: reg unitName: unitName defName: dn.stringview defn: bm.operation
+                    shadowed: false
+                    if shadowUnit.length == 0.u64 then {} else {
+                        skey: "\{shadowUnit}.\{dn}".string
+                        sgot: ty.resolved.get key: skey
+                        match (
+                            sgot
+                        ) case some then {
+                            shadowed = true
+                        } case none then {}
+                    }
+                    if shadowed then {} else {
+                        anyDemanded = true
+                        rkey: "\{unitName}.\{dn}".string
+                        got: ty.resolved.get key: rkey
+                        match (
+                            got
+                        ) case some then {} case none then {
+                            resolveDef ty: ty reg: reg unitName: unitName defName: dn.stringview defn: bm.operation
+                        }
                     }
                 } else {}
             } else {}
@@ -1265,10 +1289,113 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "OptionView"
 }
 
+# isFunctionDefWithBody -- true when a node is a functiondef carrying a non-empty body
+# (a real method, not a facet/protocol spec signature whose body is none).
+isFunctionDefWithBody: function {o: Node} out bool is {
+    match (
+        o
+    ) case functiondef then {
+        match (
+            o.body
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# objectHasMethodBody -- true when an objectdef holds at least one is/as-item method
+# with a body. Scans both blocks (transient iterators over different lists).
+objectHasMethodBody: function {op: Node} out bool is {
+    match (
+        op
+    ) case objectdef then {
+        iiter: op.isItems.iterate
+        for im: iiter loop {
+            match (
+                im
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: im.operation) then {
+                    return true
+                } else {}
+            } else {}
+        }
+        aiter: op.asItems.iterate
+        for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: am.operation) then {
+                    return true
+                } else {}
+            } else {}
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# unitHasObjectMethodBody -- true when a unit body holds an objectdef with a method-body.
+unitHasObjectMethodBody: function {def: Node} out bool is {
+    match (
+        def
+    ) case unitdef then {
+        biter: def.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (objectHasMethodBody op: bm.operation) then {
+                    return true
+                } else {}
+            } else {}
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# seedBodyWalkDemands -- the reference WALKS objectdef method bodies during
+# resolve-only-main (records/classes/facets/protocols), and those bodies use the `return`
+# builtin, so the closure pulls `return` + its `out never` type. The .z resolver does
+# signatures only, so when the MAIN unit has any objectdef with a method-with-body,
+# demand `return` + `never` to match.
+seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        found: false
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                nm: unitLabel o: u.name
+                if nm.stringview == mainName then {
+                    if (unitHasObjectMethodBody def: u.operation) then {
+                        found = true
+                    } else {}
+                } else {}
+            } else {}
+        }
+        if found then {
+            reg.recordDemand name: "return"
+            reg.recordDemand name: "never"
+        } else {}
+    } else {}
+}
+
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
 # referenced. Only `collections` is resolved here (the one non-`system` unit any
 # example references under resolve-only-main); the `system` closure is a later slice.
 resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    seedBodyWalkDemands reg: reg program: program
     match (
         program
     ) case program then {
@@ -1280,14 +1407,14 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                 nm: unitLabel o: u.name
                 if nm.stringview == "collections" then {
                     seedIteratorDemands reg: reg
-                    anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                    anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                     if anyDemanded then {
                         resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
                     } else {}
                 } else {}
                 if nm.stringview == "system" then {
                     seedSystemDemands reg: reg
-                    anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg unitName: "system" unitdef: u.operation
+                    anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg unitName: "system" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                     if anyDemandedSys then {
                         resolveConformanceDefs ty: ty reg: reg unitName: "system" unitdef: u.operation
                     } else {}

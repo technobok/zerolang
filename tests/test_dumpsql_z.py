@@ -233,15 +233,15 @@ def test_dumpsql_types_match_python(unit, zc_binary):
 
 
 @pytest.mark.emitter
-def test_dumpsql_system_closure(zc_binary):
-    """The .z dump must match the Python resolve-only dump on the FULL system-unit
-    type closure (the 357-type i64/f64 pre-seed closure). It is example-independent
-    (byte-identical for every example), so it is checked once on `hello`. (Folding
-    'system' into the per-unit filter for every example is deferred: examples that
-    reference system types beyond the pre-seed closure -- e.g. unions -> Result --
-    need cross-unit system demand, a later slice.)"""
-    py = _load(_python_skeleton_sql("hello"))
-    zp = _load(_zc_sql(zc_binary, "hello"))
+@pytest.mark.parametrize("unit", TYPES_SMOKE)
+def test_dumpsql_system_closure(unit, zc_binary):
+    """The .z dump must match the Python resolve-only dump on the system-unit type
+    closure for EVERY example -- the 357-type i64/f64 pre-seed, plus `return`+`never`
+    (359) for examples whose objectdef method bodies the reference walks. Validates the
+    main-unit shadowing skip (unions -> its own Result) and the body-walk demand before
+    'system' is folded into the per-unit filter."""
+    py = _load(_python_skeleton_sql(unit))
+    zp = _load(_zc_sql(zc_binary, unit))
 
     for table, query in (
         ("types", _SYSTEM_TYPES_Q),
@@ -253,7 +253,7 @@ def test_dumpsql_system_closure(zc_binary):
             only_py = sorted(set(pr) - set(zr))[:10]
             only_z = sorted(set(zr) - set(pr))[:10]
             pytest.fail(
-                f"system closure: table '{table}' diverged "
+                f"{unit}: system closure '{table}' diverged "
                 f"(python={len(pr)} rows, z={len(zr)} rows).\n"
                 f"  only in python: {only_py}\n"
                 f"  only in z:      {only_z}"
