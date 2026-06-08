@@ -159,6 +159,8 @@ TYPES_SMOKE = [
     "io_stdstreams",
     "io_protocol_rw",
     "io_protocol_closer",
+    # Generic units: unit-level generic param (__generic_param) + suppressed children.
+    "genmath",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
