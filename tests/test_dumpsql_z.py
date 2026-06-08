@@ -155,6 +155,10 @@ TYPES_SMOKE = [
     "typed_data",
     "specs",
     "defaults",
+    # io: typedef-class (Bytes/ByteView) + return-type demand (Result) + io-unit demand.
+    "io_stdstreams",
+    "io_protocol_rw",
+    "io_protocol_closer",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

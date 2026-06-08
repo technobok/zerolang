@@ -345,6 +345,20 @@ isNativeValueView: function {name: StringView} out bool is {
     return false
 }
 
+# demandReturnType -- record cross-unit demand for a function's return-type base
+# name (`out (Result t: u64 e: IoError)` -> demand "Result"), so a type named only
+# in a return position is resolved. The Option is borrowed, never bound.
+demandReturnType: function {reg: ztypes.ZTypeRegistry o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        bn: paramTypeBaseName op: o
+        if bn.length == 0.u64 then {} else {
+            reg.recordDemand name: bn.stringview
+        }
+    } case none then {}
+}
+
 # resolveFunction -- resolve a function definition signature into a FUNCTION
 # type: a child per parameter (param name -> type-ref shell, `this` params bound
 # to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
@@ -413,6 +427,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             }
         } else {}
     }
+    demandReturnType reg: reg o: fnode.returntype
     ty.definedInUnit.set key: dfid value: unitName.string
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: fid
@@ -638,6 +653,35 @@ recordIsTypedef: function {rnode: zast.ObjectDefData} out bool is {
         } else {}
     }
     return false
+}
+
+# typedefFieldBaseName -- the base type name of an `X.typedef` field's `X`
+# (e.g. `(List of: u8).typedef` -> "List"). Borrows the Node, never binds it (a
+# bare bind would move the type-expr out of the shared AST).
+typedefFieldBaseName: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (paramTypeBaseName op: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+# objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
+# field (the typedef wrapper base), or "" when the object is not a typedef.
+objectTypedefBase: function {onode: zast.ObjectDefData} out String is {
+    fiter: onode.isItems.iterate
+    for fm: fiter loop {
+        match (
+            fm
+        ) case namedoperation then {
+            if (isTypedefField n: fm.operation) then {
+                return (typedefFieldBaseName n: fm.operation)
+            } else {}
+        } else {}
+    }
+    return "".string
 }
 
 # resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
@@ -915,8 +959,10 @@ fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry u
 # field (field name -> type-ref shell), a child per as-block method, then a synthesized
 # `create` child (LAST). Classes are reference types (is_valtype false); they get
 # `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
-# owns heap data (fieldTypeNeedsCleanup), else none. Plain-atom fields only; `.lock` /
-# owned / parameterized fields, custom / `null` create, generics + protocols come later.
+# owns heap data (fieldTypeNeedsCleanup), else none. A typedef class (single
+# `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
+# needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
+# `null` create, generics + protocols come later.
 resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView cnode: zast.ObjectDefData} is {
     cid: reg.newType name: defName typetype: ztypes.ztypetype.CLASS
     ccid: cid
@@ -928,6 +974,13 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     isgen: hasGenericParam items: cnode.asItems
     if isgen then {
         reg.setGeneric typeId: cid value: true
+    } else {}
+    istd: recordIsTypedef rnode: cnode
+    if istd then {
+        tdbase: objectTypedefBase onode: cnode
+        if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: tdbase.stringview isLock: false) then {
+            needsDtor = true
+        } else {}
     } else {}
     fiter: cnode.isItems.iterate
     for fm: fiter loop {
@@ -955,18 +1008,20 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                 ) case some then {
                     ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mref
                 } case none then {
-                    flock: pathOwnership n: fm.operation
-                    isLock: false
-                    match (
-                        flock
-                    ) case some then {
-                        isLock = true
-                    } case none then {}
-                    if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
-                        needsDtor = true
-                    } else {}
-                    cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
-                    ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                    if (isTypedefField n: fm.operation) then {} else {
+                        flock: pathOwnership n: fm.operation
+                        isLock: false
+                        match (
+                            flock
+                        ) case some then {
+                            isLock = true
+                        } case none then {}
+                        if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
+                            needsDtor = true
+                        } else {}
+                        cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                        ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                    }
                 }
             }
         } else {}
@@ -989,6 +1044,11 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             ty.setChild parentTypeId: cid childName: "create" childTypeId: createId
         }
     }
+    if istd then {
+        borrowName: "\{defName}.borrow".string
+        borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: cid childName: "borrow" childTypeId: borrowId
+    } else {}
     if defName == "String" then {
         needsDtor = true
     } else {}
@@ -1467,6 +1527,12 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                 u
             ) case namedoperation then {
                 nm: unitLabel o: u.name
+                if nm.stringview == "io" then {
+                    anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                    if anyDemandedIo then {
+                        resolveConformanceDefs ty: ty reg: reg unitName: "io" unitdef: u.operation
+                    } else {}
+                } else {}
                 if nm.stringview == "collections" then {
                     seedIteratorDemands reg: reg
                     anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
