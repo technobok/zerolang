@@ -87,6 +87,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, typedef_base_id INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS type_children (type_id INTEGER, child_name TEXT NOT NULL, child_type_id INTEGER, position INTEGER, child_id INTEGER, is_private INTEGER, is_lock_field INTEGER, is_lock_arm INTEGER, default_expr TEXT, param_ownership INTEGER);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, cname TEXT, is_const INTEGER, const_value TEXT);\n"
     return acc
 }
 
@@ -484,6 +485,17 @@ ZDumper: class {
         }
     }
 
+    # appendTypedNodes -- one row per node->type stamp (typing.nodeType). cname
+    # is NULL (excluded from the differential -- it embeds the type id);
+    # is_const/const_value default to 0/NULL (const-only nodes carry a NULL
+    # type_id, which the node-type differential's JOIN drops anyway).
+    appendTypedNodes: function {:this typing: ztyping.ZTyping} is {
+        with it: typing.nodeType.iterateItems do for e: it loop {
+            row: "INSERT OR IGNORE INTO typed_nodes VALUES (\{e.key}, \{e.value}, NULL, 0, NULL);\n"
+            this.acc.append s: row.stringview
+        }
+    }
+
 }
 
 # --- entry point ---
@@ -496,5 +508,6 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs typing: ztyping.ZTyping reg: zty
     d.appendUnits program: program typing: typing
     d.appendTypes reg: reg typing: typing
     d.appendTypeChildren typing: typing
+    d.appendTypedNodes typing: typing
     return d.acc.copy
 }

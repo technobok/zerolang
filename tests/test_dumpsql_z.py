@@ -179,6 +179,21 @@ TYPES_SMOKE = [
     "generator_map_filter",
 ]
 
+# typed_nodes (signature level): the .z resolvers stamp each definition node
+# with its resolved type id; compared against resolve_only_main, projected by
+# (node identity, resolved-type name) and filtered to the example's OWN unit.
+# Grows by resolver cluster and later widens to system + collections.
+TYPED_NODES_SMOKE = ["hello", "factorial", "fibonacci", "mathutil", "swap", "multimod"]
+
+_TYPED_NODES_QUERY = (
+    "SELECT an.kind, an.name, an.start_line, an.start_col, t.name "
+    "FROM typed_nodes tn "
+    "JOIN ast_nodes an ON tn.node_id = an.node_id "
+    "JOIN types t ON tn.type_id = t.type_id "
+    "WHERE t.defined_in_unit = ? "
+    "ORDER BY an.kind, an.name, an.start_line, an.start_col"
+)
+
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
 # example's own unit, NOT the (monolithic ~500-type) system closure any
 # numeric reference pulls in. This is a TEMPORARY widening scaffold -- as later
@@ -301,6 +316,27 @@ def test_dumpsql_types_match_python(unit, zc_binary):
                 f"  only in python: {only_py}\n"
                 f"  only in z:      {only_z}"
             )
+
+
+@pytest.mark.emitter
+@pytest.mark.parametrize("unit", TYPED_NODES_SMOKE)
+def test_dumpsql_typed_nodes_match_python(unit, zc_binary):
+    """The .z dump must match the resolve-only dump on typed_nodes, projected
+    by (node identity, resolved-type name) and filtered to the example's own
+    unit -- the signature-level node-stamping parity."""
+    py = _load(_python_skeleton_sql(unit))
+    zp = _load(_zc_sql(zc_binary, unit))
+    pr = py.execute(_TYPED_NODES_QUERY, (unit,)).fetchall()
+    zr = zp.execute(_TYPED_NODES_QUERY, (unit,)).fetchall()
+    if pr != zr:
+        only_py = sorted(set(pr) - set(zr))[:10]
+        only_z = sorted(set(zr) - set(pr))[:10]
+        pytest.fail(
+            f"{unit}: table 'typed_nodes' diverged "
+            f"(python={len(pr)} rows, z={len(zr)} rows).\n"
+            f"  only in python: {only_py}\n"
+            f"  only in z:      {only_z}"
+        )
 
 
 @pytest.mark.emitter
