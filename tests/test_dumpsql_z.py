@@ -169,6 +169,9 @@ TYPES_SMOKE = [
     "generator_counter",
     # Generator with captured params + a promoted loop-counter local.
     "generator_intrange",
+    # Bidirectional generators: accepts: U -> _resume_input field + .call value: param.
+    "generator_bidirectional",
+    "generator_accepts_borrow",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

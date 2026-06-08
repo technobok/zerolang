@@ -1831,6 +1831,46 @@ addPromotedLocalsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry it
 # `call` method (receiver `this`, BORROW). All defined_in_unit=the example; seed
 # return/never demand (the lowered methods have bodies). No-param / no-promoted-local
 # generators only (counter); captured params + promoted locals arrive later.
+# addResumeInput -- for a bidirectional generator (`accepts: U` in the Iterator
+# return), add the `_resume_input: U` field to the iter class and a `value: U` param
+# (with the annotated ownership) to its `call` method.
+addResumeInput: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 callId: u64 returntype: (Option t: Node)} is {
+    match (
+        returntype
+    ) case some then {
+        addResumeInputExpr ty: ty reg: reg iterId: iterId callId: callId rt: returntype
+    } case none then {}
+}
+addResumeInputExpr: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 callId: u64 rt: Node} is {
+    match (
+        rt
+    ) case expression then {
+        addResumeInputExpr ty: ty reg: reg iterId: iterId callId: callId rt: rt.expression
+    } case call then {
+        aiter: rt.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                an: unitLabel o: arg.name
+                if an.stringview == "accepts" then {
+                    tn: baseTypeName n: arg.operation
+                    rf: resolveAtomType reg: reg nm: tn.stringview thisName: ""
+                    ty.setChild parentTypeId: iterId childName: "_resume_input" childTypeId: rf
+                    vf: resolveAtomType reg: reg nm: tn.stringview thisName: ""
+                    ty.setChild parentTypeId: callId childName: "value" childTypeId: vf
+                    own: pathOwnership n: arg.operation
+                    match (
+                        own
+                    ) case some then {
+                        ty.setChildOwnership parentTypeId: callId name: "value" ownership: own
+                    } case none then {}
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
 synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView fnode: zast.FunctionData} is {
     iterName: "\{fnName}_iter".string
     iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.CLASS
@@ -1843,6 +1883,12 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
     cdid: createId
     ty.definedInUnit.set key: cdid value: unitName.string
+    callName: "\{iterName}.call".string
+    callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.FUNCTION
+    clid: callId
+    ty.definedInUnit.set key: clid value: unitName.string
+    ty.setChild parentTypeId: callId childName: "this" childTypeId: iterId
+    ty.setChildOwnership parentTypeId: callId name: "this" ownership: ztypes.zparamownership.BORROW
     piter: fnode.parameters.iterate
     for pm: piter loop {
         match (
@@ -1856,16 +1902,11 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             ty.setChild parentTypeId: createId childName: pn.stringview childTypeId: f2
         } else {}
     }
+    addResumeInput ty: ty reg: reg iterId: iterId callId: callId returntype: fnode.returntype
     if (bodyHasYieldingLoop body: fnode.body) then {
         addPromotedLocals ty: ty reg: reg iterId: iterId body: fnode.body
     } else {}
     ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
-    callName: "\{iterName}.call".string
-    callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.FUNCTION
-    clid: callId
-    ty.definedInUnit.set key: clid value: unitName.string
-    ty.setChild parentTypeId: callId childName: "this" childTypeId: iterId
-    ty.setChildOwnership parentTypeId: callId name: "this" ownership: ztypes.zparamownership.BORROW
     ty.setChild parentTypeId: iterId childName: "call" childTypeId: callId
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
