@@ -132,6 +132,10 @@ SYSTEM_PORTED = {
     "f32",
     "f64",
     "tag",
+    "bool",
+    "optionval",
+    "parseerror",
+    "resultval",
 }
 
 _SYSTEM_TYPES_Q = (
