@@ -89,6 +89,10 @@ TYPES_SMOKE = [
     "facets",
     "protocols",
     "owned_protocol",
+    "generics",
+    "genericfunctions",
+    "numeric_generics",
+    "linkedlist",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

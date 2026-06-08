@@ -92,6 +92,41 @@ isStripMarker: function {name: StringView} out bool is {
     return false
 }
 
+# isGenericParam -- true when a type-expr is a generic-parameter constraint
+# (`Any.generic` / `u64.generic` / `Any.valtype`): a dottedpath whose leaf is
+# `generic` or `valtype`, peeling an `expression` / parameterized `call` wrapper.
+isGenericParam: function {op: Node} out bool is {
+    match (
+        op
+    ) case expression then {
+        return (isGenericParam op: op.expression)
+    } case call then {
+        return (isGenericParam op: op.callable)
+    } case dottedpath then {
+        leaf: atomName n: op.child
+        if leaf.stringview == "generic" then { return true } else {}
+        if leaf.stringview == "valtype" then { return true } else {}
+        return false
+    } else {
+        return false
+    }
+}
+
+# hasGenericParam -- true when any item in the block is a generic-param declaration.
+# Takes the list by value so its iterator's lock is released on return (the scan is
+# sequenced before any persistent iterator over the same list).
+hasGenericParam: function {items: (List of: Node)} out bool is {
+    it: items.iterate
+    for m: it loop {
+        match (
+            m
+        ) case namedoperation then {
+            if (isGenericParam op: m.operation) then { return true } else {}
+        } else {}
+    }
+    return false
+}
+
 # pathOwnership -- the ownership a param/field type expr declares via a `.lock`/
 # `.borrow`/`.take` dotted-path leaf, or none. (Only `.lock` is valid on a field; all
 # three on a param.)
@@ -213,6 +248,10 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     fid: reg.newType name: defName typetype: ztypes.ztypetype.FUNCTION
     dfid: fid
     rfid: fid
+    isgen: hasGenericParam items: fnode.asItems
+    if isgen then {
+        reg.setGeneric typeId: fid value: true
+    } else {}
     piter: fnode.parameters.iterate
     for pm: piter loop {
         match (
@@ -439,6 +478,10 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     rid: reg.newType name: defName typetype: ztypes.ztypetype.RECORD
     rrid: rid
     reg.setValtype typeId: rid value: true
+    isgen: hasGenericParam items: rnode.asItems
+    if isgen then {
+        reg.setGeneric typeId: rid value: true
+    } else {}
     istd: recordIsTypedef rnode: rnode
     if istd then {} else {
         fiter: rnode.isItems.iterate
@@ -464,12 +507,14 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
         ty.setChild parentTypeId: rid childName: "borrow" childTypeId: borrowId
     } else {
-        eqName: "\{defName}.==".string
-        eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
-        ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
-        neqName: "\{defName}.!=".string
-        neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
-        ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+        if isgen then {} else {
+            eqName: "\{defName}.==".string
+            eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+            ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
+            neqName: "\{defName}.!=".string
+            neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
+            ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+        }
     }
     ty.definedInUnit.set key: rrid value: unitName.string
     key: "\{unitName}.\{defName}".string
@@ -485,6 +530,10 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
     vid: reg.newType name: defName typetype: ztypes.ztypetype.VARIANT
     vvid: vid
     reg.setValtype typeId: vid value: true
+    isgen: hasGenericParam items: vnode.asItems
+    if isgen then {
+        reg.setGeneric typeId: vid value: true
+    } else {}
     fiter: vnode.isItems.iterate
     for fm: fiter loop {
         match (
@@ -495,9 +544,11 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
         } else {}
     }
-    tagName: "\{defName}:tag:data".string
-    tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
-    ty.setChild parentTypeId: vid childName: "tag" childTypeId: tagId
+    if isgen then {} else {
+        tagName: "\{defName}:tag:data".string
+        tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+        ty.setChild parentTypeId: vid childName: "tag" childTypeId: tagId
+    }
     aiter: vnode.asItems.iterate
     for am: aiter loop {
         match (
@@ -513,12 +564,14 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             } else {}
         } else {}
     }
-    eqName: "\{defName}.==".string
-    eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: vid childName: "==" childTypeId: eqId
-    neqName: "\{defName}.!=".string
-    neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: vid childName: "!=" childTypeId: neqId
+    if isgen then {} else {
+        eqName: "\{defName}.==".string
+        eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: vid childName: "==" childTypeId: eqId
+        neqName: "\{defName}.!=".string
+        neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: vid childName: "!=" childTypeId: neqId
+    }
     ty.definedInUnit.set key: vvid value: unitName.string
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: vid
@@ -584,6 +637,10 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     uid: reg.newType name: defName typetype: ztypes.ztypetype.UNION
     uuid: uid
     reg.setValtype typeId: uid value: false
+    isgen: hasGenericParam items: vnode.asItems
+    if isgen then {
+        reg.setGeneric typeId: uid value: true
+    } else {}
     allNull: true
     fiter: vnode.isItems.iterate
     for fm: fiter loop {
@@ -599,17 +656,19 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
         } else {}
     }
-    customTag: unionCustomTagId ty: ty reg: reg unitName: unitName asItems: vnode.asItems
-    tagId: 0.u64
-    match (
-        customTag
-    ) case some then {
-        tagId = customTag
-    } case none then {
-        tagName: "\{defName}:tag:data".string
-        tagId = reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+    if isgen then {} else {
+        customTag: unionCustomTagId ty: ty reg: reg unitName: unitName asItems: vnode.asItems
+        tagId: 0.u64
+        match (
+            customTag
+        ) case some then {
+            tagId = customTag
+        } case none then {
+            tagName: "\{defName}:tag:data".string
+            tagId = reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+        }
+        ty.setChild parentTypeId: uid childName: "tag" childTypeId: tagId
     }
-    ty.setChild parentTypeId: uid childName: "tag" childTypeId: tagId
     aiter: vnode.asItems.iterate
     for am: aiter loop {
         match (
@@ -671,6 +730,10 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     rkey: "\{unitName}.\{defName}".string
     ty.resolved.set key: rkey value: rcid
     needsDtor: false
+    isgen: hasGenericParam items: cnode.asItems
+    if isgen then {
+        reg.setGeneric typeId: cid value: true
+    } else {}
     fiter: cnode.isItems.iterate
     for fm: fiter loop {
         match (
@@ -698,9 +761,11 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         needsDtor = true
     } else {}
     if hasCreate then {} else {
-        createName: "\{defName}.create".string
-        createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
-        ty.setChild parentTypeId: cid childName: "create" childTypeId: createId
+        if isgen then {} else {
+            createName: "\{defName}.create".string
+            createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+            ty.setChild parentTypeId: cid childName: "create" childTypeId: createId
+        }
     }
     if needsDtor then {
         dn: "\{defName}_destroy".string
@@ -720,6 +785,10 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     reg.setValtype typeId: fid value: true
     rkey: "\{unitName}.\{defName}".string
     ty.resolved.set key: rkey value: rfid
+    isgen: hasGenericParam items: fnode.isItems
+    if isgen then {
+        reg.setGeneric typeId: fid value: true
+    } else {}
     siter: fnode.isItems.iterate
     for sm: siter loop {
         match (
@@ -735,12 +804,14 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             } else {}
         } else {}
     }
-    createName: "\{defName}.create".string
-    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: fid childName: "create" childTypeId: createId
-    borrowName: "\{defName}.borrow".string
-    borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: fid childName: "borrow" childTypeId: borrowId
+    if isgen then {} else {
+        createName: "\{defName}.create".string
+        createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: fid childName: "create" childTypeId: createId
+        borrowName: "\{defName}.borrow".string
+        borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: fid childName: "borrow" childTypeId: borrowId
+    }
     ty.definedInUnit.set key: ffid value: unitName.string
 }
 
@@ -755,6 +826,10 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     reg.setValtype typeId: pid value: false
     rkey: "\{unitName}.\{defName}".string
     ty.resolved.set key: rkey value: rpid
+    isgen: hasGenericParam items: fnode.isItems
+    if isgen then {
+        reg.setGeneric typeId: pid value: true
+    } else {}
     siter: fnode.isItems.iterate
     for sm: siter loop {
         match (
@@ -770,12 +845,14 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             } else {}
         } else {}
     }
-    createName: "\{defName}.create".string
-    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: pid childName: "create" childTypeId: createId
-    borrowName: "\{defName}.borrow".string
-    borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
-    ty.setChild parentTypeId: pid childName: "borrow" childTypeId: borrowId
+    if isgen then {} else {
+        createName: "\{defName}.create".string
+        createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: pid childName: "create" childTypeId: createId
+        borrowName: "\{defName}.borrow".string
+        borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: pid childName: "borrow" childTypeId: borrowId
+    }
     dn: "\{defName}_destroy".string
     reg.setDestructorName typeId: pid name: dn.stringview
     ty.definedInUnit.set key: ppid value: unitName.string
