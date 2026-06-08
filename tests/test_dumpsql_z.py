@@ -136,6 +136,11 @@ SYSTEM_PORTED = {
     "optionval",
     "parseerror",
     "resultval",
+    "String",
+    "StringView",
+    "CpIter",
+    "Splitter",
+    "LinesIter",
 }
 
 _SYSTEM_TYPES_Q = (

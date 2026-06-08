@@ -307,6 +307,18 @@ isBorrowReftypeCollection: function {name: StringView} out bool is {
     return false
 }
 
+# isNativeValueView -- true for StringView, the native immutable string view (subtype
+# STRINGVIEW): a param of this type stays unowned (a value-passed copy of a borrowed
+# view), so it takes no BORROW default. Other reftypes -- String (native, owns heap),
+# the mutable iterators (CpIter/Splitter/LinesIter), and non-native views (ListView/
+# OptionView) -- take the normal reftype-param BORROW default.
+isNativeValueView: function {name: StringView} out bool is {
+    if name == "StringView" then {
+        return true
+    } else {}
+    return false
+}
+
 # resolveFunction -- resolve a function definition signature into a FUNCTION
 # type: a child per parameter (param name -> type-ref shell, `this` params bound
 # to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
@@ -351,12 +363,18 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                     isref: false
                     if tn.stringview == "this" then {
                         isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
+                        if (isNativeValueView name: thisName) then {
+                            isref = false
+                        } else {}
                     } else {
                         if tn.length == 0.u64 then {
                             base: paramTypeBaseName op: pm.operation
                             isref = isBorrowReftypeCollection name: base.stringview
                         } else {
                             isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
+                            if (isNativeValueView name: tn.stringview) then {
+                                isref = false
+                            } else {}
                         }
                     }
                     if isref then {
@@ -908,6 +926,9 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             ty.setChild parentTypeId: cid childName: "create" childTypeId: createId
         }
     }
+    if defName == "String" then {
+        needsDtor = true
+    } else {}
     if needsDtor then {
         dn: "\{defName}_destroy".string
         reg.setDestructorName typeId: cid name: dn.stringview
@@ -1209,6 +1230,11 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "optionval"
     reg.recordDemand name: "parseerror"
     reg.recordDemand name: "resultval"
+    reg.recordDemand name: "String"
+    reg.recordDemand name: "StringView"
+    reg.recordDemand name: "CpIter"
+    reg.recordDemand name: "Splitter"
+    reg.recordDemand name: "LinesIter"
 }
 
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
