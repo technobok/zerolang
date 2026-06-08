@@ -85,6 +85,21 @@ resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: St
     return (reg.newType name: nm typetype: ztypes.ztypetype.RECORD)
 }
 
+# isNumericLiteralName -- true when a name begins with a digit: a numeric-literal
+# atom (an `as`-block static constant like `version: 1`), as opposed to a type-name
+# atom (a conformance marker). 48..57 are the ASCII digits.
+isNumericLiteralName: function {name: StringView} out bool is {
+    b0: name.byteAt 0.u64
+    match (
+        b0
+    ) case some then {
+        if b0 >= 48.u8 when b0 <= 57.u8 then {
+            return true
+        } else {}
+    } case none then {}
+    return false
+}
+
 # isStripMarker -- true for a dotted-path leaf that is an ownership or access marker
 # (`.lock`/`.borrow`/`.take`/`.private`/`.public`); a type reference peels these to
 # reach the underlying base type.
@@ -499,7 +514,13 @@ attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 mido
             ) case some then {
                 ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: mido
-            } else {}
+            } case none then {
+                cn: atomName n: am.operation
+                if (isNumericLiteralName name: cn.stringview) then {
+                    cid: resolveAtomType reg: reg nm: cn.stringview thisName: defName
+                    ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: cid
+                } else {}
+            }
         } else {}
     }
     return hasCreate

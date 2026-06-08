@@ -153,6 +153,7 @@ TYPES_SMOKE = [
     # Examples that needed a resolver fix to match the oracle.
     "ownership",
     "typed_data",
+    "specs",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
