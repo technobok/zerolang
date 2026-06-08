@@ -537,11 +537,26 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     return needsDtor
 }
 
+# dataOutTypeName -- the element-type name from a data block's optional `out T`
+# (an atom type-expr), or "" when absent. The Option is BORROWED (param), never
+# bound to a local: a bare bind would move the Option out of the shared AST node
+# and free its payload, corrupting the later dump walk.
+dataOutTypeName: function {o: (Option t: Node)} out String is {
+    match (
+        o
+    ) case some then {
+        return (atomName n: o)
+    } case none then {
+        return "".string
+    }
+}
+
 # resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
 # child per element (the element's own label when present, else its ordinal) plus a
-# `tag` child typed `tag__i64`, mark it a non-valtype, then record its defining unit
-# + `{unit}.{name}` view. Untyped-int elements only; typed / float / `out T`
-# elements arrive with the examples that exercise them.
+# `tag` child typed `tag__{element-type}` -- the `out T` width when declared, else
+# i64 -- mark it a non-valtype, then record its defining unit + `{unit}.{name}` view.
+# Elements stay literal_int (coerced per use); typed / float elements arrive with the
+# examples that exercise them.
 resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView dnode: zast.DataBlockData} is {
     did: reg.newType name: defName typetype: ztypes.ztypetype.DATA
     ddid: did
@@ -563,7 +578,12 @@ resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: S
         } else {}
         ordinal = ordinal + 1.u64
     }
-    tagId: reg.newType name: "tag__i64" typetype: ztypes.ztypetype.RECORD
+    etn: dataOutTypeName o: dnode.outType
+    tagName: "tag__i64".string
+    if etn.length == 0.u64 then {} else {
+        tagName = "tag__\{etn.stringview}".string
+    }
+    tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.RECORD
     ty.setChild parentTypeId: did childName: "tag" childTypeId: tagId
     ty.definedInUnit.set key: ddid value: unitName.string
     key: "\{unitName}.\{defName}".string
