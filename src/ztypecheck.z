@@ -92,6 +92,18 @@ isStripMarker: function {name: StringView} out bool is {
     return false
 }
 
+# isLabelValue -- true when a node is a bare `:X` label-value (an anonymous
+# conformance marker in an as-block parses as a namedoperation wrapping one).
+isLabelValue: function {op: Node} out bool is {
+    match (
+        op
+    ) case labelvalue then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # isGenericParam -- true when a type-expr is a generic-parameter constraint
 # (`Any.generic` / `u64.generic` / `Any.valtype`): a dottedpath whose leaf is
 # `generic` or `valtype`, peeling an `expression` / parameterized `call` wrapper.
@@ -182,6 +194,7 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
     match (
         typeExpr
     ) case atomid then {
+        reg.recordDemand name: typeExpr.name.stringview
         return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
     } case labelvalue then {
         return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
@@ -189,6 +202,7 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
         return (resolveTyperefShell reg: reg typeExpr: typeExpr.expression thisName: thisName)
     } case call then {
         suffix: atomName n: typeExpr.callable
+        reg.recordDemand name: suffix.stringview
         aiter: typeExpr.arguments.iterate
         for arg: aiter loop {
             match (
@@ -399,7 +413,13 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 if (reg.hasDestructorName typeId: mtid) then {
                     needsDtor = true
                 } else {}
-            } else {}
+            } case none then {
+                if (isLabelValue op: mm.operation) then {
+                    amlbl: unitLabel o: mm.name
+                    amlid: resolveAtomType reg: reg nm: amlbl.stringview thisName: ""
+                    ty.setChild parentTypeId: parentId childName: amlbl.stringview childTypeId: amlid
+                } else {}
+            }
         } else {}
     }
     return needsDtor
@@ -910,10 +930,10 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
 # typecheck -- entry point. Registers a UNIT type per unit (the `unit` table)
 # and resolves the main unit's definition signatures into the registry. The
 # registry is supplied by the caller and read by the SQL dumper.
-typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTyping is {
-    ty: ztyping.newTyping
-    # null is the reference's first registered type.
-    reg.newType name: "null" typetype: ztypes.ztypetype.NULL
+# registerAndResolveMain -- register a UNIT type per unit, then resolve the main
+# unit's definition signatures. Iterates program.units transiently so the demand
+# pass can re-iterate it without an overlapping exclusive lock.
+registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
@@ -933,5 +953,64 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTypin
             } else {}
         }
     } else {}
+}
+
+# resolveDemandedUnitBody -- resolve the definitions of a non-main unit that a
+# main-unit signature referenced (reg.isDemanded) and that aren't resolved yet,
+# stamping them with that unit's name (mirrors the oracle's on-demand resolution).
+resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                dn: unitLabel o: bm.name
+                if (reg.isDemanded name: dn.stringview) then {
+                    rkey: "\{unitName}.\{dn}".string
+                    got: ty.resolved.get key: rkey
+                    match (
+                        got
+                    ) case some then {} case none then {
+                        resolveDef ty: ty reg: reg unitName: unitName defName: dn.stringview defn: bm.operation
+                    }
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
+# referenced. Only `collections` is resolved here (the one non-`system` unit any
+# example references under resolve-only-main); the `system` closure is a later slice.
+resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                nm: unitLabel o: u.name
+                if nm.stringview == "collections" then {
+                    resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# typecheck -- entry point. Registers a UNIT type per unit and resolves the main
+# unit's definition signatures, then demand-resolves the cross-unit types those
+# signatures referenced. The registry is supplied by the caller, read by the dumper.
+typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTyping is {
+    ty: ztyping.newTyping
+    # null is the reference's first registered type.
+    reg.newType name: "null" typetype: ztypes.ztypetype.NULL
+    registerAndResolveMain ty: ty reg: reg program: program
+    resolveCrossUnitDemand ty: ty reg: reg program: program
     return ty
 }

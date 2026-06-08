@@ -102,20 +102,32 @@ TYPES_SMOKE = [
 # relaxed toward the COMPLETE `types` closure. Do not let it ossify. See
 # project_zerolang_ztypes_port. cname / destructor_name are excluded (their
 # values embed the type id, so they diverge between the two compilers).
-TYPED_PROJECTIONS = {
-    "types": (
-        "SELECT name, typetype, is_valtype, is_generic, needs_destructor, "
-        "is_heap_allocated FROM types WHERE defined_in_unit = ? "
-        "ORDER BY name, typetype"
-    ),
-    "type_children": (
-        "SELECT pt.name, tc.child_name, ct.name, tc.position, tc.param_ownership "
-        "FROM type_children tc "
-        "JOIN types pt ON tc.type_id = pt.type_id "
-        "JOIN types ct ON tc.child_type_id = ct.type_id "
-        "WHERE pt.defined_in_unit = ? ORDER BY pt.name, tc.position"
-    ),
+# Examples whose differential is widened beyond their own unit: each lists the
+# extra unit(s) whose definitions the example's signatures demand-resolve (the
+# filter-relaxation scaffold; widened per example as cross-unit demand lands).
+EXTRA_UNITS = {
+    "strview": ("collections",),
+    "str": ("collections",),
+    "with_alias": ("collections",),
 }
+
+
+def _typed_projections(nunits: int) -> dict:
+    ph = ", ".join("?" * nunits)
+    return {
+        "types": (
+            "SELECT name, typetype, is_valtype, is_generic, needs_destructor, "
+            f"is_heap_allocated FROM types WHERE defined_in_unit IN ({ph}) "
+            "ORDER BY name, typetype"
+        ),
+        "type_children": (
+            "SELECT pt.name, tc.child_name, ct.name, tc.position, tc.param_ownership "
+            "FROM type_children tc "
+            "JOIN types pt ON tc.type_id = pt.type_id "
+            "JOIN types ct ON tc.child_type_id = ct.type_id "
+            f"WHERE pt.defined_in_unit IN ({ph}) ORDER BY pt.name, tc.position"
+        ),
+    }
 
 
 def _python_skeleton_sql(unit: str) -> str:
@@ -188,9 +200,10 @@ def test_dumpsql_types_match_python(unit, zc_binary):
     scaffold)."""
     py = _load(_python_skeleton_sql(unit))
     zp = _load(_zc_sql(zc_binary, unit))
-    for table, query in TYPED_PROJECTIONS.items():
-        pr = py.execute(query, (unit,)).fetchall()
-        zr = zp.execute(query, (unit,)).fetchall()
+    units = (unit, *EXTRA_UNITS.get(unit, ()))
+    for table, query in _typed_projections(len(units)).items():
+        pr = py.execute(query, units).fetchall()
+        zr = zp.execute(query, units).fetchall()
         if pr != zr:
             only_py = sorted(set(pr) - set(zr))[:10]
             only_z = sorted(set(zr) - set(pr))[:10]
