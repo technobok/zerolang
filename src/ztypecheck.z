@@ -124,6 +124,22 @@ isGenericParam: function {op: Node} out bool is {
     }
 }
 
+# registerGenericParams -- record a type's generic-param names (keyed
+# `{unit}.{type}.{param}`) so method-param resolution can drop params typed by them.
+registerGenericParams: function {reg: ztypes.ZTypeRegistry typeKey: StringView items: (List of: Node)} is {
+    iter: items.iterate
+    for m: iter loop {
+        match (
+            m
+        ) case namedoperation then {
+            if (isGenericParam op: m.operation) then {
+                pn: unitLabel o: m.name
+                reg.addGenericParam typeKey: typeKey paramName: pn.stringview
+            } else {}
+        } else {}
+    }
+}
+
 # hasGenericParam -- true when any item in the block is a generic-param declaration.
 # Takes the list by value so its iterator's lock is released on return (the scan is
 # sequenced before any persistent iterator over the same list).
@@ -266,17 +282,21 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     if isgen then {
         reg.setGeneric typeId: fid value: true
     } else {}
+    enclKey: "\{unitName}.\{thisName}".string
     piter: fnode.parameters.iterate
     for pm: piter loop {
         match (
             pm
         ) case namedoperation then {
             skipParam: false
+            ptn: atomName n: pm.operation
             if skipThisType then {
-                ptn: atomName n: pm.operation
                 if ptn.stringview == "this" then {
                     skipParam = true
                 } else {}
+            } else {}
+            if (reg.isGenericParamOf typeKey: enclKey.stringview name: ptn.stringview) then {
+                skipParam = true
             } else {}
             if skipParam then {} else {
                 pname: unitLabel o: pm.name
@@ -501,8 +521,11 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     isgen: hasGenericParam items: rnode.asItems
     if isgen then {
         reg.setGeneric typeId: rid value: true
+        rtk: "\{unitName}.\{defName}".string
+        registerGenericParams reg: reg typeKey: rtk.stringview items: rnode.asItems
     } else {}
     istd: recordIsTypedef rnode: rnode
+    hasCreateIs: false
     if istd then {} else {
         fiter: rnode.isItems.iterate
         for fm: fiter loop {
@@ -510,12 +533,27 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 fm
             ) case namedoperation then {
                 fname: unitLabel o: fm.name
-                cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
-                ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+                qname: "\{defName}.\{fname}".string
+                mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
+                match (
+                    mido
+                ) case some then {
+                    if fname.stringview == "create" then {
+                        hasCreateIs = true
+                    } else {}
+                    ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: mido
+                } case none then {
+                    cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                    ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+                }
             } else {}
         }
     }
-    hasCreate: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: rid asItems: rnode.asItems
+    hasCreateAs: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: rid asItems: rnode.asItems
+    hasCreate: hasCreateIs
+    if hasCreateAs then {
+        hasCreate = true
+    } else {}
     attachMarkers ty: ty reg: reg unitName: unitName parentId: rid asItems: rnode.asItems
     if hasCreate then {} else {
         createName: "\{defName}.create".string
@@ -958,7 +996,8 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
 # resolveDemandedUnitBody -- resolve the definitions of a non-main unit that a
 # main-unit signature referenced (reg.isDemanded) and that aren't resolved yet,
 # stamping them with that unit's name (mirrors the oracle's on-demand resolution).
-resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} out bool is {
+    anyDemanded: false
     match (
         unitdef
     ) case unitdef then {
@@ -969,6 +1008,71 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             ) case namedoperation then {
                 dn: unitLabel o: bm.name
                 if (reg.isDemanded name: dn.stringview) then {
+                    anyDemanded = true
+                    rkey: "\{unitName}.\{dn}".string
+                    got: ty.resolved.get key: rkey
+                    match (
+                        got
+                    ) case some then {} case none then {
+                        resolveDef ty: ty reg: reg unitName: unitName defName: dn.stringview defn: bm.operation
+                    }
+                } else {}
+            } else {}
+        }
+    } else {}
+    return anyDemanded
+}
+
+# isConformanceMarker -- true when an as-item operation is a bare type reference
+# (atomid / labelvalue), i.e. a conformance marker like `:Text` or `m: Reader`.
+isConformanceMarker: function {op: Node} out bool is {
+    match (
+        op
+    ) case atomid then {
+        return true
+    } case labelvalue then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# declaresConformance -- true when an objectdef declares conformance via an as-item
+# (the oracle eager-resolves such collections types on first touch of the unit).
+declaresConformance: function {op: Node} out bool is {
+    match (
+        op
+    ) case objectdef then {
+        citer: op.asItems.iterate
+        for cm: citer loop {
+            match (
+                cm
+            ) case namedoperation then {
+                if (isConformanceMarker op: cm.operation) then {
+                    return true
+                } else {}
+            } else {}
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# resolveConformanceDefs -- resolve every not-yet-resolved unit def that declares a
+# conformance marker, mirroring the oracle's eager conformance pass. Only `str`
+# (`:Text`) qualifies in collections today; called when the unit was demanded at all.
+resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (declaresConformance op: bm.operation) then {
+                    dn: unitLabel o: bm.name
                     rkey: "\{unitName}.\{dn}".string
                     got: ty.resolved.get key: rkey
                     match (
@@ -996,7 +1100,10 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             ) case namedoperation then {
                 nm: unitLabel o: u.name
                 if nm.stringview == "collections" then {
-                    resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                    anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                    if anyDemanded then {
+                        resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                    } else {}
                 } else {}
             } else {}
         }
