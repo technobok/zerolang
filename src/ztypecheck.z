@@ -252,12 +252,10 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
         }
         return (reg.newType name: suffix.stringview typetype: ztypes.ztypetype.RECORD)
     } case dottedpath then {
-        cm: atomName n: typeExpr.child
-        if (isStripMarker name: cm.stringview) then {
-            return (resolveTyperefShell reg: reg typeExpr: typeExpr.parent thisName: thisName)
-        } else {
-            return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
-        }
+        # A dotted type-expr peels to its parent: an ownership/access strip marker
+        # (Container.private.lock) or a variant/union subtype default where the arm is
+        # the default value and the type is the parent (direction.north -> direction).
+        return (resolveTyperefShell reg: reg typeExpr: typeExpr.parent thisName: thisName)
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
     }
@@ -950,18 +948,26 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             } else {
                 fname: unitLabel o: fm.name
                 ftn: baseTypeName n: fm.operation
-                flock: pathOwnership n: fm.operation
-                isLock: false
+                mkey: "\{unitName}.\{defName}.\{ftn}".string
+                mref: ty.resolved.get key: mkey
                 match (
-                    flock
+                    mref
                 ) case some then {
-                    isLock = true
-                } case none then {}
-                if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
-                    needsDtor = true
-                } else {}
-                cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
-                ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                    ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mref
+                } case none then {
+                    flock: pathOwnership n: fm.operation
+                    isLock: false
+                    match (
+                        flock
+                    ) case some then {
+                        isLock = true
+                    } case none then {}
+                    if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
+                        needsDtor = true
+                    } else {}
+                    cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                    ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                }
             }
         } else {}
     }

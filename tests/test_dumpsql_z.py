@@ -154,6 +154,7 @@ TYPES_SMOKE = [
     "ownership",
     "typed_data",
     "specs",
+    "defaults",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
