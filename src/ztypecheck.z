@@ -62,6 +62,11 @@ resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: St
     if nm == "this" then {
         return (reg.newType name: thisName typetype: ztypes.ztypetype.RECORD)
     } else {}
+    if nm == "type" then {
+        if thisName.length == 0.u64 then {} else {
+            return (reg.newType name: thisName typetype: ztypes.ztypetype.RECORD)
+        }
+    } else {}
     b0: nm.byteAt 0.u64
     isnum: false
     match (
@@ -429,6 +434,8 @@ markerTargetId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             return (optionval.some rr)
         } case PROTOCOL then {
             return (optionval.some rr)
+        } case RECORD then {
+            return (optionval.some rr)
         } else {
             return (optionval.none u64)
         }
@@ -577,6 +584,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     } else {}
     istd: recordIsTypedef rnode: rnode
     hasCreateIs: false
+    hasEqIs: false
     if istd then {} else {
         fiter: rnode.isItems.iterate
         for fm: fiter loop {
@@ -591,6 +599,9 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 ) case some then {
                     if fname.stringview == "create" then {
                         hasCreateIs = true
+                    } else {}
+                    if fname.stringview == "==" then {
+                        hasEqIs = true
                     } else {}
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: mido
                 } case none then {
@@ -617,12 +628,14 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
         ty.setChild parentTypeId: rid childName: "borrow" childTypeId: borrowId
     } else {
         if isgen then {} else {
-            eqName: "\{defName}.==".string
-            eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
-            ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
-            neqName: "\{defName}.!=".string
-            neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
-            ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+            if hasEqIs then {} else {
+                eqName: "\{defName}.==".string
+                eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+                ty.setChild parentTypeId: rid childName: "==" childTypeId: eqId
+                neqName: "\{defName}.!=".string
+                neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.FUNCTION
+                ty.setChild parentTypeId: rid childName: "!=" childTypeId: neqId
+            }
         }
     }
     ty.definedInUnit.set key: rrid value: unitName.string
@@ -1175,6 +1188,25 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
     } else {}
 }
 
+# seedSystemDemands -- demand the system-unit types the i64/f64 pre-seed pulls into
+# resolve_only_main's closure. The .z side has no monomorphizer / return-type walk, so
+# it demands them by name (like seedIteratorDemands), grown by dependency layer.
+seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
+    reg.recordDemand name: "i8"
+    reg.recordDemand name: "i16"
+    reg.recordDemand name: "i32"
+    reg.recordDemand name: "i64"
+    reg.recordDemand name: "i128"
+    reg.recordDemand name: "u8"
+    reg.recordDemand name: "u16"
+    reg.recordDemand name: "u32"
+    reg.recordDemand name: "u64"
+    reg.recordDemand name: "u128"
+    reg.recordDemand name: "f32"
+    reg.recordDemand name: "f64"
+    reg.recordDemand name: "tag"
+}
+
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
 # referenced. Only `collections` is resolved here (the one non-`system` unit any
 # example references under resolve-only-main); the `system` closure is a later slice.
@@ -1193,6 +1225,13 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                     anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" unitdef: u.operation
                     if anyDemanded then {
                         resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                    } else {}
+                } else {}
+                if nm.stringview == "system" then {
+                    seedSystemDemands reg: reg
+                    anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg unitName: "system" unitdef: u.operation
+                    if anyDemandedSys then {
+                        resolveConformanceDefs ty: ty reg: reg unitName: "system" unitdef: u.operation
                     } else {}
                 } else {}
             } else {}

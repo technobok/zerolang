@@ -111,6 +111,42 @@ EXTRA_UNITS = {
     "with_alias": ("collections",),
 }
 
+# Base names of the system-unit closure ported so far. resolve_only_main pre-seeds a
+# FIXED 357-type system closure (the i64/f64 transitive closure, identical for every
+# example) via _link_literal_typedefs. The .z side reproduces it by hardcoded demand
+# (seedSystemDemands), grown by dependency layer per slice. The system differential
+# (test_dumpsql_system_closure) compares only system rows whose base type (name before
+# the first '.') is ported. When all 28 base names are in, fold 'system' into the
+# per-unit filter above and retire this set.
+SYSTEM_PORTED = {
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "f32",
+    "f64",
+    "tag",
+}
+
+_SYSTEM_TYPES_Q = (
+    "SELECT name, typetype, is_valtype, is_generic, needs_destructor, "
+    "is_heap_allocated FROM types WHERE defined_in_unit='system' "
+    "ORDER BY name, typetype"
+)
+_SYSTEM_CHILDREN_Q = (
+    "SELECT pt.name, tc.child_name, ct.name, tc.position, tc.param_ownership "
+    "FROM type_children tc "
+    "JOIN types pt ON tc.type_id = pt.type_id "
+    "JOIN types ct ON tc.child_type_id = ct.type_id "
+    "WHERE pt.defined_in_unit='system' ORDER BY pt.name, tc.position"
+)
+
 
 def _typed_projections(nunits: int) -> dict:
     ph = ", ".join("?" * nunits)
@@ -209,6 +245,36 @@ def test_dumpsql_types_match_python(unit, zc_binary):
             only_z = sorted(set(zr) - set(pr))[:10]
             pytest.fail(
                 f"{unit}: table '{table}' diverged "
+                f"(python={len(pr)} rows, z={len(zr)} rows).\n"
+                f"  only in python: {only_py}\n"
+                f"  only in z:      {only_z}"
+            )
+
+
+@pytest.mark.emitter
+def test_dumpsql_system_closure(zc_binary):
+    """The .z dump must match the Python resolve-only dump on the system-unit type
+    closure, restricted to the base types ported so far (SYSTEM_PORTED). The closure
+    is example-independent (byte-identical for every example), so it is checked once
+    on `hello`. Grows per porting slice until the whole 357-type system closure
+    lands, then folds into the per-unit filter."""
+    py = _load(_python_skeleton_sql("hello"))
+    zp = _load(_zc_sql(zc_binary, "hello"))
+
+    def _ported(rows):
+        return [r for r in rows if r[0].split(".")[0] in SYSTEM_PORTED]
+
+    for table, query in (
+        ("types", _SYSTEM_TYPES_Q),
+        ("type_children", _SYSTEM_CHILDREN_Q),
+    ):
+        pr = _ported(py.execute(query).fetchall())
+        zr = _ported(zp.execute(query).fetchall())
+        if pr != zr:
+            only_py = sorted(set(pr) - set(zr))[:10]
+            only_z = sorted(set(zr) - set(pr))[:10]
+            pytest.fail(
+                f"system closure: table '{table}' diverged "
                 f"(python={len(pr)} rows, z={len(zr)} rows).\n"
                 f"  only in python: {only_py}\n"
                 f"  only in z:      {only_z}"
