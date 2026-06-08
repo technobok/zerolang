@@ -344,6 +344,20 @@ resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     }
 }
 
+# isFunctionDefOp -- true when an is-block item's operation is a functiondef (a
+# method), false for a field type-ref. Gates generic-class method production without
+# resolving the function -- mirrors the oracle's isgeneric gate, which never builds a
+# method FUNCTION type for a generic class (so no spurious collections FUNCTION row).
+isFunctionDefOp: function {op: Node} out bool is {
+    match (
+        op
+    ) case functiondef then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # resolveSpecFn -- resolve one facet/protocol is-block spec method (a namedoperation
 # whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
 # resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
@@ -797,27 +811,46 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         match (
             fm
         ) case namedoperation then {
-            fname: unitLabel o: fm.name
-            ftn: baseTypeName n: fm.operation
-            flock: pathOwnership n: fm.operation
-            isLock: false
-            match (
-                flock
-            ) case some then {
-                isLock = true
-            } case none then {}
-            if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
-                needsDtor = true
-            } else {}
-            cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
-            ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+            if (isFunctionDefOp op: fm.operation) then {
+                if isgen then {} else {
+                    fname: unitLabel o: fm.name
+                    qname: "\{defName}.\{fname}".string
+                    mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
+                    match (
+                        mido
+                    ) case some then {
+                        ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mido
+                    } case none then {}
+                }
+            } else {
+                fname: unitLabel o: fm.name
+                ftn: baseTypeName n: fm.operation
+                flock: pathOwnership n: fm.operation
+                isLock: false
+                match (
+                    flock
+                ) case some then {
+                    isLock = true
+                } case none then {}
+                if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
+                    needsDtor = true
+                } else {}
+                cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+            }
         } else {}
     }
-    hasCreate: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: cid asItems: cnode.asItems
-    mNeedsDtor: attachMarkers ty: ty reg: reg unitName: unitName parentId: cid asItems: cnode.asItems
-    if mNeedsDtor then {
-        needsDtor = true
-    } else {}
+    hasCreate: false
+    if isgen then {} else {
+        hcAs: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: cid asItems: cnode.asItems
+        if hcAs then {
+            hasCreate = true
+        } else {}
+        mNeedsDtor: attachMarkers ty: ty reg: reg unitName: unitName parentId: cid asItems: cnode.asItems
+        if mNeedsDtor then {
+            needsDtor = true
+        } else {}
+    }
     if hasCreate then {} else {
         if isgen then {} else {
             createName: "\{defName}.create".string
@@ -1086,6 +1119,16 @@ resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     } else {}
 }
 
+# seedIteratorDemands -- a generic collection CLASS template carries no method
+# children (gated in resolveClass), so its sibling iterator/view templates are not
+# reached by ordinary type-ref demand. When a collection is demanded, demand its
+# iterators too, so the forward demand pass resolves them as bare generic templates.
+seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
+    if (reg.isDemanded name: "Set") then {
+        reg.recordDemand name: "SetIter"
+    } else {}
+}
+
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
 # referenced. Only `collections` is resolved here (the one non-`system` unit any
 # example references under resolve-only-main); the `system` closure is a later slice.
@@ -1100,6 +1143,7 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             ) case namedoperation then {
                 nm: unitLabel o: u.name
                 if nm.stringview == "collections" then {
+                    seedIteratorDemands reg: reg
                     anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" unitdef: u.operation
                     if anyDemanded then {
                         resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
