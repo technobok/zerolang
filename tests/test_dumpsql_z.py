@@ -163,6 +163,8 @@ TYPES_SMOKE = [
     "genmath",
     # Generic-unit instantiation: external file unit monomorphized at i64/i32.
     "genericfileunit",
+    # Generic-unit instantiation: inline generic unit (template + monos).
+    "genericunit",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

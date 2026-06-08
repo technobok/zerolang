@@ -1228,7 +1228,11 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 bm
             ) case namedoperation then {
                 defName: unitLabel o: bm.name
-                resolveDef ty: ty reg: reg unitName: unitName defName: defName.stringview defn: bm.operation
+                if (isUnitOp op: bm.operation) then {
+                    resolveInlineGenericUnit ty: ty reg: reg unitName: unitName defName: defName.stringview unitOp: bm.operation
+                } else {
+                    resolveDef ty: ty reg: reg unitName: unitName defName: defName.stringview defn: bm.operation
+                }
             } else {}
         }
     } else {}
@@ -1669,40 +1673,121 @@ attachMonoUnitFuncs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mon
 # unit) with JOIN-only function-shell children from the template's body, then seed
 # return/never demand (the template functions have bodies). Skips when already resolved
 # or the template unit is not found.
-resolveUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node unitName: StringView monoName: StringView templateName: StringView} is {
+# isUnitOp -- true when a binding's operation is an inline `unit as {...}` definition.
+isUnitOp: function {op: Node} out bool is {
+    match (
+        op
+    ) case unitdef then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# resolveInlineGenericUnit -- resolve an inline generic unit (mathops: unit as { t:
+# Any.generic; add; double }) into a UNIT type (is_generic) whose functions are mangled
+# {unit}_{fn} FUNCTION children (with their generic-param types KEPT -- unlike a generic
+# FILE unit, an inline template's params are not suppressed).
+resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView unitOp: Node} is {
+    match (
+        unitOp
+    ) case unitdef then {
+        uid: reg.newType name: defName typetype: ztypes.ztypetype.UNIT
+        did: uid
+        rid: uid
+        if (hasGenericParam items: unitOp.body) then {
+            reg.setGeneric typeId: uid value: true
+        } else {}
+        ty.definedInUnit.set key: did value: unitName.string
+        rk: "\{unitName}.\{defName}".string
+        ty.resolved.set key: rk value: rid
+        biter: unitOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                fn: unitLabel o: bm.name
+                qn: "\{defName}_\{fn}".string
+                mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qn.stringview thisName: "" op: bm.operation
+                match (
+                    mido
+                ) case some then {
+                    ty.setChild parentTypeId: uid childName: fn.stringview childTypeId: mido
+                } case none then {}
+            } else {}
+        }
+    } else {}
+}
+
+# createUnitMono -- create a mono UNIT (defined_in_unit=the instantiating unit) with
+# JOIN-only function-shell children from a template unit body, then seed return/never
+# demand. Dedups on the mono's resolved key.
+createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView monoName: StringView templateOp: Node} is {
     rkey: "\{unitName}.\{monoName}".string
     got: ty.resolved.get key: rkey
-    done: false
+    exists: false
     match (
         got
     ) case some then {
-        done = true
+        exists = true
     } case none then {}
-    if done then {} else {
-        match (
-            program
-        ) case program then {
-            uiter: program.units.iterate
-            for u: uiter loop {
-                match (
-                    u
-                ) case namedoperation then {
-                    un: unitLabel o: u.name
-                    if un.stringview == templateName then {
-                        monoId: reg.newType name: monoName typetype: ztypes.ztypetype.UNIT
-                        did: monoId
-                        rid: monoId
-                        ty.definedInUnit.set key: did value: unitName.string
-                        rk2: "\{unitName}.\{monoName}".string
-                        ty.resolved.set key: rk2 value: rid
-                        attachMonoUnitFuncs ty: ty reg: reg monoId: monoId monoName: monoName templateOp: u.operation
-                        reg.recordDemand name: "return"
-                        reg.recordDemand name: "never"
+    if exists then {} else {
+        monoId: reg.newType name: monoName typetype: ztypes.ztypetype.UNIT
+        did: monoId
+        rid: monoId
+        ty.definedInUnit.set key: did value: unitName.string
+        rk2: "\{unitName}.\{monoName}".string
+        ty.resolved.set key: rk2 value: rid
+        attachMonoUnitFuncs ty: ty reg: reg monoId: monoId monoName: monoName templateOp: templateOp
+        reg.recordDemand name: "return"
+        reg.recordDemand name: "never"
+    }
+}
+
+# resolveInlineMono -- create the mono for an INLINE template: scan the main unit body
+# for the inline `unit as {...}` binding named templateName and build the mono from it.
+resolveInlineMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView monoName: StringView templateName: StringView mainOp: Node} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                bn: unitLabel o: bm.name
+                if bn.stringview == templateName then {
+                    if (isUnitOp op: bm.operation) then {
+                        createUnitMono ty: ty reg: reg unitName: unitName monoName: monoName templateOp: bm.operation
                     } else {}
                 } else {}
-            }
-        } else {}
-    }
+            } else {}
+        }
+    } else {}
+}
+
+# resolveUnitMono -- create the mono UNIT for a generic-unit instantiation. The template
+# is either a FILE unit (in program.units) or an INLINE unit in the main body
+# (unitName == the main unit name for these instantiations).
+resolveUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node unitName: StringView monoName: StringView templateName: StringView} is {
+    match (
+        program
+    ) case program then {
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel o: u.name
+                if un.stringview == templateName then {
+                    createUnitMono ty: ty reg: reg unitName: unitName monoName: monoName templateOp: u.operation
+                } else {}
+                if un.stringview == unitName then {
+                    resolveInlineMono ty: ty reg: reg unitName: unitName monoName: monoName templateName: templateName mainOp: u.operation
+                } else {}
+            } else {}
+        }
+    } else {}
 }
 
 # resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings in the main
