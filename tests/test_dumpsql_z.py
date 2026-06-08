@@ -172,6 +172,8 @@ TYPES_SMOKE = [
     # Bidirectional generators: accepts: U -> _resume_input field + .call value: param.
     "generator_bidirectional",
     "generator_accepts_borrow",
+    # Method generator (Bag.iterate): synth via the method path + needs_destructor.
+    "generator_listiter",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

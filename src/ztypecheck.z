@@ -537,6 +537,8 @@ attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                     ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: cid
                 } else {}
             }
+            gfn: "\{defName}_\{mname}".string
+            synthGeneratorForMethod ty: ty reg: reg unitName: unitName fnName: gfn.stringview thisName: defName op: am.operation
         } else {}
     }
     return hasCreate
@@ -1182,7 +1184,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
     ) case functiondef then {
         resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: "" skipThisType: false
         if (isGeneratorReturn o: defn.returntype) then {
-            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: defName fnode: defn
+            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: defName thisName: "" fnode: defn
         } else {}
     } case expression then {
         resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
@@ -1871,12 +1873,26 @@ addResumeInputExpr: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iter
     } else {}
 }
 
-synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView fnode: zast.FunctionData} is {
+# synthGeneratorForMethod -- synthesize the iter class for a generator METHOD (an
+# as-block method whose return is the Iterator protocol). thisName is the enclosing
+# type, so a `this`-typed captured param (b: this.private.lock) resolves to it.
+synthGeneratorForMethod: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView thisName: StringView op: Node} is {
+    match (
+        op
+    ) case functiondef then {
+        if (isGeneratorReturn o: op.returntype) then {
+            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: fnName thisName: thisName fnode: op
+        } else {}
+    } else {}
+}
+
+synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView thisName: StringView fnode: zast.FunctionData} is {
     iterName: "\{fnName}_iter".string
     iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.CLASS
     iid: iterId
     reg.setValtype typeId: iterId value: false
     ty.definedInUnit.set key: iid value: unitName.string
+    needsDtor: false
     st1: resolveAtomType reg: reg nm: "i64" thisName: ""
     ty.setChild parentTypeId: iterId childName: "state" childTypeId: st1
     createName: "\{iterName}.create".string
@@ -1895,11 +1911,18 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             pm
         ) case namedoperation then {
             pn: unitLabel o: pm.name
-            ptn: atomName n: pm.operation
-            f1: resolveAtomType reg: reg nm: ptn.stringview thisName: ""
+            ptn: baseTypeName n: pm.operation
+            f1: resolveAtomType reg: reg nm: ptn.stringview thisName: thisName
             ty.setChild parentTypeId: iterId childName: pn.stringview childTypeId: f1
-            f2: resolveAtomType reg: reg nm: ptn.stringview thisName: ""
+            f2: resolveAtomType reg: reg nm: ptn.stringview thisName: thisName
             ty.setChild parentTypeId: createId childName: pn.stringview childTypeId: f2
+            pown: pathOwnership n: pm.operation
+            match (
+                pown
+            ) case some then {
+                ty.setChildOwnership parentTypeId: createId name: pn.stringview ownership: pown
+                needsDtor = true
+            } case none then {}
         } else {}
     }
     addResumeInput ty: ty reg: reg iterId: iterId callId: callId returntype: fnode.returntype
@@ -1908,6 +1931,10 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
     } else {}
     ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
     ty.setChild parentTypeId: iterId childName: "call" childTypeId: callId
+    if needsDtor then {
+        dn: "\{iterName}_destroy".string
+        reg.setDestructorName typeId: iterId name: dn.stringview
+    } else {}
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
 }
