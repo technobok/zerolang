@@ -387,6 +387,20 @@ class TestDiscardedOwnedReturnNoLeak:
         )
         assert result.stdout == "done\n"
 
+    def test_string_copy_then_append_no_overflow_under_asan(self):
+        # String_copy / String_new / String_cat allocated `capacity` bytes,
+        # but the buffer invariant (reserve / append / shrink) is capacity+1.
+        # Appending one byte to a freshly-copied string therefore wrote the
+        # nul one byte past the buffer. Surfaced mangling `(str to: N)`.
+        csource = emit_source(
+            'main: function is {\n    s: "abc".string\n    s.append "d"\n    print s\n}'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "abcd\n"
+
 
 class TestLoopBreakInMatch:
     """Regression: a loop `break` inside a `match` arm must leave the

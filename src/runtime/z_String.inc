@@ -8,7 +8,7 @@ static z_String_t z_String_new(const char* s) {
     z_String_t z = {0};
     z.size = (uint64_t)strlen(s);
     z.capacity = z.size + 1;
-    z.data = (char*)z_xmalloc(z.capacity);
+    z.data = (char*)z_xmalloc(z.capacity + 1);
     memcpy(z.data, s, z.size);
     z.data[z.size] = '\0';
     return z;
@@ -18,7 +18,7 @@ static z_String_t z_String_cat(z_String_t* a, z_String_t* b) {
     z_String_t z = {0};
     z.size = a->size + b->size;
     z.capacity = z.size + 1;
-    z.data = (char*)z_xmalloc(z.capacity);
+    z.data = (char*)z_xmalloc(z.capacity + 1);
     memcpy(z.data, a->data, a->size);
     memcpy(z.data + a->size, b->data, b->size);
     z.data[z.size] = '\0';
@@ -105,7 +105,7 @@ static z_String_t z_String_copy(z_String_t* s) {
     z_String_t z = {0};
     z.size = s->size;
     z.capacity = s->size + 1;
-    z.data = (char*)z_xmalloc(z.capacity);
+    z.data = (char*)z_xmalloc(z.capacity + 1);
     if (s->size > 0) memcpy(z.data, s->data, s->size);
     z.data[z.size] = '\0';
     return z;
