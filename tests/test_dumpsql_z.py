@@ -161,6 +161,8 @@ TYPES_SMOKE = [
     "io_protocol_closer",
     # Generic units: unit-level generic param (__generic_param) + suppressed children.
     "genmath",
+    # Generic-unit instantiation: external file unit monomorphized at i64/i32.
+    "genericfileunit",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the

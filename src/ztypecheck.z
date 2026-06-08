@@ -1560,6 +1560,180 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     } else {}
 }
 
+# callableUnitName -- the callable's name when a binding value is a (possibly
+# expression-wrapped) call, else "". Spots a generic-unit instantiation binding
+# (intmath: (genmath t: i64)).
+callableUnitName: function {op: Node} out String is {
+    match (
+        op
+    ) case expression then {
+        return (callableUnitName op: op.expression)
+    } case call then {
+        return (atomName n: op.callable)
+    } else {
+        return "".string
+    }
+}
+
+# firstArgTypeName -- the type-name of a call's first argument (the instantiation type
+# argument, e.g. i64 in (genmath t: i64)), else "".
+firstArgTypeName: function {op: Node} out String is {
+    match (
+        op
+    ) case expression then {
+        return (firstArgTypeName op: op.expression)
+    } case call then {
+        aiter: op.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                return (atomName n: arg.operation)
+            } else {}
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
+# and append the mono name ({template}_{arg}) + template name to the parallel lists.
+collectMainInstantiations: function {o: Node reqMono: (List of: String) reqTemplate: (List of: String)} is {
+    match (
+        o
+    ) case unitdef then {
+        biter: o.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                tn: callableUnitName op: bm.operation
+                if tn.length == 0.u64 then {} else {
+                    at: firstArgTypeName op: bm.operation
+                    mono: "\{tn}_\{at}".string
+                    reqMono.append mono
+                    reqTemplate.append tn
+                }
+            } else {}
+        }
+    } else {}
+}
+
+# scanMainForInstantiations -- find the main unit and collect its instantiation requests.
+# Its own function scope bounds the program.units iterator so it releases before the
+# mono-creation pass (which iterates program.units again).
+scanMainForInstantiations: function {program: Node reqMono: (List of: String) reqTemplate: (List of: String)} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel o: u.name
+                if un.stringview == mainName then {
+                    collectMainInstantiations o: u.operation reqMono: reqMono reqTemplate: reqTemplate
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# attachMonoUnitFuncs -- add a JOIN-only `{mono}.{fn}` FUNCTION shell child per function
+# in the template unit's body. The mono function rows are defined_in_unit=NULL (excluded
+# from the filtered dump), so no params are resolved -- only the names matter for the JOIN.
+attachMonoUnitFuncs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry monoId: u64 monoName: StringView templateOp: Node} is {
+    match (
+        templateOp
+    ) case unitdef then {
+        fiter: templateOp.body.iterate
+        for fm: fiter loop {
+            match (
+                fm
+            ) case namedoperation then {
+                if (isFunctionDefOp op: fm.operation) then {
+                    fn: unitLabel o: fm.name
+                    shellName: "\{monoName}.\{fn}".string
+                    shellId: reg.newType name: shellName.stringview typetype: ztypes.ztypetype.FUNCTION
+                    ty.setChild parentTypeId: monoId childName: fn.stringview childTypeId: shellId
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# resolveUnitMono -- create a mono UNIT (mangled name, defined_in_unit=the instantiating
+# unit) with JOIN-only function-shell children from the template's body, then seed
+# return/never demand (the template functions have bodies). Skips when already resolved
+# or the template unit is not found.
+resolveUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node unitName: StringView monoName: StringView templateName: StringView} is {
+    rkey: "\{unitName}.\{monoName}".string
+    got: ty.resolved.get key: rkey
+    done: false
+    match (
+        got
+    ) case some then {
+        done = true
+    } case none then {}
+    if done then {} else {
+        match (
+            program
+        ) case program then {
+            uiter: program.units.iterate
+            for u: uiter loop {
+                match (
+                    u
+                ) case namedoperation then {
+                    un: unitLabel o: u.name
+                    if un.stringview == templateName then {
+                        monoId: reg.newType name: monoName typetype: ztypes.ztypetype.UNIT
+                        did: monoId
+                        rid: monoId
+                        ty.definedInUnit.set key: did value: unitName.string
+                        rk2: "\{unitName}.\{monoName}".string
+                        ty.resolved.set key: rk2 value: rid
+                        attachMonoUnitFuncs ty: ty reg: reg monoId: monoId monoName: monoName templateOp: u.operation
+                        reg.recordDemand name: "return"
+                        reg.recordDemand name: "never"
+                    } else {}
+                } else {}
+            }
+        } else {}
+    }
+}
+
+# resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings in the main
+# unit (intmath: (genmath t: i64)) into mono UNIT types. Two passes avoid nested
+# program.units iteration: collect requests (separate fn), then create each mono.
+# programMainName -- the main unit's name as an owned copy (no lingering lock on
+# program, so program stays freely passable as a Node).
+programMainName: function {program: Node} out String is {
+    match (
+        program
+    ) case program then {
+        return (program.mainUnitName.string)
+    } else {
+        return "".string
+    }
+}
+
+resolveMainUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    mainName: programMainName program: program
+    reqMono: (List of: String)
+    reqTemplate: (List of: String)
+    scanMainForInstantiations program: program reqMono: reqMono reqTemplate: reqTemplate
+    i: 0.u64
+    for while i < reqMono.length loop {
+        mono: reqMono.get i: i
+        tmpl: reqTemplate.get i: i
+        resolveUnitMono ty: ty reg: reg program: program unitName: mainName.stringview monoName: mono.stringview templateName: tmpl.stringview
+        i = i + 1.u64
+    }
+}
+
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
 # unit's definition signatures, then demand-resolves the cross-unit types those
 # signatures referenced. The registry is supplied by the caller, read by the dumper.
@@ -1568,6 +1742,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTypin
     # null is the reference's first registered type.
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
     registerAndResolveMain ty: ty reg: reg program: program
+    resolveMainUnitInstantiations ty: ty reg: reg program: program
     resolveCrossUnitDemand ty: ty reg: reg program: program
     return ty
 }
