@@ -1725,6 +1725,16 @@ subtreeHasYield: function {node: Node} out bool is {
         return (subtreeHasYield node: node.expression)
     } case forexpr then {
         return (optHasYield o: node.body)
+    } case ifexpr then {
+        cliter: node.clauses.iterate
+        for cl: cliter loop {
+            if (subtreeHasYield node: cl) then {
+                return true
+            } else {}
+        }
+        return (optHasYield o: node.elseclause)
+    } case ifclause then {
+        return (subtreeHasYield node: node.statement)
     } else {
         return false
     }
@@ -1873,6 +1883,73 @@ addResumeInputExpr: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iter
     } else {}
 }
 
+# condIterableCallable -- the callable name of a for-loop's inline iterable (a
+# `binding: (gen ...)` condition), or "". A `while` condition (no binding) yields "".
+condIterableCallable: function {conds: (List of: Node)} out String is {
+    citer: conds.iterate
+    for c: citer loop {
+        match (
+            c
+        ) case namedoperation then {
+            cb: callableUnitName op: c.operation
+            if cb.length == 0.u64 then {} else {
+                return cb
+            }
+        } else {}
+    }
+    return "".string
+}
+
+# forIterableCallable -- for a yielding for-loop whose iterable is a generator call,
+# the callable name; "" otherwise (peels statementline/expression).
+forIterableCallable: function {e: Node} out String is {
+    match (
+        e
+    ) case statementline then {
+        return (forIterableCallable e: e.statementline)
+    } case expression then {
+        return (forIterableCallable e: e.expression)
+    } case forexpr then {
+        if (optHasYield o: e.body) then {
+            return (condIterableCallable conds: e.conditions)
+        } else {
+            return "".string
+        }
+    } else {
+        return "".string
+    }
+}
+
+# addInlineIterFields -- add an `_iterN: <callable>_iter` field per yielding for-loop
+# whose iterable is an inline generator call (chain/map_filter's nested pipeline). The
+# field is typed by the nested generator's iter class; no create param (that lives on
+# the excluded NULL-unit create).
+addInlineIterFields: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 body: (Option t: Node)} is {
+    match (
+        body
+    ) case some then {
+        addInlineIterFieldsBlk ty: ty reg: reg iterId: iterId blk: body
+    } case none then {}
+}
+addInlineIterFieldsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 blk: Node} is {
+    match (
+        blk
+    ) case statement then {
+        n: 0.u64
+        siter: blk.statements.iterate
+        for st: siter loop {
+            cb: forIterableCallable e: st
+            if cb.length == 0.u64 then {} else {
+                fieldName: "_iter\{n}".string
+                fieldType: "\{cb.stringview}_iter".string
+                ft: resolveAtomType reg: reg nm: fieldType.stringview thisName: ""
+                ty.setChild parentTypeId: iterId childName: fieldName.stringview childTypeId: ft
+                n = n + 1.u64
+            }
+        }
+    } else {}
+}
+
 # synthGeneratorForMethod -- synthesize the iter class for a generator METHOD (an
 # as-block method whose return is the Iterator protocol). thisName is the enclosing
 # type, so a `this`-typed captured param (b: this.private.lock) resolves to it.
@@ -1929,6 +2006,7 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
     if (bodyHasYieldingLoop body: fnode.body) then {
         addPromotedLocals ty: ty reg: reg iterId: iterId body: fnode.body
     } else {}
+    addInlineIterFields ty: ty reg: reg iterId: iterId body: fnode.body
     ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
     ty.setChild parentTypeId: iterId childName: "call" childTypeId: callId
     if needsDtor then {

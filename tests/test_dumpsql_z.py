@@ -174,6 +174,9 @@ TYPES_SMOKE = [
     "generator_accepts_borrow",
     # Method generator (Bag.iterate): synth via the method path + needs_destructor.
     "generator_listiter",
+    # Nested generators: inline-iterable for-loops promote to _iterN fields.
+    "generator_chain",
+    "generator_map_filter",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
