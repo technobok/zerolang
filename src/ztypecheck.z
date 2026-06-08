@@ -1181,6 +1181,9 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
         defn
     ) case functiondef then {
         resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: "" skipThisType: false
+        if (isGeneratorReturn o: defn.returntype) then {
+            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: defName
+        } else {}
     } case expression then {
         resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
     } case datablock then {
@@ -1673,6 +1676,62 @@ attachMonoUnitFuncs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mon
 # unit) with JOIN-only function-shell children from the template's body, then seed
 # return/never demand (the template functions have bodies). Skips when already resolved
 # or the template unit is not found.
+# isIteratorCall -- true when a type-expr is a call to `Iterator` (a generator's
+# `out (Iterator gives: T)` return), peeling an expression wrapper.
+isIteratorCall: function {op: Node} out bool is {
+    match (
+        op
+    ) case expression then {
+        return (isIteratorCall op: op.expression)
+    } case call then {
+        cn: atomName n: op.callable
+        return (cn.stringview == "Iterator")
+    } else {
+        return false
+    }
+}
+
+# isGeneratorReturn -- true when a function's return type is the Iterator protocol
+# (i.e. the function is a generator that lowers to a synth iterator class).
+isGeneratorReturn: function {o: (Option t: Node)} out bool is {
+    match (
+        o
+    ) case some then {
+        return (isIteratorCall op: o)
+    } case none then {
+        return false
+    }
+}
+
+# synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS the oracle lowers a
+# generator to: a `state: i64` field, a `create` method (param `state: i64`), and a
+# `call` method (receiver `this`, BORROW). All defined_in_unit=the example; seed
+# return/never demand (the lowered methods have bodies). No-param / no-promoted-local
+# generators only (counter); captured params + promoted locals arrive later.
+synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView} is {
+    iterName: "\{fnName}_iter".string
+    iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.CLASS
+    iid: iterId
+    reg.setValtype typeId: iterId value: false
+    ty.definedInUnit.set key: iid value: unitName.string
+    st1: resolveAtomType reg: reg nm: "i64" thisName: ""
+    ty.setChild parentTypeId: iterId childName: "state" childTypeId: st1
+    createName: "\{iterName}.create".string
+    createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
+    cdid: createId
+    ty.definedInUnit.set key: cdid value: unitName.string
+    ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
+    callName: "\{iterName}.call".string
+    callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.FUNCTION
+    clid: callId
+    ty.definedInUnit.set key: clid value: unitName.string
+    ty.setChild parentTypeId: callId childName: "this" childTypeId: iterId
+    ty.setChildOwnership parentTypeId: callId name: "this" ownership: ztypes.zparamownership.BORROW
+    ty.setChild parentTypeId: iterId childName: "call" childTypeId: callId
+    reg.recordDemand name: "return"
+    reg.recordDemand name: "never"
+}
+
 # isUnitOp -- true when a binding's operation is an inline `unit as {...}` definition.
 isUnitOp: function {op: Node} out bool is {
     match (

@@ -165,6 +165,8 @@ TYPES_SMOKE = [
     "genericfileunit",
     # Generic-unit instantiation: inline generic unit (template + monos).
     "genericunit",
+    # Generators: synth iterator class (state-only, no captured params).
+    "generator_counter",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
