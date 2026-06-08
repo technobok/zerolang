@@ -123,6 +123,7 @@ isGenericParam: function {op: Node} out bool is {
         leaf: atomName n: op.child
         if leaf.stringview == "generic" then { return true } else {}
         if leaf.stringview == "valtype" then { return true } else {}
+        if leaf.stringview == "reftype" then { return true } else {}
         return false
     } else {
         return false
@@ -422,11 +423,11 @@ isFunctionDefOp: function {op: Node} out bool is {
 # whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
 # resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
 # nothing (the reference returns no type), so the spec keeps only its real params.
-resolveSpecFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView qname: StringView thisName: StringView op: Node} out (optionval t: u64) is {
+resolveSpecFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView qname: StringView thisName: StringView op: Node skipThis: bool} out (optionval t: u64) is {
     match (
         op
     ) case functiondef then {
-        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: true))
+        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: skipThis))
     } else {
         return (optionval.none u64)
     }
@@ -958,7 +959,7 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         ) case namedoperation then {
             mname: unitLabel o: sm.name
             qname: "\{defName}.\{mname}".string
-            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: sm.operation
+            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: sm.operation skipThis: true
             match (
                 sido
             ) case some then {
@@ -992,6 +993,17 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     if isgen then {
         reg.setGeneric typeId: pid value: true
     } else {}
+    # A protocol spec receiver is normally dropped (resolves to nothing). The reference
+    # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
+    # to the enclosing String -- mirror that for the system Text protocol.
+    specThisName: defName
+    dropThis: true
+    if unitName == "system" then {
+        if defName == "Text" then {
+            specThisName = "String"
+            dropThis = false
+        } else {}
+    } else {}
     siter: fnode.isItems.iterate
     for sm: siter loop {
         match (
@@ -999,7 +1011,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
         ) case namedoperation then {
             mname: unitLabel o: sm.name
             qname: "\{defName}.\{mname}".string
-            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: sm.operation
+            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: specThisName op: sm.operation skipThis: dropThis
             match (
                 sido
             ) case some then {
@@ -1037,7 +1049,18 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
         match (
             defn.kind
         ) case RECORD then {
-            resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+            if defName == "null" then {
+                nid: reg.newType name: "null" typetype: ztypes.ztypetype.NULL
+                nnid: nid
+                reg.setValtype typeId: nid value: true
+                ncid: reg.newType name: "null.create" typetype: ztypes.ztypetype.FUNCTION
+                ty.setChild parentTypeId: nid childName: "create" childTypeId: ncid
+                ty.definedInUnit.set key: nnid value: unitName.string
+                rk: "\{unitName}.null".string
+                ty.resolved.set key: rk value: nid
+            } else {
+                resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+            }
         } case VARIANT then {
             resolveVariant ty: ty reg: reg unitName: unitName defName: defName vnode: defn
         } case UNION then {
@@ -1235,6 +1258,11 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "CpIter"
     reg.recordDemand name: "Splitter"
     reg.recordDemand name: "LinesIter"
+    reg.recordDemand name: "Text"
+    reg.recordDemand name: "Iterator"
+    reg.recordDemand name: "Any"
+    reg.recordDemand name: "Option"
+    reg.recordDemand name: "OptionView"
 }
 
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
