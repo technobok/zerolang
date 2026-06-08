@@ -1182,7 +1182,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
     ) case functiondef then {
         resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: "" skipThisType: false
         if (isGeneratorReturn o: defn.returntype) then {
-            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: defName
+            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: defName fnode: defn
         } else {}
     } case expression then {
         resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
@@ -1703,12 +1703,135 @@ isGeneratorReturn: function {o: (Option t: Node)} out bool is {
     }
 }
 
+# subtreeHasYield -- true if a node subtree contains a yield expression.
+subtreeHasYield: function {node: Node} out bool is {
+    match (
+        node
+    ) case yieldexpr then {
+        return true
+    } case statement then {
+        siter: node.statements.iterate
+        for st: siter loop {
+            if (subtreeHasYield node: st) then {
+                return true
+            } else {}
+        }
+        return false
+    } case statementline then {
+        return (subtreeHasYield node: node.statementline)
+    } case expression then {
+        return (subtreeHasYield node: node.expression)
+    } case forexpr then {
+        return (optHasYield o: node.body)
+    } else {
+        return false
+    }
+}
+
+# optHasYield -- subtreeHasYield over an optional node (a for-loop body).
+optHasYield: function {o: (Option t: Node)} out bool is {
+    match (
+        o
+    ) case some then {
+        return (subtreeHasYield node: o)
+    } case none then {
+        return false
+    }
+}
+
+# nodeIsYieldingLoop -- true when a statement (peeling statementline/expression) is a
+# for-loop whose body contains a yield.
+nodeIsYieldingLoop: function {node: Node} out bool is {
+    match (
+        node
+    ) case statementline then {
+        return (nodeIsYieldingLoop node: node.statementline)
+    } case expression then {
+        return (nodeIsYieldingLoop node: node.expression)
+    } case forexpr then {
+        return (optHasYield o: node.body)
+    } else {
+        return false
+    }
+}
+
+# bodyHasYieldingLoop -- true when a function body (optional statement block) contains a
+# yielding loop. Generators with one promote their straight-line locals to fields.
+bodyHasYieldingLoop: function {body: (Option t: Node)} out bool is {
+    match (
+        body
+    ) case some then {
+        return (blockHasYieldingLoop blk: body)
+    } case none then {
+        return false
+    }
+}
+blockHasYieldingLoop: function {blk: Node} out bool is {
+    match (
+        blk
+    ) case statement then {
+        siter: blk.statements.iterate
+        for st: siter loop {
+            if (nodeIsYieldingLoop node: st) then {
+                return true
+            } else {}
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# assignmentLocalName -- the local name a statement-line binds via `name: value`, or "".
+assignmentLocalName: function {line: Node} out String is {
+    match (
+        line
+    ) case statementline then {
+        return (assignmentInnerName s: line.statementline)
+    } else {
+        return "".string
+    }
+}
+assignmentInnerName: function {s: Node} out String is {
+    match (
+        s
+    ) case assignment then {
+        return s.name.string
+    } else {
+        return "".string
+    }
+}
+
+# addPromotedLocals -- add a field (i64) per top-level local binding in a generator body
+# (the loop-carried counters promoted to iter-class fields).
+addPromotedLocals: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 body: (Option t: Node)} is {
+    match (
+        body
+    ) case some then {
+        addPromotedLocalsBlk ty: ty reg: reg iterId: iterId blk: body
+    } case none then {}
+}
+addPromotedLocalsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 blk: Node} is {
+    match (
+        blk
+    ) case statement then {
+        siter: blk.statements.iterate
+        for st: siter loop {
+            nm: assignmentLocalName line: st
+            if nm.length == 0.u64 then {} else {
+                lf: resolveAtomType reg: reg nm: "i64" thisName: ""
+                ty.setChild parentTypeId: iterId childName: nm.stringview childTypeId: lf
+            }
+        }
+    } else {}
+}
+
 # synthGeneratorIterClass -- synthesize the `<fn>_iter` CLASS the oracle lowers a
 # generator to: a `state: i64` field, a `create` method (param `state: i64`), and a
 # `call` method (receiver `this`, BORROW). All defined_in_unit=the example; seed
 # return/never demand (the lowered methods have bodies). No-param / no-promoted-local
 # generators only (counter); captured params + promoted locals arrive later.
-synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView} is {
+synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView fnode: zast.FunctionData} is {
     iterName: "\{fnName}_iter".string
     iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.CLASS
     iid: iterId
@@ -1720,6 +1843,22 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
     cdid: createId
     ty.definedInUnit.set key: cdid value: unitName.string
+    piter: fnode.parameters.iterate
+    for pm: piter loop {
+        match (
+            pm
+        ) case namedoperation then {
+            pn: unitLabel o: pm.name
+            ptn: atomName n: pm.operation
+            f1: resolveAtomType reg: reg nm: ptn.stringview thisName: ""
+            ty.setChild parentTypeId: iterId childName: pn.stringview childTypeId: f1
+            f2: resolveAtomType reg: reg nm: ptn.stringview thisName: ""
+            ty.setChild parentTypeId: createId childName: pn.stringview childTypeId: f2
+        } else {}
+    }
+    if (bodyHasYieldingLoop body: fnode.body) then {
+        addPromotedLocals ty: ty reg: reg iterId: iterId body: fnode.body
+    } else {}
     ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
     callName: "\{iterName}.call".string
     callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.FUNCTION

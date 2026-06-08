@@ -167,6 +167,8 @@ TYPES_SMOKE = [
     "genericunit",
     # Generators: synth iterator class (state-only, no captured params).
     "generator_counter",
+    # Generator with captured params + a promoted loop-counter local.
+    "generator_intrange",
 ]
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
