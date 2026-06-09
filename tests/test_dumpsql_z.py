@@ -413,6 +413,55 @@ def test_dumpsql_typed_nodes_match_python(unit, zc_binary):
         )
 
 
+# conformance: an impl type satisfying a spec (facet/protocol) under a label.
+# Compared against resolve_only_main, projected by (impl name, spec name, label,
+# is_facet) -- the vtable/create/destroy cnames embed the type id and are excluded.
+# Covers String->Text (system), str->Text (collections), own-unit protocols
+# (MyFile->Reader) and facets (point->measurable, is_facet=1). Generators /
+# generic-units / io-protocols are deferred (their conformances need their phase).
+CONFORMANCE_SMOKE = [
+    "hello",
+    "factorial",
+    "records",
+    "classes",
+    "protocols",
+    "owned_protocol",
+    "facets",
+    "text_protocol",
+    "class_text_protocol",
+    "str",
+    "strview",
+]
+
+_CONFORMANCE_QUERY = (
+    "SELECT it.name, st.name, cf.label, cf.is_facet "
+    "FROM conformance cf "
+    "JOIN types it ON cf.impl_type_id = it.type_id "
+    "JOIN types st ON cf.spec_type_id = st.type_id "
+    "ORDER BY it.name, st.name, cf.label"
+)
+
+
+@pytest.mark.emitter
+@pytest.mark.parametrize("unit", CONFORMANCE_SMOKE)
+def test_dumpsql_conformance_match_python(unit, zc_binary):
+    """The .z dump must match the resolve-only dump on the conformance table,
+    projected by (impl name, spec name, label, is_facet) -- cnames excluded."""
+    py = _load(_python_skeleton_sql(unit))
+    zp = _load(_zc_sql(zc_binary, unit))
+    pr = py.execute(_CONFORMANCE_QUERY).fetchall()
+    zr = zp.execute(_CONFORMANCE_QUERY).fetchall()
+    if pr != zr:
+        only_py = sorted(set(pr) - set(zr))[:10]
+        only_z = sorted(set(zr) - set(pr))[:10]
+        pytest.fail(
+            f"{unit}: table 'conformance' diverged "
+            f"(python={len(pr)} rows, z={len(zr)} rows).\n"
+            f"  only in python: {only_py}\n"
+            f"  only in z:      {only_z}"
+        )
+
+
 @pytest.mark.emitter
 def test_dumpsql_structural_smoke(zc_binary):
     """Standalone invariants on the .z dump for hello, independent of the

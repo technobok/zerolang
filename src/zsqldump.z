@@ -88,6 +88,8 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, typedef_base_id INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS type_children (type_id INTEGER, child_name TEXT NOT NULL, child_type_id INTEGER, position INTEGER, child_id INTEGER, is_private INTEGER, is_lock_field INTEGER, is_lock_arm INTEGER, default_expr TEXT, param_ownership INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, cname TEXT, is_const INTEGER, const_value TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL, vtable_cname TEXT, create_cname TEXT, create_owned_cname TEXT, destroy_cname TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS conformance_wrapper (conformance_id INTEGER NOT NULL, spec_method TEXT NOT NULL, wrapper_cname TEXT NOT NULL, PRIMARY KEY (conformance_id, spec_method));\n"
     return acc
 }
 
@@ -496,6 +498,23 @@ ZDumper: class {
         }
     }
 
+    # appendConformance -- one row per recorded conformance (impl satisfies spec under a
+    # label). The vtable/create/destroy cnames embed the impl type id and are excluded
+    # from the differential. conformance_wrapper (spec-method wrappers) lands in a follow-up.
+    appendConformance: function {:this typing: ztyping.ZTyping} is {
+        citer: typing.conformance.iterate
+        for cf: citer loop {
+            lblSql: sqlStr s: cf.label.stringview
+            facetSql: boolNum b: cf.isFacet
+            vtSql: cnameSql c: cf.vtableCname.stringview
+            ccSql: cnameSql c: cf.createCname.stringview
+            coSql: cnameSql c: cf.createOwnedCname.stringview
+            dcSql: cnameSql c: cf.destroyCname.stringview
+            row: "INSERT OR IGNORE INTO conformance VALUES (\{cf.conformanceId}, \{cf.implTypeId}, \{cf.specTypeId}, \{lblSql}, \{facetSql}, \{vtSql}, \{ccSql}, \{coSql}, \{dcSql});\n"
+            this.acc.append s: row.stringview
+        }
+    }
+
 }
 
 # --- entry point ---
@@ -509,5 +528,6 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs typing: ztyping.ZTyping reg: zty
     d.appendTypes reg: reg typing: typing
     d.appendTypeChildren typing: typing
     d.appendTypedNodes typing: typing
+    d.appendConformance typing: typing
     return d.acc.copy
 }

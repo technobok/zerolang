@@ -663,6 +663,28 @@ attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
 # (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
 # methods so markers take later positions. Returns whether any marker target owns a
 # destructor (a protocol), so a class holder keeps its own.
+# recordConformance -- record an impl-satisfies-spec conformance, but only when the
+# spec resolves to a FACET or PROTOCOL (a RECORD marker like a numeric's `tag: tag` is a
+# discriminator child, NOT a conformance). Mirrors _record_conformance (ztypecheck.py:3516);
+# the helper C names (vtable/create/destroy/wrapper) are emitter-set and stay empty here.
+recordConformance: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry implTypeId: u64 specTypeId: u64 label: StringView} is {
+    tt: reg.typetypeOf typeId: specTypeId
+    recordIt: false
+    isFacetC: false
+    match (
+        tt
+    ) case FACET then {
+        recordIt = true
+        isFacetC = true
+    } case PROTOCOL then {
+        recordIt = true
+    } else {}
+    if recordIt then {
+        cf: reg.newConformance implTypeId: implTypeId specTypeId: specTypeId label: label isFacet: isFacetC
+        ty.conformance.append cf
+    } else {}
+}
+
 attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView parentId: u64 asItems: (List of: Node)} out bool is {
     needsDtor: false
     miter: asItems.iterate
@@ -680,11 +702,14 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 if (reg.hasDestructorName typeId: mtid) then {
                     needsDtor = true
                 } else {}
+                recordConformance ty: ty reg: reg implTypeId: parentId specTypeId: mtid label: mlbl.stringview
             } case none then {
                 if (isLabelValue op: mm.operation) then {
                     amlbl: unitLabel o: mm.name
                     amlid: resolveAtomType reg: reg nm: amlbl.stringview thisName: ""
                     ty.setChild parentTypeId: parentId childName: amlbl.stringview childTypeId: amlid
+                    acf: reg.newConformance implTypeId: parentId specTypeId: amlid label: amlbl.stringview isFacet: false
+                    ty.conformance.append acf
                 } else {}
             }
         } else {}
