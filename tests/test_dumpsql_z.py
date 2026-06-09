@@ -464,14 +464,14 @@ def test_dumpsql_conformance_match_python(unit, zc_binary):
 # types / type_children / conformance the walk's demand-reach extends. mathutil
 # (returning body functions) is the spine; hello (a `print` call) exercises the
 # REGULAR-call walk + the generic-print demand-reach (+14 types, +7 conformance).
-CHECK_SMOKE = ["mathutil", "hello", "ifctl", "forctl", "doctl", "withctl"]
+CHECK_SMOKE = ["mathutil", "hello", "ifctl", "forctl", "doctl", "withctl", "asgn"]
 
 # Examples whose full-mode typed_nodes also matches. hello is excluded for now:
 # its demand-reached io closure (IoError, protocol-spec method refs) is not yet
 # fully resolved by the .z, so io-definition signature nodes are missing. That
 # io demand-completeness is a follow-up; the body-walk node stamps themselves are
 # covered by mathutil.
-TYPED_NODES_CHECK = ["mathutil", "ifctl", "forctl", "doctl", "withctl"]
+TYPED_NODES_CHECK = ["mathutil", "ifctl", "forctl", "doctl", "withctl", "asgn"]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
 # depth (the scope_log enumerate index); unreachable + open/close seqs are

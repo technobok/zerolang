@@ -57,6 +57,10 @@ nodeId: function {n: Node} out u32 is {
         return n.nodeid
     } case functiondef then {
         return n.nodeid
+    } case assignment then {
+        return n.nodeid
+    } case reassignment then {
+        return n.nodeid
     } else {
         return 0.u32
     }
@@ -1708,6 +1712,11 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
     } case binop then {
         scanCallsInNode reg: reg node: node.lhs
         scanCallsInNode reg: reg node: node.rhs
+    } case assignment then {
+        scanCallsInNode reg: reg node: node.value
+    } case reassignment then {
+        scanCallsInNode reg: reg node: node.topath
+        scanCallsInNode reg: reg node: node.value
     } case ifexpr then {
         for cl: node.clauses.iterate loop {
             scanCallsInNode reg: reg node: cl
@@ -2696,6 +2705,34 @@ lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
     return result
 }
 
+# checkAssignment -- a local binding `name: value`: walk the value, define the
+# local (owned for a plain value), and stamp the assignment node + def-variable.
+checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast.AssignmentData} is {
+    vt: checkValue st: st unitName: unitName node: asgn.value
+    if vt > 0.u64 then {
+        v: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.OWNED
+        vid: v.variableId
+        st.defineVar name: asgn.name.stringview var: v
+        st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid
+        setk: vt
+        st.typing.nodeType.set key: asgn.nodeid.u64 value: setk
+    } else {
+    }
+}
+
+# checkReassignment -- `lhs = value`: resolve the target path and the value, then
+# reset any narrowing on a bare-name target (appends a non-definition overlay
+# entry, mirroring _check_reassignment_inner's reset_narrowing).
+checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView rasgn: zast.ReassignmentData} is {
+    checkValue st: st unitName: unitName node: rasgn.topath
+    checkValue st: st unitName: unitName node: rasgn.value
+    nm: atomName n: rasgn.topath
+    if nm.length > 0.u64 then {
+        st.resetNarrowing name: nm.stringview
+    } else {
+    }
+}
+
 # checkWith -- walk `with name: value do body`: push the `with` scope, bind the
 # alias variable (BORROWED for a plain-path value), walk the body, then pop. The
 # with node carries the bound value's type; the with-expression's value is the
@@ -2911,6 +2948,9 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return (checkDo st: st unitName: unitName donode: node)
     } case withexpr then {
         return (checkWith st: st unitName: unitName withnode: node)
+    } case reassignment then {
+        checkReassignment st: st unitName: unitName rasgn: node
+        return 0.u64
     } case expression then {
         t: checkValue st: st unitName: unitName node: node.expression
         if t > 0.u64 then {
@@ -2946,6 +2986,12 @@ checkStmtInner: function {st: zenv.ZSymbolTable unitName: StringView inner: Node
         inner
     ) case expression then {
         return (checkExpression st: st unitName: unitName expr: inner)
+    } case assignment then {
+        checkAssignment st: st unitName: unitName asgn: inner
+        return false
+    } case reassignment then {
+        checkReassignment st: st unitName: unitName rasgn: inner
+        return false
     } else {
         return false
     }
