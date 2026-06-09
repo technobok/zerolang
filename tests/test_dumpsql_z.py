@@ -179,10 +179,13 @@ TYPES_SMOKE = [
     "generator_map_filter",
 ]
 
-# typed_nodes (signature level): the .z resolvers stamp each definition node
-# with its resolved type id; compared against resolve_only_main, projected by
-# (node identity, resolved-type name) and filtered to the example's OWN unit.
-# Grows by resolver cluster and later widens to system + collections.
+# typed_nodes (signature level): the .z resolvers stamp each definition + type-ref
+# node with its resolved type id; a post-demand pass (stampTyperefs) resolves the
+# type-ref base names to their REAL types across units. Compared against
+# resolve_only_main, projected by (node identity, resolved-type name) and filtered to
+# the example's own unit + the 'system' and 'collections' closures. Examples still
+# excluded need the method-body walk (Phase C), conformance markers (A.5), or the
+# generator / io-protocol resolvers.
 TYPED_NODES_SMOKE = [
     "hello",
     "factorial",
@@ -190,10 +193,11 @@ TYPED_NODES_SMOKE = [
     "mathutil",
     "swap",
     "multimod",
-    # objectdef / data def-node stamping (no own-typed method-body nodes).
-    "vector",
     "data",
-    # A.3: method-def stamping + real-type type-ref (param / field / arm) stamping.
+    "vector",
+    "strview",
+    "str",
+    "with_alias",
     "narrowing",
     "variants",
     "equality",
@@ -203,9 +207,56 @@ TYPED_NODES_SMOKE = [
     "generics",
     "genericfunctions",
     "numeric_generics",
-    "str",
-    "strview",
-    "with_alias",
+    "linkedlist",
+    # Control flow, expressions, constants, compile-time diagnostics.
+    "arbprec_constants",
+    "case",
+    "chained_method_calls",
+    "compileerror",
+    "control",
+    "dobreak",
+    "field_reassign",
+    "panic",
+    "box",
+    # String operations.
+    "string_codepoints",
+    "string_join",
+    "string_ordering",
+    "string_parse",
+    "string_query",
+    "string_slice",
+    "string_split",
+    "string_transform",
+    "strings",
+    # Collections and iterators.
+    "arrays",
+    "lists",
+    "listview",
+    "mapitems",
+    "maps",
+    "set_uniq",
+    # I/O.
+    "io_buffered",
+    "io_fs_ops",
+    "io_list_dir",
+    "io_lstat",
+    "io_open",
+    "io_read_text",
+    "io_readwrite",
+    "io_seek",
+    "io_stat_mkdirp",
+    "io_textreader",
+    "io_textwriter",
+    "io_write_text",
+    # OS / CLI.
+    "cli_basic",
+    "os_basics",
+    "os_env",
+    "os_platform",
+    "os_process",
+    # Resolver-fix examples.
+    "ownership",
+    "typed_data",
 ]
 
 _TYPED_NODES_QUERY = (
@@ -213,7 +264,7 @@ _TYPED_NODES_QUERY = (
     "FROM typed_nodes tn "
     "JOIN ast_nodes an ON tn.node_id = an.node_id "
     "JOIN types t ON tn.type_id = t.type_id "
-    "WHERE t.defined_in_unit = ? "
+    "WHERE t.defined_in_unit IN (?, 'system', 'collections') "
     "ORDER BY an.kind, an.name, an.start_line, an.start_col"
 )
 
