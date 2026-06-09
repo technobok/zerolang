@@ -1731,6 +1731,8 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             } else {
             }
         }
+    } case doexpr then {
+        scanCallsInNode reg: reg node: node.statement
     } case ifclause then {
         for cnd: node.conditions.iterate loop {
             match (
@@ -2660,6 +2662,50 @@ checkClause: function {st: zenv.ZSymbolTable unitName: StringView clause: Node} 
     }
 }
 
+# lastStmtType -- the resolved type id of a statement block's last statement
+# (the value of a do-block), or 0 when empty/untyped.
+lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
+    result: 0.u64
+    match (
+        block
+    ) case statement then {
+        ne: block.statements.length
+        if ne > 0.u64 then {
+            last: block.statements.get i: (ne - 1.u64)
+            match (
+                last
+            ) case statementline then {
+                r: st.typing.nodeType.get key: last.nodeid.u64
+                match (
+                    r
+                ) case some then {
+                    result = r
+                } case none then {
+                }
+            } else {
+            }
+        } else {
+        }
+    } else {
+    }
+    return result
+}
+
+# checkDo -- walk a do-block: push the `block` scope, walk its statements, then
+# pop. The do resolves to its last statement's value type.
+checkDo: function {st: zenv.ZSymbolTable unitName: StringView donode: zast.DoData} out u64 is {
+    doMarker: st.pushBlock name: "block"
+    checkStatement st: st unitName: unitName block: donode.statement
+    result: lastStmtType st: st block: donode.statement
+    st.popTo marker: doMarker
+    if result > 0.u64 then {
+        setk: result
+        st.typing.nodeType.set key: donode.nodeid.u64 value: setk
+    } else {
+    }
+    return result
+}
+
 # checkFor -- walk a for-loop: push the `for` scope, walk its conditions
 # (while-condition / binding value), body, and postconditions, then pop. The for
 # itself resolves to null (filtered) in statement position. break/continue defines
@@ -2835,6 +2881,8 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
     } case forexpr then {
         checkFor st: st unitName: unitName fornode: node
         return 0.u64
+    } case doexpr then {
+        return (checkDo st: st unitName: unitName donode: node)
     } case expression then {
         return (checkValue st: st unitName: unitName node: node.expression)
     } else {
