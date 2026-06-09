@@ -459,10 +459,12 @@ def test_dumpsql_conformance_match_python(unit, zc_binary):
         )
 
 
-# Body-walk symbol table: scope / variable / entry / narrowed_subtype, compared
-# against typecheck(full=False) via `zc --full`. Grows as the body-walk engine
-# lands; mathutil (no main, two non-generic body functions) is the spine: two
-# function scopes, each with one parameter entry/variable.
+# Body walk, compared against typecheck(full=False) via `zc --full`. Asserts the
+# symbol-table tables (scope / variable / entry / narrowed_subtype) AND the
+# types / type_children / typed_nodes the walk extends (a returning body pulls
+# return/never + stamps its statement/expression/binop/atomid nodes). Grows as
+# the engine lands; mathutil (no main, two non-generic returning body functions)
+# is the spine.
 CHECK_SMOKE = ["mathutil"]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
@@ -472,7 +474,7 @@ CHECK_SMOKE = ["mathutil"]
 # has-variable, is_taken. variable: resolved-type name, ownership, flags.
 _CHECK_PROJECTIONS = {
     "scope": (
-        "SELECT p.name, s.kind, s.name, s.depth FROM scope s "
+        "SELECT p.name, s.kind, s.name, s.depth, s.unreachable FROM scope s "
         "LEFT JOIN scope p ON s.parent_id = p.scope_id "
         "ORDER BY s.depth, s.name"
     ),
@@ -498,12 +500,15 @@ _CHECK_PROJECTIONS = {
 @pytest.mark.parametrize("unit", CHECK_SMOKE)
 def test_dumpsql_check_match_python(unit, zc_binary):
     """The `zc --full` body-walk dump must match typecheck(full=False) on the
-    symbol-table tables (scope / entry / variable / narrowed_subtype)."""
+    symbol-table tables (scope / entry / variable / narrowed_subtype) and on the
+    types / type_children / typed_nodes the body walk extends."""
     py = _load(_python_skeleton_sql(unit, oracle="full"))
     zp = _load(_zc_sql(zc_binary, unit, full=True))
-    for table, query in _CHECK_PROJECTIONS.items():
-        pr = py.execute(query).fetchall()
-        zr = zp.execute(query).fetchall()
+    units = (unit, "system", *EXTRA_UNITS.get(unit, ()))
+
+    def _check(table, query, params=()):
+        pr = py.execute(query, params).fetchall()
+        zr = zp.execute(query, params).fetchall()
         if pr != zr:
             only_py = sorted(set(pr) - set(zr))[:10]
             only_z = sorted(set(zr) - set(pr))[:10]
@@ -513,6 +518,12 @@ def test_dumpsql_check_match_python(unit, zc_binary):
                 f"  only in python: {only_py}\n"
                 f"  only in z:      {only_z}"
             )
+
+    for table, query in _CHECK_PROJECTIONS.items():
+        _check(table, query)
+    for table, query in _typed_projections(len(units)).items():
+        _check(table, query, units)
+    _check("typed_nodes", _TYPED_NODES_QUERY, (unit,))
 
 
 @pytest.mark.emitter

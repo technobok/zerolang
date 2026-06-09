@@ -1671,6 +1671,64 @@ unitHasObjectMethodBody: function {def: Node} out bool is {
 # builtin, so the closure pulls `return` + its `out never` type. The .z resolver does
 # signatures only, so when the MAIN unit has any objectdef with a method-with-body,
 # demand `return` + `never` to match.
+# unitHasAnyBody -- true if a unit defines any function (free or object method)
+# with a body. Drives the full-mode return/never demand (the body walk uses
+# `return`, whose `out never` pulls both into the closure).
+unitHasAnyBody: function {def: Node} out bool is {
+    match (
+        def
+    ) case unitdef then {
+        biter: def.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: bm.operation) then {
+                    return true
+                } else {
+                }
+                if (objectHasMethodBody op: bm.operation) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# mainHasFunctionBody -- true if the main unit has any function/method body to walk.
+mainHasFunctionBody: function {program: Node} out bool is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        result: false
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                nm: unitLabel o: u.name
+                if nm.stringview == mainName then {
+                    if (unitHasAnyBody def: u.operation) then {
+                        result = true
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+        }
+        return result
+    } else {
+        return false
+    }
+}
+
 seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
@@ -2429,9 +2487,192 @@ paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} ou
     }
 }
 
+# isReturnCallKind -- true iff the stamped call-kind is RETURN.
+isReturnCallKind: function {o: (optionval t: zast.callkind)} out bool is {
+    match (
+        o
+    ) case some then {
+        ck: o
+        match (
+            ck
+        ) case RETURN then {
+            return true
+        } else {
+            return false
+        }
+    } case none then {
+        return false
+    }
+}
+
+# checkAtomid -- type a name-atom in value position: a local variable resolves
+# via the symbol table. (Numeric literals + unit-def atoms land in later slices.)
+checkAtomid: function {st: zenv.ZSymbolTable node: zast.AtomIdData} out u64 is {
+    result: 0.u64
+    vtOpt: st.lookup name: node.name.stringview
+    match (
+        vtOpt
+    ) case some then {
+        result = vtOpt
+        setk: result
+        st.typing.nodeType.set key: node.nodeid.u64 value: setk
+    } case none then {
+    }
+    return result
+}
+
+# checkBinop -- type an arithmetic binop. Both operands are walked (so their
+# nodes are stamped); the result is the lhs operand type (correct for same-type
+# arithmetic -- full operator-method dispatch lands with a comparison example).
+checkBinop: function {st: zenv.ZSymbolTable unitName: StringView binop: zast.BinOpData} out u64 is {
+    result: 0.u64
+    lt: checkValue st: st unitName: unitName node: binop.lhs
+    checkValue st: st unitName: unitName node: binop.rhs
+    result = lt
+    if result > 0.u64 then {
+        setk: result
+        st.typing.nodeType.set key: binop.nodeid.u64 value: setk
+    } else {
+    }
+    return result
+}
+
+# checkCall -- type a call. C1 handles the `return <value>` control-flow form:
+# stamp the callable atom with return's type, mark the call RETURN, walk the
+# return value, and resolve the call to `never`. Other call kinds land later.
+checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData} out u64 is {
+    result: 0.u64
+    cn: atomName n: call.callable
+    if cn.stringview == "return" then {
+        rtOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "return"
+        match (
+            rtOpt
+        ) case some then {
+            calid: nodeId n: call.callable
+            st.typing.nodeType.set key: calid.u64 value: rtOpt
+        } case none then {
+        }
+        st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.RETURN
+        aiter: call.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                checkValue st: st unitName: unitName node: arg.operation
+            } else {
+            }
+        }
+        nvOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never"
+        match (
+            nvOpt
+        ) case some then {
+            result = nvOpt
+            setk: result
+            st.typing.nodeType.set key: call.nodeid.u64 value: setk
+        } case none then {
+        }
+    } else {
+    }
+    return result
+}
+
+# checkValue -- type an expression-value node, dispatching by kind. Returns the
+# resolved type id, or 0 when unhandled.
+checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out u64 is {
+    match (
+        node
+    ) case call then {
+        return (checkCall st: st unitName: unitName call: node)
+    } case binop then {
+        return (checkBinop st: st unitName: unitName binop: node)
+    } case atomid then {
+        return (checkAtomid st: st node: node)
+    } case expression then {
+        return (checkValue st: st unitName: unitName node: node.expression)
+    } else {
+        return 0.u64
+    }
+}
+
+# checkExpression -- type an expression wrapper from its inner value; returns
+# true when the inner is a return terminator (so the caller marks the scope
+# unreachable).
+checkExpression: function {st: zenv.ZSymbolTable unitName: StringView expr: zast.ExpressionData} out bool is {
+    isRet: false
+    t: checkValue st: st unitName: unitName node: expr.expression
+    if t > 0.u64 then {
+        st.typing.nodeType.set key: expr.nodeid.u64 value: t
+    } else {
+    }
+    innerNid: nodeId n: expr.expression
+    ckOpt: st.typing.callKind.get key: innerNid.u64
+    isRet = isReturnCallKind o: ckOpt
+    return isRet
+}
+
+# checkStmtInner -- dispatch a statement line's inner node (C1: expressions).
+checkStmtInner: function {st: zenv.ZSymbolTable unitName: StringView inner: Node} out bool is {
+    match (
+        inner
+    ) case expression then {
+        return (checkExpression st: st unitName: unitName expr: inner)
+    } else {
+        return false
+    }
+}
+
+# checkStatementLine -- type a statement line; propagate the inner type to the
+# line wrapper. Returns true for a return terminator.
+checkStatementLine: function {st: zenv.ZSymbolTable unitName: StringView sline: Node} out bool is {
+    isRet: false
+    match (
+        sline
+    ) case statementline then {
+        isRet = checkStmtInner st: st unitName: unitName inner: sline.statementline
+        inid: nodeId n: sline.statementline
+        itOpt: st.typing.nodeType.get key: inid.u64
+        match (
+            itOpt
+        ) case some then {
+            st.typing.nodeType.set key: sline.nodeid.u64 value: itOpt
+        } case none then {
+        }
+    } else {
+    }
+    return isRet
+}
+
+# checkStatement -- walk a function-body statement block, marking the scope
+# unreachable after a control-flow terminator (return).
+checkStatement: function {st: zenv.ZSymbolTable unitName: StringView block: Node} is {
+    match (
+        block
+    ) case statement then {
+        siter: block.statements.iterate
+        for sline: siter loop {
+            isRet: checkStatementLine st: st unitName: unitName sline: sline
+            if isRet then {
+                st.markUnreachable
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+# walkBody -- walk an optional function body (none for spec methods).
+walkBody: function {st: zenv.ZSymbolTable unitName: StringView bodyOpt: (Option t: Node)} is {
+    match (
+        bodyOpt
+    ) case some then {
+        checkStatement st: st unitName: unitName block: bodyOpt
+    } case none then {
+    }
+}
+
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
-# parameter as a runtime variable, then pops (the pop snapshots the scope's
-# entries for the SQL dump). The statement walk lands in a later slice.
+# parameter as a runtime variable, walks the body, then pops (the pop snapshots
+# the scope's entries + unreachable flag for the SQL dump).
 checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
@@ -2462,6 +2703,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                 } else {
                 }
             }
+            walkBody st: st unitName: unitName bodyOpt: defn.body
             dpop: st.pop
         } else {
         }
@@ -2519,6 +2761,14 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
     registerAndResolveMain ty: ty reg: reg program: program
     resolveMainUnitInstantiations ty: ty reg: reg program: program
+    if full then {
+        if (mainHasFunctionBody program: program) then {
+            reg.recordDemand name: "return"
+            reg.recordDemand name: "never"
+        } else {
+        }
+    } else {
+    }
     resolveCrossUnitDemand ty: ty reg: reg program: program
     stampTyperefs ty: ty program: program
     st: zenv.newSymbolTable reg: reg typing: ty
