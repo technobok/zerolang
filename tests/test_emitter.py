@@ -30,7 +30,16 @@ _CC = os.environ.get("Z_TEST_CC", "gcc")
 # Every example compiled by `make build`, minus the library-only modules
 # (no `main`) the Makefile SKIP list excludes. Drives the all-examples
 # compile sweep so no example can silently stop compiling.
-_BUILD_SKIP = {"mathutil", "genmath", "ifctl", "forctl", "doctl", "withctl", "asgn"}
+_BUILD_SKIP = {
+    "mathutil",
+    "genmath",
+    "ifctl",
+    "forctl",
+    "doctl",
+    "withctl",
+    "asgn",
+    "callctl",
+}
 _BUILD_EXAMPLES = sorted(
     name
     for name in (

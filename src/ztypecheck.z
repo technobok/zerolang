@@ -327,6 +327,19 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
     } else {}
 }
 
+# recordFuncReturnNode -- map a function type id to its return type-ref's node id
+# so a call site can read the resolved return type (node_type, post stampTyperefs).
+recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        rn: nodeId n: o
+        fidc: fid
+        ty.funcReturnNode.set key: fidc value: rn.u64
+    } case none then {
+    }
+}
+
 # recordReturnType -- record a function's `out T` return type-ref (mirrors
 # demandReturnType's extraction). A parameterized return (out (Result ...)) yields no
 # bare base name and is skipped (its mono is NULL-defined, filtered out anyway).
@@ -544,6 +557,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     }
     demandReturnType reg: reg o: fnode.returntype
     recordReturnType ty: ty thisName: thisName o: fnode.returntype
+    recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
     ty.definedInUnit.set key: dfid value: unitName.string
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: fid
@@ -2875,6 +2889,19 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView binop: zast.Bin
     return result
 }
 
+# walkCallArgs -- type each argument's value (arguments are namedoperation-wrapped).
+walkCallArgs: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData} is {
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            checkValue st: st unitName: unitName node: arg.operation
+        } else {
+        }
+    }
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -2910,17 +2937,59 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
         } case none then {
         }
     } else {
-        # REGULAR call: walk arguments so their nodes get typed. The callable, the
-        # call result, and any monomorphization are out of the own+system+
-        # collections projection (NULL-unit / io), so they need no stamping here.
-        aiter: call.arguments.iterate
-        for arg: aiter loop {
+        # A regular call. Resolve the callable; a non-generic user function
+        # pushes a call scope and resolves to its return type. A generic callee
+        # (e.g. print) or an unresolvable/dotted callable just has its args walked
+        # (its callable/result/mono are out of the own+system+collections filter).
+        funcId: 0.u64
+        if cn.length > 0.u64 then {
+            fo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview
             match (
-                arg
-            ) case namedoperation then {
-                checkValue st: st unitName: unitName node: arg.operation
-            } else {
+                fo
+            ) case some then {
+                funcId = fo
+            } case none then {
             }
+        } else {
+        }
+        isUser: false
+        if funcId > 0.u64 then {
+            zo: st.reg.typeById.get key: funcId
+            match (
+                zo
+            ) case some then {
+                if zo.isgeneric then {
+                } else {
+                    isUser = true
+                }
+            } case none then {
+            }
+        } else {
+        }
+        if isUser then {
+            calid: nodeId n: call.callable
+            setc: funcId
+            st.typing.nodeType.set key: calid.u64 value: setc
+            cm: st.pushCall
+            walkCallArgs st: st unitName: unitName call: call
+            st.popTo marker: cm
+            rnOpt: st.typing.funcReturnNode.get key: funcId
+            match (
+                rnOpt
+            ) case some then {
+                rtOpt: st.typing.nodeType.get key: rnOpt
+                match (
+                    rtOpt
+                ) case some then {
+                    result = rtOpt
+                    setr: result
+                    st.typing.nodeType.set key: call.nodeid.u64 value: setr
+                } case none then {
+                }
+            } case none then {
+            }
+        } else {
+            walkCallArgs st: st unitName: unitName call: call
         }
     }
     return result
