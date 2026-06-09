@@ -183,7 +183,17 @@ TYPES_SMOKE = [
 # with its resolved type id; compared against resolve_only_main, projected by
 # (node identity, resolved-type name) and filtered to the example's OWN unit.
 # Grows by resolver cluster and later widens to system + collections.
-TYPED_NODES_SMOKE = ["hello", "factorial", "fibonacci", "mathutil", "swap", "multimod"]
+TYPED_NODES_SMOKE = [
+    "hello",
+    "factorial",
+    "fibonacci",
+    "mathutil",
+    "swap",
+    "multimod",
+    # objectdef / data def-node stamping (no own-typed method-body nodes).
+    "vector",
+    "data",
+]
 
 _TYPED_NODES_QUERY = (
     "SELECT an.kind, an.name, an.start_line, an.start_col, t.name "
