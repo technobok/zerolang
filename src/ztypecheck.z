@@ -2384,7 +2384,136 @@ stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
     } else {}
 }
 
-typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTyping is {
+# ownershipOfParam -- a parameter's binding ownership from its path annotation:
+# an explicit .take binds OWNED, everything else (.borrow / .lock / default)
+# binds BORROWED (mirrors _check_function_body_inner's param-ownership mapping).
+ownershipOfParam: function {o: (optionval t: ztypes.zparamownership)} out ztypes.zownership is {
+    match (
+        o
+    ) case some then {
+        po: o
+        match (
+            po
+        ) case TAKE then {
+            return ztypes.zownership.OWNED
+        } case BORROW then {
+            return ztypes.zownership.BORROWED
+        } case LOCK then {
+            return ztypes.zownership.BORROWED
+        }
+    } case none then {
+        return ztypes.zownership.BORROWED
+    }
+}
+
+# paramTypeId -- the resolved type id of a parameter's type-expr. Reads the
+# post-demand node stamp (stampTyperefs), falling back to a cross-unit name
+# lookup for a bare-atom base.
+paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} out u64 is {
+    onid: nodeId n: op
+    r: typing.nodeType.get key: onid.u64
+    match (
+        r
+    ) case some then {
+        return r
+    } case none then {
+        an: atomName n: op
+        lr: lookupTyperef resolved: typing.resolved mainName: unitName base: an.stringview
+        match (
+            lr
+        ) case some then {
+            return lr
+        } case none then {
+            return 0.u64
+        }
+    }
+}
+
+# checkFunctionBody -- type-check one function body. Pushes a scope, binds each
+# parameter as a runtime variable, then pops (the pop snapshots the scope's
+# entries for the SQL dump). The statement walk lands in a later slice.
+checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node} is {
+    match (
+        defn
+    ) case functiondef then {
+        hasBody: false
+        match (
+            defn.body
+        ) case some then {
+            hasBody = true
+        } case none then {
+        }
+        if hasBody then {
+            sname: "function:\{defName}"
+            dpush: st.push name: sname.stringview
+            piter: defn.parameters.iterate
+            for pm: piter loop {
+                match (
+                    pm
+                ) case namedoperation then {
+                    pname: unitLabel o: pm.name
+                    pnid: nodeId n: pm.operation
+                    ptid: paramTypeId typing: st.typing unitName: unitName op: pm.operation
+                    own: ownershipOfParam o: (pathOwnership n: pm.operation)
+                    v: st.reg.newVariable ztypeId: ptid ownership: own
+                    vid2: v.variableId
+                    st.defineVar name: pname.stringview var: v
+                    st.typing.defVariableId.set key: pnid.u64 value: vid2
+                } else {
+                }
+            }
+            dpop: st.pop
+        } else {
+        }
+    } else {
+    }
+}
+
+# checkUnitBodies -- walk every function definition with a body in one unit.
+checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                defName: unitLabel o: bm.name
+                checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+# checkBodies -- the body-walk pass (full mode), mirroring check()'s top-level
+# loop: walk the main unit's function bodies. Runs after demand resolution so
+# referenced types are already resolved.
+checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                nm: unitLabel o: u.name
+                if nm.stringview == mainName then {
+                    checkUnitBodies st: st unitName: nm.stringview unitdef: u.operation
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     # null is the reference's first registered type.
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
@@ -2392,5 +2521,10 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry} out ztyping.ZTypin
     resolveMainUnitInstantiations ty: ty reg: reg program: program
     resolveCrossUnitDemand ty: ty reg: reg program: program
     stampTyperefs ty: ty program: program
-    return ty
+    st: zenv.newSymbolTable reg: reg typing: ty
+    if full then {
+        checkBodies st: st program: program
+    } else {
+    }
+    return st
 }

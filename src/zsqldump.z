@@ -90,6 +90,10 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, cname TEXT, is_const INTEGER, const_value TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL, vtable_cname TEXT, create_cname TEXT, create_owned_cname TEXT, destroy_cname TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance_wrapper (conformance_id INTEGER NOT NULL, spec_method TEXT NOT NULL, wrapper_cname TEXT NOT NULL, PRIMARY KEY (conformance_id, spec_method));\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, opened_at_seq INTEGER NOT NULL, closed_at_seq INTEGER, unreachable INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
     return acc
 }
 
@@ -154,6 +158,45 @@ paramOwnSql: function {o: (optionval t: ztypes.zparamownership)} out String is {
         o
     ) case some then {
         return "\{ztypes.zparamownershipInt o}".string
+    } case none then {
+        return "NULL".string
+    }
+}
+
+# varOwnSql -- a variable's ownership enum as a SQL string literal.
+varOwnSql: function {o: (optionval t: ztypes.zownership)} out String is {
+    match (
+        o
+    ) case some then {
+        ow: o
+        ownStr: (ztypes.zownershipName ow)
+        return (sqlStr s: ownStr.stringview)
+    } case none then {
+        return "'BORROWED'".string
+    }
+}
+
+# optBoolNumOr0 -- an optional bool as SQL "1"/"0", defaulting to "0".
+optBoolNumOr0: function {o: (optionval t: bool)} out String is {
+    match (
+        o
+    ) case some then {
+        return (boolNum b: o)
+    } case none then {
+        return "0".string
+    }
+}
+
+# originSql -- a borrow/synth origin ("" or absent => NULL), else a SQL string.
+originSql: function {o: (Option t: String)} out String is {
+    match (
+        o
+    ) case some then {
+        if o.length == 0.u64 then {
+            return "NULL".string
+        } else {
+            return (sqlStr s: o.stringview)
+        }
     } case none then {
         return "NULL".string
     }
@@ -445,11 +488,11 @@ ZDumper: class {
     # appendTypes -- one row per registered type, read by sequential id from
     # the registry. The dumper emits the full (small) registry; the
     # differential filters to the example's own unit via defined_in_unit.
-    appendTypes: function {:this reg: ztypes.ZTypeRegistry typing: ztyping.ZTyping} is {
-        n: reg.nextTypeId
+    appendTypes: function {:this st: zenv.ZSymbolTable} is {
+        n: st.reg.nextTypeId
         tid: 0.u64
         for while tid < n loop {
-            zt: reg.typeById.get key: tid
+            zt: st.reg.typeById.get key: tid
             match (
                 zt
             ) case some then {
@@ -465,7 +508,7 @@ ZDumper: class {
                 dnSql: optStrSql o: zt.destructorName
                 heapSql: boolNum b: zt.isHeapAllocated
                 cnSql: cnameSql c: zt.cname.stringview
-                duSql: optStrSql o: (typing.definedInUnit.get key: tid)
+                duSql: optStrSql o: (st.typing.definedInUnit.get key: tid)
                 row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{parentSql}, \{valSql}, \{genSql}, \{tbSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
                 this.acc.append s: row.stringview
             } case none then {}
@@ -515,19 +558,69 @@ ZDumper: class {
         }
     }
 
+    # appendSymbolTable -- scope / entry / variable rows from the body-walk
+    # symbol table. scope rows from the append-only scope log (depth = log
+    # index, mirroring the reference enumerate); entry rows from the pop-time
+    # snapshots; variable rows from the per-id side tables, deduped. Sibling
+    # fields are read directly (not via st methods) so the scope-log iterator's
+    # lock does not reject a whole-value method call on st. narrowed_subtype is
+    # emitted by a later slice (taken/narrowing entries).
+    appendSymbolTable: function {:this st: zenv.ZSymbolTable} is {
+        seen: (Set of: u64)
+        depth: 0.u64
+        for row: st.scopeLog.iterate loop {
+            sidv: row.scopeId
+            parentSql: optIdStr o: row.parentId
+            rk: (ztypes.zscopekindName row.kind)
+            kindSql: sqlStr s: rk.stringview
+            nameSql: sqlStr s: row.name.stringview
+            closeSql: optIdStr o: (st.scopeClose.get key: sidv)
+            unreachNum: boolNum b: (st.unreachableScopes.has item: sidv)
+            r: "INSERT OR IGNORE INTO scope VALUES (\{sidv}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{row.openedAtSeq}, \{closeSql}, \{unreachNum});\n"
+            this.acc.append s: r.stringview
+            depth = depth + 1.u64
+        }
+        for e: st.entryDump.iterate loop {
+            varSql: optIdStr o: e.varId
+            origSql: optIdStr o: e.originalZtypeId
+            defNum: boolNum b: e.isDefinition
+            takNum: boolNum b: e.isTaken
+            enmSql: sqlStr s: e.name.stringview
+            r: "INSERT OR IGNORE INTO entry VALUES (\{e.entryId}, \{e.scopeId}, \{e.position}, \{enmSql}, \{e.ztypeId}, \{defNum}, \{varSql}, \{origSql}, \{takNum}, NULL, NULL, NULL);\n"
+            this.acc.append s: r.stringview
+            vd: e.varId
+            match (
+                vd
+            ) case some then {
+                seen.add item: vd
+            } case none then {
+            }
+        }
+        for vid: seen.iterate loop {
+            ztSql: optIdStr o: (st.typing.variableZtype.get key: vid)
+            ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
+            privNum: optBoolNumOr0 o: (st.typing.variableIsPrivate.get key: vid)
+            boSql: originSql o: (st.typing.variableBorrowOrigin.get key: vid)
+            soSql: originSql o: (st.typing.variableSynthOrigin.get key: vid)
+            r: "INSERT OR IGNORE INTO variable VALUES (\{vid}, \{ztSql}, \{ownSql}, \{privNum}, \{boSql}, \{soSql});\n"
+            this.acc.append s: r.stringview
+        }
+    }
+
 }
 
 # --- entry point ---
 
 # dumpSql -- the full dump: schema, then files, ast_nodes and unit rows.
-dumpSql: function {program: Node vfs: zvfs.ZVfs typing: ztyping.ZTyping reg: ztypes.ZTypeRegistry} out String is {
+dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out String is {
     d: ZDumper acc: schemaSql
     d.appendFiles vfs: vfs
     d.appendNodes program: program
-    d.appendUnits program: program typing: typing
-    d.appendTypes reg: reg typing: typing
-    d.appendTypeChildren typing: typing
-    d.appendTypedNodes typing: typing
-    d.appendConformance typing: typing
+    d.appendUnits program: program typing: symtab.typing
+    d.appendTypes st: symtab
+    d.appendTypeChildren typing: symtab.typing
+    d.appendTypedNodes typing: symtab.typing
+    d.appendConformance typing: symtab.typing
+    d.appendSymbolTable st: symtab
     return d.acc.copy
 }

@@ -35,7 +35,7 @@ import pytest
 
 from zvfs import ZVfs, FSProvider, BindType
 from zparser import Parser
-from ztypecheck import resolve_only_main
+from ztypecheck import resolve_only_main, typecheck
 from zsqldump import dump_sql
 
 # Building zc.z compiles the entire ported pipeline as one unit -- the
@@ -307,10 +307,11 @@ def _typed_projections(nunits: int) -> dict:
     }
 
 
-def _python_skeleton_sql(unit: str) -> str:
+def _python_skeleton_sql(unit: str, oracle: str = "resolve_only_main") -> str:
     """Reference dump at the ported pipeline's capability: parse over the same
-    stdlib + source VFS as zc, run the resolve-only-main pass (resolve every
-    main-unit definition SIGNATURE, no function-body walk), and dump."""
+    stdlib + source VFS as zc, then dump. ``oracle`` selects the typecheck pass:
+    ``resolve_only_main`` (signatures only, no body walk -- the SIGONLY zc path)
+    or ``full`` (``typecheck(full=False)`` -- the ``zc --full`` body-walk path)."""
     vfs = ZVfs()
     sysid = vfs.register(FSProvider(rootpath=SYSTEM_DIR, parentpath=""))
     srcid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
@@ -319,26 +320,22 @@ def _python_skeleton_sql(unit: str) -> str:
     root = vfs.bind(parentid=root, name=None, newid=srcid, bindtype=BindType.BEFORE)
     program = Parser(vfs, unit).parse()
     assert not program.is_error, f"python parse failed for {unit}"
+    if oracle == "full":
+        return dump_sql(typecheck(program, full=False))
     return dump_sql(resolve_only_main(program))
 
 
-def _zc_sql(zc_binary: str, unit: str) -> str:
-    proc = subprocess.run(
-        [
-            zc_binary,
-            unit,
-            "--src",
-            EXAMPLES_DIR,
-            "--system",
-            SYSTEM_DIR,
-            "--dump-sql",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-    )
+def _zc_sql(zc_binary: str, unit: str, full: bool = False) -> str:
+    args = [zc_binary, unit, "--src", EXAMPLES_DIR, "--system", SYSTEM_DIR]
+    if full:
+        args.append("--full")
+    args += ["--dump-sql", "-"]
+    proc = subprocess.run(args, capture_output=True, text=True)
     if proc.returncode != 0:
-        pytest.fail(f"zc exited {proc.returncode} on {unit}.\nstderr:\n{proc.stderr}")
+        flag = " --full" if full else ""
+        pytest.fail(
+            f"zc{flag} exited {proc.returncode} on {unit}.\nstderr:\n{proc.stderr}"
+        )
     return proc.stdout
 
 
@@ -460,6 +457,62 @@ def test_dumpsql_conformance_match_python(unit, zc_binary):
             f"  only in python: {only_py}\n"
             f"  only in z:      {only_z}"
         )
+
+
+# Body-walk symbol table: scope / variable / entry / narrowed_subtype, compared
+# against typecheck(full=False) via `zc --full`. Grows as the body-walk engine
+# lands; mathutil (no main, two non-generic body functions) is the spine: two
+# function scopes, each with one parameter entry/variable.
+CHECK_SMOKE = ["mathutil"]
+
+# Id-independent symbol-table projections. scope: parent-by-name, kind, name,
+# depth (the scope_log enumerate index); unreachable + open/close seqs are
+# excluded (the statement walk drives unreachable; seqs are ordering artifacts).
+# entry: owning-scope name + position, name, resolved-type name, is_definition,
+# has-variable, is_taken. variable: resolved-type name, ownership, flags.
+_CHECK_PROJECTIONS = {
+    "scope": (
+        "SELECT p.name, s.kind, s.name, s.depth FROM scope s "
+        "LEFT JOIN scope p ON s.parent_id = p.scope_id "
+        "ORDER BY s.depth, s.name"
+    ),
+    "entry": (
+        "SELECT sc.name, e.position, e.name, t.name, e.is_definition, "
+        "(e.variable_id IS NOT NULL), e.is_taken FROM entry e "
+        "JOIN scope sc ON e.scope_id = sc.scope_id "
+        "JOIN types t ON e.ztype_id = t.type_id "
+        "ORDER BY sc.name, e.position, e.name"
+    ),
+    "variable": (
+        "SELECT t.name, v.ownership, v.is_private_access, v.borrow_origin, "
+        "v.synth_origin FROM variable v JOIN types t ON v.ztype_id = t.type_id "
+        "ORDER BY t.name, v.ownership"
+    ),
+    "narrowed_subtype": (
+        "SELECT name, excluded FROM narrowed_subtype ORDER BY name, excluded"
+    ),
+}
+
+
+@pytest.mark.emitter
+@pytest.mark.parametrize("unit", CHECK_SMOKE)
+def test_dumpsql_check_match_python(unit, zc_binary):
+    """The `zc --full` body-walk dump must match typecheck(full=False) on the
+    symbol-table tables (scope / entry / variable / narrowed_subtype)."""
+    py = _load(_python_skeleton_sql(unit, oracle="full"))
+    zp = _load(_zc_sql(zc_binary, unit, full=True))
+    for table, query in _CHECK_PROJECTIONS.items():
+        pr = py.execute(query).fetchall()
+        zr = zp.execute(query).fetchall()
+        if pr != zr:
+            only_py = sorted(set(pr) - set(zr))[:10]
+            only_z = sorted(set(zr) - set(pr))[:10]
+            pytest.fail(
+                f"{unit}: table '{table}' diverged "
+                f"(python={len(pr)} rows, z={len(zr)} rows).\n"
+                f"  only in python: {only_py}\n"
+                f"  only in z:      {only_z}"
+            )
 
 
 @pytest.mark.emitter

@@ -205,6 +205,22 @@ ZScopeLogRow: class {
     openedAtSeq: u64
 }
 
+# A symbol-table entry snapshotted at scope pop (before the flat entry list
+# is truncated) so the SQL dump can reconstruct each scope's entries after
+# typecheck. `position` is the index within the owning scope's entry range.
+ZEntryDumpRow: class {
+    scopeId:         u64
+    position:        u64
+    entryId:         u64
+    name:            String
+    ztypeId:         u64
+    isDefinition:    bool
+    varId:           (optionval t: u64)
+    originalZtypeId: (optionval t: u64)
+    isTaken:         bool
+    takenAt:         (optionval t: ztypes.zsrcpos)
+}
+
 # Scoped symbol table. Owns the id registry and the typecheck-output
 # container outright (a reftype class field is moved in at construction),
 # so every method reads metadata via `this.reg` / `this.typing` without
@@ -216,6 +232,7 @@ ZSymbolTable: class {
     scopeLog:   (List of: ZScopeLogRow)
     scopeClose: (Map key: u64 value: u64)
     unreachableScopes: (Set of: u64)
+    entryDump:  (List of: ZEntryDumpRow)
     seqCounter: u64
     reg:        ztypes.ZTypeRegistry
     typing:     ZTyping
@@ -334,6 +351,15 @@ ZSymbolTable: class {
         start: top.entryStart
         endIdx: this.entries.length
 
+        # Snapshot this scope's entries before truncation so the SQL dump can
+        # reconstruct them after typecheck (the flat list is emptied on pop).
+        sp: start
+        for while sp < endIdx loop {
+            de: this.entries.get i: sp
+            this.entryDump.append (ZEntryDumpRow scopeId: topId position: (sp - start) entryId: de.entryId name: de.name.copy ztypeId: de.ztypeId isDefinition: de.isDefinition varId: de.varId originalZtypeId: de.originalZtypeId isTaken: de.isTaken takenAt: de.takenAt)
+            sp = sp + 1.u64
+        }
+
         localDefs: (Set of: String)
         p: start
         for while p < endIdx loop {
@@ -420,6 +446,13 @@ ZSymbolTable: class {
         }
         vid: var.variableId
         this.typing.variableCname.set key: vid value: var.cname.copy
+        this.typing.variableZtype.set key: var.variableId value: var.ztypeId
+        this.typing.variableOwnership.set key: var.variableId value: var.ownership
+        this.typing.variableIsPrivate.set key: var.variableId value: var.isPrivateAccess
+        bo: optStrOrEmpty o: var.borrowOrigin
+        this.typing.variableBorrowOrigin.set key: var.variableId value: bo
+        so: optStrOrEmpty o: var.synthOrigin
+        this.typing.variableSynthOrigin.set key: var.variableId value: so
         e: this.reg.newEntry name: name ztypeId: var.ztypeId isDefinition: true
         e.varId = (optionval.some var.variableId)
         this.entries.append e
@@ -1148,6 +1181,17 @@ ZSymbolTable: class {
     }
 }
 
+# An optional String as an owned String, "" when absent (the dump renders "" as NULL).
+optStrOrEmpty: function {o: (Option t: String)} out String is {
+    match (
+        o
+    ) case some then {
+        return o.string
+    } case none then {
+        return "".string
+    }
+}
+
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
         scopes: (List of: ZScope)
@@ -1156,6 +1200,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         scopeLog: (List of: ZScopeLogRow)
         scopeClose: (Map key: u64 value: u64)
         unreachableScopes: (Set of: u64)
+        entryDump: (List of: ZEntryDumpRow)
         seqCounter: 0.u64
         reg: reg
         typing: typing)
