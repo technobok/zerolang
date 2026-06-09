@@ -1714,6 +1714,7 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
         }
         scanBodyOpt reg: reg bodyOpt: node.elseclause
     } case forexpr then {
+        reg.recordDemand name: "never"
         for fc: node.conditions.iterate loop {
             match (
                 fc
@@ -1732,7 +1733,11 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             }
         }
     } case doexpr then {
+        reg.recordDemand name: "never"
         scanCallsInNode reg: reg node: node.statement
+    } case withexpr then {
+        scanCallsInNode reg: reg node: node.value
+        scanCallsInNode reg: reg node: node.body
     } case ifclause then {
         for cnd: node.conditions.iterate loop {
             match (
@@ -2691,6 +2696,27 @@ lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
     return result
 }
 
+# checkWith -- walk `with name: value do body`: push the `with` scope, bind the
+# alias variable (BORROWED for a plain-path value), walk the body, then pop. The
+# with node carries the bound value's type; the with-expression's value is the
+# body's value.
+checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.WithData} out u64 is {
+    withMarker: st.pushBlock name: "with"
+    vt: checkValue st: st unitName: unitName node: withnode.value
+    if vt > 0.u64 then {
+        v: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.BORROWED
+        vid: v.variableId
+        st.defineVar name: withnode.name.stringview var: v
+        st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid
+        setk: vt
+        st.typing.nodeType.set key: withnode.nodeid.u64 value: setk
+    } else {
+    }
+    dt: checkValue st: st unitName: unitName node: withnode.body
+    st.popTo marker: withMarker
+    return dt
+}
+
 # checkDo -- walk a do-block: push the `block` scope, walk its statements, then
 # pop. The do resolves to its last statement's value type.
 checkDo: function {st: zenv.ZSymbolTable unitName: StringView donode: zast.DoData} out u64 is {
@@ -2883,8 +2909,16 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return 0.u64
     } case doexpr then {
         return (checkDo st: st unitName: unitName donode: node)
+    } case withexpr then {
+        return (checkWith st: st unitName: unitName withnode: node)
     } case expression then {
-        return (checkValue st: st unitName: unitName node: node.expression)
+        t: checkValue st: st unitName: unitName node: node.expression
+        if t > 0.u64 then {
+            setk: t
+            st.typing.nodeType.set key: node.nodeid.u64 value: setk
+        } else {
+        }
+        return t
     } else {
         return 0.u64
     }
