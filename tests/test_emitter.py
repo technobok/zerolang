@@ -39,6 +39,7 @@ _BUILD_SKIP = {
     "withctl",
     "asgn",
     "callctl",
+    "nlit",
 }
 _BUILD_EXAMPLES = sorted(
     name

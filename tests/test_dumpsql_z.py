@@ -473,6 +473,7 @@ CHECK_SMOKE = [
     "withctl",
     "asgn",
     "callctl",
+    "nlit",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello is excluded for now:
@@ -488,6 +489,7 @@ TYPED_NODES_CHECK = [
     "withctl",
     "asgn",
     "callctl",
+    "nlit",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
