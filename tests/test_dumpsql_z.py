@@ -193,6 +193,19 @@ TYPED_NODES_SMOKE = [
     # objectdef / data def-node stamping (no own-typed method-body nodes).
     "vector",
     "data",
+    # A.3: method-def stamping + real-type type-ref (param / field / arm) stamping.
+    "narrowing",
+    "variants",
+    "equality",
+    "result",
+    "unions",
+    "path_locks",
+    "generics",
+    "genericfunctions",
+    "numeric_generics",
+    "str",
+    "strview",
+    "with_alias",
 ]
 
 _TYPED_NODES_QUERY = (

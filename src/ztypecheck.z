@@ -38,6 +38,30 @@ unitdefNodeId: function {n: Node} out u32 is {
     }
 }
 
+# nodeId -- the nodeid of an arbitrary type-ref / definition Node. Covers the
+# kinds a type expression or method def can take (atom / labelvalue / dotted /
+# expression / call / functiondef); 0 otherwise (the stamp is then a no-op row
+# the typed_nodes JOIN drops).
+nodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.nodeid
+    } case labelvalue then {
+        return n.nodeid
+    } case dottedpath then {
+        return n.nodeid
+    } case expression then {
+        return n.nodeid
+    } case call then {
+        return n.nodeid
+    } case functiondef then {
+        return n.nodeid
+    } else {
+        return 0.u32
+    }
+}
+
 # atomName -- the name of an atom Node (atomid / labelvalue) as an owned String,
 # "" for anything else. Matching the Node param narrows it cleanly (the proven
 # simple-param pattern), so callers pass a field/arg projection without worrying
@@ -227,6 +251,31 @@ baseTypeName: function {n: Node} out String is {
 # type `(T arg: N)` (an expression wrapping a call) mangles to a `T_N` shell.
 # Source-type rows never include these shells (they fall outside `defined_in_unit`),
 # but a `type_children` row joins to the shell's name. Returns the shell's type id.
+stampNodeByName: function {ty: ztyping.ZTyping unitName: StringView name: StringView node: Node} is {
+    if name.length == 0.u64 then {} else {
+        rkey: "\{unitName}.\{name}".string
+        real: ty.resolved.get key: rkey
+        match (
+            real
+        ) case some then {
+            ty.nodeType.set key: (nodeId n: node).u64 value: real
+        } case none then {}
+    }
+}
+
+# stampTyperef -- stamp a type-ref node with its REAL resolved own-unit type id
+# (ty.resolved by base name), not the shallow shell resolveTyperefShell returns.
+# `this` resolves to the enclosing type (thisName). System / forward / unparsed
+# refs miss the {unit}.{name} lookup and are left unstamped (filtered out anyway).
+stampTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView node: Node} is {
+    bn: baseTypeName n: node
+    if bn.stringview == "this" then {
+        stampNodeByName ty: ty unitName: unitName name: thisName node: node
+    } else {
+        stampNodeByName ty: ty unitName: unitName name: bn.stringview node: node
+    }
+}
+
 resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
@@ -396,6 +445,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 pname: unitLabel o: pm.name
                 cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
+                stampTyperef ty: ty unitName: unitName thisName: thisName node: pm.operation
                 pown: pathOwnership n: pm.operation
                 match (
                     pown
@@ -445,7 +495,10 @@ resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     match (
         op
     ) case functiondef then {
-        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: false))
+        mid: resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: false
+        midS: mid
+        ty.nodeType.set key: op.nodeid.u64 value: midS
+        return (optionval.some mid)
     } else {
         return (optionval.none u64)
     }
@@ -473,7 +526,10 @@ resolveSpecFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
     match (
         op
     ) case functiondef then {
-        return (optionval.some (resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: skipThis))
+        sid: resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: skipThis
+        sidS: sid
+        ty.nodeType.set key: op.nodeid.u64 value: sidS
+        return (optionval.some sid)
     } else {
         return (optionval.none u64)
     }
@@ -729,6 +785,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 } case none then {
                     cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+                    stampTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                 }
             } else {}
         }
@@ -786,6 +843,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             aname: unitLabel o: fm.name
             cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
+            stampTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if isgen then {} else {
@@ -898,6 +956,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             }
             cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
+            stampTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if isgen then {} else {
@@ -1026,6 +1085,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         } else {}
                         cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                        stampTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     }
                 }
             }
