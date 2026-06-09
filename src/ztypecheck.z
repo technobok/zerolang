@@ -1708,6 +1708,21 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
     } case binop then {
         scanCallsInNode reg: reg node: node.lhs
         scanCallsInNode reg: reg node: node.rhs
+    } case ifexpr then {
+        for cl: node.clauses.iterate loop {
+            scanCallsInNode reg: reg node: cl
+        }
+        scanBodyOpt reg: reg bodyOpt: node.elseclause
+    } case ifclause then {
+        for cnd: node.conditions.iterate loop {
+            match (
+                cnd
+            ) case namedoperation then {
+                scanCallsInNode reg: reg node: cnd.operation
+            } else {
+            }
+        }
+        scanCallsInNode reg: reg node: node.statement
     } else {
     }
 }
@@ -2590,6 +2605,93 @@ checkAtomid: function {st: zenv.ZSymbolTable node: zast.AtomIdData} out u64 is {
     return result
 }
 
+# isComparisonOp -- a binop operator whose result is bool (not the operand type).
+isComparisonOp: function {name: StringView} out bool is {
+    if name == "<" then { return true } else {
+    }
+    if name == ">" then { return true } else {
+    }
+    if name == "<=" then { return true } else {
+    }
+    if name == ">=" then { return true } else {
+    }
+    if name == "==" then { return true } else {
+    }
+    if name == "!=" then { return true } else {
+    }
+    return false
+}
+
+# checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped)
+# then its then-statement block.
+checkClause: function {st: zenv.ZSymbolTable unitName: StringView clause: Node} is {
+    match (
+        clause
+    ) case ifclause then {
+        coiter: clause.conditions.iterate
+        for cond: coiter loop {
+            match (
+                cond
+            ) case namedoperation then {
+                checkValue st: st unitName: unitName node: cond.operation
+            } else {
+            }
+        }
+        checkStatement st: st unitName: unitName block: clause.statement
+    } else {
+    }
+}
+
+# checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
+# and an `if_else` scope for the else; when every branch diverges (returns) the
+# if resolves to never and marks the enclosing scope unreachable.
+checkIf: function {st: zenv.ZSymbolTable unitName: StringView ifnode: zast.IfData} out u64 is {
+    ifMarker: st.pushBlock name: "if"
+    allDiverge: true
+    cliter: ifnode.clauses.iterate
+    for clause: cliter loop {
+        bm: st.pushBlock name: "if_branch"
+        checkClause st: st unitName: unitName clause: clause
+        if (st.isUnreachable) then {
+        } else {
+            allDiverge = false
+        }
+        st.popTo marker: bm
+    }
+    match (
+        ifnode.elseclause
+    ) case some then {
+        ebm: st.pushBlock name: "if_else"
+        walkBody st: st unitName: unitName bodyOpt: ifnode.elseclause
+        if (st.isUnreachable) then {
+        } else {
+            allDiverge = false
+        }
+        st.popTo marker: ebm
+    } case none then {
+        allDiverge = false
+    }
+    result: 0.u64
+    if allDiverge then {
+        nvOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never"
+        match (
+            nvOpt
+        ) case some then {
+            result = nvOpt
+            setk: result
+            st.typing.nodeType.set key: ifnode.nodeid.u64 value: setk
+        } case none then {
+        }
+    } else {
+    }
+    st.popTo marker: ifMarker
+    if allDiverge then {
+        st.markUnreachable
+    } else {
+    }
+    return result
+}
+
 # checkBinop -- type an arithmetic binop. Both operands are walked (so their
 # nodes are stamped); the result is the lhs operand type (correct for same-type
 # arithmetic -- full operator-method dispatch lands with a comparison example).
@@ -2597,7 +2699,19 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView binop: zast.Bin
     result: 0.u64
     lt: checkValue st: st unitName: unitName node: binop.lhs
     checkValue st: st unitName: unitName node: binop.rhs
-    result = lt
+    opn: atomName n: binop.operator
+    if (isComparisonOp name: opn.stringview) then {
+        boOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "bool"
+        match (
+            boOpt
+        ) case some then {
+            result = boOpt
+        } case none then {
+            result = lt
+        }
+    } else {
+        result = lt
+    }
     if result > 0.u64 then {
         setk: result
         st.typing.nodeType.set key: binop.nodeid.u64 value: setk
@@ -2670,6 +2784,8 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return (checkAtomid st: st node: node)
     } case atomstring then {
         return (checkString st: st unitName: unitName node: node)
+    } case ifexpr then {
+        return (checkIf st: st unitName: unitName ifnode: node)
     } case expression then {
         return (checkValue st: st unitName: unitName node: node.expression)
     } else {
