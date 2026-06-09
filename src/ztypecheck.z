@@ -1713,6 +1713,24 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             scanCallsInNode reg: reg node: cl
         }
         scanBodyOpt reg: reg bodyOpt: node.elseclause
+    } case forexpr then {
+        for fc: node.conditions.iterate loop {
+            match (
+                fc
+            ) case namedoperation then {
+                scanCallsInNode reg: reg node: fc.operation
+            } else {
+            }
+        }
+        scanBodyOpt reg: reg bodyOpt: node.body
+        for fp: node.postconditions.iterate loop {
+            match (
+                fp
+            ) case namedoperation then {
+                scanCallsInNode reg: reg node: fp.operation
+            } else {
+            }
+        }
     } case ifclause then {
         for cnd: node.conditions.iterate loop {
             match (
@@ -2642,6 +2660,34 @@ checkClause: function {st: zenv.ZSymbolTable unitName: StringView clause: Node} 
     }
 }
 
+# checkFor -- walk a for-loop: push the `for` scope, walk its conditions
+# (while-condition / binding value), body, and postconditions, then pop. The for
+# itself resolves to null (filtered) in statement position. break/continue defines
+# are skipped -- their synthesized types are unregistered, so they never dump.
+checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.ForData} is {
+    forMarker: st.pushBlock name: "for"
+    citer: fornode.conditions.iterate
+    for cond: citer loop {
+        match (
+            cond
+        ) case namedoperation then {
+            checkValue st: st unitName: unitName node: cond.operation
+        } else {
+        }
+    }
+    walkBody st: st unitName: unitName bodyOpt: fornode.body
+    piter: fornode.postconditions.iterate
+    for pc: piter loop {
+        match (
+            pc
+        ) case namedoperation then {
+            checkValue st: st unitName: unitName node: pc.operation
+        } else {
+        }
+    }
+    st.popTo marker: forMarker
+}
+
 # checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
 # and an `if_else` scope for the else; when every branch diverges (returns) the
 # if resolves to never and marks the enclosing scope unreachable.
@@ -2786,6 +2832,9 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return (checkString st: st unitName: unitName node: node)
     } case ifexpr then {
         return (checkIf st: st unitName: unitName ifnode: node)
+    } case forexpr then {
+        checkFor st: st unitName: unitName fornode: node
+        return 0.u64
     } case expression then {
         return (checkValue st: st unitName: unitName node: node.expression)
     } else {
