@@ -2621,15 +2621,31 @@ isReturnCallKind: function {o: (optionval t: zast.callkind)} out bool is {
     }
 }
 
-# checkString -- a string literal types as StringView (interpolated strings type
-# as String -- handled when an interpolated example enters the smoke set).
+# checkString -- a non-interpolated string literal types as StringView; an
+# interpolated one (any non-chunk part) types as String, since it must allocate
+# to splice the values, and each interpolated sub-expression is walked + stamped.
 checkString: function {st: zenv.ZSymbolTable unitName: StringView node: zast.AtomStringData} out u64 is {
     result: 0.u64
-    svOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "StringView"
+    hasInterp: false
+    for part: node.stringparts.iterate loop {
+        match (
+            part
+        ) case stringchunk then {
+        } else {
+            hasInterp = true
+            checkValue st: st unitName: unitName node: part
+        }
+    }
+    tyOpt: (optionval.none u64)
+    if hasInterp then {
+        tyOpt = lookupTyperef resolved: st.typing.resolved mainName: unitName base: "String"
+    } else {
+        tyOpt = lookupTyperef resolved: st.typing.resolved mainName: unitName base: "StringView"
+    }
     match (
-        svOpt
+        tyOpt
     ) case some then {
-        result = svOpt
+        result = tyOpt
         setk: result
         st.typing.nodeType.set key: node.nodeid.u64 value: setk
     } case none then {
