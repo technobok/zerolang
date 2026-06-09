@@ -41,6 +41,7 @@ _BUILD_SKIP = {
     "callctl",
     "nlit",
     "interp",
+    "swapctl",
 }
 _BUILD_EXAMPLES = sorted(
     name
