@@ -461,11 +461,17 @@ def test_dumpsql_conformance_match_python(unit, zc_binary):
 
 # Body walk, compared against typecheck(full=False) via `zc --full`. Asserts the
 # symbol-table tables (scope / variable / entry / narrowed_subtype) AND the
-# types / type_children / typed_nodes the walk extends (a returning body pulls
-# return/never + stamps its statement/expression/binop/atomid nodes). Grows as
-# the engine lands; mathutil (no main, two non-generic returning body functions)
-# is the spine.
-CHECK_SMOKE = ["mathutil"]
+# types / type_children / conformance the walk's demand-reach extends. mathutil
+# (returning body functions) is the spine; hello (a `print` call) exercises the
+# REGULAR-call walk + the generic-print demand-reach (+14 types, +7 conformance).
+CHECK_SMOKE = ["mathutil", "hello"]
+
+# Examples whose full-mode typed_nodes also matches. hello is excluded for now:
+# its demand-reached io closure (IoError, protocol-spec method refs) is not yet
+# fully resolved by the .z, so io-definition signature nodes are missing. That
+# io demand-completeness is a follow-up; the body-walk node stamps themselves are
+# covered by mathutil.
+TYPED_NODES_CHECK = ["mathutil"]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
 # depth (the scope_log enumerate index); unreachable + open/close seqs are
@@ -523,7 +529,9 @@ def test_dumpsql_check_match_python(unit, zc_binary):
         _check(table, query)
     for table, query in _typed_projections(len(units)).items():
         _check(table, query, units)
-    _check("typed_nodes", _TYPED_NODES_QUERY, (unit,))
+    _check("conformance", _CONFORMANCE_QUERY)
+    if unit in TYPED_NODES_CHECK:
+        _check("typed_nodes", _TYPED_NODES_QUERY, (unit,))
 
 
 @pytest.mark.emitter

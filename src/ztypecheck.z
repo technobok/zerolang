@@ -1671,42 +1671,74 @@ unitHasObjectMethodBody: function {def: Node} out bool is {
 # builtin, so the closure pulls `return` + its `out never` type. The .z resolver does
 # signatures only, so when the MAIN unit has any objectdef with a method-with-body,
 # demand `return` + `never` to match.
-# unitHasAnyBody -- true if a unit defines any function (free or object method)
-# with a body. Drives the full-mode return/never demand (the body walk uses
-# `return`, whose `out never` pulls both into the closure).
-unitHasAnyBody: function {def: Node} out bool is {
+# scanCallsInNode -- recursively record demands for the call targets in an
+# expression/statement subtree (full-mode body-walk pre-pass): `return` pulls
+# return+never, any other bare-atom callable (e.g. `print`) is demanded by name
+# so the cross-unit pass resolves it before the walk runs.
+scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
     match (
-        def
-    ) case unitdef then {
-        biter: def.body.iterate
-        for bm: biter loop {
-            match (
-                bm
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: bm.operation) then {
-                    return true
-                } else {
-                }
-                if (objectHasMethodBody op: bm.operation) then {
-                    return true
-                } else {
-                }
+        node
+    ) case statement then {
+        for stm: node.statements.iterate loop {
+            scanCallsInNode reg: reg node: stm
+        }
+    } case statementline then {
+        scanCallsInNode reg: reg node: node.statementline
+    } case expression then {
+        scanCallsInNode reg: reg node: node.expression
+    } case call then {
+        cn: atomName n: node.callable
+        if cn.stringview == "return" then {
+            reg.recordDemand name: "return"
+            reg.recordDemand name: "never"
+        } else {
+            if cn.length > 0.u64 then {
+                reg.recordDemand name: cn.stringview
             } else {
             }
         }
-        return false
+        for arg: node.arguments.iterate loop {
+            match (
+                arg
+            ) case namedoperation then {
+                scanCallsInNode reg: reg node: arg.operation
+            } else {
+            }
+        }
+    } case binop then {
+        scanCallsInNode reg: reg node: node.lhs
+        scanCallsInNode reg: reg node: node.rhs
     } else {
-        return false
     }
 }
 
-# mainHasFunctionBody -- true if the main unit has any function/method body to walk.
-mainHasFunctionBody: function {program: Node} out bool is {
+# scanBodyOpt -- scan an optional function body for call demands.
+scanBodyOpt: function {reg: ztypes.ZTypeRegistry bodyOpt: (Option t: Node)} is {
+    match (
+        bodyOpt
+    ) case some then {
+        scanCallsInNode reg: reg node: bodyOpt
+    } case none then {
+    }
+}
+
+# scanDefCalls -- scan a functiondef's body for call demands.
+scanDefCalls: function {reg: ztypes.ZTypeRegistry op: Node} is {
+    match (
+        op
+    ) case functiondef then {
+        scanBodyOpt reg: reg bodyOpt: op.body
+    } else {
+    }
+}
+
+# scanMainBodyCalls -- record call-target demands for every function body in the
+# main unit (the full-mode body walk reaches them; demand must precede the pass).
+scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
         mainName: program.mainUnitName.stringview
-        result: false
         uiter: program.units.iterate
         for u: uiter loop {
             match (
@@ -1714,18 +1746,30 @@ mainHasFunctionBody: function {program: Node} out bool is {
             ) case namedoperation then {
                 nm: unitLabel o: u.name
                 if nm.stringview == mainName then {
-                    if (unitHasAnyBody def: u.operation) then {
-                        result = true
-                    } else {
-                    }
+                    scanUnitCalls reg: reg unitdef: u.operation
                 } else {
                 }
             } else {
             }
         }
-        return result
     } else {
-        return false
+    }
+}
+
+# scanUnitCalls -- scan each function definition's body in a unit for call demands.
+scanUnitCalls: function {reg: ztypes.ZTypeRegistry unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        for bm: unitdef.body.iterate loop {
+            match (
+                bm
+            ) case namedoperation then {
+                scanDefCalls reg: reg op: bm.operation
+            } else {
+            }
+        }
+    } else {
     }
 }
 
@@ -1760,6 +1804,15 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
 # example references under resolve-only-main); the `system` closure is a later slice.
 resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     seedBodyWalkDemands reg: reg program: program
+    # print is generic over StringLike; its signature closure pulls StringLike
+    # (system) + str + List (collections, which seeds ListIter/ListView and the
+    # str->Text conformance). Seed it like the iterator/system closures.
+    if (reg.isDemanded name: "print") then {
+        reg.recordDemand name: "StringLike"
+        reg.recordDemand name: "str"
+        reg.recordDemand name: "List"
+    } else {
+    }
     match (
         program
     ) case program then {
@@ -2505,6 +2558,22 @@ isReturnCallKind: function {o: (optionval t: zast.callkind)} out bool is {
     }
 }
 
+# checkString -- a string literal types as StringView (interpolated strings type
+# as String -- handled when an interpolated example enters the smoke set).
+checkString: function {st: zenv.ZSymbolTable unitName: StringView node: zast.AtomStringData} out u64 is {
+    result: 0.u64
+    svOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "StringView"
+    match (
+        svOpt
+    ) case some then {
+        result = svOpt
+        setk: result
+        st.typing.nodeType.set key: node.nodeid.u64 value: setk
+    } case none then {
+    }
+    return result
+}
+
 # checkAtomid -- type a name-atom in value position: a local variable resolves
 # via the symbol table. (Numeric literals + unit-def atoms land in later slices.)
 checkAtomid: function {st: zenv.ZSymbolTable node: zast.AtomIdData} out u64 is {
@@ -2572,6 +2641,18 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
         } case none then {
         }
     } else {
+        # REGULAR call: walk arguments so their nodes get typed. The callable, the
+        # call result, and any monomorphization are out of the own+system+
+        # collections projection (NULL-unit / io), so they need no stamping here.
+        aiter: call.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                checkValue st: st unitName: unitName node: arg.operation
+            } else {
+            }
+        }
     }
     return result
 }
@@ -2587,6 +2668,8 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return (checkBinop st: st unitName: unitName binop: node)
     } case atomid then {
         return (checkAtomid st: st node: node)
+    } case atomstring then {
+        return (checkString st: st unitName: unitName node: node)
     } case expression then {
         return (checkValue st: st unitName: unitName node: node.expression)
     } else {
@@ -2762,11 +2845,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     registerAndResolveMain ty: ty reg: reg program: program
     resolveMainUnitInstantiations ty: ty reg: reg program: program
     if full then {
-        if (mainHasFunctionBody program: program) then {
-            reg.recordDemand name: "return"
-            reg.recordDemand name: "never"
-        } else {
-        }
+        scanMainBodyCalls reg: reg program: program
     } else {
     }
     resolveCrossUnitDemand ty: ty reg: reg program: program
