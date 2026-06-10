@@ -481,14 +481,13 @@ CHECK_SMOKE = [
     "factorial",
 ]
 
-# Examples whose full-mode typed_nodes also matches. hello and factorial are
-# excluded for now: their demand-reached io closure (IoError, protocol-spec
-# method refs, io-pulled system signatures) is not yet fully resolved by the
-# .z, so io/system-definition signature nodes are missing. That io
-# demand-completeness is a follow-up; the body-walk node stamps themselves are
-# covered by the rest.
+# Examples whose full-mode typed_nodes also matches. hello and factorial pin
+# the demand-reached io closure (protocol-spec method refs, IoError/seekorigin
+# arms, the Bytes/ByteView typedef-field refs) alongside their body walks.
 TYPED_NODES_CHECK = [
     "mathutil",
+    "hello",
+    "factorial",
     "ifctl",
     "forctl",
     "doctl",

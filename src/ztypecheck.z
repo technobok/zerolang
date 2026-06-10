@@ -366,12 +366,18 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
         # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
         # record the dotted node with its peeled base AND recurse on the parent so the
         # stripped inner atom is stamped too (the reference stamps both ppath + stripped).
+        # A `.typedef` marker only recurses -- the dotted node itself resolves to a
+        # NULL-defined typedef wrapper the dump filters out.
         cn: atomName n: node.child
         if (isStripMarker name: cn.stringview) then {
             bn: baseTypeName n: node.parent
             recordResolvedName ty: ty thisName: thisName name: bn.stringview nid: node.nodeid.u64
             recordTyperef ty: ty thisName: thisName node: node.parent
-        } else {}
+        } else {
+            if cn.stringview == "typedef" then {
+                recordTyperef ty: ty thisName: thisName node: node.parent
+            } else {}
+        }
     } case atomid then {
         recordResolvedName ty: ty thisName: thisName name: node.name.stringview nid: node.nodeid.u64
     } case labelvalue then {
@@ -1227,7 +1233,11 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                 ) case some then {
                     ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mref
                 } case none then {
-                    if (isTypedefField n: fm.operation) then {} else {
+                    if (isTypedefField n: fm.operation) then {
+                        # No field child for the wrapper, but the inner refs
+                        # (the u8 in `(List of: u8).typedef`) still stamp.
+                        recordTyperef ty: ty thisName: "" node: fm.operation
+                    } else {
                         flock: pathOwnership n: fm.operation
                         isLock: false
                         match (
@@ -1665,6 +1675,21 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "OptionView"
 }
 
+# seedIoDemands -- demand the io-unit closure the reference's full typecheck pulls
+# reference-driven: the stream protocols (conformance-marker targets), IoError
+# (the Result err arms), and seekorigin (Seeker.seek). The .z demand pass is
+# name-driven, so the closure is seeded explicitly (like seedSystemDemands);
+# IoError/seekorigin precede the protocols in io.z body order, so demands recorded
+# while resolving the protocols would arrive after the pass already walked them.
+seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
+    reg.recordDemand name: "Reader"
+    reg.recordDemand name: "Writer"
+    reg.recordDemand name: "Seeker"
+    reg.recordDemand name: "Closer"
+    reg.recordDemand name: "IoError"
+    reg.recordDemand name: "seekorigin"
+}
+
 # isFunctionDefWithBody -- true when a node is a functiondef carrying a non-empty body
 # (a real method, not a facet/protocol spec signature whose body is none).
 isFunctionDefWithBody: function {o: Node} out bool is {
@@ -1915,9 +1940,11 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
 }
 
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
-# referenced. Only `collections` is resolved here (the one non-`system` unit any
-# example references under resolve-only-main); the `system` closure is a later slice.
-resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+# referenced (io / collections / system, each by demanded name plus its
+# conformance declarers). Under full, an io demand also seeds the io-internal
+# closure (stream protocols / IoError / seekorigin); the signature-only
+# reference resolves no io at all, so the seed must stay sigonly-silent.
+resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
     seedBodyWalkDemands reg: reg program: program
     # print is generic over StringLike; its signature closure pulls StringLike
     # (system) + str + List (collections, which seeds ListIter/ListView and the
@@ -1940,6 +1967,10 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                 if nm.stringview == "io" then {
                     anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                     if anyDemandedIo then {
+                        if full then {
+                            seedIoDemands reg: reg
+                            resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        } else {}
                         resolveConformanceDefs ty: ty reg: reg unitName: "io" unitdef: u.operation
                     } else {}
                 } else {}
@@ -3472,7 +3503,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
         scanMainBodyCalls reg: reg program: program
     } else {
     }
-    resolveCrossUnitDemand ty: ty reg: reg program: program
+    resolveCrossUnitDemand ty: ty reg: reg program: program full: full
     stampTyperefs ty: ty program: program
     st: zenv.newSymbolTable reg: reg typing: ty
     if full then {
