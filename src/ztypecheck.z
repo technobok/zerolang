@@ -948,8 +948,19 @@ attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
             } case none then {
                 cn: atomName n: am.operation
                 if (isNumericLiteralName name: cn.stringview) then {
-                    cid: resolveAtomType reg: reg nm: cn.stringview thisName: defName
+                    # A static constant's child is a per-constant NULL-unit
+                    # clone of the literal's default type: named through the
+                    # type_children join, filtered from typed_nodes.
+                    clname: "i64"
+                    if (isFloatLiteralName name: cn.stringview) then {
+                        clname = "f64"
+                    } else {}
+                    cid: reg.newType name: clname typetype: ztypes.ztypetype.RECORD
                     ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: cid
+                    ty.markAsConstClone typeId: cid
+                    cnid3: nodeId n: am.operation
+                    cidc: cid
+                    ty.nodeType.set key: cnid3.u64 value: cidc
                 } else {}
             }
             gfn: "\{defName}_\{mname}".string
@@ -992,7 +1003,10 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
         match (
             mm
         ) case namedoperation then {
-            recordTyperef ty: ty thisName: "" node: mm.operation
+            cnm: atomName n: mm.operation
+            if (isNumericLiteralName name: cnm.stringview) then {} else {
+                recordTyperef ty: ty thisName: "" node: mm.operation
+            }
             mtid: markerTargetId ty: ty reg: reg unitName: unitName op: mm.operation
             match (
                 mtid
@@ -3596,6 +3610,17 @@ isOptionViewMono: function {st: zenv.ZSymbolTable unitName: StringView wid: u64}
 # beyond the implicit receiver: no children at all (synthesized collection
 # methods), or a single child that IS the receiver -- `this`, or the long-form
 # receiver recorded in thisParamName (`stringview: function {t: this.lock}`).
+# optStrIsSome -- whether an optional string is present.
+optStrIsSome: function {o: (Option t: String)} out bool is {
+    match (
+        o
+    ) case some then {
+        return true
+    } case none then {
+        return false
+    }
+}
+
 optStrEquals: function {o: (Option t: String) s: StringView} out bool is {
     match (
         o
@@ -3660,6 +3685,24 @@ metaCreateBaseId: function {n: Node} out (optionval t: u32) is {
     } else {
     }
     return (optionval.none u32)
+}
+
+# methodHasThisReceiver -- a FUNCTION child bound to a receiver: a declared
+# `this` param (shorthand) or a recorded long-form receiver name. A this-less
+# function member is a callable field, not a method.
+methodHasThisReceiver: function {st: zenv.ZSymbolTable mid: u64} out bool is {
+    if (st.typing.hasChild parentTypeId: mid name: "this") then {
+        return true
+    } else {
+    }
+    zo: st.reg.typeById.get key: mid
+    match (
+        zo
+    ) case some then {
+        return (optStrIsSome o: zo.thisParamName)
+    } case none then {
+        return false
+    }
 }
 
 methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
@@ -3780,6 +3823,12 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
     match (
         mo
     ) case some then {
+        if (st.typing.isAsConstClone typeId: mo) then {
+            setcc: mo
+            st.typing.nodeType.set key: dp.nodeid.u64 value: setcc
+            return mo
+        } else {
+        }
         rm: resolveChildPayload st: st unitName: unitName cid: mo
         result: 0.u64
         result = rm
@@ -4870,7 +4919,20 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                             match (
                                 rvt2
                             ) case some then {
-                                if (typeIsReftype st: st tid: rvt2) then {
+                                # A receiver-bound method locks reftype
+                                # receivers; a this-less function member is a
+                                # callable field -- its receiver locks
+                                # unconditionally (mirrors _lock_receiver).
+                                doLock: false
+                                if (methodHasThisReceiver st: st mid: dro) then {
+                                    if (typeIsReftype st: st tid: rvt2) then {
+                                        doLock = true
+                                    } else {
+                                    }
+                                } else {
+                                    doLock = true
+                                }
+                                if doLock then {
                                     lockCallArg st: st name: rro.stringview callId: call.nodeid.u64
                                 } else {
                                 }
@@ -4934,12 +4996,27 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
         }
         funcId: 0.u64
         if cn.length > 0.u64 then {
-            fo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview
+            # A local variable of FUNCTION type (a spec-typed param or a
+            # function reference) is callable; locals shadow unit names.
+            lvo: st.lookup name: cn.stringview
             match (
-                fo
+                lvo
             ) case some then {
-                funcId = fo
+                if (st.reg.typetypeOf typeId: lvo) == ztypes.ztypetype.FUNCTION then {
+                    funcId = lvo
+                } else {
+                }
             } case none then {
+            }
+            if funcId > 0.u64 then {
+            } else {
+                fo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview
+                match (
+                    fo
+                ) case some then {
+                    funcId = fo
+                } case none then {
+                }
             }
         } else {
         }

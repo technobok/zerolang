@@ -513,6 +513,7 @@ CHECK_SMOKE = [
     "create_null",
     "constructors",
     "borrowed_record",
+    "specs",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -567,6 +568,7 @@ TYPED_NODES_CHECK = [
     "create_null",
     "constructors",
     "borrowed_record",
+    "specs",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
