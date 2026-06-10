@@ -3060,7 +3060,7 @@ isReturnCallKind: function {o: (optionval t: zast.callkind)} out bool is {
 # checkString -- a non-interpolated string literal types as StringView; an
 # interpolated one (any non-chunk part) types as String, since it must allocate
 # to splice the values, and each interpolated sub-expression is walked + stamped.
-checkString: function {st: zenv.ZSymbolTable unitName: StringView node: zast.AtomStringData} out u64 is {
+checkString: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) node: zast.AtomStringData} out u64 is {
     result: 0.u64
     hasInterp: false
     for part: node.stringparts.iterate loop {
@@ -3069,7 +3069,7 @@ checkString: function {st: zenv.ZSymbolTable unitName: StringView node: zast.Ato
         ) case stringchunk then {
         } else {
             hasInterp = true
-            checkValue st: st unitName: unitName node: part
+            checkValue st: st unitName: unitName unitBody: unitBody node: part
         }
     }
     tyOpt: (optionval.none u64)
@@ -3640,7 +3640,7 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
 # member up on the base's type, and stamp the dotted node -- with the method's
 # return when the method takes no user parameters beyond the receiver (the
 # auto-call coercion), else with the method FUNCTION type itself.
-checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.DottedPathData coerce: bool} out u64 is {
+checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) dp: zast.DottedPathData coerce: bool} out u64 is {
     # Numeric dotted suffix (`1.u8`): when the child names a non-function
     # type, the path is a typed-literal cast -- the parent atom coerces to
     # the suffix type and the path carries it.
@@ -3664,7 +3664,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.Dotte
         }
     } else {
     }
-    bt: checkValue st: st unitName: unitName node: dp.parent
+    bt: checkValue st: st unitName: unitName unitBody: unitBody node: dp.parent
     if bt == 0.u64 then {
         return 0.u64
     } else {
@@ -3763,7 +3763,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.Dotte
     }
 }
 
-checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView node: zast.AtomIdData} out u64 is {
+checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) node: zast.AtomIdData} out u64 is {
     result: 0.u64
     vtOpt: st.lookup name: node.name.stringview
     match (
@@ -3836,7 +3836,7 @@ isComparisonOp: function {name: StringView} out bool is {
 
 # checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped)
 # then its then-statement block.
-checkClause: function {st: zenv.ZSymbolTable unitName: StringView clause: Node} is {
+checkClause: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) clause: Node} is {
     match (
         clause
     ) case ifclause then {
@@ -3845,11 +3845,11 @@ checkClause: function {st: zenv.ZSymbolTable unitName: StringView clause: Node} 
             match (
                 cond
             ) case namedoperation then {
-                checkValue st: st unitName: unitName node: cond.operation
+                checkValue st: st unitName: unitName unitBody: unitBody node: cond.operation
             } else {
             }
         }
-        checkStatement st: st unitName: unitName block: clause.statement
+        checkStatement st: st unitName: unitName unitBody: unitBody block: clause.statement
     } else {
     }
 }
@@ -3913,8 +3913,8 @@ materialiseLiteral: function {st: zenv.ZSymbolTable unitName: StringView t: u64}
 # literal-typed value to its concrete default (the binding takes i64, unlike a
 # for-loop binding which keeps the pseudo id), define the local (owned for a plain
 # value), and stamp the assignment node + def-variable.
-checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast.AssignmentData} is {
-    vt: checkValue st: st unitName: unitName node: asgn.value
+checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) asgn: zast.AssignmentData} is {
+    vt: checkValue st: st unitName: unitName unitBody: unitBody node: asgn.value
     mvt: materialiseLiteral st: st unitName: unitName t: vt
     vt = mvt
     if vt > 0.u64 then {
@@ -3949,9 +3949,9 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast
 # checkReassignment -- `lhs = value`: resolve the target path and the value, then
 # reset any narrowing on a bare-name target (appends a non-definition overlay
 # entry, mirroring _check_reassignment_inner's reset_narrowing).
-checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView rasgn: zast.ReassignmentData} is {
-    lvt: checkValue st: st unitName: unitName node: rasgn.topath
-    rvt: checkValue st: st unitName: unitName node: rasgn.value
+checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) rasgn: zast.ReassignmentData} is {
+    lvt: checkValue st: st unitName: unitName unitBody: unitBody node: rasgn.topath
+    rvt: checkValue st: st unitName: unitName unitBody: unitBody node: rasgn.value
     # A literal RHS at a concretely-typed target coerces: restamp the RHS's
     # innermost node (wrappers derive through the dump's descent). A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
@@ -3990,9 +3990,9 @@ checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView rasgn: z
 # checkSwap -- `lhs swap rhs`: resolve both operand paths (stamping them). The swap
 # carries no type (the expression wrapper is null, like reassignment) and does no
 # narrowing. Operand ownership/lock/type-match validation produces no dump rows -- deferred.
-checkSwap: function {st: zenv.ZSymbolTable unitName: StringView swapnode: zast.SwapStmtData} is {
-    checkValue st: st unitName: unitName node: swapnode.lhs
-    checkValue st: st unitName: unitName node: swapnode.rhs
+checkSwap: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) swapnode: zast.SwapStmtData} is {
+    checkValue st: st unitName: unitName unitBody: unitBody node: swapnode.lhs
+    checkValue st: st unitName: unitName unitBody: unitBody node: swapnode.rhs
 }
 
 # withValueOwnership -- the with-binding's ownership from the bound value's
@@ -4029,9 +4029,9 @@ withValueOwnership: function {st: zenv.ZSymbolTable v: Node} out ztypes.zownersh
 # alias variable (BORROWED for a plain-path value), walk the body, then pop. The
 # with node carries the bound value's type; the with-expression's value is the
 # body's value.
-checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.WithData} out u64 is {
+checkWith: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) withnode: zast.WithData} out u64 is {
     withMarker: st.pushBlock name: "with"
-    vt: checkValue st: st unitName: unitName node: withnode.value
+    vt: checkValue st: st unitName: unitName unitBody: unitBody node: withnode.value
     if vt > 0.u64 then {
         own: withValueOwnership st: st v: withnode.value
         # The borrow target: a BORROW-returning auto-call reported the receiver
@@ -4059,7 +4059,7 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.W
         st.typing.nodeType.set key: withnode.nodeid.u64 value: setk
     } else {
     }
-    dt: checkValue st: st unitName: unitName node: withnode.body
+    dt: checkValue st: st unitName: unitName unitBody: unitBody node: withnode.body
     st.popTo marker: withMarker
     return dt
 }
@@ -4067,11 +4067,11 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.W
 # checkDo -- walk a do-block: push the `block` scope, define break (an entry
 # position placeholder with an unregistered type id, so it never joins the dump),
 # walk the statements, then pop. The do resolves to its last statement's value type.
-checkDo: function {st: zenv.ZSymbolTable unitName: StringView donode: zast.DoData} out u64 is {
+checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) donode: zast.DoData} out u64 is {
     doMarker: st.pushBlock name: "block"
     dbk: st.reg.allocType
     st.define name: "break" ztypeId: dbk
-    checkStatement st: st unitName: unitName block: donode.statement
+    checkStatement st: st unitName: unitName unitBody: unitBody block: donode.statement
     result: lastStmtType st: st block: donode.statement
     st.popTo marker: doMarker
     if result > 0.u64 then {
@@ -4089,7 +4089,7 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView donode: zast.DoDat
 # a bare literal init stays the literal pseudo-type, keeping the entry out of the
 # dump joins). Iterator-wrapper element extraction needs monomorphization and is
 # not implemented. The for itself resolves to null (filtered) in statement position.
-checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.ForData} is {
+checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) fornode: zast.ForData} is {
     forMarker: st.pushBlock name: "for"
     bk: st.reg.allocType
     st.define name: "break" ztypeId: bk
@@ -4100,7 +4100,7 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.For
         match (
             cond
         ) case namedoperation then {
-            vt: checkValue st: st unitName: unitName node: cond.operation
+            vt: checkValue st: st unitName: unitName unitBody: unitBody node: cond.operation
             nm: unitLabel o: cond.name
             if nm.length > 0.u64 when vt > 0.u64 then {
                 elem: 0.u64
@@ -4183,24 +4183,24 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.For
         match (
             pc
         ) case namedoperation then {
-            checkValue st: st unitName: unitName node: pc.operation
+            checkValue st: st unitName: unitName unitBody: unitBody node: pc.operation
         } else {
         }
     }
-    walkBody st: st unitName: unitName bodyOpt: fornode.body
+    walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: fornode.body
     st.popTo marker: forMarker
 }
 
 # checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
 # and an `if_else` scope for the else; when every branch diverges (returns) the
 # if resolves to never and marks the enclosing scope unreachable.
-checkIf: function {st: zenv.ZSymbolTable unitName: StringView ifnode: zast.IfData} out u64 is {
+checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) ifnode: zast.IfData} out u64 is {
     ifMarker: st.pushBlock name: "if"
     allDiverge: true
     cliter: ifnode.clauses.iterate
     for clause: cliter loop {
         bm: st.pushBlock name: "if_branch"
-        checkClause st: st unitName: unitName clause: clause
+        checkClause st: st unitName: unitName unitBody: unitBody clause: clause
         if (st.isUnreachable) then {
         } else {
             allDiverge = false
@@ -4211,7 +4211,7 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView ifnode: zast.IfDat
         ifnode.elseclause
     ) case some then {
         ebm: st.pushBlock name: "if_else"
-        walkBody st: st unitName: unitName bodyOpt: ifnode.elseclause
+        walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: ifnode.elseclause
         if (st.isUnreachable) then {
         } else {
             allDiverge = false
@@ -4244,10 +4244,10 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView ifnode: zast.IfDat
 # checkBinop -- type an arithmetic binop. Both operands are walked (so their
 # nodes are stamped); the result is the lhs operand type (correct for same-type
 # arithmetic -- full operator-method dispatch lands with a comparison example).
-checkBinop: function {st: zenv.ZSymbolTable unitName: StringView binop: zast.BinOpData} out u64 is {
+checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) binop: zast.BinOpData} out u64 is {
     result: 0.u64
-    lt: checkValue st: st unitName: unitName node: binop.lhs
-    checkValue st: st unitName: unitName node: binop.rhs
+    lt: checkValue st: st unitName: unitName unitBody: unitBody node: binop.lhs
+    checkValue st: st unitName: unitName unitBody: unitBody node: binop.rhs
     opn: atomName n: binop.operator
     if (isComparisonOp name: opn.stringview) then {
         boOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "bool"
@@ -4555,7 +4555,7 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
-walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64 isCtor: bool} out String is {
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData funcId: u64 isCtor: bool} out String is {
     lockRoot: "".string
     argIdx: 0.u64
     aiter: call.arguments.iterate
@@ -4563,7 +4563,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
         match (
             arg
         ) case namedoperation then {
-            vt: checkValue st: st unitName: unitName node: arg.operation
+            vt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
             if vt > 0.u64 then {
                 pn: unitLabel o: arg.name
                 if pn.length == 0.u64 then {
@@ -4682,11 +4682,11 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
 # the base is typed and stamped there. none = the callable is not a dotted
 # path; some 0 = dotted but unresolved (e.g. a data block's `.index`), which
 # leaves the call untyped with its arguments unwalked, like the reference.
-callableDottedResult: function {st: zenv.ZSymbolTable unitName: StringView n: Node} out (optionval t: u64) is {
+callableDottedResult: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) n: Node} out (optionval t: u64) is {
     match (
         n
     ) case dottedpath then {
-        r: checkDotted st: st unitName: unitName dp: n coerce: false
+        r: checkDotted st: st unitName: unitName unitBody: unitBody dp: n coerce: false
         return (optionval.some r)
     } else {
         return (optionval.none u64)
@@ -4696,7 +4696,7 @@ callableDottedResult: function {st: zenv.ZSymbolTable unitName: StringView n: No
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
-checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData} out u64 is {
+checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData} out u64 is {
     result: 0.u64
     cn: atomName n: call.callable
     if cn.stringview == "return" then {
@@ -4714,7 +4714,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             match (
                 arg
             ) case namedoperation then {
-                checkValue st: st unitName: unitName node: arg.operation
+                checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
             } else {
             }
         }
@@ -4734,7 +4734,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
         # and resolves to its return type; a generic callee (e.g. print) infers
         # a clone; an unresolvable callable just has its args walked (its
         # callable/result/mono are out of the own+system+collections filter).
-        dro: callableDottedResult st: st unitName: unitName n: call.callable
+        dro: callableDottedResult st: st unitName: unitName unitBody: unitBody n: call.callable
         match (
             dro
         ) case some then {
@@ -4762,7 +4762,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
                 }
                 if isMethodFn then {
                     mcm: st.pushCall
-                    mlr: walkCallArgsHoist st: st unitName: unitName call: call funcId: dro isCtor: false
+                    mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false
                     # The receiver locks for the call's duration too (after
                     # the args, matching the oracle's entry order).
                     rro: methodReceiverRoot n: call.callable
@@ -4851,7 +4851,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            lockRoot: walkCallArgsHoist st: st unitName: unitName call: call funcId: funcId isCtor: isCtor
+            lockRoot: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: funcId isCtor: isCtor
             st.popTo marker: cm
             if isCtor then {
                 # a type in callable position constructs: the call's value is
@@ -4892,7 +4892,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             }
         } else {
             if isGen then {
-                gr: checkGenericCall st: st unitName: unitName call: call funcId: funcId
+                gr: checkGenericCall st: st unitName: unitName unitBody: unitBody call: call funcId: funcId
                 result = gr
                 if gr > 0.u64 then {
                     setgc: gr
@@ -4919,7 +4919,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
                     match (
                         garg
                     ) case namedoperation then {
-                        checkValue st: st unitName: unitName node: garg.operation
+                        checkValue st: st unitName: unitName unitBody: unitBody node: garg.operation
                     } else {
                     }
                 }
@@ -4938,7 +4938,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
 # templates only, so native generics like print add no scope), stamp the
 # callable with the instance, and resolve to the instance's return. Nested
 # control flow inside generic bodies needs a real clone walk and is deferred.
-checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64} out u64 is {
+checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData funcId: u64} out u64 is {
     gparams: (List of: String)
     with gpiter: st.typing.typeGenericArg.iterate do for gp: gpiter loop {
         if gp.parentTypeId == funcId then {
@@ -5001,7 +5001,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView call: zas
                 } case none then {
                 }
             } else {
-                avt: checkValue st: st unitName: unitName node: arg.operation
+                avt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
                 mat: materialiseLiteral st: st unitName: unitName t: avt
                 holder: ""
                 if an2.length > 0.u64 then {
@@ -5240,9 +5240,9 @@ lastStmtTypeOpt: function {st: zenv.ZSymbolTable bodyOpt: (Option t: Node)} out 
 # resolves to `never` (a completing-arm result type lands with a value-match
 # example) and each diverging arm's subtype is excluded from the subject in
 # the enclosing scope (all-excluded marks it unreachable).
-checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.CaseData} out u64 is {
+checkCase: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) casenode: zast.CaseData} out u64 is {
     matchMarker: st.pushBlock name: "match"
-    subjT: checkValue st: st unitName: unitName node: casenode.subject
+    subjT: checkValue st: st unitName: unitName unitBody: unitBody node: casenode.subject
     isSum: false
     if subjT > 0.u64 then {
         stt: st.reg.typetypeOf typeId: subjT
@@ -5294,7 +5294,7 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
                 }
             } else {
             }
-            checkStatement st: st unitName: unitName block: clause.statement
+            checkStatement st: st unitName: unitName unitBody: unitBody block: clause.statement
             at: lastStmtType st: st block: clause.statement
             atc: at
             armTypes.append atc
@@ -5326,7 +5326,7 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
             }
         } else {
         }
-        walkBody st: st unitName: unitName bodyOpt: casenode.elseclause
+        walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: casenode.elseclause
         et: lastStmtTypeOpt st: st bodyOpt: casenode.elseclause
         armTypes.append et
         st.popTo marker: elseMarker
@@ -5402,38 +5402,38 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
 
 # checkValue -- type an expression-value node, dispatching by kind. Returns the
 # resolved type id, or 0 when unhandled.
-checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out u64 is {
+checkValue: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) node: Node} out u64 is {
     match (
         node
     ) case call then {
-        return (checkCall st: st unitName: unitName call: node)
+        return (checkCall st: st unitName: unitName unitBody: unitBody call: node)
     } case binop then {
-        return (checkBinop st: st unitName: unitName binop: node)
+        return (checkBinop st: st unitName: unitName unitBody: unitBody binop: node)
     } case atomid then {
-        return (checkAtomid st: st unitName: unitName node: node)
+        return (checkAtomid st: st unitName: unitName unitBody: unitBody node: node)
     } case atomstring then {
-        return (checkString st: st unitName: unitName node: node)
+        return (checkString st: st unitName: unitName unitBody: unitBody node: node)
     } case dottedpath then {
-        return (checkDotted st: st unitName: unitName dp: node coerce: true)
+        return (checkDotted st: st unitName: unitName unitBody: unitBody dp: node coerce: true)
     } case caseexpr then {
-        return (checkCase st: st unitName: unitName casenode: node)
+        return (checkCase st: st unitName: unitName unitBody: unitBody casenode: node)
     } case ifexpr then {
-        return (checkIf st: st unitName: unitName ifnode: node)
+        return (checkIf st: st unitName: unitName unitBody: unitBody ifnode: node)
     } case forexpr then {
-        checkFor st: st unitName: unitName fornode: node
+        checkFor st: st unitName: unitName unitBody: unitBody fornode: node
         return 0.u64
     } case doexpr then {
-        return (checkDo st: st unitName: unitName donode: node)
+        return (checkDo st: st unitName: unitName unitBody: unitBody donode: node)
     } case withexpr then {
-        return (checkWith st: st unitName: unitName withnode: node)
+        return (checkWith st: st unitName: unitName unitBody: unitBody withnode: node)
     } case reassignment then {
-        checkReassignment st: st unitName: unitName rasgn: node
+        checkReassignment st: st unitName: unitName unitBody: unitBody rasgn: node
         return 0.u64
     } case swapstmt then {
-        checkSwap st: st unitName: unitName swapnode: node
+        checkSwap st: st unitName: unitName unitBody: unitBody swapnode: node
         return 0.u64
     } case expression then {
-        t: checkValue st: st unitName: unitName node: node.expression
+        t: checkValue st: st unitName: unitName unitBody: unitBody node: node.expression
         if t > 0.u64 then {
             setk: t
             st.typing.nodeType.set key: node.nodeid.u64 value: setk
@@ -5448,9 +5448,9 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
 # checkExpression -- type an expression wrapper from its inner value; returns
 # true when the inner is a return terminator (so the caller marks the scope
 # unreachable).
-checkExpression: function {st: zenv.ZSymbolTable unitName: StringView expr: zast.ExpressionData} out bool is {
+checkExpression: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) expr: zast.ExpressionData} out bool is {
     isRet: false
-    t: checkValue st: st unitName: unitName node: expr.expression
+    t: checkValue st: st unitName: unitName unitBody: unitBody node: expr.expression
     if t > 0.u64 then {
         st.typing.nodeType.set key: expr.nodeid.u64 value: t
     } else {
@@ -5462,16 +5462,16 @@ checkExpression: function {st: zenv.ZSymbolTable unitName: StringView expr: zast
 }
 
 # checkStmtInner -- dispatch a statement line's inner node (C1: expressions).
-checkStmtInner: function {st: zenv.ZSymbolTable unitName: StringView inner: Node} out bool is {
+checkStmtInner: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) inner: Node} out bool is {
     match (
         inner
     ) case expression then {
-        return (checkExpression st: st unitName: unitName expr: inner)
+        return (checkExpression st: st unitName: unitName unitBody: unitBody expr: inner)
     } case assignment then {
-        checkAssignment st: st unitName: unitName asgn: inner
+        checkAssignment st: st unitName: unitName unitBody: unitBody asgn: inner
         return false
     } case reassignment then {
-        checkReassignment st: st unitName: unitName rasgn: inner
+        checkReassignment st: st unitName: unitName unitBody: unitBody rasgn: inner
         return false
     } else {
         return false
@@ -5480,12 +5480,12 @@ checkStmtInner: function {st: zenv.ZSymbolTable unitName: StringView inner: Node
 
 # checkStatementLine -- type a statement line; propagate the inner type to the
 # line wrapper. Returns true for a return terminator.
-checkStatementLine: function {st: zenv.ZSymbolTable unitName: StringView sline: Node} out bool is {
+checkStatementLine: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) sline: Node} out bool is {
     isRet: false
     match (
         sline
     ) case statementline then {
-        isRet = checkStmtInner st: st unitName: unitName inner: sline.statementline
+        isRet = checkStmtInner st: st unitName: unitName unitBody: unitBody inner: sline.statementline
         inid: nodeId n: sline.statementline
         itOpt: st.typing.nodeType.get key: inid.u64
         match (
@@ -5501,13 +5501,13 @@ checkStatementLine: function {st: zenv.ZSymbolTable unitName: StringView sline: 
 
 # checkStatement -- walk a function-body statement block, marking the scope
 # unreachable after a control-flow terminator (return).
-checkStatement: function {st: zenv.ZSymbolTable unitName: StringView block: Node} is {
+checkStatement: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) block: Node} is {
     match (
         block
     ) case statement then {
         siter: block.statements.iterate
         for sline: siter loop {
-            isRet: checkStatementLine st: st unitName: unitName sline: sline
+            isRet: checkStatementLine st: st unitName: unitName unitBody: unitBody sline: sline
             drainPendingBorrow st: st
             if isRet then {
                 st.markUnreachable
@@ -5519,11 +5519,11 @@ checkStatement: function {st: zenv.ZSymbolTable unitName: StringView block: Node
 }
 
 # walkBody -- walk an optional function body (none for spec methods).
-walkBody: function {st: zenv.ZSymbolTable unitName: StringView bodyOpt: (Option t: Node)} is {
+walkBody: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) bodyOpt: (Option t: Node)} is {
     match (
         bodyOpt
     ) case some then {
-        checkStatement st: st unitName: unitName block: bodyOpt
+        checkStatement st: st unitName: unitName unitBody: unitBody block: bodyOpt
     } case none then {
     }
 }
@@ -5664,7 +5664,7 @@ objectdefHasMethodBodies: function {op: Node} out bool is {
 # checkMethodBodies -- body-check every method of one type definition (is- and
 # as-block functiondefs, declaration order). The scopes land under the walk's
 # current scope, mirroring the oracle's resolve-at-first-demand placement.
-checkMethodBodies: function {st: zenv.ZSymbolTable unitName: StringView typeName: StringView op: Node} is {
+checkMethodBodies: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) typeName: StringView op: Node} is {
     emptyBody: (List of: Node)
     match (
         op
@@ -5751,7 +5751,7 @@ triggerMethodWalks: function {st: zenv.ZSymbolTable unitName: StringView unitBod
                         mk: nm.copy
                         mv: true
                         st.typing.walkedMethodOwners.set key: mk value: mv
-                        checkMethodBodies st: st unitName: unitName typeName: nm.stringview op: mem.operation
+                        checkMethodBodies st: st unitName: unitName unitBody: unitBody typeName: nm.stringview op: mem.operation
                     } else {
                     }
                 } else {
@@ -5869,7 +5869,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             } else {
             }
             st.typing.synthLabel = lbl
-            walkBody st: st unitName: unitName bodyOpt: defn.body
+            walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: defn.body
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
             # line (the node the reference coerces by id).
