@@ -66,6 +66,52 @@ nodeId: function {n: Node} out u32 is {
     }
 }
 
+# nodeLine / nodeCol -- the source position of a value-expression Node. Covers
+# the operation kinds a call argument can take; 0 otherwise.
+nodeLine: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.lineno
+    } case labelvalue then {
+        return n.lineno
+    } case dottedpath then {
+        return n.lineno
+    } case expression then {
+        return n.lineno
+    } case call then {
+        return n.lineno
+    } case binop then {
+        return n.lineno
+    } case atomstring then {
+        return n.lineno
+    } else {
+        return 0.u32
+    }
+}
+
+nodeCol: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.colno
+    } case labelvalue then {
+        return n.colno
+    } case dottedpath then {
+        return n.colno
+    } case expression then {
+        return n.colno
+    } case call then {
+        return n.colno
+    } case binop then {
+        return n.colno
+    } case atomstring then {
+        return n.colno
+    } else {
+        return 0.u32
+    }
+}
+
 # atomName -- the name of an atom Node (atomid / labelvalue) as an owned String,
 # "" for anything else. Matching the Node param narrows it cleanly (the proven
 # simple-param pattern), so callers pass a field/arg projection without worrying
@@ -2965,6 +3011,107 @@ walkCallArgs: function {st: zenv.ZSymbolTable unitName: StringView call: zast.Ca
     }
 }
 
+# argIsTrivial -- true when a call argument's operation is a hoisting no-op: a
+# bare atom, a labelvalue, a string literal without interpolation, or an
+# expression wrapping a bare atom / labelvalue. Anything else (binop, call,
+# dotted path, interpolated string) hoists into a synth temp.
+argIsTrivial: function {op: Node} out bool is {
+    match (
+        op
+    ) case atomid then {
+        return true
+    } case labelvalue then {
+        return true
+    } case atomstring then {
+        spiter: op.stringparts.iterate
+        for sp: spiter loop {
+            match (
+                sp
+            ) case stringchunk then {
+            } else {
+                return false
+            }
+        }
+        return true
+    } case expression then {
+        match (
+            op.expression
+        ) case atomid then {
+            return true
+        } case labelvalue then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
+# define the temp (OWNED, synth origin anf) in the open CALL scope and record
+# the synth Assignment / value-Expression / AtomId rows + their type stamps so
+# the dump matches the reference's hoisted tree. The parsed argument keeps its
+# own stamps; only the dump rows are synthesised (no AST mutation).
+hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64} is {
+    tn: st.typing.nextTempId
+    st.typing.nextTempId = tn + 1.u64
+    tname: "_t\{tn}"
+    ln: nodeLine n: argNode
+    co: nodeCol n: argNode
+    assignId: st.typing.nextSynthNodeId
+    exprId: assignId + 1.u32
+    atomId: assignId + 2.u32
+    st.typing.nextSynthNodeId = assignId + 3.u32
+    st.typing.synthNodes.append (ztyping.SynthNode
+        nodeid: assignId
+        kind: "Assignment".string
+        label: st.typing.synthLabel.copy
+        lineno: ln
+        colno: co)
+    st.typing.synthNodes.append (ztyping.SynthNode
+        nodeid: exprId
+        kind: "Expression".string
+        label: st.typing.synthLabel.copy
+        lineno: ln
+        colno: co)
+    st.typing.synthNodes.append (ztyping.SynthNode
+        nodeid: atomId
+        kind: "AtomId".string
+        label: st.typing.synthLabel.copy
+        lineno: ln
+        colno: co)
+    seta: argType
+    st.typing.nodeType.set key: assignId.u64 value: seta
+    sete: argType
+    st.typing.nodeType.set key: exprId.u64 value: sete
+    setm: argType
+    st.typing.nodeType.set key: atomId.u64 value: setm
+    v: st.reg.newVariable ztypeId: argType ownership: ztypes.zownership.OWNED
+    v.synthOrigin = (Option.some "anf".string)
+    vid: v.variableId
+    st.defineVar name: tname.stringview var: v
+    st.typing.defVariableId.set key: assignId.u64 value: vid
+}
+
+# walkCallArgsHoist -- the user-call argument walk: type each argument, then
+# hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData} is {
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            vt: checkValue st: st unitName: unitName node: arg.operation
+            if vt > 0.u64 when (argIsTrivial op: arg.operation) == false then {
+                hoistArg st: st argNode: arg.operation argType: vt
+            } else {
+            }
+        } else {
+        }
+    }
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -3034,7 +3181,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            walkCallArgs st: st unitName: unitName call: call
+            walkCallArgsHoist st: st unitName: unitName call: call
             st.popTo marker: cm
             rnOpt: st.typing.funcReturnNode.get key: funcId
             match (
@@ -3196,6 +3343,8 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
         } case none then {
         }
         if hasBody then {
+            lbl: "\{unitName}.\{defName}"
+            st.typing.synthLabel = lbl
             sname: "function:\{defName}"
             dpush: st.push name: sname.stringview
             piter: defn.parameters.iterate
@@ -3227,13 +3376,27 @@ checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: N
     match (
         unitdef
     ) case unitdef then {
-        biter: unitdef.body.iterate
-        for bm: biter loop {
+        with miter: unitdef.body.iterate do for mm: miter loop {
+            match (
+                mm
+            ) case namedoperation then {
+                mainName: unitLabel o: mm.name
+                if mainName.stringview == "main" then {
+                    checkFunctionBody st: st unitName: unitName defName: mainName.stringview defn: mm.operation
+                } else {
+                }
+            } else {
+            }
+        }
+        with biter: unitdef.body.iterate do for bm: biter loop {
             match (
                 bm
             ) case namedoperation then {
                 defName: unitLabel o: bm.name
-                checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation
+                if defName.stringview == "main" then {
+                } else {
+                    checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation
+                }
             } else {
             }
         }
@@ -3242,8 +3405,9 @@ checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: N
 }
 
 # checkBodies -- the body-walk pass (full mode), mirroring check()'s top-level
-# loop: walk the main unit's function bodies. Runs after demand resolution so
-# referenced types are already resolved.
+# loop: walk the main unit's function bodies, main first, then the others in
+# body order. Runs after demand resolution so referenced types are already
+# resolved.
 checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
     match (
         program

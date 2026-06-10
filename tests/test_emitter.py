@@ -43,6 +43,7 @@ _BUILD_SKIP = {
     "interp",
     "swapctl",
     "forbind",
+    "hoistctl",
 }
 _BUILD_EXAMPLES = sorted(
     name

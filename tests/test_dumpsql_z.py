@@ -477,13 +477,16 @@ CHECK_SMOKE = [
     "interp",
     "swapctl",
     "forbind",
+    "hoistctl",
+    "factorial",
 ]
 
-# Examples whose full-mode typed_nodes also matches. hello is excluded for now:
-# its demand-reached io closure (IoError, protocol-spec method refs) is not yet
-# fully resolved by the .z, so io-definition signature nodes are missing. That
-# io demand-completeness is a follow-up; the body-walk node stamps themselves are
-# covered by mathutil.
+# Examples whose full-mode typed_nodes also matches. hello and factorial are
+# excluded for now: their demand-reached io closure (IoError, protocol-spec
+# method refs, io-pulled system signatures) is not yet fully resolved by the
+# .z, so io/system-definition signature nodes are missing. That io
+# demand-completeness is a follow-up; the body-walk node stamps themselves are
+# covered by the rest.
 TYPED_NODES_CHECK = [
     "mathutil",
     "ifctl",
@@ -496,6 +499,7 @@ TYPED_NODES_CHECK = [
     "interp",
     "swapctl",
     "forbind",
+    "hoistctl",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
