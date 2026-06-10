@@ -3561,6 +3561,29 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
 # return when the method takes no user parameters beyond the receiver (the
 # auto-call coercion), else with the method FUNCTION type itself.
 checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.DottedPathData coerce: bool} out u64 is {
+    # Numeric dotted suffix (`1.u8`): when the child names a non-function
+    # type, the path is a typed-literal cast -- the parent atom coerces to
+    # the suffix type and the path carries it.
+    castBase: atomName n: dp.parent
+    if (isNumericLiteralName name: castBase.stringview) then {
+        castChild: atomName n: dp.child
+        castOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: castChild.stringview
+        match (
+            castOpt
+        ) case some then {
+            if (st.reg.typetypeOf typeId: castOpt) == ztypes.ztypetype.FUNCTION then {
+            } else {
+                castPid: nodeId n: dp.parent
+                setcp: castOpt
+                st.typing.nodeType.set key: castPid.u64 value: setcp
+                setcd: castOpt
+                st.typing.nodeType.set key: dp.nodeid.u64 value: setcd
+                return castOpt
+            }
+        } case none then {
+        }
+    } else {
+    }
     bt: checkValue st: st unitName: unitName node: dp.parent
     if bt == 0.u64 then {
         return 0.u64
@@ -4081,7 +4104,26 @@ argIsTrivial: function {op: Node} out bool is {
 # the synth Assignment / value-Expression / AtomId rows + their type stamps so
 # the dump matches the reference's hoisted tree. The parsed argument keeps its
 # own stamps; only the dump rows are synthesised (no AST mutation).
-hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64} is {
+# isLiteralTypeId -- a literal-typed value: the unregistered int/float pseudo
+# ids, or a data block's registered literal_int/literal_float element shell.
+isLiteralTypeId: function {st: zenv.ZSymbolTable tid: u64} out bool is {
+    if tid == literalIntId then {
+        return true
+    } else {
+    }
+    if tid == literalFloatId then {
+        return true
+    } else {
+    }
+    nm: typeNameOf st: st tid: tid
+    if nm.stringview == "literal_int" then {
+        return true
+    } else {
+    }
+    return nm.stringview == "literal_float"
+}
+
+hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: u64} is {
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1.u64
     tname: "_t\{tn}"
@@ -4113,7 +4155,12 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64} is {
     st.typing.nodeType.set key: assignId.u64 value: seta
     sete: argType
     st.typing.nodeType.set key: exprId.u64 value: sete
-    setm: argType
+    atomT: argType
+    if paramType > 0.u64 then {
+        atomT = paramType
+    } else {
+    }
+    setm: atomT
     st.typing.nodeType.set key: atomId.u64 value: setm
     v: st.reg.newVariable ztypeId: argType ownership: ztypes.zownership.OWNED
     v.synthOrigin = (Option.some "anf".string)
@@ -4124,7 +4171,7 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64} is {
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
-walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData} is {
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64} is {
     aiter: call.arguments.iterate
     for arg: aiter loop {
         match (
@@ -4132,7 +4179,22 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
         ) case namedoperation then {
             vt: checkValue st: st unitName: unitName node: arg.operation
             if vt > 0.u64 when (argIsTrivial op: arg.operation) == false then {
-                hoistArg st: st argNode: arg.operation argType: vt
+                pt: 0.u64
+                if funcId > 0.u64 when (isLiteralTypeId st: st tid: vt) then {
+                    lbl: unitLabel o: arg.name
+                    if lbl.length > 0.u64 then {
+                        po: st.typing.childOf parentTypeId: funcId name: lbl.stringview
+                        match (
+                            po
+                        ) case some then {
+                            pt = resolveChildPayload st: st unitName: unitName cid: po
+                        } case none then {
+                        }
+                    } else {
+                    }
+                } else {
+                }
+                hoistArg st: st argNode: arg.operation argType: vt paramType: pt
             } else {
             }
         } else {
@@ -4244,7 +4306,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            walkCallArgsHoist st: st unitName: unitName call: call
+            walkCallArgsHoist st: st unitName: unitName call: call funcId: funcId
             st.popTo marker: cm
             if isCtor then {
                 # a type in callable position constructs: the call's value is
@@ -5018,9 +5080,11 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
     }
 }
 
-# foldLiteralStamps -- replace literal pseudo-type node stamps with their
-# concrete defaults (i64 / f64) after the body walk. Symbol-table entries keep
-# the pseudo id and stay out of the dump joins.
+# foldLiteralStamps -- replace literal-typed node stamps with their concrete
+# defaults (i64 / f64) after the body walk: the unregistered pseudo ids and the
+# data blocks' registered literal_int/literal_float element shells. Symbol-table
+# entries keep their literal ids (the oracle's entry/variable rows read
+# literal_int there too).
 foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
     match (
         program
@@ -5042,15 +5106,43 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
             floatId = lf
         } case none then {
         }
+        intShells: (List of: u64)
+        floatShells: (List of: u64)
+        nshell: st.reg.nextTypeId
+        ti: 0.u64
+        for while ti < nshell loop {
+            snm: typeNameOf st: st tid: ti
+            if snm.stringview == "literal_int" then {
+                sid: ti
+                intShells.append sid
+            } else {
+                if snm.stringview == "literal_float" then {
+                    sid2: ti
+                    floatShells.append sid2
+                } else {
+                }
+            }
+            ti = ti + 1.u64
+        }
         iks: (List of: u64)
         fks: (List of: u64)
         with it: st.typing.nodeType.iterateItems do for e: it loop {
-            if e.value == literalIntId then {
+            isInt: e.value == literalIntId
+            if (intShells.contains item: e.value) then {
+                isInt = true
+            } else {
+            }
+            isFloat: e.value == literalFloatId
+            if (floatShells.contains item: e.value) then {
+                isFloat = true
+            } else {
+            }
+            if isInt then {
                 k: e.key
                 iks.append k
             } else {
             }
-            if e.value == literalFloatId then {
+            if isFloat then {
                 k2: e.key
                 fks.append k2
             } else {

@@ -491,6 +491,7 @@ CHECK_SMOKE = [
     "case",
     "control",
     "data",
+    "typed_data",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -523,6 +524,7 @@ TYPED_NODES_CHECK = [
     "case",
     "control",
     "data",
+    "typed_data",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
