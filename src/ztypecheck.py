@@ -7709,7 +7709,8 @@ class TypeChecker:
 
     def _check_reassignment_inner(self, reassign: zast.Reassignment) -> None:
         existing = self._check_path(reassign.topath).ztype
-        new_t = self._check_expression(reassign.value).ztype
+        rhs_result = self._check_expression(reassign.value)
+        new_t = rhs_result.ztype
         self._check_exhaustive_if(reassign.value)
         # Generator-desugarer TypeOfExpr field: the LHS resolved to a
         # placeholder because the field's declared type is "type of
@@ -7785,8 +7786,15 @@ class TypeChecker:
                     err=ERR.OWNERERROR,
                     hint="copy it with `.copy` (e.g. `x = (list.get i: i).copy`)",
                 )
+            # A borrow-projection RHS (`nm.stringview`, `m.borrow`) is a
+            # non-owning view of its source, not a transfer: the source
+            # must outlive the view, so it keeps its scope-end destruction
+            # and is never invalidated here (invalidating it emitted an
+            # early free the view then dangled over).
             rhs_root = (
-                None if _rhs_borrow_call else self._get_arg_root_name(reassign.value)
+                None
+                if (_rhs_borrow_call or rhs_result.borrow_target is not None)
+                else self._get_arg_root_name(reassign.value)
             )
             rhs_is_copy = self._rhs_is_copy_projection(reassign.value)
             if rhs_root and not rhs_is_copy:

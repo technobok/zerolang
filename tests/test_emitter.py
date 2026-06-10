@@ -913,6 +913,41 @@ class TestBareReftypeBindNoUseAfterFree:
         assert result.stdout == "len 0\n"
 
 
+class TestViewReassignmentKeepsSourceAlive:
+    """Pin: reassigning a view local from a borrow projection
+    (`sv = nm.stringview`) re-targets the view without consuming the
+    source.
+
+    The reftype drop-and-transfer move treated the projection's root as
+    the moved source and invalidated it, so `nm` was freed at the
+    invalidation point — before the view's next use — and the view read
+    freed memory (it surfaced as a branch-local reassignment whose view
+    printed garbage after the branch). A borrow-projection RHS carries a
+    `borrow_target`; such an RHS is a non-owning view of its source, so
+    the source keeps its scope-end destruction and is never invalidated.
+    """
+
+    _SRC = (
+        "main: function is {\n"
+        '  sv: "abcd"\n'
+        '  nm: "Cat".string\n'
+        "  if nm.length > 0.u64 then {\n"
+        "    sv = nm.stringview\n"
+        "  } else {\n"
+        "  }\n"
+        "  print sv\n"
+        "}"
+    )
+
+    def test_view_reassignment_is_asan_clean(self):
+        csource = emit_source(self._SRC)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "Cat\n"
+
+
 class TestBorrowedViewFieldProjectionNoDoubleFree:
     """Pin: reading an owning struct FIELD off a borrowed `Map.get`
     `OptionView` and passing it to a borrow parameter must not free the
