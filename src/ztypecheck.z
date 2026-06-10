@@ -4358,6 +4358,18 @@ bareAtomName: function {n: Node} out String is {
     }
 }
 
+# methodReceiverRoot -- the bare root name of a dotted callable's receiver
+# (`a.compare` -> a), "" for non-dotted or non-bare receivers.
+methodReceiverRoot: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (bareAtomName n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
 # positionalParamName -- the funcId's parameter name at `idx` (typeChild
 # position order), "" when absent. Positional call args map to it.
 positionalParamName: function {st: zenv.ZSymbolTable funcId: u64 idx: u64} out String is {
@@ -4723,6 +4735,76 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             if dro == 0.u64 then {
                 return 0.u64
             } else {
+                # A non-generic FUNCTION member dispatches as a user method
+                # call: call scope, arg walk, the callee's return, and the
+                # borrow-return report.
+                isMethodFn: false
+                {
+                    mzo: st.reg.typeById.get key: dro
+                    match (
+                        mzo
+                    ) case some then {
+                        if mzo.typetype == ztypes.ztypetype.FUNCTION then {
+                            if mzo.isgeneric then {
+                            } else {
+                                isMethodFn = true
+                            }
+                        } else {
+                        }
+                    } case none then {
+                    }
+                }
+                if isMethodFn then {
+                    mcm: st.pushCall
+                    mlr: walkCallArgsHoist st: st unitName: unitName call: call funcId: dro isCtor: false
+                    # The receiver locks for the call's duration too (after
+                    # the args, matching the oracle's entry order).
+                    rro: methodReceiverRoot n: call.callable
+                    if rro.length > 0.u64 then {
+                        rvo2: st.lookupVarId name: rro.stringview
+                        match (
+                            rvo2
+                        ) case some then {
+                            rvt2: st.lookup name: rro.stringview
+                            match (
+                                rvt2
+                            ) case some then {
+                                if (typeIsReftype st: st tid: rvt2) then {
+                                    lockCallArg st: st name: rro.stringview callId: call.nodeid.u64
+                                } else {
+                                }
+                            } case none then {
+                            }
+                        } case none then {
+                        }
+                    } else {
+                    }
+                    st.popTo marker: mcm
+                    mres: 0.u64
+                    mro: methodReturnOf st: st mid: dro
+                    match (
+                        mro
+                    ) case some then {
+                        mres = mro
+                        setmr: mres
+                        st.typing.nodeType.set key: call.nodeid.u64 value: setmr
+                    } case none then {
+                    }
+                    mfb: st.typing.funcReturnsBorrow.get key: dro
+                    match (
+                        mfb
+                    ) case some then {
+                        if mfb when mlr.length > 0.u64 then {
+                            drainPendingBorrow st: st
+                            mlrc: mlr.copy
+                            st.typing.pendingBorrowPath.append mlrc
+                        } else {
+                        }
+                    } case none then {
+                    }
+                    return mres
+                } else {
+                }
             }
         } case none then {
         }
@@ -5443,6 +5525,238 @@ walkBody: function {st: zenv.ZSymbolTable unitName: StringView bodyOpt: (Option 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
 # parameter as a runtime variable, walks the body, then pops (the pop snapshots
 # the scope's entries + unreachable flag for the SQL dump).
+# collectRefNames -- the bare names a body references (atom reads, call
+# callables, dotted-path roots), in source order; the method-walk trigger
+# consumes them.
+collectRefNames: function {n: Node names: (List of: String)} is {
+    match (
+        n
+    ) case expression then {
+        collectRefNames n: n.expression names: names
+    } case atomid then {
+        nm: n.name.copy
+        names.append nm
+    } case dottedpath then {
+        collectRefNames n: n.parent names: names
+    } case call then {
+        collectRefNames n: n.callable names: names
+        aiter: n.arguments.iterate
+        for arg: aiter loop {
+            collectRefNames n: arg names: names
+        }
+    } case namedoperation then {
+        collectRefNames n: n.operation names: names
+    } case binop then {
+        collectRefNames n: n.lhs names: names
+        collectRefNames n: n.rhs names: names
+    } case atomstring then {
+        spiter: n.stringparts.iterate
+        for sp: spiter loop {
+            collectRefNames n: sp names: names
+        }
+    } case statement then {
+        sliter: n.statements.iterate
+        for ln: sliter loop {
+            collectRefNames n: ln names: names
+        }
+    } case statementline then {
+        collectRefNames n: n.statementline names: names
+    } case assignment then {
+        collectRefNames n: n.value names: names
+    } case reassignment then {
+        collectRefNames n: n.topath names: names
+        collectRefNames n: n.value names: names
+    } case swapstmt then {
+        collectRefNames n: n.lhs names: names
+        collectRefNames n: n.rhs names: names
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl: cliter loop {
+            collectRefNames n: cl names: names
+        }
+        collectRefNamesOpt o: n.elseclause names: names
+    } case ifclause then {
+        coiter: n.conditions.iterate
+        for co: coiter loop {
+            collectRefNames n: co names: names
+        }
+        collectRefNames n: n.statement names: names
+    } case forexpr then {
+        fciter: n.conditions.iterate
+        for fc: fciter loop {
+            collectRefNames n: fc names: names
+        }
+        collectRefNamesOpt o: n.body names: names
+        fpiter: n.postconditions.iterate
+        for fp: fpiter loop {
+            collectRefNames n: fp names: names
+        }
+    } case doexpr then {
+        collectRefNames n: n.statement names: names
+    } case withexpr then {
+        collectRefNames n: n.value names: names
+        collectRefNames n: n.body names: names
+    } case caseexpr then {
+        collectRefNames n: n.subject names: names
+        cciter: n.clauses.iterate
+        for cc: cciter loop {
+            collectRefNames n: cc names: names
+        }
+        collectRefNamesOpt o: n.elseclause names: names
+    } case caseclause then {
+        collectRefNames n: n.matcharm names: names
+        collectRefNames n: n.statement names: names
+    } else {
+    }
+}
+
+collectRefNamesOpt: function {o: (Option t: Node) names: (List of: String)} is {
+    match (
+        o
+    ) case some then {
+        collectRefNames n: o names: names
+    } case none then {
+    }
+}
+
+# objectdefHasMethodBodies -- a unit member whose operation is an objectdef
+# with at least one functiondef-with-body item.
+objectdefHasMethodBodies: function {op: Node} out bool is {
+    match (
+        op
+    ) case objectdef then {
+        iiter: op.isItems.iterate
+        for im: iiter loop {
+            match (
+                im
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: im.operation) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        aiter: op.asItems.iterate
+        for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: am.operation) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# checkMethodBodies -- body-check every method of one type definition (is- and
+# as-block functiondefs, declaration order). The scopes land under the walk's
+# current scope, mirroring the oracle's resolve-at-first-demand placement.
+checkMethodBodies: function {st: zenv.ZSymbolTable unitName: StringView typeName: StringView op: Node} is {
+    emptyBody: (List of: Node)
+    match (
+        op
+    ) case objectdef then {
+        iiter: op.isItems.iterate
+        for im: iiter loop {
+            match (
+                im
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: im.operation) then {
+                    mname: unitLabel o: im.name
+                    qn: "\{typeName}.\{mname}"
+                    checkFunctionBody st: st unitName: unitName defName: qn.stringview defn: im.operation thisName: typeName unitBody: emptyBody
+                } else {
+                }
+            } else {
+            }
+        }
+        aiter: op.asItems.iterate
+        for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: am.operation) then {
+                    mname2: unitLabel o: am.name
+                    qn2: "\{typeName}.\{mname2}"
+                    checkFunctionBody st: st unitName: unitName defName: qn2.stringview defn: am.operation thisName: typeName unitBody: emptyBody
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+# triggerMethodWalks -- walk the method bodies of every main-unit type the
+# function body references, in first-reference order, once per type.
+triggerMethodWalks: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) bodyOpt: (Option t: Node)} is {
+    names: (List of: String)
+    match (
+        bodyOpt
+    ) case some then {
+        collectRefNames n: bodyOpt names: names
+    } case none then {
+    }
+    ni: 0.u64
+    nn: names.length
+    for while ni < nn loop {
+        nm: names.get i: ni
+        got: st.typing.walkedMethodOwners.get key: nm
+        match (
+            got
+        ) case some then {
+        } case none then {
+            idx2: 0.u64
+            found2: false
+            with biter: unitBody.iterate do for bm: biter loop {
+                if found2 then {} else {
+                    isMatch: false
+                    match (
+                        bm
+                    ) case namedoperation then {
+                        dn: unitLabel o: bm.name
+                        if dn.stringview == nm.stringview then {
+                            isMatch = true
+                        } else {
+                        }
+                    } else {
+                    }
+                    if isMatch then {
+                        found2 = true
+                    } else {
+                        idx2 = idx2 + 1.u64
+                    }
+                }
+            }
+            if found2 then {
+                mem: unitBody.get i: idx2
+                match (
+                    mem
+                ) case namedoperation then {
+                    if (objectdefHasMethodBodies op: mem.operation) then {
+                        mk: nm.copy
+                        mv: true
+                        st.typing.walkedMethodOwners.set key: mk value: mv
+                        checkMethodBodies st: st unitName: unitName typeName: nm.stringview op: mem.operation
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+        }
+        ni = ni + 1.u64
+    }
+}
+
 # lastStmtLineId / lastStmtLineIdOpt -- the node id of a function body's last
 # statement line (the implicit-return position), or 0 when absent.
 lastStmtLineId: function {block: Node} out u32 is {
@@ -5475,7 +5789,7 @@ lastStmtLineIdOpt: function {o: (Option t: Node)} out u32 is {
     }
 }
 
-checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node} is {
+checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node thisName: StringView unitBody: (List of: Node)} is {
     match (
         defn
     ) case functiondef then {
@@ -5511,8 +5825,6 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
         } else {
         }
         if hasBody then {
-            lbl: "\{unitName}.\{defName}"
-            st.typing.synthLabel = lbl
             sname: "function:\{defName}"
             dpush: st.push name: sname.stringview
             piter: defn.parameters.iterate
@@ -5523,6 +5835,16 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                     pname: unitLabel o: pm.name
                     pnid: nodeId n: pm.operation
                     ptid: paramTypeId typing: st.typing unitName: unitName op: pm.operation
+                    if thisName.length > 0.u64 when (paramIsThisReceiver op: pm.operation) then {
+                        thOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: thisName
+                        match (
+                            thOpt
+                        ) case some then {
+                            ptid = thOpt
+                        } case none then {
+                        }
+                    } else {
+                    }
                     own: ownershipOfParam o: (pathOwnership n: pm.operation)
                     v: st.reg.newVariable ztypeId: ptid ownership: own
                     vid2: v.variableId
@@ -5531,6 +5853,16 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                 } else {
                 }
             }
+            triggerMethodWalks st: st unitName: unitName unitBody: unitBody bodyOpt: defn.body
+            # Synth rows carry the unit member's dump label: a method's nodes
+            # live inside its TYPE's subtree, so the label is the type name.
+            # Set after the method-walk trigger -- nested walks set their own.
+            lbl: "\{unitName}.\{defName}"
+            if thisName.length > 0.u64 then {
+                lbl = "\{unitName}.\{thisName}"
+            } else {
+            }
+            st.typing.synthLabel = lbl
             walkBody st: st unitName: unitName bodyOpt: defn.body
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
@@ -5585,7 +5917,7 @@ checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: N
             ) case namedoperation then {
                 mainName: unitLabel o: mm.name
                 if mainName.stringview == "main" then {
-                    checkFunctionBody st: st unitName: unitName defName: mainName.stringview defn: mm.operation
+                    checkFunctionBody st: st unitName: unitName defName: mainName.stringview defn: mm.operation thisName: "" unitBody: unitdef.body
                 } else {
                 }
             } else {
@@ -5598,7 +5930,7 @@ checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: N
                 defName: unitLabel o: bm.name
                 if defName.stringview == "main" then {
                 } else {
-                    checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation
+                    checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation thisName: "" unitBody: unitdef.body
                 }
             } else {
             }

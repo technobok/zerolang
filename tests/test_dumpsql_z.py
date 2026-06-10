@@ -500,6 +500,14 @@ CHECK_SMOKE = [
     "string_parse",
     "ownership",
     "panic",
+    "records",
+    "classes",
+    "class_text_protocol",
+    "string_ordering",
+    "string_query",
+    "string_slice",
+    "string_split",
+    "text_protocol",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -541,6 +549,14 @@ TYPED_NODES_CHECK = [
     "string_parse",
     "ownership",
     "panic",
+    "records",
+    "classes",
+    "class_text_protocol",
+    "string_ordering",
+    "string_query",
+    "string_slice",
+    "string_split",
+    "text_protocol",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
