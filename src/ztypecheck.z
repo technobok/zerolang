@@ -49,6 +49,8 @@ nodeId: function {n: Node} out u32 is {
         return n.nodeid
     } case labelvalue then {
         return n.nodeid
+    } case binop then {
+        return n.nodeid
     } case dottedpath then {
         return n.nodeid
     } case expression then {
@@ -3788,8 +3790,23 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast
 # reset any narrowing on a bare-name target (appends a non-definition overlay
 # entry, mirroring _check_reassignment_inner's reset_narrowing).
 checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView rasgn: zast.ReassignmentData} is {
-    checkValue st: st unitName: unitName node: rasgn.topath
+    lvt: checkValue st: st unitName: unitName node: rasgn.topath
     rvt: checkValue st: st unitName: unitName node: rasgn.value
+    # A literal RHS at a concretely-typed target coerces: restamp the RHS's
+    # innermost node (wrappers derive through the dump's descent). A
+    # literal-typed target (a literal-init loop binding) keeps the pseudo.
+    if lvt > 0.u64 when rvt > 0.u64 when (isLiteralTypeId st: st tid: rvt) then {
+        if (isLiteralTypeId st: st tid: lvt) then {
+        } else {
+            iid: innermostNodeId n: rasgn.value
+            if iid > 0.u32 then {
+                setc: lvt
+                st.typing.nodeType.set key: iid.u64 value: setc
+            } else {
+            }
+        }
+    } else {
+    }
     nm: atomName n: rasgn.topath
     if nm.length > 0.u64 then {
         st.resetNarrowing name: nm.stringview
@@ -4138,6 +4155,18 @@ typeIsReftype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     }
 }
 
+# innermostNodeId -- the node id of a value with its expression wrappers
+# stripped (the node the dump's descent reads first); 0 for uncovered kinds.
+innermostNodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case expression then {
+        return (innermostNodeId n: n.expression)
+    } else {
+        return (nodeId n: n)
+    }
+}
+
 # bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
 # or "" when the value is any other shape.
 bareAtomName: function {n: Node} out String is {
@@ -4230,7 +4259,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
             arg
         ) case namedoperation then {
             vt: checkValue st: st unitName: unitName node: arg.operation
-            if vt > 0.u64 when (argIsTrivial op: arg.operation) == false then {
+            if vt > 0.u64 then {
                 pt: 0.u64
                 if funcId > 0.u64 when (isLiteralTypeId st: st tid: vt) then {
                     lbl: unitLabel o: arg.name
@@ -4246,14 +4275,28 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
                     }
                 } else {
                 }
-                # A construction takes ownership of its reftype field args:
-                # the hoisted temp invalidates inside the call scope.
-                consumes: false
-                if isCtor when (typeIsReftype st: st tid: vt) then {
-                    consumes = true
+                if (argIsTrivial op: arg.operation) then {
+                    # A trivial literal argument coerces in place at the
+                    # parameter boundary (no hoist: restamp its bare node).
+                    if pt > 0.u64 then {
+                        iid2: innermostNodeId n: arg.operation
+                        if iid2 > 0.u32 then {
+                            seta2: pt
+                            st.typing.nodeType.set key: iid2.u64 value: seta2
+                        } else {
+                        }
+                    } else {
+                    }
                 } else {
+                    # A construction takes ownership of its reftype field args:
+                    # the hoisted temp invalidates inside the call scope.
+                    consumes: false
+                    if isCtor when (typeIsReftype st: st tid: vt) then {
+                        consumes = true
+                    } else {
+                    }
+                    hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
                 }
-                hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
             } else {
             }
         } else {
@@ -5016,6 +5059,38 @@ walkBody: function {st: zenv.ZSymbolTable unitName: StringView bodyOpt: (Option 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
 # parameter as a runtime variable, walks the body, then pops (the pop snapshots
 # the scope's entries + unreachable flag for the SQL dump).
+# lastStmtLineId / lastStmtLineIdOpt -- the node id of a function body's last
+# statement line (the implicit-return position), or 0 when absent.
+lastStmtLineId: function {block: Node} out u32 is {
+    match (
+        block
+    ) case statement then {
+        ne: block.statements.length
+        if ne > 0.u64 then {
+            last: block.statements.get i: (ne - 1.u64)
+            match (
+                last
+            ) case statementline then {
+                return last.nodeid
+            } else {
+            }
+        } else {
+        }
+    } else {
+    }
+    return 0.u32
+}
+
+lastStmtLineIdOpt: function {o: (Option t: Node)} out u32 is {
+    match (
+        o
+    ) case some then {
+        return (lastStmtLineId block: o)
+    } case none then {
+        return 0.u32
+    }
+}
+
 checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node} is {
     match (
         defn
@@ -5073,6 +5148,41 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                 }
             }
             walkBody st: st unitName: unitName bodyOpt: defn.body
+            # Implicit-return coercion: a literal-typed last statement takes
+            # the function's concrete return type, stamped on the statement
+            # line (the node the reference coerces by id).
+            ftid: 0.u64
+            rg2: st.typing.resolved.get key: rkey
+            match (
+                rg2
+            ) case some then {
+                ftid = rg2
+            } case none then {
+            }
+            if ftid > 0.u64 then {
+                ro: methodReturnOf st: st mid: ftid
+                match (
+                    ro
+                ) case some then {
+                    lsid: lastStmtLineIdOpt o: defn.body
+                    if lsid > 0.u32 then {
+                        cur: st.typing.nodeType.get key: lsid.u64
+                        match (
+                            cur
+                        ) case some then {
+                            if (isLiteralTypeId st: st tid: cur) then {
+                                setr: ro
+                                st.typing.nodeType.set key: lsid.u64 value: setr
+                            } else {
+                            }
+                        } case none then {
+                        }
+                    } else {
+                    }
+                } case none then {
+                }
+            } else {
+            }
             dpop: st.pop
         } else {
         }
