@@ -3782,6 +3782,36 @@ checkSwap: function {st: zenv.ZSymbolTable unitName: StringView swapnode: zast.S
     checkValue st: st unitName: unitName node: swapnode.rhs
 }
 
+# withValueOwnership -- the with-binding's ownership from the bound value's
+# syntactic shape, mirroring the reference's function-argument rules: a bare
+# name bound to a runtime variable or a plain dotted path borrows; `.take`
+# transfers; calls, literals and constructions are fresh owned values.
+withValueOwnership: function {st: zenv.ZSymbolTable v: Node} out ztypes.zownership is {
+    match (
+        v
+    ) case expression then {
+        return (withValueOwnership st: st v: v.expression)
+    } case atomid then {
+        vo: st.lookupVarId name: v.name.stringview
+        match (
+            vo
+        ) case some then {
+            return ztypes.zownership.BORROWED
+        } case none then {
+            return ztypes.zownership.OWNED
+        }
+    } case dottedpath then {
+        cn: atomName n: v.child
+        if cn.stringview == "take" then {
+            return ztypes.zownership.OWNED
+        } else {
+            return ztypes.zownership.BORROWED
+        }
+    } else {
+        return ztypes.zownership.OWNED
+    }
+}
+
 # checkWith -- walk `with name: value do body`: push the `with` scope, bind the
 # alias variable (BORROWED for a plain-path value), walk the body, then pop. The
 # with node carries the bound value's type; the with-expression's value is the
@@ -3790,7 +3820,8 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.W
     withMarker: st.pushBlock name: "with"
     vt: checkValue st: st unitName: unitName node: withnode.value
     if vt > 0.u64 then {
-        v: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.BORROWED
+        own: withValueOwnership st: st v: withnode.value
+        v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
         st.defineVar name: withnode.name.stringview var: v
         st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid

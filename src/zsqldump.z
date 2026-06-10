@@ -631,6 +631,199 @@ ZDumper: class {
 
 }
 
+# walkExprStamps -- mirror the reference dump's node-type read (_node_ztype):
+# an Expression wrapper's typed row shows the innermost non-expression node's
+# stamp when one exists, falling back to the wrapper's own. The walk returns
+# each node's effective stamp so nested wrappers see through inner wrappers;
+# overrides are collected and applied to nodeType after the walk (check-time
+# propagation has already read the original values).
+walkExprStamps: function {typing: ztyping.ZTyping n: Node ids: (List of: u64) vals: (List of: u64)} out (optionval t: u64) is {
+    match (
+        n
+    ) case expression then {
+        eff: walkExprStamps typing: typing n: n.expression ids: ids vals: vals
+        match (
+            eff
+        ) case some then {
+            wid: n.nodeid.u64
+            ids.append wid
+            ev: eff
+            vals.append ev
+            ev2: eff
+            return (optionval.some ev2)
+        } case none then {
+            return (typing.nodeType.get key: n.nodeid.u64)
+        }
+    } case binop then {
+        walkExprStamps typing: typing n: n.lhs ids: ids vals: vals
+        walkExprStamps typing: typing n: n.operator ids: ids vals: vals
+        walkExprStamps typing: typing n: n.rhs ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case atomstring then {
+        spiter: n.stringparts.iterate
+        for sp: spiter loop {
+            walkExprStamps typing: typing n: sp ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case dottedpath then {
+        walkExprStamps typing: typing n: n.parent ids: ids vals: vals
+        walkExprStamps typing: typing n: n.child ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case call then {
+        walkExprStamps typing: typing n: n.callable ids: ids vals: vals
+        aiter: n.arguments.iterate
+        for arg: aiter loop {
+            walkExprStamps typing: typing n: arg ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case typeofexpr then {
+        walkExprStamps typing: typing n: n.source ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case namedoperation then {
+        walkExprStamps typing: typing n: n.operation ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case datablock then {
+        eiter: n.elements.iterate
+        for el: eiter loop {
+            walkExprStamps typing: typing n: el ids: ids vals: vals
+        }
+        walkExprStampsOpt typing: typing o: n.outType ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case yieldexpr then {
+        walkExprStamps typing: typing n: n.expr ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case statement then {
+        sliter: n.statements.iterate
+        for ln: sliter loop {
+            walkExprStamps typing: typing n: ln ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case statementline then {
+        walkExprStamps typing: typing n: n.statementline ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case assignment then {
+        walkExprStamps typing: typing n: n.value ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case reassignment then {
+        walkExprStamps typing: typing n: n.topath ids: ids vals: vals
+        walkExprStamps typing: typing n: n.value ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case swapstmt then {
+        walkExprStamps typing: typing n: n.lhs ids: ids vals: vals
+        walkExprStamps typing: typing n: n.rhs ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl: cliter loop {
+            walkExprStamps typing: typing n: cl ids: ids vals: vals
+        }
+        walkExprStampsOpt typing: typing o: n.elseclause ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case ifclause then {
+        coiter: n.conditions.iterate
+        for co: coiter loop {
+            walkExprStamps typing: typing n: co ids: ids vals: vals
+        }
+        walkExprStamps typing: typing n: n.statement ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case forexpr then {
+        fciter: n.conditions.iterate
+        for fc: fciter loop {
+            walkExprStamps typing: typing n: fc ids: ids vals: vals
+        }
+        walkExprStampsOpt typing: typing o: n.body ids: ids vals: vals
+        fpiter: n.postconditions.iterate
+        for fp: fpiter loop {
+            walkExprStamps typing: typing n: fp ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case doexpr then {
+        walkExprStamps typing: typing n: n.statement ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case withexpr then {
+        walkExprStamps typing: typing n: n.value ids: ids vals: vals
+        walkExprStamps typing: typing n: n.body ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case caseexpr then {
+        walkExprStamps typing: typing n: n.subject ids: ids vals: vals
+        cciter: n.clauses.iterate
+        for cc: cciter loop {
+            walkExprStamps typing: typing n: cc ids: ids vals: vals
+        }
+        walkExprStampsOpt typing: typing o: n.elseclause ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case caseclause then {
+        walkExprStamps typing: typing n: n.matcharm ids: ids vals: vals
+        walkExprStamps typing: typing n: n.statement ids: ids vals: vals
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case functiondef then {
+        walkExprStampsOpt typing: typing o: n.returntype ids: ids vals: vals
+        piter: n.parameters.iterate
+        for pm: piter loop {
+            walkExprStamps typing: typing n: pm ids: ids vals: vals
+        }
+        walkExprStampsOpt typing: typing o: n.body ids: ids vals: vals
+        faiter: n.asItems.iterate
+        for am: faiter loop {
+            walkExprStamps typing: typing n: am ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case objectdef then {
+        oiiter: n.isItems.iterate
+        for oi: oiiter loop {
+            walkExprStamps typing: typing n: oi ids: ids vals: vals
+        }
+        oaiter: n.asItems.iterate
+        for oa: oaiter loop {
+            walkExprStamps typing: typing n: oa ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } case unitdef then {
+        ubiter: n.body.iterate
+        for ub: ubiter loop {
+            walkExprStamps typing: typing n: ub ids: ids vals: vals
+        }
+        return (typing.nodeType.get key: n.nodeid.u64)
+    } else {
+        return (optionval.none u64)
+    }
+}
+
+walkExprStampsOpt: function {typing: ztyping.ZTyping o: (Option t: Node) ids: (List of: u64) vals: (List of: u64)} is {
+    match (
+        o
+    ) case some then {
+        walkExprStamps typing: typing n: o ids: ids vals: vals
+    } case none then {
+    }
+}
+
+# overrideExpressionStamps -- collect the wrapper overrides across every unit,
+# then rewrite nodeType so appendTypedNodes emits the descended values.
+overrideExpressionStamps: function {typing: ztyping.ZTyping program: Node} is {
+    ids: (List of: u64)
+    vals: (List of: u64)
+    match (
+        program
+    ) case program then {
+        uiter: program.units.iterate
+        for u: uiter loop {
+            walkExprStamps typing: typing n: u ids: ids vals: vals
+        }
+    } else {
+    }
+    i: 0.u64
+    cnt: ids.length
+    for while i < cnt loop {
+        k: ids.get i: i
+        v: vals.get i: i
+        setk: k
+        setv: v
+        typing.nodeType.set key: setk value: setv
+        i = i + 1.u64
+    }
+}
+
 # --- entry point ---
 
 # dumpSql -- the full dump: schema, then files, ast_nodes and unit rows.
@@ -642,6 +835,7 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     d.appendUnits program: program typing: symtab.typing
     d.appendTypes st: symtab
     d.appendTypeChildren typing: symtab.typing
+    overrideExpressionStamps typing: symtab.typing program: program
     d.appendTypedNodes typing: symtab.typing
     d.appendConformance typing: symtab.typing
     d.appendSymbolTable st: symtab
