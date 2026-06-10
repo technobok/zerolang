@@ -483,6 +483,10 @@ CHECK_SMOKE = [
     "intit",
     "genericfunctions",
     "matchctl",
+    "chained_method_calls",
+    "fibonacci",
+    "strings",
+    "swap",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -507,6 +511,10 @@ TYPED_NODES_CHECK = [
     "intit",
     "genericfunctions",
     "matchctl",
+    "chained_method_calls",
+    "fibonacci",
+    "strings",
+    "swap",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

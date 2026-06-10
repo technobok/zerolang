@@ -670,27 +670,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 ) case some then {
                     ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: pown
                 } case none then {
-                    tn: atomName n: pm.operation
-                    isref: false
-                    if tn.stringview == "this" then {
-                        isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
-                        if (isNativeValueView name: thisName) then {
-                            isref = false
-                        } else {}
-                    } else {
-                        if tn.length == 0.u64 then {
-                            base: paramTypeBaseName op: pm.operation
-                            isref = isBorrowReftypeCollection name: base.stringview
-                        } else {
-                            isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
-                            if (isBorrowNativeReftype name: tn.stringview) then {
-                                isref = true
-                            } else {}
-                            if (isNativeValueView name: tn.stringview) then {
-                                isref = false
-                            } else {}
-                        }
-                    }
+                    isref: paramIsBorrowReftype ty: ty reg: reg unitName: unitName thisName: thisName op: pm.operation
                     if isref then {
                         ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
                     } else {}
@@ -705,6 +685,93 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: fid
     return rfid
+}
+
+# paramIsBorrowReftype -- the default-ownership rule for a parameter with no
+# explicit suffix: user reftypes (and the borrow-default native reftypes /
+# collections) borrow; native value views do not.
+paramIsBorrowReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView thisName: StringView op: Node} out bool is {
+    tn: atomName n: op
+    isref: false
+    if tn.stringview == "this" then {
+        isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
+        if (isNativeValueView name: thisName) then {
+            isref = false
+        } else {}
+    } else {
+        if tn.length == 0.u64 then {
+            base: paramTypeBaseName op: op
+            isref = isBorrowReftypeCollection name: base.stringview
+        } else {
+            isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: tn.stringview
+            if (isBorrowNativeReftype name: tn.stringview) then {
+                isref = true
+            } else {}
+            if (isNativeValueView name: tn.stringview) then {
+                isref = false
+            } else {}
+        }
+    }
+    return isref
+}
+
+# fixupDemandedParamOwnership -- under the full body-walk driver, a main-unit
+# reftype may resolve AFTER the functions that reference it (demand order, not
+# body order), so resolveFunction's default-ownership rule missed it. Re-run
+# the rule for top-level main-unit function params with no recorded ownership.
+fixupDemandedParamOwnership: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (isFunctionDefOp op: bm.operation) then {
+                    dn: unitLabel o: bm.name
+                    rkey: "\{unitName}.\{dn}".string
+                    fo: ty.resolved.get key: rkey
+                    match (
+                        fo
+                    ) case some then {
+                        fixupFnParamOwnership ty: ty reg: reg unitName: unitName fid: fo defn: bm.operation
+                    } case none then {
+                    }
+                } else {
+                }
+            } else {}
+        }
+    } else {}
+}
+
+fixupFnParamOwnership: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fid: u64 defn: Node} is {
+    match (
+        defn
+    ) case functiondef then {
+        piter: defn.parameters.iterate
+        for pm: piter loop {
+            match (
+                pm
+            ) case namedoperation then {
+                pname: unitLabel o: pm.name
+                hasOwn: ty.hasChildOwnership parentTypeId: fid name: pname.stringview
+                if hasOwn then {
+                } else {
+                    pown: pathOwnership n: pm.operation
+                    match (
+                        pown
+                    ) case some then {
+                    } case none then {
+                        isref: paramIsBorrowReftype ty: ty reg: reg unitName: unitName thisName: "" op: pm.operation
+                        if isref then {
+                            ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
+                        } else {}
+                    }
+                }
+            } else {}
+        }
+    } else {}
 }
 
 # resolveMethodFn -- resolve one record-method as-item (a namedoperation whose
@@ -1550,7 +1617,11 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
 }
 
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
-resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+# resolveUnitBody -- resolve a unit's definition signatures. Signature-only
+# resolves every member; the full body-walk mode mirrors check()'s eager set
+# (functions and units only -- other definitions resolve on demand, so unused
+# main-unit records/classes/unions drop out of the full dump).
+resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node full: bool} is {
     match (
         unitdef
     ) case unitdef then {
@@ -1565,10 +1636,24 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 bm
             ) case namedoperation then {
                 defName: unitLabel o: bm.name
-                if (isUnitOp op: bm.operation) then {
-                    resolveInlineGenericUnit ty: ty reg: reg unitName: unitName defName: defName.stringview unitOp: bm.operation
+                eager: true
+                if full then {
+                    if (isFunctionDefOp op: bm.operation) then {
+                    } else {
+                        if (isUnitOp op: bm.operation) then {
+                        } else {
+                            eager = false
+                        }
+                    }
                 } else {
-                    resolveDef ty: ty reg: reg unitName: unitName defName: defName.stringview defn: bm.operation
+                }
+                if eager then {
+                    if (isUnitOp op: bm.operation) then {
+                        resolveInlineGenericUnit ty: ty reg: reg unitName: unitName defName: defName.stringview unitOp: bm.operation
+                    } else {
+                        resolveDef ty: ty reg: reg unitName: unitName defName: defName.stringview defn: bm.operation
+                    }
+                } else {
                 }
             } else {}
         }
@@ -1581,7 +1666,7 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
 # registerAndResolveMain -- register a UNIT type per unit, then resolve the main
 # unit's definition signatures. Iterates program.units transiently so the demand
 # pass can re-iterate it without an overlapping exclusive lock.
-registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
     match (
         program
     ) case program then {
@@ -1596,7 +1681,7 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                 opid: unitdefNodeId n: u.operation
                 ty.unitTypesById.set key: opid.u64 value: uid
                 if nm.stringview == mainName then {
-                    resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: u.operation
+                    resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: u.operation full: full
                 } else {}
             } else {}
         }
@@ -1935,6 +2020,7 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             } else {
             }
         }
+        scanCallsInNode reg: reg node: node.callable
         for arg: node.arguments.iterate loop {
             match (
                 arg
@@ -1942,6 +2028,17 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
                 scanCallsInNode reg: reg node: arg.operation
             } else {
             }
+        }
+    } case atomstring then {
+        for sp: node.stringparts.iterate loop {
+            scanCallsInNode reg: reg node: sp
+        }
+    } case atomid then {
+        # bare body identifiers demand main-unit definitions (unit constants,
+        # data blocks); non-definition names never match a demanded def.
+        if (isNumericLiteralName name: node.name.stringview) then {
+        } else {
+            reg.recordDemand name: node.name.stringview
         }
     } case binop then {
         scanCallsInNode reg: reg node: node.lhs
@@ -1981,6 +2078,13 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
     } case withexpr then {
         scanCallsInNode reg: reg node: node.value
         scanCallsInNode reg: reg node: node.body
+    } case dottedpath then {
+        bn: atomName n: node.parent
+        if bn.length > 0.u64 then {
+            reg.recordDemand name: bn.stringview
+        } else {
+        }
+        scanCallsInNode reg: reg node: node.parent
     } case caseexpr then {
         scanCallsInNode reg: reg node: node.subject
         for cl: node.clauses.iterate loop {
@@ -2109,6 +2213,34 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     match (
         program
     ) case program then {
+        if full then {
+            with miter2: program.units.iterate do for mu: miter2 loop {
+                match (
+                    mu
+                ) case namedoperation then {
+                    mnm: unitLabel o: mu.name
+                    if mnm.stringview == program.mainUnitName.stringview then {
+                        # main-unit demand fixpoint: signatures and body scans
+                        # demand main-unit definitions transitively (a demanded
+                        # record's fields demand further records), so iterate
+                        # until no new types mint.
+                        again: true
+                        for while again loop {
+                            before: reg.nextTypeId
+                            resolveDemandedUnitBody ty: ty reg: reg unitName: mnm.stringview shadowUnit: "" unitdef: mu.operation
+                            if reg.nextTypeId == before then {
+                                again = false
+                            } else {
+                            }
+                        }
+                        fixupDemandedParamOwnership ty: ty reg: reg unitName: mnm.stringview unitdef: mu.operation
+                    } else {
+                    }
+                } else {
+                }
+            }
+        } else {
+        }
         uiter: program.units.iterate
         for u: uiter loop {
             match (
@@ -4795,7 +4927,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     ty: ztyping.newTyping
     # null is the reference's first registered type.
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
-    registerAndResolveMain ty: ty reg: reg program: program
+    registerAndResolveMain ty: ty reg: reg program: program full: full
     resolveMainUnitInstantiations ty: ty reg: reg program: program
     if full then {
         scanMainBodyCalls reg: reg program: program
