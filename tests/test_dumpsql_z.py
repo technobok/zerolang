@@ -508,6 +508,7 @@ CHECK_SMOKE = [
     "string_slice",
     "string_split",
     "text_protocol",
+    "string_transform",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -557,6 +558,7 @@ TYPED_NODES_CHECK = [
     "string_slice",
     "string_split",
     "text_protocol",
+    "string_transform",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
