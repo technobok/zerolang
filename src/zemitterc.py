@@ -9654,9 +9654,13 @@ class CEmitter:
                     return f"{resolved.cname}()"
                 return resolved.cname
             return mangle_func_name(name)
-        if name in self._const_names:
+        if name in self._const_names or self._node_const_value(atom) is not None:
             # Unit-level numeric constants are macros: inline the value
             # at every reference site (no backing static decl exists).
+            # The stamp check covers a same-unit reference to a dependency
+            # unit's own constant: _const_names holds it under the
+            # unit-qualified name only, but typecheck folded the use-site
+            # atom, and locals/functions already returned above.
             inlined = self._inline_const_lookup(atom, name)
             if inlined is not None:
                 return inlined
