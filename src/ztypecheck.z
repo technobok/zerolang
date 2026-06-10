@@ -164,6 +164,7 @@ resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: St
 # the dump projections' types join; foldLiteralStamps rewrites surviving node
 # stamps to i64 before the dump.
 literalIntId: 0x7FFFFFFFFFFFFFFF.u64
+literalFloatId: 0x7FFFFFFFFFFFFFFE.u64
 
 # isNumericLiteralName -- true when a name begins with a digit: a numeric-literal
 # atom (an `as`-block static constant like `version: 1`), as opposed to a type-name
@@ -616,6 +617,28 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     isgen: hasGenericParam items: fnode.asItems
     if isgen then {
         reg.setGeneric typeId: fid value: true
+        aiter2: fnode.asItems.iterate
+        for am: aiter2 loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (isGenericParam op: am.operation) then {
+                    apn: unitLabel o: am.name
+                    ty.setGenericArg parentTypeId: fid paramName: apn.stringview argTypeId: 0
+                } else {}
+            } else {}
+        }
+        hasB: false
+        match (
+            fnode.body
+        ) case some then {
+            hasB = true
+        } case none then {}
+        if hasB then {
+            dvg: bodyEndsInReturn bodyOpt: fnode.body
+            fidd: fid
+            ty.fnBodyDiverges.set key: fidd value: dvg
+        } else {}
     } else {}
     enclKey: unitName.string
     if thisName.length == 0.u64 then {} else {
@@ -1750,6 +1773,64 @@ seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "Closer"
     reg.recordDemand name: "IoError"
     reg.recordDemand name: "seekorigin"
+}
+
+# bodyEndsInReturn -- true when an optional body block's last statement is a
+# bare `return ...` call (the syntactic divergence the clone-scope synthesis
+# needs; no stamps are made).
+bodyEndsInReturn: function {bodyOpt: (Option t: Node)} out bool is {
+    match (
+        bodyOpt
+    ) case some then {
+        return (blockEndsInReturn block: bodyOpt)
+    } case none then {
+        return false
+    }
+}
+
+blockEndsInReturn: function {block: Node} out bool is {
+    match (
+        block
+    ) case statement then {
+        ne: block.statements.length
+        if ne > 0.u64 then {
+            last: block.statements.get i: (ne - 1.u64)
+            match (
+                last
+            ) case statementline then {
+                return (stmtExprIsReturn op: last.statementline)
+            } else {
+                return false
+            }
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# stmtExprIsReturn -- an expression statement whose inner call's callable is
+# the `return` builtin.
+stmtExprIsReturn: function {op: Node} out bool is {
+    match (
+        op
+    ) case expression then {
+        return (exprCallIsReturn op: op.expression)
+    } else {
+        return false
+    }
+}
+
+exprCallIsReturn: function {op: Node} out bool is {
+    match (
+        op
+    ) case call then {
+        cn: atomName n: op.callable
+        return cn.stringview == "return"
+    } else {
+        return false
+    }
 }
 
 # isFunctionDefWithBody -- true when a node is a functiondef carrying a non-empty body
@@ -3073,22 +3154,6 @@ mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: String
     }
 }
 
-# mintGenericCallMono -- mint the instance of a generic callee from its first
-# argument's resolved type (single-type-param inference; print today) and stamp
-# the call's callable node with it.
-mintGenericCallMono: function {st: zenv.ZSymbolTable mainName: StringView templateId: u64 argTypeId: u64 calNid: u32} is {
-    tn: typeNameOf st: st tid: templateId
-    an: typeNameOf st: st tid: argTypeId
-    if tn.length > 0.u64 when an.length > 0.u64 then {
-        mname: "\{tn}_\{an}"
-        eSubs: (Map key: String value: u64)
-        mid: mintMono st: st mainName: mainName name: mname.stringview templateId: templateId subs: eSubs fallbackArg: argTypeId
-        setg: mid
-        st.typing.nodeType.set key: calNid.u64 value: setg
-    } else {
-    }
-}
-
 # One resolved instantiation staged for minting: the mono name parts, the
 # template id, the wrapper node to stamp, and the by-name substitution map.
 ResolvedMono: class {
@@ -3366,13 +3431,38 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView node: zast.Ato
         st.typing.nodeType.set key: node.nodeid.u64 value: setk
     } case none then {
         if (isNumericLiteralName name: node.name.stringview) then {
-            result = literalIntId
+            if (isFloatLiteralName name: node.name.stringview) then {
+                result = literalFloatId
+            } else {
+                result = literalIntId
+            }
             setl: result
             st.typing.nodeType.set key: node.nodeid.u64 value: setl
         } else {
         }
     }
     return result
+}
+
+# isFloatLiteralName -- a numeric-literal atom carrying a decimal point (the
+# float default; hex/binary stay integer literals).
+isFloatLiteralName: function {name: StringView} out bool is {
+    i: 0.u64
+    n: name.length
+    for while i < n loop {
+        b: name.byteAt i
+        match (
+            b
+        ) case some then {
+            if b == 46.u8 then {
+                return true
+            } else {
+            }
+        } case none then {
+        }
+        i = i + 1.u64
+    }
+    return false
 }
 
 # isComparisonOp -- a binop operator whose result is bool (not the operand type).
@@ -3441,22 +3531,40 @@ lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
     return result
 }
 
+# materialiseLiteral -- fold a literal pseudo-type id to its concrete default
+# (i64 / f64); concrete ids pass through.
+materialiseLiteral: function {st: zenv.ZSymbolTable unitName: StringView t: u64} out u64 is {
+    base: ""
+    if t == literalIntId then {
+        base = "i64"
+    } else {
+    }
+    if t == literalFloatId then {
+        base = "f64"
+    } else {
+    }
+    if base.length == 0.u64 then {
+        return t
+    } else {
+    }
+    li: lookupTyperef resolved: st.typing.resolved mainName: unitName base: base
+    match (
+        li
+    ) case some then {
+        return li
+    } case none then {
+        return t
+    }
+}
+
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
 # literal-typed value to its concrete default (the binding takes i64, unlike a
 # for-loop binding which keeps the pseudo id), define the local (owned for a plain
 # value), and stamp the assignment node + def-variable.
 checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast.AssignmentData} is {
     vt: checkValue st: st unitName: unitName node: asgn.value
-    if vt == literalIntId then {
-        li: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "i64"
-        match (
-            li
-        ) case some then {
-            vt = li
-        } case none then {
-        }
-    } else {
-    }
+    mvt: materialiseLiteral st: st unitName: unitName t: vt
+    vt = mvt
     if vt > 0.u64 then {
         v: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.OWNED
         vid: v.variableId
@@ -3905,30 +4013,236 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             } case none then {
             }
         } else {
-            argT: 0.u64
-            gfirst: true
-            giter: call.arguments.iterate
-            for garg: giter loop {
-                match (
-                    garg
-                ) case namedoperation then {
-                    avt: checkValue st: st unitName: unitName node: garg.operation
-                    if gfirst then {
-                        argT = avt
-                        gfirst = false
-                    } else {
-                    }
+            if isGen then {
+                gr: checkGenericCall st: st unitName: unitName call: call funcId: funcId
+                result = gr
+                if gr > 0.u64 then {
+                    setgc: gr
+                    st.typing.nodeType.set key: call.nodeid.u64 value: setgc
                 } else {
                 }
-            }
-            if isGen when argT > 0.u64 then {
-                gcalid: nodeId n: call.callable
-                mintGenericCallMono st: st mainName: unitName templateId: funcId argTypeId: argT calNid: gcalid
             } else {
+                giter: call.arguments.iterate
+                for garg: giter loop {
+                    match (
+                        garg
+                    ) case namedoperation then {
+                        checkValue st: st unitName: unitName node: garg.operation
+                    } else {
+                    }
+                }
             }
         }
     }
     return result
+}
+
+# checkGenericCall -- a call to a generic user function: walk the value args,
+# infer the type-param bindings (explicit `param: Type` args, else each value
+# arg's materialised type through the parameter it feeds), mint the instance
+# (children substituted; return substituted from the recorded `out` placeholder
+# name), synthesize the clone scope on first instantiation (empty, named by the
+# instance, unreachable per the template body's syntactic divergence -- bodied
+# templates only, so native generics like print add no scope), stamp the
+# callable with the instance, and resolve to the instance's return. Nested
+# control flow inside generic bodies needs a real clone walk and is deferred.
+checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64} out u64 is {
+    gparams: (List of: String)
+    with gpiter: st.typing.typeGenericArg.iterate do for gp: gpiter loop {
+        if gp.parentTypeId == funcId then {
+            gpn: gp.paramName.copy
+            gparams.append gpn
+        } else {
+        }
+    }
+    pNames: (List of: String)
+    pHolderIds: (List of: u64)
+    with pciter: st.typing.typeChild.iterate do for tc: pciter loop {
+        if tc.parentTypeId == funcId then {
+            cto: st.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                pn2: tc.childName.copy
+                pNames.append pn2
+                cto2: cto
+                pHolderIds.append cto2
+            } case none then {
+            }
+        } else {
+        }
+    }
+    pHolders: (List of: String)
+    phi: 0.u64
+    phn: pHolderIds.length
+    for while phi < phn loop {
+        hid: pHolderIds.get i: phi
+        hn: typeNameOf st: st tid: hid
+        pHolders.append hn
+        phi = phi + 1.u64
+    }
+    subs: (Map key: String value: u64)
+    posIdx: 0.u64
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            an2: unitLabel o: arg.name
+            isTypeArg: false
+            tgi: gparams.iterate
+            for gp2: tgi loop {
+                if an2.stringview == gp2.stringview then {
+                    isTypeArg = true
+                } else {
+                }
+            }
+            if isTypeArg then {
+                tn3: atomName n: arg.operation
+                to3: lookupTyperef resolved: st.typing.resolved mainName: unitName base: tn3.stringview
+                match (
+                    to3
+                ) case some then {
+                    sk: an2.copy
+                    sv: to3
+                    subs.set key: sk value: sv
+                } case none then {
+                }
+            } else {
+                avt: checkValue st: st unitName: unitName node: arg.operation
+                mat: materialiseLiteral st: st unitName: unitName t: avt
+                holder: ""
+                if an2.length > 0.u64 then {
+                    hi: 0.u64
+                    hn2: pNames.length
+                    for while hi < hn2 loop {
+                        pn3: pNames.get i: hi
+                        if an2.stringview == pn3.stringview then {
+                            hv: pHolders.get i: hi
+                            holder = hv.stringview
+                        } else {
+                        }
+                        hi = hi + 1.u64
+                    }
+                } else {
+                    if posIdx < pHolders.length then {
+                        hv2: pHolders.get i: posIdx
+                        holder = hv2.stringview
+                    } else {
+                    }
+                }
+                posIdx = posIdx + 1.u64
+                if holder.length > 0.u64 when mat > 0.u64 then {
+                    hk: holder.string
+                    hgot: subs.get key: hk
+                    match (
+                        hgot
+                    ) case some then {
+                    } case none then {
+                        sk2: holder.string
+                        sv2: mat
+                        subs.set key: sk2 value: sv2
+                    }
+                } else {
+                }
+            }
+        } else {
+        }
+    }
+    mname: typeNameOf st: st tid: funcId
+    if mname.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    allOk: true
+    giter2: gparams.iterate
+    for gp3: giter2 loop {
+        gv: gp3.stringview
+        gk: gv.string
+        ggot: subs.get key: gk
+        match (
+            ggot
+        ) case some then {
+            an4: typeNameOf st: st tid: ggot
+            mname.append s: "_"
+            mname.append s: an4.stringview
+        } case none then {
+            allOk = false
+        }
+    }
+    if allOk == false then {
+        return 0.u64
+    } else {
+    }
+    if gparams.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    wasNew: false
+    nk: mname.string
+    ngot: st.typing.monoByName.get key: nk
+    match (
+        ngot
+    ) case some then {
+    } case none then {
+        wasNew = true
+    }
+    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: funcId subs: subs fallbackArg: 0.u64
+    rno: st.typing.funcReturnNode.get key: funcId
+    match (
+        rno
+    ) case some then {
+        rbn: st.typing.pendingTyperef.get key: rno
+        match (
+            rbn
+        ) case some then {
+            rv: rbn.stringview
+            rk: rv.string
+            rgot2: subs.get key: rk
+            match (
+                rgot2
+            ) case some then {
+                st.reg.setReturnType typeId: mid value: rgot2
+            } case none then {
+                rconc: lookupTyperef resolved: st.typing.resolved mainName: unitName base: rv
+                match (
+                    rconc
+                ) case some then {
+                    st.reg.setReturnType typeId: mid value: rconc
+                } case none then {
+                }
+            }
+        } case none then {
+        }
+    } case none then {
+    }
+    if wasNew then {
+        dvo: st.typing.fnBodyDiverges.get key: funcId
+        match (
+            dvo
+        ) case some then {
+            csname: "function:\{mname}"
+            cm2: st.pushBlock name: csname.stringview
+            if dvo then {
+                st.markUnreachable
+            } else {
+            }
+            st.popTo marker: cm2
+        } case none then {
+        }
+    } else {
+    }
+    calid2: nodeId n: call.callable
+    setc2: mid
+    st.typing.nodeType.set key: calid2.u64 value: setc2
+    ro2: methodReturnOf st: st mid: mid
+    match (
+        ro2
+    ) case some then {
+        return ro2
+    } case none then {
+        return 0.u64
+    }
 }
 
 # checkValue -- type an expression-value node, dispatching by kind. Returns the
@@ -4070,6 +4384,30 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             hasBody = true
         } case none then {
         }
+        isGenDef: false
+        rkey: "\{unitName}.\{defName}".string
+        rgot: st.typing.resolved.get key: rkey
+        match (
+            rgot
+        ) case some then {
+            {
+                gz: st.reg.typeById.get key: rgot
+                match (
+                    gz
+                ) case some then {
+                    if gz.isgeneric then {
+                        isGenDef = true
+                    } else {
+                    }
+                } case none then {
+                }
+            }
+        } case none then {
+        }
+        if isGenDef then {
+            return
+        } else {
+        }
         if hasBody then {
             lbl: "\{unitName}.\{defName}"
             st.typing.synthLabel = lbl
@@ -4158,33 +4496,61 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
     }
 }
 
-# foldLiteralStamps -- replace literal pseudo-type node stamps with the concrete
-# default (i64) after the body walk. Symbol-table entries keep the pseudo id and
-# stay out of the dump joins.
+# foldLiteralStamps -- replace literal pseudo-type node stamps with their
+# concrete defaults (i64 / f64) after the body walk. Symbol-table entries keep
+# the pseudo id and stay out of the dump joins.
 foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
     match (
         program
     ) case program then {
         mainName: program.mainUnitName.stringview
+        intId: 0.u64
         li: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "i64"
         match (
             li
         ) case some then {
-            ks: (List of: u64)
-            with it: st.typing.nodeType.iterateItems do for e: it loop {
-                if e.value == literalIntId then {
-                    k: e.key
-                    ks.append k
-                } else {
-                }
+            intId = li
+        } case none then {
+        }
+        floatId: 0.u64
+        lf: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "f64"
+        match (
+            lf
+        ) case some then {
+            floatId = lf
+        } case none then {
+        }
+        iks: (List of: u64)
+        fks: (List of: u64)
+        with it: st.typing.nodeType.iterateItems do for e: it loop {
+            if e.value == literalIntId then {
+                k: e.key
+                iks.append k
+            } else {
             }
-            kiter: ks.iterate
-            for k2: kiter loop {
-                kc: k2
-                setv: li
+            if e.value == literalFloatId then {
+                k2: e.key
+                fks.append k2
+            } else {
+            }
+        }
+        if intId > 0.u64 then {
+            kiter: iks.iterate
+            for k3: kiter loop {
+                kc: k3
+                setv: intId
                 st.typing.nodeType.set key: kc value: setv
             }
-        } case none then {
+        } else {
+        }
+        if floatId > 0.u64 then {
+            fiter: fks.iterate
+            for k4: fiter loop {
+                kc2: k4
+                setv2: floatId
+                st.typing.nodeType.set key: kc2 value: setv2
+            }
+        } else {
         }
     } else {
     }
