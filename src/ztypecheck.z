@@ -3590,6 +3590,15 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView node: zast.Ato
             setl: result
             st.typing.nodeType.set key: node.nodeid.u64 value: setl
         } else {
+            fo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: node.name.stringview
+            match (
+                fo
+            ) case some then {
+                result = fo
+                setu: result
+                st.typing.nodeType.set key: node.nodeid.u64 value: setu
+            } case none then {
+            }
         }
     }
     return result
@@ -4985,6 +4994,84 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
     }
 }
 
+# resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
+# atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
+# default (i64 / f64 -- both pre-demanded by seedSystemDemands). The definition's
+# own nodes stay unstamped: the oracle's stamps there carry its unregistered
+# literal pseudo-type (NULL in the dump), invisible to every projection.
+resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: StringView defn: Node} is {
+    match (
+        defn
+    ) case expression then {
+        resolveConstantDef ty: ty mainName: mainName defName: defName defn: defn.expression
+    } case atomid then {
+        if (isNumericLiteralName name: defn.name.stringview) then {
+            base: "i64"
+            if (isFloatLiteralName name: defn.name.stringview) then {
+                base = "f64"
+            } else {
+            }
+            tOpt: lookupTyperef resolved: ty.resolved mainName: mainName base: base
+            match (
+                tOpt
+            ) case some then {
+                k: "\{mainName}.\{defName}".string
+                setv: tOpt
+                ty.resolved.set key: k value: setv
+            } case none then {
+            }
+        } else {
+        }
+    } else {
+    }
+}
+
+resolveConstantDefsInUnit: function {ty: ztyping.ZTyping mainName: StringView unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                defName: unitLabel o: bm.name
+                if defName.length > 0.u64 then {
+                    resolveConstantDef ty: ty mainName: mainName defName: defName.stringview defn: bm.operation
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+# resolveConstantDefs -- under the full driver, materialise the main unit's numeric
+# constant definitions the way the oracle resolves them on first name lookup. Runs
+# post-demand so the numeric defaults are already in resolved.
+resolveConstantDefs: function {ty: ztyping.ZTyping program: Node} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        uiter: program.units.iterate
+        for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                nm: unitLabel o: u.name
+                if nm.stringview == mainName then {
+                    resolveConstantDefsInUnit ty: ty mainName: mainName unitdef: u.operation
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     # null is the reference's first registered type.
@@ -4996,6 +5083,10 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     } else {
     }
     resolveCrossUnitDemand ty: ty reg: reg program: program full: full
+    if full then {
+        resolveConstantDefs ty: ty program: program
+    } else {
+    }
     stampTyperefs ty: ty program: program
     st: zenv.newSymbolTable reg: reg typing: ty
     if full then {
