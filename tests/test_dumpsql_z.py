@@ -510,6 +510,8 @@ CHECK_SMOKE = [
     "text_protocol",
     "string_transform",
     "visibility",
+    "create_null",
+    "constructors",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -561,6 +563,8 @@ TYPED_NODES_CHECK = [
     "text_protocol",
     "string_transform",
     "visibility",
+    "create_null",
+    "constructors",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

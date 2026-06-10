@@ -3615,6 +3615,39 @@ optBoolOr: function {o: (optionval t: bool) d: bool} out bool is {
     }
 }
 
+# createDottedBaseId -- the base atom's node id when a dotted path's child is
+# `create` (explicit construction: `T.create` is bare-name construction).
+createDottedBaseId: function {n: Node} out (optionval t: u32) is {
+    match (
+        n
+    ) case dottedpath then {
+        ccn: atomName n: n.child
+        if ccn.stringview == "create" then {
+            return (optionval.some (nodeId n: n.parent))
+        } else {
+        }
+    } else {
+    }
+    return (optionval.none u32)
+}
+
+# metaCreateBaseId -- the base atom's node id when a callable is the dotted
+# `meta.create` (the enclosing type's raw allocator), or none.
+metaCreateBaseId: function {n: Node} out (optionval t: u32) is {
+    match (
+        n
+    ) case dottedpath then {
+        pn: atomName n: n.parent
+        cn2: atomName n: n.child
+        if pn.stringview == "meta" when cn2.stringview == "create" then {
+            return (optionval.some (nodeId n: n.parent))
+        } else {
+        }
+    } else {
+    }
+    return (optionval.none u32)
+}
+
 methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     cnt: st.typing.childCount parentTypeId: mid
     if cnt == 0.u64 then {
@@ -4732,6 +4765,34 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
         # and resolves to its return type; a generic callee (e.g. print) infers
         # a clone; an unresolvable callable just has its args walked (its
         # callable/result/mono are out of the own+system+collections filter).
+        mcb: metaCreateBaseId n: call.callable
+        mcid: 0.u32
+        match (
+            mcb
+        ) case some then {
+            mcid = mcb
+        } case none then {
+        }
+        if mcid > 0.u32 when st.typing.currentThisName.length > 0.u64 then {
+            # `meta.create` constructs the enclosing type: the raw allocator's
+            # params are the type's field children, so the ctor arg walk
+            # (hoists, coercion, field consumption) rides funcId = the type.
+            mctn: st.typing.currentThisName.copy
+            mto: lookupTyperef resolved: st.typing.resolved mainName: unitName base: mctn.stringview
+            mtid: optU64Or o: mto d: 0.u64
+            if mtid > 0.u64 then {
+                setmb: mtid
+                st.typing.nodeType.set key: mcid.u64 value: setmb
+                mcm: st.pushCall
+                mclr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: mtid isCtor: true
+                st.popTo marker: mcm
+                setmc: mtid
+                st.typing.nodeType.set key: call.nodeid.u64 value: setmc
+                return mtid
+            } else {
+            }
+        } else {
+        }
         dro: callableDottedResult st: st unitName: unitName unitBody: unitBody n: call.callable
         match (
             dro
@@ -4793,6 +4854,28 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                         setmr: mres
                         st.typing.nodeType.set key: call.nodeid.u64 value: setmr
                     } case none then {
+                    }
+                    # A synthesized `create` has no recorded return: explicit
+                    # `.create` constructs, so the result is the base type.
+                    if mres == 0.u64 then {
+                        cdb: createDottedBaseId n: call.callable
+                        cdbid: 0.u32
+                        match (
+                            cdb
+                        ) case some then {
+                            cdbid = cdb
+                        } case none then {
+                        }
+                        if cdbid > 0.u32 then {
+                            btid: optU64Or o: (st.typing.nodeType.get key: cdbid.u64) d: 0.u64
+                            if btid > 0.u64 then {
+                                mres = btid
+                                setmr2: mres
+                                st.typing.nodeType.set key: call.nodeid.u64 value: setmr2
+                            } else {
+                            }
+                        } else {
+                        }
                     }
                     if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) when mlr.length > 0.u64 then {
                         drainPendingBorrow st: st
@@ -5650,8 +5733,10 @@ maybeWalkMethods: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
         }
         if canWalk then {
             prev: st.typing.synthLabel.copy
+            prevThis: st.typing.currentThisName.copy
             checkMethodBodies st: st unitName: unitName unitBody: unitBody typeName: name op: mem.operation
             st.typing.synthLabel = prev
+            st.typing.currentThisName = prevThis
         } else {
         }
     } else {
@@ -5842,6 +5927,8 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             } else {
             }
             st.typing.synthLabel = lbl
+            tnl: thisName.string
+            st.typing.currentThisName = tnl
             walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: defn.body
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
