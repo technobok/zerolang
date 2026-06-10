@@ -2923,6 +2923,122 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     return mid
 }
 
+# isContainsEligible / isSortEligible -- element types List.contains /
+# List.sort support (the hardcoded equality / ordering dispatch): numerics +
+# bool + the String/StringView/str family; sort excludes bool (no ordering).
+isContainsEligible: function {name: StringView} out bool is {
+    if name == "bool" then { return true } else {
+    }
+    return (isSortEligible name: name)
+}
+
+isSortEligible: function {name: StringView} out bool is {
+    if name == "i8" then { return true } else {
+    }
+    if name == "i16" then { return true } else {
+    }
+    if name == "i32" then { return true } else {
+    }
+    if name == "i64" then { return true } else {
+    }
+    if name == "i128" then { return true } else {
+    }
+    if name == "u8" then { return true } else {
+    }
+    if name == "u16" then { return true } else {
+    }
+    if name == "u32" then { return true } else {
+    }
+    if name == "u64" then { return true } else {
+    }
+    if name == "u128" then { return true } else {
+    }
+    if name == "f32" then { return true } else {
+    }
+    if name == "f64" then { return true } else {
+    }
+    if name == "String" then { return true } else {
+    }
+    if name == "StringView" then { return true } else {
+    }
+    if name == "str" then { return true } else {
+    }
+    return false
+}
+
+# mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child.
+mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoId: u64 m: StringView} is {
+    fname: "\{monoName}.\{m}"
+    fid: st.reg.newType name: fname.stringview typetype: ztypes.ztypetype.FUNCTION
+    st.typing.setChild parentTypeId: monoId childName: m childTypeId: fid
+}
+
+# mintCollectionChildren -- the collection-class instance children, mirroring
+# the reference's programmatic synthesis (length/capacity as direct u64 value
+# children, then the method family in synthesis order; create only where the
+# template declares none; contains/sort gated on element eligibility). The
+# Set/Map/array/str tables land when an example needs them. No-op for other
+# templates or when the instance already has children (re-mint dedup).
+mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView monoName: StringView monoId: u64 templateName: StringView elemArg: u64} is {
+    isColl: false
+    if templateName == "List" then { isColl = true } else {
+    }
+    if templateName == "ListIter" then { isColl = true } else {
+    }
+    if templateName == "ListView" then { isColl = true } else {
+    }
+    if isColl then {
+    } else {
+        return
+    }
+    if (st.typing.childCount parentTypeId: monoId) > 0.u64 then {
+        return
+    } else {
+    }
+    u64id: 0.u64
+    uo: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "u64"
+    match (
+        uo
+    ) case some then {
+        u64id = uo
+    } case none then {
+    }
+    en: typeNameOf st: st tid: elemArg
+    if templateName == "List" then {
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
+        st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64id
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "append"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "insert"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extend"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "pop"
+        if (isContainsEligible name: en.stringview) then {
+            mintCollectionMethod st: st monoName: monoName monoId: monoId m: "contains"
+        } else {
+        }
+        if (isSortEligible name: en.stringview) then {
+            mintCollectionMethod st: st monoName: monoName monoId: monoId m: "sort"
+        } else {
+        }
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extendView"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
+    } else {
+    }
+    if templateName == "ListIter" then {
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "call"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+    } else {
+    }
+    if templateName == "ListView" then {
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+    } else {
+    }
+}
+
 # mintChain -- mint one iterator-family instance (`{tpl}{suffix}`) when the
 # chain template resolves.
 mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: StringView suffix: StringView elemArg: u64} is {
@@ -2932,7 +3048,8 @@ mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: String
     ) case some then {
         mname: "\{chainTpl}\{suffix}"
         eSubs: (Map key: String value: u64)
-        mintMono st: st mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
+        cid: mintMono st: st mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
+        mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl elemArg: elemArg
     } case none then {
     }
 }
@@ -3029,6 +3146,7 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
         for rm2: riter loop {
             mname: "\{rm2.template}\{rm2.suffix}"
             mid: mintMono st: st mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0.u64
+            mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: rm2.template.stringview elemArg: rm2.firstArgId
             setn: mid
             st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
             if rm2.template.stringview == "List" then {

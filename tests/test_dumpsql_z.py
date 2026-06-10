@@ -533,15 +533,15 @@ _CHECK_PROJECTIONS = {
         "SELECT t.name, t.typetype, o.name, t.is_generic FROM types t "
         "JOIN types o ON t.generic_origin_id = o.type_id ORDER BY t.name"
     ),
-    # Instance children (substituted arms/params + synthesized tag and ==/!=).
-    # CLASS instances are excluded: their cloned method children come from the
-    # template's AST and land with the class-mono slice.
+    # Instance children: substituted arms/params, synthesized tag and ==/!=,
+    # and the collection classes' synthesized member tables (List/ListIter/
+    # ListView; Set/Map land when an example needs them).
     "mono_children": (
         "SELECT pt.name, tc.child_name, ct.name, tc.position "
         "FROM type_children tc "
         "JOIN types pt ON tc.type_id = pt.type_id "
         "JOIN types ct ON tc.child_type_id = ct.type_id "
-        "WHERE pt.generic_origin_id IS NOT NULL AND pt.typetype != 'CLASS' "
+        "WHERE pt.generic_origin_id IS NOT NULL "
         "ORDER BY pt.name, tc.position"
     ),
     # Nodes typed with an instance: the parameterized refs' expression wrappers
