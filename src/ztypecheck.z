@@ -447,7 +447,15 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
         if (isStripMarker name: cn.stringview) then {
             bn: baseTypeName n: node.parent
             recordResolvedName ty: ty thisName: thisName name: bn.stringview nid: node.nodeid.u64
-            recordTyperef ty: ty thisName: thisName node: node.parent
+            # Ownership markers peel and stamp the inner ref; `.private` /
+            # `.public` resolve the pair atomically (no base-atom stamp).
+            if cn.stringview == "private" then {
+            } else {
+                if cn.stringview == "public" then {
+                } else {
+                    recordTyperef ty: ty thisName: thisName node: node.parent
+                }
+            }
         } else {
             if cn.stringview == "typedef" then {
                 recordTyperef ty: ty thisName: thisName node: node.parent
@@ -1442,30 +1450,36 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             } else {
                 fname: unitLabel o: fm.name
                 ftn: baseTypeName n: fm.operation
+                lockField: false
+                flock0: pathOwnership n: fm.operation
+                match (
+                    flock0
+                ) case some then {
+                    lockField = true
+                } case none then {}
                 mkey: "\{unitName}.\{defName}.\{ftn}".string
                 mref: ty.resolved.get key: mkey
                 match (
                     mref
                 ) case some then {
                     ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mref
+                    if lockField then {
+                        ty.setChildLockField parentTypeId: cid name: fname.stringview
+                    } else {}
                 } case none then {
                     if (isTypedefField n: fm.operation) then {
                         # No field child for the wrapper, but the inner refs
                         # (the u8 in `(List of: u8).typedef`) still stamp.
                         recordTyperef ty: ty thisName: "" node: fm.operation
                     } else {
-                        flock: pathOwnership n: fm.operation
-                        isLock: false
-                        match (
-                            flock
-                        ) case some then {
-                            isLock = true
-                        } case none then {}
-                        if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: isLock) then {
+                        if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
                             needsDtor = true
                         } else {}
                         cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                        if lockField then {
+                            ty.setChildLockField parentTypeId: cid name: fname.stringview
+                        } else {}
                         recordTyperef ty: ty thisName: "" node: fm.operation
                     }
                 }
@@ -3717,6 +3731,20 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         return 0.u64
     } else {
     }
+    # `.private` / `.public` access markers: the path carries the base's
+    # type (the access view is a dump-filtered shell, not a member).
+    if cn.stringview == "private" then {
+        setpv: bt
+        st.typing.nodeType.set key: dp.nodeid.u64 value: setpv
+        return bt
+    } else {
+    }
+    if cn.stringview == "public" then {
+        setpb: bt
+        st.typing.nodeType.set key: dp.nodeid.u64 value: setpb
+        return bt
+    } else {
+    }
     # `.take` / `.release`: ownership transfer markers, not members. The path
     # carries the base's type; a bare-name source releases its held locks and
     # invalidates (the taken overlay propagates out of popped scopes).
@@ -4588,6 +4616,7 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
 walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData funcId: u64 isCtor: bool} out String is {
     lockRoot: "".string
+    st.typing.lastLockParamRoot = "".string
     argIdx: 0.u64
     aiter: call.arguments.iterate
     for arg: aiter loop {
@@ -4604,6 +4633,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                 }
                 isTake: false
                 isLockish: false
+                isDeclLock: false
                 pt: 0.u64
                 if funcId > 0.u64 when pn.length > 0.u64 then {
                     if (isLiteralTypeId st: st tid: vt) then {
@@ -4627,6 +4657,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                         }
                         if oo == ztypes.zparamownership.LOCK then {
                             isLockish = true
+                            isDeclLock = true
                         } else {
                         }
                         if oo == ztypes.zparamownership.BORROW then {
@@ -4640,6 +4671,20 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                         } else {
                             isLockish = true
                         }
+                    }
+                    if isCtor then {
+                        # Field ownership flows to the constructor param:
+                        # a `.lock` field locks the caller's argument, any
+                        # other reftype field takes it.
+                        if (st.typing.isChildLockField parentTypeId: funcId name: pn.stringview) then {
+                            isLockish = true
+                        } else {
+                            if (typeIsReftype st: st tid: vt) then {
+                                isTake = true
+                            } else {
+                            }
+                        }
+                    } else {
                     }
                 } else {
                 }
@@ -4673,6 +4718,11 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                                         lockRoot = bn.copy
                                     } else {
                                     }
+                                    if isDeclLock then {
+                                        xlc: bn.copy
+                                        st.typing.lastLockParamRoot = xlc
+                                    } else {
+                                    }
                                 } else {
                                 }
                             }
@@ -4685,10 +4735,6 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                     # temp inside the call scope; a lock/borrow parameter
                     # locks it there.
                     consumes: false
-                    if isCtor when (typeIsReftype st: st tid: vt) then {
-                        consumes = true
-                    } else {
-                    }
                     if isTake then {
                         consumes = true
                     } else {
@@ -4877,6 +4923,13 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                         } else {
                         }
                     }
+                    xroot: st.typing.lastLockParamRoot.copy
+                    if xroot.length > 0.u64 then {
+                        st.typing.lastLockParamRoot = "".string
+                        drainPendingBorrow st: st
+                        st.typing.pendingBorrowPath.append xroot
+                    } else {
+                    }
                     if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) when mlr.length > 0.u64 then {
                         drainPendingBorrow st: st
                         mlrc: mlr.copy
@@ -4956,6 +5009,13 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                 }
                 # A `.borrow`-marked return borrows from the lock parameter's
                 # argument: report the source for the binding site.
+                xroot2: st.typing.lastLockParamRoot.copy
+                if xroot2.length > 0.u64 then {
+                    st.typing.lastLockParamRoot = "".string
+                    drainPendingBorrow st: st
+                    st.typing.pendingBorrowPath.append xroot2
+                } else {
+                }
                 if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: funcId) d: false) when lockRoot.length > 0.u64 then {
                     drainPendingBorrow st: st
                     lrc: lockRoot.copy
