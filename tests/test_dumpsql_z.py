@@ -515,6 +515,7 @@ CHECK_SMOKE = [
     "borrowed_record",
     "specs",
     "genmath",
+    "typedefs",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -571,6 +572,7 @@ TYPED_NODES_CHECK = [
     "borrowed_record",
     "specs",
     "genmath",
+    "typedefs",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

@@ -1214,6 +1214,13 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
         registerGenericParams reg: reg typeKey: rtk.stringview items: rnode.asItems
     } else {}
     istd: recordIsTypedef rnode: rnode
+    if istd then {
+        tdb: objectTypedefBase onode: rnode
+        if tdb.length > 0.u64 then {
+            tdk: rid
+            ty.typedefBaseName.set key: tdk value: tdb
+        } else {}
+    } else {}
     hasCreateIs: false
     hasEqIs: false
     if istd then {} else {
@@ -3759,6 +3766,67 @@ metaCreateBaseId: function {n: Node} out (optionval t: u32) is {
     return (optionval.none u32)
 }
 
+# typedefBaseOf -- a typedef type's base type id (the recorded base name,
+# resolved at read time -- the resolver runs before the base's unit), or 0.
+typedefBaseOf: function {st: zenv.ZSymbolTable unitName: StringView tid: u64} out u64 is {
+    bo: st.typing.typedefBaseName.get key: tid
+    match (
+        bo
+    ) case some then {
+        return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: bo.stringview) d: 0.u64)
+    } case none then {
+        return 0.u64
+    }
+}
+
+# checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
+# an owned cast, not a call. No CALL scope; the from-argument walks in the
+# current scope (a non-trivial one hoists there) and is consumed; the value
+# is the typedef type.
+checkTypedefCreate: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData tdId: u64} out u64 is {
+    found: false
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            if found then {} else {
+                an: unitLabel o: arg.name
+                isFrom: false
+                if an.length == 0.u64 then {
+                    isFrom = true
+                } else {
+                    if an.stringview == "from" then {
+                        isFrom = true
+                    } else {}
+                }
+                if isFrom then {
+                    found = true
+                    vt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                    if vt > 0.u64 then {
+                        if (argIsTrivial op: arg.operation) then {
+                            bn: bareAtomName n: arg.operation
+                            if bn.length > 0.u64 then {
+                                bvo: st.lookupVarId name: bn.stringview
+                                match (
+                                    bvo
+                                ) case some then {
+                                    st.invalidate name: bn.stringview loc: (optionval.none ztypes.zsrcpos)
+                                } case none then {}
+                            } else {}
+                        } else {
+                            tnm: hoistArg st: st argNode: arg.operation argType: vt paramType: 0.u64 consumes: true
+                        }
+                    } else {}
+                } else {}
+            }
+        } else {}
+    }
+    settd: tdId
+    st.typing.nodeType.set key: call.nodeid.u64 value: settd
+    return tdId
+}
+
 # methodHasThisReceiver -- a FUNCTION child bound to a receiver: a declared
 # `this` param (shorthand) or a recorded long-form receiver name. A this-less
 # function member is a callable field, not a method.
@@ -4431,6 +4499,11 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
     } else {
         result = lt
     }
+    tdb2: typedefBaseOf st: st unitName: unitName tid: result
+    if tdb2 > 0.u64 then {
+        result = tdb2
+    } else {
+    }
     if result > 0.u64 when (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.GENERIC_PARAM then {
         return 0.u64
     } else {
@@ -4981,6 +5054,20 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                     }
                 }
                 if isMethodFn then {
+                    tdcb: createDottedBaseId n: call.callable
+                    tdcid: 0.u32
+                    match (
+                        tdcb
+                    ) case some then {
+                        tdcid = tdcb
+                    } case none then {}
+                    if tdcid > 0.u32 then {
+                        tdo: optU64Or o: (st.typing.nodeType.get key: tdcid.u64) d: 0.u64
+                        tdb: typedefBaseOf st: st unitName: unitName tid: tdo
+                        if tdb > 0.u64 then {
+                            return (checkTypedefCreate st: st unitName: unitName unitBody: unitBody call: call tdId: tdo)
+                        } else {}
+                    } else {}
                     mcm: st.pushCall
                     mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false
                     # The receiver locks for the call's duration too (after
@@ -5119,6 +5206,15 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                 }
             } case none then {
             }
+        } else {
+        }
+        tdb0: 0.u64
+        if isCtor then {
+            tdb0 = typedefBaseOf st: st unitName: unitName tid: funcId
+        } else {
+        }
+        if tdb0 > 0.u64 then {
+            return (checkTypedefCreate st: st unitName: unitName unitBody: unitBody call: call tdId: funcId)
         } else {
         }
         if isUser then {
