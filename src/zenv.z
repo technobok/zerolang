@@ -209,16 +209,18 @@ ZScopeLogRow: class {
 # is truncated) so the SQL dump can reconstruct each scope's entries after
 # typecheck. `position` is the index within the owning scope's entry range.
 ZEntryDumpRow: class {
-    scopeId:         u64
-    position:        u64
-    entryId:         u64
-    name:            String
-    ztypeId:         u64
-    isDefinition:    bool
-    varId:           (optionval t: u64)
-    originalZtypeId: (optionval t: u64)
-    isTaken:         bool
-    takenAt:         (optionval t: ztypes.zsrcpos)
+    scopeId:          u64
+    position:         u64
+    entryId:          u64
+    name:             String
+    ztypeId:          u64
+    isDefinition:     bool
+    varId:            (optionval t: u64)
+    originalZtypeId:  (optionval t: u64)
+    isTaken:          bool
+    takenAt:          (optionval t: ztypes.zsrcpos)
+    narrowedSubtype:  String
+    excludedSubtypes: (List of: String)
 }
 
 # Scoped symbol table. Owns the id registry and the typecheck-output
@@ -357,7 +359,13 @@ ZSymbolTable: class {
         sp: start
         for while sp < endIdx loop {
             de: this.entries.get i: sp
-            this.entryDump.append (ZEntryDumpRow scopeId: topId position: (sp - start) entryId: de.entryId name: de.name.copy ztypeId: de.ztypeId isDefinition: de.isDefinition varId: de.varId originalZtypeId: de.originalZtypeId isTaken: de.isTaken takenAt: de.takenAt)
+            exs: (List of: String)
+            with xit: de.excludedSubtypes.iterate do for xn: xit loop {
+                xnc: xn.copy
+                exs.append xnc
+            }
+            nsc: de.narrowedSubtype.copy
+            this.entryDump.append (ZEntryDumpRow scopeId: topId position: (sp - start) entryId: de.entryId name: de.name.copy ztypeId: de.ztypeId isDefinition: de.isDefinition varId: de.varId originalZtypeId: de.originalZtypeId isTaken: de.isTaken takenAt: de.takenAt narrowedSubtype: nsc excludedSubtypes: exs)
             sp = sp + 1.u64
         }
 
@@ -928,15 +936,25 @@ ZSymbolTable: class {
         hasSubtype: subtypeName.length > 0.u64
         if shadow then {
             if hasSubtype then {
-                payloadOpt: this.typing.childOf parentTypeId: originalTypeId name: subtypeName
-                match (
-                    payloadOpt
-                ) case some then {
-                    pt: this.reg.typetypeOf typeId: payloadOpt
-                    if pt == ztypes.ztypetype.NULL then { } else {
-                        entryZtype = payloadOpt
+                if toTypeId == originalTypeId then {
+                    payloadOpt: this.typing.childOf parentTypeId: originalTypeId name: subtypeName
+                    match (
+                        payloadOpt
+                    ) case some then {
+                        pt: this.reg.typetypeOf typeId: payloadOpt
+                        if pt == ztypes.ztypetype.NULL then { } else {
+                            entryZtype = payloadOpt
+                        }
+                    } case none then { }
+                } else {
+                    # the caller passed a resolved payload (the typecheck
+                    # re-resolves arm-child reference shells to real types);
+                    # null payloads still keep the outer type.
+                    pt2: this.reg.typetypeOf typeId: toTypeId
+                    if pt2 == ztypes.ztypetype.NULL then { } else {
+                        entryZtype = toTypeId
                     }
-                } case none then { }
+                }
             }
         }
 

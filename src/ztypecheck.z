@@ -1981,6 +1981,14 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
     } case withexpr then {
         scanCallsInNode reg: reg node: node.value
         scanCallsInNode reg: reg node: node.body
+    } case caseexpr then {
+        scanCallsInNode reg: reg node: node.subject
+        for cl: node.clauses.iterate loop {
+            scanCallsInNode reg: reg node: cl
+        }
+        scanBodyOpt reg: reg bodyOpt: node.elseclause
+    } case caseclause then {
+        scanCallsInNode reg: reg node: node.statement
     } case ifclause then {
         for cnd: node.conditions.iterate loop {
             match (
@@ -4245,6 +4253,231 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView call: zas
     }
 }
 
+# subjectAtomName -- a match subject's bare-atom name (narrowing requires a
+# simple addressable name): unwrap expression wrappers, "" for dotted/complex
+# subjects and numeric atoms.
+subjectAtomName: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (subjectAtomName n: n.expression)
+    } case atomid then {
+        if (isNumericLiteralName name: n.name.stringview) then {
+            return "".string
+        } else {
+            return n.name.copy
+        }
+    } else {
+        return "".string
+    }
+}
+
+# sumSubtypeNames -- a union/variant's arm names: its children minus the
+# synthesized members (functions, the tag data record, enums).
+sumSubtypeNames: function {st: zenv.ZSymbolTable sid: u64} out (List of: String) is {
+    names: (List of: String)
+    cids: (List of: u64)
+    with citer: st.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == sid then {
+            cto: st.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                nm2: tc.childName.copy
+                names.append nm2
+                cto2: cto
+                cids.append cto2
+            } case none then {
+            }
+        } else {
+        }
+    }
+    arms: (List of: String)
+    i: 0.u64
+    n: names.length
+    for while i < n loop {
+        cid: cids.get i: i
+        tt: st.reg.typetypeOf typeId: cid
+        keep: true
+        if tt == ztypes.ztypetype.FUNCTION then { keep = false } else {
+        }
+        if tt == ztypes.ztypetype.DATA then { keep = false } else {
+        }
+        if tt == ztypes.ztypetype.TAG then { keep = false } else {
+        }
+        if tt == ztypes.ztypetype.ENUM then { keep = false } else {
+        }
+        if keep then {
+            nm3: names.get i: i
+            nm4: nm3.copy
+            arms.append nm4
+        } else {
+        }
+        i = i + 1.u64
+    }
+    return arms
+}
+
+# resolveChildPayload -- a sum-type arm child resolves through a NULL-unit
+# reference shell; re-resolve it by name to the real type so arm-body stamps
+# survive the dump's unit filter. Falls back to the shell id.
+resolveChildPayload: function {st: zenv.ZSymbolTable unitName: StringView cid: u64} out u64 is {
+    cn: typeNameOf st: st tid: cid
+    if cn.length == 0.u64 then {
+        return cid
+    } else {
+    }
+    ro: lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview
+    match (
+        ro
+    ) case some then {
+        return ro
+    } case none then {
+        return cid
+    }
+}
+
+# checkCase -- walk a match: push the `match` scope, type the subject, push
+# `match_body` (resetting the bare-name subject's narrowing), then per arm an
+# `arm:{name}` scope with a shadow-narrowing overlay (the subject resolves to
+# the arm payload in the body), tracking diverging arms; an else arm excludes
+# the covered subtypes. After popping, an exhaustive all-diverging match
+# resolves to `never` (a completing-arm result type lands with a value-match
+# example) and each diverging arm's subtype is excluded from the subject in
+# the enclosing scope (all-excluded marks it unreachable).
+checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.CaseData} out u64 is {
+    matchMarker: st.pushBlock name: "match"
+    subjT: checkValue st: st unitName: unitName node: casenode.subject
+    isSum: false
+    if subjT > 0.u64 then {
+        stt: st.reg.typetypeOf typeId: subjT
+        if stt == ztypes.ztypetype.UNION then { isSum = true } else {
+        }
+        if stt == ztypes.ztypetype.VARIANT then { isSum = true } else {
+        }
+    } else {
+    }
+    targetName: "".string
+    if isSum then {
+        tn: subjectAtomName n: casenode.subject
+        targetName = tn
+    } else {
+    }
+    neverId: 0.u64
+    nvOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never"
+    match (
+        nvOpt
+    ) case some then {
+        neverId = nvOpt
+    } case none then {
+    }
+    bodyMarker: st.pushBlock name: "match_body"
+    if targetName.length > 0.u64 then {
+        st.resetNarrowing name: targetName.stringview
+    } else {
+    }
+    covered: (List of: String)
+    diverging: (List of: String)
+    allDiverge: true
+    cliter: casenode.clauses.iterate
+    for clause: cliter loop {
+        match (
+            clause
+        ) case caseclause then {
+            armName: atomName n: clause.matcharm
+            asname: "arm:\{armName}"
+            armMarker: st.pushBlock name: asname.stringview
+            if targetName.length > 0.u64 when subjT > 0.u64 then {
+                po: st.typing.childOf parentTypeId: subjT name: armName.stringview
+                match (
+                    po
+                ) case some then {
+                    rp: resolveChildPayload st: st unitName: unitName cid: po
+                    st.narrow name: targetName.stringview toTypeId: rp subtypeName: armName.stringview shadow: true
+                } case none then {
+                }
+            } else {
+            }
+            checkStatement st: st unitName: unitName block: clause.statement
+            at: lastStmtType st: st block: clause.statement
+            if at > 0.u64 when at == neverId then {
+                dn: armName.copy
+                diverging.append dn
+            } else {
+                allDiverge = false
+            }
+            cn2: armName.copy
+            covered.append cn2
+            st.popTo marker: armMarker
+        } else {
+        }
+    }
+    hasElse: false
+    match (
+        casenode.elseclause
+    ) case some then {
+        hasElse = true
+    } case none then {
+    }
+    if hasElse then {
+        elseMarker: st.pushBlock name: "arm:else"
+        if targetName.length > 0.u64 when subjT > 0.u64 then {
+            eiter: covered.iterate
+            for en2: eiter loop {
+                st.exclude name: targetName.stringview subtypeName: en2.stringview fullTypeId: subjT
+            }
+        } else {
+        }
+        walkBody st: st unitName: unitName bodyOpt: casenode.elseclause
+        st.popTo marker: elseMarker
+    } else {
+    }
+    st.popTo marker: matchMarker
+    exhaustive: hasElse
+    if exhaustive then {
+    } else {
+        if isSum then {
+            arms2: sumSubtypeNames st: st sid: subjT
+            allCovered: true
+            a2iter: arms2.iterate
+            for an3: a2iter loop {
+                found: false
+                c2iter: covered.iterate
+                for cn3: c2iter loop {
+                    if an3.stringview == cn3.stringview then {
+                        found = true
+                    } else {
+                    }
+                }
+                if found then {
+                } else {
+                    allCovered = false
+                }
+            }
+            exhaustive = allCovered
+        } else {
+        }
+    }
+    if targetName.length > 0.u64 when subjT > 0.u64 then {
+        diter: diverging.iterate
+        for dn2: diter loop {
+            st.exclude name: targetName.stringview subtypeName: dn2.stringview fullTypeId: subjT
+        }
+    } else {
+    }
+    if exhaustive when allDiverge when neverId > 0.u64 then {
+        if casenode.clauses.length > 0.u64 then {
+            setn2: neverId
+            st.typing.nodeType.set key: casenode.nodeid.u64 value: setn2
+            return neverId
+        } else {
+            return 0.u64
+        }
+    } else {
+        return 0.u64
+    }
+}
+
 # checkValue -- type an expression-value node, dispatching by kind. Returns the
 # resolved type id, or 0 when unhandled.
 checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out u64 is {
@@ -4260,6 +4493,8 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return (checkString st: st unitName: unitName node: node)
     } case dottedpath then {
         return (checkDotted st: st unitName: unitName dp: node)
+    } case caseexpr then {
+        return (checkCase st: st unitName: unitName casenode: node)
     } case ifexpr then {
         return (checkIf st: st unitName: unitName ifnode: node)
     } case forexpr then {

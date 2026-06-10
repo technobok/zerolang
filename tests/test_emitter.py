@@ -46,6 +46,7 @@ _BUILD_SKIP = {
     "hoistctl",
     "itctl",
     "intit",
+    "matchctl",
 }
 _BUILD_EXAMPLES = sorted(
     name

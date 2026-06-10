@@ -482,6 +482,7 @@ CHECK_SMOKE = [
     "itctl",
     "intit",
     "genericfunctions",
+    "matchctl",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -505,6 +506,7 @@ TYPED_NODES_CHECK = [
     "itctl",
     "intit",
     "genericfunctions",
+    "matchctl",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
