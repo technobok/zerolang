@@ -488,6 +488,7 @@ CHECK_SMOKE = [
     "strings",
     "swap",
     "vector",
+    "case",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -517,6 +518,7 @@ TYPED_NODES_CHECK = [
     "strings",
     "swap",
     "vector",
+    "case",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
