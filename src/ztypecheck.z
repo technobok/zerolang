@@ -3022,14 +3022,7 @@ paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} ou
         return r
     } case none then {
         an: atomName n: op
-        lr: lookupTyperef resolved: typing.resolved mainName: unitName base: an.stringview
-        match (
-            lr
-        ) case some then {
-            return lr
-        } case none then {
-            return 0.u64
-        }
+        return (optU64Or o: (lookupTyperef resolved: typing.resolved mainName: unitName base: an.stringview) d: 0.u64)
     }
 }
 
@@ -3167,13 +3160,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         chId: cIds.get i: ci
         target: chId
         ctn: typeNameOf st: st tid: chId
-        so: subs.get key: ctn
-        match (
-            so
-        ) case some then {
-            target = so
-        } case none then {
-        }
+        target = optU64Or o: (subs.get key: ctn) d: target
         if fallbackArg > 0.u64 then {
             cko: lookupTyperef resolved: st.typing.resolved mainName: mainName base: ctn.stringview
             match (
@@ -3605,6 +3592,29 @@ optStrEquals: function {o: (Option t: String) s: StringView} out bool is {
     }
 }
 
+# optU64Or / optBoolOr -- the option's payload, or the given default. Collapse
+# the some/none match at get-or-default sites (match narrowing needs a
+# bare-name subject, so inline gets can't match directly).
+optU64Or: function {o: (optionval t: u64) d: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return d
+    }
+}
+
+optBoolOr: function {o: (optionval t: bool) d: bool} out bool is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return d
+    }
+}
+
 methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     cnt: st.typing.childCount parentTypeId: mid
     if cnt == 0.u64 then {
@@ -3868,13 +3878,7 @@ lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
             match (
                 last
             ) case statementline then {
-                r: st.typing.nodeType.get key: last.nodeid.u64
-                match (
-                    r
-                ) case some then {
-                    result = r
-                } case none then {
-                }
+                result = optU64Or o: (st.typing.nodeType.get key: last.nodeid.u64) d: result
             } else {
             }
         } else {
@@ -3900,14 +3904,7 @@ materialiseLiteral: function {st: zenv.ZSymbolTable unitName: StringView t: u64}
         return t
     } else {
     }
-    li: lookupTyperef resolved: st.typing.resolved mainName: unitName base: base
-    match (
-        li
-    ) case some then {
-        return li
-    } case none then {
-        return t
-    }
+    return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: base) d: t)
 }
 
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
@@ -4797,17 +4794,11 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                         st.typing.nodeType.set key: call.nodeid.u64 value: setmr
                     } case none then {
                     }
-                    mfb: st.typing.funcReturnsBorrow.get key: dro
-                    match (
-                        mfb
-                    ) case some then {
-                        if mfb when mlr.length > 0.u64 then {
-                            drainPendingBorrow st: st
-                            mlrc: mlr.copy
-                            st.typing.pendingBorrowPath.append mlrc
-                        } else {
-                        }
-                    } case none then {
+                    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) when mlr.length > 0.u64 then {
+                        drainPendingBorrow st: st
+                        mlrc: mlr.copy
+                        st.typing.pendingBorrowPath.append mlrc
+                    } else {
                     }
                     return mres
                 } else {
@@ -4882,17 +4873,11 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                 }
                 # A `.borrow`-marked return borrows from the lock parameter's
                 # argument: report the source for the binding site.
-                fb2: st.typing.funcReturnsBorrow.get key: funcId
-                match (
-                    fb2
-                ) case some then {
-                    if fb2 when lockRoot.length > 0.u64 then {
-                        drainPendingBorrow st: st
-                        lrc: lockRoot.copy
-                        st.typing.pendingBorrowPath.append lrc
-                    } else {
-                    }
-                } case none then {
+                if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: funcId) d: false) when lockRoot.length > 0.u64 then {
+                    drainPendingBorrow st: st
+                    lrc: lockRoot.copy
+                    st.typing.pendingBorrowPath.append lrc
+                } else {
                 }
             }
         } else {
@@ -5132,14 +5117,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     calid2: nodeId n: call.callable
     setc2: mid
     st.typing.nodeType.set key: calid2.u64 value: setc2
-    ro2: methodReturnOf st: st mid: mid
-    match (
-        ro2
-    ) case some then {
-        return ro2
-    } case none then {
-        return 0.u64
-    }
+    return (optU64Or o: (methodReturnOf st: st mid: mid) d: 0.u64)
 }
 
 # subjectAtomName -- a match subject's bare-atom name (narrowing requires a
@@ -5216,14 +5194,7 @@ resolveChildPayload: function {st: zenv.ZSymbolTable unitName: StringView cid: u
         return cid
     } else {
     }
-    ro: lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview
-    match (
-        ro
-    ) case some then {
-        return ro
-    } case none then {
-        return cid
-    }
+    return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview) d: cid)
 }
 
 # lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
@@ -5876,13 +5847,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             # the function's concrete return type, stamped on the statement
             # line (the node the reference coerces by id).
             ftid: 0.u64
-            rg2: st.typing.resolved.get key: rkey
-            match (
-                rg2
-            ) case some then {
-                ftid = rg2
-            } case none then {
-            }
+            ftid = optU64Or o: (st.typing.resolved.get key: rkey) d: ftid
             if ftid > 0.u64 then {
                 ro: methodReturnOf st: st mid: ftid
                 match (
