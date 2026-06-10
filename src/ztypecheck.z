@@ -1667,6 +1667,16 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     if isgen then {
         reg.setGeneric typeId: fid value: true
     } else {}
+    specThisStr: defName.string
+    dropThis: true
+    fdk: defName.string
+    fcto: ty.protocolThisContext.get key: fdk
+    match (
+        fcto
+    ) case some then {
+        specThisStr = fcto.take
+        dropThis = false
+    } case none then {}
     siter: fnode.isItems.iterate
     for sm: siter loop {
         match (
@@ -1674,7 +1684,7 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         ) case namedoperation then {
             mname: unitLabel o: sm.name
             qname: "\{defName}.\{mname}".string
-            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: sm.operation skipThis: true
+            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: specThisStr.stringview op: sm.operation skipThis: dropThis
             match (
                 sido
             ) case some then {
@@ -3827,6 +3837,55 @@ createDottedBaseId: function {n: Node} out (optionval t: u32) is {
     return (optionval.none u32)
 }
 
+# borrowDottedBaseId -- the base atom's node id when a dotted path's child is
+# `borrow` (a protocol/facet borrow projection), or none.
+borrowDottedBaseId: function {n: Node} out (optionval t: u32) is {
+    match (
+        n
+    ) case dottedpath then {
+        bcn: atomName n: n.child
+        if bcn.stringview == "borrow" then {
+            return (optionval.some (nodeId n: n.parent))
+        } else {
+        }
+    } else {
+    }
+    return (optionval.none u32)
+}
+
+# checkProjectionCreate -- `F.create from: expr` / `P.borrow from: expr` on a
+# facet or protocol: a projection, not a call. No CALL scope; the from-argument
+# walks in the current scope (a facet copies its source -- nothing is consumed);
+# the value is the facet/protocol type.
+checkProjectionCreate: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData pjId: u64} out u64 is {
+    found: false
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            if found then {} else {
+                an: unitLabel o: arg.name
+                isFrom: false
+                if an.length == 0.u64 then {
+                    isFrom = true
+                } else {
+                    if an.stringview == "from" then {
+                        isFrom = true
+                    } else {}
+                }
+                if isFrom then {
+                    found = true
+                    checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                } else {}
+            }
+        } else {}
+    }
+    setpj: pjId
+    st.typing.nodeType.set key: call.nodeid.u64 value: setpj
+    return pjId
+}
+
 # metaCreateBaseId -- the base atom's node id when a callable is the dotted
 # `meta.create` (the enclosing type's raw allocator), or none.
 metaCreateBaseId: function {n: Node} out (optionval t: u32) is {
@@ -5139,11 +5198,28 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                     ) case some then {
                         tdcid = tdcb
                     } case none then {}
+                    bdcb: borrowDottedBaseId n: call.callable
+                    match (
+                        bdcb
+                    ) case some then {
+                        tdcid = bdcb
+                    } case none then {}
                     if tdcid > 0.u32 then {
                         tdo: optU64Or o: (st.typing.nodeType.get key: tdcid.u64) d: 0.u64
                         tdb: typedefBaseOf st: st unitName: unitName tid: tdo
                         if tdb > 0.u64 then {
                             return (checkTypedefCreate st: st unitName: unitName unitBody: unitBody call: call tdId: tdo)
+                        } else {}
+                        pjtt: st.reg.typetypeOf typeId: tdo
+                        isProj: false
+                        if pjtt == ztypes.ztypetype.FACET then {
+                            isProj = true
+                        } else {}
+                        if pjtt == ztypes.ztypetype.PROTOCOL then {
+                            isProj = true
+                        } else {}
+                        if isProj then {
+                            return (checkProjectionCreate st: st unitName: unitName unitBody: unitBody call: call pjId: tdo)
                         } else {}
                     } else {}
                     mcm: st.pushCall
@@ -5165,13 +5241,27 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                                 # callable field -- its receiver locks
                                 # unconditionally (mirrors _lock_receiver).
                                 doLock: false
-                                if (methodHasThisReceiver st: st mid: dro) then {
-                                    if (typeIsReftype st: st tid: rvt2) then {
-                                        doLock = true
-                                    } else {
-                                    }
+                                rtt: st.reg.typetypeOf typeId: rvt2
+                                isFP: false
+                                if rtt == ztypes.ztypetype.FACET then {
+                                    isFP = true
                                 } else {
+                                }
+                                if rtt == ztypes.ztypetype.PROTOCOL then {
+                                    isFP = true
+                                } else {
+                                }
+                                if isFP then {
                                     doLock = true
+                                } else {
+                                    if (methodHasThisReceiver st: st mid: dro) then {
+                                        if (typeIsReftype st: st tid: rvt2) then {
+                                            doLock = true
+                                        } else {
+                                        }
+                                    } else {
+                                        doLock = true
+                                    }
                                 }
                                 if doLock then {
                                     lockCallArg st: st name: rro.stringview callId: call.nodeid.u64
