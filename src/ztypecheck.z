@@ -2966,11 +2966,26 @@ isSortEligible: function {name: StringView} out bool is {
     return false
 }
 
-# mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child.
-mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoId: u64 m: StringView} is {
+# mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child; returns
+# the method's type id so callers can link its return type.
+mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoId: u64 m: StringView} out u64 is {
     fname: "\{monoName}.\{m}"
     fid: st.reg.newType name: fname.stringview typetype: ztypes.ztypetype.FUNCTION
     st.typing.setChild parentTypeId: monoId childName: m childTypeId: fid
+    return fid
+}
+
+# linkMonoReturn -- point a synthesized method's return at an already-minted
+# instance (by mono name); no-op when the target is absent.
+linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: StringView} is {
+    tk: targetMono.string
+    got: st.typing.monoByName.get key: tk
+    match (
+        got
+    ) case some then {
+        st.reg.setReturnType typeId: methodId value: got
+    } case none then {
+    }
 }
 
 # mintCollectionChildren -- the collection-class instance children, mirroring
@@ -3023,11 +3038,15 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         }
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extendView"
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
+        itid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
+        itTarget: "ListIter_\{en}"
+        linkMonoReturn st: st methodId: itid targetMono: itTarget.stringview
     } else {
     }
     if templateName == "ListIter" then {
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "call"
+        clid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "call"
+        clTarget: "OptionView_\{en}"
+        linkMonoReturn st: st methodId: clid targetMono: clTarget.stringview
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
     } else {
     }
@@ -3146,13 +3165,15 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
         for rm2: riter loop {
             mname: "\{rm2.template}\{rm2.suffix}"
             mid: mintMono st: st mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0.u64
-            mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: rm2.template.stringview elemArg: rm2.firstArgId
             setn: mid
             st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
+            # iterator-family chain instances mint before the primary's children
+            # so the synthesized method return links can resolve by mono name
+            # (dependency order: OptionView, then the views, then the primary).
             if rm2.template.stringview == "List" then {
-                mintChain st: st mainName: mainName chainTpl: "ListIter" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
-                mintChain st: st mainName: mainName chainTpl: "ListView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
                 mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
+                mintChain st: st mainName: mainName chainTpl: "ListView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
+                mintChain st: st mainName: mainName chainTpl: "ListIter" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
             } else {
             }
             if rm2.template.stringview == "ListView" then {
@@ -3163,8 +3184,174 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
                 mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
             } else {
             }
+            mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: rm2.template.stringview elemArg: rm2.firstArgId
         }
     } else {
+    }
+}
+
+# methodReturnOf -- a method FUNCTION type's return type id: the synthesized
+# returnTypeId link when set, else the AST method's recorded `out T` ref node
+# (funcReturnNode) read through the post-demand stamp.
+methodReturnOf: function {st: zenv.ZSymbolTable mid: u64} out (optionval t: u64) is {
+    rto: (optionval.none u64)
+    {
+        t: st.reg.typeById.get key: mid
+        match (
+            t
+        ) case some then {
+            rto = t.returnTypeId
+        } case none then {
+        }
+    }
+    match (
+        rto
+    ) case some then {
+        return (optionval.some rto)
+    } case none then {
+    }
+    rn: st.typing.funcReturnNode.get key: mid
+    match (
+        rn
+    ) case some then {
+        nt: st.typing.nodeType.get key: rn
+        match (
+            nt
+        ) case some then {
+            return (optionval.some nt)
+        } case none then {
+        }
+    } case none then {
+    }
+    return (optionval.none u64)
+}
+
+# iterWrapperElem -- when a type is an Option / optionval / OptionView instance,
+# its element (`some` child) type id.
+iterWrapperElem: function {st: zenv.ZSymbolTable unitName: StringView wid: u64} out (optionval t: u64) is {
+    origin: 0.u64
+    goo: (optionval.none u64)
+    {
+        t: st.reg.typeById.get key: wid
+        match (
+            t
+        ) case some then {
+            goo = t.genericOriginId
+        } case none then {
+        }
+    }
+    match (
+        goo
+    ) case some then {
+        origin = goo
+    } case none then {
+    }
+    if origin == 0.u64 then {
+        return (optionval.none u64)
+    } else {
+    }
+    isWrapper: false
+    oo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "Option"
+    match (
+        oo
+    ) case some then {
+        if origin == oo then { isWrapper = true } else {
+        }
+    } case none then {
+    }
+    vo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "optionval"
+    match (
+        vo
+    ) case some then {
+        if origin == vo then { isWrapper = true } else {
+        }
+    } case none then {
+    }
+    wo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "OptionView"
+    match (
+        wo
+    ) case some then {
+        if origin == wo then { isWrapper = true } else {
+        }
+    } case none then {
+    }
+    if isWrapper then {
+        return (st.typing.childOf parentTypeId: wid name: "some")
+    } else {
+    }
+    return (optionval.none u64)
+}
+
+# isOptionViewMono -- true when a type is an OptionView instance (its per-
+# iteration values are borrowed views, so the loop var binds BORROWED).
+isOptionViewMono: function {st: zenv.ZSymbolTable unitName: StringView wid: u64} out bool is {
+    origin: 0.u64
+    goo: (optionval.none u64)
+    {
+        t: st.reg.typeById.get key: wid
+        match (
+            t
+        ) case some then {
+            goo = t.genericOriginId
+        } case none then {
+        }
+    }
+    match (
+        goo
+    ) case some then {
+        origin = goo
+    } case none then {
+    }
+    if origin == 0.u64 then {
+        return false
+    } else {
+    }
+    wo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "OptionView"
+    match (
+        wo
+    ) case some then {
+        return origin == wo
+    } case none then {
+        return false
+    }
+}
+
+# checkDotted -- a dotted method reference in a body: type the base, look the
+# member up on the base's type, and stamp the dotted node -- with the method's
+# return when the method takes no parameters (the auto-call coercion), else
+# with the method FUNCTION type itself.
+checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.DottedPathData} out u64 is {
+    bt: checkValue st: st unitName: unitName node: dp.parent
+    if bt == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    cn: atomName n: dp.child
+    if cn.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    mo: st.typing.childOf parentTypeId: bt name: cn.stringview
+    match (
+        mo
+    ) case some then {
+        result: 0.u64
+        result = mo
+        if (st.typing.childCount parentTypeId: mo) == 0.u64 then {
+            ro: methodReturnOf st: st mid: mo
+            match (
+                ro
+            ) case some then {
+                result = ro
+            } case none then {
+            }
+        } else {
+        }
+        setd: result
+        st.typing.nodeType.set key: dp.nodeid.u64 value: setd
+        return result
+    } case none then {
+        return 0.u64
     }
 }
 
@@ -3362,7 +3549,76 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.For
             vt: checkValue st: st unitName: unitName node: cond.operation
             nm: unitLabel o: cond.name
             if nm.length > 0.u64 when vt > 0.u64 then {
-                st.define name: nm.stringview ztypeId: vt
+                elem: 0.u64
+                isView: false
+                w1: iterWrapperElem st: st unitName: unitName wid: vt
+                match (
+                    w1
+                ) case some then {
+                    elem = w1
+                    isView = isOptionViewMono st: st unitName: unitName wid: vt
+                } case none then {
+                }
+                if elem == 0.u64 then {
+                    if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.FUNCTION then {
+                        r1: methodReturnOf st: st mid: vt
+                        match (
+                            r1
+                        ) case some then {
+                            w2: iterWrapperElem st: st unitName: unitName wid: r1
+                            match (
+                                w2
+                            ) case some then {
+                                elem = w2
+                                isView = isOptionViewMono st: st unitName: unitName wid: r1
+                            } case none then {
+                            }
+                        } case none then {
+                        }
+                    } else {
+                        c1: st.typing.childOf parentTypeId: vt name: "call"
+                        match (
+                            c1
+                        ) case some then {
+                            r2: methodReturnOf st: st mid: c1
+                            match (
+                                r2
+                            ) case some then {
+                                w3: iterWrapperElem st: st unitName: unitName wid: r2
+                                match (
+                                    w3
+                                ) case some then {
+                                    elem = w3
+                                    isView = isOptionViewMono st: st unitName: unitName wid: r2
+                                } case none then {
+                                }
+                            } case none then {
+                            }
+                        } case none then {
+                        }
+                    }
+                } else {
+                }
+                if elem > 0.u64 then {
+                    if isView then {
+                        srcName: atomName n: cond.operation
+                        bo: "<iterator>".string
+                        if srcName.length > 0.u64 then {
+                            bo = srcName.copy
+                        } else {
+                        }
+                        v: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.BORROWED
+                        v.borrowOrigin = (Option.some bo)
+                        vid: v.variableId
+                        st.defineVar name: nm.stringview var: v
+                        condNid: nodeId n: cond.operation
+                        st.typing.defVariableId.set key: condNid.u64 value: vid
+                    } else {
+                        st.define name: nm.stringview ztypeId: elem
+                    }
+                } else {
+                    st.define name: nm.stringview ztypeId: vt
+                }
             } else {
             }
         } else {
@@ -3688,6 +3944,8 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
         return (checkAtomid st: st unitName: unitName node: node)
     } case atomstring then {
         return (checkString st: st unitName: unitName node: node)
+    } case dottedpath then {
+        return (checkDotted st: st unitName: unitName dp: node)
     } case ifexpr then {
         return (checkIf st: st unitName: unitName ifnode: node)
     } case forexpr then {
