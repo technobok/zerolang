@@ -3560,7 +3560,7 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
 # member up on the base's type, and stamp the dotted node -- with the method's
 # return when the method takes no user parameters beyond the receiver (the
 # auto-call coercion), else with the method FUNCTION type itself.
-checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.DottedPathData} out u64 is {
+checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.DottedPathData coerce: bool} out u64 is {
     bt: checkValue st: st unitName: unitName node: dp.parent
     if bt == 0.u64 then {
         return 0.u64
@@ -3578,7 +3578,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.Dotte
         rm: resolveChildPayload st: st unitName: unitName cid: mo
         result: 0.u64
         result = rm
-        if (methodHasNoUserArgs st: st mid: mo) then {
+        if coerce when (methodHasNoUserArgs st: st mid: mo) then {
             ro: methodReturnOf st: st mid: mo
             match (
                 ro
@@ -4140,6 +4140,22 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
     }
 }
 
+# callableDottedResult -- a dotted callable resolves through the dotted-path
+# walk (no auto-call coercion -- callable position wants the function itself);
+# the base is typed and stamped there. none = the callable is not a dotted
+# path; some 0 = dotted but unresolved (e.g. a data block's `.index`), which
+# leaves the call untyped with its arguments unwalked, like the reference.
+callableDottedResult: function {st: zenv.ZSymbolTable unitName: StringView n: Node} out (optionval t: u64) is {
+    match (
+        n
+    ) case dottedpath then {
+        r: checkDotted st: st unitName: unitName dp: n coerce: false
+        return (optionval.some r)
+    } else {
+        return (optionval.none u64)
+    }
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -4175,10 +4191,22 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
         } case none then {
         }
     } else {
-        # A regular call. Resolve the callable; a non-generic user function
-        # pushes a call scope and resolves to its return type. A generic callee
-        # (e.g. print) or an unresolvable/dotted callable just has its args walked
-        # (its callable/result/mono are out of the own+system+collections filter).
+        # A regular call. A dotted callable resolves through the dotted-path
+        # walk first; an unresolved member bails with the args unwalked. A
+        # bare-name callable: a non-generic user function pushes a call scope
+        # and resolves to its return type; a generic callee (e.g. print) infers
+        # a clone; an unresolvable callable just has its args walked (its
+        # callable/result/mono are out of the own+system+collections filter).
+        dro: callableDottedResult st: st unitName: unitName n: call.callable
+        match (
+            dro
+        ) case some then {
+            if dro == 0.u64 then {
+                return 0.u64
+            } else {
+            }
+        } case none then {
+        }
         funcId: 0.u64
         if cn.length > 0.u64 then {
             fo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview
@@ -4751,7 +4779,7 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView node: Node} out
     } case atomstring then {
         return (checkString st: st unitName: unitName node: node)
     } case dottedpath then {
-        return (checkDotted st: st unitName: unitName dp: node)
+        return (checkDotted st: st unitName: unitName dp: node coerce: true)
     } case caseexpr then {
         return (checkCase st: st unitName: unitName casenode: node)
     } case ifexpr then {
