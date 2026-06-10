@@ -217,6 +217,23 @@ isLabelValue: function {op: Node} out bool is {
     }
 }
 
+# isBareGenericParam -- a generic-param definition in direct dotted form
+# (`t: Any.generic`); wrapped shapes (a def whose payload merely contains a
+# constraint) are not unit-level generic params.
+isBareGenericParam: function {op: Node} out bool is {
+    match (
+        op
+    ) case dottedpath then {
+        leaf: atomName n: op.child
+        if leaf.stringview == "generic" then { return true } else {}
+        if leaf.stringview == "valtype" then { return true } else {}
+        if leaf.stringview == "reftype" then { return true } else {}
+        return false
+    } else {
+        return false
+    }
+}
+
 # isGenericParam -- true when a type-expr is a generic-parameter constraint
 # (`Any.generic` / `u64.generic` / `Any.valtype`): a dottedpath whose leaf is
 # `generic` or `valtype`, peeling an `expression` / parameterized `call` wrapper.
@@ -468,6 +485,28 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
     } else {}
 }
 
+# stampGenericParamRef -- a return typeref naming one of the enclosing
+# template's generic params stamps the unit's generic-param type directly
+# (generic params live outside the name-resolution table).
+stampGenericParamRef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView enclKey: StringView o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        bn: atomName n: o
+        if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
+            uk3: unitName.string
+            ugo3: ty.unitGenericParamId.get key: uk3
+            match (
+                ugo3
+            ) case some then {
+                gnid3: nodeId n: o
+                ugv3: ugo3
+                ty.nodeType.set key: gnid3.u64 value: ugv3
+            } case none then {}
+        } else {}
+    } case none then {}
+}
+
 # recordFuncReturnNode -- map a function type id to its return type-ref's node id
 # so a call site can read the resolved return type (node_type, post stampTyperefs).
 recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 o: (Option t: Node)} is {
@@ -712,6 +751,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             pm
         ) case namedoperation then {
             skipParam: false
+            genParam: false
             ptn: atomName n: pm.operation
             if skipThisType then {
                 if ptn.stringview == "this" then {
@@ -720,8 +760,21 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             } else {}
             if (reg.isGenericParamOf typeKey: enclKey.stringview name: ptn.stringview) then {
                 skipParam = true
+                genParam = true
             } else {}
-            if skipParam then {} else {
+            if skipParam then {
+                if genParam then {
+                    uk2: unitName.string
+                    ugo2: ty.unitGenericParamId.get key: uk2
+                    match (
+                        ugo2
+                    ) case some then {
+                        pnid2: nodeId n: pm.operation
+                        ugv2: ugo2
+                        ty.nodeType.set key: pnid2.u64 value: ugv2
+                    } case none then {}
+                } else {}
+            } else {
                 pname: unitLabel o: pm.name
                 cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
@@ -747,6 +800,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     demandReturnType reg: reg o: fnode.returntype
     recordReturnType ty: ty thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
+    stampGenericParamRef ty: ty reg: reg unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
     if (returnHasBorrowMarker o: fnode.returntype) then {
         fbk: fid
         fbv: true
@@ -1720,7 +1774,25 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
         if (hasGenericParam items: unitdef.body) then {
             registerGenericParams reg: reg typeKey: unitName items: unitdef.body
             gpid: reg.newType name: "__generic_param" typetype: ztypes.ztypetype.GENERIC_PARAM
-            ty.definedInUnit.set key: gpid value: unitName.string
+            gpidK: gpid
+            ty.definedInUnit.set key: gpidK value: unitName.string
+            uk0: unitName.string
+            gpv0: gpid
+            ty.unitGenericParamId.set key: uk0 value: gpv0
+            # Each generic-param name resolves to the unit's generic-param
+            # type, so template signatures and bodies stamp it; the param
+            # definition's value node carries it too.
+            with gpiter: unitdef.body.iterate do for gm: gpiter loop {
+                match (
+                    gm
+                ) case namedoperation then {
+                    if (isBareGenericParam op: gm.operation) then {
+                        gpnid: nodeId n: gm.operation
+                        gpv2: gpid
+                        ty.nodeType.set key: gpnid.u64 value: gpv2
+                    } else {}
+                } else {}
+            }
         } else {}
         biter: unitdef.body.iterate
         for bm: biter loop {
@@ -4358,6 +4430,10 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
         }
     } else {
         result = lt
+    }
+    if result > 0.u64 when (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.GENERIC_PARAM then {
+        return 0.u64
+    } else {
     }
     if result > 0.u64 then {
         setk: result
