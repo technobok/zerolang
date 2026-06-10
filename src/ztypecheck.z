@@ -177,6 +177,16 @@ isNumericLiteralName: function {name: StringView} out bool is {
         if b0 >= 48.u8 when b0 <= 57.u8 then {
             return true
         } else {}
+        if b0 == 45.u8 then {
+            b1: name.byteAt 1.u64
+            match (
+                b1
+            ) case some then {
+                if b1 >= 48.u8 when b1 <= 57.u8 then {
+                    return true
+                } else {}
+            } case none then {}
+        } else {}
     } case none then {}
     return false
 }
@@ -3540,8 +3550,9 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.Dotte
     match (
         mo
     ) case some then {
+        rm: resolveChildPayload st: st unitName: unitName cid: mo
         result: 0.u64
-        result = mo
+        result = rm
         if (st.typing.childCount parentTypeId: mo) == 0.u64 then {
             ro: methodReturnOf st: st mid: mo
             match (
@@ -4116,6 +4127,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
         }
         isUser: false
         isGen: false
+        isCtor: false
         if funcId > 0.u64 then {
             zo: st.reg.typeById.get key: funcId
             match (
@@ -4125,6 +4137,10 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
                     isGen = true
                 } else {
                     isUser = true
+                    if zo.typetype == ztypes.ztypetype.FUNCTION then {
+                    } else {
+                        isCtor = true
+                    }
                 }
             } case none then {
             }
@@ -4137,20 +4153,28 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             cm: st.pushCall
             walkCallArgsHoist st: st unitName: unitName call: call
             st.popTo marker: cm
-            rnOpt: st.typing.funcReturnNode.get key: funcId
-            match (
-                rnOpt
-            ) case some then {
-                rtOpt: st.typing.nodeType.get key: rnOpt
+            if isCtor then {
+                # a type in callable position constructs: the call's value is
+                # the type itself.
+                result = funcId
+                setr2: result
+                st.typing.nodeType.set key: call.nodeid.u64 value: setr2
+            } else {
+                rnOpt: st.typing.funcReturnNode.get key: funcId
                 match (
-                    rtOpt
+                    rnOpt
                 ) case some then {
-                    result = rtOpt
-                    setr: result
-                    st.typing.nodeType.set key: call.nodeid.u64 value: setr
+                    rtOpt: st.typing.nodeType.get key: rnOpt
+                    match (
+                        rtOpt
+                    ) case some then {
+                        result = rtOpt
+                        setr: result
+                        st.typing.nodeType.set key: call.nodeid.u64 value: setr
+                    } case none then {
+                    }
                 } case none then {
                 }
-            } case none then {
             }
         } else {
             if isGen then {
@@ -4469,6 +4493,17 @@ resolveChildPayload: function {st: zenv.ZSymbolTable unitName: StringView cid: u
     }
 }
 
+# lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
+lastStmtTypeOpt: function {st: zenv.ZSymbolTable bodyOpt: (Option t: Node)} out u64 is {
+    match (
+        bodyOpt
+    ) case some then {
+        return (lastStmtType st: st block: bodyOpt)
+    } case none then {
+        return 0.u64
+    }
+}
+
 # checkCase -- walk a match: push the `match` scope, type the subject, push
 # `match_body` (resetting the bare-name subject's narrowing), then per arm an
 # `arm:{name}` scope with a shadow-narrowing overlay (the subject resolves to
@@ -4510,6 +4545,7 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
     }
     covered: (List of: String)
     diverging: (List of: String)
+    armTypes: (List of: u64)
     allDiverge: true
     cliter: casenode.clauses.iterate
     for clause: cliter loop {
@@ -4532,6 +4568,8 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
             }
             checkStatement st: st unitName: unitName block: clause.statement
             at: lastStmtType st: st block: clause.statement
+            atc: at
+            armTypes.append atc
             if at > 0.u64 when at == neverId then {
                 dn: armName.copy
                 diverging.append dn
@@ -4561,6 +4599,8 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
         } else {
         }
         walkBody st: st unitName: unitName bodyOpt: casenode.elseclause
+        et: lastStmtTypeOpt st: st bodyOpt: casenode.elseclause
+        armTypes.append et
         st.popTo marker: elseMarker
     } else {
     }
@@ -4605,6 +4645,28 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView casenode: zast.C
         } else {
             return 0.u64
         }
+    } else {
+    }
+    if exhaustive then {
+        # the first completing (non-diverging) arm's type is the match value;
+        # an untyped completing arm leaves the match unstamped.
+        ti: 0.u64
+        tn4: armTypes.length
+        for while ti < tn4 loop {
+            at2: armTypes.get i: ti
+            if at2 == neverId then {
+            } else {
+                if at2 > 0.u64 then {
+                    setc3: at2
+                    st.typing.nodeType.set key: casenode.nodeid.u64 value: setc3
+                    return at2
+                } else {
+                    return 0.u64
+                }
+            }
+            ti = ti + 1.u64
+        }
+        return 0.u64
     } else {
         return 0.u64
     }

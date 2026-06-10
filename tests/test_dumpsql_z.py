@@ -487,6 +487,7 @@ CHECK_SMOKE = [
     "fibonacci",
     "strings",
     "swap",
+    "vector",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -515,6 +516,7 @@ TYPED_NODES_CHECK = [
     "fibonacci",
     "strings",
     "swap",
+    "vector",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
