@@ -217,6 +217,55 @@ isLabelValue: function {op: Node} out bool is {
     }
 }
 
+# recordConformerContexts -- pre-record each as-block marker target's first
+# conforming type (body order) so a demand-resolved protocol binds its spec
+# receiver to the conformer (the reference resolves the protocol inside the
+# conformer's resolution, inheriting its `this` context). Full mode only:
+# signature-only resolves protocols standalone, receiver dropped.
+recordConformerContexts: function {ty: ztyping.ZTyping defName: StringView op: Node} is {
+    match (
+        op
+    ) case objectdef then {
+        isRef: false
+        if op.kind == zast.nodetype.CLASS then {
+            isRef = true
+        } else {}
+        if op.kind == zast.nodetype.UNION then {
+            isRef = true
+        } else {}
+        dk0: defName.string
+        dv0: isRef
+        ty.mainDefIsReftype.set key: dk0 value: dv0
+        aiter: op.asItems.iterate
+        for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                cn: atomName n: am.operation
+                skipIt: false
+                if cn.length == 0.u64 then {
+                    skipIt = true
+                } else {}
+                if (isNumericLiteralName name: cn.stringview) then {
+                    skipIt = true
+                } else {}
+                if skipIt then {} else {
+                    ck: cn.string
+                    got: ty.protocolThisContext.get key: ck
+                    match (
+                        got
+                    ) case some then {
+                    } case none then {
+                        ck2: cn.string
+                        cv: defName.string
+                        ty.protocolThisContext.set key: ck2 value: cv
+                    }
+                }
+            } else {}
+        }
+    } else {}
+}
+
 # isBareGenericParam -- a generic-param definition in direct dotted form
 # (`t: Any.generic`); wrapped shapes (a def whose payload merely contains a
 # constraint) are not unit-level generic params.
@@ -821,6 +870,15 @@ paramIsBorrowReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry un
     isref: false
     if tn.stringview == "this" then {
         isref = nameIsInUnitReftype ty: ty reg: reg unitName: unitName name: thisName
+        if isref then {} else {
+            tk0: thisName.string
+            rgo: ty.mainDefIsReftype.get key: tk0
+            match (
+                rgo
+            ) case some then {
+                isref = rgo
+            } case none then {}
+        }
         if (isNativeValueView name: thisName) then {
             isref = false
         } else {}
@@ -1653,13 +1711,23 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
     # to the enclosing String -- mirror that for the system Text protocol.
-    specThisName: defName
+    specThisStr: defName.string
     dropThis: true
     if unitName == "system" then {
         if defName == "Text" then {
-            specThisName = "String"
+            specThisStr = "String".string
             dropThis = false
         } else {}
+    } else {}
+    if dropThis then {
+        dk: defName.string
+        cto: ty.protocolThisContext.get key: dk
+        match (
+            cto
+        ) case some then {
+            specThisStr = cto.take
+            dropThis = false
+        } case none then {}
     } else {}
     siter: fnode.isItems.iterate
     for sm: siter loop {
@@ -1668,7 +1736,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
         ) case namedoperation then {
             mname: unitLabel o: sm.name
             qname: "\{defName}.\{mname}".string
-            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: specThisName op: sm.operation skipThis: dropThis
+            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: specThisStr.stringview op: sm.operation skipThis: dropThis
             match (
                 sido
             ) case some then {
@@ -1798,6 +1866,16 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                         gpv2: gpid
                         ty.nodeType.set key: gpnid.u64 value: gpv2
                     } else {}
+                } else {}
+            }
+        } else {}
+        if full then {
+            with cmiter: unitdef.body.iterate do for cmm: cmiter loop {
+                match (
+                    cmm
+                ) case namedoperation then {
+                    cdn: unitLabel o: cmm.name
+                    recordConformerContexts ty: ty defName: cdn.stringview op: cmm.operation
                 } else {}
             }
         } else {}
