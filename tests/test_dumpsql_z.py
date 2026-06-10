@@ -527,6 +527,12 @@ _CHECK_PROJECTIONS = {
     "narrowed_subtype": (
         "SELECT name, excluded FROM narrowed_subtype ORDER BY name, excluded"
     ),
+    # Monomorphized instances by identity: name, the template's typetype, and
+    # the origin link. Children / mono-typed node stamps land in a later slice.
+    "mono": (
+        "SELECT t.name, t.typetype, o.name, t.is_generic FROM types t "
+        "JOIN types o ON t.generic_origin_id = o.type_id ORDER BY t.name"
+    ),
 }
 
 

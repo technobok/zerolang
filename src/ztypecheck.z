@@ -336,6 +336,21 @@ recordResolvedName: function {ty: ztyping.ZTyping thisName: StringView name: Str
     }
 }
 
+# monoArgName -- a pending-instantiation argument's recorded name: `this` and
+# `type` map to the enclosing type (the recordResolvedName mapping); "" when
+# there is no enclosing type.
+monoArgName: function {an: StringView thisName: StringView} out String is {
+    if an == "this" then {
+        return thisName.string
+    } else {
+    }
+    if an == "type" then {
+        return thisName.string
+    } else {
+    }
+    return an.string
+}
+
 # recordTyperef -- record a signature type-ref node (param / field / arm / return) for
 # post-demand stamping. resolveTyperefShell yields only a NULL-unit shell and the real
 # type may be unresolved here (system / forward refs), so the base name is resolved to its
@@ -350,18 +365,39 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
         # Parameterized type `(T arg: U ...)`: the outer node resolves to a NULL-defined
         # mono (filtered out); record each argument's inner TYPE-ref (e.g. the `u32` in
         # `(optionval t: u32)`), but skip numeric-literal size args (the `16` in
-        # `(str to: 16)`) -- they are const values, not type references.
+        # `(str to: 16)`) -- they are const values, not type references. A ref whose
+        # args are all bare atoms also records a pending instantiation for the
+        # full-mode mono pass.
+        tname: atomName n: node.callable
+        margs: (List of: String)
+        allAtoms: true
         aiter: node.arguments.iterate
         for arg: aiter loop {
             match (
                 arg
             ) case namedoperation then {
                 an: atomName n: arg.operation
-                if (isNumericLiteralName name: an.stringview) then {} else {
+                if (isNumericLiteralName name: an.stringview) then {
+                    allAtoms = false
+                } else {
+                    if an.length == 0.u64 then {
+                        allAtoms = false
+                    } else {
+                        anc: monoArgName an: an.stringview thisName: thisName
+                        if anc.length == 0.u64 then {
+                            allAtoms = false
+                        } else {
+                            margs.append anc
+                        }
+                    }
                     recordTyperef ty: ty thisName: thisName node: arg.operation
                 }
             } else {}
         }
+        if tname.length > 0.u64 when allAtoms when margs.length > 0.u64 then {
+            pm: (ztyping.PendingMono template: tname args: margs)
+            ty.pendingMono.append pm
+        } else {}
     } case dottedpath then {
         # Ownership/access strip marker (this.lock / StringView.borrow / Container.private):
         # record the dotted node with its peeled base AND recurse on the parent so the
@@ -2738,6 +2774,153 @@ checkString: function {st: zenv.ZSymbolTable unitName: StringView node: zast.Ato
 
 # checkAtomid -- type a name-atom in value position: a local variable resolves
 # via the symbol table. (Numeric literals + unit-def atoms land in later slices.)
+# typeNameOf -- a registered type's name as an owned String ("" when absent).
+typeNameOf: function {st: zenv.ZSymbolTable tid: u64} out String is {
+    t: st.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.name.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# mintMono -- register one generic-instance type (deduped by mono name): the
+# template's typetype and valtype flag, with genericOriginId linking back to
+# the template. Children and node stamps land in a later slice.
+mintMono: function {st: zenv.ZSymbolTable name: StringView templateId: u64} out u64 is {
+    kn: name.string
+    got: st.typing.monoByName.get key: kn
+    match (
+        got
+    ) case some then {
+        return got
+    } case none then {
+    }
+    tt: ztypes.ztypetype.RECORD
+    vto: (optionval.none bool)
+    {
+        tpl: st.reg.typeById.get key: templateId
+        match (
+            tpl
+        ) case some then {
+            tt = tpl.typetype
+            vto = tpl.isValtype
+        } case none then {
+        }
+    }
+    mid: st.reg.newType name: name typetype: tt
+    match (
+        vto
+    ) case some then {
+        st.reg.setValtype typeId: mid value: vto
+    } case none then {
+    }
+    st.reg.setGenericOrigin typeId: mid value: templateId
+    setk: name.string
+    setv: mid
+    st.typing.monoByName.set key: setk value: setv
+    return mid
+}
+
+# mintChain -- mint one iterator-family instance (`{tpl}{suffix}`) when the
+# chain template resolves.
+mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: StringView suffix: StringView} is {
+    co: lookupTyperef resolved: st.typing.resolved mainName: mainName base: chainTpl
+    match (
+        co
+    ) case some then {
+        mname: "\{chainTpl}\{suffix}"
+        mintMono st: st name: mname.stringview templateId: co
+    } case none then {
+    }
+}
+
+# mintGenericCallMono -- mint the instance of a generic callee from its first
+# argument's resolved type (single-type-param inference; print today).
+mintGenericCallMono: function {st: zenv.ZSymbolTable templateId: u64 argTypeId: u64} is {
+    tn: typeNameOf st: st tid: templateId
+    an: typeNameOf st: st tid: argTypeId
+    if tn.length > 0.u64 when an.length > 0.u64 then {
+        mname: "\{tn}_\{an}"
+        mintMono st: st name: mname.stringview templateId: templateId
+    } else {
+    }
+}
+
+# resolveMonos -- the full-mode monomorphization pass (type identity): mint an
+# instance type per recorded parameterized signature ref whose template and
+# args all resolve by name (an unresolved arg -- e.g. the unbound T in a
+# template's own `(ListIter of: T)` -- skips the ref). Minting a List /
+# ListView / ListIter instance also mints its iterator-family instances,
+# mirroring the reference's transitive method-signature instantiation; the
+# Set/Map chains land when an example needs them.
+resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        tplNames: (List of: String)
+        suffixes: (List of: String)
+        tplIds: (List of: u64)
+        with piter: st.typing.pendingMono.iterate do for pm: piter loop {
+            tplOpt: lookupTyperef resolved: st.typing.resolved mainName: mainName base: pm.template.stringview
+            match (
+                tplOpt
+            ) case some then {
+                allOk: true
+                sfx: "".string
+                with aiter: pm.args.iterate do for an: aiter loop {
+                    ao: lookupTyperef resolved: st.typing.resolved mainName: mainName base: an.stringview
+                    match (
+                        ao
+                    ) case some then {
+                        sfx.append s: "_"
+                        sfx.append s: an.stringview
+                    } case none then {
+                        allOk = false
+                    }
+                }
+                if allOk when sfx.length > 0.u64 then {
+                    tn: pm.template.copy
+                    tplNames.append tn
+                    suffixes.append sfx
+                    tid: tplOpt
+                    tplIds.append tid
+                } else {
+                }
+            } case none then {
+            }
+        }
+        i: 0.u64
+        n: tplNames.length
+        for while i < n loop {
+            tn2: tplNames.get i: i
+            sf2: suffixes.get i: i
+            td2: tplIds.get i: i
+            mname: "\{tn2}\{sf2}"
+            mintMono st: st name: mname.stringview templateId: td2
+            if tn2.stringview == "List" then {
+                mintChain st: st mainName: mainName chainTpl: "ListIter" suffix: sf2.stringview
+                mintChain st: st mainName: mainName chainTpl: "ListView" suffix: sf2.stringview
+                mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: sf2.stringview
+            } else {
+            }
+            if tn2.stringview == "ListView" then {
+                mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: sf2.stringview
+            } else {
+            }
+            if tn2.stringview == "ListIter" then {
+                mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: sf2.stringview
+            } else {
+            }
+            i = i + 1.u64
+        }
+    } else {
+    }
+}
+
 checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView node: zast.AtomIdData} out u64 is {
     result: 0.u64
     vtOpt: st.lookup name: node.name.stringview
@@ -3029,19 +3212,6 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView binop: zast.Bin
     return result
 }
 
-# walkCallArgs -- type each argument's value (arguments are namedoperation-wrapped).
-walkCallArgs: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData} is {
-    aiter: call.arguments.iterate
-    for arg: aiter loop {
-        match (
-            arg
-        ) case namedoperation then {
-            checkValue st: st unitName: unitName node: arg.operation
-        } else {
-        }
-    }
-}
-
 # argIsTrivial -- true when a call argument's operation is a hoisting no-op: a
 # bare atom, a labelvalue, a string literal without interpolation, or an
 # expression wrapping a bare atom / labelvalue. Anything else (binop, call,
@@ -3194,12 +3364,14 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
         } else {
         }
         isUser: false
+        isGen: false
         if funcId > 0.u64 then {
             zo: st.reg.typeById.get key: funcId
             match (
                 zo
             ) case some then {
                 if zo.isgeneric then {
+                    isGen = true
                 } else {
                     isUser = true
                 }
@@ -3230,7 +3402,26 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             } case none then {
             }
         } else {
-            walkCallArgs st: st unitName: unitName call: call
+            argT: 0.u64
+            gfirst: true
+            giter: call.arguments.iterate
+            for garg: giter loop {
+                match (
+                    garg
+                ) case namedoperation then {
+                    avt: checkValue st: st unitName: unitName node: garg.operation
+                    if gfirst then {
+                        argT = avt
+                        gfirst = false
+                    } else {
+                    }
+                } else {
+                }
+            }
+            if isGen when argT > 0.u64 then {
+                mintGenericCallMono st: st templateId: funcId argTypeId: argT
+            } else {
+            }
         }
     }
     return result
@@ -3507,6 +3698,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     stampTyperefs ty: ty program: program
     st: zenv.newSymbolTable reg: reg typing: ty
     if full then {
+        resolveMonos st: st program: program
         checkBodies st: st program: program
         foldLiteralStamps st: st program: program
     } else {
