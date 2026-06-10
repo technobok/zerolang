@@ -528,10 +528,31 @@ _CHECK_PROJECTIONS = {
         "SELECT name, excluded FROM narrowed_subtype ORDER BY name, excluded"
     ),
     # Monomorphized instances by identity: name, the template's typetype, and
-    # the origin link. Children / mono-typed node stamps land in a later slice.
+    # the origin link.
     "mono": (
         "SELECT t.name, t.typetype, o.name, t.is_generic FROM types t "
         "JOIN types o ON t.generic_origin_id = o.type_id ORDER BY t.name"
+    ),
+    # Instance children (substituted arms/params + synthesized tag and ==/!=).
+    # CLASS instances are excluded: their cloned method children come from the
+    # template's AST and land with the class-mono slice.
+    "mono_children": (
+        "SELECT pt.name, tc.child_name, ct.name, tc.position "
+        "FROM type_children tc "
+        "JOIN types pt ON tc.type_id = pt.type_id "
+        "JOIN types ct ON tc.child_type_id = ct.type_id "
+        "WHERE pt.generic_origin_id IS NOT NULL AND pt.typetype != 'CLASS' "
+        "ORDER BY pt.name, tc.position"
+    ),
+    # Nodes typed with an instance: the parameterized refs' expression wrappers
+    # and the generic call sites' callables.
+    "mono_typed_nodes": (
+        "SELECT an.kind, an.name, an.start_line, an.start_col, t.name "
+        "FROM typed_nodes tn "
+        "JOIN ast_nodes an ON tn.node_id = an.node_id "
+        "JOIN types t ON tn.type_id = t.type_id "
+        "WHERE t.generic_origin_id IS NOT NULL "
+        "ORDER BY an.name, an.start_line, an.start_col, t.name"
     ),
 }
 
