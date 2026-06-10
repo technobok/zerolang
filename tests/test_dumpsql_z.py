@@ -495,6 +495,9 @@ CHECK_SMOKE = [
     "field_reassign",
     "arbprec_constants",
     "constfold",
+    "path_locks",
+    "string_codepoints",
+    "string_parse",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -531,6 +534,9 @@ TYPED_NODES_CHECK = [
     "field_reassign",
     "arbprec_constants",
     "constfold",
+    "path_locks",
+    "string_codepoints",
+    "string_parse",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

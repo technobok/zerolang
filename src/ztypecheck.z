@@ -547,6 +547,48 @@ nameIsInUnitReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
 # paramTypeBaseName -- the base type name of a (possibly parameterized) param type
 # expression: an atom name directly, or the callable of a parenthesized
 # `(List of: i64)` form (an expression wrapping a call). "" for anything else.
+# returnHasBorrowMarkerNode / returnHasBorrowMarker -- the function's return
+# type carries the `.borrow` marker (`out StringView.borrow`).
+returnHasBorrowMarkerNode: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (returnHasBorrowMarkerNode n: n.expression)
+    } case dottedpath then {
+        cn: atomName n: n.child
+        return cn.stringview == "borrow"
+    } else {
+        return false
+    }
+}
+
+returnHasBorrowMarker: function {o: (Option t: Node)} out bool is {
+    match (
+        o
+    ) case some then {
+        return (returnHasBorrowMarkerNode n: o)
+    } case none then {
+        return false
+    }
+}
+
+# paramIsThisReceiver -- the parameter's type names the receiver: bare `this`
+# or a marker-suffixed `this.lock` / `this.borrow`.
+paramIsThisReceiver: function {op: Node} out bool is {
+    match (
+        op
+    ) case expression then {
+        return (paramIsThisReceiver op: op.expression)
+    } case atomid then {
+        return op.name.stringview == "this"
+    } case dottedpath then {
+        pn: atomName n: op.parent
+        return pn.stringview == "this"
+    } else {
+        return false
+    }
+}
+
 paramTypeBaseName: function {op: Node} out String is {
     match (
         op
@@ -675,6 +717,10 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 pname: unitLabel o: pm.name
                 cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
+                if (paramIsThisReceiver op: pm.operation) then {
+                    reg.setThisParamName typeId: fid name: pname.stringview
+                } else {
+                }
                 recordTyperef ty: ty thisName: thisName node: pm.operation
                 pown: pathOwnership n: pm.operation
                 match (
@@ -693,6 +739,12 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
     demandReturnType reg: reg o: fnode.returntype
     recordReturnType ty: ty thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
+    if (returnHasBorrowMarker o: fnode.returntype) then {
+        fbk: fid
+        fbv: true
+        ty.funcReturnsBorrow.set key: fbk value: fbv
+    } else {
+    }
     ty.definedInUnit.set key: dfid value: unitName.string
     key: "\{unitName}.\{defName}".string
     ty.resolved.set key: key value: fid
@@ -3535,9 +3587,18 @@ isOptionViewMono: function {st: zenv.ZSymbolTable unitName: StringView wid: u64}
 
 # methodHasNoUserArgs -- true when a method type has no user-visible parameters
 # beyond the implicit receiver: no children at all (synthesized collection
-# methods), or a single child that IS the receiver (`this`). The reference also
-# accepts a long-form receiver matching this_param_name; the .z never records
-# thisParamName yet, so that form is deferred until a resolver slice sets it.
+# methods), or a single child that IS the receiver -- `this`, or the long-form
+# receiver recorded in thisParamName (`stringview: function {t: this.lock}`).
+optStrEquals: function {o: (Option t: String) s: StringView} out bool is {
+    match (
+        o
+    ) case some then {
+        return o.stringview == s
+    } case none then {
+        return false
+    }
+}
+
 methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     cnt: st.typing.childCount parentTypeId: mid
     if cnt == 0.u64 then {
@@ -3555,7 +3616,18 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
         } else {
         }
     }
-    return soleName.stringview == "this"
+    if soleName.stringview == "this" then {
+        return true
+    } else {
+    }
+    zo: st.reg.typeById.get key: mid
+    match (
+        zo
+    ) case some then {
+        return (optStrEquals o: zo.thisParamName s: soleName.stringview)
+    } case none then {
+        return false
+    }
 }
 
 # checkDotted -- a dotted method reference in a body: type the base, look the
@@ -3609,6 +3681,29 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.Dotte
                 ro
             ) case some then {
                 result = ro
+                fb: st.typing.funcReturnsBorrow.get key: mo
+                match (
+                    fb
+                ) case some then {
+                    if fb then {
+                        # Build locally, then append through the full field
+                        # path (a field list passed as an argument is a
+                        # non-owning shallow copy -- appends would be lost).
+                        tup: (List of: String)
+                        appendValueTuple n: dp.parent dst: tup
+                        drainPendingBorrow st: st
+                        ti: 0.u64
+                        tn: tup.length
+                        for while ti < tn loop {
+                            te: tup.get i: ti
+                            tec: te.copy
+                            st.typing.pendingBorrowPath.append tec
+                            ti = ti + 1.u64
+                        }
+                    } else {
+                    }
+                } case none then {
+                }
             } case none then {
             }
         } else {
@@ -3776,12 +3871,30 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast
     mvt: materialiseLiteral st: st unitName: unitName t: vt
     vt = mvt
     if vt > 0.u64 then {
-        v: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.OWNED
+        bsrc: (List of: String)
+        takePendingBorrow st: st dst: bsrc
+        own: ztypes.zownership.OWNED
+        if bsrc.length > 0.u64 when (typeIsReftype st: st tid: vt) then {
+            own = ztypes.zownership.BORROWED
+        } else {
+        }
+        v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
+        if own == ztypes.zownership.BORROWED then {
+            r0: bsrc.get i: 0.u64
+            bo: r0.copy
+            v.borrowOrigin = (Option.some bo)
+        } else {
+        }
         st.defineVar name: asgn.name.stringview var: v
-        st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid
+        vid2: vid
+        st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
         setk: vt
         st.typing.nodeType.set key: asgn.nodeid.u64 value: setk
+        if own == ztypes.zownership.BORROWED then {
+            installBorrowLocks st: st src: bsrc vid: vid
+        } else {
+        }
     } else {
     }
 }
@@ -3874,10 +3987,27 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.W
     vt: checkValue st: st unitName: unitName node: withnode.value
     if vt > 0.u64 then {
         own: withValueOwnership st: st v: withnode.value
+        # The borrow target: a BORROW-returning auto-call reported the receiver
+        # source; a plain-path value locks its full dotted tuple. Valtype
+        # borrows are copies -- no lock.
+        btgt: (List of: String)
+        takePendingBorrow st: st dst: btgt
+        if btgt.length == 0.u64 then {
+            if own == ztypes.zownership.BORROWED then {
+                appendValueTuple n: withnode.value dst: btgt
+            } else {
+            }
+        } else {
+        }
         v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
         st.defineVar name: withnode.name.stringview var: v
-        st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid
+        vid2: vid
+        st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
+        if (typeIsReftype st: st tid: vt) then {
+            installBorrowLocks st: st src: btgt vid: vid
+        } else {
+        }
         setk: vt
         st.typing.nodeType.set key: withnode.nodeid.u64 value: setk
     } else {
@@ -4179,6 +4309,84 @@ bareAtomName: function {n: Node} out String is {
     } else {
         return "".string
     }
+}
+
+# appendValueTuple -- the dotted-path tuple of a value node (root first),
+# appended onto dst; non-path shapes contribute nothing.
+appendValueTuple: function {n: Node dst: (List of: String)} is {
+    match (
+        n
+    ) case expression then {
+        appendValueTuple n: n.expression dst: dst
+    } case atomid then {
+        nm: n.name.copy
+        dst.append nm
+    } case dottedpath then {
+        appendValueTuple n: n.parent dst: dst
+        cn: atomName n: n.child
+        if cn.length > 0.u64 then {
+            dst.append cn
+        } else {
+        }
+    } else {
+    }
+}
+
+# drainPendingBorrow / takePendingBorrow -- clear the borrow side-channel /
+# move it into a local list (root-first order preserved).
+drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
+    for while st.typing.pendingBorrowPath.length > 0.u64 loop {
+        pd: st.typing.pendingBorrowPath.pop
+    }
+}
+
+takePendingBorrow: function {st: zenv.ZSymbolTable dst: (List of: String)} is {
+    n: st.typing.pendingBorrowPath.length
+    i: 0.u64
+    for while i < n loop {
+        e: st.typing.pendingBorrowPath.get i: i
+        ec: e.copy
+        dst.append ec
+        i = i + 1.u64
+    }
+    drainPendingBorrow st: st
+}
+
+# installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
+# (the symtab appends one lock overlay entry per acquisition, keyed by the
+# path root -- the oracle's non-definition rows). Holder = the binding var.
+installBorrowLocks: function {st: zenv.ZSymbolTable src: (List of: String) vid: u64} is {
+    n: src.length
+    if n == 0.u64 then {
+        return
+    } else {
+    }
+    end: 1.u64
+    for while end < n loop {
+        sub: (List of: String)
+        i: 0.u64
+        for while i < end loop {
+            e: src.get i: i
+            ec: e.copy
+            sub.append ec
+            i = i + 1.u64
+        }
+        hs: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vid)
+        hs2: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vid)
+        rs: st.tryLock path: sub lockType: ztypes.zlockstate.SHARED holder: hs hasSelfHolder: false selfHolder: hs2
+        end = end + 1.u64
+    }
+    full: (List of: String)
+    j: 0.u64
+    for while j < n loop {
+        e2: src.get i: j
+        ec2: e2.copy
+        full.append ec2
+        j = j + 1.u64
+    }
+    he: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vid)
+    he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vid)
+    re: st.tryLock path: full lockType: ztypes.zlockstate.EXCLUSIVE holder: he hasSelfHolder: false selfHolder: he2
 }
 
 # isLiteralTypeId -- a literal-typed value: the unregistered int/float pseudo
@@ -5037,6 +5245,7 @@ checkStatement: function {st: zenv.ZSymbolTable unitName: StringView block: Node
         siter: block.statements.iterate
         for sline: siter loop {
             isRet: checkStatementLine st: st unitName: unitName sline: sline
+            drainPendingBorrow st: st
             if isRet then {
                 st.markUnreachable
             } else {
