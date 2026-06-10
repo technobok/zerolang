@@ -3789,10 +3789,23 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast
 # entry, mirroring _check_reassignment_inner's reset_narrowing).
 checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView rasgn: zast.ReassignmentData} is {
     checkValue st: st unitName: unitName node: rasgn.topath
-    checkValue st: st unitName: unitName node: rasgn.value
+    rvt: checkValue st: st unitName: unitName node: rasgn.value
     nm: atomName n: rasgn.topath
     if nm.length > 0.u64 then {
         st.resetNarrowing name: nm.stringview
+    } else {
+    }
+    # A bare-name reftype RHS is a move: the source invalidates (the symtab
+    # appends its taken overlay entry).
+    rn: bareAtomName n: rasgn.value
+    if rn.length > 0.u64 when rvt > 0.u64 when (typeIsReftype st: st tid: rvt) then {
+        vo: st.lookupVarId name: rn.stringview
+        match (
+            vo
+        ) case some then {
+            st.invalidate name: rn.stringview loc: (optionval.none ztypes.zsrcpos)
+        } case none then {
+        }
     } else {
     }
 }
@@ -4104,6 +4117,41 @@ argIsTrivial: function {op: Node} out bool is {
 # the synth Assignment / value-Expression / AtomId rows + their type stamps so
 # the dump matches the reference's hoisted tree. The parsed argument keeps its
 # own stamps; only the dump rows are synthesised (no AST mutation).
+# typeIsReftype -- a registered type whose isValtype flag is explicitly false
+# (classes, unions, protocols, heap natives like String). Unset or unregistered
+# ids are not reftypes.
+typeIsReftype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
+    zo: st.reg.typeById.get key: tid
+    match (
+        zo
+    ) case some then {
+        vt: zo.isValtype
+        match (
+            vt
+        ) case some then {
+            return vt == false
+        } case none then {
+            return false
+        }
+    } case none then {
+        return false
+    }
+}
+
+# bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
+# or "" when the value is any other shape.
+bareAtomName: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (bareAtomName n: n.expression)
+    } case atomid then {
+        return n.name.copy
+    } else {
+        return "".string
+    }
+}
+
 # isLiteralTypeId -- a literal-typed value: the unregistered int/float pseudo
 # ids, or a data block's registered literal_int/literal_float element shell.
 isLiteralTypeId: function {st: zenv.ZSymbolTable tid: u64} out bool is {
@@ -4123,7 +4171,7 @@ isLiteralTypeId: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     return nm.stringview == "literal_float"
 }
 
-hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: u64} is {
+hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: u64 consumes: bool} is {
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1.u64
     tname: "_t\{tn}"
@@ -4167,11 +4215,15 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
     vid: v.variableId
     st.defineVar name: tname.stringview var: v
     st.typing.defVariableId.set key: assignId.u64 value: vid
+    if consumes then {
+        st.invalidate name: tname.stringview loc: (optionval.none ztypes.zsrcpos)
+    } else {
+    }
 }
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
-walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64} is {
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64 isCtor: bool} is {
     aiter: call.arguments.iterate
     for arg: aiter loop {
         match (
@@ -4194,7 +4246,14 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
                     }
                 } else {
                 }
-                hoistArg st: st argNode: arg.operation argType: vt paramType: pt
+                # A construction takes ownership of its reftype field args:
+                # the hoisted temp invalidates inside the call scope.
+                consumes: false
+                if isCtor when (typeIsReftype st: st tid: vt) then {
+                    consumes = true
+                } else {
+                }
+                hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
             } else {
             }
         } else {
@@ -4306,7 +4365,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            walkCallArgsHoist st: st unitName: unitName call: call funcId: funcId
+            walkCallArgsHoist st: st unitName: unitName call: call funcId: funcId isCtor: isCtor
             st.popTo marker: cm
             if isCtor then {
                 # a type in callable position constructs: the call's value is
