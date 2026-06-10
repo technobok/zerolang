@@ -5339,6 +5339,83 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
     }
 }
 
+# isBinopNode -- kind test without narrowing (the caller keeps the Node handle).
+isBinopNode: function {n: Node} out bool is {
+    match (
+        n
+    ) case binop then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# constantOperandType -- type one operand of a unit-level constant expression,
+# stamping as it walks: a numeric literal wears the pseudo id (folded to its
+# visible default later), a name reads an already-materialised constant from
+# resolved (body order), and a binop takes the first concretely-typed operand
+# (else the literal pseudo). 0 = not a constant shape.
+constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (constantOperandType ty: ty mainName: mainName n: n.expression)
+    } case atomid then {
+        result: 0.u64
+        if (isNumericLiteralName name: n.name.stringview) then {
+            if (isFloatLiteralName name: n.name.stringview) then {
+                result = literalFloatId
+            } else {
+                result = literalIntId
+            }
+        } else {
+            ro: lookupTyperef resolved: ty.resolved mainName: mainName base: n.name.stringview
+            match (
+                ro
+            ) case some then {
+                result = ro
+            } case none then {
+            }
+        }
+        if result > 0.u64 then {
+            seto: result
+            ty.nodeType.set key: n.nodeid.u64 value: seto
+        } else {
+        }
+        return result
+    } case binop then {
+        lt: constantOperandType ty: ty mainName: mainName n: n.lhs
+        rt: constantOperandType ty: ty mainName: mainName n: n.rhs
+        result: lt
+        if lt == 0.u64 then {
+            result = rt
+        } else {
+        }
+        if lt == literalIntId then {
+            if rt > 0.u64 when rt != literalIntId when rt != literalFloatId then {
+                result = rt
+            } else {
+            }
+        } else {
+        }
+        if lt == literalFloatId then {
+            if rt > 0.u64 when rt != literalIntId when rt != literalFloatId then {
+                result = rt
+            } else {
+            }
+        } else {
+        }
+        if result > 0.u64 then {
+            setb: result
+            ty.nodeType.set key: n.nodeid.u64 value: setb
+        } else {
+        }
+        return result
+    } else {
+        return 0.u64
+    }
+}
+
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
 # atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
 # default (i64 / f64 -- both pre-demanded by seedSystemDemands). The definition's
@@ -5368,6 +5445,41 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
         } else {
         }
     } else {
+        if (isBinopNode n: defn) then {
+            # A constant expression (`COMBINED: OFFSET + SCALE`): the operand
+            # walk stamps the refs and the binop; a literal result materialises
+            # to its default, a concrete one (an already-materialised constant)
+            # keeps it.
+            bt: constantOperandType ty: ty mainName: mainName n: defn
+            base2: ""
+            if bt == literalIntId then {
+                base2 = "i64"
+            } else {
+            }
+            if bt == literalFloatId then {
+                base2 = "f64"
+            } else {
+            }
+            if base2.length > 0.u64 then {
+                mOpt: lookupTyperef resolved: ty.resolved mainName: mainName base: base2
+                match (
+                    mOpt
+                ) case some then {
+                    k2: "\{mainName}.\{defName}".string
+                    setv2: mOpt
+                    ty.resolved.set key: k2 value: setv2
+                } case none then {
+                }
+            } else {
+                if bt > 0.u64 then {
+                    k3: "\{mainName}.\{defName}".string
+                    setv3: bt
+                    ty.resolved.set key: k3 value: setv3
+                } else {
+                }
+            }
+        } else {
+        }
     }
 }
 
