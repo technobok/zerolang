@@ -3837,6 +3837,53 @@ createDottedBaseId: function {n: Node} out (optionval t: u32) is {
     return (optionval.none u32)
 }
 
+# dottedChildName -- a dotted path's child atom name, or "".
+dottedChildName: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomName n: n.child)
+    } else {
+        return "".string
+    }
+}
+
+# unionCreateArmName -- the constructed arm's name when a value is a tagged
+# subtype construction (a UNION_CREATE-stamped call's dotted child), or "".
+unionCreateArmName: function {st: zenv.ZSymbolTable n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (unionCreateArmName st: st n: n.expression)
+    } case dottedpath then {
+        dgot: st.typing.dpTaggedParent.get key: n.nodeid.u64
+        match (
+            dgot
+        ) case some then {
+            return (atomName n: n.child)
+        } case none then {
+            return "".string
+        }
+    } case call then {
+        kOpt: st.typing.callKind.get key: n.nodeid.u64
+        isUC: false
+        match (
+            kOpt
+        ) case some then {
+            if kOpt == zast.callkind.UNION_CREATE then {
+                isUC = true
+            } else {}
+        } case none then {}
+        if isUC then {
+            return (dottedChildName n: n.callable)
+        } else {
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
 # borrowDottedBaseId -- the base atom's node id when a dotted path's child is
 # `borrow` (a protocol/facet borrow projection), or none.
 borrowDottedBaseId: function {n: Node} out (optionval t: u32) is {
@@ -4100,6 +4147,49 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
     match (
         mo
     ) case some then {
+        # A subtype member named on a tagged TYPE (not a value of it, not the
+        # tag, not a method) is a construction reference: record the dotted
+        # node's tagged parent (construction dispatch and generic-union
+        # inference key off it), stamp the path with the parent, and the
+        # path's value IS the parent. A value base keeps member semantics.
+        btt0: st.reg.typetypeOf typeId: bt
+        isTagged0: false
+        if btt0 == ztypes.ztypetype.VARIANT then {
+            isTagged0 = true
+        } else {}
+        if btt0 == ztypes.ztypetype.UNION then {
+            isTagged0 = true
+        } else {}
+        if isTagged0 then {
+            ctt0: st.reg.typetypeOf typeId: mo
+            isMember0: true
+            if ctt0 == ztypes.ztypetype.FUNCTION then {
+                isMember0 = false
+            } else {}
+            if ctt0 == ztypes.ztypetype.DATA then {
+                isMember0 = false
+            } else {}
+            if isMember0 then {
+                tvn0: bareAtomName n: dp.parent
+                isVal0: false
+                if tvn0.length > 0.u64 then {
+                    tvo0: st.lookupVarId name: tvn0.stringview
+                    match (
+                        tvo0
+                    ) case some then {
+                        isVal0 = true
+                    } case none then {}
+                } else {}
+                if isVal0 then {} else {
+                    dpk0: dp.nodeid.u64
+                    dpv0: bt
+                    st.typing.dpTaggedParent.set key: dpk0 value: dpv0
+                    setdp0: bt
+                    st.typing.nodeType.set key: dp.nodeid.u64 value: setdp0
+                    return bt
+                }
+            } else {}
+        } else {}
         if (st.typing.isAsConstClone typeId: mo) then {
             setcc: mo
             st.typing.nodeType.set key: dp.nodeid.u64 value: setcc
@@ -4315,6 +4405,14 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
         st.typing.nodeType.set key: asgn.nodeid.u64 value: setk
         if own == ztypes.zownership.BORROWED then {
             installBorrowLocks st: st src: bsrc vid: vid
+        } else {
+        }
+        # Binding a tagged-subtype construction narrows the name to the
+        # constructed arm (assignment-based narrowing: the overlay keeps the
+        # subject's type with the narrowed-subtype sidecar).
+        ucArm: unionCreateArmName st: st n: asgn.value
+        if ucArm.length > 0.u64 then {
+            st.narrow name: asgn.name.stringview toTypeId: vt subtypeName: ucArm.stringview shadow: false
         } else {
         }
     } else {
@@ -5321,6 +5419,41 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                     }
                     return mres
                 } else {
+                    # A non-FUNCTION dotted member in callable position: a
+                    # tagged subtype constructs (the union/variant branch of
+                    # _dispatch_call_construction). Generic templates infer
+                    # their mono separately.
+                    calid2: nodeId n: call.callable
+                    dtp: optU64Or o: (st.typing.dpTaggedParent.get key: calid2.u64) d: 0.u64
+                    if dtp > 0.u64 then {
+                        isGenT: false
+                        {
+                            gzo: st.reg.typeById.get key: dtp
+                            match (
+                                gzo
+                            ) case some then {
+                                if gzo.isgeneric then {
+                                    isGenT = true
+                                } else {}
+                            } case none then {}
+                        }
+                        if isGenT then {
+                        } else {
+                            aiter2: call.arguments.iterate
+                            for arg2: aiter2 loop {
+                                match (
+                                    arg2
+                                ) case namedoperation then {
+                                    checkValue st: st unitName: unitName unitBody: unitBody node: arg2.operation
+                                } else {}
+                            }
+                            setuc: dtp
+                            st.typing.nodeType.set key: call.nodeid.u64 value: setuc
+                            st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.UNION_CREATE
+                            return dtp
+                        }
+                    } else {
+                    }
                 }
             }
         } case none then {

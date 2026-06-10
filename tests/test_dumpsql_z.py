@@ -518,6 +518,9 @@ CHECK_SMOKE = [
     "typedefs",
     "autoproject",
     "facets",
+    "variants",
+    "narrowing",
+    "equality",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -577,6 +580,9 @@ TYPED_NODES_CHECK = [
     "typedefs",
     "autoproject",
     "facets",
+    "variants",
+    "narrowing",
+    "equality",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
