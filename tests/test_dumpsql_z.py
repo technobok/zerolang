@@ -498,6 +498,7 @@ CHECK_SMOKE = [
     "path_locks",
     "string_codepoints",
     "string_parse",
+    "ownership",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -537,6 +538,7 @@ TYPED_NODES_CHECK = [
     "path_locks",
     "string_codepoints",
     "string_parse",
+    "ownership",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

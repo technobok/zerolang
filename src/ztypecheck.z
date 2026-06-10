@@ -3668,6 +3668,47 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView dp: zast.Dotte
         return 0.u64
     } else {
     }
+    # `.take` / `.release`: ownership transfer markers, not members. The path
+    # carries the base's type; a bare-name source releases its held locks and
+    # invalidates (the taken overlay propagates out of popped scopes).
+    if cn.stringview == "take" then {
+        mkRoot: bareAtomName n: dp.parent
+        if mkRoot.length > 0.u64 then {
+            mvo: st.lookupVarId name: mkRoot.stringview
+            match (
+                mvo
+            ) case some then {
+                mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: mvo)
+                st.releaseHeldLocks holder: mh
+                st.invalidate name: mkRoot.stringview loc: takenHere
+            } case none then {
+            }
+        } else {
+        }
+        setmk: bt
+        st.typing.nodeType.set key: dp.nodeid.u64 value: setmk
+        return bt
+    } else {
+    }
+    if cn.stringview == "release" then {
+        rlRoot: bareAtomName n: dp.parent
+        if rlRoot.length > 0.u64 then {
+            rvo: st.lookupVarId name: rlRoot.stringview
+            match (
+                rvo
+            ) case some then {
+                rh: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: rvo)
+                st.releaseHeldLocks holder: rh
+                st.invalidate name: rlRoot.stringview loc: takenHere
+            } case none then {
+            }
+        } else {
+        }
+        setrl: bt
+        st.typing.nodeType.set key: dp.nodeid.u64 value: setrl
+        return bt
+    } else {
+    }
     mo: st.typing.childOf parentTypeId: bt name: cn.stringview
     match (
         mo
@@ -4311,6 +4352,41 @@ bareAtomName: function {n: Node} out String is {
     }
 }
 
+# positionalParamName -- the funcId's parameter name at `idx` (typeChild
+# position order), "" when absent. Positional call args map to it.
+positionalParamName: function {st: zenv.ZSymbolTable funcId: u64 idx: u64} out String is {
+    result: "".string
+    found: false
+    with citer: st.typing.typeChild.iterate do for tc: citer loop {
+        if found then {} else {
+            if tc.parentTypeId == funcId when tc.position == idx then {
+                result = tc.childName.copy
+                found = true
+            } else {
+            }
+        }
+    }
+    return result
+}
+
+# lockCallArg -- the call-scoped EXCLUSIVE lock a lock/borrow parameter takes
+# on its argument's root for the call's duration (the symtab appends the lock
+# overlay entry in the open call scope; it vanishes when the scope pops).
+lockCallArg: function {st: zenv.ZSymbolTable name: StringView callId: u64} is {
+    pth: (List of: String)
+    nm: name.string
+    pth.append nm
+    h: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
+    h2: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
+    r: st.tryLock path: pth lockType: ztypes.zlockstate.EXCLUSIVE holder: h hasSelfHolder: true selfHolder: h2
+}
+
+# takenHere -- the location stamp an ownership-transfer overlay carries (pop
+# propagates only located takes into the enclosing scope).
+takenHere: function {} out (optionval t: ztypes.zsrcpos) is {
+    return (optionval.some (ztypes.zsrcpos fsno: 0 lineno: 0 colno: 0))
+}
+
 # appendValueTuple -- the dotted-path tuple of a value node (root first),
 # appended onto dst; non-path shapes contribute nothing.
 appendValueTuple: function {n: Node dst: (List of: String)} is {
@@ -4408,7 +4484,7 @@ isLiteralTypeId: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     return nm.stringview == "literal_float"
 }
 
-hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: u64 consumes: bool} is {
+hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: u64 consumes: bool} out String is {
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1.u64
     tname: "_t\{tn}"
@@ -4456,11 +4532,14 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
         st.invalidate name: tname.stringview loc: (optionval.none ztypes.zsrcpos)
     } else {
     }
+    return tname
 }
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
-walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64 isCtor: bool} is {
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData funcId: u64 isCtor: bool} out String is {
+    lockRoot: "".string
+    argIdx: 0.u64
     aiter: call.arguments.iterate
     for arg: aiter loop {
         match (
@@ -4468,11 +4547,18 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
         ) case namedoperation then {
             vt: checkValue st: st unitName: unitName node: arg.operation
             if vt > 0.u64 then {
+                pn: unitLabel o: arg.name
+                if pn.length == 0.u64 then {
+                    pp: positionalParamName st: st funcId: funcId idx: argIdx
+                    pn = pp
+                } else {
+                }
+                isTake: false
+                isLockish: false
                 pt: 0.u64
-                if funcId > 0.u64 when (isLiteralTypeId st: st tid: vt) then {
-                    lbl: unitLabel o: arg.name
-                    if lbl.length > 0.u64 then {
-                        po: st.typing.childOf parentTypeId: funcId name: lbl.stringview
+                if funcId > 0.u64 when pn.length > 0.u64 then {
+                    if (isLiteralTypeId st: st tid: vt) then {
+                        po: st.typing.childOf parentTypeId: funcId name: pn.stringview
                         match (
                             po
                         ) case some then {
@@ -4480,6 +4566,25 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
                         } case none then {
                         }
                     } else {
+                    }
+                    cnid: st.typing.childIdFor parentTypeId: funcId name: pn.stringview
+                    oo: st.typing.childOwnership.get key: cnid
+                    match (
+                        oo
+                    ) case some then {
+                        if oo == ztypes.zparamownership.TAKE then {
+                            isTake = true
+                        } else {
+                        }
+                        if oo == ztypes.zparamownership.LOCK then {
+                            isLockish = true
+                        } else {
+                        }
+                        if oo == ztypes.zparamownership.BORROW then {
+                            isLockish = true
+                        } else {
+                        }
+                    } case none then {
                     }
                 } else {
                 }
@@ -4495,21 +4600,57 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView call: za
                         }
                     } else {
                     }
+                    # A bare-name reftype argument: a take parameter consumes
+                    # it (the overlay propagates out on pop); a lock/borrow
+                    # parameter locks it for the call.
+                    bn: bareAtomName n: arg.operation
+                    if bn.length > 0.u64 when (typeIsReftype st: st tid: vt) then {
+                        bvo: st.lookupVarId name: bn.stringview
+                        match (
+                            bvo
+                        ) case some then {
+                            if isTake then {
+                                st.invalidate name: bn.stringview loc: takenHere
+                            } else {
+                                if isLockish then {
+                                    lockCallArg st: st name: bn.stringview callId: call.nodeid.u64
+                                    if lockRoot.length == 0.u64 then {
+                                        lockRoot = bn.copy
+                                    } else {
+                                    }
+                                } else {
+                                }
+                            }
+                        } case none then {
+                        }
+                    } else {
+                    }
                 } else {
-                    # A construction takes ownership of its reftype field args:
-                    # the hoisted temp invalidates inside the call scope.
+                    # A construction or take parameter consumes the hoisted
+                    # temp inside the call scope; a lock/borrow parameter
+                    # locks it there.
                     consumes: false
                     if isCtor when (typeIsReftype st: st tid: vt) then {
                         consumes = true
                     } else {
                     }
-                    hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
+                    if isTake then {
+                        consumes = true
+                    } else {
+                    }
+                    tnm: hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
+                    if isLockish when (typeIsReftype st: st tid: vt) then {
+                        lockCallArg st: st name: tnm.stringview callId: call.nodeid.u64
+                    } else {
+                    }
                 }
             } else {
             }
+            argIdx = argIdx + 1.u64
         } else {
         }
     }
+    return lockRoot
 }
 
 # callableDottedResult -- a dotted callable resolves through the dotted-path
@@ -4616,7 +4757,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            walkCallArgsHoist st: st unitName: unitName call: call funcId: funcId isCtor: isCtor
+            lockRoot: walkCallArgsHoist st: st unitName: unitName call: call funcId: funcId isCtor: isCtor
             st.popTo marker: cm
             if isCtor then {
                 # a type in callable position constructs: the call's value is
@@ -4637,6 +4778,20 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallD
                         setr: result
                         st.typing.nodeType.set key: call.nodeid.u64 value: setr
                     } case none then {
+                    }
+                } case none then {
+                }
+                # A `.borrow`-marked return borrows from the lock parameter's
+                # argument: report the source for the binding site.
+                fb2: st.typing.funcReturnsBorrow.get key: funcId
+                match (
+                    fb2
+                ) case some then {
+                    if fb2 when lockRoot.length > 0.u64 then {
+                        drainPendingBorrow st: st
+                        lrc: lockRoot.copy
+                        st.typing.pendingBorrowPath.append lrc
+                    } else {
                     }
                 } case none then {
                 }
