@@ -113,6 +113,12 @@ resolveAtomType: function {reg: ztypes.ZTypeRegistry nm: StringView thisName: St
     return (reg.newType name: nm typetype: ztypes.ztypetype.RECORD)
 }
 
+# literalIntId -- pseudo-type id worn by bare numeric literals during the body
+# walk. Never registered, so symbol-table and node rows carrying it drop out of
+# the dump projections' types join; foldLiteralStamps rewrites surviving node
+# stamps to i64 before the dump.
+literalIntId: 0x7FFFFFFFFFFFFFFF.u64
+
 # isNumericLiteralName -- true when a name begins with a digit: a numeric-literal
 # atom (an `as`-block static constant like `version: 1`), as opposed to a type-name
 # atom (a conformance marker). 48..57 are the ASCII digits.
@@ -2666,15 +2672,9 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView node: zast.Ato
         st.typing.nodeType.set key: node.nodeid.u64 value: setk
     } case none then {
         if (isNumericLiteralName name: node.name.stringview) then {
-            li: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "i64"
-            match (
-                li
-            ) case some then {
-                result = li
-                setl: result
-                st.typing.nodeType.set key: node.nodeid.u64 value: setl
-            } case none then {
-            }
+            result = literalIntId
+            setl: result
+            st.typing.nodeType.set key: node.nodeid.u64 value: setl
         } else {
         }
     }
@@ -2747,10 +2747,22 @@ lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
     return result
 }
 
-# checkAssignment -- a local binding `name: value`: walk the value, define the
-# local (owned for a plain value), and stamp the assignment node + def-variable.
+# checkAssignment -- a local binding `name: value`: walk the value, materialise a
+# literal-typed value to its concrete default (the binding takes i64, unlike a
+# for-loop binding which keeps the pseudo id), define the local (owned for a plain
+# value), and stamp the assignment node + def-variable.
 checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView asgn: zast.AssignmentData} is {
     vt: checkValue st: st unitName: unitName node: asgn.value
+    if vt == literalIntId then {
+        li: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "i64"
+        match (
+            li
+        ) case some then {
+            vt = li
+        } case none then {
+        }
+    } else {
+    }
     if vt > 0.u64 then {
         v: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.OWNED
         vid: v.variableId
@@ -2804,10 +2816,13 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView withnode: zast.W
     return dt
 }
 
-# checkDo -- walk a do-block: push the `block` scope, walk its statements, then
-# pop. The do resolves to its last statement's value type.
+# checkDo -- walk a do-block: push the `block` scope, define break (an entry
+# position placeholder with an unregistered type id, so it never joins the dump),
+# walk the statements, then pop. The do resolves to its last statement's value type.
 checkDo: function {st: zenv.ZSymbolTable unitName: StringView donode: zast.DoData} out u64 is {
     doMarker: st.pushBlock name: "block"
+    dbk: st.reg.allocType
+    st.define name: "break" ztypeId: dbk
     checkStatement st: st unitName: unitName block: donode.statement
     result: lastStmtType st: st block: donode.statement
     st.popTo marker: doMarker
@@ -2819,22 +2834,33 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView donode: zast.DoDat
     return result
 }
 
-# checkFor -- walk a for-loop: push the `for` scope, walk its conditions
-# (while-condition / binding value), body, and postconditions, then pop. The for
-# itself resolves to null (filtered) in statement position. break/continue defines
-# are skipped -- their synthesized types are unregistered, so they never dump.
+# checkFor -- walk a for-loop: push the `for` scope, define break/continue (entry
+# position placeholders with unregistered type ids, so they never join the dump),
+# then walk the conditions, postconditions, and body, and pop. A named condition
+# is a binding: define the loop var with the condition value's type (the value of
+# a bare literal init stays the literal pseudo-type, keeping the entry out of the
+# dump joins). Iterator-wrapper element extraction needs monomorphization and is
+# not implemented. The for itself resolves to null (filtered) in statement position.
 checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.ForData} is {
     forMarker: st.pushBlock name: "for"
+    bk: st.reg.allocType
+    st.define name: "break" ztypeId: bk
+    ct: st.reg.allocType
+    st.define name: "continue" ztypeId: ct
     citer: fornode.conditions.iterate
     for cond: citer loop {
         match (
             cond
         ) case namedoperation then {
-            checkValue st: st unitName: unitName node: cond.operation
+            vt: checkValue st: st unitName: unitName node: cond.operation
+            nm: unitLabel o: cond.name
+            if nm.length > 0.u64 when vt > 0.u64 then {
+                st.define name: nm.stringview ztypeId: vt
+            } else {
+            }
         } else {
         }
     }
-    walkBody st: st unitName: unitName bodyOpt: fornode.body
     piter: fornode.postconditions.iterate
     for pc: piter loop {
         match (
@@ -2844,6 +2870,7 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView fornode: zast.For
         } else {
         }
     }
+    walkBody st: st unitName: unitName bodyOpt: fornode.body
     st.popTo marker: forMarker
 }
 
@@ -3239,6 +3266,38 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
     }
 }
 
+# foldLiteralStamps -- replace literal pseudo-type node stamps with the concrete
+# default (i64) after the body walk. Symbol-table entries keep the pseudo id and
+# stay out of the dump joins.
+foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        li: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "i64"
+        match (
+            li
+        ) case some then {
+            ks: (List of: u64)
+            with it: st.typing.nodeType.iterateItems do for e: it loop {
+                if e.value == literalIntId then {
+                    k: e.key
+                    ks.append k
+                } else {
+                }
+            }
+            kiter: ks.iterate
+            for k2: kiter loop {
+                kc: k2
+                setv: li
+                st.typing.nodeType.set key: kc value: setv
+            }
+        } case none then {
+        }
+    } else {
+    }
+}
+
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     # null is the reference's first registered type.
@@ -3254,6 +3313,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     st: zenv.newSymbolTable reg: reg typing: ty
     if full then {
         checkBodies st: st program: program
+        foldLiteralStamps st: st program: program
     } else {
     }
     return st

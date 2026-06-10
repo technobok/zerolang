@@ -42,6 +42,7 @@ _BUILD_SKIP = {
     "nlit",
     "interp",
     "swapctl",
+    "forbind",
 }
 _BUILD_EXAMPLES = sorted(
     name
