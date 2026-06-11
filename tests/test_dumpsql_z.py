@@ -530,6 +530,7 @@ CHECK_SMOKE = [
     "unions",
     "defaults",
     "string_join",
+    "lists",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -601,6 +602,7 @@ TYPED_NODES_CHECK = [
     "unions",
     "defaults",
     "string_join",
+    "lists",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
@@ -654,7 +656,7 @@ _CHECK_PROJECTIONS = {
         "JOIN ast_nodes an ON tn.node_id = an.node_id "
         "JOIN types t ON tn.type_id = t.type_id "
         "WHERE t.generic_origin_id IS NOT NULL "
-        "ORDER BY an.name, an.start_line, an.start_col, t.name"
+        "ORDER BY an.kind, an.name, an.start_line, an.start_col, t.name"
     ),
 }
 

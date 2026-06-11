@@ -80,7 +80,7 @@ _CHECK_PROJECTIONS = {
         "JOIN ast_nodes an ON tn.node_id = an.node_id "
         "JOIN types t ON tn.type_id = t.type_id "
         "WHERE t.generic_origin_id IS NOT NULL "
-        "ORDER BY an.name, an.start_line, an.start_col, t.name"
+        "ORDER BY an.kind, an.name, an.start_line, an.start_col, t.name"
     ),
 }
 

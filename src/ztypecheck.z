@@ -3847,19 +3847,34 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         u64id = uo
     } case none then {
     }
+    boolid: 0.u64
+    bo9: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "bool"
+    match (
+        bo9
+    ) case some then {
+        boolid = bo9
+    } case none then {
+    }
     en: typeNameOf st: st tid: elemArg
     if templateName == "List" then {
         st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
         st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64id
         apId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "append"
         mintTakeParam st: st methodId: apId pname: "from" elemArg: elemArg
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "insert"
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extend"
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "pop"
+        inId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "insert"
+        mintTakeParam st: st methodId: inId pname: "item" elemArg: elemArg
+        exId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extend"
+        mintTakeParam st: st methodId: exId pname: "from" elemArg: elemArg
+        gtId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        st.reg.setReturnType typeId: gtId value: elemArg
+        stId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
+        mintTakeParam st: st methodId: stId pname: "item" elemArg: elemArg
+        st.reg.setReturnType typeId: stId value: elemArg
+        ppId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "pop"
+        st.reg.setReturnType typeId: ppId value: elemArg
         if (isContainsEligible name: en.stringview) then {
-            mintCollectionMethod st: st monoName: monoName monoId: monoId m: "contains"
+            cnId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "contains"
+            st.reg.setReturnType typeId: cnId value: boolid
         } else {
         }
         if (isSortEligible name: en.stringview) then {
@@ -5845,6 +5860,32 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
         # and resolves to its return type; a generic callee (e.g. print) infers
         # a clone; an unresolvable callable just has its args walked (its
         # callable/result/mono are out of the own+system+collections filter).
+        # A parenthesized construction in callable position re-applies its
+        # init arguments: the value is the constructed type.
+        isWrapCall: false
+        match (
+            call.callable
+        ) case expression then {
+            isWrapCall = true
+        } else {}
+        if isWrapCall then {
+            wcv: checkValue st: st unitName: unitName unitBody: unitBody node: call.callable
+            if wcv > 0.u64 then {
+                witer: call.arguments.iterate
+                for warg: witer loop {
+                    match (
+                        warg
+                    ) case namedoperation then {
+                        checkValue st: st unitName: unitName unitBody: unitBody node: warg.operation
+                    } else {}
+                }
+                setwc: wcv
+                st.typing.nodeType.set key: call.nodeid.u64 value: setwc
+                return wcv
+            } else {
+            }
+        } else {
+        }
         mcb: metaCreateBaseId n: call.callable
         mcid: 0.u32
         match (
