@@ -506,30 +506,32 @@ baseTypeName: function {n: Node} out String is {
 # type `(T arg: N)` (an expression wrapping a call) mangles to a `T_N` shell.
 # Source-type rows never include these shells (they fall outside `defined_in_unit`),
 # but a `type_children` row joins to the shell's name. Returns the shell's type id.
-recordNodeName: function {ty: ztyping.ZTyping name: StringView nid: u64} is {
+recordNodeName: function {ty: ztyping.ZTyping unitName: StringView name: StringView nid: u64} is {
     if name.length == 0.u64 then {} else {
         kc: nid
         ty.pendingTyperef.set key: kc value: name.string
+        kc2: nid
+        ty.pendingTyperefUnit.set key: kc2 value: unitName.string
     }
 }
 
 # recordResolvedName -- record (nid -> name) for post-demand resolution; the `this` and
 # `type` self-keywords record as the enclosing type (thisName).
-recordResolvedName: function {ty: ztyping.ZTyping thisName: StringView name: StringView nid: u64} is {
+recordResolvedName: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView name: StringView nid: u64} is {
     if name == "this" then {
-        recordNodeName ty: ty name: thisName nid: nid
+        recordNodeName ty: ty unitName: unitName name: thisName nid: nid
     } else {
         if name == "type" then {
-            recordNodeName ty: ty name: thisName nid: nid
+            recordNodeName ty: ty unitName: unitName name: thisName nid: nid
         } else {
             if (isNumericLiteralName name: name) then {
                 if (name.contains ".") then {
-                    recordNodeName ty: ty name: "f64" nid: nid
+                    recordNodeName ty: ty unitName: unitName name: "f64" nid: nid
                 } else {
-                    recordNodeName ty: ty name: "i64" nid: nid
+                    recordNodeName ty: ty unitName: unitName name: "i64" nid: nid
                 }
             } else {
-                recordNodeName ty: ty name: name nid: nid
+                recordNodeName ty: ty unitName: unitName name: name nid: nid
             }
         }
     }
@@ -599,12 +601,12 @@ recordPendingMono: function {ty: ztyping.ZTyping thisName: StringView op: Node n
 # type may be unresolved here (system / forward refs), so the base name is resolved to its
 # real type later by stampTyperefs. Recurses parameterized args and strip-marker dotted
 # paths; `this`/`type` record as the enclosing type (thisName).
-recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is {
+recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView node: Node} is {
     match (
         node
     ) case expression then {
         recordPendingMono ty: ty thisName: thisName op: node.expression nid: node.nodeid
-        recordTyperef ty: ty thisName: thisName node: node.expression
+        recordTyperef ty: ty unitName: unitName thisName: thisName node: node.expression
     } case call then {
         # Parameterized type `(T arg: U ...)`: the outer node resolves to a NULL-defined
         # mono (filtered out); record each argument's inner TYPE-ref (e.g. the `u32` in
@@ -619,7 +621,7 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
             ) case namedoperation then {
                 an: atomName n: arg.operation
                 if (isNumericLiteralName name: an.stringview) then {} else {
-                    recordTyperef ty: ty thisName: thisName node: arg.operation
+                    recordTyperef ty: ty unitName: unitName thisName: thisName node: arg.operation
                 }
             } else {}
         }
@@ -632,25 +634,25 @@ recordTyperef: function {ty: ztyping.ZTyping thisName: StringView node: Node} is
         cn: atomName n: node.child
         if (isStripMarker name: cn.stringview) then {
             bn: baseTypeName n: node.parent
-            recordResolvedName ty: ty thisName: thisName name: bn.stringview nid: node.nodeid.u64
+            recordResolvedName ty: ty unitName: unitName thisName: thisName name: bn.stringview nid: node.nodeid.u64
             # Ownership markers peel and stamp the inner ref; `.private` /
             # `.public` resolve the pair atomically (no base-atom stamp).
             if cn.stringview == "private" then {
             } else {
                 if cn.stringview == "public" then {
                 } else {
-                    recordTyperef ty: ty thisName: thisName node: node.parent
+                    recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
                 }
             }
         } else {
             if cn.stringview == "typedef" then {
-                recordTyperef ty: ty thisName: thisName node: node.parent
+                recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
             } else {}
         }
     } case atomid then {
-        recordResolvedName ty: ty thisName: thisName name: node.name.stringview nid: node.nodeid.u64
+        recordResolvedName ty: ty unitName: unitName thisName: thisName name: node.name.stringview nid: node.nodeid.u64
     } case labelvalue then {
-        recordResolvedName ty: ty thisName: thisName name: node.name.stringview nid: node.nodeid.u64
+        recordResolvedName ty: ty unitName: unitName thisName: thisName name: node.name.stringview nid: node.nodeid.u64
     } else {}
 }
 
@@ -692,11 +694,11 @@ recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 o: (Option t: Node)
 # recordReturnType -- record a function's `out T` return type-ref (mirrors
 # demandReturnType's extraction). A parameterized return (out (Result ...)) yields no
 # bare base name and is skipped (its mono is NULL-defined, filtered out anyway).
-recordReturnType: function {ty: ztyping.ZTyping thisName: StringView o: (Option t: Node)} is {
+recordReturnType: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView o: (Option t: Node)} is {
     match (
         o
     ) case some then {
-        recordTyperef ty: ty thisName: thisName node: o
+        recordTyperef ty: ty unitName: unitName thisName: thisName node: o
     } case none then {}
 }
 
@@ -951,7 +953,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                     reg.setThisParamName typeId: fid name: pname.stringview
                 } else {
                 }
-                recordTyperef ty: ty thisName: thisName node: pm.operation
+                recordTyperef ty: ty unitName: unitName thisName: thisName node: pm.operation
                 pown: pathOwnership n: pm.operation
                 match (
                     pown
@@ -967,7 +969,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
         } else {}
     }
     demandReturnType reg: reg o: fnode.returntype
-    recordReturnType ty: ty thisName: thisName o: fnode.returntype
+    recordReturnType ty: ty unitName: unitName thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
     stampGenericParamRef ty: ty reg: reg unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
     if (returnHasBorrowMarker o: fnode.returntype) then {
@@ -1237,7 +1239,7 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
         ) case namedoperation then {
             cnm: atomName n: mm.operation
             if (isNumericLiteralName name: cnm.stringview) then {} else {
-                recordTyperef ty: ty thisName: "" node: mm.operation
+                recordTyperef ty: ty unitName: unitName thisName: "" node: mm.operation
             }
             mtid: markerTargetId ty: ty reg: reg unitName: unitName op: mm.operation
             match (
@@ -1423,7 +1425,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 } case none then {
                     cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
-                    recordTyperef ty: ty thisName: "" node: fm.operation
+                    recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                 }
             } else {}
         }
@@ -1481,7 +1483,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             aname: unitLabel o: fm.name
             cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
-            recordTyperef ty: ty thisName: "" node: fm.operation
+            recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if isgen then {} else {
@@ -1594,7 +1596,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             }
             cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
-            recordTyperef ty: ty thisName: "" node: fm.operation
+            recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if isgen then {} else {
@@ -1723,7 +1725,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                     if (isTypedefField n: fm.operation) then {
                         # No field child for the wrapper, but the inner refs
                         # (the u8 in `(List of: u8).typedef`) still stamp.
-                        recordTyperef ty: ty thisName: "" node: fm.operation
+                        recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     } else {
                         if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
                             needsDtor = true
@@ -1733,7 +1735,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         if lockField then {
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
                         } else {}
-                        recordTyperef ty: ty thisName: "" node: fm.operation
+                        recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     }
                 }
             }
@@ -2110,6 +2112,9 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             ) case namedoperation then {
                 dn: unitLabel o: bm.name
                 if (reg.isDemanded name: dn.stringview) then {
+                    # A name the main unit defines shadows this unit's def --
+                    # unless the unit's own internals demand it (seeded io
+                    # names): the reference resolves those io-locally.
                     shadowed: false
                     if shadowUnit.length == 0.u64 then {} else {
                         skey: "\{shadowUnit}.\{dn}".string
@@ -2120,6 +2125,9 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
                             shadowed = true
                         } case none then {}
                     }
+                    if shadowed when (reg.isSeededDemand un: unitName name: dn.stringview) then {
+                        shadowed = false
+                    } else {}
                     if shadowed then {} else {
                         anyDemanded = true
                         rkey: "\{unitName}.\{dn}".string
@@ -2260,11 +2268,17 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
 # while resolving the protocols would arrive after the pass already walked them.
 seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "Reader"
+    reg.recordSeededDemand un: "io" name: "Reader"
     reg.recordDemand name: "Writer"
+    reg.recordSeededDemand un: "io" name: "Writer"
     reg.recordDemand name: "Seeker"
+    reg.recordSeededDemand un: "io" name: "Seeker"
     reg.recordDemand name: "Closer"
+    reg.recordSeededDemand un: "io" name: "Closer"
     reg.recordDemand name: "IoError"
+    reg.recordSeededDemand un: "io" name: "IoError"
     reg.recordDemand name: "seekorigin"
+    reg.recordSeededDemand un: "io" name: "seekorigin"
 }
 
 # bodyEndsInReturn -- true when an optional body block's last statement is a
@@ -3320,7 +3334,17 @@ stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
     ) case program then {
         mainName: program.mainUnitName.stringview
         with it: ty.pendingTyperef.iterateItems do for e: it loop {
-            r: lookupTyperef resolved: ty.resolved mainName: mainName base: e.value.stringview
+            uk: e.key
+            uo: ty.pendingTyperefUnit.get key: uk
+            origin: mainName
+            match (
+                uo
+            ) case some then {
+                if uo.length > 0.u64 then {
+                    origin = uo.stringview
+                } else {}
+            } case none then {}
+            r: lookupTyperef resolved: ty.resolved mainName: origin base: e.value.stringview
             match (
                 r
             ) case some then {
@@ -3985,6 +4009,22 @@ createDottedBaseId: function {n: Node} out (optionval t: u32) is {
     return (optionval.none u32)
 }
 
+# rootNameOf -- a value path's root atom name (unwrapping expressions and
+# dotted segments), or "".
+rootNameOf: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.string
+    } case expression then {
+        return (rootNameOf n: n.expression)
+    } case dottedpath then {
+        return (rootNameOf n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
 # dottedChildName -- a dotted path's child atom name, or "".
 dottedChildName: function {n: Node} out String is {
     match (
@@ -4073,30 +4113,37 @@ checkProjectionCreate: function {st: zenv.ZSymbolTable unitName: StringView unit
                     found = true
                     pvt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
                     if pvt > 0.u64 then {
-                        if (argIsTrivial op: arg.operation) then {
-                            pbn: bareAtomName n: arg.operation
-                            if pbn.length > 0.u64 then {
-                                pbv: st.lookupVarId name: pbn.stringview
+                        if borrows then {
+                            # The from-path's root is the borrow origin (a
+                            # bare name or a `.lock`/`.borrow` projection) --
+                            # the projection borrows, it never hoists.
+                            pbr: rootNameOf n: arg.operation
+                            if pbr.length > 0.u64 then {
+                                pbv2: st.lookupVarId name: pbr.stringview
                                 match (
-                                    pbv
+                                    pbv2
                                 ) case some then {
-                                    if consumes then {
-                                        st.invalidate name: pbn.stringview loc: (optionval.none ztypes.zsrcpos)
-                                    } else {}
-                                    if borrows then {
-                                        drainPendingBorrow st: st
-                                        pbc: pbn.copy
-                                        st.typing.pendingBorrowPath.append pbc
-                                    } else {}
+                                    drainPendingBorrow st: st
+                                    pbc2: pbr.copy
+                                    st.typing.pendingBorrowPath.append pbc2
                                 } case none then {}
                             } else {}
                         } else {
-                            tnm3: hoistArg st: st argNode: arg.operation argType: pvt paramType: 0.u64 consumes: consumes
-                            if borrows then {
-                                drainPendingBorrow st: st
-                                tnc3: tnm3.copy
-                                st.typing.pendingBorrowPath.append tnc3
-                            } else {}
+                            if (argIsTrivial op: arg.operation) then {
+                                pbn: bareAtomName n: arg.operation
+                                if pbn.length > 0.u64 then {
+                                    pbv: st.lookupVarId name: pbn.stringview
+                                    match (
+                                        pbv
+                                    ) case some then {
+                                        if consumes then {
+                                            st.invalidate name: pbn.stringview loc: (optionval.none ztypes.zsrcpos)
+                                        } else {}
+                                    } case none then {}
+                                } else {}
+                            } else {
+                                tnm3: hoistArg st: st argNode: arg.operation argType: pvt paramType: 0.u64 consumes: consumes
+                            }
                         }
                     } else {}
                 } else {}
@@ -4285,6 +4332,40 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         setpb: bt
         st.typing.nodeType.set key: dp.nodeid.u64 value: setpb
         return bt
+    } else {
+    }
+    if cn.stringview == "lock" then {
+        setlk: bt
+        st.typing.nodeType.set key: dp.nodeid.u64 value: setlk
+        return bt
+    } else {
+    }
+    if cn.stringview == "borrow" then {
+        # Protocol/facet `.borrow` and a typedef wrapper's FUNCTION borrow
+        # child are projection callables, not ownership markers.
+        btt1: st.reg.typetypeOf typeId: bt
+        isMk: true
+        if btt1 == ztypes.ztypetype.PROTOCOL then {
+            isMk = false
+        } else {}
+        if btt1 == ztypes.ztypetype.FACET then {
+            isMk = false
+        } else {}
+        if isMk then {
+            bco: st.typing.childOf parentTypeId: bt name: "borrow"
+            bcid: optU64Or o: bco d: 0.u64
+            if bcid > 0.u64 then {
+                if (st.reg.typetypeOf typeId: bcid) == ztypes.ztypetype.FUNCTION then {
+                    isMk = false
+                } else {}
+            } else {}
+        } else {}
+        if isMk then {
+            setbw: bt
+            st.typing.nodeType.set key: dp.nodeid.u64 value: setbw
+            return bt
+        } else {
+        }
     } else {
     }
     # `.take` / `.release`: ownership transfer markers, not members. The path
