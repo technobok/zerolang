@@ -217,6 +217,126 @@ isLabelValue: function {op: Node} out bool is {
     }
 }
 
+# nodeMentionsName -- whether a subtree references a bare name (atom reads,
+# call callables, dotted bases). Drives the conformer-context gate: the
+# reference's lazy resolution only reaches a conformer the main body names.
+nodeMentionsName: function {n: Node name: StringView} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.stringview == name
+    } case expression then {
+        return (nodeMentionsName n: n.expression name: name)
+    } case dottedpath then {
+        return (nodeMentionsName n: n.parent name: name)
+    } case call then {
+        if (nodeMentionsName n: n.callable name: name) then {
+            return true
+        } else {}
+        aiter: n.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                if (nodeMentionsName n: arg.operation name: name) then {
+                    return true
+                } else {}
+            } else {}
+        }
+        return false
+    } case binop then {
+        if (nodeMentionsName n: n.lhs name: name) then {
+            return true
+        } else {}
+        return (nodeMentionsName n: n.rhs name: name)
+    } case statement then {
+        siter: n.statements.iterate
+        for sm: siter loop {
+            if (nodeMentionsName n: sm name: name) then {
+                return true
+            } else {}
+        }
+        return false
+    } case statementline then {
+        return (nodeMentionsName n: n.statementline name: name)
+    } case assignment then {
+        return (nodeMentionsName n: n.value name: name)
+    } case reassignment then {
+        return (nodeMentionsName n: n.value name: name)
+    } case caseexpr then {
+        if (nodeMentionsName n: n.subject name: name) then {
+            return true
+        } else {}
+        citer: n.clauses.iterate
+        for cm: citer loop {
+            if (nodeMentionsName n: cm name: name) then {
+                return true
+            } else {}
+        }
+        return false
+    } case caseclause then {
+        return (nodeMentionsName n: n.statement name: name)
+    } case ifexpr then {
+        citer2: n.clauses.iterate
+        for cm2: citer2 loop {
+            if (nodeMentionsName n: cm2 name: name) then {
+                return true
+            } else {}
+        }
+        return false
+    } case forexpr then {
+        return (nodeMentionsNameOpt o: n.body name: name)
+    } case withexpr then {
+        if (nodeMentionsName n: n.value name: name) then {
+            return true
+        } else {}
+        return (nodeMentionsName n: n.body name: name)
+    } case doexpr then {
+        return (nodeMentionsName n: n.statement name: name)
+    } else {
+        return false
+    }
+}
+
+# nodeMentionsNameOpt -- nodeMentionsName over an optional subtree.
+nodeMentionsNameOpt: function {o: (Option t: Node) name: StringView} out bool is {
+    match (
+        o
+    ) case some then {
+        return (nodeMentionsName n: o name: name)
+    } case none then {
+        return false
+    }
+}
+
+# fnBodyMentions -- nodeMentionsName over a function definition's body.
+fnBodyMentions: function {op: Node name: StringView} out bool is {
+    match (
+        op
+    ) case functiondef then {
+        return (nodeMentionsNameOpt o: op.body name: name)
+    } else {
+        return false
+    }
+}
+
+# mainBodyMentions -- whether the unit's `main` function body references a name.
+mainBodyMentions: function {unitBody: (List of: Node) name: StringView} out bool is {
+    {
+        with miter: unitBody.iterate do for mm: miter loop {
+            match (
+                mm
+            ) case namedoperation then {
+                mn: unitLabel o: mm.name
+                if mn.stringview == "main" then {
+                    return (fnBodyMentions op: mm.operation name: name)
+                } else {}
+            } else {}
+        }
+    }
+    return false
+}
+
 # recordConformerContexts -- pre-record each as-block marker target's first
 # conforming type (body order) so a demand-resolved protocol binds its spec
 # receiver to the conformer (the reference resolves the protocol inside the
@@ -1669,14 +1789,16 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     } else {}
     specThisStr: defName.string
     dropThis: true
-    fdk: defName.string
-    fcto: ty.protocolThisContext.get key: fdk
-    match (
-        fcto
-    ) case some then {
-        specThisStr = fcto.take
-        dropThis = false
-    } case none then {}
+    if unitName == ty.fullMainUnit.stringview then {
+        fdk: defName.string
+        fcto: ty.protocolThisContext.get key: fdk
+        match (
+            fcto
+        ) case some then {
+            specThisStr = fcto.take
+            dropThis = false
+        } case none then {}
+    } else {}
     siter: fnode.isItems.iterate
     for sm: siter loop {
         match (
@@ -1729,7 +1851,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             dropThis = false
         } else {}
     } else {}
-    if dropThis then {
+    if dropThis when unitName == ty.fullMainUnit.stringview then {
         dk: defName.string
         cto: ty.protocolThisContext.get key: dk
         match (
@@ -1880,13 +2002,39 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             }
         } else {}
         if full then {
+            # The reference binds a spec receiver only when the conformer's
+            # resolution triggers the protocol's; a main body that never
+            # names the conformer resolves the protocol context-free (e.g.
+            # through a function signature). Collect member names first --
+            # the body list cannot be passed while its iterator is live.
+            fmu: unitName.string
+            ty.fullMainUnit = fmu
+            ccNames: (List of: String)
             with cmiter: unitdef.body.iterate do for cmm: cmiter loop {
+                ccn0: "".string
                 match (
                     cmm
                 ) case namedoperation then {
-                    cdn: unitLabel o: cmm.name
-                    recordConformerContexts ty: ty defName: cdn.stringview op: cmm.operation
+                    ccn1: unitLabel o: cmm.name
+                    ccn0 = ccn1
                 } else {}
+                ccNames.append ccn0
+            }
+            cci: 0.u64
+            ccTotal: ccNames.length
+            for while cci < ccTotal loop {
+                cnm2: ccNames.get i: cci
+                if cnm2.length > 0.u64 then {
+                    if (mainBodyMentions unitBody: unitdef.body name: cnm2.stringview) then {
+                        mem2: unitdef.body.get i: cci
+                        match (
+                            mem2
+                        ) case namedoperation then {
+                            recordConformerContexts ty: ty defName: cnm2.stringview op: mem2.operation
+                        } else {}
+                    } else {}
+                } else {}
+                cci = cci + 1.u64
             }
         } else {}
         biter: unitdef.body.iterate
@@ -3904,7 +4052,7 @@ borrowDottedBaseId: function {n: Node} out (optionval t: u32) is {
 # facet or protocol: a projection, not a call. No CALL scope; the from-argument
 # walks in the current scope (a facet copies its source -- nothing is consumed);
 # the value is the facet/protocol type.
-checkProjectionCreate: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData pjId: u64} out u64 is {
+checkProjectionCreate: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData pjId: u64 consumes: bool borrows: bool} out u64 is {
     found: false
     aiter: call.arguments.iterate
     for arg: aiter loop {
@@ -3923,7 +4071,34 @@ checkProjectionCreate: function {st: zenv.ZSymbolTable unitName: StringView unit
                 }
                 if isFrom then {
                     found = true
-                    checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                    pvt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                    if pvt > 0.u64 then {
+                        if (argIsTrivial op: arg.operation) then {
+                            pbn: bareAtomName n: arg.operation
+                            if pbn.length > 0.u64 then {
+                                pbv: st.lookupVarId name: pbn.stringview
+                                match (
+                                    pbv
+                                ) case some then {
+                                    if consumes then {
+                                        st.invalidate name: pbn.stringview loc: (optionval.none ztypes.zsrcpos)
+                                    } else {}
+                                    if borrows then {
+                                        drainPendingBorrow st: st
+                                        pbc: pbn.copy
+                                        st.typing.pendingBorrowPath.append pbc
+                                    } else {}
+                                } case none then {}
+                            } else {}
+                        } else {
+                            tnm3: hoistArg st: st argNode: arg.operation argType: pvt paramType: 0.u64 consumes: consumes
+                            if borrows then {
+                                drainPendingBorrow st: st
+                                tnc3: tnm3.copy
+                                st.typing.pendingBorrowPath.append tnc3
+                            } else {}
+                        }
+                    } else {}
                 } else {}
             }
         } else {}
@@ -4199,6 +4374,23 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         rm: resolveChildPayload st: st unitName: unitName cid: mo
         result: 0.u64
         result = rm
+        # Reading a protocol-typed conformance member projects a borrow of
+        # the receiver: the consuming binding becomes BORROWED with the base
+        # as its origin (and installs the borrow locks).
+        rmtt: st.reg.typetypeOf typeId: rm
+        if rmtt == ztypes.ztypetype.PROTOCOL then {
+            pjroot: bareAtomName n: dp.parent
+            if pjroot.length > 0.u64 then {
+                pjvo: st.lookupVarId name: pjroot.stringview
+                match (
+                    pjvo
+                ) case some then {
+                    drainPendingBorrow st: st
+                    pjc: pjroot.copy
+                    st.typing.pendingBorrowPath.append pjc
+                } case none then {}
+            } else {}
+        } else {}
         if coerce when (methodHasNoUserArgs st: st mid: mo) then {
             ro: methodReturnOf st: st mid: mo
             match (
@@ -5026,10 +5218,27 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
     }
     setm: atomT
     st.typing.nodeType.set key: atomId.u64 value: setm
-    v: st.reg.newVariable ztypeId: argType ownership: ztypes.zownership.OWNED
+    hbsrc: (List of: String)
+    takePendingBorrow st: st dst: hbsrc
+    hown: ztypes.zownership.OWNED
+    if hbsrc.length > 0.u64 when (typeIsReftype st: st tid: argType) then {
+        hown = ztypes.zownership.BORROWED
+    } else {
+    }
+    v: st.reg.newVariable ztypeId: argType ownership: hown
     v.synthOrigin = (Option.some "anf".string)
+    if hown == ztypes.zownership.BORROWED then {
+        hr0: hbsrc.get i: 0.u64
+        hbo: hr0.copy
+        v.borrowOrigin = (Option.some hbo)
+    } else {
+    }
     vid: v.variableId
     st.defineVar name: tname.stringview var: v
+    if hown == ztypes.zownership.BORROWED then {
+        installBorrowLocks st: st src: hbsrc vid: vid
+    } else {
+    }
     st.typing.defVariableId.set key: assignId.u64 value: vid
     if consumes then {
         st.invalidate name: tname.stringview loc: (optionval.none ztypes.zsrcpos)
@@ -5165,10 +5374,18 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                         consumes = true
                     } else {
                     }
-                    tnm: hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
-                    if isLockish when (typeIsReftype st: st tid: vt) then {
-                        lockCallArg st: st name: tnm.stringview callId: call.nodeid.u64
+                    hadPending: false
+                    if st.typing.pendingBorrowPath.length > 0.u64 then {
+                        hadPending = true
                     } else {
+                    }
+                    tnm: hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
+                    if hadPending then {
+                    } else {
+                        if isLockish when (typeIsReftype st: st tid: vt) then {
+                            lockCallArg st: st name: tnm.stringview callId: call.nodeid.u64
+                        } else {
+                        }
                     }
                 }
             } else {
@@ -5320,7 +5537,18 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                             isProj = true
                         } else {}
                         if isProj then {
-                            return (checkProjectionCreate st: st unitName: unitName unitBody: unitBody call: call pjId: tdo)
+                            pjTake: false
+                            pjBorrow: false
+                            if pjtt == ztypes.ztypetype.PROTOCOL then {
+                                pjcn: dottedChildName n: call.callable
+                                if pjcn.stringview == "create" then {
+                                    pjTake = true
+                                } else {}
+                                if pjcn.stringview == "borrow" then {
+                                    pjBorrow = true
+                                } else {}
+                            } else {}
+                            return (checkProjectionCreate st: st unitName: unitName unitBody: unitBody call: call pjId: tdo consumes: pjTake borrows: pjBorrow)
                         } else {}
                     } else {}
                     mcm: st.pushCall
