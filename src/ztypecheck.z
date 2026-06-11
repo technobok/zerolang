@@ -555,8 +555,8 @@ monoArgName: function {an: StringView thisName: StringView} out String is {
 # recordPendingMono -- record a pending generic instantiation for a call-shaped
 # parameterized type-ref, keyed to the EXPRESSION wrapper node `nid` (the
 # reference stamps the wrapper with the instance type). Args must be bare atoms
-# (`this` / `type` map to the enclosing type); numeric size args or an empty
-# callable skip the record.
+# (`this` / `type` map to the enclosing type) or numeric size literals; an
+# empty callable skips the record.
 recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView op: Node nid: u32} is {
     match (
         op
@@ -572,7 +572,12 @@ recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: 
             ) case namedoperation then {
                 an: atomName n: arg.operation
                 if (isNumericLiteralName name: an.stringview) then {
-                    allAtoms = false
+                    # A numeric size arg joins as the literal text; the
+                    # resolver folds it into the mono suffix (str_16).
+                    nv: an.copy
+                    margs.append nv
+                    pn2: unitLabel o: arg.name
+                    margNames.append pn2
                 } else {
                     if an.length == 0.u64 then {
                         allAtoms = false
@@ -3678,6 +3683,11 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     setk: name.string
     setv: mid
     st.typing.monoByName.set key: setk value: setv
+    # Register under <unit>.<mangled> so name lookups (field/arm shells named
+    # by the mangled form) resolve to the instance once minted.
+    rk9: "\{mainName}.\{name}".string
+    rv9: mid
+    st.typing.resolved.set key: rk9 value: rv9
     cNames: (List of: String)
     cIds: (List of: u64)
     with citer: st.typing.typeChild.iterate do for tc: citer loop {
@@ -3900,13 +3910,28 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     }
     if templateName == "MapEntry" then { isColl = true } else {
     }
+    if templateName == "str" then { isColl = true } else {
+    }
+    if templateName == "array" then { isColl = true } else {
+    }
     if isColl then {
     } else {
         return
     }
-    if (st.typing.childCount parentTypeId: monoId) > 0.u64 then {
-        return
+    isSized: false
+    if templateName == "str" then { isSized = true } else {
+    }
+    if templateName == "array" then { isSized = true } else {
+    }
+    # str/array templates copy their children at mint time; the branch below
+    # REPLACES members in place (setChild keeps positions), so the dedup
+    # guard applies only to the from-scratch families.
+    if isSized then {
     } else {
+        if (st.typing.childCount parentTypeId: monoId) > 0.u64 then {
+            return
+        } else {
+        }
     }
     u64id: 0.u64
     uo: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "u64"
@@ -4046,6 +4071,47 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
     } else {
     }
+    if templateName == "array" then {
+        agId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        st.reg.setReturnType typeId: agId value: elemArg
+        asId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
+        st.reg.setReturnType typeId: asId value: elemArg
+        alen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: alen value: true
+        st.typing.markAsConstClone typeId: alen
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: alen
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+        st.typing.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
+        aeqId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "=="
+        st.reg.setReturnType typeId: aeqId value: boolid
+        aneId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "!="
+        st.reg.setReturnType typeId: aneId value: boolid
+    } else {
+    }
+    if templateName == "str" then {
+        tlen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: tlen value: true
+        st.typing.markAsConstClone typeId: tlen
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: tlen
+        tsz: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: tsz value: true
+        st.typing.markAsConstClone typeId: tsz
+        st.typing.setChild parentTypeId: monoId childName: "size" childTypeId: tsz
+        tstId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "string"
+        sgo: lookupTyperef resolved: st.typing.resolved mainName: mainName base: "String"
+        sgid: optU64Or o: sgo d: 0.u64
+        if sgid > 0.u64 then {
+            st.reg.setReturnType typeId: tstId value: sgid
+        } else {
+        }
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+        st.typing.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
+        teqId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "=="
+        st.reg.setReturnType typeId: teqId value: boolid
+        tneId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "!="
+        st.reg.setReturnType typeId: tneId value: boolid
+    } else {
+    }
 }
 
 # mintChain -- mint one chain-family instance (`{tpl}{suffix}`) when the
@@ -4153,6 +4219,13 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
                 na: pm.args.length
                 for while j < na loop {
                     an: pm.args.get i: j
+                    if (isNumericLiteralName name: an.stringview) then {
+                        sfx.append s: "_"
+                        sfx.append s: an.stringview
+                        j = j + 1.u64
+                        continue
+                    } else {
+                    }
                     ao: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: an.stringview
                     match (
                         ao
@@ -4228,7 +4301,10 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
             arg
         ) case namedoperation then {
             an: paramTypeBaseName op: arg.operation
-            if (isNumericLiteralName name: an.stringview) then {} else {
+            if (isNumericLiteralName name: an.stringview) then {
+                nsfx2: "\{sfx}_\{an}"
+                sfx = nsfx2
+            } else {
                 ao: lookupTyperef resolved: st.typing.resolved mainName: unitName base: an.stringview
                 aid: optU64Or o: ao d: 0.u64
                 if aid > 0.u64 then {
@@ -4267,8 +4343,11 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
     vv2: optU64Or o: (subs.get key: vk2) d: 0.u64
     mintTemplateChains st: st mainName: unitName tname: tname.stringview suffix: sfx.stringview firstA: firstA valA: vv2
     mintCollectionChildren st: st mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: vv2
+    # Only a bare-atom callable restamps to the instance; a dotted callable
+    # (the .str conversion form) leaves the path unstamped like the reference.
+    gcb: bareAtomName n: call.callable
     gcal: nodeId n: call.callable
-    if gcal > 0.u32 then {
+    if gcal > 0.u32 when gcb.length > 0.u64 then {
         setga: mid
         st.typing.nodeType.set key: gcal.u64 value: setga
     } else {
@@ -4818,6 +4897,45 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         setlk: bt
         st.typing.nodeType.set key: dp.nodeid.u64 value: setlk
         return bt
+    } else {
+    }
+    # `.str` on String/StringView/str bases is the sized-conversion form:
+    # the path resolves to the str TEMPLATE (unstamped -- the call check
+    # mints the sized instance and stamps only the Call node).
+    if cn.stringview == "str" then {
+        bnm9: typeNameOf st: st tid: bt
+        isStrBase: false
+        if bnm9.stringview == "String" then { isStrBase = true } else {
+        }
+        if bnm9.stringview == "StringView" then { isStrBase = true } else {
+        }
+        if isStrBase then {} else {
+            bz9: st.reg.typeById.get key: bt
+            match (
+                bz9
+            ) case some then {
+                bgo9: bz9.genericOriginId
+                match (
+                    bgo9
+                ) case some then {
+                    gn9: typeNameOf st: st tid: bgo9
+                    if gn9.stringview == "str" then { isStrBase = true } else {
+                    }
+                } case none then {
+                }
+            } case none then {
+            }
+        }
+        if isStrBase then {
+            sto9: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "str"
+            match (
+                sto9
+            ) case some then {
+                return sto9
+            } case none then {
+            }
+        } else {
+        }
     } else {
     }
     if cn.stringview == "borrow" then {
@@ -6361,6 +6479,33 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                             return dtp
                         }
                     } else {
+                        # A generic non-FUNCTION dotted callee constructs its
+                        # instance in place: the .str conversion form resolves
+                        # the dotted path to the sized template, and the call
+                        # mints/stamps the instance (only the Call node).
+                        isGenD: false
+                        {
+                            gz2: st.reg.typeById.get key: dro
+                            match (
+                                gz2
+                            ) case some then {
+                                if gz2.isgeneric then {
+                                    if gz2.typetype == ztypes.ztypetype.FUNCTION then {} else {
+                                        isGenD = true
+                                    }
+                                } else {
+                                }
+                            } case none then {
+                            }
+                        }
+                        if isGenD then {
+                            gres2: genericTypeConstruction st: st unitName: unitName call: call tplId: dro
+                            if gres2 > 0.u64 then {
+                                return gres2
+                            } else {
+                            }
+                        } else {
+                        }
                     }
                 }
             }

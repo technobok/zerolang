@@ -534,6 +534,8 @@ CHECK_SMOKE = [
     "mapitems",
     "maps",
     "set_uniq",
+    "with_alias",
+    "str",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -609,6 +611,8 @@ TYPED_NODES_CHECK = [
     "mapitems",
     "maps",
     "set_uniq",
+    "with_alias",
+    "str",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
