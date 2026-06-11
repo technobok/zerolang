@@ -4518,6 +4518,9 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
             } else {
             }
         } else {
+            # A pending borrow from the value's call (a lock-param transfer
+            # or a borrow-marked return) makes the with-binding borrowed.
+            own = ztypes.zownership.BORROWED
         }
         v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
@@ -5438,6 +5441,59 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                             } case none then {}
                         }
                         if isGenT then {
+                            # Generic template: infer the mono (mirrors
+                            # _infer_generic_union_construction). A NULL-payload
+                            # arm with an argument names the type EXPLICITLY
+                            # (resolved as a type, never value-walked); a
+                            # param-payload arm infers from the value's type.
+                            armn: dottedChildName n: call.callable
+                            co: st.typing.childOf parentTypeId: dtp name: armn.stringview
+                            payId: optU64Or o: co d: 0.u64
+                            if payId > 0.u64 then {
+                                pn0: typeNameOf st: st tid: payId
+                                isNullPay: false
+                                if pn0.stringview == "null" then {
+                                    isNullPay = true
+                                } else {}
+                                subT: 0.u64
+                                fiter2: call.arguments.iterate
+                                argFound: false
+                                for farg: fiter2 loop {
+                                    match (
+                                        farg
+                                    ) case namedoperation then {
+                                        if argFound then {} else {
+                                            argFound = true
+                                            if isNullPay then {
+                                                etn: paramTypeBaseName op: farg.operation
+                                                subT = optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: etn.stringview) d: 0.u64
+                                            } else {
+                                                avt2: checkValue st: st unitName: unitName unitBody: unitBody node: farg.operation
+                                                mvt2: materialiseLiteral st: st unitName: unitName t: avt2
+                                                subT = mvt2
+                                            }
+                                        }
+                                    } else {}
+                                }
+                                if subT > 0.u64 then {
+                                    tn2: typeNameOf st: st tid: dtp
+                                    an2: typeNameOf st: st tid: subT
+                                    mname2: "\{tn2}_\{an2}"
+                                    subs2: (Map key: String value: u64)
+                                    if isNullPay then {} else {
+                                        pk2: pn0.copy
+                                        pv2: subT
+                                        subs2.set key: pk2 value: pv2
+                                    }
+                                    mintedT: mintMono st: st mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 fallbackArg: subT
+                                    if mintedT > 0.u64 then {
+                                        setgu: mintedT
+                                        st.typing.nodeType.set key: call.nodeid.u64 value: setgu
+                                        st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.UNION_CREATE
+                                        return mintedT
+                                    } else {}
+                                } else {}
+                            } else {}
                         } else {
                             aiter2: call.arguments.iterate
                             for arg2: aiter2 loop {
