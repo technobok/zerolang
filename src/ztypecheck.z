@@ -3804,6 +3804,59 @@ mintTakeParam: function {st: zenv.ZSymbolTable methodId: u64 pname: StringView e
     st.typing.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.TAKE
 }
 
+# mintBorrowParam -- a synthesized method's borrowed parameter: a child with
+# recorded BORROW ownership, so the call-site arg walk locks instead of
+# consuming.
+mintBorrowParam: function {st: zenv.ZSymbolTable methodId: u64 pname: StringView elemArg: u64} is {
+    pe: elemArg
+    st.typing.setChild parentTypeId: methodId childName: pname childTypeId: pe
+    st.typing.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.BORROW
+}
+
+# markReturnsBorrow -- carry the template's `.borrow` return marker onto a
+# synthesized method (the reference's _carry_native_method_metadata): the
+# auto-call borrow transfer keys on it.
+markReturnsBorrow: function {st: zenv.ZSymbolTable methodId: u64} is {
+    fbk: methodId
+    fbv: true
+    st.typing.funcReturnsBorrow.set key: fbk value: fbv
+}
+
+# mapGetWrapperName -- the Map.get return-wrapper template by value kind:
+# optionval for valtypes (copy-out), Option for String (deep-copied owned
+# value), OptionView for reftypes (borrowed view into the map).
+mapGetWrapperName: function {st: zenv.ZSymbolTable valArg: u64} out String is {
+    vn: typeNameOf st: st tid: valArg
+    if vn.stringview == "String" then {
+        return ("Option".string)
+    } else {
+    }
+    isVal: false
+    {
+        vt: st.reg.typeById.get key: valArg
+        match (
+            vt
+        ) case some then {
+            vvo: vt.isValtype
+            match (
+                vvo
+            ) case some then {
+                if vvo then {
+                    isVal = true
+                } else {
+                }
+            } case none then {
+            }
+        } case none then {
+        }
+    }
+    if isVal then {
+        return ("optionval".string)
+    } else {
+    }
+    return ("OptionView".string)
+}
+
 # linkMonoReturn -- point a synthesized method's return at an already-minted
 # instance (by mono name); no-op when the target is absent.
 linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: StringView} is {
@@ -3819,17 +3872,33 @@ linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: String
 
 # mintCollectionChildren -- the collection-class instance children, mirroring
 # the reference's programmatic synthesis (length/capacity as direct u64 value
-# children, then the method family in synthesis order; create only where the
-# template declares none; contains/sort gated on element eligibility). The
-# Set/Map/array/str tables land when an example needs them. No-op for other
-# templates or when the instance already has children (re-mint dedup).
-mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView monoName: StringView monoId: u64 templateName: StringView elemArg: u64} is {
-    isColl: false
+# children, then the method family in synthesis order; meta create appended
+# last for every collection class except List and Map, which have their own
+# create paths). The iterator family (ListIter/SetIter/MapKeyIter/MapItemIter)
+# shares one shape: .call returning the minted OptionView over the element,
+# then create. The array/str tables land when an example needs them. No-op
+# for other templates or when the instance already has children (re-mint
+# dedup).
+mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView monoName: StringView monoId: u64 templateName: StringView suffix: StringView elemArg: u64 valArg: u64} is {
+    isIter: false
+    if templateName == "ListIter" then { isIter = true } else {
+    }
+    if templateName == "SetIter" then { isIter = true } else {
+    }
+    if templateName == "MapKeyIter" then { isIter = true } else {
+    }
+    if templateName == "MapItemIter" then { isIter = true } else {
+    }
+    isColl: isIter
     if templateName == "List" then { isColl = true } else {
     }
-    if templateName == "ListIter" then { isColl = true } else {
-    }
     if templateName == "ListView" then { isColl = true } else {
+    }
+    if templateName == "Set" then { isColl = true } else {
+    }
+    if templateName == "Map" then { isColl = true } else {
+    }
+    if templateName == "MapEntry" then { isColl = true } else {
     }
     if isColl then {
     } else {
@@ -3881,14 +3950,16 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
             mintCollectionMethod st: st monoName: monoName monoId: monoId m: "sort"
         } else {
         }
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
+        lvId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
+        markReturnsBorrow st: st methodId: lvId
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extendView"
         itid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
+        markReturnsBorrow st: st methodId: itid
         itTarget: "ListIter_\{en}"
         linkMonoReturn st: st methodId: itid targetMono: itTarget.stringview
     } else {
     }
-    if templateName == "ListIter" then {
+    if isIter then {
         clid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "call"
         clTarget: "OptionView_\{en}"
         linkMonoReturn st: st methodId: clid targetMono: clTarget.stringview
@@ -3901,11 +3972,85 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
     } else {
     }
+    if templateName == "Set" then {
+        # length/capacity expose FRESH u64 clones (no defined-in unit), unlike
+        # List's global u64 -- the reference is asymmetric here and the clone
+        # stays invisible to unit-filtered projections.
+        slen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: slen value: true
+        st.typing.markAsConstClone typeId: slen
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: slen
+        scap: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: scap value: true
+        st.typing.markAsConstClone typeId: scap
+        st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: scap
+        adId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "add"
+        mintTakeParam st: st methodId: adId pname: "item" elemArg: elemArg
+        st.reg.setReturnType typeId: adId value: boolid
+        hsId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "has"
+        mintBorrowParam st: st methodId: hsId pname: "item" elemArg: elemArg
+        st.reg.setReturnType typeId: hsId value: boolid
+        dlId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "delete"
+        mintBorrowParam st: st methodId: dlId pname: "item" elemArg: elemArg
+        st.reg.setReturnType typeId: dlId value: boolid
+        itId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
+        markReturnsBorrow st: st methodId: itId
+        sitn: "SetIter\{suffix}"
+        linkMonoReturn st: st methodId: itId targetMono: sitn.stringview
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+    } else {
+    }
+    if templateName == "Map" when valArg > 0.u64 then {
+        # Fresh u64 clones, mirroring the Set branch (see note there).
+        mlen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: mlen value: true
+        st.typing.markAsConstClone typeId: mlen
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: mlen
+        mcap: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: mcap value: true
+        st.typing.markAsConstClone typeId: mcap
+        st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: mcap
+        msId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
+        mintTakeParam st: st methodId: msId pname: "key" elemArg: elemArg
+        mintTakeParam st: st methodId: msId pname: "value" elemArg: valArg
+        mgId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        mintBorrowParam st: st methodId: mgId pname: "key" elemArg: elemArg
+        wtpl: mapGetWrapperName st: st valArg: valArg
+        vn9: typeNameOf st: st tid: valArg
+        wname: "\{wtpl}_\{vn9}"
+        linkMonoReturn st: st methodId: mgId targetMono: wname.stringview
+        mdId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "delete"
+        mintBorrowParam st: st methodId: mdId pname: "key" elemArg: elemArg
+        st.reg.setReturnType typeId: mdId value: boolid
+        mhId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "has"
+        mintBorrowParam st: st methodId: mhId pname: "key" elemArg: elemArg
+        st.reg.setReturnType typeId: mhId value: boolid
+        mitId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
+        markReturnsBorrow st: st methodId: mitId
+        kitn: "MapKeyIter\{suffix}"
+        linkMonoReturn st: st methodId: mitId targetMono: kitn.stringview
+        miiId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterateItems"
+        markReturnsBorrow st: st methodId: miiId
+        iitn: "MapItemIter\{suffix}"
+        linkMonoReturn st: st methodId: miiId targetMono: iitn.stringview
+    } else {
+    }
+    if templateName == "MapEntry" then {
+        kyId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "key"
+        st.reg.setReturnType typeId: kyId value: elemArg
+        vlId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "value"
+        if valArg > 0.u64 then {
+            st.reg.setReturnType typeId: vlId value: valArg
+        } else {
+        }
+        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+    } else {
+    }
 }
 
-# mintChain -- mint one iterator-family instance (`{tpl}{suffix}`) when the
-# chain template resolves.
-mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: StringView suffix: StringView elemArg: u64} is {
+# mintChain -- mint one chain-family instance (`{tpl}{suffix}`) when the
+# chain template resolves; returns the instance id (0 when unresolved).
+mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: StringView suffix: StringView elemArg: u64 valArg: u64} out u64 is {
     co: lookupTyperef resolved: st.typing.resolved mainName: mainName base: chainTpl
     match (
         co
@@ -3913,8 +4058,57 @@ mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: String
         mname: "\{chainTpl}\{suffix}"
         eSubs: (Map key: String value: u64)
         cid: mintMono st: st mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
-        mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl elemArg: elemArg
+        mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl suffix: suffix elemArg: elemArg valArg: valArg
+        return cid
     } case none then {
+    }
+    return 0.u64
+}
+
+# mintTemplateChains -- the iterator/view-family instances a collection
+# template's synthesized methods reference, minted before the primary's
+# children so the return links resolve by mono name. List family: OptionView
+# + ListView + ListIter. Set: OptionView + SetIter. Map: the get wrapper
+# (by value kind), the key OptionView + MapKeyIter, then MapEntry + its
+# OptionView + MapItemIter.
+mintTemplateChains: function {st: zenv.ZSymbolTable mainName: StringView tname: StringView suffix: StringView firstA: u64 valA: u64} is {
+    if tname == "List" then {
+        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0.u64
+        mintChain st: st mainName: mainName chainTpl: "ListView" suffix: suffix elemArg: firstA valArg: 0.u64
+        mintChain st: st mainName: mainName chainTpl: "ListIter" suffix: suffix elemArg: firstA valArg: 0.u64
+    } else {
+    }
+    if tname == "ListView" then {
+        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0.u64
+    } else {
+    }
+    if tname == "ListIter" then {
+        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0.u64
+    } else {
+    }
+    if tname == "Set" then {
+        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0.u64
+        mintChain st: st mainName: mainName chainTpl: "SetIter" suffix: suffix elemArg: firstA valArg: 0.u64
+    } else {
+    }
+    if tname == "Map" when valA > 0.u64 then {
+        kn: typeNameOf st: st tid: firstA
+        vn: typeNameOf st: st tid: valA
+        wtpl: mapGetWrapperName st: st valArg: valA
+        vsfx: "_\{vn}"
+        mintChain st: st mainName: mainName chainTpl: wtpl.stringview suffix: vsfx.stringview elemArg: valA valArg: 0.u64
+        ksfx: "_\{kn}"
+        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: ksfx.stringview elemArg: firstA valArg: 0.u64
+        mintChain st: st mainName: mainName chainTpl: "MapKeyIter" suffix: suffix elemArg: firstA valArg: valA
+        meid: mintChain st: st mainName: mainName chainTpl: "MapEntry" suffix: suffix elemArg: firstA valArg: valA
+        if meid > 0.u64 then {
+            men: typeNameOf st: st tid: meid
+            mesfx: "_\{men}"
+            mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: mesfx.stringview elemArg: meid valArg: 0.u64
+            mintChain st: st mainName: mainName chainTpl: "MapItemIter" suffix: suffix elemArg: meid valArg: valA
+        } else {
+        }
+    } else {
     }
 }
 
@@ -3998,24 +4192,16 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
             mid: mintMono st: st mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0.u64
             setn: mid
             st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
-            # iterator-family chain instances mint before the primary's children
-            # so the synthesized method return links can resolve by mono name
-            # (dependency order: OptionView, then the views, then the primary).
-            if rm2.template.stringview == "List" then {
-                mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
-                mintChain st: st mainName: mainName chainTpl: "ListView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
-                mintChain st: st mainName: mainName chainTpl: "ListIter" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
-            } else {
-            }
-            if rm2.template.stringview == "ListView" then {
-                mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
-            } else {
-            }
-            if rm2.template.stringview == "ListIter" then {
-                mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: rm2.suffix.stringview elemArg: rm2.firstArgId
-            } else {
-            }
-            mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: rm2.template.stringview elemArg: rm2.firstArgId
+            # chain-family instances mint before the primary's children so the
+            # synthesized method return links can resolve by mono name.
+            vk: "value".string
+            vv: optU64Or o: (rm2.subs.get key: vk) d: 0.u64
+            tnvv: rm2.template.stringview
+            tnv: tnvv.string
+            sfvv: rm2.suffix.stringview
+            sfv: sfvv.string
+            mintTemplateChains st: st mainName: mainName tname: tnv.stringview suffix: sfv.stringview firstA: rm2.firstArgId valA: vv
+            mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: tnv.stringview suffix: sfv.stringview elemArg: rm2.firstArgId valArg: vv
         }
     } else {
     }
@@ -4077,21 +4263,10 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         return 0.u64
     } else {
     }
-    if tname.stringview == "List" then {
-        mintChain st: st mainName: unitName chainTpl: "OptionView" suffix: sfx.stringview elemArg: firstA
-        mintChain st: st mainName: unitName chainTpl: "ListView" suffix: sfx.stringview elemArg: firstA
-        mintChain st: st mainName: unitName chainTpl: "ListIter" suffix: sfx.stringview elemArg: firstA
-    } else {
-    }
-    if tname.stringview == "ListView" then {
-        mintChain st: st mainName: unitName chainTpl: "OptionView" suffix: sfx.stringview elemArg: firstA
-    } else {
-    }
-    if tname.stringview == "ListIter" then {
-        mintChain st: st mainName: unitName chainTpl: "OptionView" suffix: sfx.stringview elemArg: firstA
-    } else {
-    }
-    mintCollectionChildren st: st mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview elemArg: firstA
+    vk2: "value".string
+    vv2: optU64Or o: (subs.get key: vk2) d: 0.u64
+    mintTemplateChains st: st mainName: unitName tname: tname.stringview suffix: sfx.stringview firstA: firstA valA: vv2
+    mintCollectionChildren st: st mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: vv2
     gcal: nodeId n: call.callable
     if gcal > 0.u32 then {
         setga: mid

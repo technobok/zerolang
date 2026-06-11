@@ -531,6 +531,9 @@ CHECK_SMOKE = [
     "defaults",
     "string_join",
     "lists",
+    "mapitems",
+    "maps",
+    "set_uniq",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -603,6 +606,9 @@ TYPED_NODES_CHECK = [
     "defaults",
     "string_join",
     "lists",
+    "mapitems",
+    "maps",
+    "set_uniq",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
