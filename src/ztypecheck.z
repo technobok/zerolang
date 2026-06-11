@@ -3795,6 +3795,15 @@ mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoI
     return fid
 }
 
+# mintTakeParam -- a synthesized method's consuming parameter: a child (its
+# type is irrelevant to the projections -- synth methods have no generic
+# origin) with recorded TAKE ownership, so the call-site arg walk consumes.
+mintTakeParam: function {st: zenv.ZSymbolTable methodId: u64 pname: StringView elemArg: u64} is {
+    pe: elemArg
+    st.typing.setChild parentTypeId: methodId childName: pname childTypeId: pe
+    st.typing.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.TAKE
+}
+
 # linkMonoReturn -- point a synthesized method's return at an already-minted
 # instance (by mono name); no-op when the target is absent.
 linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: StringView} is {
@@ -3842,7 +3851,8 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     if templateName == "List" then {
         st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
         st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64id
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "append"
+        apId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "append"
+        mintTakeParam st: st methodId: apId pname: "from" elemArg: elemArg
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "insert"
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extend"
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
@@ -3994,6 +4004,89 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
         }
     } else {
     }
+}
+
+# genericTypeConstruction -- a generic TYPE template in callable position
+# with type-name arguments constructs its mono in place (`(List of: String)`
+# in value position): resolve each argument as a type, mint the deduped mono
+# with its chains and children (the resolveMonos shapes), and the call's
+# value is the mono.
+genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData tplId: u64} out u64 is {
+    tname: typeNameOf st: st tid: tplId
+    if tname.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    sfx: "".string
+    subs: (Map key: String value: u64)
+    firstA: 0.u64
+    anyMiss: false
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            an: paramTypeBaseName op: arg.operation
+            if (isNumericLiteralName name: an.stringview) then {} else {
+                ao: lookupTyperef resolved: st.typing.resolved mainName: unitName base: an.stringview
+                aid: optU64Or o: ao d: 0.u64
+                if aid > 0.u64 then {
+                    atn: typeNameOf st: st tid: aid
+                    nsfx: "\{sfx}_\{atn}"
+                    sfx = nsfx
+                    pk: unitLabel o: arg.name
+                    if pk.length > 0.u64 then {
+                        pv: aid
+                        subs.set key: pk value: pv
+                    } else {}
+                    if firstA == 0.u64 then {
+                        firstA = aid
+                    } else {}
+                } else {
+                    anyMiss = true
+                }
+            }
+        } else {}
+    }
+    if anyMiss then {
+        return 0.u64
+    } else {
+    }
+    if sfx.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    mname: "\{tname}\{sfx}"
+    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: firstA
+    if mid == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    if tname.stringview == "List" then {
+        mintChain st: st mainName: unitName chainTpl: "OptionView" suffix: sfx.stringview elemArg: firstA
+        mintChain st: st mainName: unitName chainTpl: "ListView" suffix: sfx.stringview elemArg: firstA
+        mintChain st: st mainName: unitName chainTpl: "ListIter" suffix: sfx.stringview elemArg: firstA
+    } else {
+    }
+    if tname.stringview == "ListView" then {
+        mintChain st: st mainName: unitName chainTpl: "OptionView" suffix: sfx.stringview elemArg: firstA
+    } else {
+    }
+    if tname.stringview == "ListIter" then {
+        mintChain st: st mainName: unitName chainTpl: "OptionView" suffix: sfx.stringview elemArg: firstA
+    } else {
+    }
+    mintCollectionChildren st: st mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview elemArg: firstA
+    gcal: nodeId n: call.callable
+    if gcal > 0.u32 then {
+        setga: mid
+        st.typing.nodeType.set key: gcal.u64 value: setga
+    } else {
+    }
+    setgt: mid
+    st.typing.nodeType.set key: call.nodeid.u64 value: setgt
+    st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.CLASS_CREATE
+    return mid
 }
 
 # methodReturnOf -- a method FUNCTION type's return type id: the synthesized
@@ -6167,6 +6260,15 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
             }
         } else {
             if isGen then {
+                gtt: st.reg.typetypeOf typeId: funcId
+                if gtt == ztypes.ztypetype.FUNCTION then {
+                } else {
+                    gres: genericTypeConstruction st: st unitName: unitName call: call tplId: funcId
+                    if gres > 0.u64 then {
+                        return gres
+                    } else {
+                    }
+                }
                 gr: checkGenericCall st: st unitName: unitName unitBody: unitBody call: call funcId: funcId
                 result = gr
                 if gr > 0.u64 then {
