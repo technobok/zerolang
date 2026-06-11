@@ -4997,6 +4997,94 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         return bt
     } else {
     }
+    # A compile-time numeric index on an array instance projects the element
+    # type (`a.0` reads / reassigns element zero).
+    if (isNumericLiteralName name: cn.stringview) then {
+        isArr9: false
+        {
+            bz8: st.reg.typeById.get key: bt
+            match (
+                bz8
+            ) case some then {
+                bgo8: bz8.genericOriginId
+                match (
+                    bgo8
+                ) case some then {
+                    gn8: typeNameOf st: st tid: bgo8
+                    if gn8.stringview == "array" then { isArr9 = true } else {
+                    }
+                } case none then {
+                }
+            } case none then {
+            }
+        }
+        if isArr9 then {
+            go8: st.typing.childOf parentTypeId: bt name: "get"
+            match (
+                go8
+            ) case some then {
+                ro8: methodReturnOf st: st mid: go8
+                match (
+                    ro8
+                ) case some then {
+                    seta8: ro8
+                    st.typing.nodeType.set key: dp.nodeid.u64 value: seta8
+                    return ro8
+                } case none then {
+                }
+            } case none then {
+            }
+        } else {
+        }
+    } else {
+    }
+    # `.array` on a data block copies the elements into the sized array
+    # instance (array_{elem}_{count}), minting it on first access. The
+    # element type rides the data's `tag__{elem}` tag-child name.
+    if cn.stringview == "array" then {
+        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.DATA then {
+            tgo: st.typing.childOf parentTypeId: bt name: "tag"
+            match (
+                tgo
+            ) case some then {
+                tagn: typeNameOf st: st tid: tgo
+                eno: tagn.stringview.stripPrefix p: "tag__"
+                match (
+                    eno
+                ) case some then {
+                    den: eno.string
+                    elo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: den.stringview
+                    match (
+                        elo
+                    ) case some then {
+                        ecnt: (st.typing.childCount parentTypeId: bt) - 1.u64
+                        ato: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "array"
+                        match (
+                            ato
+                        ) case some then {
+                            amn: "array_\{den}_\{ecnt}"
+                            asubs: (Map key: String value: u64)
+                            sk0: "of".string
+                            sv0: elo
+                            asubs.set key: sk0 value: sv0
+                            amid: mintMono st: st mainName: unitName name: amn.stringview templateId: ato subs: asubs fallbackArg: 0.u64
+                            asfx: "_\{den}_\{ecnt}"
+                            mintCollectionChildren st: st mainName: unitName monoName: amn.stringview monoId: amid templateName: "array" suffix: asfx.stringview elemArg: elo valArg: 0.u64
+                            setar: amid
+                            st.typing.nodeType.set key: dp.nodeid.u64 value: setar
+                            return amid
+                        } case none then {
+                        }
+                    } case none then {
+                    }
+                } case none then {
+                }
+            } case none then {
+            }
+        } else {
+        }
+    } else {
+    }
     mo: st.typing.childOf parentTypeId: bt name: cn.stringview
     match (
         mo
@@ -5100,6 +5188,16 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
                 } case none then {
                 }
             } case none then {
+                # A no-`out` METHOD auto-call resolves to null (the
+                # reference's auto-call rule for out-less methods). Non-
+                # function members (field shells) keep their re-resolved
+                # type.
+                if (st.reg.typetypeOf typeId: mo) == ztypes.ztypetype.FUNCTION then {
+                    # an unregistered shell id: the stamp never joins the
+                    # dump (the reference's t_null carries no unit either)
+                    result = st.reg.allocType
+                } else {
+                }
             }
         } else {
         }
@@ -6276,6 +6374,56 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                             return (checkProjectionCreate st: st unitName: unitName unitBody: unitBody call: call pjId: tdo consumes: pjTake borrows: pjBorrow)
                         } else {}
                     } else {}
+                    # `.stringview from: to:` is the substring-view form:
+                    # walk the bound args and the call IS the view -- no call
+                    # scope, no receiver lock (mirrors the reference's leg).
+                    svw9: dottedChildName n: call.callable
+                    if svw9.stringview == "stringview" then {
+                        svret9: 0.u64
+                        rsv9: methodReturnOf st: st mid: dro
+                        match (
+                            rsv9
+                        ) case some then {
+                            svret9 = rsv9
+                        } case none then {
+                        }
+                        isSvw9: false
+                        if svret9 > 0.u64 then {
+                            rn9: typeNameOf st: st tid: svret9
+                            if rn9.stringview == "StringView" then { isSvw9 = true } else {
+                            }
+                        } else {
+                        }
+                        hasFT9: false
+                        with fiter9: call.arguments.iterate do for fa9: fiter9 loop {
+                            match (
+                                fa9
+                            ) case namedoperation then {
+                                fan9: unitLabel o: fa9.name
+                                if fan9.stringview == "from" then { hasFT9 = true } else {
+                                }
+                                if fan9.stringview == "to" then { hasFT9 = true } else {
+                                }
+                            } else {
+                            }
+                        }
+                        if isSvw9 when hasFT9 then {
+                            with aiter9: call.arguments.iterate do for aa9: aiter9 loop {
+                                match (
+                                    aa9
+                                ) case namedoperation then {
+                                    checkValue st: st unitName: unitName unitBody: unitBody node: aa9.operation
+                                } else {
+                                }
+                            }
+                            setsv9: svret9
+                            st.typing.nodeType.set key: call.nodeid.u64 value: setsv9
+                            st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.REGULAR
+                            return svret9
+                        } else {
+                        }
+                    } else {
+                    }
                     mcm: st.pushCall
                     mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false
                     # The receiver locks for the call's duration too (after

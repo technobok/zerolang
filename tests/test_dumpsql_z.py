@@ -536,6 +536,8 @@ CHECK_SMOKE = [
     "set_uniq",
     "with_alias",
     "str",
+    "strview",
+    "arrays",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -613,6 +615,8 @@ TYPED_NODES_CHECK = [
     "set_uniq",
     "with_alias",
     "str",
+    "strview",
+    "arrays",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
