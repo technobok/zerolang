@@ -1430,6 +1430,17 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                     cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
                     recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+                    dcn1: dottedChildName n: fm.operation
+                    if dcn1.length > 0.u64 when (isStripMarker name: dcn1.stringview) then {} else {
+                        if dcn1.length > 0.u64 then {
+                            rdk3: nodeId n: fm.operation
+                            rdo3: rid
+                            ty.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
+                            rdk4: nodeId n: fm.operation
+                            rdn4: rootNameOf n: fm.operation
+                            ty.pendingDefaultName.set key: rdk4.u64 value: rdn4
+                        } else {}
+                    }
                 }
             } else {}
         }
@@ -1491,8 +1502,16 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         } else {}
     }
     if isgen then {} else {
-        tagName: "\{defName}:tag:data".string
-        tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+        customTagV: unionCustomTagId ty: ty reg: reg unitName: unitName uid: vid asItems: vnode.asItems
+        tagId: 0.u64
+        match (
+            customTagV
+        ) case some then {
+            tagId = customTagV
+        } case none then {
+            tagName: "\{defName}:tag:data".string
+            tagId = reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+        }
         ty.setChild parentTypeId: vid childName: "tag" childTypeId: tagId
     }
     aiter: vnode.asItems.iterate
@@ -1528,7 +1547,9 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
 dottedParentName: function {n: Node} out String is {
     match (
         n
-    ) case dottedpath then {
+    ) case expression then {
+        return (dottedParentName n: n.expression)
+    } case dottedpath then {
         return (atomName n: n.parent)
     } else {
         return "".string
@@ -1548,8 +1569,7 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
             if nm.stringview == "tag" then {
                 pn: dottedParentName n: am.operation
                 if pn.length == 0.u64 then {} else {
-                    rkey: "\{unitName}.\{pn}".string
-                    rr: ty.resolved.get key: rkey
+                    rr: lookupTyperef resolved: ty.resolved mainName: unitName base: pn.stringview
                     match (
                         rr
                     ) case some then {
@@ -1562,7 +1582,21 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
                         } else {}
                         if isdata then {
                             return (optionval.some rr)
-                        } else {}
+                        } else {
+                            # the reference stamps only the main unit's
+                            # custom-tag items (system variants resolve
+                            # standalone, unstamped).
+                            if unitName == reg.regMainUnit.stringview then {
+                                tgk: "system.tag".string
+                                tgo: ty.resolved.get key: tgk
+                                match (
+                                    tgo
+                                ) case some then {
+                                    tnid0: innermostNodeId n: am.operation
+                                    ty.nodeType.set key: tnid0.u64 value: tgo
+                                } case none then {}
+                            } else {}
+                        }
                     } case none then {
                         # the tag base resolves later (demand order): record
                         # the demand and a pending fixup for the tag child.
@@ -1570,6 +1604,10 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
                         uk: uid
                         pv: pn.copy
                         ty.pendingCustomTag.set key: uk value: pv
+                        uk2: uid
+                        pnid9: innermostNodeId n: am.operation
+                        pnv9: pnid9.u64
+                        ty.pendingCustomTagNode.set key: uk2 value: pnv9
                     }
                 }
             } else {}
@@ -1732,6 +1770,14 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                     if lockField then {
                         ty.setChildLockField parentTypeId: cid name: fname.stringview
                     } else {}
+                    # a sibling-member ref default: the construction fill
+                    # stamps the default's node with the member's type.
+                    pdk: nodeId n: fm.operation
+                    pdo: cid
+                    ty.pendingDefaultOwner.set key: pdk.u64 value: pdo
+                    pdk2: nodeId n: fm.operation
+                    pdi: mref
+                    ty.pendingDefaultId.set key: pdk2.u64 value: pdi
                 } case none then {
                     if (isTypedefField n: fm.operation) then {
                         # No field child for the wrapper, but the inner refs
@@ -1747,6 +1793,17 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
                         } else {}
                         recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+                        dcn0: dottedChildName n: fm.operation
+                        if dcn0.length > 0.u64 when (isStripMarker name: dcn0.stringview) then {} else {
+                            if dcn0.length > 0.u64 then {
+                                rdk: nodeId n: fm.operation
+                                rdo: cid
+                                ty.pendingDefaultOwner.set key: rdk.u64 value: rdo
+                                rdk2: nodeId n: fm.operation
+                                rdn: rootNameOf n: fm.operation
+                                ty.pendingDefaultName.set key: rdk2.u64 value: rdn
+                            } else {}
+                        }
                     }
                 }
             }
@@ -2295,6 +2352,54 @@ seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordSeededDemand un: "io" name: "seekorigin"
 }
 
+# stampCtorDefaults -- a construction fills unprovided defaulted fields: the
+# default's node stamps its resolved member/parent type, once the owner has
+# actually been constructed (full-mode body walk).
+stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
+    nodes: (List of: u64)
+    owners: (List of: u64)
+    with diter: st.typing.pendingDefaultOwner.iterateItems do for de: diter loop {
+        dk: de.key
+        nodes.append dk
+        dv: de.value
+        owners.append dv
+    }
+    di: 0.u64
+    dn: nodes.length
+    for while di < dn loop {
+        ow: owners.get i: di
+        cgot: st.typing.constructedTypes.get key: ow
+        isCon: optBoolOr o: cgot d: false
+        if isCon then {
+            nd: nodes.get i: di
+            ido: st.typing.pendingDefaultId.get key: nd
+            idv: optU64Or o: ido d: 0.u64
+            if idv > 0.u64 then {
+                rm2: resolveChildPayload st: st unitName: unitName cid: idv
+                if rm2 > 0.u64 then {
+                    nd2: nodes.get i: di
+                    setd2: rm2
+                    st.typing.nodeType.set key: nd2 value: setd2
+                } else {}
+            } else {
+                nd3: nodes.get i: di
+                ngo: st.typing.pendingDefaultName.get key: nd3
+                match (
+                    ngo
+                ) case some then {
+                    nrt: optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: ngo.stringview) d: 0.u64
+                    if nrt > 0.u64 then {
+                        nd4: nodes.get i: di
+                        setd4: nrt
+                        st.typing.nodeType.set key: nd4 value: setd4
+                    } else {}
+                } case none then {}
+            }
+        } else {}
+        di = di + 1.u64
+    }
+}
+
 # fixupCustomTags -- bind deferred custom union tags: a `tag: X.tag` as-item
 # whose data block resolved after the union (demand order) overrides the
 # synthesized tag child once both exist.
@@ -2319,7 +2424,20 @@ fixupCustomTags: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
             if (reg.typetypeOf typeId: ctid) == ztypes.ztypetype.DATA then {
                 cuidc: cuid
                 ty.setChild parentTypeId: cuidc childName: "tag" childTypeId: ctid
-            } else {}
+            } else {
+                cuidn: cuid
+                cngo: ty.pendingCustomTagNode.get key: cuidn
+                cnid9: optU64Or o: cngo d: 0.u64
+                if cnid9 > 0.u64 then {
+                    tgk2: "system.tag".string
+                    tgo2: ty.resolved.get key: tgk2
+                    match (
+                        tgo2
+                    ) case some then {
+                        ty.nodeType.set key: cnid9 value: tgo2
+                    } case none then {}
+                } else {}
+            }
         } else {}
         ci = ci + 1.u64
     }
@@ -3433,7 +3551,20 @@ paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} ou
         return r
     } case none then {
         an: atomName n: op
-        return (optU64Or o: (lookupTyperef resolved: typing.resolved mainName: unitName base: an.stringview) d: 0.u64)
+        ano: lookupTyperef resolved: typing.resolved mainName: unitName base: an.stringview
+        anid: optU64Or o: ano d: 0.u64
+        if anid > 0.u64 then {
+            return anid
+        } else {
+        }
+        # a dotted typeref naming a variant/union ARM is an arm DEFAULT:
+        # the parameter's type is the tagged parent.
+        bn: rootNameOf n: op
+        if bn.length > 0.u64 then {
+            return (optU64Or o: (lookupTyperef resolved: typing.resolved mainName: unitName base: bn.stringview) d: 0.u64)
+        } else {
+        }
+        return 0.u64
     }
 }
 
@@ -4132,6 +4263,26 @@ borrowDottedBaseId: function {n: Node} out (optionval t: u32) is {
     } else {
     }
     return (optionval.none u32)
+}
+
+# valueNoCoerce -- checkValue minus the value-position auto-call coercion
+# (construction arguments take method REFERENCES for function-typed fields).
+valueNoCoerce: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        ev: valueNoCoerce st: st unitName: unitName unitBody: unitBody n: n.expression
+        if ev > 0.u64 then {
+            sete: ev
+            st.typing.nodeType.set key: n.nodeid.u64 value: sete
+        } else {
+        }
+        return ev
+    } case dottedpath then {
+        return (checkDotted st: st unitName: unitName unitBody: unitBody dp: n coerce: false)
+    } else {
+        return (checkValue st: st unitName: unitName unitBody: unitBody node: n)
+    }
 }
 
 # checkProjectionCreate -- `F.create from: expr` / `P.borrow from: expr` on a
@@ -5385,7 +5536,27 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
         match (
             arg
         ) case namedoperation then {
-            vt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+            # a FUNCTION-typed field takes a method REFERENCE: its ctor
+            # argument walks without the value-position auto-call coercion.
+            useNC: false
+            if isCtor then {
+                pn0: unitLabel o: arg.name
+                if pn0.length > 0.u64 then {
+                    fco: st.typing.childOf parentTypeId: funcId name: pn0.stringview
+                    fcid: optU64Or o: fco d: 0.u64
+                    if fcid > 0.u64 then {
+                        if (st.reg.typetypeOf typeId: fcid) == ztypes.ztypetype.FUNCTION then {
+                            useNC = true
+                        } else {}
+                    } else {}
+                } else {}
+            } else {}
+            vt: 0.u64
+            if useNC then {
+                vt = valueNoCoerce st: st unitName: unitName unitBody: unitBody n: arg.operation
+            } else {
+                vt = checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+            }
             if vt > 0.u64 then {
                 pn: unitLabel o: arg.name
                 if pn.length == 0.u64 then {
@@ -5956,6 +6127,9 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
             if isCtor then {
                 # a type in callable position constructs: the call's value is
                 # the type itself.
+                ctk: funcId
+                ctv: true
+                st.typing.constructedTypes.set key: ctk value: ctv
                 result = funcId
                 setr2: result
                 st.typing.nodeType.set key: call.nodeid.u64 value: setr2
@@ -6928,6 +7102,17 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                     pname: unitLabel o: pm.name
                     pnid: nodeId n: pm.operation
                     ptid: paramTypeId typing: st.typing unitName: unitName op: pm.operation
+                    if ptid > 0.u64 then {
+                        ppre: st.typing.nodeType.get key: pnid.u64
+                        match (
+                            ppre
+                        ) case some then {
+                        } case none then {
+                            setpp: ptid
+                            st.typing.nodeType.set key: pnid.u64 value: setpp
+                        }
+                    } else {
+                    }
                     if thisName.length > 0.u64 when (paramIsThisReceiver op: pm.operation) then {
                         thOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: thisName
                         match (
@@ -7375,6 +7560,11 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     if full then {
         resolveMonos st: st program: program
         checkBodies st: st program: program
+        match (
+            program
+        ) case program then {
+            stampCtorDefaults st: st unitName: program.mainUnitName.stringview
+        } else {}
         foldLiteralStamps st: st program: program
     } else {
     }

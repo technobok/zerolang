@@ -528,6 +528,7 @@ CHECK_SMOKE = [
     "atomic_call_temps",
     "owned_protocol",
     "unions",
+    "defaults",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -597,6 +598,7 @@ TYPED_NODES_CHECK = [
     "atomic_call_temps",
     "owned_protocol",
     "unions",
+    "defaults",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
