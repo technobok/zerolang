@@ -4959,9 +4959,20 @@ class TypeChecker:
                 return child
             # child is not an arm of the (narrowed) union/variant. If the
             # parent is a narrowed AtomId and the child is an arm of the
-            # shadowed original, emit a targeted error instead of
-            # falling through silently to return None.
-            self._maybe_report_shadowed_parent_access(path, child_name)
+            # shadowed original, emit a targeted error; otherwise the
+            # access is a real unknown-member error -- a silent None here
+            # reaches the emitter as a payload access that does not exist.
+            # (Dotted match subjects do not narrow: the arm still sees the
+            # full union.)
+            if not self._maybe_report_shadowed_parent_access(path, child_name):
+                self._error(
+                    f"type '{parent_type.name}' has no member '{child_name}'",
+                    loc=path.start,
+                    hint=(
+                        "a dotted match subject does not narrow; bind the "
+                        "value to a local first and match on that"
+                    ),
+                )
             return None
         # for data: .array method returns a new array of matching type/length
         if parent_type.typetype == ZTypeType.DATA and child_name == "array":
@@ -5082,13 +5093,14 @@ class TypeChecker:
 
     def _maybe_report_shadowed_parent_access(
         self, path: zast.DottedPath, child_name: str
-    ) -> None:
+    ) -> bool:
         """Emit a targeted error when a failed field/arm lookup looks
         like reaching back to the shadowed parent union/variant, or an
-        unknown field on the narrowed payload. Silent no-op otherwise.
+        unknown field on the narrowed payload. Returns whether an error
+        was emitted; silent no-op (False) otherwise.
         """
         if path.parent.nodetype != NodeType.ATOMID:
-            return
+            return False
         parent_atom = cast(zast.AtomId, path.parent)
         entry = self.symtab.lookup_entry(parent_atom.name)
         if (
@@ -5096,7 +5108,7 @@ class TypeChecker:
             or entry.narrowed_subtype is None
             or entry.original_ztype is None
         ):
-            return
+            return False
         if self.typing.has_child(entry.original_ztype, child_name):
             self._error(
                 f"'{parent_atom.name}' is narrowed to "
@@ -5116,6 +5128,7 @@ class TypeChecker:
                 f"'{child_name}'.",
                 loc=path.start,
             )
+        return True
 
     def _resolve_numeric(
         self, name: str, loc: Optional[Token] = None

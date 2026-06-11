@@ -15222,3 +15222,31 @@ class TestNarrowedPayloadRebindRejected:
             "  }\n"
             "}\n"
         )
+
+
+class TestDottedMatchSubjectMemberMiss:
+    """Pin: a dotted match subject does not narrow, so an arm accessing a
+    nonexistent member through the same dotted path is an error (a silent
+    None previously reached the emitter as a payload access on the full
+    union -- invalid C)."""
+
+    _SRC = (
+        "Inner: class { body: i64 }\n"
+        "Wrap: union { fn: Inner  other: null }\n"
+        "Holder: class { operation: Wrap }\n"
+        "main: function is {\n"
+        "  h: Holder operation: (Wrap.fn (Inner body: 7))\n"
+        "  match (\n"
+        "    h.operation\n"
+        "  ) case fn then {\n"
+        '    print "\\{h.operation.body}"\n'
+        "  } else {\n"
+        "  }\n"
+        "}\n"
+    )
+
+    def test_union_member_miss_is_rejected(self):
+        errors = check_errors(self._SRC)
+        assert any("has no member 'body'" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
