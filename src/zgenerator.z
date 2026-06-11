@@ -1,0 +1,586 @@
+# zgenerator.z -- generator-function lowering.
+#
+# Mirrors src/zgenerator.py: a generator is a function whose body contains
+# a yield and whose declared return type resolves to the stdlib Iterator
+# protocol (the caller decides that by resolved type id). Lowering turns it
+# into a synthesized iterator class -- `state` cursor plus captured fields,
+# a `create` forwarding to meta.create, and a `call` method holding the
+# original body (yields stay intact; the state machine is the emitter's
+# job) -- and rebinds the original function to a factory returning the
+# class. Validation failures skip the lowering (the reference also reports
+# errors; this port gates only -- the differential corpus is all-valid).
+
+Node: zast.Node
+
+# The lowering's synth-node id space: above every parsed id, below the
+# typechecker's hoist-temp space (0x40000000), so ast_nodes ids never
+# collide across the three sources.
+GenIds: class {
+    nextId: u32
+} as {
+    mint: function {:this} out u32 is {
+        id: this.nextId
+        this.nextId = this.nextId + 1.u32
+        return id
+    }
+}
+
+newGenIds: function {} out GenIds is {
+    return (GenIds nextId: 0x20000000.u32)
+}
+
+# One lowered generator: the factory that replaces the original function
+# definition, the synth class to append to the unit body, and the synth
+# `.call` return wrapper-EXPRESSION's nodeid (the pendingMono key; the
+# typechecker collapses that wrapper to optionval for valtype elements).
+GenLowered: class {
+    factory:       Node
+    synthClass:    Node
+    wrapperNodeId: u32
+}
+
+# bodyContainsYield -- a yield anywhere in this subtree, not descending
+# into nested function literals (their yields belong to that function).
+bodyContainsYield: function {n: Node} out bool is {
+    match (
+        n
+    ) case yieldexpr then {
+        return true
+    } case functiondef then {
+        return false
+    } case statement then {
+        siter: n.statements.iterate
+        for s0: siter loop {
+            if (bodyContainsYield n: s0) then {
+                return true
+            } else {
+            }
+        }
+        return false
+    } case statementline then {
+        return (bodyContainsYield n: n.statementline)
+    } case expression then {
+        return (bodyContainsYield n: n.expression)
+    } case assignment then {
+        return (bodyContainsYield n: n.value)
+    } case reassignment then {
+        return (bodyContainsYield n: n.value)
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl0: cliter loop {
+            if (bodyContainsYield n: cl0) then {
+                return true
+            } else {
+            }
+        }
+        return (bodyContainsYieldOpt o: n.elseclause)
+    } case ifclause then {
+        coiter: n.conditions.iterate
+        for c0: coiter loop {
+            if (bodyContainsYield n: c0) then {
+                return true
+            } else {
+            }
+        }
+        return (bodyContainsYield n: n.statement)
+    } case forexpr then {
+        fiter: n.conditions.iterate
+        for f0: fiter loop {
+            if (bodyContainsYield n: f0) then {
+                return true
+            } else {
+            }
+        }
+        if (bodyContainsYieldOpt o: n.body) then {
+            return true
+        } else {
+        }
+        piter: n.postconditions.iterate
+        for p0: piter loop {
+            if (bodyContainsYield n: p0) then {
+                return true
+            } else {
+            }
+        }
+        return false
+    } case doexpr then {
+        return (bodyContainsYield n: n.statement)
+    } case withexpr then {
+        if (bodyContainsYield n: n.value) then {
+            return true
+        } else {
+        }
+        return (bodyContainsYield n: n.body)
+    } case caseexpr then {
+        if (bodyContainsYield n: n.subject) then {
+            return true
+        } else {
+        }
+        mliter: n.clauses.iterate
+        for m0: mliter loop {
+            if (bodyContainsYield n: m0) then {
+                return true
+            } else {
+            }
+        }
+        return (bodyContainsYieldOpt o: n.elseclause)
+    } case caseclause then {
+        return (bodyContainsYield n: n.statement)
+    } case namedoperation then {
+        return (bodyContainsYield n: n.operation)
+    } case call then {
+        if (bodyContainsYield n: n.callable) then {
+            return true
+        } else {
+        }
+        aiter: n.arguments.iterate
+        for a0: aiter loop {
+            if (bodyContainsYield n: a0) then {
+                return true
+            } else {
+            }
+        }
+        return false
+    } case binop then {
+        if (bodyContainsYield n: n.lhs) then {
+            return true
+        } else {
+        }
+        return (bodyContainsYield n: n.rhs)
+    } else {
+        return false
+    }
+}
+
+bodyContainsYieldOpt: function {o: (Option t: Node)} out bool is {
+    match (
+        o
+    ) case some then {
+        return (bodyContainsYield n: o)
+    } case none then {
+        return false
+    }
+}
+
+# fnBodyHasYield -- the cheap structural generator pre-test on a
+# functiondef Node (spec/native bodies are never generators).
+fnBodyHasYield: function {n: Node} out bool is {
+    match (
+        n
+    ) case functiondef then {
+        return (bodyContainsYieldOpt o: n.body)
+    } else {
+        return false
+    }
+}
+
+# leafAtomName -- an atom's name (owned copy); "" for other shapes.
+leafAtomName: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        nv: n.name.stringview
+        nc: nv.string
+        return nc
+    } else {
+        return "".string
+    }
+}
+
+# returnHeadName -- the callable head atom of a parenthesized return-type
+# call (`out (Iterator gives: i64)` -> "Iterator"); "" for other shapes.
+returnHeadName: function {n: Node} out String is {
+    match (
+        n
+    ) case functiondef then {
+        return (returnHeadOpt o: n.returntype)
+    } else {
+        return "".string
+    }
+}
+
+returnHeadOpt: function {o: (Option t: Node)} out String is {
+    match (
+        o
+    ) case some then {
+        return (returnHeadOf n: o)
+    } case none then {
+        return "".string
+    }
+}
+
+returnHeadOf: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (returnHeadOf n: n.expression)
+    } case call then {
+        return (leafAtomName n: n.callable)
+    } else {
+        return "".string
+    }
+}
+
+# pathLeafName -- the take/lock/borrow ownership leaf on a dotted path,
+# "" when none.
+pathLeafName: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        ln: leafAtomName n: n.child
+        if ln.stringview == "take" then {
+            return ln
+        } else {
+        }
+        if ln.stringview == "lock" then {
+            return ln
+        } else {
+        }
+        if ln.stringview == "borrow" then {
+            return ln
+        } else {
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# clonePath -- deep-copy a type-path subtree (atom / labelvalue / dotted /
+# expression / call / namedoperation shapes), minting fresh nodeids. The
+# synth wrapper and field types embed clones because a node owns exactly
+# one parent.
+clonePath: function {ids: GenIds n: Node} out Node is {
+    match (
+        n
+    ) case atomid then {
+        ln0: n.lineno
+        co0: n.colno
+        nmv: n.name.stringview
+        nm0: nmv.string
+        return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: ln0 colno: co0 name: nm0))
+    } case labelvalue then {
+        ln1: n.lineno
+        co1: n.colno
+        lmv: n.name.stringview
+        lm0: lmv.string
+        return (Node.labelvalue (zast.LabelValueData nodeid: ids.mint lineno: ln1 colno: co1 name: lm0))
+    } case dottedpath then {
+        ln2: n.lineno
+        co2: n.colno
+        np: clonePath ids: ids n: n.parent
+        nc: clonePath ids: ids n: n.child
+        return (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: ln2 colno: co2 parent: np child: nc))
+    } case expression then {
+        ln3: n.lineno
+        co3: n.colno
+        ne: clonePath ids: ids n: n.expression
+        return (Node.expression (zast.ExpressionData nodeid: ids.mint lineno: ln3 colno: co3 expression: ne))
+    } case call then {
+        ln4: n.lineno
+        co4: n.colno
+        ncal: clonePath ids: ids n: n.callable
+        nargs: (List of: Node)
+        aiter: n.arguments.iterate
+        for a0: aiter loop {
+            na0: clonePath ids: ids n: a0
+            nargs.append na0
+        }
+        return (Node.call (zast.CallData nodeid: ids.mint lineno: ln4 colno: co4 callable: ncal arguments: nargs))
+    } case namedoperation then {
+        ln5: n.lineno
+        co5: n.colno
+        nop: clonePath ids: ids n: n.operation
+        nnm: cloneOptString o: n.name
+        return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln5 colno: co5 name: nnm operation: nop))
+    } else {
+        # unsupported path shape -- an error atom keeps the tree total
+        return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: 0.u32 colno: 0.u32 name: "?".string))
+    }
+}
+
+cloneOptString: function {o: (Option t: String)} out (Option t: String) is {
+    match (
+        o
+    ) case some then {
+        ov: o.stringview
+        oc: ov.string
+        return (Option.some oc)
+    } case none then {
+        return (Option.none String)
+    }
+}
+
+optStringOr: function {o: (Option t: String) d: StringView} out String is {
+    match (
+        o
+    ) case some then {
+        ov: o.stringview
+        oc: ov.string
+        return oc
+    } case none then {
+        return d.string
+    }
+}
+
+# givesParts -- split the iterator return into (gives base path CLONE,
+# ownership leaf, accepts path CLONE or none). The base clone feeds the
+# synth wrapper; leaf "take" selects Option, else OptionView.
+GivesParts: class {
+    base:       (Option t: Node)
+    leaf:       String
+    acceptsTy:  (Option t: Node)
+}
+
+givesParts: function {ids: GenIds n: Node} out GivesParts is {
+    result: (GivesParts base: (Option.none Node) leaf: "".string acceptsTy: (Option.none Node))
+    match (
+        n
+    ) case functiondef then {
+        givesPartsOpt ids: ids o: n.returntype dst: result
+    } else {
+    }
+    return result
+}
+
+givesPartsOpt: function {ids: GenIds o: (Option t: Node) dst: GivesParts} is {
+    match (
+        o
+    ) case some then {
+        givesPartsOf ids: ids n: o dst: dst
+    } case none then {
+    }
+}
+
+givesPartsOf: function {ids: GenIds n: Node dst: GivesParts} is {
+    match (
+        n
+    ) case expression then {
+        givesPartsOf ids: ids n: n.expression dst: dst
+    } case call then {
+        aiter: n.arguments.iterate
+        for a0: aiter loop {
+            match (
+                a0
+            ) case namedoperation then {
+                an: optStringOr o: a0.name d: ""
+                if an.stringview == "gives" then {
+                    givesFromOp ids: ids n: a0.operation dst: dst
+                } else {
+                }
+                if an.stringview == "accepts" then {
+                    acceptsFromOp ids: ids n: a0.operation dst: dst
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+givesFromOp: function {ids: GenIds n: Node dst: GivesParts} is {
+    isExpr: false
+    match (
+        n
+    ) case expression then {
+        isExpr = true
+        givesFromOp ids: ids n: n.expression dst: dst
+    } else {
+    }
+    if isExpr then {
+        return
+    } else {
+    }
+    lf: pathLeafName n: n
+    if lf.length > 0.u64 then {
+        match (
+            n
+        ) case dottedpath then {
+            bc: clonePath ids: ids n: n.parent
+            dst.base = (Option.some bc)
+            dst.leaf = lf
+        } else {
+        }
+    } else {
+        bc2: clonePath ids: ids n: n
+        dst.base = (Option.some bc2)
+    }
+}
+
+acceptsFromOp: function {ids: GenIds n: Node dst: GivesParts} is {
+    nm0: leafAtomName n: n
+    if nm0.stringview == "null" then {} else {
+        ac: clonePath ids: ids n: n
+        dst.acceptsTy = (Option.some ac)
+    }
+}
+
+# mkAtom / mkNamedOp / mkBareOp -- small node factories at a source
+# position (the synthesized members all carry the function's start).
+mkAtom: function {ids: GenIds line: u32 col: u32 name: StringView} out Node is {
+    return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: line colno: col name: name.string))
+}
+
+mkNamedOp: function {ids: GenIds line: u32 col: u32 name: StringView op: Node.take} out Node is {
+    nm: (Option.some name.string)
+    return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: line colno: col name: nm operation: op))
+}
+
+mkBareOp: function {ids: GenIds line: u32 col: u32 op: Node.take} out Node is {
+    return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: line colno: col name: (Option.none String) operation: op))
+}
+
+# mkReturnBody -- `{ return (<inner>) }`: the single-statement body both
+# the create method and the factory share.
+mkReturnBody: function {ids: GenIds line: u32 col: u32 inner: Node.take} out Node is {
+    retCal: mkAtom ids: ids line: line col: col name: "return"
+    retArg: mkBareOp ids: ids line: line col: col op: inner
+    retArgs: (List of: Node)
+    retArgs.append retArg
+    retCall: (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: retCal arguments: retArgs))
+    retExpr: (Node.expression (zast.ExpressionData nodeid: ids.mint lineno: line colno: col expression: retCall))
+    sline: (Node.statementline (zast.StatementLineData nodeid: ids.mint lineno: line colno: col statementline: retExpr))
+    slist: (List of: Node)
+    slist.append sline
+    return (Node.statement (zast.StatementData nodeid: ids.mint lineno: line colno: col statements: slist))
+}
+
+# buildCreateMethod -- `create: function {<params>} out this is { return
+# (meta.create state: 0 :p1 ...) }`. Parameter list cloning and receiver
+# rewrites land with the parameterized examples.
+buildCreateMethod: function {ids: GenIds line: u32 col: u32} out Node is {
+    metaAtom: mkAtom ids: ids line: line col: col name: "meta"
+    createAtom: mkAtom ids: ids line: line col: col name: "create"
+    metaCreate: (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: line colno: col parent: metaAtom child: createAtom))
+    zeroAtom: mkAtom ids: ids line: line col: col name: "0"
+    stArg: mkNamedOp ids: ids line: line col: col name: "state" op: zeroAtom
+    cargs: (List of: Node)
+    cargs.append stArg
+    icall: (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: metaCreate arguments: cargs))
+    body: mkReturnBody ids: ids line: line col: col inner: icall
+    thisRet: mkAtom ids: ids line: line col: col name: "this"
+    params: (List of: Node)
+    return (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: line colno: col returntype: (Option.some thisRet) parameters: params body: (Option.some body) isNative: false asItems: (List of: Node)))
+}
+
+# buildCallMethod -- the iterator protocol implementation: `call: function
+# {this: this} out (<wrapper> t: <gives>) is <original body>`. Yields stay
+# in place; promoted-name rewriting lands with the parameterized examples.
+buildCallMethod: function {ids: GenIds line: u32 col: u32 body: Node.take wrapExpr: Node.take} out Node is {
+    thisP: mkAtom ids: ids line: line col: col name: "this"
+    thisParam: mkNamedOp ids: ids line: line col: col name: "this" op: thisP
+    params: (List of: Node)
+    params.append thisParam
+    return (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: line colno: col returntype: (Option.some wrapExpr) parameters: params body: (Option.some body) isNative: false asItems: (List of: Node)))
+}
+
+# buildWrapper -- the synth `.call` return `(Option|OptionView t: <base>)`;
+# leaf "take" selects Option, anything else OptionView.
+buildWrapper: function {ids: GenIds line: u32 col: u32 base: Node.take leaf: StringView} out Node is {
+    wn: "OptionView"
+    if leaf == "take" then {
+        wn = "Option"
+    } else {
+    }
+    wAtom: mkAtom ids: ids line: line col: col name: wn
+    tArg: mkNamedOp ids: ids line: line col: col name: "t" op: base
+    wargs: (List of: Node)
+    wargs.append tArg
+    return (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: wAtom arguments: wargs))
+}
+
+# buildFactory -- the replacement for the original function: return type =
+# the synth class, body = `return (<synth_name>)`. Parameter forwarding
+# lands with the parameterized examples.
+buildFactory: function {ids: GenIds line: u32 col: u32 synthName: StringView} out Node is {
+    synthAtom: mkAtom ids: ids line: line col: col name: synthName
+    fargs: (List of: Node)
+    icall: (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: synthAtom arguments: fargs))
+    body: mkReturnBody ids: ids line: line col: col inner: icall
+    retAtom: mkAtom ids: ids line: line col: col name: synthName
+    params: (List of: Node)
+    return (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: line colno: col returntype: (Option.some retAtom) parameters: params body: (Option.some body) isNative: false asItems: (List of: Node)))
+}
+
+# canLowerNow -- pre-surgery shape gate on the borrowed definition: the
+# supported slice (no parameters, parenthesized gives, a real body). The
+# driver extracts the owned node only when this passes, so unsupported
+# generators stay untouched in the unit body.
+canLowerNow: function {n: Node} out bool is {
+    match (
+        n
+    ) case functiondef then {
+        if n.parameters.length > 0.u64 then {
+            return false
+        } else {
+        }
+        hd: returnHeadOpt o: n.returntype
+        if hd.length == 0.u64 then {
+            return false
+        } else {
+        }
+        match (
+            n.body
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# lowerOne -- lower one no-parameter generator: dissect the owned
+# functiondef, build the synth class (state field + create + call around
+# the original body) and the factory. Returns none when the shape is
+# outside the supported slice.
+lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option t: GenLowered) is {
+    gp: givesParts ids: ids n: fn
+    match (
+        fn
+    ) case functiondef then {
+        if fn.parameters.length > 0.u64 then {
+            return (Option.none GenLowered)
+        } else {
+        }
+        line: fn.lineno
+        col: fn.colno
+        gbase: gp.base.take
+        match (
+            gbase
+        ) case some then {
+            wrapper: buildWrapper ids: ids line: line col: col base: gbase.take leaf: gp.leaf.stringview
+            # the EXPRESSION wrapper's id keys the pendingMono record; the
+            # typechecker's valtype collapse looks it up there.
+            wid: ids.mint
+            wrapExpr: (Node.expression (zast.ExpressionData nodeid: wid lineno: line colno: col expression: wrapper))
+            bodyOpt: fn.body.take
+            match (
+                bodyOpt
+            ) case some then {
+                callM: buildCallMethod ids: ids line: line col: col body: bodyOpt.take wrapExpr: wrapExpr
+                createM: buildCreateMethod ids: ids line: line col: col
+                i64Atom: mkAtom ids: ids line: line col: col name: "i64"
+                stField: mkNamedOp ids: ids line: line col: col name: "state" op: i64Atom
+                isItems: (List of: Node)
+                isItems.append stField
+                createNamed: mkNamedOp ids: ids line: line col: col name: "create" op: createM
+                callNamed: mkNamedOp ids: ids line: line col: col name: "call" op: callM
+                asItems: (List of: Node)
+                asItems.append createNamed
+                asItems.append callNamed
+                synthClass: (Node.objectdef (zast.ObjectDefData nodeid: ids.mint lineno: line colno: col kind: zast.nodetype.CLASS isItems: isItems asItems: asItems isNative: false))
+                factory: buildFactory ids: ids line: line col: col synthName: synthName
+                return (Option.some (GenLowered factory: factory synthClass: synthClass wrapperNodeId: wid))
+            } case none then {
+                return (Option.none GenLowered)
+            }
+        } case none then {
+            return (Option.none GenLowered)
+        }
+    } else {
+        return (Option.none GenLowered)
+    }
+}

@@ -4389,8 +4389,51 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
                     j = j + 1.u64
                 }
                 if allOk when sfx.length > 0.u64 then {
+                    # generator wrapper collapse: the synth `.call` return's
+                    # Option/OptionView over a VALTYPE element is optionval
+                    # (ownership is a physical no-op for valtypes).
+                    tplId2: tplOpt
+                    tnOver: "".string
+                    gwv: optBoolOr o: (st.typing.generatorWrapper.get key: pm.nodeid.u64) d: false
+                    if gwv when firstA > 0.u64 then {
+                        faVal: false
+                        {
+                            fz: st.reg.typeById.get key: firstA
+                            match (
+                                fz
+                            ) case some then {
+                                fvo: fz.isValtype
+                                match (
+                                    fvo
+                                ) case some then {
+                                    if fvo then {
+                                        faVal = true
+                                    } else {
+                                    }
+                                } case none then {
+                                }
+                            } case none then {
+                            }
+                        }
+                        if faVal then {
+                            ovo: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: "optionval"
+                            match (
+                                ovo
+                            ) case some then {
+                                tplId2 = ovo
+                                tnOver = "optionval".string
+                            } case none then {
+                            }
+                        } else {
+                        }
+                    } else {
+                    }
                     tn: pm.template.copy
-                    tid: tplOpt
+                    if tnOver.length > 0.u64 then {
+                        tn = tnOver
+                    } else {
+                    }
+                    tid: tplId2
                     pnid: pm.nodeid
                     rm: (ResolvedMono template: tn suffix: sfx templateId: tid nodeid: pnid firstArgId: firstA subs: subs)
                     staged.append rm
@@ -6047,7 +6090,61 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
         match (
             cond
         ) case namedoperation then {
-            vt: checkValue st: st unitName: unitName unitBody: unitBody node: cond.operation
+            # A bare 0-arg function returning an iterator class auto-invokes
+            # (the reference rewrites the condition to a synthetic call):
+            # its walk runs in a call scope and the atom keeps the FUNCTION
+            # stamp rather than the auto-call's coerced return.
+            facId: 0.u64
+            fbn: bareAtomName n: cond.operation
+            if fbn.length > 0.u64 then {
+                ffo: lookupTyperef resolved: st.typing.resolved mainName: unitName base: fbn.stringview
+                match (
+                    ffo
+                ) case some then {
+                    if (st.reg.typetypeOf typeId: ffo) == ztypes.ztypetype.FUNCTION then {
+                        if (methodHasNoUserArgs st: st mid: ffo) then {
+                            fro: methodReturnOf st: st mid: ffo
+                            match (
+                                fro
+                            ) case some then {
+                                if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.CLASS then {
+                                    fco: st.typing.childOf parentTypeId: fro name: "call"
+                                    match (
+                                        fco
+                                    ) case some then {
+                                        facId = ffo
+                                    } case none then {
+                                    }
+                                } else {
+                                }
+                            } case none then {
+                            }
+                        } else {
+                        }
+                    } else {
+                    }
+                } case none then {
+                }
+            } else {
+            }
+            vt: 0.u64
+            if facId > 0.u64 then {
+                # the factory's lazy walks (its body + the iterator class's
+                # methods via return-first transitivity) fire before the
+                # synthetic invocation's call scope opens.
+                maybeWalkMethods st: st unitName: unitName unitBody: unitBody name: fbn.stringview
+                fcm: st.pushCall
+                vt = checkValue st: st unitName: unitName unitBody: unitBody node: cond.operation
+                st.popTo marker: fcm
+                fiid: innermostNodeId n: cond.operation
+                if fiid > 0.u32 then {
+                    setff: facId
+                    st.typing.nodeType.set key: fiid.u64 value: setff
+                } else {
+                }
+            } else {
+                vt = checkValue st: st unitName: unitName unitBody: unitBody node: cond.operation
+            }
             nm: unitLabel o: cond.name
             if nm.length > 0.u64 when vt > 0.u64 then {
                 # A call-shaped iterator init probes its per-iteration call
@@ -8153,6 +8250,12 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
         return (checkIf st: st unitName: unitName unitBody: unitBody ifnode: node)
     } case forexpr then {
         return (checkFor st: st unitName: unitName unitBody: unitBody fornode: node)
+    } case yieldexpr then {
+        # a suspension point: the yielded value walks for diagnostics; the
+        # out-only yield itself carries no type (bidirectional resume
+        # values land with the accepts examples).
+        checkValue st: st unitName: unitName unitBody: unitBody node: node.expr
+        return 0.u64
     } case doexpr then {
         return (checkDo st: st unitName: unitName unitBody: unitBody donode: node)
     } case withexpr then {
@@ -9191,6 +9294,162 @@ resolveConstantDefs: function {ty: ztyping.ZTyping program: Node} is {
     }
 }
 
+# unitHasYieldFn -- any function member of this unit whose body suspends.
+unitHasYieldFn: function {unitdef: Node} out bool is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (zgenerator.fnBodyHasYield n: bm.operation) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# lowerGenerators -- the generator lowering pass (the reference's
+# _lower_generators): for each unit, rewrite every yield-function whose
+# declared return head resolves to the stdlib Iterator protocol into a
+# synth iterator class + a factory. Runs before main-unit resolution so
+# the rewritten definitions flow through the normal walk; the Iterator
+# protocol resolves through a targeted demand only when a suspending
+# function exists, so non-generator programs never touch it.
+lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        anyYield: false
+        with yiter: program.units.iterate do for yu: yiter loop {
+            match (
+                yu
+            ) case namedoperation then {
+                if (unitHasYieldFn unitdef: yu.operation) then {
+                    anyYield = true
+                } else {
+                }
+            } else {
+            }
+        }
+        if anyYield then {} else {
+            return
+        }
+        reg.recordDemand name: "Iterator"
+        reg.recordDemand name: "optionval"
+        with siter: program.units.iterate do for su: siter loop {
+            match (
+                su
+            ) case namedoperation then {
+                snm: unitLabel o: su.name
+                if snm.stringview == "system" then {
+                    resolveDemandedUnitBody ty: ty reg: reg unitName: "system" shadowUnit: "" unitdef: su.operation
+                } else {
+                }
+            } else {
+            }
+        }
+        ik: "system.Iterator".string
+        iterTid: optU64Or o: (ty.resolved.get key: ik) d: 0.u64
+        if iterTid == 0.u64 then {
+            return
+        } else {
+        }
+        ids: zgenerator.newGenIds
+        ui: 0.u64
+        un: program.units.length
+        for while ui < un loop {
+            uel: program.units.get i: ui
+            match (
+                uel
+            ) case namedoperation then {
+                lowerGeneratorsInUnit ty: ty ids: ids unitdef: uel.operation
+            } else {
+            }
+            ui = ui + 1.u64
+        }
+    } else {
+    }
+}
+
+# lowerGeneratorsInUnit -- candidates collect first (indexes + names),
+# then each lowers by index: the functiondef moves out of its
+# namedoperation slot, the factory moves in, and the synth class appends
+# to the unit body under `{name}_iter`.
+lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        cIdx: (List of: u64)
+        bi: 0.u64
+        bn: unitdef.body.length
+        for while bi < bn loop {
+            bm: unitdef.body.get i: bi
+            isCand: false
+            match (
+                bm
+            ) case namedoperation then {
+                if (zgenerator.fnBodyHasYield n: bm.operation) then {
+                    hd: zgenerator.returnHeadName n: bm.operation
+                    if hd.stringview == "Iterator" then {
+                        if (zgenerator.canLowerNow n: bm.operation) then {
+                            isCand = true
+                        } else {
+                        }
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+            if isCand then {
+                bic: bi
+                cIdx.append bic
+            } else {
+            }
+            bi = bi + 1.u64
+        }
+        ci: 0.u64
+        cn: cIdx.length
+        for while ci < cn loop {
+            idx: cIdx.get i: ci
+            uel2: unitdef.body.get i: idx
+            match (
+                uel2
+            ) case namedoperation then {
+                dnm: unitLabel o: uel2.name
+                sname: "\{dnm}_iter"
+                fnNode: uel2.operation.take
+                lowOpt: zgenerator.lowerOne ids: ids fn: fnNode synthName: sname.stringview
+                match (
+                    lowOpt
+                ) case some then {
+                    wfid: lowOpt.wrapperNodeId
+                    wfv: true
+                    ty.generatorWrapper.set key: wfid.u64 value: wfv
+                    fac: lowOpt.factory.take
+                    uel2.operation = fac
+                    cls: lowOpt.synthClass.take
+                    clsN: zgenerator.mkNamedOp ids: ids line: 0.u32 col: 0.u32 name: sname.stringview op: cls
+                    unitdef.body.append clsN
+                } case none then {
+                }
+            } else {
+            }
+            ci = ci + 1.u64
+        }
+    } else {
+    }
+}
+
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     match (
@@ -9200,6 +9459,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     } else {}
     # null is the reference's first registered type.
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
+    lowerGenerators ty: ty reg: reg program: program
     registerAndResolveMain ty: ty reg: reg program: program full: full
     resolveMainUnitInstantiations ty: ty reg: reg program: program
     if full then {

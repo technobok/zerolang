@@ -948,6 +948,43 @@ class TestViewReassignmentKeepsSourceAlive:
         assert result.stdout == "Cat\n"
 
 
+class TestFieldTakeZeroesSource:
+    """Pin: `obj.field.take` moves the field's payload out and must zero
+    the source field storage.
+
+    The take-invalidation walker only recognised `<atom>.take`; a dotted
+    parent (`h.val.take`) returned no invalidation target, so the owner's
+    scope-exit destructor freed the payload the take had already moved --
+    a use-after-free. The field's C lvalue is now the invalidation target.
+    """
+
+    _SRC = (
+        "Holder: class {\n"
+        "  val: (Option t: String)\n"
+        "}\n"
+        "main: function is {\n"
+        '  h: (Holder val: (Option.some "hello".string))\n'
+        "  taken: h.val.take\n"
+        "  match (\n"
+        "    taken\n"
+        "  ) case some then {\n"
+        "    print taken\n"
+        "  } case none then {\n"
+        '    print "none"\n'
+        "  }\n"
+        '  print "done"\n'
+        "}"
+    )
+
+    def test_field_take_is_asan_clean(self):
+        csource = emit_source(self._SRC)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, (
+            f"asan flagged: stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert result.stdout == "hello\ndone\n"
+
+
 class TestBorrowedViewFieldProjectionNoDoubleFree:
     """Pin: reading an owning struct FIELD off a borrowed `Map.get`
     `OptionView` and passing it to a borrow parameter must not free the

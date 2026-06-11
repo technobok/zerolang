@@ -7969,6 +7969,18 @@ class CEmitter:
                     if name in self._alias_map:
                         return self._alias_map[name]
                     return mangle_var_name(name)
+            if (
+                cast(zast.DottedPath, op).child.name == "take"
+                and cast(zast.DottedPath, op).parent.nodetype == NodeType.DOTTEDPATH
+            ):
+                # Field take (`obj.field.take`): the invalidation target is
+                # the field's C lvalue. Without zeroing it, the owner's
+                # destructor frees the payload the take just moved out.
+                prev_lhs = self._lhs_mode
+                self._lhs_mode = True
+                target = self._emit_path_value(cast(zast.DottedPath, op).parent)
+                self._lhs_mode = prev_lhs
+                return target
         return None
 
     def _take_parent_atom_name(self, op: zast.Operation) -> Optional[str]:

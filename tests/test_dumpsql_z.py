@@ -265,7 +265,7 @@ _TYPED_NODES_QUERY = (
     "JOIN ast_nodes an ON tn.node_id = an.node_id "
     "JOIN types t ON tn.type_id = t.type_id "
     "WHERE t.defined_in_unit IN (?, 'system', 'collections') "
-    "ORDER BY an.kind, an.name, an.start_line, an.start_col"
+    "ORDER BY an.kind, an.name, an.start_line, an.start_col, t.name"
 )
 
 # SCAFFOLD: `defined_in_unit` filters the comparison to types DEFINED in the
@@ -547,6 +547,7 @@ CHECK_SMOKE = [
     "compileerror",
     "dobreak",
     "forloop",
+    "generator_counter",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -635,6 +636,7 @@ TYPED_NODES_CHECK = [
     "compileerror",
     "dobreak",
     "forloop",
+    "generator_counter",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
