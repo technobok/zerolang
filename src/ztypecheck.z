@@ -5283,7 +5283,7 @@ isComparisonOp: function {name: StringView} out bool is {
 
 # checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped)
 # then its then-statement block.
-checkClause: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) clause: Node} is {
+checkClause: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) clause: Node} out u64 is {
     match (
         clause
     ) case ifclause then {
@@ -5297,7 +5297,9 @@ checkClause: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
             }
         }
         checkStatement st: st unitName: unitName unitBody: unitBody block: clause.statement
+        return (lastStmtType st: st block: clause.statement)
     } else {
+        return 0.u64
     }
 }
 
@@ -5320,6 +5322,13 @@ lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
         } else {
         }
     } else {
+        # An expression-shaped body (a bare `then 10` branch) carries its
+        # value on its own node.
+        bid9: nodeId n: block
+        if bid9 > 0.u32 then {
+            result = optU64Or o: (st.typing.nodeType.get key: bid9.u64) d: result
+        } else {
+        }
     }
     return result
 }
@@ -5641,22 +5650,31 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
 # if resolves to never and marks the enclosing scope unreachable.
 checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) ifnode: zast.IfData} out u64 is {
     ifMarker: st.pushBlock name: "if"
+    nvId: optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never") d: 0.u64
+    branchTypes: (List of: u64)
     allDiverge: true
     cliter: ifnode.clauses.iterate
     for clause: cliter loop {
         bm: st.pushBlock name: "if_branch"
-        checkClause st: st unitName: unitName unitBody: unitBody clause: clause
+        bt9: checkClause st: st unitName: unitName unitBody: unitBody clause: clause
+        btc: bt9
+        branchTypes.append btc
         if (st.isUnreachable) then {
         } else {
             allDiverge = false
         }
         st.popTo marker: bm
     }
+    hasElse: false
     match (
         ifnode.elseclause
     ) case some then {
+        hasElse = true
         ebm: st.pushBlock name: "if_else"
         walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: ifnode.elseclause
+        et9: lastStmtTypeOpt st: st bodyOpt: ifnode.elseclause
+        etc9: et9
+        branchTypes.append etc9
         if (st.isUnreachable) then {
         } else {
             allDiverge = false
@@ -5667,16 +5685,35 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
     }
     result: 0.u64
     if allDiverge then {
-        nvOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never"
-        match (
-            nvOpt
-        ) case some then {
-            result = nvOpt
+        if nvId > 0.u64 then {
+            result = nvId
             setk: result
             st.typing.nodeType.set key: ifnode.nodeid.u64 value: setk
-        } case none then {
+        } else {
         }
     } else {
+        # An exhaustive (else-carrying) if is a value: the first completing
+        # branch's type, diverging branches skipped (mirrors the match rule).
+        if hasElse then {
+            ti9: 0.u64
+            tn9: branchTypes.length
+            for while ti9 < tn9 loop {
+                bt2: branchTypes.get i: ti9
+                if bt2 == nvId then {
+                } else {
+                    if bt2 > 0.u64 then {
+                        result = bt2
+                        setv9: result
+                        st.typing.nodeType.set key: ifnode.nodeid.u64 value: setv9
+                        ti9 = tn9
+                    } else {
+                        ti9 = tn9
+                    }
+                }
+                ti9 = ti9 + 1.u64
+            }
+        } else {
+        }
     }
     st.popTo marker: ifMarker
     if allDiverge then {
@@ -8145,6 +8182,67 @@ constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node}
     } case binop then {
         lt: constantOperandType ty: ty mainName: mainName n: n.lhs
         rt: constantOperandType ty: ty mainName: mainName n: n.rhs
+        opn9: atomName n: n.operator
+        if (isComparisonOp name: opn9.stringview) then {
+            # A comparison condition: the result is bool and a literal
+            # operand coerces (restamps) at the concrete side's type.
+            lLit: false
+            if lt == literalIntId then { lLit = true } else {
+            }
+            if lt == literalFloatId then { lLit = true } else {
+            }
+            rLit: false
+            if rt == literalIntId then { rLit = true } else {
+            }
+            if rt == literalFloatId then { rLit = true } else {
+            }
+            conc: 0.u64
+            if lLit then {} else {
+                if lt > 0.u64 then {
+                    conc = lt
+                } else {
+                }
+            }
+            if conc == 0.u64 then {
+                if rLit then {} else {
+                    if rt > 0.u64 then {
+                        conc = rt
+                    } else {
+                    }
+                }
+            } else {
+            }
+            if lLit when conc > 0.u64 then {
+                lid9: innermostNodeId n: n.lhs
+                if lid9 > 0.u32 then {
+                    setl9: conc
+                    ty.nodeType.set key: lid9.u64 value: setl9
+                } else {
+                }
+            } else {
+            }
+            if rLit when conc > 0.u64 then {
+                rid9: innermostNodeId n: n.rhs
+                if rid9 > 0.u32 then {
+                    setr9: conc
+                    ty.nodeType.set key: rid9.u64 value: setr9
+                } else {
+                }
+            } else {
+            }
+            bres9: 0.u64
+            bo9: lookupTyperef resolved: ty.resolved mainName: mainName base: "bool"
+            match (
+                bo9
+            ) case some then {
+                bres9 = bo9
+                setb9: bres9
+                ty.nodeType.set key: n.nodeid.u64 value: setb9
+            } case none then {
+            }
+            return bres9
+        } else {
+        }
         result: lt
         if lt == 0.u64 then {
             result = rt
@@ -8175,6 +8273,125 @@ constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node}
     }
 }
 
+# constantBranchWalk -- walk one unit-level-if branch block: each statement's
+# expression types through the constant walk; literal results materialise to
+# their defaults (i64/f64) on the statement, its expression wrapper, and the
+# atom. Returns the (materialised) last-statement type.
+constantBranchWalk: function {ty: ztyping.ZTyping mainName: StringView block: Node} out u64 is {
+    match (
+        block
+    ) case statement then {
+        result: 0.u64
+        siter: block.statements.iterate
+        for s9: siter loop {
+            match (
+                s9
+            ) case statementline then {
+                bt0: constantOperandType ty: ty mainName: mainName n: s9.statementline
+                mt0: 0.u64
+                if bt0 == literalIntId then {
+                    mt0 = optU64Or o: (lookupTyperef resolved: ty.resolved mainName: mainName base: "i64") d: 0.u64
+                } else {
+                }
+                if bt0 == literalFloatId then {
+                    mt0 = optU64Or o: (lookupTyperef resolved: ty.resolved mainName: mainName base: "f64") d: 0.u64
+                } else {
+                }
+                if mt0 > 0.u64 then {
+                    sets0: mt0
+                    ty.nodeType.set key: s9.nodeid.u64 value: sets0
+                    eid0: nodeId n: s9.statementline
+                    if eid0 > 0.u32 then {
+                        sete0: mt0
+                        ty.nodeType.set key: eid0.u64 value: sete0
+                    } else {
+                    }
+                    iid0: innermostNodeId n: s9.statementline
+                    if iid0 > 0.u32 then {
+                        seti0: mt0
+                        ty.nodeType.set key: iid0.u64 value: seti0
+                    } else {
+                    }
+                    result = mt0
+                } else {
+                    if bt0 > 0.u64 then {
+                        sets1: bt0
+                        ty.nodeType.set key: s9.nodeid.u64 value: sets1
+                        result = bt0
+                    } else {
+                    }
+                }
+            } else {
+            }
+        }
+        return result
+    } else {
+        return 0.u64
+    }
+}
+
+# constantBranchWalkOpt -- constantBranchWalk over an optional block.
+constantBranchWalkOpt: function {ty: ztyping.ZTyping mainName: StringView bodyOpt: (Option t: Node)} out u64 is {
+    match (
+        bodyOpt
+    ) case some then {
+        return (constantBranchWalk ty: ty mainName: mainName block: bodyOpt)
+    } case none then {
+        return 0.u64
+    }
+}
+
+# resolveUnitIfDef -- a unit-level `if` definition (compile-time conditional):
+# conditions walk through the constant machinery (comparisons stamp bool and
+# coerce literal operands), branches walk + materialise, and the definition
+# resolves to the first branch's type -- stamped on the If, its Expression
+# wrapper, and resolved[unit.name].
+resolveUnitIfDef: function {ty: ztyping.ZTyping mainName: StringView defName: StringView wrapperId: u32 n: Node} is {
+    match (
+        n
+    ) case ifexpr then {
+        t9: 0.u64
+        cliter: n.clauses.iterate
+        for clause: cliter loop {
+            match (
+                clause
+            ) case ifclause then {
+                coiter: clause.conditions.iterate
+                for cond: coiter loop {
+                    match (
+                        cond
+                    ) case namedoperation then {
+                        constantOperandType ty: ty mainName: mainName n: cond.operation
+                    } else {
+                    }
+                }
+                bt9: constantBranchWalk ty: ty mainName: mainName block: clause.statement
+                if t9 == 0.u64 then {
+                    t9 = bt9
+                } else {
+                }
+            } else {
+            }
+        }
+        et9: constantBranchWalkOpt ty: ty mainName: mainName bodyOpt: n.elseclause
+        if t9 == 0.u64 then {
+            t9 = et9
+        } else {
+        }
+        if t9 > 0.u64 then {
+            setw9: t9
+            ty.nodeType.set key: wrapperId.u64 value: setw9
+            seti9: t9
+            ty.nodeType.set key: n.nodeid.u64 value: seti9
+            k9: "\{mainName}.\{defName}".string
+            setr9: t9
+            ty.resolved.set key: k9 value: setr9
+        } else {
+        }
+    } else {
+    }
+}
+
 # resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
 # atomid is a unit constant. Record resolved[unit.name] as the literal's concrete
 # default (i64 / f64 -- both pre-demanded by seedSystemDemands). The definition's
@@ -8184,6 +8401,7 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
     match (
         defn
     ) case expression then {
+        resolveUnitIfDef ty: ty mainName: mainName defName: defName wrapperId: defn.nodeid n: defn.expression
         resolveConstantDef ty: ty mainName: mainName defName: defName defn: defn.expression
     } case atomid then {
         if (isNumericLiteralName name: defn.name.stringview) then {

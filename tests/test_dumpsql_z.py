@@ -539,6 +539,7 @@ CHECK_SMOKE = [
     "strview",
     "arrays",
     "box",
+    "ifexpr",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -619,6 +620,7 @@ TYPED_NODES_CHECK = [
     "strview",
     "arrays",
     "box",
+    "ifexpr",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
