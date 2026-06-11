@@ -2697,6 +2697,10 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
         }
     } case doexpr then {
         reg.recordDemand name: "never"
+        if (blockHasBreak n: node.statement) then {
+            reg.recordDemand name: "optionval"
+        } else {
+        }
         scanCallsInNode reg: reg node: node.statement
     } case withexpr then {
         scanCallsInNode reg: reg node: node.value
@@ -5535,6 +5539,17 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         vtOpt
     ) case some then {
         result = vtOpt
+        # break/continue diverge: the atom's value is never (the scope
+        # entry stays the unregistered placeholder).
+        isBrk9: false
+        if node.name.stringview == "break" then { isBrk9 = true } else {
+        }
+        if node.name.stringview == "continue" then { isBrk9 = true } else {
+        }
+        if isBrk9 then {
+            result = optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never") d: result
+        } else {
+        }
         setk: result
         st.typing.nodeType.set key: node.nodeid.u64 value: setk
     } case none then {
@@ -5865,6 +5880,73 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
     return dt
 }
 
+# blockHasBreak -- a bare `break` statement somewhere in this block's own
+# control flow (descending if/match/with bodies but NOT nested do/for, whose
+# breaks bind to them). Drives the do-block's optionval wrapping.
+blockHasBreak: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        siter: n.statements.iterate
+        for s0: siter loop {
+            if (blockHasBreak n: s0) then {
+                return true
+            } else {
+            }
+        }
+        return false
+    } case statementline then {
+        return (blockHasBreak n: n.statementline)
+    } case expression then {
+        return (blockHasBreak n: n.expression)
+    } case atomid then {
+        return (n.name.stringview == "break")
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl0: cliter loop {
+            match (
+                cl0
+            ) case ifclause then {
+                if (blockHasBreak n: cl0.statement) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        return (blockHasBreakOpt bodyOpt: n.elseclause)
+    } case caseexpr then {
+        mliter: n.clauses.iterate
+        for ml0: mliter loop {
+            match (
+                ml0
+            ) case caseclause then {
+                if (blockHasBreak n: ml0.statement) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        return (blockHasBreakOpt bodyOpt: n.elseclause)
+    } case withexpr then {
+        return (blockHasBreak n: n.body)
+    } else {
+        return false
+    }
+}
+
+# blockHasBreakOpt -- blockHasBreak over an optional body.
+blockHasBreakOpt: function {bodyOpt: (Option t: Node)} out bool is {
+    match (
+        bodyOpt
+    ) case some then {
+        return (blockHasBreak n: bodyOpt)
+    } case none then {
+        return false
+    }
+}
+
 # checkDo -- walk a do-block: push the `block` scope, define break (an entry
 # position placeholder with an unregistered type id, so it never joins the dump),
 # walk the statements, then pop. The do resolves to its last statement's value type.
@@ -5875,6 +5957,42 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
     checkStatement st: st unitName: unitName unitBody: unitBody block: donode.statement
     result: lastStmtType st: st block: donode.statement
     st.popTo marker: doMarker
+    # A break-carrying do-block's value wraps in optionval (early exit =
+    # none); the literal pseudo keys the instance as literal_int/float.
+    if result > 0.u64 when (blockHasBreak n: donode.statement) then {
+        vtn0: typeNameOf st: st tid: result
+        payId0: result
+        if result == literalIntId then {
+            vtn0 = "literal_int".string
+            payId0 = st.reg.newType name: "literal_int" typetype: ztypes.ztypetype.RECORD
+        } else {
+        }
+        if result == literalFloatId then {
+            vtn0 = "literal_float".string
+            payId0 = st.reg.newType name: "literal_float" typetype: ztypes.ztypetype.RECORD
+        } else {
+        }
+        if vtn0.length > 0.u64 then {
+            ovo0: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "optionval"
+            match (
+                ovo0
+            ) case some then {
+                osubs0: (Map key: String value: u64)
+                ok0: "t".string
+                ov0: payId0
+                osubs0.set key: ok0 value: ov0
+                omn0: "optionval_\{vtn0}"
+                omid0: mintMono st: st mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 fallbackArg: 0.u64
+                if omid0 > 0.u64 then {
+                    result = omid0
+                } else {
+                }
+            } case none then {
+            }
+        } else {
+        }
+    } else {
+    }
     if result > 0.u64 then {
         setk: result
         st.typing.nodeType.set key: donode.nodeid.u64 value: setk
@@ -8001,7 +8119,17 @@ checkStmtInner: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (
     match (
         inner
     ) case expression then {
-        return (checkExpression st: st unitName: unitName unitBody: unitBody expr: inner)
+        isR0: checkExpression st: st unitName: unitName unitBody: unitBody expr: inner
+        bn0: bareAtomName n: inner.expression
+        if bn0.stringview == "break" then {
+            isR0 = true
+        } else {
+        }
+        if bn0.stringview == "continue" then {
+            isR0 = true
+        } else {
+        }
+        return isR0
     } case assignment then {
         checkAssignment st: st unitName: unitName unitBody: unitBody asgn: inner
         return false
