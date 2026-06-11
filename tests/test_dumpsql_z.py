@@ -540,6 +540,9 @@ CHECK_SMOKE = [
     "arrays",
     "box",
     "ifexpr",
+    "listview",
+    "linkedlist",
+    "generics",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -621,6 +624,9 @@ TYPED_NODES_CHECK = [
     "arrays",
     "box",
     "ifexpr",
+    "listview",
+    "linkedlist",
+    "generics",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

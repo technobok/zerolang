@@ -1494,6 +1494,8 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
     isgen: hasGenericParam items: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: vid value: true
+        gtk9: "\{unitName}.\{defName}".string
+        registerGenericParams reg: reg typeKey: gtk9.stringview items: vnode.asItems
     } else {}
     fiter: vnode.isItems.iterate
     for fm: fiter loop {
@@ -1636,6 +1638,8 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     isgen: hasGenericParam items: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: uid value: true
+        gtk9: "\{unitName}.\{defName}".string
+        registerGenericParams reg: reg typeKey: gtk9.stringview items: vnode.asItems
     } else {}
     allNull: true
     fiter: vnode.isItems.iterate
@@ -1732,6 +1736,8 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     isgen: hasGenericParam items: cnode.asItems
     if isgen then {
         reg.setGeneric typeId: cid value: true
+        gtk9: "\{unitName}.\{defName}".string
+        registerGenericParams reg: reg typeKey: gtk9.stringview items: cnode.asItems
     } else {}
     istd: recordIsTypedef rnode: cnode
     if istd then {
@@ -3977,6 +3983,8 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         }
         lvId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
         markReturnsBorrow st: st methodId: lvId
+        lvTarget: "ListView_\{en}"
+        linkMonoReturn st: st methodId: lvId targetMono: lvTarget.stringview
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extendView"
         itid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
         markReturnsBorrow st: st methodId: itid
@@ -3992,8 +4000,12 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     } else {
     }
     if templateName == "ListView" then {
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        vlen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        st.reg.setValtype typeId: vlen value: true
+        st.typing.markAsConstClone typeId: vlen
+        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: vlen
+        vgId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
+        st.reg.setReturnType typeId: vgId value: elemArg
         mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
     } else {
     }
@@ -4280,6 +4292,177 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
     }
 }
 
+# genericTypeKey -- "{defining-unit}.{name}" for the registry's generic-param
+# set lookups.
+genericTypeKey: function {st: zenv.ZSymbolTable tid: u64} out String is {
+    tn: typeNameOf st: st tid: tid
+    duo: st.typing.definedInUnit.get key: tid
+    match (
+        duo
+    ) case some then {
+        return ("\{duo}.\{tn}")
+    } case none then {
+    }
+    return tn
+}
+
+# inferGenericConstruction -- a generic class/record template called with
+# field-bound value arguments: labels naming generic params resolve as
+# explicit type args; other args walk as values and bind their field's
+# param (literals materialise + restamp the bare node). The deduped
+# instance mints with substituted fields plus a synthesized create.
+# 0 when nothing infers.
+inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData tplId: u64} out u64 is {
+    tname: typeNameOf st: st tid: tplId
+    if tname.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    tk: genericTypeKey st: st tid: tplId
+    # Stage the template's children, then keep the ones whose TYPE NAME is a
+    # registered generic param (field shells carry the param name, not a
+    # GENERIC_PARAM typetype).
+    cNames3: (List of: String)
+    cIds3: (List of: u64)
+    with fiter: st.typing.typeChild.iterate do for tc: fiter loop {
+        if tc.parentTypeId == tplId then {
+            cto: st.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                fnv: tc.childName.stringview
+                fn1: fnv.string
+                cNames3.append fn1
+                cid1: cto
+                cIds3.append cid1
+            } case none then {
+            }
+        } else {
+        }
+    }
+    fNames: (List of: String)
+    fParams: (List of: String)
+    ci3: 0.u64
+    cn3: cIds3.length
+    for while ci3 < cn3 loop {
+        cid3: cIds3.get i: ci3
+        pnm3: typeNameOf st: st tid: cid3
+        if (st.reg.isGenericParamOf typeKey: tk.stringview name: pnm3.stringview) then {
+            nm3: cNames3.get i: ci3
+            nv3: nm3.stringview
+            n3: nv3.string
+            fNames.append n3
+            fParams.append pnm3
+        } else {
+        }
+        ci3 = ci3 + 1.u64
+    }
+    sfx: "".string
+    subs: (Map key: String value: u64)
+    firstA: 0.u64
+    with aiter: call.arguments.iterate do for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            pk: unitLabel o: arg.name
+            isP: false
+            if pk.length > 0.u64 then {
+                isP = st.reg.isGenericParamOf typeKey: tk.stringview name: pk.stringview
+            } else {
+            }
+            if isP then {
+                an: paramTypeBaseName op: arg.operation
+                if (isNumericLiteralName name: an.stringview) then {
+                    sfx.append s: "_"
+                    sfx.append s: an.stringview
+                } else {
+                    ao: lookupTyperef resolved: st.typing.resolved mainName: unitName base: an.stringview
+                    match (
+                        ao
+                    ) case some then {
+                        atn: typeNameOf st: st tid: ao
+                        sfx.append s: "_"
+                        sfx.append s: atn.stringview
+                        pk2: pk.copy
+                        pv2: ao
+                        subs.set key: pk2 value: pv2
+                        if firstA == 0.u64 then {
+                            firstA = ao
+                        } else {
+                        }
+                    } case none then {
+                    }
+                }
+            } else {
+                vt0: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                gidx: 0.u64
+                gfound: false
+                fi: 0.u64
+                fn2: fNames.length
+                for while fi < fn2 loop {
+                    f0: fNames.get i: fi
+                    if f0.stringview == pk.stringview then {
+                        if gfound then {} else {
+                            gidx = fi
+                            gfound = true
+                        }
+                    } else {
+                    }
+                    fi = fi + 1.u64
+                }
+                if gfound when vt0 > 0.u64 then {
+                    mv0: materialiseLiteral st: st unitName: unitName t: vt0
+                    if mv0 == vt0 then {} else {
+                        iid0: innermostNodeId n: arg.operation
+                        if iid0 > 0.u32 then {
+                            setm0: mv0
+                            st.typing.nodeType.set key: iid0.u64 value: setm0
+                        } else {
+                        }
+                    }
+                    gp0: fParams.get i: gidx
+                    already: optU64Or o: (subs.get key: gp0) d: 0.u64
+                    if already > 0.u64 then {} else {
+                        vtn: typeNameOf st: st tid: mv0
+                        sfx.append s: "_"
+                        sfx.append s: vtn.stringview
+                        gpv0: gp0.stringview
+                        gpc: gpv0.string
+                        gpv: mv0
+                        subs.set key: gpc value: gpv
+                        if firstA == 0.u64 then {
+                            firstA = mv0
+                        } else {
+                        }
+                    }
+                } else {
+                }
+            }
+        } else {
+        }
+    }
+    if sfx.length == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    mname: "\{tname}\{sfx}"
+    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0.u64
+    if mid == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    cro: st.typing.childOf parentTypeId: mid name: "create"
+    match (
+        cro
+    ) case some then {
+    } case none then {
+        crn: "\{mname}.create"
+        crId: st.reg.newType name: crn.stringview typetype: ztypes.ztypetype.FUNCTION
+        st.typing.setChild parentTypeId: mid childName: "create" childTypeId: crId
+    }
+    return mid
+}
+
 # genericTypeConstruction -- a generic TYPE template in callable position
 # with type-name arguments constructs its mono in place (`(List of: String)`
 # in value position): resolve each argument as a type, mint the deduped mono
@@ -4291,6 +4474,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         return 0.u64
     } else {
     }
+    tk0: genericTypeKey st: st tid: tplId
     sfx: "".string
     subs: (Map key: String value: u64)
     firstA: 0.u64
@@ -4300,8 +4484,19 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         match (
             arg
         ) case namedoperation then {
+            # only generic-param labels construct here; a value arg means
+            # the field-bound inference leg owns the call.
+            pk0: unitLabel o: arg.name
+            isP0: false
+            if pk0.length > 0.u64 then {
+                isP0 = st.reg.isGenericParamOf typeKey: tk0.stringview name: pk0.stringview
+            } else {
+            }
+            if isP0 then {} else {
+                anyMiss = true
+            }
             an: paramTypeBaseName op: arg.operation
-            if (isNumericLiteralName name: an.stringview) then {
+            if anyMiss then {} else { if (isNumericLiteralName name: an.stringview) then {
                 nsfx2: "\{sfx}_\{an}"
                 sfx = nsfx2
             } else {
@@ -4322,7 +4517,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
                 } else {
                     anyMiss = true
                 }
-            }
+            } }
         } else {}
     }
     if anyMiss then {
@@ -6959,6 +7154,28 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                     gres: genericTypeConstruction st: st unitName: unitName call: call tplId: funcId
                     if gres > 0.u64 then {
                         return gres
+                    } else {
+                    }
+                    # field-bound value args: infer the instance and construct
+                    # through the standard ctor flow (mirrors the reference's
+                    # generic record/class construction).
+                    gmid: inferGenericConstruction st: st unitName: unitName unitBody: unitBody call: call tplId: funcId
+                    if gmid > 0.u64 then {
+                        calid9: nodeId n: call.callable
+                        if calid9 > 0.u32 then {
+                            setc9: gmid
+                            st.typing.nodeType.set key: calid9.u64 value: setc9
+                        } else {
+                        }
+                        cm9: st.pushCall
+                        walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: gmid isCtor: true
+                        st.popTo marker: cm9
+                        ctk9: gmid
+                        ctv9: true
+                        st.typing.constructedTypes.set key: ctk9 value: ctv9
+                        setr9: gmid
+                        st.typing.nodeType.set key: call.nodeid.u64 value: setr9
+                        return gmid
                     } else {
                     }
                 }
