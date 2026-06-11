@@ -546,6 +546,7 @@ CHECK_SMOKE = [
     "numeric_generics",
     "compileerror",
     "dobreak",
+    "forloop",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -633,6 +634,7 @@ TYPED_NODES_CHECK = [
     "numeric_generics",
     "compileerror",
     "dobreak",
+    "forloop",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

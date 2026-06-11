@@ -5197,6 +5197,21 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         return 0.u64
     } else {
     }
+    # A literal base materialises before member lookup (`5.iterate` is
+    # i64.iterate); the parent node restamps at the concrete default.
+    if (isLiteralTypeId st: st tid: bt) then {
+        mbt9: materialiseLiteral st: st unitName: unitName t: bt
+        if mbt9 == bt then {} else {
+            bt = mbt9
+            pid9: nodeId n: dp.parent
+            if pid9 > 0.u32 then {
+                setp9: mbt9
+                st.typing.nodeType.set key: pid9.u64 value: setp9
+            } else {
+            }
+        }
+    } else {
+    }
     cn: atomName n: dp.child
     if cn.length == 0.u64 then {
         return 0.u64
@@ -6001,6 +6016,19 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
     return result
 }
 
+# isCallNode -- the node is a (possibly expression-wrapped) call.
+isCallNode: function {n: Node} out bool is {
+    match (
+        n
+    ) case call then {
+        return true
+    } case expression then {
+        return (isCallNode n: n.expression)
+    } else {
+        return false
+    }
+}
+
 # checkFor -- walk a for-loop: push the `for` scope, define break/continue (entry
 # position placeholders with unregistered type ids, so they never join the dump),
 # then walk the conditions, postconditions, and body, and pop. A named condition
@@ -6008,7 +6036,7 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
 # a bare literal init stays the literal pseudo-type, keeping the entry out of the
 # dump joins). Iterator-wrapper element extraction needs monomorphization and is
 # not implemented. The for itself resolves to null (filtered) in statement position.
-checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) fornode: zast.ForData} is {
+checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) fornode: zast.ForData} out u64 is {
     forMarker: st.pushBlock name: "for"
     bk: st.reg.allocType
     st.define name: "break" ztypeId: bk
@@ -6022,6 +6050,20 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
             vt: checkValue st: st unitName: unitName unitBody: unitBody node: cond.operation
             nm: unitLabel o: cond.name
             if nm.length > 0.u64 when vt > 0.u64 then {
+                # A call-shaped iterator init probes its per-iteration call
+                # in an empty call scope (the reference's rewrite walks it
+                # once); gated on the value being an iterator wrapper.
+                if (isCallNode n: cond.operation) then {
+                    pw9: iterWrapperElem st: st unitName: unitName wid: vt
+                    match (
+                        pw9
+                    ) case some then {
+                        ecm9: st.pushCall
+                        st.popTo marker: ecm9
+                    } case none then {
+                    }
+                } else {
+                }
                 elem: 0.u64
                 isView: false
                 w1: iterWrapperElem st: st unitName: unitName wid: vt
@@ -6104,10 +6146,47 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
         ) case namedoperation then {
             checkValue st: st unitName: unitName unitBody: unitBody node: pc.operation
         } else {
+            checkValue st: st unitName: unitName unitBody: unitBody node: pc
         }
     }
     walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: fornode.body
+    elemT9: lastStmtTypeOpt st: st bodyOpt: fornode.body
     st.popTo marker: forMarker
+    # for-as-expression: a value-producing body makes the loop a List of
+    # that element type (the comprehension form).
+    if elemT9 > 0.u64 then {
+        en9: typeNameOf st: st tid: elemT9
+        isNull9: false
+        if en9.stringview == "null" then { isNull9 = true } else {
+        }
+        if en9.length == 0.u64 then { isNull9 = true } else {
+        }
+        if isNull9 then {} else {
+            lto9: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "List"
+            match (
+                lto9
+            ) case some then {
+                lsubs9: (Map key: String value: u64)
+                lk9: "of".string
+                lv9: elemT9
+                lsubs9.set key: lk9 value: lv9
+                lsfx9: "_\{en9}"
+                lmn9: "List\{lsfx9}"
+                lmid9: mintMono st: st mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 fallbackArg: 0.u64
+                if lmid9 > 0.u64 then {
+                    mintTemplateChains st: st mainName: unitName tname: "List" suffix: lsfx9.stringview firstA: elemT9 valA: 0.u64
+                    mintCollectionChildren st: st mainName: unitName monoName: lmn9.stringview monoId: lmid9 templateName: "List" suffix: lsfx9.stringview elemArg: elemT9 valArg: 0.u64
+                    setf9: lmid9
+                    st.typing.nodeType.set key: fornode.nodeid.u64 value: setf9
+                    return lmid9
+                } else {
+                }
+            } case none then {
+            }
+        }
+    } else {
+    }
+    return 0.u64
 }
 
 # checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
@@ -8073,8 +8152,7 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
     } case ifexpr then {
         return (checkIf st: st unitName: unitName unitBody: unitBody ifnode: node)
     } case forexpr then {
-        checkFor st: st unitName: unitName unitBody: unitBody fornode: node
-        return 0.u64
+        return (checkFor st: st unitName: unitName unitBody: unitBody fornode: node)
     } case doexpr then {
         return (checkDo st: st unitName: unitName unitBody: unitBody donode: node)
     } case withexpr then {
