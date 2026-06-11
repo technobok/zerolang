@@ -544,6 +544,7 @@ CHECK_SMOKE = [
     "linkedlist",
     "generics",
     "numeric_generics",
+    "compileerror",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -629,6 +630,7 @@ TYPED_NODES_CHECK = [
     "linkedlist",
     "generics",
     "numeric_generics",
+    "compileerror",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

@@ -1988,7 +1988,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
 # registerEmptyType -- register a native bottom type (null -> NULL, never -> NEVER) as a
 # valtype with a single synth `create` child. The reference special-cases these: they are
 # `record is native` in source but carry a distinct typetype and only a create child.
-registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView tt: ztypes.ztypetype} is {
+registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView tt: ztypes.ztypetype} out u64 is {
     nid: reg.newType name: name typetype: tt
     nnid: nid
     reg.setValtype typeId: nid value: true
@@ -1997,7 +1997,9 @@ registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitN
     ty.setChild parentTypeId: nid childName: "create" childTypeId: ccid
     ty.definedInUnit.set key: nnid value: unitName.string
     rk: "\{unitName}.\{name}".string
-    ty.resolved.set key: rk value: nid
+    rv9: nid
+    ty.resolved.set key: rk value: rv9
+    return nid
 }
 
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
@@ -2039,7 +2041,9 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
                 registerEmptyType ty: ty reg: reg unitName: unitName name: "null" tt: ztypes.ztypetype.NULL
             } else {
                 if defName == "never" then {
-                    registerEmptyType ty: ty reg: reg unitName: unitName name: "never" tt: ztypes.ztypetype.NEVER
+                    nvid9: registerEmptyType ty: ty reg: reg unitName: unitName name: "never" tt: ztypes.ztypetype.NEVER
+                    setnv9: nvid9
+                    ty.nodeType.set key: defn.nodeid.u64 value: setnv9
                 } else {
                     resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
                 }
@@ -2624,6 +2628,16 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             reg.recordDemand name: "return"
             reg.recordDemand name: "never"
         } else {
+            # error/panic return never; the demand must land before the
+            # system sweep passes never's definition.
+            if cn.stringview == "error" then {
+                reg.recordDemand name: "never"
+            } else {
+            }
+            if cn.stringview == "panic" then {
+                reg.recordDemand name: "never"
+            } else {
+            }
             if cn.length > 0.u64 then {
                 reg.recordDemand name: cn.stringview
             } else {
@@ -5538,6 +5552,34 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
                 fo
             ) case some then {
                 result = fo
+                # A bare no-arg non-generic FUNCTION name is a call: the
+                # value is its return (an unregistered shell when out-less).
+                isAutoFn: false
+                {
+                    fz9: st.reg.typeById.get key: fo
+                    match (
+                        fz9
+                    ) case some then {
+                        if fz9.typetype == ztypes.ztypetype.FUNCTION then {
+                            if fz9.isgeneric then {} else {
+                                isAutoFn = true
+                            }
+                        } else {
+                        }
+                    } case none then {
+                    }
+                }
+                if isAutoFn when (methodHasNoUserArgs st: st mid: fo) then {
+                    ro9: methodReturnOf st: st mid: fo
+                    match (
+                        ro9
+                    ) case some then {
+                        result = ro9
+                    } case none then {
+                        result = st.reg.allocType
+                    }
+                } else {
+                }
                 setu: result
                 st.typing.nodeType.set key: node.nodeid.u64 value: setu
                 maybeWalkMethods st: st unitName: unitName unitBody: unitBody name: node.name.stringview
@@ -6028,13 +6070,38 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
     return result
 }
 
+# comparisonCoerceTarget -- the type a literal comparison operand coerces at:
+# the concrete side's operator-child first-param type when resolvable (a
+# boxed value's == is the element's, so the literal wears the element type),
+# else the concrete side itself.
+comparisonCoerceTarget: function {st: zenv.ZSymbolTable unitName: StringView concrete: u64 op: StringView} out u64 is {
+    opo9: st.typing.childOf parentTypeId: concrete name: op
+    match (
+        opo9
+    ) case some then {
+        p0n9: positionalParamName st: st funcId: opo9 idx: 0.u64
+        if p0n9.length > 0.u64 then {
+            ppo9: st.typing.childOf parentTypeId: opo9 name: p0n9.stringview
+            match (
+                ppo9
+            ) case some then {
+                return (resolveChildPayload st: st unitName: unitName cid: ppo9)
+            } case none then {
+            }
+        } else {
+        }
+    } case none then {
+    }
+    return concrete
+}
+
 # checkBinop -- type an arithmetic binop. Both operands are walked (so their
 # nodes are stamped); the result is the lhs operand type (correct for same-type
 # arithmetic -- full operator-method dispatch lands with a comparison example).
 checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) binop: zast.BinOpData} out u64 is {
     result: 0.u64
     lt: checkValue st: st unitName: unitName unitBody: unitBody node: binop.lhs
-    checkValue st: st unitName: unitName unitBody: unitBody node: binop.rhs
+    rt: checkValue st: st unitName: unitName unitBody: unitBody node: binop.rhs
     opn: atomName n: binop.operator
     if (isComparisonOp name: opn.stringview) then {
         boOpt: lookupTyperef resolved: st.typing.resolved mainName: unitName base: "bool"
@@ -6044,6 +6111,39 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
             result = boOpt
         } case none then {
             result = lt
+        }
+        # A literal operand coerces (restamps) at the concrete side's type.
+        lLit9: false
+        if lt == literalIntId then { lLit9 = true } else {
+        }
+        if lt == literalFloatId then { lLit9 = true } else {
+        }
+        rLit9: false
+        if rt == literalIntId then { rLit9 = true } else {
+        }
+        if rt == literalFloatId then { rLit9 = true } else {
+        }
+        if lLit9 when rLit9 then {} else {
+            if lLit9 when rt > 0.u64 then {
+                lct9: comparisonCoerceTarget st: st unitName: unitName concrete: rt op: opn.stringview
+                lid9: innermostNodeId n: binop.lhs
+                if lid9 > 0.u32 then {
+                    setlc9: lct9
+                    st.typing.nodeType.set key: lid9.u64 value: setlc9
+                } else {
+                }
+            } else {
+            }
+            if rLit9 when lt > 0.u64 then {
+                rct9: comparisonCoerceTarget st: st unitName: unitName concrete: lt op: opn.stringview
+                rid9: innermostNodeId n: binop.rhs
+                if rid9 > 0.u32 then {
+                    setrc9: rct9
+                    st.typing.nodeType.set key: rid9.u64 value: setrc9
+                } else {
+                }
+            } else {
+            }
         }
     } else {
         result = lt
@@ -7702,6 +7802,20 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
             clause
         ) case caseclause then {
             armName: atomName n: clause.matcharm
+            # A value-match literal arm wears the subject's concrete type.
+            if isSum then {} else {
+                if (isNumericLiteralName name: armName.stringview) when subjT > 0.u64 then {
+                    if (isLiteralTypeId st: st tid: subjT) then {} else {
+                        amid9: nodeId n: clause.matcharm
+                        if amid9 > 0.u32 then {
+                            seta9: subjT
+                            st.typing.nodeType.set key: amid9.u64 value: seta9
+                        } else {
+                        }
+                    }
+                } else {
+                }
+            }
             asname: "arm:\{armName}"
             armMarker: st.pushBlock name: asname.stringview
             if targetName.length > 0.u64 when subjT > 0.u64 then {
