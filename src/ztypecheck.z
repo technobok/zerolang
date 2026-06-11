@@ -434,9 +434,24 @@ registerGenericParams: function {reg: ztypes.ZTypeRegistry typeKey: StringView i
         ) case namedoperation then {
             if (isGenericParam op: m.operation) then {
                 pn: unitLabel o: m.name
-                reg.addGenericParam typeKey: typeKey paramName: pn.stringview
+                cb: genericConstraintBase n: m.operation
+                reg.addGenericParam typeKey: typeKey paramName: pn.stringview constraint: cb.stringview
             } else {}
         } else {}
+    }
+}
+
+# genericConstraintBase -- the constraint name of a `u64.generic`-style param
+# declaration (the dotted parent), "" otherwise.
+genericConstraintBase: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (genericConstraintBase n: n.expression)
+    } case dottedpath then {
+        return (atomName n: n.parent)
+    } else {
+        return "".string
     }
 }
 
@@ -3732,6 +3747,101 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         st.typing.setChild parentTypeId: mid childName: chName.stringview childTypeId: target
         ci = ci + 1.u64
     }
+    # RECORD instances: numeric-param fields synthesize from their declared
+    # constraint (size: u64.generic -> a u64 child) when no field references
+    # them; then the meta-create requalifies to the instance and ==/!=
+    # synthesize -- except str/array, whose branches own those members.
+    if tt == ztypes.ztypetype.RECORD then {
+        tplNm9: typeNameOf st: st tid: templateId
+        isSized9: false
+        if tplNm9.stringview == "str" then { isSized9 = true } else {
+        }
+        if tplNm9.stringview == "array" then { isSized9 = true } else {
+        }
+        tk9: genericTypeKey st: st tid: templateId
+        pfx9: "\{tk9}."
+        pNames9: (List of: String)
+        pCons9: (List of: String)
+        allKeys9: (List of: String)
+        with kit9: st.reg.genericParamConstraint.iterate do for k9: kit9 loop {
+            kv0: k9.stringview
+            kc0: kv0.string
+            allKeys9.append kc0
+        }
+        ki9: 0.u64
+        kn9: allKeys9.length
+        for while ki9 < kn9 loop {
+            k1: allKeys9.get i: ki9
+            po9: k1.stringview.stripPrefix p: pfx9.stringview
+            match (
+                po9
+            ) case some then {
+                pn9: po9.string
+                pNames9.append pn9
+                k1v: k1.stringview
+                k1o: k1v.string
+                co9: st.reg.genericParamConstraint.get key: k1o
+                match (
+                    co9
+                ) case some then {
+                    cvv9: co9.stringview
+                    cc9: cvv9.string
+                    pCons9.append cc9
+                } case none then {
+                    e9: "".string
+                    pCons9.append e9
+                }
+            } case none then {
+            }
+            ki9 = ki9 + 1.u64
+        }
+        pi9: 0.u64
+        pn0: pNames9.length
+        for while pi9 < pn0 loop {
+            pname9: pNames9.get i: pi9
+            pcon9: pCons9.get i: pi9
+            isNum9: true
+            if pcon9.stringview == "Any" then { isNum9 = false } else {
+            }
+            if pcon9.length == 0.u64 then { isNum9 = false } else {
+            }
+            if isNum9 then {
+                exo9: st.typing.childOf parentTypeId: mid name: pname9.stringview
+                match (
+                    exo9
+                ) case some then {
+                } case none then {
+                    cno9: lookupTyperef resolved: st.typing.resolved mainName: mainName base: pcon9.stringview
+                    match (
+                        cno9
+                    ) case some then {
+                        st.typing.setChild parentTypeId: mid childName: pname9.stringview childTypeId: cno9
+                    } case none then {
+                    }
+                }
+            } else {
+            }
+            pi9 = pi9 + 1.u64
+        }
+        if isSized9 then {} else {
+            crq9: "\{name}.create"
+            crId9: st.reg.newType name: crq9.stringview typetype: ztypes.ztypetype.FUNCTION
+            st.typing.setChild parentTypeId: mid childName: "create" childTypeId: crId9
+            eqo9: st.typing.childOf parentTypeId: mid name: "=="
+            match (
+                eqo9
+            ) case some then {
+            } case none then {
+                req9: "\{name}.=="
+                reqId9: st.reg.newType name: req9.stringview typetype: ztypes.ztypetype.FUNCTION
+                st.typing.setChild parentTypeId: mid childName: "==" childTypeId: reqId9
+                rne9: "\{name}.!="
+                rneId9: st.reg.newType name: rne9.stringview typetype: ztypes.ztypetype.FUNCTION
+                st.typing.setChild parentTypeId: mid childName: "!=" childTypeId: rneId9
+            }
+        }
+    } else {
+    }
     wantTag: false
     if tt == ztypes.ztypetype.VARIANT then {
         wantTag = true
@@ -6616,13 +6726,51 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
         if isWrapCall then {
             wcv: checkValue st: st unitName: unitName unitBody: unitBody node: call.callable
             if wcv > 0.u64 then {
-                witer: call.arguments.iterate
-                for warg: witer loop {
+                # A non-FUNCTION wrapped callee is the paren-mono construction
+                # form: value args ride the standard ctor walk (call scope,
+                # hoists, consumption); arg-less stays a bare construction.
+                isWType: true
+                if (st.reg.typetypeOf typeId: wcv) == ztypes.ztypetype.FUNCTION then {
+                    isWType = false
+                } else {
+                }
+                # List/Map have their own create paths in the reference --
+                # no standard ctor scope for their paren-construction args.
+                {
+                    wgo9: st.reg.typeById.get key: wcv
                     match (
-                        warg
-                    ) case namedoperation then {
-                        checkValue st: st unitName: unitName unitBody: unitBody node: warg.operation
-                    } else {}
+                        wgo9
+                    ) case some then {
+                        wgi9: wgo9.genericOriginId
+                        match (
+                            wgi9
+                        ) case some then {
+                            wgn9: typeNameOf st: st tid: wgi9
+                            if wgn9.stringview == "List" then { isWType = false } else {
+                            }
+                            if wgn9.stringview == "Map" then { isWType = false } else {
+                            }
+                        } case none then {
+                        }
+                    } case none then {
+                    }
+                }
+                if isWType when call.arguments.length > 0.u64 then {
+                    wcm: st.pushCall
+                    walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: wcv isCtor: true
+                    st.popTo marker: wcm
+                    wck: wcv
+                    wcvv: true
+                    st.typing.constructedTypes.set key: wck value: wcvv
+                } else {
+                    witer: call.arguments.iterate
+                    for warg: witer loop {
+                        match (
+                            warg
+                        ) case namedoperation then {
+                            checkValue st: st unitName: unitName unitBody: unitBody node: warg.operation
+                        } else {}
+                    }
                 }
                 setwc: wcv
                 st.typing.nodeType.set key: call.nodeid.u64 value: setwc
