@@ -527,6 +527,7 @@ CHECK_SMOKE = [
     "iterator",
     "atomic_call_temps",
     "owned_protocol",
+    "unions",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -595,6 +596,7 @@ TYPED_NODES_CHECK = [
     "iterator",
     "atomic_call_temps",
     "owned_protocol",
+    "unions",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

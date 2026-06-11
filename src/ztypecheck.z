@@ -557,7 +557,7 @@ monoArgName: function {an: StringView thisName: StringView} out String is {
 # reference stamps the wrapper with the instance type). Args must be bare atoms
 # (`this` / `type` map to the enclosing type); numeric size args or an empty
 # callable skip the record.
-recordPendingMono: function {ty: ztyping.ZTyping thisName: StringView op: Node nid: u32} is {
+recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView op: Node nid: u32} is {
     match (
         op
     ) case call then {
@@ -590,7 +590,8 @@ recordPendingMono: function {ty: ztyping.ZTyping thisName: StringView op: Node n
             } else {}
         }
         if tname.length > 0.u64 when allAtoms when margs.length > 0.u64 then {
-            pm: (ztyping.PendingMono nodeid: nid template: tname args: margs argNames: margNames)
+            oun: unitName.string
+            pm: (ztyping.PendingMono nodeid: nid template: tname originUnit: oun args: margs argNames: margNames)
             ty.pendingMono.append pm
         } else {}
     } else {}
@@ -605,7 +606,7 @@ recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: Stri
     match (
         node
     ) case expression then {
-        recordPendingMono ty: ty thisName: thisName op: node.expression nid: node.nodeid
+        recordPendingMono ty: ty unitName: unitName thisName: thisName op: node.expression nid: node.nodeid
         recordTyperef ty: ty unitName: unitName thisName: thisName node: node.expression
     } case call then {
         # Parameterized type `(T arg: U ...)`: the outer node resolves to a NULL-defined
@@ -702,19 +703,21 @@ recordReturnType: function {ty: ztyping.ZTyping unitName: StringView thisName: S
     } case none then {}
 }
 
-resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName: StringView} out u64 is {
+resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
     ) case atomid then {
         reg.recordDemand name: typeExpr.name.stringview
+        reg.recordSeededDemand un: unitName name: typeExpr.name.stringview
         return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
     } case labelvalue then {
         return (resolveAtomType reg: reg nm: typeExpr.name.stringview thisName: thisName)
     } case expression then {
-        return (resolveTyperefShell reg: reg typeExpr: typeExpr.expression thisName: thisName)
+        return (resolveTyperefShell reg: reg unitName: unitName typeExpr: typeExpr.expression thisName: thisName)
     } case call then {
         suffix: atomName n: typeExpr.callable
         reg.recordDemand name: suffix.stringview
+        reg.recordSeededDemand un: unitName name: suffix.stringview
         aiter: typeExpr.arguments.iterate
         for arg: aiter loop {
             match (
@@ -730,7 +733,7 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry typeExpr: Node thisName
         # A dotted type-expr peels to its parent: an ownership/access strip marker
         # (Container.private.lock) or a variant/union subtype default where the arm is
         # the default value and the type is the parent (direction.north -> direction).
-        return (resolveTyperefShell reg: reg typeExpr: typeExpr.parent thisName: thisName)
+        return (resolveTyperefShell reg: reg unitName: unitName typeExpr: typeExpr.parent thisName: thisName)
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
     }
@@ -865,13 +868,14 @@ isNativeValueView: function {name: StringView} out bool is {
 # demandReturnType -- record cross-unit demand for a function's return-type base
 # name (`out (Result t: u64 e: IoError)` -> demand "Result"), so a type named only
 # in a return position is resolved. The Option is borrowed, never bound.
-demandReturnType: function {reg: ztypes.ZTypeRegistry o: (Option t: Node)} is {
+demandReturnType: function {reg: ztypes.ZTypeRegistry unitName: StringView o: (Option t: Node)} is {
     match (
         o
     ) case some then {
         bn: paramTypeBaseName op: o
         if bn.length == 0.u64 then {} else {
             reg.recordDemand name: bn.stringview
+            reg.recordSeededDemand un: unitName name: bn.stringview
         }
     } case none then {}
 }
@@ -947,7 +951,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 } else {}
             } else {
                 pname: unitLabel o: pm.name
-                cid: resolveTyperefShell reg: reg typeExpr: pm.operation thisName: thisName
+                cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: pm.operation thisName: thisName
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
                 if (paramIsThisReceiver op: pm.operation) then {
                     reg.setThisParamName typeId: fid name: pname.stringview
@@ -968,7 +972,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
             }
         } else {}
     }
-    demandReturnType reg: reg o: fnode.returntype
+    demandReturnType reg: reg unitName: unitName o: fnode.returntype
     recordReturnType ty: ty unitName: unitName thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
     stampGenericParamRef ty: ty reg: reg unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
@@ -1423,7 +1427,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                     } else {}
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: mido
                 } case none then {
-                    cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                    cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
                     recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                 }
@@ -1481,7 +1485,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             fm
         ) case namedoperation then {
             aname: unitLabel o: fm.name
-            cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+            cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
             recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
@@ -1534,7 +1538,7 @@ dottedParentName: function {n: Node} out String is {
 # unionCustomTagId -- a union's custom DATA tag, if any: an `as { tag: <data>.tag }`
 # item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
 # none when absent or not a DATA (the union then synthesizes its own tag wrapper).
-unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView asItems: (List of: Node)} out (optionval t: u64) is {
+unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView uid: u64 asItems: (List of: Node)} out (optionval t: u64) is {
     iter: asItems.iterate
     for am: iter loop {
         match (
@@ -1559,7 +1563,14 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
                         if isdata then {
                             return (optionval.some rr)
                         } else {}
-                    } case none then {}
+                    } case none then {
+                        # the tag base resolves later (demand order): record
+                        # the demand and a pending fixup for the tag child.
+                        reg.recordDemand name: pn.stringview
+                        uk: uid
+                        pv: pn.copy
+                        ty.pendingCustomTag.set key: uk value: pv
+                    }
                 }
             } else {}
         } else {}
@@ -1594,13 +1605,13 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             if an.stringview == "null" then {} else {
                 allNull = false
             }
-            cid: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+            cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
             recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if isgen then {} else {
-        customTag: unionCustomTagId ty: ty reg: reg unitName: unitName asItems: vnode.asItems
+        customTag: unionCustomTagId ty: ty reg: reg unitName: unitName uid: uid asItems: vnode.asItems
         tagId: 0.u64
         match (
             customTag
@@ -1730,7 +1741,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
                             needsDtor = true
                         } else {}
-                        cidf: resolveTyperefShell reg: reg typeExpr: fm.operation thisName: ""
+                        cidf: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
                         if lockField then {
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
@@ -2128,6 +2139,9 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
                     if shadowed when (reg.isSeededDemand un: unitName name: dn.stringview) then {
                         shadowed = false
                     } else {}
+                    if shadowed when (reg.isSeededDemand un: "*" name: dn.stringview) then {
+                        shadowed = false
+                    } else {}
                     if shadowed then {} else {
                         anyDemanded = true
                         rkey: "\{unitName}.\{dn}".string
@@ -2279,6 +2293,36 @@ seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordSeededDemand un: "io" name: "IoError"
     reg.recordDemand name: "seekorigin"
     reg.recordSeededDemand un: "io" name: "seekorigin"
+}
+
+# fixupCustomTags -- bind deferred custom union tags: a `tag: X.tag` as-item
+# whose data block resolved after the union (demand order) overrides the
+# synthesized tag child once both exist.
+fixupCustomTags: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView} is {
+    pend: (List of: u64)
+    pnames: (List of: String)
+    with citer: ty.pendingCustomTag.iterateItems do for ce: citer loop {
+        ck: ce.key
+        pend.append ck
+        cvv: ce.value.stringview
+        cv: cvv.string
+        pnames.append cv
+    }
+    ci: 0.u64
+    cn: pend.length
+    for while ci < cn loop {
+        cuid: pend.get i: ci
+        cnm: pnames.get i: ci
+        co: lookupTyperef resolved: ty.resolved mainName: mainName base: cnm.stringview
+        ctid: optU64Or o: co d: 0.u64
+        if ctid > 0.u64 then {
+            if (reg.typetypeOf typeId: ctid) == ztypes.ztypetype.DATA then {
+                cuidc: cuid
+                ty.setChild parentTypeId: cuidc childName: "tag" childTypeId: ctid
+            } else {}
+        } else {}
+        ci = ci + 1.u64
+    }
 }
 
 # bodyEndsInReturn -- true when an optional body block's last statement is a
@@ -3745,7 +3789,9 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
         mainName: program.mainUnitName.stringview
         staged: (List of: ResolvedMono)
         with piter: st.typing.pendingMono.iterate do for pm: piter loop {
-            tplOpt: lookupTyperef resolved: st.typing.resolved mainName: mainName base: pm.template.stringview
+            pmuv: pm.originUnit.stringview
+            pmu: pmuv.string
+            tplOpt: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: pm.template.stringview
             match (
                 tplOpt
             ) case some then {
@@ -3757,7 +3803,7 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
                 na: pm.args.length
                 for while j < na loop {
                     an: pm.args.get i: j
-                    ao: lookupTyperef resolved: st.typing.resolved mainName: mainName base: an.stringview
+                    ao: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: an.stringview
                     match (
                         ao
                     ) case some then {
@@ -5804,12 +5850,29 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                                 } else {}
                             } else {}
                         } else {
+                            ucArm2: dottedChildName n: call.callable
                             aiter2: call.arguments.iterate
                             for arg2: aiter2 loop {
                                 match (
                                     arg2
                                 ) case namedoperation then {
-                                    checkValue st: st unitName: unitName unitBody: unitBody node: arg2.operation
+                                    uvt: checkValue st: st unitName: unitName unitBody: unitBody node: arg2.operation
+                                    # a literal payload coerces at the arm's
+                                    # payload type (restamp the bare node).
+                                    if (isLiteralTypeId st: st tid: uvt) then {
+                                        upo: st.typing.childOf parentTypeId: dtp name: ucArm2.stringview
+                                        upid: optU64Or o: upo d: 0.u64
+                                        if upid > 0.u64 then {
+                                            upt: resolveChildPayload st: st unitName: unitName cid: upid
+                                            if upt > 0.u64 then {
+                                                uiid: innermostNodeId n: arg2.operation
+                                                if uiid > 0.u32 then {
+                                                    setup: upt
+                                                    st.typing.nodeType.set key: uiid.u64 value: setup
+                                                } else {}
+                                            } else {}
+                                        } else {}
+                                    } else {}
                                 } else {}
                             }
                             setuc: dtp
@@ -7284,6 +7347,11 @@ resolveConstantDefs: function {ty: ztyping.ZTyping program: Node} is {
 
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
+    match (
+        program
+    ) case program then {
+        reg.setMainUnit name: program.mainUnitName.stringview
+    } else {}
     # null is the reference's first registered type.
     reg.newType name: "null" typetype: ztypes.ztypetype.NULL
     registerAndResolveMain ty: ty reg: reg program: program full: full
@@ -7293,6 +7361,11 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     } else {
     }
     resolveCrossUnitDemand ty: ty reg: reg program: program full: full
+    match (
+        program
+    ) case program then {
+        fixupCustomTags ty: ty reg: reg mainName: program.mainUnitName.stringview
+    } else {}
     if full then {
         resolveConstantDefs ty: ty program: program
     } else {

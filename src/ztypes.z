@@ -535,6 +535,7 @@ ZTypeRegistry: class {
     typeById:          (Map key: u64 value: ZType)
     crossUnitDemand:   (Set of: String)
     unitSeededDemand:  (Map key: String value: bool)
+    regMainUnit:       String
     genericParamSet:   (Set of: String)
 } as {
     allocType: function {:this} out u64 is {
@@ -799,10 +800,23 @@ ZTypeRegistry: class {
     # signature referenced; the typecheck demand pass resolves the ones that
     # name a definition in a non-main unit (mirrors the oracle's on-demand
     # `_resolve_typeref`). A side table, not part of the dumped type system.
+    setMainUnit: function {:this name: StringView} is {
+        mn: name.string
+        this.regMainUnit = mn
+    }
+
     recordSeededDemand: function {:this un: StringView name: StringView} is {
         sk: "\{un}.\{name}".string
         sv: true
         this.unitSeededDemand.set key: sk value: sv
+        # a non-main unit's internal demand also records unit-agnostically:
+        # any resolver in the demand chain may satisfy it despite a main-unit
+        # shadow (the reference resolves within the demanding unit's view).
+        if un == this.regMainUnit.stringview then {} else {
+            sk2: "*.\{name}".string
+            sv2: true
+            this.unitSeededDemand.set key: sk2 value: sv2
+        }
     }
 
     isSeededDemand: function {:this un: StringView name: StringView} out bool is {
@@ -840,7 +854,7 @@ ZTypeRegistry: class {
 }
 
 newRegistry: function {} out ZTypeRegistry is {
-    return (ZTypeRegistry nextTypeId: 0.u64 nextChildId: 0.u64 nextVariableId: 0.u64 nextScopeId: 0.u64 nextEntryId: 0.u64 nextConformanceId: 0.u64 typeById: (Map key: u64 value: ZType) crossUnitDemand: (Set of: String) unitSeededDemand: (Map key: String value: bool) genericParamSet: (Set of: String))
+    return (ZTypeRegistry nextTypeId: 0.u64 nextChildId: 0.u64 nextVariableId: 0.u64 nextScopeId: 0.u64 nextEntryId: 0.u64 nextConformanceId: 0.u64 typeById: (Map key: u64 value: ZType) crossUnitDemand: (Set of: String) unitSeededDemand: (Map key: String value: bool) regMainUnit: "".string genericParamSet: (Set of: String))
 }
 
 makeIntConst: function {v: i64} out ZConst is {
