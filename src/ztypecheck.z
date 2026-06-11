@@ -5705,6 +5705,21 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
         }
     } else {
         result = lt
+        # Operator children delegate (a boxed value's `+` is the element's,
+        # so the result is the element type, not the box).
+        opo: st.typing.childOf parentTypeId: lt name: opn.stringview
+        match (
+            opo
+        ) case some then {
+            oro: methodReturnOf st: st mid: opo
+            match (
+                oro
+            ) case some then {
+                result = oro
+            } case none then {
+            }
+        } case none then {
+        }
     }
     tdb2: typedefBaseOf st: st unitName: unitName tid: result
     if tdb2 > 0.u64 then {
@@ -6192,6 +6207,113 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
         }
     }
     return lockRoot
+}
+
+# checkBoxConstruction -- `Box from: val`: the value's (materialised) type
+# binds t; the argument is consumed (hoisted first when non-trivial); the
+# instance carries create plus the element type's children copied for
+# transparent member access. Heap passthrough (List/Map boxing) lands when
+# an example needs it.
+checkBoxConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData tplId: u64} out u64 is {
+    fnd: false
+    vt: 0.u64
+    with aiter: call.arguments.iterate do for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            if fnd then {} else {
+                an: unitLabel o: arg.name
+                if an.stringview == "t" then {} else {
+                    fnd = true
+                    avt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                    vt = materialiseLiteral st: st unitName: unitName t: avt
+                    if vt > 0.u64 then {
+                        if (argIsTrivial op: arg.operation) then {
+                            iid: innermostNodeId n: arg.operation
+                            if iid > 0.u32 then {
+                                setbl: vt
+                                st.typing.nodeType.set key: iid.u64 value: setbl
+                            } else {
+                            }
+                            bn: bareAtomName n: arg.operation
+                            if bn.length > 0.u64 when (typeIsReftype st: st tid: vt) then {
+                                st.invalidate name: bn.stringview loc: takenHere
+                            } else {
+                            }
+                        } else {
+                            hoistArg st: st argNode: arg.operation argType: vt paramType: 0.u64 consumes: true
+                        }
+                    } else {
+                    }
+                }
+            }
+        } else {
+        }
+    }
+    if vt == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    tn: typeNameOf st: st tid: vt
+    mname: "Box_\{tn}"
+    subs: (Map key: String value: u64)
+    sk: "t".string
+    sv: vt
+    subs.set key: sk value: sv
+    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0.u64
+    if mid == 0.u64 then {
+        return 0.u64
+    } else {
+    }
+    if (st.typing.childCount parentTypeId: mid) > 0.u64 then {} else {
+        crn: "\{mname}.create"
+        crId: st.reg.newType name: crn.stringview typetype: ztypes.ztypetype.FUNCTION
+        st.typing.setChild parentTypeId: mid childName: "create" childTypeId: crId
+        # Stage the element's children first: setChild appends to the very
+        # table being iterated.
+        cNames2: (List of: String)
+        cIds2: (List of: u64)
+        with citer2: st.typing.typeChild.iterate do for tc2: citer2 loop {
+            if tc2.parentTypeId == vt then {
+                cto2: st.typing.childTypeById.get key: tc2.childNameId
+                match (
+                    cto2
+                ) case some then {
+                    cnv2: tc2.childName.stringview
+                    cn2: cnv2.string
+                    cNames2.append cn2
+                    cid3: cto2
+                    cIds2.append cid3
+                } case none then {
+                }
+            } else {
+            }
+        }
+        bi: 0.u64
+        bn2: cNames2.length
+        for while bi < bn2 loop {
+            chn: cNames2.get i: bi
+            chi: cIds2.get i: bi
+            ext9: st.typing.childOf parentTypeId: mid name: chn.stringview
+            match (
+                ext9
+            ) case some then {
+            } case none then {
+                st.typing.setChild parentTypeId: mid childName: chn.stringview childTypeId: chi
+            }
+            bi = bi + 1.u64
+        }
+    }
+    bcal: nodeId n: call.callable
+    if bcal > 0.u32 then {
+        setbt: tplId
+        st.typing.nodeType.set key: bcal.u64 value: setbt
+    } else {
+    }
+    setbc: mid
+    st.typing.nodeType.set key: call.nodeid.u64 value: setbc
+    st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.BOX_CREATE
+    return mid
 }
 
 # callableDottedResult -- a dotted callable resolves through the dotted-path
@@ -6768,6 +6890,31 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                 }
             }
         } else {
+            # `Box from: val` -- the system box (empty generic class body)
+            # constructs through its own leg: t inferred from the value.
+            isBox: false
+            if isGen then {
+                if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.CLASS then {
+                    bxn: typeNameOf st: st tid: funcId
+                    if bxn.stringview == "Box" then {
+                        if (st.typing.childCount parentTypeId: funcId) == 0.u64 then {
+                            isBox = true
+                        } else {
+                        }
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+            if isBox then {
+                bres: checkBoxConstruction st: st unitName: unitName unitBody: unitBody call: call tplId: funcId
+                if bres > 0.u64 then {
+                    return bres
+                } else {
+                }
+            } else {
+            }
             if isGen then {
                 gtt: st.reg.typetypeOf typeId: funcId
                 if gtt == ztypes.ztypetype.FUNCTION then {
