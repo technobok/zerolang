@@ -1921,9 +1921,14 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         # (the u8 in `(List of: u8).typedef`) still stamp.
                         recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     } else {
-                        if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
-                            needsDtor = true
-                        } else {}
+                        if fname.stringview == "_resume_input" then {
+                            # the resume slot is pointer storage (or a value
+                            # copy for valtypes) -- never a destructor source
+                        } else {
+                            if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
+                                needsDtor = true
+                            } else {}
+                        }
                         cidf: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: cid typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
                         if lockField then {
@@ -2932,6 +2937,70 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
     } else {}
 }
 
+# resolveCoreBools -- register core's true/false re-exports as the bool
+# type and stamp each definition's `bool.<tag>` ref. The rest of core is
+# alias re-exports the demand sweep must not touch.
+resolveCoreBools: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        with citer: program.units.iterate do for cu: citer loop {
+            match (
+                cu
+            ) case namedoperation then {
+                cnm: unitLabel o: cu.name
+                if cnm.stringview == "core" then {
+                    resolveCoreBoolsIn ty: ty unitdef: cu.operation
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+resolveCoreBoolsIn: function {ty: ztyping.ZTyping unitdef: Node} is {
+    boolId: optU64Or o: (ty.resolved.get key: "system.bool".string) d: 0.u64
+    if boolId == 0.u64 then {
+        return
+    } else {
+    }
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                dn: unitLabel o: bm.name
+                isBoolName: false
+                if dn.stringview == "true" then { isBoolName = true } else {
+                }
+                if dn.stringview == "false" then { isBoolName = true } else {
+                }
+                if isBoolName then {
+                    rk: "core.\{dn}".string
+                    rv: boolId
+                    ty.resolved.set key: rk value: rv
+                    did: nodeId n: bm.operation
+                    if did > 0.u32 then {
+                        bnm: "bool".string
+                        ty.pendingTyperef.set key: did.u64 value: bnm
+                        bun: "".string
+                        ty.pendingTyperefUnit.set key: did.u64 value: bun
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
 # referenced (io / collections / system, each by demanded name plus its
 # conformance declarers). Under full, an io demand also seeds the io-internal
@@ -2948,6 +3017,7 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         reg.recordDemand name: "List"
     } else {
     }
+
     match (
         program
     ) case program then {
@@ -3012,6 +3082,20 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             } else {}
         }
     } else {}
+    # bare bool literals resolve through core's true/false re-exports
+    # (`false: bool.false`): the constant registers as the bool type and
+    # its definition's dotted ref stamps bool. Core's other members are
+    # unit aliases the demand sweep must NOT resolve, so this walks only
+    # the two names (post-sweep: bool is resolved by now).
+    wantBool: reg.isDemanded name: "true"
+    if (reg.isDemanded name: "false") then {
+        wantBool = true
+    } else {
+    }
+    if wantBool then {
+        resolveCoreBools ty: ty reg: reg program: program
+    } else {
+    }
 }
 
 # callableUnitName -- the callable's name when a binding value is a (possibly
@@ -6777,6 +6861,25 @@ lockCallArg: function {st: zenv.ZSymbolTable name: StringView callId: u64} is {
     r: st.tryLock path: pth lockType: ztypes.zlockstate.EXCLUSIVE holder: h hasSelfHolder: true selfHolder: h2
 }
 
+# lockSuffixBase -- the bare base name of a `<atom>.lock` argument, ""
+# otherwise.
+lockSuffixBase: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (lockSuffixBase n: n.expression)
+    } case dottedpath then {
+        ln: atomName n: n.child
+        if ln.stringview == "lock" then {
+            return (bareAtomName n: n.parent)
+        } else {
+            return "".string
+        }
+    } else {
+        return "".string
+    }
+}
+
 # takenHere -- the location stamp an ownership-transfer overlay carries (pop
 # propagates only located takes into the enclosing scope).
 takenHere: function {} out (optionval t: ztypes.zsrcpos) is {
@@ -7093,6 +7196,29 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                     consumes: false
                     if isTake then {
                         consumes = true
+                    } else {
+                    }
+                    # a `.lock`-suffixed argument at a lock parameter locks
+                    # its base and hoists a BORROWED view of it (the synth
+                    # temp's origin is the base; the base's lock row lands
+                    # in the call scope via the borrow-lock install).
+                    if isLockish then {
+                        lsb9: lockSuffixBase n: arg.operation
+                        if lsb9.length > 0.u64 then {
+                            drainPendingBorrow st: st
+                            lsbc9: lsb9.copy
+                            st.typing.pendingBorrowPath.append lsbc9
+                            if lockRoot.length == 0.u64 then {
+                                lockRoot = lsb9.copy
+                            } else {
+                            }
+                            if isDeclLock then {
+                                xlc9: lsb9.copy
+                                st.typing.lastLockParamRoot = xlc9
+                            } else {
+                            }
+                        } else {
+                        }
                     } else {
                     }
                     hadPending: false
@@ -8436,11 +8562,27 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
             return 0.u64
         }
     } case yieldexpr then {
-        # a suspension point: the yielded value walks for diagnostics; the
-        # out-only yield itself carries no type (bidirectional resume
-        # values land with the accepts examples).
+        # a suspension point: the yielded value walks for diagnostics. A
+        # bidirectional generator's yield carries the resumed value -- the
+        # synth `.call`'s `value` parameter's type (the node itself stays
+        # unstamped; the expression wrapper takes the type). A reftype
+        # resume value is a borrow into the caller's argument: the
+        # surrounding binding becomes BORROWED origin value.
         checkValue st: st unitName: unitName unitBody: unitBody node: node.expr
-        return 0.u64
+        yvo: st.lookup name: "value"
+        match (
+            yvo
+        ) case some then {
+            if (typeIsReftype st: st tid: yvo) then {
+                drainPendingBorrow st: st
+                yvc: "value".string
+                st.typing.pendingBorrowPath.append yvc
+            } else {
+            }
+            return yvo
+        } case none then {
+            return 0.u64
+        }
     } case doexpr then {
         return (checkDo st: st unitName: unitName unitBody: unitBody donode: node)
     } case withexpr then {
@@ -9496,6 +9638,46 @@ unitHasYieldFn: function {unitdef: Node} out bool is {
                     return true
                 } else {
                 }
+                if (objectHasYieldMethod n: bm.operation) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# objectHasYieldMethod -- any is/as member of an object definition whose
+# body suspends.
+objectHasYieldMethod: function {n: Node} out bool is {
+    match (
+        n
+    ) case objectdef then {
+        aiter: n.asItems.iterate
+        for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (zgenerator.fnBodyHasYield n: am.operation) then {
+                    return true
+                } else {
+                }
+            } else {
+            }
+        }
+        iiter: n.isItems.iterate
+        for im: iiter loop {
+            match (
+                im
+            ) case namedoperation then {
+                if (zgenerator.fnBodyHasYield n: im.operation) then {
+                    return true
+                } else {
+                }
             } else {
             }
         }
@@ -9588,7 +9770,7 @@ lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unit
                 if (zgenerator.fnBodyHasYield n: bm.operation) then {
                     hd: zgenerator.returnHeadName n: bm.operation
                     if hd.stringview == "Iterator" then {
-                        if (zgenerator.canLowerNow n: bm.operation) then {
+                        if (zgenerator.canLowerNow n: bm.operation hasReceiver: false) then {
                             isCand = true
                         } else {
                         }
@@ -9616,7 +9798,7 @@ lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unit
                 dnm: unitLabel o: uel2.name
                 sname: "\{dnm}_iter"
                 fnNode: uel2.operation.take
-                lowOpt: zgenerator.lowerOne ids: ids fn: fnNode synthName: sname.stringview
+                lowOpt: zgenerator.lowerOne ids: ids fn: fnNode synthName: sname.stringview receiverType: ""
                 match (
                     lowOpt
                 ) case some then {
@@ -9646,7 +9828,122 @@ lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unit
             }
             ci = ci + 1.u64
         }
+        # method generators: each object definition's members lower the
+        # same way, named {Type}_{method}_iter, with the receiver context.
+        # Synth classes stage locally; the double-pop drain preserves order.
+        pendingCls: (List of: Node)
+        ogi: 0.u64
+        ogn: unitdef.body.length
+        for while ogi < ogn loop {
+            oel: unitdef.body.get i: ogi
+            match (
+                oel
+            ) case namedoperation then {
+                tnm: unitLabel o: oel.name
+                if tnm.length > 0.u64 then {
+                    lowerGeneratorMethods ty: ty ids: ids typeName: tnm.stringview defn: oel.operation dst: pendingCls
+                } else {
+                }
+            } else {
+            }
+            ogi = ogi + 1.u64
+        }
+        revCls: (List of: Node)
+        for while pendingCls.length > 0.u64 loop {
+            pc0: pendingCls.pop
+            revCls.append pc0
+        }
+        for while revCls.length > 0.u64 loop {
+            rc0: revCls.pop
+            unitdef.body.append rc0
+        }
     } else {
+    }
+}
+
+# lowerGeneratorMethods -- lower the generator methods of one object
+# definition (as-block first, then is-block), replacing each method with
+# its factory in place and appending the synth class to the unit body.
+lowerGeneratorMethods: function {ty: ztyping.ZTyping ids: zgenerator.GenIds typeName: StringView defn: Node dst: (List of: Node)} is {
+    match (
+        defn
+    ) case objectdef then {
+        lowerGeneratorItems ty: ty ids: ids typeName: typeName items: defn.asItems dst: dst
+        lowerGeneratorItems ty: ty ids: ids typeName: typeName items: defn.isItems dst: dst
+    } else {
+    }
+}
+
+lowerGeneratorItems: function {ty: ztyping.ZTyping ids: zgenerator.GenIds typeName: StringView items: (List of: Node) dst: (List of: Node)} is {
+    bi: 0.u64
+    bn: items.length
+    for while bi < bn loop {
+        bm: items.get i: bi
+        isCand: false
+        match (
+            bm
+        ) case namedoperation then {
+            if (zgenerator.fnBodyHasYield n: bm.operation) then {
+                hd: zgenerator.returnHeadName n: bm.operation
+                if hd.stringview == "Iterator" then {
+                    if (zgenerator.canLowerNow n: bm.operation hasReceiver: true) then {
+                        isCand = true
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+        } else {
+        }
+        if isCand then {
+            bm2: items.get i: bi
+            match (
+                bm2
+            ) case namedoperation then {
+                mnm: unitLabel o: bm2.name
+                sname: "\{typeName}_\{mnm}_iter"
+                fnNode: bm2.operation.take
+                lowOpt: zgenerator.lowerOne ids: ids fn: fnNode synthName: sname.stringview receiverType: typeName
+                match (
+                    lowOpt
+                ) case some then {
+                    wfid: lowOpt.wrapperNodeId
+                    wfv: true
+                    ty.generatorWrapper.set key: wfid.u64 value: wfv
+                    nsi: 0.u64
+                    nsn: lowOpt.noStamp.length
+                    for while nsi < nsn loop {
+                        ns0: lowOpt.noStamp.get i: nsi
+                        nsk: ns0.u64
+                        nsv: true
+                        ty.noStampNode.set key: nsk value: nsv
+                        nsi = nsi + 1.u64
+                    }
+                    iri: 0.u64
+                    irn: lowOpt.innerRefs.length
+                    for while iri < irn loop {
+                        ir0: lowOpt.innerRefs.get i: iri
+                        irk: ir0.u64
+                        irk2: ir0.u64
+                        irv: typeName.string
+                        ty.pendingTyperef.set key: irk value: irv
+                        iru: "".string
+                        ty.pendingTyperefUnit.set key: irk2 value: iru
+                        iri = iri + 1.u64
+                    }
+                    fac: lowOpt.factory.take
+                    bm2.operation = fac
+                    cls: lowOpt.synthClass.take
+                    clsN: zgenerator.mkNamedOp ids: ids line: 0.u32 col: 0.u32 name: sname.stringview op: cls
+                    dst.append clsN
+                } case none then {
+                }
+            } else {
+            }
+        } else {
+        }
+        bi = bi + 1.u64
     }
 }
 

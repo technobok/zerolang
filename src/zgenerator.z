@@ -38,6 +38,32 @@ GenLowered: class {
     synthClass:    Node
     wrapperNodeId: u32
     noStamp:       (List of: u32)
+    # inner dotted nodes of receiver-lock field spines: each stamps the
+    # receiver type through the deferred typeref pass (the reference's
+    # marker-path stamps cover them).
+    innerRefs:     (List of: u32)
+}
+
+# innerDpId -- the parent dotted node's id of a two-level marker path
+# (`Bag.private.lock` -> the `Bag.private` node); 0 otherwise.
+innerDpId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case dottedpath then {
+        return (dpNodeId n: n.parent)
+    } else {
+        return 0.u32
+    }
+}
+
+dpNodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case dottedpath then {
+        return n.nodeid
+    } else {
+        return 0.u32
+    }
 }
 
 # topNodeId -- a cloned type-path's top node id (the typeref-stamp key the
@@ -471,6 +497,48 @@ acceptsFromOp: function {ids: GenIds n: Node dst: GivesParts} is {
     }
 }
 
+# resumeBaseId -- pathBaseAtomId over an optional path.
+resumeBaseId: function {o: (Option t: Node)} out u32 is {
+    match (
+        o
+    ) case some then {
+        return (pathBaseAtomId n: o)
+    } case none then {
+        return 0.u32
+    }
+}
+
+# pathBaseAtomId -- the head atom's node id of a (possibly dotted /
+# wrapped) type path; 0 for other shapes.
+pathBaseAtomId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.nodeid
+    } case labelvalue then {
+        return n.nodeid
+    } case dottedpath then {
+        return (pathBaseAtomId n: n.parent)
+    } case expression then {
+        return (pathBaseAtomId n: n.expression)
+    } else {
+        return 0.u32
+    }
+}
+
+# cloneDottedParent -- a clone of a dotted path's parent (the ownership
+# leaf stripped); none for non-dotted shapes.
+cloneDottedParent: function {ids: GenIds n: Node} out (Option t: Node) is {
+    match (
+        n
+    ) case dottedpath then {
+        c: clonePath ids: ids n: n.parent
+        return (Option.some c)
+    } else {
+        return (Option.none Node)
+    }
+}
+
 # mkAtom / mkNamedOp / mkBareOp -- small node factories at a source
 # position (the synthesized members all carry the function's start).
 mkAtom: function {ids: GenIds line: u32 col: u32 name: StringView} out Node is {
@@ -533,11 +601,19 @@ buildCreateMethod: function {ids: GenIds line: u32 col: u32 params: (List of: No
 # buildCallMethod -- the iterator protocol implementation: `call: function
 # {this: this} out (<wrapper> t: <gives>) is <original body>`. Yields stay
 # in place; promoted-name rewriting lands with the parameterized examples.
-buildCallMethod: function {ids: GenIds line: u32 col: u32 body: Node.take wrapExpr: Node.take} out Node is {
+buildCallMethod: function {ids: GenIds line: u32 col: u32 body: Node.take wrapExpr: Node.take valueParam: (Option t: Node).take} out Node is {
     thisP: mkAtom ids: ids line: line col: col name: "this"
     thisParam: mkNamedOp ids: ids line: line col: col name: "this" op: thisP
     params: (List of: Node)
     params.append thisParam
+    vp9: valueParam.take
+    match (
+        vp9
+    ) case some then {
+        vparam: mkNamedOp ids: ids line: line col: col name: "value" op: vp9.take
+        params.append vparam
+    } case none then {
+    }
     return (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: line colno: col returntype: (Option.some wrapExpr) parameters: params body: (Option.some body) isNative: false asItems: (List of: Node)))
 }
 
@@ -559,7 +635,7 @@ buildWrapper: function {ids: GenIds line: u32 col: u32 base: Node.take leaf: Str
 # buildFactory -- the replacement for the original function: return type =
 # the synth class, body = `return (<synth_name> p1: p1 ...)` forwarding
 # each captured parameter by name.
-buildFactory: function {ids: GenIds line: u32 col: u32 synthName: StringView params: (List of: Node).take fwdNames: (List of: String)} out Node is {
+buildFactory: function {ids: GenIds line: u32 col: u32 synthName: StringView params: (List of: Node).take fwdNames: (List of: String) privNames: (Map key: String value: bool)} out Node is {
     synthAtom: mkAtom ids: ids line: line col: col name: synthName
     fargs: (List of: Node)
     fi: 0.u64
@@ -568,8 +644,20 @@ buildFactory: function {ids: GenIds line: u32 col: u32 synthName: StringView par
         f0: fwdNames.get i: fi
         f0v: f0.stringview
         va0: mkAtom ids: ids line: line col: col name: f0v
-        fa0: mkNamedOp ids: ids line: line col: col name: f0v op: va0
-        fargs.append fa0
+        # a private-lock receiver forwards through `.private`: the synth
+        # class's field needs friend access, while the factory's own
+        # public `this.lock` parameter stays callable from outside.
+        f0o: f0v.string
+        isPriv: optBoolOr2 o: (privNames.get key: f0o) d: false
+        if isPriv then {
+            pa0: mkAtom ids: ids line: line col: col name: "private"
+            vp0: (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: line colno: col parent: va0 child: pa0))
+            fa1: mkNamedOp ids: ids line: line col: col name: f0v op: vp0
+            fargs.append fa1
+        } else {
+            fa0: mkNamedOp ids: ids line: line col: col name: f0v op: va0
+            fargs.append fa0
+        }
         fi = fi + 1.u64
     }
     icall: (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: synthAtom arguments: fargs))
@@ -1312,11 +1400,86 @@ mkThisDotted: function {ids: GenIds line: u32 col: u32 name: StringView} out Nod
     return (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: line colno: col parent: thisAtom child: childAtom))
 }
 
+# cloneWithThisHead -- clone a type path replacing its `this` head atom
+# with the named receiver type (`this.private.lock` -> `Bag.private.lock`).
+# cloneWithThisHead -- the rewritten spine carries the supplied position
+# (the reference synthesizes the receiver rewrite at loc = func.start).
+cloneWithThisHead: function {ids: GenIds n: Node receiverType: StringView line: u32 col: u32} out Node is {
+    match (
+        n
+    ) case atomid then {
+        if n.name.stringview == "this" then {
+            return (mkAtom ids: ids line: line col: col name: receiverType)
+        } else {
+            nmv: n.name.stringview
+            nm0: nmv.string
+            return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: line colno: col name: nm0))
+        }
+    } case labelvalue then {
+        if n.name.stringview == "this" then {
+            return (mkAtom ids: ids line: line col: col name: receiverType)
+        } else {
+            lmv: n.name.stringview
+            lm0: lmv.string
+            return (Node.labelvalue (zast.LabelValueData nodeid: ids.mint lineno: line colno: col name: lm0))
+        }
+    } case dottedpath then {
+        np: cloneWithThisHead ids: ids n: n.parent receiverType: receiverType line: line col: col
+        nc: clonePath ids: ids n: n.child
+        return (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: line colno: col parent: np child: nc))
+    } case expression then {
+        ne: cloneWithThisHead ids: ids n: n.expression receiverType: receiverType line: line col: col
+        return (Node.expression (zast.ExpressionData nodeid: ids.mint lineno: line colno: col expression: ne))
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
+# isThisPrivateLock -- the `this.private.lock` friend-access receiver form.
+isThisPrivateLock: function {n: Node} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        ln: leafAtomName n: n.child
+        if ln.stringview == "lock" then {
+            return (isThisPrivate n: n.parent)
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+isThisPrivate: function {n: Node} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        pn: leafAtomName n: n.child
+        if pn.stringview == "private" then {
+            return (pathHeadIsThis n: n.parent)
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
 # paramFieldPath -- the synth class's field type for one captured
 # parameter: a take-leaf strips (fields hold owned values), lock keeps
-# its suffix, bare passes through. Receiver (`this`-headed) params land
-# with the method-generator slice.
-paramFieldPath: function {ids: GenIds n: Node} out Node is {
+# its suffix, bare passes through. Receiver (`this`-headed) params
+# capture as receiver-type lock fields.
+paramFieldPath: function {ids: GenIds n: Node receiverType: StringView} out Node is {
+    if receiverType.length > 0.u64 then {
+        if (pathHeadIsThis n: n) then {
+            fl0: nodeLineOf n: n
+            fc0: nodeColOf n: n
+            return (cloneWithThisHead ids: ids n: n receiverType: receiverType line: fl0 col: fc0)
+        } else {
+        }
+    } else {
+    }
     lf: pathLeafName n: n
     if lf.stringview == "take" then {
         match (
@@ -1331,17 +1494,76 @@ paramFieldPath: function {ids: GenIds n: Node} out Node is {
     }
 }
 
+# cloneCreateParam -- the synth create's parameter: a clone with any
+# `this` head rewritten to the receiver type (inside the synth class,
+# `this` is the iterator, not the original receiver).
+cloneCreateParam: function {ids: GenIds n: Node receiverType: StringView fnLine: u32 fnCol: u32} out Node is {
+    match (
+        n
+    ) case namedoperation then {
+        ln0: n.lineno
+        co0: n.colno
+        nnm: cloneOptString o: n.name
+        isTh0: false
+        if receiverType.length > 0.u64 then {
+            isTh0 = pathHeadIsThis n: n.operation
+        } else {
+        }
+        if isTh0 then {
+            nop1: cloneWithThisHead ids: ids n: n.operation receiverType: receiverType line: fnLine col: fnCol
+            return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln0 colno: co0 name: nnm operation: nop1))
+        } else {
+            nop: clonePath ids: ids n: n.operation
+            return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln0 colno: co0 name: nnm operation: nop))
+        }
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
+# cloneFactoryParam -- the factory's parameter: `this.private.lock`
+# exposes publicly as `this.lock` (the body projects `.private` when
+# forwarding); everything else clones as-is.
+cloneFactoryParam: function {ids: GenIds n: Node fnLine: u32 fnCol: u32} out Node is {
+    match (
+        n
+    ) case namedoperation then {
+        ln0: n.lineno
+        co0: n.colno
+        nnm: cloneOptString o: n.name
+        if (isThisPrivateLock n: n.operation) then {
+            # the public this.lock replacement carries the function's start
+            # (the reference synthesizes it at loc = func.start)
+            ta0: mkAtom ids: ids line: fnLine col: fnCol name: "this"
+            la0: mkAtom ids: ids line: fnLine col: fnCol name: "lock"
+            nop2: (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: fnLine colno: fnCol parent: ta0 child: la0))
+            return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln0 colno: co0 name: nnm operation: nop2))
+        } else {
+            nop: clonePath ids: ids n: n.operation
+            return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln0 colno: co0 name: nnm operation: nop))
+        }
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
 # canLowerNow -- pre-surgery shape gate on the borrowed definition: a
 # parenthesized gives, a real body, and no receiver (`this`-headed)
 # parameter types (method generators land with the listiter slice).
-canLowerNow: function {n: Node} out bool is {
+canLowerNow: function {n: Node hasReceiver: bool} out bool is {
     match (
         n
     ) case functiondef then {
         piter: n.parameters.iterate
         for p0: piter loop {
             if (paramHeadIsThis n: p0) then {
-                return false
+                if hasReceiver then {
+                    if (paramIsThisLock n: p0) then {} else {
+                        return false
+                    }
+                } else {
+                    return false
+                }
             } else {
             }
         }
@@ -1350,11 +1572,7 @@ canLowerNow: function {n: Node} out bool is {
             return false
         } else {
         }
-        if (returnHasAccepts o: n.returntype) then {
-            # bidirectional generators land with the accepts slice
-            return false
-        } else {
-        }
+
         match (
             n.body
         ) case some then {
@@ -1417,6 +1635,23 @@ paramHeadIsThis: function {n: Node} out bool is {
     }
 }
 
+# paramIsThisLock -- the receiver parameter forms a generator method may
+# carry: `this.lock` or `this.private.lock`.
+paramIsThisLock: function {n: Node} out bool is {
+    match (
+        n
+    ) case namedoperation then {
+        lf: pathLeafName n: n.operation
+        if lf.stringview == "lock" then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
 pathHeadIsThis: function {n: Node} out bool is {
     match (
         n
@@ -1437,7 +1672,7 @@ pathHeadIsThis: function {n: Node} out bool is {
 # yield-crossing locals, deep-clone the body with promoted names
 # rewritten through `this`, and assemble the synth class (state +
 # captured fields + create + call) plus the forwarding factory.
-lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option t: GenLowered) is {
+lowerOne: function {ids: GenIds fn: Node.take synthName: StringView receiverType: StringView} out (Option t: GenLowered) is {
     gp: givesParts ids: ids n: fn
     match (
         fn
@@ -1459,25 +1694,40 @@ lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option
             createParams: (List of: Node)
             factoryParams: (List of: Node)
             noStamp: (List of: u32)
+            innerRefs: (List of: u32)
+            thisFlags: (List of: bool)
+            privNames: (Map key: String value: bool)
             piter: fn.parameters.iterate
             for p0: piter loop {
-                cp0: clonePath ids: ids n: p0
+                cp0: cloneCreateParam ids: ids n: p0 receiverType: receiverType fnLine: line fnCol: col
+                isThP: paramHeadIsThis n: p0
                 cpid0: paramOpId n: cp0
-                if cpid0 > 0.u32 then {
-                    noStamp.append cpid0
-                } else {
+                if cpid0 > 0.u32 when isThP then {} else {
+                    if cpid0 > 0.u32 then {
+                        noStamp.append cpid0
+                    } else {
+                    }
                 }
-                fp0: clonePath ids: ids n: p0
+                fp0: cloneFactoryParam ids: ids n: p0 fnLine: line fnCol: col
                 match (
                     p0
                 ) case namedoperation then {
                     pn0: optStringOr o: p0.name d: ""
                     if pn0.length > 0.u64 then {
-                        pf0: paramFieldPath ids: ids n: p0.operation
+                        if (isThisPrivateLock n: p0.operation) then {
+                            pnv1: pn0.stringview
+                            pk1: pnv1.string
+                            pv1: true
+                            privNames.set key: pk1 value: pv1
+                        } else {
+                        }
+                        pf0: paramFieldPath ids: ids n: p0.operation receiverType: receiverType
                         pFields.append pf0
                         createParams.append cp0
                         factoryParams.append fp0
                         pNames.append pn0
+                        tf0: isThP
+                        thisFlags.append tf0
                     } else {
                     }
                 } else {
@@ -1528,7 +1778,73 @@ lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option
             match (
                 newBodyOpt
             ) case some then {
-                callM: buildCallMethod ids: ids line: line col: col body: newBodyOpt.take wrapExpr: wrapExpr
+                # bidirectional: the accepts path becomes the call's value
+                # parameter; the _resume_input field stores the most recent
+                # resumed value (take strips to an owned field, lock keeps,
+                # bare/borrow wraps in .lock -- the reference collapses the
+                # lock back to a value field for valtypes).
+                valueParam: (Option.none Node)
+                resumeField: (Option.none Node)
+                acc9: gp.acceptsTy.take
+                match (
+                    acc9
+                ) case some then {
+                    al9: nodeLineOf n: acc9
+                    ac9: nodeColOf n: acc9
+                    vp0: clonePath ids: ids n: acc9
+                    valueParam = (Option.some vp0)
+                    alf9: pathLeafName n: acc9
+                    if alf9.stringview == "take" then {
+                        resumeField = cloneDottedParent ids: ids n: acc9
+                        rfb0: resumeBaseId o: resumeField
+                        if rfb0 > 0.u32 then {
+                            noStamp.append rfb0
+                        } else {
+                        }
+                    } else {
+                        if alf9.stringview == "lock" then {
+                            rf1: clonePath ids: ids n: acc9
+                            # the field copy shares the param's stamp in the
+                            # reference -- one stamp per ref (the recorder
+                            # keys the head atom)
+                            rfb1: pathBaseAtomId n: rf1
+                            if rfb1 > 0.u32 then {
+                                noStamp.append rfb1
+                            } else {
+                            }
+                            rfd1: topNodeId n: rf1
+                            if rfd1 > 0.u32 then {
+                                noStamp.append rfd1
+                            } else {
+                            }
+                            resumeField = (Option.some rf1)
+                        } else {
+                            base9: (Option.none Node)
+                            if alf9.stringview == "borrow" then {
+                                base9 = cloneDottedParent ids: ids n: acc9
+                            } else {
+                                b10: clonePath ids: ids n: acc9
+                                base9 = (Option.some b10)
+                            }
+                            rfb2: resumeBaseId o: base9
+                            if rfb2 > 0.u32 then {
+                                noStamp.append rfb2
+                            } else {
+                            }
+                            bg9: base9.take
+                            match (
+                                bg9
+                            ) case some then {
+                                la9: mkAtom ids: ids line: al9 col: ac9 name: "lock"
+                                rf2: (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: al9 colno: ac9 parent: bg9.take child: la9))
+                                resumeField = (Option.some rf2)
+                            } case none then {
+                            }
+                        }
+                    }
+                } case none then {
+                }
+                callM: buildCallMethod ids: ids line: line col: col body: newBodyOpt.take wrapExpr: wrapExpr valueParam: valueParam
                 createM: buildCreateMethod ids: ids line: line col: col params: createParams fwdNames: pNames
                 # class fields: the state cursor, captured params, then
                 # typeof-typed yield-crossing locals (first-assignment order)
@@ -1545,10 +1861,23 @@ lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option
                     # field paths staged owned: List.get is a borrow, the
                     # namedoperation stores owned -- clone out
                     pf3o: clonePath ids: ids n: pf3
-                    pfid3: topNodeId n: pf3o
-                    if pfid3 > 0.u32 then {
-                        noStamp.append pfid3
+                    # receiver-lock fields stamp (the reference builds them
+                    # fresh); ordinary param fields share the factory's stamp
+                    tf3: thisFlags.get i: fi3
+                    if tf3 then {
+                        # the installed clone's inner spine node stamps the
+                        # receiver type through the deferred pass
+                        idp3: innerDpId n: pf3o
+                        if idp3 > 0.u32 then {
+                            innerRefs.append idp3
+                        } else {
+                        }
                     } else {
+                        pfid3: topNodeId n: pf3o
+                        if pfid3 > 0.u32 then {
+                            noStamp.append pfid3
+                        } else {
+                        }
                     }
                     nf3: mkNamedOp ids: ids line: line col: col name: f3v op: pf3o
                     isItems.append nf3
@@ -1572,14 +1901,22 @@ lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option
                     }
                     li3 = li3 + 1.u64
                 }
+                rfg9: resumeField.take
+                match (
+                    rfg9
+                ) case some then {
+                    rfn9: mkNamedOp ids: ids line: line col: col name: "_resume_input" op: rfg9.take
+                    isItems.append rfn9
+                } case none then {
+                }
                 createNamed: mkNamedOp ids: ids line: line col: col name: "create" op: createM
                 callNamed: mkNamedOp ids: ids line: line col: col name: "call" op: callM
                 asItems: (List of: Node)
                 asItems.append createNamed
                 asItems.append callNamed
                 synthClass: (Node.objectdef (zast.ObjectDefData nodeid: ids.mint lineno: line colno: col kind: zast.nodetype.CLASS isItems: isItems asItems: asItems isNative: false))
-                factory: buildFactory ids: ids line: line col: col synthName: synthName params: factoryParams fwdNames: pNames
-                return (Option.some (GenLowered factory: factory synthClass: synthClass wrapperNodeId: wid noStamp: noStamp))
+                factory: buildFactory ids: ids line: line col: col synthName: synthName params: factoryParams fwdNames: pNames privNames: privNames
+                return (Option.some (GenLowered factory: factory synthClass: synthClass wrapperNodeId: wid noStamp: noStamp innerRefs: innerRefs))
             } case none then {
                 return (Option.none GenLowered)
             }

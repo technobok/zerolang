@@ -551,6 +551,9 @@ CHECK_SMOKE = [
     "generator_intrange",
     "generator_chain",
     "generator_map_filter",
+    "generator_listiter",
+    "generator_bidirectional",
+    "generator_accepts_borrow",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -643,6 +646,9 @@ TYPED_NODES_CHECK = [
     "generator_intrange",
     "generator_chain",
     "generator_map_filter",
+    "generator_listiter",
+    "generator_bidirectional",
+    "generator_accepts_borrow",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
