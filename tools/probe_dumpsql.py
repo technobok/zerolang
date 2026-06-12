@@ -8,6 +8,7 @@ Run from the repo root with a freshly built /tmp/zc.
 
 import argparse
 import os
+import resource
 import sqlite3
 import subprocess
 import sys
@@ -114,9 +115,40 @@ def python_sql(unit, srcdir):
     return dump_sql(typecheck(program, full=False))
 
 
+# Runaway guards for the zc child: a non-terminating allocation loop must die
+# at the cap instead of swapping the machine to death. RLIMIT_AS is safe here
+# (plain-C binary, no ASan); normal full dumps stay well under the limit.
+ZC_TIMEOUT_S = 60
+ZC_MEM_LIMIT = 1536 * 1024 * 1024
+
+
+def _cap_zc():
+    resource.setrlimit(resource.RLIMIT_AS, (ZC_MEM_LIMIT, ZC_MEM_LIMIT))
+
+
 def zc_sql(zc, unit, srcdir):
-    args = [zc, unit, "--src", srcdir, "--system", SYSTEM_DIR, "--full", "--dump-sql", "-"]
-    proc = subprocess.run(args, capture_output=True, text=True)
+    args = [
+        zc,
+        unit,
+        "--src",
+        srcdir,
+        "--system",
+        SYSTEM_DIR,
+        "--full",
+        "--dump-sql",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=ZC_TIMEOUT_S,
+            preexec_fn=_cap_zc,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"zc timed out (>{ZC_TIMEOUT_S}s) on {unit}")
+        sys.exit(2)
     if proc.returncode != 0:
         print(f"zc exited {proc.returncode}\nstderr:\n{proc.stderr}")
         sys.exit(1)
@@ -155,7 +187,10 @@ def main():
         if pr == zr:
             print(f"== {table}: MATCH ({len(pr)} rows)")
         else:
-            key = lambda r: tuple(str(c) for c in r)
+
+            def key(r):
+                return tuple(str(c) for c in r)
+
             only_py = sorted(set(pr) - set(zr), key=key)
             only_z = sorted(set(zr) - set(pr), key=key)
             print(f"== {table}: DIVERGED (python={len(pr)}, z={len(zr)})")

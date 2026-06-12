@@ -28,6 +28,7 @@ and skips cleanly without a C compiler.
 """
 
 import os
+import resource
 import sqlite3
 import subprocess
 
@@ -325,14 +326,34 @@ def _python_skeleton_sql(unit: str, oracle: str = "resolve_only_main") -> str:
     return dump_sql(resolve_only_main(program))
 
 
+# Runaway guards for the zc child: a non-terminating allocation loop must die
+# at the cap instead of swapping the machine to death. RLIMIT_AS is safe here
+# (plain-C binary, no ASan); normal full dumps stay well under the limit.
+ZC_TIMEOUT_S = 60
+ZC_MEM_LIMIT = 1536 * 1024 * 1024
+
+
+def _cap_zc():
+    resource.setrlimit(resource.RLIMIT_AS, (ZC_MEM_LIMIT, ZC_MEM_LIMIT))
+
+
 def _zc_sql(zc_binary: str, unit: str, full: bool = False) -> str:
     args = [zc_binary, unit, "--src", EXAMPLES_DIR, "--system", SYSTEM_DIR]
     if full:
         args.append("--full")
     args += ["--dump-sql", "-"]
-    proc = subprocess.run(args, capture_output=True, text=True)
+    flag = " --full" if full else ""
+    try:
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=ZC_TIMEOUT_S,
+            preexec_fn=_cap_zc,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"zc{flag} timed out (>{ZC_TIMEOUT_S}s) on {unit} -- runaway zc")
     if proc.returncode != 0:
-        flag = " --full" if full else ""
         pytest.fail(
             f"zc{flag} exited {proc.returncode} on {unit}.\nstderr:\n{proc.stderr}"
         )
