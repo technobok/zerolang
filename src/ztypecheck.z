@@ -759,6 +759,117 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView ty
     }
 }
 
+# regTypeNameOf -- a type's name (owned copy) straight off the registry.
+regTypeNameOf: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
+    t: reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.name.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# typeofSourceType -- resolve a typeof field's SOURCE without a body walk
+# (the reference's resolution-time method walks run its placeholder swap
+# even in resolve-only mode; our sources are signature-resolvable): a bare
+# atom reads the owner's already-resolved field of that name (a generator
+# parameter capture), and a call to a lowered factory yields the factory's
+# `{name}_iter` class. 0 when the shape needs the body walk.
+typeofSourceType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView ownerId: u64 n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (typeofSourceType ty: ty reg: reg unitName: unitName ownerId: ownerId n: n.expression)
+    } case atomid then {
+        if ownerId == 0.u64 then {
+            return 0.u64
+        } else {
+        }
+        co: ty.childOf parentTypeId: ownerId name: n.name.stringview
+        match (
+            co
+        ) case some then {
+            cn9: regTypeNameOf reg: reg tid: co
+            if cn9.length > 0.u64 then {
+                ro9: lookupTyperef resolved: ty.resolved mainName: unitName base: cn9.stringview
+                match (
+                    ro9
+                ) case some then {
+                    return ro9
+                } case none then {
+                    return co
+                }
+            } else {
+                return co
+            }
+        } case none then {
+            return 0.u64
+        }
+    } case call then {
+        fn9: atomName n: n.callable
+        if fn9.length > 0.u64 then {
+            sk9: "\{unitName}.\{fn9}_iter".string
+            so9: ty.resolved.get key: sk9
+            match (
+                so9
+            ) case some then {
+                return so9
+            } case none then {
+                return 0.u64
+            }
+        } else {
+            return 0.u64
+        }
+    } else {
+        return 0.u64
+    }
+}
+
+# resolveTyperefShellMarked -- resolveTyperefShell plus the typeof handling:
+# a generator-promoted local's field type is a `typeof <first-rhs>` node.
+# When the source resolves from signatures alone the field types directly
+# (and the typeof node stamps); otherwise the shell is marked and the
+# body's first `this.<field> =` write swaps it (the reference's
+# placeholder mechanism).
+resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView ownerId: u64 typeExpr: Node thisName: StringView} out u64 is {
+    isTof: false
+    match (
+        typeExpr
+    ) case typeofexpr then {
+        isTof = true
+        rid9: typeofSourceType ty: ty reg: reg unitName: unitName ownerId: ownerId n: typeExpr.source
+        if rid9 > 0.u64 then {
+            # the node's stamp defers to the post-demand pass so it lands
+            # on the globally-resolved type, not an early shell
+            tnm9: regTypeNameOf reg: reg tid: rid9
+            if tnm9.length > 0.u64 then {
+                ty.pendingTyperef.set key: typeExpr.nodeid.u64 value: tnm9
+                tun9: unitName.string
+                ty.pendingTyperefUnit.set key: typeExpr.nodeid.u64 value: tun9
+            } else {
+            }
+            return rid9
+        } else {
+        }
+    } else {
+    }
+    cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: typeExpr thisName: thisName
+    if isTof then {
+        match (
+            typeExpr
+        ) case typeofexpr then {
+            tk: cid
+            tv: typeExpr.nodeid
+            ty.typeofShell.set key: tk value: tv
+        } else {
+        }
+    } else {
+    }
+    return cid
+}
+
 # nameIsInUnitReftype -- true when a type name resolves to an in-unit reference type
 # (class or union). Drives the reftype-param BORROW default and class field cleanup.
 # Native heap params (String/List/Map) are pointer-typed already and get no BORROW
@@ -1447,7 +1558,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                     } else {}
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: mido
                 } case none then {
-                    cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
+                    cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0.u64 typeExpr: fm.operation thisName: ""
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
                     recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     dcn1: dottedChildName n: fm.operation
@@ -1518,7 +1629,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             fm
         ) case namedoperation then {
             aname: unitLabel o: fm.name
-            cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
+            cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0.u64 typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
             recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
@@ -1667,7 +1778,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             if an.stringview == "null" then {} else {
                 allNull = false
             }
-            cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
+            cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0.u64 typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
             recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
@@ -1813,7 +1924,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
                             needsDtor = true
                         } else {}
-                        cidf: resolveTyperefShell reg: reg unitName: unitName typeExpr: fm.operation thisName: ""
+                        cidf: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: cid typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
                         if lockField then {
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
@@ -3550,13 +3661,28 @@ stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
                     origin = uo.stringview
                 } else {}
             } case none then {}
-            r: lookupTyperef resolved: ty.resolved mainName: origin base: e.value.stringview
-            match (
-                r
-            ) case some then {
-                nid: e.key
-                ty.nodeType.set key: nid value: r
-            } case none then {}
+            skip0: false
+            {
+                sk0: ty.noStampNode.get key: uk
+                match (
+                    sk0
+                ) case some then {
+                    if sk0 then {
+                        skip0 = true
+                    } else {
+                    }
+                } case none then {
+                }
+            }
+            if skip0 then {} else {
+                r: lookupTyperef resolved: ty.resolved mainName: origin base: e.value.stringview
+                match (
+                    r
+                ) case some then {
+                    nid: e.key
+                    ty.nodeType.set key: nid value: r
+                } case none then {}
+            }
         }
     } else {}
 }
@@ -5823,6 +5949,41 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
 checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) rasgn: zast.ReassignmentData} is {
     lvt: checkValue st: st unitName: unitName unitBody: unitBody node: rasgn.topath
     rvt: checkValue st: st unitName: unitName unitBody: unitBody node: rasgn.value
+    # A typeof-placeholder field resolves at its first write: swap the
+    # field child to the RHS's type and restamp the target path.
+    if lvt > 0.u64 when rvt > 0.u64 then {
+        tso: st.typing.typeofShell.get key: lvt
+        match (
+            tso
+        ) case some then {
+            troot: methodReceiverRoot n: rasgn.topath
+            if troot.length > 0.u64 then {
+                tto: st.lookup name: troot.stringview
+                match (
+                    tto
+                ) case some then {
+                    tfn: dottedChildName n: rasgn.topath
+                    if tfn.length > 0.u64 then {
+                        mrvt: materialiseLiteral st: st unitName: unitName t: rvt
+                        st.typing.setChild parentTypeId: tto childName: tfn.stringview childTypeId: mrvt
+                        settof: mrvt
+                        st.typing.nodeType.set key: tso.u64 value: settof
+                        tpid: nodeId n: rasgn.topath
+                        if tpid > 0.u32 then {
+                            settp: mrvt
+                            st.typing.nodeType.set key: tpid.u64 value: settp
+                        } else {
+                        }
+                    } else {
+                    }
+                } case none then {
+                }
+            } else {
+            }
+        } case none then {
+        }
+    } else {
+    }
     # A literal RHS at a concretely-typed target coerces: restamp the RHS's
     # innermost node (wrappers derive through the dump's descent). A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
@@ -6151,13 +6312,25 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
                 # in an empty call scope (the reference's rewrite walks it
                 # once); gated on the value being an iterator wrapper.
                 if (isCallNode n: cond.operation) then {
+                    doProbe9: false
                     pw9: iterWrapperElem st: st unitName: unitName wid: vt
                     match (
                         pw9
                     ) case some then {
+                        doProbe9 = true
+                    } case none then {
+                        ico9: st.typing.childOf parentTypeId: vt name: "call"
+                        match (
+                            ico9
+                        ) case some then {
+                            doProbe9 = true
+                        } case none then {
+                        }
+                    }
+                    if doProbe9 then {
                         ecm9: st.pushCall
                         st.popTo marker: ecm9
-                    } case none then {
+                    } else {
                     }
                 } else {
                 }
@@ -8250,6 +8423,18 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List
         return (checkIf st: st unitName: unitName unitBody: unitBody ifnode: node)
     } case forexpr then {
         return (checkFor st: st unitName: unitName unitBody: unitBody fornode: node)
+    } case labelvalue then {
+        # the `:x` shorthand in value position reads the local x
+        lvo9: st.lookup name: node.name.stringview
+        match (
+            lvo9
+        ) case some then {
+            setlv9: lvo9
+            st.typing.nodeType.set key: node.nodeid.u64 value: setlv9
+            return lvo9
+        } case none then {
+            return 0.u64
+        }
     } case yieldexpr then {
         # a suspension point: the yielded value walks for diagnostics; the
         # out-only yield itself carries no type (bidirectional resume
@@ -8686,13 +8871,16 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                     pnid: nodeId n: pm.operation
                     ptid: paramTypeId typing: st.typing unitName: unitName op: pm.operation
                     if ptid > 0.u64 then {
-                        ppre: st.typing.nodeType.get key: pnid.u64
-                        match (
-                            ppre
-                        ) case some then {
-                        } case none then {
-                            setpp: ptid
-                            st.typing.nodeType.set key: pnid.u64 value: setpp
+                        noSt: optBoolOr o: (st.typing.noStampNode.get key: pnid.u64) d: false
+                        if noSt then {} else {
+                            ppre: st.typing.nodeType.get key: pnid.u64
+                            match (
+                                ppre
+                            ) case some then {
+                            } case none then {
+                                setpp: ptid
+                                st.typing.nodeType.set key: pnid.u64 value: setpp
+                            }
                         }
                     } else {
                     }
@@ -9435,6 +9623,18 @@ lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unit
                     wfid: lowOpt.wrapperNodeId
                     wfv: true
                     ty.generatorWrapper.set key: wfid.u64 value: wfv
+                    # the create-param and field-path clones must not stamp:
+                    # the reference shares those nodes with the factory, so
+                    # each ref carries exactly one stamp.
+                    nsi: 0.u64
+                    nsn: lowOpt.noStamp.length
+                    for while nsi < nsn loop {
+                        ns0: lowOpt.noStamp.get i: nsi
+                        nsk: ns0.u64
+                        nsv: true
+                        ty.noStampNode.set key: nsk value: nsv
+                        nsi = nsi + 1.u64
+                    }
                     fac: lowOpt.factory.take
                     uel2.operation = fac
                     cls: lowOpt.synthClass.take

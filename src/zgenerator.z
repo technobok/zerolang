@@ -37,6 +37,37 @@ GenLowered: class {
     factory:       Node
     synthClass:    Node
     wrapperNodeId: u32
+    noStamp:       (List of: u32)
+}
+
+# topNodeId -- a cloned type-path's top node id (the typeref-stamp key the
+# resolution records); 0 for unhandled shapes.
+topNodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.nodeid
+    } case labelvalue then {
+        return n.nodeid
+    } case dottedpath then {
+        return n.nodeid
+    } case expression then {
+        return n.nodeid
+    } case call then {
+        return n.nodeid
+    } else {
+        return 0.u32
+    }
+}
+
+paramOpId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case namedoperation then {
+        return (topNodeId n: n.operation)
+    } else {
+        return 0.u32
+    }
 }
 
 # bodyContainsYield -- a yield anywhere in this subtree, not descending
@@ -293,6 +324,30 @@ clonePath: function {ids: GenIds n: Node} out Node is {
         nop: clonePath ids: ids n: n.operation
         nnm: cloneOptString o: n.name
         return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln5 colno: co5 name: nnm operation: nop))
+    } case binop then {
+        ln6: n.lineno
+        co6: n.colno
+        nl6: clonePath ids: ids n: n.lhs
+        no6: clonePath ids: ids n: n.operator
+        nr6: clonePath ids: ids n: n.rhs
+        return (Node.binop (zast.BinOpData nodeid: ids.mint lineno: ln6 colno: co6 lhs: nl6 operator: no6 rhs: nr6))
+    } case atomstring then {
+        ln7: n.lineno
+        co7: n.colno
+        nparts: (List of: Node)
+        spiter: n.stringparts.iterate
+        for sp0: spiter loop {
+            np0: clonePath ids: ids n: sp0
+            nparts.append np0
+        }
+        return (Node.atomstring (zast.AtomStringData nodeid: ids.mint lineno: ln7 colno: co7 stringparts: nparts))
+    } case stringchunk then {
+        ln8: n.lineno
+        co8: n.colno
+        tv8: n.text.stringview
+        tc8: tv8.string
+        ck8: n.chunkKind
+        return (Node.stringchunk (zast.StringChunkData nodeid: ids.mint lineno: ln8 colno: co8 text: tc8 chunkKind: ck8))
     } else {
         # unsupported path shape -- an error atom keeps the tree total
         return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: 0.u32 colno: 0.u32 name: "?".string))
@@ -446,10 +501,11 @@ mkReturnBody: function {ids: GenIds line: u32 col: u32 inner: Node.take} out Nod
     return (Node.statement (zast.StatementData nodeid: ids.mint lineno: line colno: col statements: slist))
 }
 
-# buildCreateMethod -- `create: function {<params>} out this is { return
-# (meta.create state: 0 :p1 ...) }`. Parameter list cloning and receiver
-# rewrites land with the parameterized examples.
-buildCreateMethod: function {ids: GenIds line: u32 col: u32} out Node is {
+# buildCreateMethod -- `create: function {<param-clones>} out this is {
+# return (meta.create state: 0 p1: :p1 ...) }`: captured parameters
+# forward by label-value shorthand; promoted locals are reserved fields
+# the body's first write initialises.
+buildCreateMethod: function {ids: GenIds line: u32 col: u32 params: (List of: Node).take fwdNames: (List of: String)} out Node is {
     metaAtom: mkAtom ids: ids line: line col: col name: "meta"
     createAtom: mkAtom ids: ids line: line col: col name: "create"
     metaCreate: (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: line colno: col parent: metaAtom child: createAtom))
@@ -457,10 +513,20 @@ buildCreateMethod: function {ids: GenIds line: u32 col: u32} out Node is {
     stArg: mkNamedOp ids: ids line: line col: col name: "state" op: zeroAtom
     cargs: (List of: Node)
     cargs.append stArg
+    fi: 0.u64
+    fn: fwdNames.length
+    for while fi < fn loop {
+        f0: fwdNames.get i: fi
+        f0v: f0.stringview
+        f0s: f0v.string
+        lv0: (Node.labelvalue (zast.LabelValueData nodeid: ids.mint lineno: line colno: col name: f0s))
+        fa0: mkNamedOp ids: ids line: line col: col name: f0v op: lv0
+        cargs.append fa0
+        fi = fi + 1.u64
+    }
     icall: (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: metaCreate arguments: cargs))
     body: mkReturnBody ids: ids line: line col: col inner: icall
     thisRet: mkAtom ids: ids line: line col: col name: "this"
-    params: (List of: Node)
     return (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: line colno: col returntype: (Option.some thisRet) parameters: params body: (Option.some body) isNative: false asItems: (List of: Node)))
 }
 
@@ -491,32 +557,801 @@ buildWrapper: function {ids: GenIds line: u32 col: u32 base: Node.take leaf: Str
 }
 
 # buildFactory -- the replacement for the original function: return type =
-# the synth class, body = `return (<synth_name>)`. Parameter forwarding
-# lands with the parameterized examples.
-buildFactory: function {ids: GenIds line: u32 col: u32 synthName: StringView} out Node is {
+# the synth class, body = `return (<synth_name> p1: p1 ...)` forwarding
+# each captured parameter by name.
+buildFactory: function {ids: GenIds line: u32 col: u32 synthName: StringView params: (List of: Node).take fwdNames: (List of: String)} out Node is {
     synthAtom: mkAtom ids: ids line: line col: col name: synthName
     fargs: (List of: Node)
+    fi: 0.u64
+    fn: fwdNames.length
+    for while fi < fn loop {
+        f0: fwdNames.get i: fi
+        f0v: f0.stringview
+        va0: mkAtom ids: ids line: line col: col name: f0v
+        fa0: mkNamedOp ids: ids line: line col: col name: f0v op: va0
+        fargs.append fa0
+        fi = fi + 1.u64
+    }
     icall: (Node.call (zast.CallData nodeid: ids.mint lineno: line colno: col callable: synthAtom arguments: fargs))
     body: mkReturnBody ids: ids line: line col: col inner: icall
     retAtom: mkAtom ids: ids line: line col: col name: synthName
-    params: (List of: Node)
     return (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: line colno: col returntype: (Option.some retAtom) parameters: params body: (Option.some body) isNative: false asItems: (List of: Node)))
 }
 
-# canLowerNow -- pre-surgery shape gate on the borrowed definition: the
-# supported slice (no parameters, parenthesized gives, a real body). The
-# driver extracts the owned node only when this passes, so unsupported
-# generators stay untouched in the unit body.
+# GenCross -- the crossing-locals walk state: yields passed so far, each
+# local's first-definition yield count, its maximum-use yield count, and
+# whether any reference sits inside a yielding loop (next iteration
+# resumes past the suspension, so reuse crosses implicitly).
+GenCross: class {
+    yieldCount: u64
+    firstDef:   (Map key: String value: u64)
+    maxUse:     (Map key: String value: u64)
+    inLoop:     (Map key: String value: bool)
+    params:     (Map key: String value: bool)
+}
+
+crossWalk: function {gc: GenCross n: Node inYieldLoop: bool} is {
+    match (
+        n
+    ) case functiondef then {
+    } case yieldexpr then {
+        crossWalk gc: gc n: n.expr inYieldLoop: inYieldLoop
+        gc.yieldCount = gc.yieldCount + 1.u64
+    } case assignment then {
+        crossWalk gc: gc n: n.value inYieldLoop: inYieldLoop
+        anv: n.name.stringview
+        isP: optBoolOr2 o: (gc.params.get key: anv.string) d: false
+        if isP then {} else {
+            seen: optU64Or2 o: (gc.firstDef.get key: anv.string) d: 18446744073709551615.u64
+            if seen == 18446744073709551615.u64 then {
+                dk: anv.string
+                dv: gc.yieldCount
+                gc.firstDef.set key: dk value: dv
+            } else {
+            }
+            if inYieldLoop then {
+                lk: anv.string
+                lv: true
+                gc.inLoop.set key: lk value: lv
+            } else {
+            }
+        }
+    } case atomid then {
+        unv: n.name.stringview
+        seen2: optU64Or2 o: (gc.firstDef.get key: unv.string) d: 18446744073709551615.u64
+        if seen2 == 18446744073709551615.u64 then {} else {
+            uk: unv.string
+            uv: gc.yieldCount
+            prev: optU64Or2 o: (gc.maxUse.get key: unv.string) d: 0.u64
+            if uv > prev then {
+                gc.maxUse.set key: uk value: uv
+            } else {
+            }
+            if inYieldLoop then {
+                lk2: unv.string
+                lv2: true
+                gc.inLoop.set key: lk2 value: lv2
+            } else {
+            }
+        }
+    } case forexpr then {
+        bodyYields: bodyContainsYieldOpt o: n.body
+        sub: inYieldLoop
+        if bodyYields then {
+            sub = true
+        } else {
+        }
+        fiter: n.conditions.iterate
+        for f0: fiter loop {
+            crossWalk gc: gc n: f0 inYieldLoop: sub
+        }
+        crossWalkOpt gc: gc o: n.body inYieldLoop: sub
+        piter: n.postconditions.iterate
+        for p0: piter loop {
+            crossWalk gc: gc n: p0 inYieldLoop: sub
+        }
+    } case statement then {
+        siter: n.statements.iterate
+        for s0: siter loop {
+            crossWalk gc: gc n: s0 inYieldLoop: inYieldLoop
+        }
+    } case statementline then {
+        crossWalk gc: gc n: n.statementline inYieldLoop: inYieldLoop
+    } case expression then {
+        crossWalk gc: gc n: n.expression inYieldLoop: inYieldLoop
+    } case reassignment then {
+        crossWalk gc: gc n: n.topath inYieldLoop: inYieldLoop
+        crossWalk gc: gc n: n.value inYieldLoop: inYieldLoop
+    } case swapstmt then {
+        crossWalk gc: gc n: n.lhs inYieldLoop: inYieldLoop
+        crossWalk gc: gc n: n.rhs inYieldLoop: inYieldLoop
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl0: cliter loop {
+            crossWalk gc: gc n: cl0 inYieldLoop: inYieldLoop
+        }
+        crossWalkOpt gc: gc o: n.elseclause inYieldLoop: inYieldLoop
+    } case ifclause then {
+        coiter: n.conditions.iterate
+        for c0: coiter loop {
+            crossWalk gc: gc n: c0 inYieldLoop: inYieldLoop
+        }
+        crossWalk gc: gc n: n.statement inYieldLoop: inYieldLoop
+    } case doexpr then {
+        crossWalk gc: gc n: n.statement inYieldLoop: inYieldLoop
+    } case withexpr then {
+        crossWalk gc: gc n: n.value inYieldLoop: inYieldLoop
+        crossWalk gc: gc n: n.body inYieldLoop: inYieldLoop
+    } case caseexpr then {
+        crossWalk gc: gc n: n.subject inYieldLoop: inYieldLoop
+        mliter: n.clauses.iterate
+        for m0: mliter loop {
+            crossWalk gc: gc n: m0 inYieldLoop: inYieldLoop
+        }
+        crossWalkOpt gc: gc o: n.elseclause inYieldLoop: inYieldLoop
+    } case caseclause then {
+        crossWalk gc: gc n: n.statement inYieldLoop: inYieldLoop
+    } case call then {
+        cciter: n.arguments.iterate
+        for cc0: cciter loop {
+            crossWalk gc: gc n: cc0 inYieldLoop: inYieldLoop
+        }
+    } case namedoperation then {
+        crossWalk gc: gc n: n.operation inYieldLoop: inYieldLoop
+    } case binop then {
+        crossWalk gc: gc n: n.lhs inYieldLoop: inYieldLoop
+        crossWalk gc: gc n: n.rhs inYieldLoop: inYieldLoop
+    } case dottedpath then {
+        crossWalk gc: gc n: n.parent inYieldLoop: inYieldLoop
+    } case atomstring then {
+        apiter: n.stringparts.iterate
+        for ap0: apiter loop {
+            crossWalk gc: gc n: ap0 inYieldLoop: inYieldLoop
+        }
+    } else {
+    }
+}
+
+crossWalkOpt: function {gc: GenCross o: (Option t: Node) inYieldLoop: bool} is {
+    match (
+        o
+    ) case some then {
+        crossWalk gc: gc n: o inYieldLoop: inYieldLoop
+    } case none then {
+    }
+}
+
+optU64Or2: function {o: (optionval t: u64) d: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return d
+    }
+}
+
+optBoolOr2: function {o: (optionval t: bool) d: bool} out bool is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return d
+    }
+}
+
+# crossingLocals -- the locals whose def-to-use span crosses a yield (or
+# that live in a yielding loop): names appended to dst. Conservative;
+# parameters are excluded (they promote unconditionally).
+crossingLocals: function {gc: GenCross dst: (List of: String)} is {
+    allKeys: (List of: String)
+    with kit: gc.firstDef.iterate do for k0: kit loop {
+        kv0: k0.stringview
+        kc0: kv0.string
+        allKeys.append kc0
+    }
+    ki: 0.u64
+    kn: allKeys.length
+    for while ki < kn loop {
+        k1: allKeys.get i: ki
+        k1v: k1.stringview
+        k1o: k1v.string
+        defYc: optU64Or2 o: (gc.firstDef.get key: k1o) d: 0.u64
+        k2o: k1v.string
+        useYc: optU64Or2 o: (gc.maxUse.get key: k2o) d: defYc
+        k3o: k1v.string
+        looped: optBoolOr2 o: (gc.inLoop.get key: k3o) d: false
+        crossing: false
+        if useYc > defYc then {
+            crossing = true
+        } else {
+        }
+        if looped then {
+            crossing = true
+        } else {
+        }
+        if crossing then {
+            k4o: k1v.string
+            dst.append k4o
+        } else {
+        }
+        ki = ki + 1.u64
+    }
+}
+
+# firstRhsOf -- the first `name: <rhs>` assignment's INNER rhs (a clone),
+# feeding the promoted local's typeof field.
+firstRhsOf: function {ids: GenIds n: Node name: StringView dst: GivesParts} is {
+    match (
+        n
+    ) case functiondef then {
+    } case assignment then {
+        already: false
+        match (
+            dst.base
+        ) case some then {
+            already = true
+        } case none then {
+        }
+        if already then {} else {
+            if n.name.stringview == name then {
+                rc: cloneInner ids: ids n: n.value
+                dst.base = (Option.some rc)
+            } else {
+            }
+        }
+    } case statement then {
+        siter: n.statements.iterate
+        for s0: siter loop {
+            firstRhsOf ids: ids n: s0 name: name dst: dst
+        }
+    } case statementline then {
+        firstRhsOf ids: ids n: n.statementline name: name dst: dst
+    } case expression then {
+        firstRhsOf ids: ids n: n.expression name: name dst: dst
+    } case ifexpr then {
+        cliter: n.clauses.iterate
+        for cl0: cliter loop {
+            firstRhsOf ids: ids n: cl0 name: name dst: dst
+        }
+        firstRhsOfOpt ids: ids o: n.elseclause name: name dst: dst
+    } case ifclause then {
+        firstRhsOf ids: ids n: n.statement name: name dst: dst
+    } case forexpr then {
+        firstRhsOfOpt ids: ids o: n.body name: name dst: dst
+    } case doexpr then {
+        firstRhsOf ids: ids n: n.statement name: name dst: dst
+    } case withexpr then {
+        firstRhsOf ids: ids n: n.body name: name dst: dst
+    } case caseexpr then {
+        mliter: n.clauses.iterate
+        for m0: mliter loop {
+            firstRhsOf ids: ids n: m0 name: name dst: dst
+        }
+        firstRhsOfOpt ids: ids o: n.elseclause name: name dst: dst
+    } case caseclause then {
+        firstRhsOf ids: ids n: n.statement name: name dst: dst
+    } else {
+    }
+}
+
+firstRhsOfOpt: function {ids: GenIds o: (Option t: Node) name: StringView dst: GivesParts} is {
+    match (
+        o
+    ) case some then {
+        firstRhsOf ids: ids n: o name: name dst: dst
+    } case none then {
+    }
+}
+
+# cloneInner -- clone the inside of an expression wrapper (the typeof
+# field embeds the bare operation).
+cloneInner: function {ids: GenIds n: Node} out Node is {
+    match (
+        n
+    ) case expression then {
+        return (cloneInner ids: ids n: n.expression)
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
+# promoteIterables -- clone the body, and for each top-level `for` whose
+# loop body suspends, hoist every non-trivial named iterable into a
+# synthetic `_iterN: <expr>` binding before the loop (the loop references
+# `_iterN`). Without this, the iterable would be a C-stack local that
+# does not survive a suspension; the synthetic local is visible to the
+# crossing analysis (the yielding-loop rule promotes it) and to the
+# typeof field machinery. Recurses into for bodies only, mirroring the
+# reference.
+promoteIterables: function {ids: GenIds ctr: GenIds n: Node} out Node is {
+    match (
+        n
+    ) case statement then {
+        lnP: n.lineno
+        coP: n.colno
+        newLines: (List of: Node)
+        siter: n.statements.iterate
+        for s0: siter loop {
+            promoteLine ids: ids ctr: ctr n: s0 dst: newLines
+        }
+        return (Node.statement (zast.StatementData nodeid: ids.mint lineno: lnP colno: coP statements: newLines))
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
+promoteIterablesOpt: function {ids: GenIds ctr: GenIds o: (Option t: Node)} out (Option t: Node) is {
+    match (
+        o
+    ) case some then {
+        r: promoteIterables ids: ids ctr: ctr n: o
+        return (Option.some r)
+    } case none then {
+        return (Option.none Node)
+    }
+}
+
+# promoteLine -- one statement line: a for-statement transforms (possibly
+# appending synthetic bindings first); anything else passes through as a
+# rewrite-clone (the rewrite with no promotions is a faithful deep copy).
+promoteLine: function {ids: GenIds ctr: GenIds n: Node dst: (List of: Node)} is {
+    isFor: false
+    match (
+        n
+    ) case statementline then {
+        isFor = lineIsFor n: n.statementline
+    } else {
+    }
+    if isFor then {
+        match (
+            n
+        ) case statementline then {
+            lnQ: n.lineno
+            coQ: n.colno
+            ni: promoteInExpr ids: ids ctr: ctr n: n.statementline dst: dst
+            nl: (Node.statementline (zast.StatementLineData nodeid: ids.mint lineno: lnQ colno: coQ statementline: ni))
+            dst.append nl
+        } else {
+        }
+    } else {
+        empty9: (Map key: String value: bool)
+        nc: rewriteToThis ids: ids n: n promoted: empty9
+        dst.append nc
+    }
+}
+
+lineIsFor: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (lineIsFor n: n.expression)
+    } case forexpr then {
+        return true
+    } else {
+        return false
+    }
+}
+
+promoteInExpr: function {ids: GenIds ctr: GenIds n: Node dst: (List of: Node)} out Node is {
+    match (
+        n
+    ) case expression then {
+        lnR: n.lineno
+        coR: n.colno
+        ni: promoteInExpr ids: ids ctr: ctr n: n.expression dst: dst
+        return (Node.expression (zast.ExpressionData nodeid: ids.mint lineno: lnR colno: coR expression: ni))
+    } else {
+        return (promoteFor ids: ids ctr: ctr n: n dst: dst)
+    }
+}
+
+promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: (List of: Node)} out Node is {
+    match (
+        n
+    ) case forexpr then {
+        lnS: n.lineno
+        coS: n.colno
+        # recurse into the loop body first (nested suspending fors)
+        nbody: promoteIterablesOpt ids: ids ctr: ctr o: n.body
+        suspends: bodyContainsYieldOpt o: nbody
+        nconds: (List of: Node)
+        citer: n.conditions.iterate
+        for c0: citer loop {
+            doHoist: false
+            match (
+                c0
+            ) case namedoperation then {
+                cn0: optStringOr o: c0.name d: ""
+                if cn0.length > 0.u64 when suspends then {
+                    if (condIsTrivial n: c0.operation) then {} else {
+                        doHoist = true
+                    }
+                } else {
+                }
+            } else {
+            }
+            if doHoist then {
+                match (
+                    c0
+                ) case namedoperation then {
+                    # synth nodes carry the ITERABLE's source position
+                    hl0: nodeLineOf n: c0.operation
+                    hc0: nodeColOf n: c0.operation
+                    synthN: "_iter\{ctr.mint}"
+                    empty7: (Map key: String value: bool)
+                    rhs0: rewriteToThis ids: ids n: c0.operation promoted: empty7
+                    rhsE: ensureExpr ids: ids line: hl0 col: hc0 n: rhs0
+                    snv0: synthN.stringview
+                    sno0: snv0.string
+                    sno1: snv0.string
+                    sa0: (Node.assignment (zast.AssignmentData nodeid: ids.mint lineno: hl0 colno: hc0 name: sno0 value: rhsE))
+                    sl0: (Node.statementline (zast.StatementLineData nodeid: ids.mint lineno: hl0 colno: hc0 statementline: sa0))
+                    dst.append sl0
+                    cn1: optStringOr o: c0.name d: ""
+                    na0: mkAtom ids: ids line: hl0 col: hc0 name: sno1.stringview
+                    nc0: mkNamedOp ids: ids line: hl0 col: hc0 name: cn1.stringview op: na0
+                    nconds.append nc0
+                } else {
+                }
+            } else {
+                empty6: (Map key: String value: bool)
+                cc0: rewriteToThis ids: ids n: c0 promoted: empty6
+                nconds.append cc0
+            }
+        }
+        nposts: (List of: Node)
+        piter: n.postconditions.iterate
+        for p0: piter loop {
+            empty5: (Map key: String value: bool)
+            pp0: rewriteToThis ids: ids n: p0 promoted: empty5
+            nposts.append pp0
+        }
+        return (Node.forexpr (zast.ForData nodeid: ids.mint lineno: lnS colno: coS conditions: nconds body: nbody postconditions: nposts))
+    } else {
+        empty4: (Map key: String value: bool)
+        return (rewriteToThis ids: ids n: n promoted: empty4)
+    }
+}
+
+nodeLineOf: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.lineno
+    } case labelvalue then {
+        return n.lineno
+    } case dottedpath then {
+        return n.lineno
+    } case expression then {
+        return n.lineno
+    } case call then {
+        return n.lineno
+    } case binop then {
+        return n.lineno
+    } else {
+        return 0.u32
+    }
+}
+
+nodeColOf: function {n: Node} out u32 is {
+    match (
+        n
+    ) case atomid then {
+        return n.colno
+    } case labelvalue then {
+        return n.colno
+    } case dottedpath then {
+        return n.colno
+    } case expression then {
+        return n.colno
+    } case call then {
+        return n.colno
+    } case binop then {
+        return n.colno
+    } else {
+        return 0.u32
+    }
+}
+
+condIsTrivial: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (condIsTrivial n: n.expression)
+    } case atomid then {
+        return true
+    } else {
+        return false
+    }
+}
+
+wrapExprNode: function {ids: GenIds line: u32 col: u32 n: Node.take} out Node is {
+    return (Node.expression (zast.ExpressionData nodeid: ids.mint lineno: line colno: col expression: n))
+}
+
+isExprNode: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# ensureExpr -- wrap in an Expression unless already one (the reference's
+# _wrap_as_expression).
+ensureExpr: function {ids: GenIds line: u32 col: u32 n: Node.take} out Node is {
+    if (isExprNode n: n) then {
+        return n
+    } else {
+        return (wrapExprNode ids: ids line: line col: col n: n)
+    }
+}
+
+# rewriteToThis -- deep-clone the body, rewriting every promoted-name
+# reference to `this.<name>`: atoms and labelvalues in value position
+# become the dotted path, dotted HEADS rewrite (children are field
+# labels), and an assignment to a promoted name becomes a reassignment
+# through `this` (the field was reserved at create time).
+rewriteToThis: function {ids: GenIds n: Node promoted: (Map key: String value: bool)} out Node is {
+    match (
+        n
+    ) case atomid then {
+        ln0: n.lineno
+        co0: n.colno
+        anv: n.name.stringview
+        isP: optBoolOr2 o: (promoted.get key: anv.string) d: false
+        if isP then {
+            return (mkThisDotted ids: ids line: ln0 col: co0 name: anv)
+        } else {
+            an0: anv.string
+            return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: ln0 colno: co0 name: an0))
+        }
+    } case labelvalue then {
+        ln1: n.lineno
+        co1: n.colno
+        lnv: n.name.stringview
+        isP1: optBoolOr2 o: (promoted.get key: lnv.string) d: false
+        if isP1 then {
+            return (mkThisDotted ids: ids line: ln1 col: co1 name: lnv)
+        } else {
+            ln9: lnv.string
+            return (Node.labelvalue (zast.LabelValueData nodeid: ids.mint lineno: ln1 colno: co1 name: ln9))
+        }
+    } case dottedpath then {
+        ln2: n.lineno
+        co2: n.colno
+        np: rewriteToThis ids: ids n: n.parent promoted: promoted
+        nc: clonePath ids: ids n: n.child
+        return (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: ln2 colno: co2 parent: np child: nc))
+    } case expression then {
+        ln3: n.lineno
+        co3: n.colno
+        ne: rewriteToThis ids: ids n: n.expression promoted: promoted
+        return (Node.expression (zast.ExpressionData nodeid: ids.mint lineno: ln3 colno: co3 expression: ne))
+    } case call then {
+        ln4: n.lineno
+        co4: n.colno
+        ncal: rewriteToThis ids: ids n: n.callable promoted: promoted
+        nargs: (List of: Node)
+        aiter: n.arguments.iterate
+        for a0: aiter loop {
+            na0: rewriteToThis ids: ids n: a0 promoted: promoted
+            nargs.append na0
+        }
+        return (Node.call (zast.CallData nodeid: ids.mint lineno: ln4 colno: co4 callable: ncal arguments: nargs))
+    } case namedoperation then {
+        ln5: n.lineno
+        co5: n.colno
+        nop: rewriteToThis ids: ids n: n.operation promoted: promoted
+        nnm: cloneOptString o: n.name
+        return (Node.namedoperation (zast.NamedOperationData nodeid: ids.mint lineno: ln5 colno: co5 name: nnm operation: nop))
+    } case binop then {
+        ln6: n.lineno
+        co6: n.colno
+        nl6: rewriteToThis ids: ids n: n.lhs promoted: promoted
+        no6: clonePath ids: ids n: n.operator
+        nr6: rewriteToThis ids: ids n: n.rhs promoted: promoted
+        return (Node.binop (zast.BinOpData nodeid: ids.mint lineno: ln6 colno: co6 lhs: nl6 operator: no6 rhs: nr6))
+    } case statement then {
+        ln7: n.lineno
+        co7: n.colno
+        nstmts: (List of: Node)
+        siter: n.statements.iterate
+        for s0: siter loop {
+            ns0: rewriteToThis ids: ids n: s0 promoted: promoted
+            nstmts.append ns0
+        }
+        return (Node.statement (zast.StatementData nodeid: ids.mint lineno: ln7 colno: co7 statements: nstmts))
+    } case statementline then {
+        ln8: n.lineno
+        co8: n.colno
+        ni8: rewriteToThis ids: ids n: n.statementline promoted: promoted
+        return (Node.statementline (zast.StatementLineData nodeid: ids.mint lineno: ln8 colno: co8 statementline: ni8))
+    } case assignment then {
+        ln9c: n.lineno
+        co9c: n.colno
+        nval: rewriteToThis ids: ids n: n.value promoted: promoted
+        anv9: n.name.stringview
+        isP9: optBoolOr2 o: (promoted.get key: anv9.string) d: false
+        if isP9 then {
+            topath: mkThisDotted ids: ids line: ln9c col: co9c name: anv9
+            return (Node.reassignment (zast.ReassignmentData nodeid: ids.mint lineno: ln9c colno: co9c topath: topath value: nval))
+        } else {
+            an9: anv9.string
+            return (Node.assignment (zast.AssignmentData nodeid: ids.mint lineno: ln9c colno: co9c name: an9 value: nval))
+        }
+    } case reassignment then {
+        lnA: n.lineno
+        coA: n.colno
+        ntp: rewriteToThis ids: ids n: n.topath promoted: promoted
+        nvA: rewriteToThis ids: ids n: n.value promoted: promoted
+        return (Node.reassignment (zast.ReassignmentData nodeid: ids.mint lineno: lnA colno: coA topath: ntp value: nvA))
+    } case swapstmt then {
+        lnB: n.lineno
+        coB: n.colno
+        nlB: rewriteToThis ids: ids n: n.lhs promoted: promoted
+        nrB: rewriteToThis ids: ids n: n.rhs promoted: promoted
+        return (Node.swapstmt (zast.SwapStmtData nodeid: ids.mint lineno: lnB colno: coB lhs: nlB rhs: nrB))
+    } case ifexpr then {
+        lnC: n.lineno
+        coC: n.colno
+        ncls: (List of: Node)
+        cliter: n.clauses.iterate
+        for cl0: cliter loop {
+            ncl0: rewriteToThis ids: ids n: cl0 promoted: promoted
+            ncls.append ncl0
+        }
+        nels: rewriteOptToThis ids: ids o: n.elseclause promoted: promoted
+        return (Node.ifexpr (zast.IfData nodeid: ids.mint lineno: lnC colno: coC clauses: ncls elseclause: nels))
+    } case ifclause then {
+        lnD: n.lineno
+        coD: n.colno
+        nconds: (List of: Node)
+        coiter: n.conditions.iterate
+        for c0: coiter loop {
+            nc0: rewriteToThis ids: ids n: c0 promoted: promoted
+            nconds.append nc0
+        }
+        nst: rewriteToThis ids: ids n: n.statement promoted: promoted
+        return (Node.ifclause (zast.IfClauseData nodeid: ids.mint lineno: lnD colno: coD conditions: nconds statement: nst))
+    } case forexpr then {
+        lnE: n.lineno
+        coE: n.colno
+        nfconds: (List of: Node)
+        fiter: n.conditions.iterate
+        for f0: fiter loop {
+            nf0: rewriteToThis ids: ids n: f0 promoted: promoted
+            nfconds.append nf0
+        }
+        nbody: rewriteOptToThis ids: ids o: n.body promoted: promoted
+        nposts: (List of: Node)
+        piter: n.postconditions.iterate
+        for p0: piter loop {
+            np0: rewriteToThis ids: ids n: p0 promoted: promoted
+            nposts.append np0
+        }
+        return (Node.forexpr (zast.ForData nodeid: ids.mint lineno: lnE colno: coE conditions: nfconds body: nbody postconditions: nposts))
+    } case doexpr then {
+        lnF: n.lineno
+        coF: n.colno
+        nstF: rewriteToThis ids: ids n: n.statement promoted: promoted
+        return (Node.doexpr (zast.DoData nodeid: ids.mint lineno: lnF colno: coF statement: nstF))
+    } case withexpr then {
+        lnG: n.lineno
+        coG: n.colno
+        wnv: n.name.stringview
+        wn0: wnv.string
+        nvG: rewriteToThis ids: ids n: n.value promoted: promoted
+        nbG: rewriteToThis ids: ids n: n.body promoted: promoted
+        return (Node.withexpr (zast.WithData nodeid: ids.mint lineno: lnG colno: coG name: wn0 value: nvG body: nbG))
+    } case caseexpr then {
+        lnH: n.lineno
+        coH: n.colno
+        nsubH: rewriteToThis ids: ids n: n.subject promoted: promoted
+        nclsH: (List of: Node)
+        mliter: n.clauses.iterate
+        for m0: mliter loop {
+            nm0: rewriteToThis ids: ids n: m0 promoted: promoted
+            nclsH.append nm0
+        }
+        nelsH: rewriteOptToThis ids: ids o: n.elseclause promoted: promoted
+        return (Node.caseexpr (zast.CaseData nodeid: ids.mint lineno: lnH colno: coH subject: nsubH clauses: nclsH elseclause: nelsH))
+    } case caseclause then {
+        lnI: n.lineno
+        coI: n.colno
+        cnv: n.name.stringview
+        cn0: cnv.string
+        nma: clonePath ids: ids n: n.matcharm
+        nstI: rewriteToThis ids: ids n: n.statement promoted: promoted
+        return (Node.caseclause (zast.CaseClauseData nodeid: ids.mint lineno: lnI colno: coI name: cn0 matcharm: nma statement: nstI))
+    } case yieldexpr then {
+        lnJ: n.lineno
+        coJ: n.colno
+        nxJ: rewriteToThis ids: ids n: n.expr promoted: promoted
+        return (Node.yieldexpr (zast.YieldExprData nodeid: ids.mint lineno: lnJ colno: coJ expr: nxJ))
+    } case atomstring then {
+        lnK: n.lineno
+        coK: n.colno
+        npartsK: (List of: Node)
+        spiter: n.stringparts.iterate
+        for sp0: spiter loop {
+            nsp0: rewriteToThis ids: ids n: sp0 promoted: promoted
+            npartsK.append nsp0
+        }
+        return (Node.atomstring (zast.AtomStringData nodeid: ids.mint lineno: lnK colno: coK stringparts: npartsK))
+    } case stringchunk then {
+        lnL: n.lineno
+        coL: n.colno
+        tvL: n.text.stringview
+        tcL: tvL.string
+        ckL: n.chunkKind
+        return (Node.stringchunk (zast.StringChunkData nodeid: ids.mint lineno: lnL colno: coL text: tcL chunkKind: ckL))
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
+rewriteOptToThis: function {ids: GenIds o: (Option t: Node) promoted: (Map key: String value: bool)} out (Option t: Node) is {
+    match (
+        o
+    ) case some then {
+        r: rewriteToThis ids: ids n: o promoted: promoted
+        return (Option.some r)
+    } case none then {
+        return (Option.none Node)
+    }
+}
+
+mkThisDotted: function {ids: GenIds line: u32 col: u32 name: StringView} out Node is {
+    thisAtom: mkAtom ids: ids line: line col: col name: "this"
+    childAtom: mkAtom ids: ids line: line col: col name: name
+    return (Node.dottedpath (zast.DottedPathData nodeid: ids.mint lineno: line colno: col parent: thisAtom child: childAtom))
+}
+
+# paramFieldPath -- the synth class's field type for one captured
+# parameter: a take-leaf strips (fields hold owned values), lock keeps
+# its suffix, bare passes through. Receiver (`this`-headed) params land
+# with the method-generator slice.
+paramFieldPath: function {ids: GenIds n: Node} out Node is {
+    lf: pathLeafName n: n
+    if lf.stringview == "take" then {
+        match (
+            n
+        ) case dottedpath then {
+            return (clonePath ids: ids n: n.parent)
+        } else {
+            return (clonePath ids: ids n: n)
+        }
+    } else {
+        return (clonePath ids: ids n: n)
+    }
+}
+
+# canLowerNow -- pre-surgery shape gate on the borrowed definition: a
+# parenthesized gives, a real body, and no receiver (`this`-headed)
+# parameter types (method generators land with the listiter slice).
 canLowerNow: function {n: Node} out bool is {
     match (
         n
     ) case functiondef then {
-        if n.parameters.length > 0.u64 then {
-            return false
-        } else {
+        piter: n.parameters.iterate
+        for p0: piter loop {
+            if (paramHeadIsThis n: p0) then {
+                return false
+            } else {
+            }
         }
         hd: returnHeadOpt o: n.returntype
         if hd.length == 0.u64 then {
+            return false
+        } else {
+        }
+        if (returnHasAccepts o: n.returntype) then {
+            # bidirectional generators land with the accepts slice
             return false
         } else {
         }
@@ -532,19 +1367,81 @@ canLowerNow: function {n: Node} out bool is {
     }
 }
 
-# lowerOne -- lower one no-parameter generator: dissect the owned
-# functiondef, build the synth class (state field + create + call around
-# the original body) and the factory. Returns none when the shape is
-# outside the supported slice.
+# returnHasAccepts -- a non-null accepts: argument on the iterator return
+# (the bidirectional form).
+returnHasAccepts: function {o: (Option t: Node)} out bool is {
+    match (
+        o
+    ) case some then {
+        return (returnHasAcceptsOf n: o)
+    } case none then {
+        return false
+    }
+}
+
+returnHasAcceptsOf: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (returnHasAcceptsOf n: n.expression)
+    } case call then {
+        aiter: n.arguments.iterate
+        for a0: aiter loop {
+            match (
+                a0
+            ) case namedoperation then {
+                an: optStringOr o: a0.name d: ""
+                if an.stringview == "accepts" then {
+                    nv0: leafAtomName n: a0.operation
+                    if nv0.stringview == "null" then {} else {
+                        return true
+                    }
+                } else {
+                }
+            } else {
+            }
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+paramHeadIsThis: function {n: Node} out bool is {
+    match (
+        n
+    ) case namedoperation then {
+        return (pathHeadIsThis n: n.operation)
+    } else {
+        return false
+    }
+}
+
+pathHeadIsThis: function {n: Node} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return (n.name.stringview == "this")
+    } case labelvalue then {
+        return (n.name.stringview == "this")
+    } case dottedpath then {
+        return (pathHeadIsThis n: n.parent)
+    } case expression then {
+        return (pathHeadIsThis n: n.expression)
+    } else {
+        return false
+    }
+}
+
+# lowerOne -- lower one generator: collect the captured parameters and
+# yield-crossing locals, deep-clone the body with promoted names
+# rewritten through `this`, and assemble the synth class (state +
+# captured fields + create + call) plus the forwarding factory.
 lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option t: GenLowered) is {
     gp: givesParts ids: ids n: fn
     match (
         fn
     ) case functiondef then {
-        if fn.parameters.length > 0.u64 then {
-            return (Option.none GenLowered)
-        } else {
-        }
         line: fn.lineno
         col: fn.colno
         gbase: gp.base.take
@@ -556,24 +1453,133 @@ lowerOne: function {ids: GenIds fn: Node.take synthName: StringView} out (Option
             # typechecker's valtype collapse looks it up there.
             wid: ids.mint
             wrapExpr: (Node.expression (zast.ExpressionData nodeid: wid lineno: line colno: col expression: wrapper))
-            bodyOpt: fn.body.take
+            # captured parameters: names, field paths, create/factory clones
+            pNames: (List of: String)
+            pFields: (List of: Node)
+            createParams: (List of: Node)
+            factoryParams: (List of: Node)
+            noStamp: (List of: u32)
+            piter: fn.parameters.iterate
+            for p0: piter loop {
+                cp0: clonePath ids: ids n: p0
+                cpid0: paramOpId n: cp0
+                if cpid0 > 0.u32 then {
+                    noStamp.append cpid0
+                } else {
+                }
+                fp0: clonePath ids: ids n: p0
+                match (
+                    p0
+                ) case namedoperation then {
+                    pn0: optStringOr o: p0.name d: ""
+                    if pn0.length > 0.u64 then {
+                        pf0: paramFieldPath ids: ids n: p0.operation
+                        pFields.append pf0
+                        createParams.append cp0
+                        factoryParams.append fp0
+                        pNames.append pn0
+                    } else {
+                    }
+                } else {
+                }
+            }
+            # the suspending-iterable promotion runs first; the analyses and
+            # the this-rewrite read the promoted body.
+            ictr: (GenIds nextId: 0.u32)
+            pBody: promoteIterablesOpt ids: ids ctr: ictr o: fn.body
+            # promoted = parameters + yield-crossing locals
+            gc: (GenCross yieldCount: 0.u64 firstDef: (Map key: String value: u64) maxUse: (Map key: String value: u64) inLoop: (Map key: String value: bool) params: (Map key: String value: bool))
+            gi: 0.u64
+            gn: pNames.length
+            for while gi < gn loop {
+                g0: pNames.get i: gi
+                g0v: g0.stringview
+                gk0: g0v.string
+                gv0: true
+                gc.params.set key: gk0 value: gv0
+                gi = gi + 1.u64
+            }
+            crossWalkOpt gc: gc o: pBody inYieldLoop: false
+            crossing: (List of: String)
+            crossingLocals gc: gc dst: crossing
+            promoted: (Map key: String value: bool)
+            pi2: 0.u64
+            pn2: pNames.length
+            for while pi2 < pn2 loop {
+                pe2: pNames.get i: pi2
+                pe2v: pe2.stringview
+                pk2: pe2v.string
+                pv2: true
+                promoted.set key: pk2 value: pv2
+                pi2 = pi2 + 1.u64
+            }
+            ci2: 0.u64
+            cn2: crossing.length
+            for while ci2 < cn2 loop {
+                ce2: crossing.get i: ci2
+                ce2v: ce2.stringview
+                ck2: ce2v.string
+                cv2: true
+                promoted.set key: ck2 value: cv2
+                ci2 = ci2 + 1.u64
+            }
+            # the call body: a deep clone with promoted names through `this`
+            newBodyOpt: rewriteOptToThis ids: ids o: pBody promoted: promoted
             match (
-                bodyOpt
+                newBodyOpt
             ) case some then {
-                callM: buildCallMethod ids: ids line: line col: col body: bodyOpt.take wrapExpr: wrapExpr
-                createM: buildCreateMethod ids: ids line: line col: col
+                callM: buildCallMethod ids: ids line: line col: col body: newBodyOpt.take wrapExpr: wrapExpr
+                createM: buildCreateMethod ids: ids line: line col: col params: createParams fwdNames: pNames
+                # class fields: the state cursor, captured params, then
+                # typeof-typed yield-crossing locals (first-assignment order)
                 i64Atom: mkAtom ids: ids line: line col: col name: "i64"
                 stField: mkNamedOp ids: ids line: line col: col name: "state" op: i64Atom
                 isItems: (List of: Node)
                 isItems.append stField
+                fi3: 0.u64
+                fn3: pNames.length
+                for while fi3 < fn3 loop {
+                    f3: pNames.get i: fi3
+                    f3v: f3.stringview
+                    pf3: pFields.get i: fi3
+                    # field paths staged owned: List.get is a borrow, the
+                    # namedoperation stores owned -- clone out
+                    pf3o: clonePath ids: ids n: pf3
+                    pfid3: topNodeId n: pf3o
+                    if pfid3 > 0.u32 then {
+                        noStamp.append pfid3
+                    } else {
+                    }
+                    nf3: mkNamedOp ids: ids line: line col: col name: f3v op: pf3o
+                    isItems.append nf3
+                    fi3 = fi3 + 1.u64
+                }
+                li3: 0.u64
+                ln3: crossing.length
+                for while li3 < ln3 loop {
+                    l3: crossing.get i: li3
+                    l3v: l3.stringview
+                    rhsCar: (GivesParts base: (Option.none Node) leaf: "".string acceptsTy: (Option.none Node))
+                    firstRhsOfOpt ids: ids o: pBody name: l3v dst: rhsCar
+                    rc3: rhsCar.base.take
+                    match (
+                        rc3
+                    ) case some then {
+                        tof3: (Node.typeofexpr (zast.TypeOfExprData nodeid: ids.mint lineno: line colno: col source: rc3.take))
+                        nf4: mkNamedOp ids: ids line: line col: col name: l3v op: tof3
+                        isItems.append nf4
+                    } case none then {
+                    }
+                    li3 = li3 + 1.u64
+                }
                 createNamed: mkNamedOp ids: ids line: line col: col name: "create" op: createM
                 callNamed: mkNamedOp ids: ids line: line col: col name: "call" op: callM
                 asItems: (List of: Node)
                 asItems.append createNamed
                 asItems.append callNamed
                 synthClass: (Node.objectdef (zast.ObjectDefData nodeid: ids.mint lineno: line colno: col kind: zast.nodetype.CLASS isItems: isItems asItems: asItems isNative: false))
-                factory: buildFactory ids: ids line: line col: col synthName: synthName
-                return (Option.some (GenLowered factory: factory synthClass: synthClass wrapperNodeId: wid))
+                factory: buildFactory ids: ids line: line col: col synthName: synthName params: factoryParams fwdNames: pNames
+                return (Option.some (GenLowered factory: factory synthClass: synthClass wrapperNodeId: wid noStamp: noStamp))
             } case none then {
                 return (Option.none GenLowered)
             }

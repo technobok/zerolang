@@ -548,6 +548,9 @@ CHECK_SMOKE = [
     "dobreak",
     "forloop",
     "generator_counter",
+    "generator_intrange",
+    "generator_chain",
+    "generator_map_filter",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -637,6 +640,9 @@ TYPED_NODES_CHECK = [
     "dobreak",
     "forloop",
     "generator_counter",
+    "generator_intrange",
+    "generator_chain",
+    "generator_map_filter",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
