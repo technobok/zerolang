@@ -25,7 +25,9 @@ pytestmark = [pytest.mark.infra, pytest.mark.timeout(240)]
 
 # Examples whose ported emission fully matches the reference's runtime
 # behavior (build parity + stdout + exit code). Admitted per slice.
-EMITC_SMOKE: "list[str]" = []
+EMITC_SMOKE: "list[str]" = [
+    "hello",
+]
 
 
 def test_emitc_scaffold_compiles(tmp_path, zc_binary):
