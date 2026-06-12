@@ -2,8 +2,8 @@
 #
 # This slice wires the self-hosted pipeline far enough to dump SQL: it
 # parses a unit (over a stdlib + source VFS, like zc.py), runs the
-# skeleton typechecker, and writes the SQL dump. C emission is not wired
-# yet (the emitter is unported), so only --dump-sql is honoured.
+# typechecker, and writes either the SQL dump (--dump-sql, the default
+# target '-') or the emitted C (--emit-c, the Phase C surface).
 
 Node: zast.Node
 
@@ -11,13 +11,14 @@ main: function is {
     argv: os.args
     n: argv.length
     if n < 2.u64 then {
-        io.eprintln "usage: zc <unitname> [--src DIR] [--system DIR] [--dump-sql FILE]"
+        io.eprintln "usage: zc <unitname> [--src DIR] [--system DIR] [--dump-sql FILE] [--emit-c FILE]"
         os.exit code: 2.i32
     }
     unitname: (argv.get i: 1.u64).copy
     srcdir: ".".string
     systemdir: "lib/system".string
     dumpTarget: "-".string
+    emitTarget: "".string
     full: false
 
     # parse flags after the unit name; flag values are copied out of the
@@ -35,6 +36,9 @@ main: function is {
         } else if av == "--dump-sql" then {
             i = i + 1.u64
             dumpTarget = (argv.get i: i).copy
+        } else if av == "--emit-c" then {
+            i = i + 1.u64
+            emitTarget = (argv.get i: i).copy
         } else if av == "--full" then {
             full = true
         } else {}
@@ -62,16 +66,31 @@ main: function is {
     } else {
         reg: ztypes.newRegistry
         st: ztypecheck.typecheck program: prog reg: reg full: full
-        sql: zsqldump.dumpSql program: prog vfs: vfs symtab: st
-        if dumpTarget.stringview == "-" then {
-            print sql.stringview
+        if emitTarget.length > 0.u64 then {
+            csrc: zemitterc.emitC program: prog symtab: st
+            if emitTarget.stringview == "-" then {
+                print csrc.stringview
+            } else {
+                wr2: io.writeText path: emitTarget.stringview content: csrc.stringview
+                match (
+                    wr2
+                ) case ok then {} case err then {
+                    io.eprintln "zc: could not write C output"
+                    os.exit code: 1.i32
+                }
+            }
         } else {
-            wr: io.writeText path: dumpTarget.stringview content: sql.stringview
-            match (
-                wr
-            ) case ok then {} case err then {
-                io.eprintln "zc: could not write SQL dump"
-                os.exit code: 1.i32
+            sql: zsqldump.dumpSql program: prog vfs: vfs symtab: st
+            if dumpTarget.stringview == "-" then {
+                print sql.stringview
+            } else {
+                wr: io.writeText path: dumpTarget.stringview content: sql.stringview
+                match (
+                    wr
+                ) case ok then {} case err then {
+                    io.eprintln "zc: could not write SQL dump"
+                    os.exit code: 1.i32
+                }
             }
         }
     }

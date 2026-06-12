@@ -1,0 +1,58 @@
+"""Differential test for the self-hosted C emitter (src/zemitterc.z).
+
+Each admitted example compiles through both pipelines (zc.py reference,
+zc --emit-c ported) under the golden cc flags; the two binaries must
+produce identical stdout and exit codes. Type ids differ between the two
+typecheckers by construction, so the C text is never byte-compared.
+
+``EMITC_SMOKE`` grows per Phase C slice, mirroring the dumpsql suite's
+admission ramp. The ``zc_binary`` fixture (tests/conftest.py) builds
+src/zc.z once per session and skips cleanly without a C compiler.
+"""
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+
+from probe_emitc import build, emit_ref, emit_z, run_binary  # noqa: E402
+
+# Building zc.z compiles the entire ported pipeline as one unit -- the
+# reference compiler takes ~30s on it, over the default per-test timeout.
+pytestmark = [pytest.mark.infra, pytest.mark.timeout(240)]
+
+# Examples whose ported emission fully matches the reference's runtime
+# behavior (build parity + stdout + exit code). Admitted per slice.
+EMITC_SMOKE: "list[str]" = []
+
+
+def test_emitc_scaffold_compiles(tmp_path, zc_binary):
+    """C0 baseline: the skeleton's C compiles standalone under golden flags."""
+    z_c = str(tmp_path / "z.c")
+    zp = emit_z(zc_binary, "hello", z_c)
+    assert zp.returncode == 0, zp.stderr
+    zb = build(z_c, str(tmp_path / "z.bin"))
+    assert zb.returncode == 0, zb.stderr
+
+
+@pytest.mark.parametrize("unit", EMITC_SMOKE)
+def test_emitc_matches_reference(unit, tmp_path, zc_binary):
+    ref_c = str(tmp_path / "ref.c")
+    z_c = str(tmp_path / "z.c")
+    rp = emit_ref(unit, ref_c)
+    assert rp.returncode == 0, rp.stderr
+    zp = emit_z(zc_binary, unit, z_c)
+    assert zp.returncode == 0, zp.stderr
+    rb = build(ref_c, str(tmp_path / "ref.bin"))
+    assert rb.returncode == 0, rb.stderr
+    zb = build(z_c, str(tmp_path / "z.bin"))
+    assert zb.returncode == 0, zb.stderr
+    ref_dir = tmp_path / "ref_run"
+    ref_dir.mkdir()
+    z_dir = tmp_path / "z_run"
+    z_dir.mkdir()
+    ref_res = run_binary(str(tmp_path / "ref.bin"), str(ref_dir))
+    z_res = run_binary(str(tmp_path / "z.bin"), str(z_dir))
+    assert ref_res[:2] == z_res[:2], f"ref={ref_res!r} z={z_res!r}"
