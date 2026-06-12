@@ -3339,7 +3339,62 @@ firstArgTypeName: function {op: Node} out String is {
 
 # collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
 # and append the mono name ({template}_{arg}) + template name to the parallel lists.
-collectMainInstantiations: function {o: Node reqMono: (List of: String) reqTemplate: (List of: String)} is {
+# InstReq -- one generic-unit instantiation binding (intmath: (mathops t: i64)):
+# the names the mint needs plus the binding's node ids for full-mode stamps.
+InstReq: class {
+    bind: String
+    mono: String
+    tmpl: String
+    argn: String
+    exprId: u64
+    callId: u64
+    calId: u64
+    argAtomId: u64
+}
+
+# instFillIds -- record the instantiation's expression/call/callable/arg node
+# ids on the request (the reference stamps all four at binding resolution).
+instFillIds: function {r: InstReq op: Node} is {
+    match (
+        op
+    ) case expression then {
+        r.exprId = op.nodeid.u64
+        instFillIds r: r op: op.expression
+    } case call then {
+        r.callId = op.nodeid.u64
+        instFillCallable r: r op: op.callable
+        aiter: op.arguments.iterate
+        for a9: aiter loop {
+            match (
+                a9
+            ) case namedoperation then {
+                if r.argAtomId == 0.u64 then {
+                    instFillArg r: r op: a9.operation
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+instFillCallable: function {r: InstReq op: Node} is {
+    match (
+        op
+    ) case atomid then {
+        r.calId = op.nodeid.u64
+    } else {}
+}
+
+instFillArg: function {r: InstReq op: Node} is {
+    match (
+        op
+    ) case expression then {
+        instFillArg r: r op: op.expression
+    } case atomid then {
+        r.argAtomId = op.nodeid.u64
+    } else {}
+}
+
+collectMainInstantiations: function {o: Node reqs: (List of: InstReq)} is {
     match (
         o
     ) case unitdef then {
@@ -3351,9 +3406,11 @@ collectMainInstantiations: function {o: Node reqMono: (List of: String) reqTempl
                 tn: callableUnitName op: bm.operation
                 if tn.length == 0.u64 then {} else {
                     at: firstArgTypeName op: bm.operation
+                    bindn: unitLabel o: bm.name
                     mono: "\{tn}_\{at}".string
-                    reqMono.append mono
-                    reqTemplate.append tn
+                    r9: (InstReq bind: bindn mono: mono tmpl: tn argn: at exprId: 0 callId: 0 calId: 0 argAtomId: 0)
+                    instFillIds r: r9 op: bm.operation
+                    reqs.append r9
                 }
             } else {}
         }
@@ -3363,7 +3420,7 @@ collectMainInstantiations: function {o: Node reqMono: (List of: String) reqTempl
 # scanMainForInstantiations -- find the main unit and collect its instantiation requests.
 # Its own function scope bounds the program.units iterator so it releases before the
 # mono-creation pass (which iterates program.units again).
-scanMainForInstantiations: function {program: Node reqMono: (List of: String) reqTemplate: (List of: String)} is {
+scanMainForInstantiations: function {program: Node reqs: (List of: InstReq)} is {
     match (
         program
     ) case program then {
@@ -3375,7 +3432,7 @@ scanMainForInstantiations: function {program: Node reqMono: (List of: String) re
             ) case namedoperation then {
                 un: unitLabel o: u.name
                 if un.stringview == mainName then {
-                    collectMainInstantiations o: u.operation reqMono: reqMono reqTemplate: reqTemplate
+                    collectMainInstantiations o: u.operation reqs: reqs
                 } else {}
             } else {}
         }
@@ -3772,6 +3829,26 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
         rid: uid
         if (hasGenericParam items: unitOp.body) then {
             reg.setGeneric typeId: uid value: true
+            if ty.fullMainUnit.length > 0.u64 then {
+                # full mode mirrors the reference's inline-template touch:
+                # the unit node and each bare generic-param def stamp, and
+                # the param name resolves so signature t-refs stamp.
+                udnid: unitOp.nodeid
+                uidv: uid
+                ty.nodeType.set key: udnid.u64 value: uidv
+                gpid: reg.newType name: "__generic_param" typetype: ztypes.ztypetype.GENERIC_PARAM
+                with gpiter: unitOp.body.iterate do for gm: gpiter loop {
+                    match (
+                        gm
+                    ) case namedoperation then {
+                        if (isBareGenericParam op: gm.operation) then {
+                            gpnid: nodeId n: gm.operation
+                            gpv2: gpid
+                            ty.nodeType.set key: gpnid.u64 value: gpv2
+                        } else {}
+                    } else {}
+                }
+            } else {}
         } else {}
         ty.definedInUnit.set key: did value: unitName.string
         rk: "\{unitName}.\{defName}".string
@@ -3797,7 +3874,7 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
 # createUnitMono -- create a mono UNIT (defined_in_unit=the instantiating unit) with
 # JOIN-only function-shell children from a template unit body, then seed return/never
 # demand. Dedups on the mono's resolved key.
-createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView monoName: StringView templateOp: Node} is {
+createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView monoName: StringView templateName: StringView templateOp: Node} is {
     rkey: "\{unitName}.\{monoName}".string
     got: ty.resolved.get key: rkey
     exists: false
@@ -3813,6 +3890,23 @@ createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         ty.definedInUnit.set key: did value: unitName.string
         rk2: "\{unitName}.\{monoName}".string
         ty.resolved.set key: rk2 value: rid
+        # link the mono to its template (inline templates register under
+        # the main unit; file templates carry the per-unit UNIT type).
+        tplKey: "\{unitName}.\{templateName}".string
+        tplGot: ty.resolved.get key: tplKey
+        match (
+            tplGot
+        ) case some then {
+            reg.setGenericOrigin typeId: monoId value: tplGot
+        } case none then {
+            tplK2: templateName.string
+            utGot: ty.unitTypes.get key: tplK2
+            match (
+                utGot
+            ) case some then {
+                reg.setGenericOrigin typeId: monoId value: utGot
+            } case none then {}
+        }
         attachMonoUnitFuncs ty: ty reg: reg monoId: monoId monoName: monoName templateOp: templateOp
         reg.recordDemand name: "return"
         reg.recordDemand name: "never"
@@ -3833,7 +3927,7 @@ resolveInlineMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitN
                 bn: unitLabel o: bm.name
                 if bn.stringview == templateName then {
                     if (isUnitOp op: bm.operation) then {
-                        createUnitMono ty: ty reg: reg unitName: unitName monoName: monoName templateOp: bm.operation
+                        createUnitMono ty: ty reg: reg unitName: unitName monoName: monoName templateName: templateName templateOp: bm.operation
                     } else {}
                 } else {}
             } else {}
@@ -3855,7 +3949,7 @@ resolveUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             ) case namedoperation then {
                 un: unitLabel o: u.name
                 if un.stringview == templateName then {
-                    createUnitMono ty: ty reg: reg unitName: unitName monoName: monoName templateOp: u.operation
+                    createUnitMono ty: ty reg: reg unitName: unitName monoName: monoName templateName: templateName templateOp: u.operation
                 } else {}
                 if un.stringview == unitName then {
                     resolveInlineMono ty: ty reg: reg unitName: unitName monoName: monoName templateName: templateName mainOp: u.operation
@@ -3863,6 +3957,487 @@ resolveUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             } else {}
         }
     } else {}
+}
+
+# typeNameOfReg -- typeNameOf without a symbol table (registry-only callers).
+typeNameOfReg: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
+    t: reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.name.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# fnReturnBaseName -- the base type name of a function's return typeref
+# ("" when absent), for completing substituted signatures whose template
+# return was still unresolved at signature time.
+fnReturnBaseName: function {o: (Option t: Node)} out String is {
+    match (
+        o
+    ) case some then {
+        return (baseTypeName n: o)
+    } case none then {
+        return "".string
+    }
+}
+
+fnReturnBaseNameOf: function {op: Node} out String is {
+    match (
+        op
+    ) case functiondef then {
+        return (fnReturnBaseName o: op.returntype)
+    } else {
+        return "".string
+    }
+}
+
+# cloneUnitMethod -- deep-clone a template method functiondef with fresh synth
+# nodeids. The clone never registers in ast_nodes, so its body's stamps stay
+# out of the dump; only its walk's scope/entry/variable rows are visible.
+cloneUnitMethod: function {ids: zgenerator.GenIds op: Node} out (Option t: Node) is {
+    match (
+        op
+    ) case functiondef then {
+        pm9: (Map key: String value: bool)
+        params9: (List of: Node)
+        with piter: op.parameters.iterate do for pp: piter loop {
+            pc: zgenerator.clonePath ids: ids n: pp
+            params9.append pc
+        }
+        rt9: zgenerator.rewriteOptToThis ids: ids o: op.returntype promoted: pm9
+        body9: zgenerator.rewriteOptToThis ids: ids o: op.body promoted: pm9
+        ln9: op.lineno
+        cn9: op.colno
+        fnew: (Node.functiondef (zast.FunctionData nodeid: ids.mint lineno: ln9 colno: cn9 returntype: rt9 parameters: params9 body: body9 isNative: false asItems: (List of: Node)))
+        return (Option.some fnew)
+    } else {
+        return (Option.none Node)
+    }
+}
+
+# buildUnitMonoFull -- full-mode unit-mono completion: substituted method
+# children ({mono}.{fn} FUNCTION types whose generic-param-named child types
+# and return are replaced by the instantiation arg) plus a cloned body per
+# method, stashed for the lazy first-use walk. One build per mono.
+buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tmplUnitName: StringView tmplName: StringView monoId: u64 monoName: StringView tplId: u64 argId: u64 templateOp: Node} is {
+    bgot9: ty.collectionChildrenBuilt.get key: monoId
+    if (optBoolOr o: bgot9 d: false) then {
+        return
+    } else {}
+    bk0: monoId
+    ty.collectionChildrenBuilt.set key: bk0 value: true
+    gpNames: (Map key: String value: bool)
+    gpFirst: "".string
+    match (
+        templateOp
+    ) case unitdef then {
+        with giter: templateOp.body.iterate do for gm: giter loop {
+            match (
+                gm
+            ) case namedoperation then {
+                if (isGenericParam op: gm.operation) then {
+                    gn: unitLabel o: gm.name
+                    if gpFirst.length == 0.u64 then {
+                        gnv9: gn.stringview
+                        gpc9: gnv9.string
+                        gpFirst = gpc9
+                    } else {}
+                    gv: true
+                    gpNames.set key: gn value: gv
+                } else {}
+            } else {}
+        }
+        ids9: (zgenerator.GenIds nextId: ty.nextSynthNodeId)
+        fiter: templateOp.body.iterate
+        for fm: fiter loop {
+            match (
+                fm
+            ) case namedoperation then {
+                if (isFunctionDefOp op: fm.operation) then {
+                    fn: unitLabel o: fm.name
+                    qn: "\{monoName}.\{fn}".string
+                    srcId: 0.u64
+                    tfo: ty.childOf parentTypeId: tplId name: fn.stringview
+                    match (
+                        tfo
+                    ) case some then {
+                        srcId = tfo
+                    } case none then {
+                        tq: "\{tmplName}_\{fn}".string
+                        mo0: resolveMethodFn ty: ty reg: reg unitName: tmplUnitName qname: tq.stringview thisName: "" op: fm.operation
+                        match (
+                            mo0
+                        ) case some then {
+                            srcId = mo0
+                            ty.setChild parentTypeId: tplId childName: fn.stringview childTypeId: mo0
+                        } case none then {}
+                    }
+                    newFnId: reg.newType name: qn.stringview typetype: ztypes.ztypetype.FUNCTION
+                    if srcId > 0.u64 then {
+                        cNames: (List of: String)
+                        cIds: (List of: u64)
+                        with citer: ty.typeChild.iterate do for tc: citer loop {
+                            if tc.parentTypeId == srcId then {
+                                cto: ty.childTypeById.get key: tc.childNameId
+                                match (
+                                    cto
+                                ) case some then {
+                                    cn0: tc.childName.copy
+                                    cNames.append cn0
+                                    cid2: cto
+                                    cIds.append cid2
+                                } case none then {}
+                            } else {}
+                        }
+                        ci: 0.u64
+                        cn3: cNames.length
+                        for while ci < cn3 loop {
+                            chName: cNames.get i: ci
+                            chId: cIds.get i: ci
+                            target: chId
+                            ctn: typeNameOfReg reg: reg tid: chId
+                            cgo: gpNames.get key: ctn
+                            match (
+                                cgo
+                            ) case some then {
+                                if argId > 0.u64 then {
+                                    target = argId
+                                } else {}
+                            } case none then {}
+                            ty.setChild parentTypeId: newFnId childName: chName.stringview childTypeId: target
+                            ci = ci + 1.u64
+                        }
+                        rto9: (optionval.none u64)
+                        {
+                            tf2: reg.typeById.get key: srcId
+                            match (
+                                tf2
+                            ) case some then {
+                                rto9 = tf2.returnTypeId
+                            } case none then {}
+                        }
+                        match (
+                            rto9
+                        ) case some then {
+                            rtv: rto9
+                            rtn: typeNameOfReg reg: reg tid: rtv
+                            rgo: gpNames.get key: rtn
+                            match (
+                                rgo
+                            ) case some then {
+                                if argId > 0.u64 then {
+                                    rtv = argId
+                                } else {}
+                            } case none then {}
+                            reg.setReturnType typeId: newFnId value: rtv
+                        } case none then {
+                            # template return unresolved at signature time
+                            # (out t): derive from the method's AST typeref.
+                            rnm: fnReturnBaseNameOf op: fm.operation
+                            if rnm.length > 0.u64 then {
+                                rgo2: gpNames.get key: rnm
+                                rid2: 0.u64
+                                match (
+                                    rgo2
+                                ) case some then {
+                                    rid2 = argId
+                                } case none then {
+                                    rlo2: lookupTyperef resolved: ty.resolved mainName: tmplUnitName base: rnm.stringview
+                                    match (
+                                        rlo2
+                                    ) case some then {
+                                        rid2 = rlo2
+                                    } case none then {}
+                                }
+                                if rid2 > 0.u64 then {
+                                    reg.setReturnType typeId: newFnId value: rid2
+                                } else {}
+                            } else {}
+                        }
+                    } else {}
+                    ty.setChild parentTypeId: monoId childName: fn.stringview childTypeId: newFnId
+                    rfk: "\{monoName}.\{fn}".string
+                    rfv: newFnId
+                    ty.resolved.set key: rfk value: rfv
+                    co9: cloneUnitMethod ids: ids9 op: fm.operation
+                    match (
+                        co9
+                    ) case some then {
+                        gpv9: gpFirst.stringview
+                        gpn9: gpv9.string
+                        mn9: monoName.string
+                        rec9: (ztyping.PendingUnitWalk monoId: monoId monoName: mn9 qualified: qn gpName: gpn9 argId: argId fn: co9.take)
+                        ty.pendingUnitWalk.append rec9
+                        mk9: monoId
+                        pw9: true
+                        ty.unitMonoWalksPending.set key: mk9 value: pw9
+                    } case none then {}
+                } else {}
+            } else {}
+        }
+        ty.nextSynthNodeId = ids9.nextId
+    } else {}
+}
+
+# completeInlineReq -- locate an inline template member by name in the main
+# unit body and build its mono's full-mode completion.
+completeInlineReq: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView monoId: u64 monoName: StringView tmplName: StringView tplId: u64 argId: u64 mainOp: Node} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                bn: unitLabel o: bm.name
+                if bn.stringview == tmplName then {
+                    if (isUnitOp op: bm.operation) then {
+                        buildUnitMonoFull ty: ty reg: reg tmplUnitName: mainName tmplName: tmplName monoId: monoId monoName: monoName tplId: tplId argId: argId templateOp: bm.operation
+                    } else {}
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# registerUnitGenericParams -- register (or remove) an inline template's
+# bare generic-param names in resolved, minting a GENERIC_PARAM type per
+# name. Bracketed around stampTyperefs only: a persistent registration
+# would hijack generic-param-named children in later mono resolution.
+registerUnitGenericParams: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView unitOp: Node doRegister: bool} is {
+    match (
+        unitOp
+    ) case unitdef then {
+        with giter: unitOp.body.iterate do for gm: giter loop {
+            match (
+                gm
+            ) case namedoperation then {
+                if (isBareGenericParam op: gm.operation) then {
+                    gpn: unitLabel o: gm.name
+                    gpk: "\{mainName}.\{gpn}".string
+                    if doRegister then {
+                        ego: ty.resolved.get key: gpk
+                        match (
+                            ego
+                        ) case some then {} case none then {
+                            tpid: reg.newType name: gpn.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                            tpv: tpid
+                            ty.resolved.set key: gpk value: tpv
+                        }
+                    } else {
+                        ggo: ty.resolved.get key: gpk
+                        match (
+                            ggo
+                        ) case some then {
+                            if (reg.typetypeOf typeId: ggo) == ztypes.ztypetype.GENERIC_PARAM then {
+                                ty.resolved.delete key: gpk
+                            } else {}
+                        } case none then {}
+                    }
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# bracketInlineMainOp -- walk the main unit body's inline templates for the
+# bracket (bare param so the unitdef arm narrows).
+bracketInlineMainOp: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView mainOp: Node doRegister: bool} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biterB: mainOp.body.iterate
+        for bmB: biterB loop {
+            match (
+                bmB
+            ) case namedoperation then {
+                if (isUnitOp op: bmB.operation) then {
+                    registerUnitGenericParams ty: ty reg: reg mainName: mainName unitOp: bmB.operation doRegister: doRegister
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# bracketInlineGenericParamNames -- apply registerUnitGenericParams to every
+# inline generic template in the main unit.
+bracketInlineGenericParamNames: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node doRegister: bool} is {
+    mainName: programMainName program: program
+    match (
+        program
+    ) case program then {
+        with uiterB: program.units.iterate do for uB: uiterB loop {
+            match (
+                uB
+            ) case namedoperation then {
+                unB: unitLabel o: uB.name
+                if unB.stringview == mainName.stringview then {
+                    bracketInlineMainOp ty: ty reg: reg mainName: mainName.stringview mainOp: uB.operation doRegister: doRegister
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+# completeUnitInstantiations -- post-demand full-mode pass: with system types
+# resolved, finish each generic-unit instantiation (substituted children +
+# clone stash), register the binding name, and stamp the instantiation's
+# expression/call/callable/arg nodes (the reference stamps all four).
+completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    mainName: programMainName program: program
+    reqs: (List of: InstReq)
+    scanMainForInstantiations program: program reqs: reqs
+    i: 0.u64
+    for while i < reqs.length loop {
+        r: reqs.get i: i
+        rbv1: r.bind.stringview
+        rb: rbv1.string
+        rmv1: r.mono.stringview
+        rm: rmv1.string
+        rtv1: r.tmpl.stringview
+        rt: rtv1.string
+        rav1: r.argn.stringview
+        ra: rav1.string
+        re: r.exprId
+        rc: r.callId
+        rl: r.calId
+        rg: r.argAtomId
+        mk: "\{mainName}.\{rm}".string
+        mgo: ty.resolved.get key: mk
+        match (
+            mgo
+        ) case some then {
+            mid9: mgo
+            tplId: 0.u64
+            tk: "\{mainName}.\{rt}".string
+            tgo: ty.resolved.get key: tk
+            match (
+                tgo
+            ) case some then {
+                tplId = tgo
+            } case none then {
+                tnv9: rt.stringview
+                tn9: tnv9.string
+                ugo: ty.unitTypes.get key: tn9
+                match (
+                    ugo
+                ) case some then {
+                    tplId = ugo
+                } case none then {}
+            }
+            argId: 0.u64
+            ago: lookupTyperef resolved: ty.resolved mainName: mainName.stringview base: ra.stringview
+            match (
+                ago
+            ) case some then {
+                argId = ago
+            } case none then {}
+            if tplId > 0.u64 then {
+                match (
+                    program
+                ) case program then {
+                    with uiter9: program.units.iterate do for u9: uiter9 loop {
+                        match (
+                            u9
+                        ) case namedoperation then {
+                            un9: unitLabel o: u9.name
+                            if un9.stringview == rt.stringview then {
+                                buildUnitMonoFull ty: ty reg: reg tmplUnitName: un9.stringview tmplName: rt.stringview monoId: mid9 monoName: rm.stringview tplId: tplId argId: argId templateOp: u9.operation
+                            } else {}
+                            if un9.stringview == mainName.stringview then {
+                                completeInlineReq ty: ty reg: reg mainName: mainName.stringview monoId: mid9 monoName: rm.stringview tmplName: rt.stringview tplId: tplId argId: argId mainOp: u9.operation
+                            } else {}
+                        } else {}
+                    }
+                } else {}
+            } else {}
+            bk: "\{mainName}.\{rb}".string
+            bv: mid9
+            ty.resolved.set key: bk value: bv
+            if re > 0.u64 then {
+                ev: mid9
+                ty.nodeType.set key: re value: ev
+            } else {}
+            if rc > 0.u64 then {
+                cv: mid9
+                ty.nodeType.set key: rc value: cv
+            } else {}
+            if rl > 0.u64 when tplId > 0.u64 then {
+                lv: tplId
+                ty.nodeType.set key: rl value: lv
+            } else {}
+            if rg > 0.u64 when argId > 0.u64 then {
+                av: argId
+                ty.nodeType.set key: rg value: av
+            } else {}
+        } case none then {}
+        i = i + 1.u64
+    }
+}
+
+# runUnitMonoWalks -- first body-walk use of a generic-unit mono: walk each
+# stashed method clone under a unitgeneric scope. The generic param name
+# temporarily resolves to the arg type for the walk (param typerefs resolve
+# by name); clone scopes parent under the current (using) scope, matching
+# the reference's lazy clone-and-check.
+runUnitMonoWalks: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) monoId: u64} is {
+    pgo: st.typing.unitMonoWalksPending.get key: monoId
+    match (
+        pgo
+    ) case some then {} case none then {
+        return
+    }
+    dk: monoId
+    st.typing.unitMonoWalksPending.delete key: dk
+    n9: st.typing.pendingUnitWalk.length
+    i9: 0.u64
+    for while i9 < n9 loop {
+        rec: st.typing.pendingUnitWalk.get i: i9
+        rmid: rec.monoId
+        if rmid == monoId then {
+            rqv: rec.qualified.stringview
+            rqual: rqv.string
+            rgv: rec.gpName.stringview
+            rgp: rgv.string
+            rmv: rec.monoName.stringview
+            rmn: rmv.string
+            raid: rec.argId
+            gk: "\{unitName}.\{rgp}".string
+            prior: st.typing.resolved.get key: gk
+            pv9: (optionval.none u64)
+            match (
+                prior
+            ) case some then {
+                pv9 = (optionval.some prior)
+            } case none then {}
+            gk2: "\{unitName}.\{rgp}".string
+            av9: raid
+            st.typing.resolved.set key: gk2 value: av9
+            sn: "unitgeneric:\{rmn}".string
+            sid: st.push name: sn.stringview
+            st.define name: rgp.stringview ztypeId: raid
+            prevL: st.typing.synthLabel.copy
+            prevT: st.typing.currentThisName.copy
+            checkFunctionBody st: st unitName: unitName defName: rqual.stringview defn: rec.fn thisName: "" unitBody: unitBody
+            st.typing.synthLabel = prevL
+            st.typing.currentThisName = prevT
+            p9: st.pop
+            match (
+                pv9
+            ) case some then {
+                gk3: "\{unitName}.\{rgp}".string
+                rv9: pv9
+                st.typing.resolved.set key: gk3 value: rv9
+            } case none then {
+                st.typing.resolved.delete key: gk
+            }
+        } else {}
+        i9 = i9 + 1.u64
+    }
 }
 
 # resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings in the main
@@ -3882,14 +4457,16 @@ programMainName: function {program: Node} out String is {
 
 resolveMainUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     mainName: programMainName program: program
-    reqMono: (List of: String)
-    reqTemplate: (List of: String)
-    scanMainForInstantiations program: program reqMono: reqMono reqTemplate: reqTemplate
+    reqs: (List of: InstReq)
+    scanMainForInstantiations program: program reqs: reqs
     i: 0.u64
-    for while i < reqMono.length loop {
-        mono: reqMono.get i: i
-        tmpl: reqTemplate.get i: i
-        resolveUnitMono ty: ty reg: reg program: program unitName: mainName.stringview monoName: mono.stringview templateName: tmpl.stringview
+    for while i < reqs.length loop {
+        r: reqs.get i: i
+        rmv0: r.mono.stringview
+        rm: rmv0.string
+        rtv0: r.tmpl.stringview
+        rt: rtv0.string
+        resolveUnitMono ty: ty reg: reg program: program unitName: mainName.stringview monoName: rm.stringview templateName: rt.stringview
         i = i + 1.u64
     }
 }
@@ -9278,6 +9855,13 @@ maybeWalkMethods: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
             st.typing.currentThisName = prevThis
         } else {
         }
+        rko: "\{unitName}.\{name}".string
+        rgo9: st.typing.resolved.get key: rko
+        match (
+            rgo9
+        ) case some then {
+            runUnitMonoWalks st: st unitName: unitName unitBody: unitBody monoId: rgo9
+        } case none then {}
     } else {
     }
 }
@@ -10398,9 +10982,18 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     } else {}
     if full then {
         resolveConstantDefs ty: ty program: program
+        completeUnitInstantiations ty: ty reg: reg program: program
+    } else {
+    }
+    if full then {
+        bracketInlineGenericParamNames ty: ty reg: reg program: program doRegister: true
     } else {
     }
     stampTyperefs ty: ty program: program
+    if full then {
+        bracketInlineGenericParamNames ty: ty reg: reg program: program doRegister: false
+    } else {
+    }
     st: zenv.newSymbolTable reg: reg typing: ty
     if full then {
         resolveMonos st: st program: program
