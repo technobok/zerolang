@@ -32,6 +32,8 @@ EMITC_SMOKE: "list[str]" = [
     "arbprec_constants",
     "chained_method_calls",
     "panic",
+    "constfold",
+    "control",
 ]
 
 

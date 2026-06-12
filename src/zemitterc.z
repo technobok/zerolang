@@ -227,6 +227,9 @@ collectLiterals: function {n: Node ids: (List of: u64) texts: (List of: String)}
             collectLiterals n: k ids: ids texts: texts
         }
         collectLiterals n: n.statement ids: ids texts: texts
+    } case withexpr then {
+        collectLiterals n: n.value ids: ids texts: texts
+        collectLiterals n: n.body ids: ids texts: texts
     } case forexpr then {
         fiter: n.conditions.iterate
         for f: fiter loop {
@@ -301,6 +304,7 @@ Ctx: class {
     strC: String
     svC: String
     litIds: (List of: u64)
+    constVals: (Map key: String value: String)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -326,7 +330,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
     } case atomid then {
         av: n.name.stringview
         ac: av.string
-        return ac
+        cgo: ctx.constVals.get key: ac
+        match (
+            cgo
+        ) case some then {
+            cvv: cgo.stringview
+            cvc: cvv.string
+            return cvc
+        } case none then {}
+        ac2: av.string
+        return ac2
     } case binop then {
         l: emitExpr symtab: symtab ctx: ctx n: n.lhs
         op: atomTextOf n: n.operator
@@ -595,6 +608,20 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         emitElse9 symtab: symtab ctx: ctx o: n.elseclause ind: ind tmp: tmp buf: buf
         le: "\{ind}}\n"
         buf.append le.stringview
+    } case withexpr then {
+        wn9: n.name.stringview
+        wnm: wn9.string
+        wtn: stampNameDeep symtab: symtab n: n.value
+        wct: cTypeOf name: wtn.stringview
+        wv: emitExpr symtab: symtab ctx: ctx n: n.value
+        if wct.length > 0.u64 then {
+            lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
+            buf.append lwv.stringview
+        } else {
+            lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
+            buf.append lwv2.stringview
+        }
+        emitStmt symtab: symtab ctx: ctx n: n.body ind: ind tmp: tmp buf: buf
     } case forexpr then {
         cond: "".string
         kiter: n.conditions.iterate
@@ -814,6 +841,90 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
     } case none then {
         return "".string
     }
+}
+
+# isConstShape -- a unit member value that folds to a C constant
+# expression: numeric/float atoms, already-rendered constant names, and
+# binop trees over those.
+isConstShape: function {ctx: Ctx n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isConstShape ctx: ctx n: n.expression)
+    } case atomid then {
+        av: n.name.stringview
+        b0: av.byteAt i: 0.u64
+        match (
+            b0
+        ) case some then {
+            if b0 >= 48.u8 then {
+                if b0 <= 57.u8 then {
+                    return true
+                } else {}
+            } else {}
+        } case none then {}
+        ak: av.string
+        cgo: ctx.constVals.get key: ak
+        match (
+            cgo
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    } case binop then {
+        if (isConstShape ctx: ctx n: n.lhs) then {
+            return (isConstShape ctx: ctx n: n.rhs)
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# fillConstVals -- pre-render each main-unit constant's C text in
+# definition order (constants reference only earlier ones; C folds the
+# arithmetic in the emitted expression).
+fillConstVals: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    fillConstValsIn symtab: symtab ctx: ctx mainOp: u.operation
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+fillConstValsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (isConstShape ctx: ctx n: bm.operation) then {
+                    nm: unitLabel9 o: bm.name
+                    cv: emitExpr symtab: symtab ctx: ctx n: bm.operation
+                    nmv: nm.stringview
+                    nk: nmv.string
+                    cvv: cv.stringview
+                    ck: cvv.string
+                    ctx.constVals.set key: nk value: ck
+                } else {}
+            } else {}
+        }
+    } else {}
 }
 
 # emitFns -- the main unit's function declarations then definitions
@@ -1039,7 +1150,8 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1.u64
     }
     buf.append "\n"
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds)
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String))
+    fillConstVals program: program symtab: symtab ctx: ctx
     emitFns program: program symtab: symtab ctx: ctx buf: buf
     hasMain: programHasMain program: program
     if hasMain then {} else {
