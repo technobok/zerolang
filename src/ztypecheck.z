@@ -1497,6 +1497,41 @@ typedefFieldBaseName: function {n: Node} out String is {
     }
 }
 
+# mangledTypeName -- a type ref's resolvable name: bare atoms as-is, a
+# parameterized ref as its instance mangling (`(List of: u8)` ->
+# "List_u8"), matching the shell/mono naming so member delegation finds
+# the minted instance.
+mangledTypeName: function {op: Node} out String is {
+    match (
+        op
+    ) case atomid then {
+        return op.name.copy
+    } case labelvalue then {
+        return op.name.copy
+    } case expression then {
+        return (mangledTypeName op: op.expression)
+    } case call then {
+        base: atomName n: op.callable
+        aiter: op.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                an: atomName n: arg.operation
+                if an.length > 0.u64 then {
+                    base.append s: "_"
+                    base.append s: an.stringview
+                } else {
+                }
+            } else {
+            }
+        }
+        return base
+    } else {
+        return "".string
+    }
+}
+
 # objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
 # field (the typedef wrapper base), or "" when the object is not a typedef.
 objectTypedefBase: function {onode: zast.ObjectDefData} out String is {
@@ -1507,6 +1542,35 @@ objectTypedefBase: function {onode: zast.ObjectDefData} out String is {
         ) case namedoperation then {
             if (isTypedefField n: fm.operation) then {
                 return (typedefFieldBaseName n: fm.operation)
+            } else {}
+        } else {}
+    }
+    return "".string
+}
+
+# typedefFieldMangledName -- the mangled instance name of an `X.typedef`
+# field's `X` (`(List of: u8).typedef` -> "List_u8"), the minted-mono key
+# member delegation resolves through.
+typedefFieldMangledName: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (mangledTypeName op: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+# objectTypedefMangled -- the mangled base-instance name of an objectdef's
+# single `X.typedef` field, or "" when the object is not a typedef.
+objectTypedefMangled: function {onode: zast.ObjectDefData} out String is {
+    fiter: onode.isItems.iterate
+    for fm: fiter loop {
+        match (
+            fm
+        ) case namedoperation then {
+            if (isTypedefField n: fm.operation) then {
+                return (typedefFieldMangledName n: fm.operation)
             } else {}
         } else {}
     }
@@ -1534,6 +1598,11 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
         if tdb.length > 0.u64 then {
             tdk: rid
             ty.typedefBaseName.set key: tdk value: tdb
+        } else {}
+        tdm: objectTypedefMangled onode: rnode
+        if tdm.length > 0.u64 then {
+            tdk2: rid
+            ty.typedefBaseMangled.set key: tdk2 value: tdm
         } else {}
     } else {}
     hasCreateIs: false
@@ -1870,6 +1939,15 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         tdbase: objectTypedefBase onode: cnode
         if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: tdbase.stringview isLock: false) then {
             needsDtor = true
+        } else {}
+        if tdbase.length > 0.u64 then {
+            tdk3: cid
+            ty.typedefBaseName.set key: tdk3 value: tdbase
+        } else {}
+        tdm3: objectTypedefMangled onode: cnode
+        if tdm3.length > 0.u64 then {
+            tdk4: cid
+            ty.typedefBaseMangled.set key: tdk4 value: tdm3
         } else {}
     } else {}
     fiter: cnode.isItems.iterate
@@ -2301,8 +2379,15 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             ) case namedoperation then {
                 nm: unitLabel o: u.name
                 uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
+                uid2: uid
                 opid: unitdefNodeId n: u.operation
                 ty.unitTypesById.set key: opid.u64 value: uid
+                # unit-qualified member paths type their base as the
+                # UNIT type via a name-keyed side map -- never the
+                # resolution chain, where a main unit sharing a type's
+                # name (str.z, panic.z) would shadow it.
+                unk: nm.copy
+                ty.unitTypes.set key: unk value: uid2
                 if nm.stringview == mainName then {
                     resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: u.operation full: full
                 } else {}
@@ -2825,6 +2910,23 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
         bn: atomName n: node.parent
         if bn.length > 0.u64 then {
             reg.recordDemand name: bn.stringview
+            # a unit-qualified member (io.stdout) demands the member name
+            # so the unit's demand walk resolves it
+            isUnitQ: false
+            if bn.stringview == "io" then { isUnitQ = true } else {
+            }
+            if bn.stringview == "os" then { isUnitQ = true } else {
+            }
+            if bn.stringview == "cli" then { isUnitQ = true } else {
+            }
+            if isUnitQ then {
+                mn0: atomName n: node.child
+                if mn0.length > 0.u64 then {
+                    reg.recordDemand name: mn0.stringview
+                } else {
+                }
+            } else {
+            }
         } else {
         }
         scanCallsInNode reg: reg node: node.parent
@@ -5320,6 +5422,20 @@ typedefBaseOf: function {st: zenv.ZSymbolTable unitName: StringView tid: u64} ou
     }
 }
 
+# typedefBaseMangledOf -- a typedef type's base INSTANCE id (the recorded
+# mangled name resolved at read time -- monos register in resolved once
+# minted), or 0.
+typedefBaseMangledOf: function {st: zenv.ZSymbolTable unitName: StringView tid: u64} out u64 is {
+    bo: st.typing.typedefBaseMangled.get key: tid
+    match (
+        bo
+    ) case some then {
+        return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: bo.stringview) d: 0.u64)
+    } case none then {
+        return 0.u64
+    }
+}
+
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
 # an owned cast, not a call. No CALL scope; the from-argument walks in the
 # current scope (a non-trivial one hoists there) and is consumed; the value
@@ -5357,6 +5473,55 @@ checkTypedefCreate: function {st: zenv.ZSymbolTable unitName: StringView unitBod
                             } else {}
                         } else {
                             tnm: hoistArg st: st argNode: arg.operation argType: vt paramType: 0.u64 consumes: true
+                        }
+                    } else {}
+                } else {}
+            }
+        } else {}
+    }
+    settd: tdId
+    st.typing.nodeType.set key: call.nodeid.u64 value: settd
+    return tdId
+}
+
+# checkTypedefBorrow -- `T.borrow from: expr` on a typedef: a borrowed
+# cast. No CALL scope, no take; the from-argument walks in the current
+# scope and the binding borrows the argument's source (the lifted view
+# origin when the argument is itself a borrowed view, else the
+# argument's own path).
+checkTypedefBorrow: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) call: zast.CallData tdId: u64} out u64 is {
+    found: false
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            if found then {} else {
+                an: unitLabel o: arg.name
+                isFrom: false
+                if an.length == 0.u64 then {
+                    isFrom = true
+                } else {
+                    if an.stringview == "from" then {
+                        isFrom = true
+                    } else {}
+                }
+                if isFrom then {
+                    found = true
+                    vt: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                    if vt > 0.u64 then {
+                        if st.typing.pendingBorrowPath.length > 0.u64 then {
+                        } else {
+                            tup: (List of: String)
+                            appendValueTuple n: arg.operation dst: tup
+                            ti: 0.u64
+                            tn: tup.length
+                            for while ti < tn loop {
+                                te: tup.get i: ti
+                                tec: te.copy
+                                st.typing.pendingBorrowPath.append tec
+                                ti = ti + 1.u64
+                            }
                         }
                     } else {}
                 } else {}
@@ -5447,7 +5612,29 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
     }
     bt: checkValue st: st unitName: unitName unitBody: unitBody node: dp.parent
     if bt == 0.u64 then {
-        return 0.u64
+        # an unresolved bare-name base may be a unit-qualified member
+        # path (io.stdout): the side map types the base as the UNIT type.
+        ubn: atomName n: dp.parent
+        if ubn.length > 0.u64 then {
+            ubo: st.typing.unitTypes.get key: ubn
+            match (
+                ubo
+            ) case some then {
+                bt = ubo
+                ubp: nodeId n: dp.parent
+                if ubp > 0.u32 then {
+                    setub: ubo
+                    st.typing.nodeType.set key: ubp.u64 value: setub
+                } else {
+                }
+            } case none then {
+            }
+        } else {
+        }
+        if bt == 0.u64 then {
+            return 0.u64
+        } else {
+        }
     } else {
     }
     # A literal base materialises before member lookup (`5.iterate` is
@@ -5675,6 +5862,60 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
         } else {
         }
     } else {
+    }
+    # a unit-qualified member (`io.stdout`): the member resolves in that
+    # unit's namespace; a no-arg FUNCTION member auto-calls in value
+    # position (its return is the path's value).
+    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.UNIT then {
+        un9: typeNameOf st: st tid: bt
+        mo9: lookupTyperef resolved: st.typing.resolved mainName: un9.stringview base: cn.stringview
+        match (
+            mo9
+        ) case some then {
+            result9: mo9
+            isFn9: false
+            if (st.reg.typetypeOf typeId: mo9) == ztypes.ztypetype.FUNCTION then {
+                isFn9 = true
+            } else {
+            }
+            if coerce when isFn9 then {
+                if (methodHasNoUserArgs st: st mid: mo9) then {
+                    ro9: methodReturnOf st: st mid: mo9
+                    match (
+                        ro9
+                    ) case some then {
+                        result9 = ro9
+                    } case none then {
+                        result9 = st.reg.allocType
+                    }
+                } else {
+                }
+            } else {
+            }
+            setu9: result9
+            st.typing.nodeType.set key: dp.nodeid.u64 value: setu9
+            return result9
+        } case none then {
+            return 0.u64
+        }
+    } else {
+    }
+    # a typedef member that isn't on the wrapper delegates to the base
+    # (Bytes.append is List_u8.append).
+    tdw9: st.typing.childOf parentTypeId: bt name: cn.stringview
+    match (
+        tdw9
+    ) case some then {
+    } case none then {
+        tdd9: typedefBaseMangledOf st: st unitName: unitName tid: bt
+        if tdd9 == 0.u64 then {
+            tdd9 = typedefBaseOf st: st unitName: unitName tid: bt
+        } else {
+        }
+        if tdd9 > 0.u64 then {
+            bt = tdd9
+        } else {
+        }
     }
     mo: st.typing.childOf parentTypeId: bt name: cn.stringview
     match (
@@ -7534,16 +7775,27 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                     ) case some then {
                         tdcid = tdcb
                     } case none then {}
+                    isBorrowForm: false
                     bdcb: borrowDottedBaseId n: call.callable
                     match (
                         bdcb
                     ) case some then {
                         tdcid = bdcb
+                        isBorrowForm = true
                     } case none then {}
                     if tdcid > 0.u32 then {
                         tdo: optU64Or o: (st.typing.nodeType.get key: tdcid.u64) d: 0.u64
-                        tdb: typedefBaseOf st: st unitName: unitName tid: tdo
-                        if tdb > 0.u64 then {
+                        isTd: false
+                        if (typedefBaseOf st: st unitName: unitName tid: tdo) > 0.u64 then {
+                            isTd = true
+                        } else {}
+                        if (typedefBaseMangledOf st: st unitName: unitName tid: tdo) > 0.u64 then {
+                            isTd = true
+                        } else {}
+                        if isTd when isBorrowForm then {
+                            return (checkTypedefBorrow st: st unitName: unitName unitBody: unitBody call: call tdId: tdo)
+                        } else {}
+                        if isTd then {
                             return (checkTypedefCreate st: st unitName: unitName unitBody: unitBody call: call tdId: tdo)
                         } else {}
                         pjtt: st.reg.typetypeOf typeId: tdo
@@ -7822,6 +8074,35 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
                             return dtp
                         }
                     } else {
+                        # a GENERIC FUNCTION member (io.eprintln) dispatches
+                        # through the generic-call machinery like its bare-
+                        # name form.
+                        isGenF: false
+                        {
+                            gf9: st.reg.typeById.get key: dro
+                            match (
+                                gf9
+                            ) case some then {
+                                if gf9.typetype == ztypes.ztypetype.FUNCTION then {
+                                    if gf9.isgeneric then {
+                                        isGenF = true
+                                    } else {
+                                    }
+                                } else {
+                                }
+                            } case none then {
+                            }
+                        }
+                        if isGenF then {
+                            gfr: checkGenericCall st: st unitName: unitName unitBody: unitBody call: call funcId: dro
+                            if gfr > 0.u64 then {
+                                setgf: gfr
+                                st.typing.nodeType.set key: call.nodeid.u64 value: setgf
+                            } else {
+                            }
+                            return gfr
+                        } else {
+                        }
                         # A generic non-FUNCTION dotted callee constructs its
                         # instance in place: the .str conversion form resolves
                         # the dotted path to the sized template, and the call

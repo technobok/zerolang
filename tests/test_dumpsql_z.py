@@ -554,6 +554,18 @@ CHECK_SMOKE = [
     "generator_listiter",
     "generator_bidirectional",
     "generator_accepts_borrow",
+    "io_stdstreams",
+    "io_buffered",
+    "io_fs_ops",
+    "io_open",
+    "io_protocol_closer",
+    "io_protocol_rw",
+    "io_read_text",
+    "io_readwrite",
+    "io_seek",
+    "io_textreader",
+    "io_textwriter",
+    "io_write_text",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -649,6 +661,18 @@ TYPED_NODES_CHECK = [
     "generator_listiter",
     "generator_bidirectional",
     "generator_accepts_borrow",
+    "io_stdstreams",
+    "io_buffered",
+    "io_fs_ops",
+    "io_open",
+    "io_protocol_closer",
+    "io_protocol_rw",
+    "io_read_text",
+    "io_readwrite",
+    "io_seek",
+    "io_textreader",
+    "io_textwriter",
+    "io_write_text",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
