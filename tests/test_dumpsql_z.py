@@ -599,6 +599,8 @@ CHECK_SMOKE = [
     # Generic-unit instantiation (unit clones).
     "genericunit",
     "genericfileunit",
+    # Plain cross-unit user units.
+    "multimod",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -718,6 +720,8 @@ TYPED_NODES_CHECK = [
     # Generic-unit instantiation (unit clones).
     "genericunit",
     "genericfileunit",
+    # Plain cross-unit user units.
+    "multimod",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,

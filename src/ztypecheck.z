@@ -2438,6 +2438,7 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                 # name (str.z, panic.z) would shadow it.
                 unk: nm.copy
                 ty.unitTypes.set key: unk value: uid2
+                reg.setUnitName name: nm.stringview
                 if nm.stringview == mainName then {
                     resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: u.operation full: full
                 } else {}
@@ -2969,6 +2970,8 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             }
             if bn.stringview == "cli" then { isUnitQ = true } else {
             }
+            if (reg.isUnitName name: bn.stringview) then { isUnitQ = true } else {
+            }
             if isUnitQ then {
                 mn0: atomName n: node.child
                 if mn0.length > 0.u64 then {
@@ -3276,6 +3279,41 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                             }
                         } else {}
                     } else {}
+                    isKnown9: false
+                    if nm.stringview == program.mainUnitName.stringview then { isKnown9 = true } else {
+                    }
+                    if nm.stringview == "io" then { isKnown9 = true } else {
+                    }
+                    if nm.stringview == "collections" then { isKnown9 = true } else {
+                    }
+                    if nm.stringview == "system" then { isKnown9 = true } else {
+                    }
+                    if nm.stringview == "core" then { isKnown9 = true } else {
+                    }
+                    if nm.stringview == "os" then { isKnown9 = true } else {
+                    }
+                    if nm.stringview == "cli" then { isKnown9 = true } else {
+                    }
+                    if isKnown9 then {} else {
+                        # a USER dependency unit: resolve its demanded member
+                        # signatures (the reference's on-demand cross-unit
+                        # resolution); its functions have bodies, so the
+                        # body walks need return/never resolved.
+                        anyDemandedUser: resolveDemandedUnitBody ty: ty reg: reg unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        if anyDemandedUser then {
+                            reg.recordDemand name: "return"
+                            reg.recordDemand name: "never"
+                            again12: true
+                            for while again12 loop {
+                                before12: reg.nextTypeId
+                                resolveDemandedUnitBody ty: ty reg: reg unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                if reg.nextTypeId == before12 then {
+                                    again12 = false
+                                } else {
+                                }
+                            }
+                        } else {}
+                    }
                 } else {}
             }
             if reg.nextTypeId == beforeU then {
@@ -4422,7 +4460,8 @@ runUnitMonoWalks: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
             st.define name: rgp.stringview ztypeId: raid
             prevL: st.typing.synthLabel.copy
             prevT: st.typing.currentThisName.copy
-            checkFunctionBody st: st unitName: unitName defName: rqual.stringview defn: rec.fn thisName: "" unitBody: unitBody
+            ed8: (List of: Node)
+            checkFunctionBody st: st unitName: unitName defName: rqual.stringview defn: rec.fn thisName: "" unitBody: unitBody depUnits: ed8
             st.typing.synthLabel = prevL
             st.typing.currentThisName = prevT
             p9: st.pop
@@ -9917,7 +9956,8 @@ checkMethodBodies: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                 if (isFunctionDefWithBody o: im.operation) then {
                     mname: unitLabel o: im.name
                     qn: "\{typeName}.\{mname}"
-                    checkFunctionBody st: st unitName: unitName defName: qn.stringview defn: im.operation thisName: typeName unitBody: unitBody
+                    ed7: (List of: Node)
+                    checkFunctionBody st: st unitName: unitName defName: qn.stringview defn: im.operation thisName: typeName unitBody: unitBody depUnits: ed7
                 } else {
                 }
             } else {
@@ -9931,7 +9971,8 @@ checkMethodBodies: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                 if (isFunctionDefWithBody o: am.operation) then {
                     mname2: unitLabel o: am.name
                     qn2: "\{typeName}.\{mname2}"
-                    checkFunctionBody st: st unitName: unitName defName: qn2.stringview defn: am.operation thisName: typeName unitBody: unitBody
+                    ed6: (List of: Node)
+                    checkFunctionBody st: st unitName: unitName defName: qn2.stringview defn: am.operation thisName: typeName unitBody: unitBody depUnits: ed6
                 } else {
                 }
             } else {
@@ -9976,7 +10017,7 @@ lastStmtLineIdOpt: function {o: (Option t: Node)} out u32 is {
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
 # parameter as a runtime variable, walks the body, then pops (the pop snapshots
 # the scope's entries + unreachable flag for the SQL dump).
-checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node thisName: StringView unitBody: (List of: Node)} is {
+checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName: StringView defn: Node thisName: StringView unitBody: (List of: Node) depUnits: (List of: Node)} is {
     match (
         defn
     ) case functiondef then {
@@ -10066,6 +10107,10 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             st.typing.synthLabel = lbl
             tnl: thisName.string
             st.typing.currentThisName = tnl
+            if depUnits.length > 0.u64 then {
+                runDepUnitWalks st: st mainName: unitName depUnits: depUnits
+            } else {
+            }
             walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: defn.body
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
@@ -10103,11 +10148,109 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
     }
 }
 
+# runDepUnitWalks -- full-mode dependency-unit body walks: the reference
+# checks a demanded user unit's function bodies on first touch, inside the
+# using function's scope. Walks every resolved function-with-body member of
+# each non-system dependency unit, scoped function:{unit}.{fn}.
+runDepUnitWalks: function {st: zenv.ZSymbolTable mainName: StringView depUnits: (List of: Node)} is {
+    diter: depUnits.iterate
+    for du: diter loop {
+        match (
+            du
+        ) case namedoperation then {
+            dn: unitLabel o: du.name
+            isKnownD: false
+            if dn.stringview == mainName then { isKnownD = true } else {
+            }
+            if dn.stringview == "io" then { isKnownD = true } else {
+            }
+            if dn.stringview == "collections" then { isKnownD = true } else {
+            }
+            if dn.stringview == "system" then { isKnownD = true } else {
+            }
+            if dn.stringview == "core" then { isKnownD = true } else {
+            }
+            if dn.stringview == "os" then { isKnownD = true } else {
+            }
+            if dn.stringview == "cli" then { isKnownD = true } else {
+            }
+            if isKnownD then {} else {
+                depWalkUnit st: st depName: dn.stringview unitOp: du.operation
+            }
+        } else {
+        }
+    }
+}
+
+# depWalkUnit -- walk one dependency unit's resolved function bodies (two
+# passes: indices first, so the body list is free for the walk itself).
+depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} is {
+    match (
+        unitOp
+    ) case unitdef then {
+        emptyD: (List of: Node)
+        idxs: (List of: u64)
+        di0: 0.u64
+        with biter: unitOp.body.iterate do for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: bm.operation) then {
+                    dv0: di0
+                    idxs.append dv0
+                } else {}
+            } else {}
+            di0 = di0 + 1.u64
+        }
+        wi: 0.u64
+        for while wi < idxs.length loop {
+            bidx: idxs.get i: wi
+            bm2: unitOp.body.get i: bidx
+            match (
+                bm2
+            ) case namedoperation then {
+                fn: unitLabel o: bm2.name
+                rk: "\{depName}.\{fn}".string
+                rgo: st.typing.resolved.get key: rk
+                match (
+                    rgo
+                ) case some then {
+                    isGenD9: false
+                    {
+                        gz9: st.reg.typeById.get key: rgo
+                        match (
+                            gz9
+                        ) case some then {
+                            if gz9.isgeneric then {
+                                isGenD9 = true
+                            } else {
+                            }
+                        } case none then {
+                        }
+                    }
+                    walked: optBoolOr o: (st.typing.walkedMethodOwners.get key: rk) d: false
+                    if walked then {} else {
+                        wv: true
+                        wk2: "\{depName}.\{fn}".string
+                        st.typing.walkedMethodOwners.set key: wk2 value: wv
+                        if isGenD9 then {} else {
+                            dq: "\{depName}.\{fn}".string
+                            checkFunctionBody st: st unitName: depName defName: dq.stringview defn: bm2.operation thisName: "" unitBody: unitOp.body depUnits: emptyD
+                        }
+                    }
+                } case none then {}
+            } else {}
+            wi = wi + 1.u64
+        }
+    } else {}
+}
+
 # checkUnitBodies -- walk every function definition with a body in one unit.
-checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: Node} is {
+checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: Node depUnits: (List of: Node)} is {
     match (
         unitdef
     ) case unitdef then {
+        emptyDeps9: (List of: Node)
         mi: 0.u64
         with niter: unitdef.body.iterate do for nm: niter loop {
             match (
@@ -10126,7 +10269,7 @@ checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: N
             ) case namedoperation then {
                 mainName: unitLabel o: mm.name
                 if mainName.stringview == "main" then {
-                    checkFunctionBody st: st unitName: unitName defName: mainName.stringview defn: mm.operation thisName: "" unitBody: unitdef.body
+                    checkFunctionBody st: st unitName: unitName defName: mainName.stringview defn: mm.operation thisName: "" unitBody: unitdef.body depUnits: depUnits
                 } else {
                 }
             } else {
@@ -10139,7 +10282,7 @@ checkUnitBodies: function {st: zenv.ZSymbolTable unitName: StringView unitdef: N
                 defName: unitLabel o: bm.name
                 if defName.stringview == "main" then {
                 } else {
-                    checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation thisName: "" unitBody: unitdef.body
+                    checkFunctionBody st: st unitName: unitName defName: defName.stringview defn: bm.operation thisName: "" unitBody: unitdef.body depUnits: emptyDeps9
                 }
             } else {
             }
@@ -10157,18 +10300,34 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
         program
     ) case program then {
         mainName: program.mainUnitName.stringview
-        uiter: program.units.iterate
-        for u: uiter loop {
+        mainIdx: 0.u64
+        found0: false
+        i0: 0.u64
+        with uiter: program.units.iterate do for u: uiter loop {
             match (
                 u
             ) case namedoperation then {
                 nm: unitLabel o: u.name
                 if nm.stringview == mainName then {
-                    checkUnitBodies st: st unitName: nm.stringview unitdef: u.operation
+                    if found0 then {} else {
+                        mainIdx = i0
+                        found0 = true
+                    }
                 } else {
                 }
             } else {
             }
+            i0 = i0 + 1.u64
+        }
+        if found0 then {
+            mu: program.units.get i: mainIdx
+            match (
+                mu
+            ) case namedoperation then {
+                checkUnitBodies st: st unitName: mainName unitdef: mu.operation depUnits: program.units
+            } else {
+            }
+        } else {
         }
     } else {
     }
