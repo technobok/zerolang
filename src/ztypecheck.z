@@ -669,6 +669,12 @@ recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: Stri
         if (isStripMarker name: cn.stringview) then {
             bn: baseTypeName n: node.parent
             recordResolvedName ty: ty unitName: unitName thisName: thisName name: bn.stringview nid: node.nodeid.u64
+            # a parameterized parent ((List of: String).take) has no base
+            # name; the marker dp wears the parent's mono stamp.
+            if bn.length == 0.u64 then {
+                recordPendingMono ty: ty unitName: unitName thisName: thisName op: node.parent nid: node.nodeid
+            } else {
+            }
             # Ownership markers peel and stamp the inner ref; `.private` /
             # `.public` resolve the pair atomically (no base-atom stamp).
             if cn.stringview == "private" then {
@@ -3195,48 +3201,87 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             }
         } else {
         }
-        uiter: program.units.iterate
-        for u: uiter loop {
-            match (
-                u
-            ) case namedoperation then {
-                nm: unitLabel o: u.name
-                if nm.stringview == "io" then {
-                    anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                    if anyDemandedIo then {
-                        if full then {
-                            seedIoDemands reg: reg
-                        } else {}
-                        # signature-closure fixpoint: a resolved signature
-                        # demands types an earlier body position already
-                        # passed (lstat -> filestat -> filekind).
-                        again9: true
-                        for while again9 loop {
-                            before9: reg.nextTypeId
-                            resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                            if reg.nextTypeId == before9 then {
-                                again9 = false
-                            } else {
+        # cross-unit signature closure: a later leg's resolution demands
+        # names an earlier leg already passed (os.setEnv -> io.IoError),
+        # so the per-unit legs run to a joint fixpoint.
+        againU: true
+        for while againU loop {
+            beforeU: reg.nextTypeId
+            uiter: program.units.iterate
+            for u: uiter loop {
+                match (
+                    u
+                ) case namedoperation then {
+                    nm: unitLabel o: u.name
+                    if nm.stringview == "io" then {
+                        anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        if anyDemandedIo then {
+                            if full then {
+                                seedIoDemands reg: reg
+                            } else {}
+                            # signature-closure fixpoint: a resolved signature
+                            # demands types an earlier body position already
+                            # passed (lstat -> filestat -> filekind).
+                            again9: true
+                            for while again9 loop {
+                                before9: reg.nextTypeId
+                                resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                if reg.nextTypeId == before9 then {
+                                    again9 = false
+                                } else {
+                                }
                             }
-                        }
-                        resolveConformanceDefs ty: ty reg: reg unitName: "io" unitdef: u.operation
+                            resolveConformanceDefs ty: ty reg: reg unitName: "io" unitdef: u.operation
+                        } else {}
+                    } else {}
+                    if nm.stringview == "collections" then {
+                        seedIteratorDemands reg: reg
+                        anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        if anyDemanded then {
+                            resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                        } else {}
+                    } else {}
+                    if nm.stringview == "system" then {
+                        seedSystemDemands reg: reg
+                        anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg unitName: "system" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        if anyDemandedSys then {
+                            resolveConformanceDefs ty: ty reg: reg unitName: "system" unitdef: u.operation
+                        } else {}
+                    } else {}
+                    if nm.stringview == "os" then {
+                        anyDemandedOs: resolveDemandedUnitBody ty: ty reg: reg unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        if anyDemandedOs then {
+                            again10: true
+                            for while again10 loop {
+                                before10: reg.nextTypeId
+                                resolveDemandedUnitBody ty: ty reg: reg unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                if reg.nextTypeId == before10 then {
+                                    again10 = false
+                                } else {
+                                }
+                            }
+                        } else {}
+                    } else {}
+                    if nm.stringview == "cli" then {
+                        anyDemandedCli: resolveDemandedUnitBody ty: ty reg: reg unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        if anyDemandedCli then {
+                            again11: true
+                            for while again11 loop {
+                                before11: reg.nextTypeId
+                                resolveDemandedUnitBody ty: ty reg: reg unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                if reg.nextTypeId == before11 then {
+                                    again11 = false
+                                } else {
+                                }
+                            }
+                        } else {}
                     } else {}
                 } else {}
-                if nm.stringview == "collections" then {
-                    seedIteratorDemands reg: reg
-                    anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                    if anyDemanded then {
-                        resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
-                    } else {}
-                } else {}
-                if nm.stringview == "system" then {
-                    seedSystemDemands reg: reg
-                    anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg unitName: "system" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                    if anyDemandedSys then {
-                        resolveConformanceDefs ty: ty reg: reg unitName: "system" unitdef: u.operation
-                    } else {}
-                } else {}
-            } else {}
+            }
+            if reg.nextTypeId == beforeU then {
+                againU = false
+            } else {
+            }
         }
     } else {}
     # bare bool literals resolve through core's true/false re-exports

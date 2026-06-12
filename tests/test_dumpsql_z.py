@@ -590,6 +590,12 @@ CHECK_SMOKE = [
     "io_list_dir",
     "io_lstat",
     "io_stat_mkdirp",
+    # OS / CLI.
+    "os_basics",
+    "os_env",
+    "os_platform",
+    "os_process",
+    "cli_basic",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -700,6 +706,12 @@ TYPED_NODES_CHECK = [
     "io_list_dir",
     "io_lstat",
     "io_stat_mkdirp",
+    # OS / CLI.
+    "os_basics",
+    "os_env",
+    "os_platform",
+    "os_process",
+    "cli_basic",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
