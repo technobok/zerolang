@@ -69,6 +69,7 @@ isIntName: function {name: StringView} out bool is {
     if name == "u16" then { return true } else {}
     if name == "u32" then { return true } else {}
     if name == "u64" then { return true } else {}
+    if name == "bool" then { return true } else {}
     return false
 }
 
@@ -209,6 +210,8 @@ collectLiterals: function {n: Node ids: (List of: u64) texts: (List of: String)}
         for a: aiter loop {
             collectLiterals n: a ids: ids texts: texts
         }
+    } case dottedpath then {
+        collectLiterals n: n.parent ids: ids texts: texts
     } case binop then {
         collectLiterals n: n.lhs ids: ids texts: texts
         collectLiterals n: n.rhs ids: ids texts: texts
@@ -282,6 +285,17 @@ atomTextOf: function {n: Node} out String is {
     }
 }
 
+# atomNodeId9 -- an atomid node's id (0 for any other shape).
+atomNodeId9: function {n: Node} out u64 is {
+    match (
+        n
+    ) case atomid then {
+        return n.nodeid.u64
+    } else {
+        return 0.u64
+    }
+}
+
 # stampNameOf -- the registry name of a node's stamped type ("" unstamped).
 stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     go: symtab.typing.nodeType.get key: nid
@@ -306,6 +320,7 @@ Ctx: class {
     svC: String
     litIds: (List of: u64)
     constVals: (Map key: String value: String)
+    needs: (Map key: String value: bool)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -319,6 +334,128 @@ userFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64
     } case none then {
         return 0.u64
     }
+}
+
+needsAdd: function {ctx: Ctx name: StringView} is {
+    k: name.string
+    v: true
+    ctx.needs.set key: k value: v
+}
+
+needsHas: function {ctx: Ctx name: StringView} out bool is {
+    k: name.string
+    g: ctx.needs.get key: k
+    match (
+        g
+    ) case some then {
+        return true
+    } case none then {
+        return false
+    }
+}
+
+# dottedBaseAtom / dottedChildText -- the parent atom and member name of
+# a dotted path ("" when the shape is deeper than one segment).
+dottedBaseAtom: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomTextOf n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+dottedChildText: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomTextOf n: n.child)
+    } else {
+        return "".string
+    }
+}
+
+dottedBaseNodeId: function {n: Node} out u64 is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomNodeId9 n: n.parent)
+    } else {
+        return 0.u64
+    }
+}
+
+# svNativeName -- the simple StringView-native set C2b supports (the
+# pointer-arg predicates and trims; indexOf/byteAt wait on optionval
+# struct emission).
+isSvSimpleNative: function {name: StringView} out bool is {
+    if name == "isEmpty" then { return true } else {}
+    if name == "isAscii" then { return true } else {}
+    if name == "startsWith" then { return true } else {}
+    if name == "endsWith" then { return true } else {}
+    if name == "contains" then { return true } else {}
+    if name == "trim" then { return true } else {}
+    if name == "trimStart" then { return true } else {}
+    if name == "trimEnd" then { return true } else {}
+    return false
+}
+
+# svArgAddr -- the &-form of a StringView native argument (pooled
+# literal or local view); "" when unsupported.
+svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (svArgAddr symtab: symtab ctx: ctx n: n.expression)
+    } case atomstring then {
+        li: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
+        if li > 0.u64 then {
+            a1: "&_zs\{li}"
+            return a1
+        } else {
+            return "".string
+        }
+    } case atomid then {
+        an: n.name.stringview
+        a2: "&\{an}"
+        return a2
+    } else {
+        return "".string
+    }
+}
+
+# emitDottedCall -- a method call on a stamped String/StringView base:
+# the simple native set emits {svC}_{member}(&base, &args...).
+emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    mn: dottedChildText n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    bnid: dottedBaseNodeId n: call.callable
+    bt: stampNameOf symtab: symtab nid: bnid
+    if bt.stringview == "StringView" then {
+        if (isSvSimpleNative name: mn.stringview) then {
+            needsAdd ctx: ctx name: mn.stringview
+            args: "".string
+            aiter: call.arguments.iterate
+            for a: aiter loop {
+                match (
+                    a
+                ) case namedoperation then {
+                    av: svArgAddr symtab: symtab ctx: ctx n: a.operation
+                    if av.length > 0.u64 then {
+                        args.append ", "
+                        args.append av.stringview
+                    } else {}
+                } else {}
+            }
+            e1: "\{ctx.svC}_\{mn}(&\{bn}\{args})"
+            return e1
+        } else {}
+    } else {}
+    return "".string
 }
 
 # emitExpr -- the C expression text for a node (calls inline; the scalar
@@ -341,6 +478,32 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         } case none then {}
         ac2: av.string
         return ac2
+    } case dottedpath then {
+        bn2: atomTextOf n: n.parent
+        mn2: atomTextOf n: n.child
+        if bn2.length > 0.u64 then {
+            bnid2: atomNodeId9 n: n.parent
+            bt2: stampNameOf symtab: symtab nid: bnid2
+            if bt2.stringview == "StringView" then {
+                if mn2.stringview == "length" then {
+                    e2: "\{bn2}.length"
+                    return e2
+                } else {}
+                if (isSvSimpleNative name: mn2.stringview) then {
+                    # a no-paren method reference auto-calls
+                    needsAdd ctx: ctx name: mn2.stringview
+                    e4: "\{ctx.svC}_\{mn2}(&\{bn2})"
+                    return e4
+                } else {}
+            } else {}
+            if bt2.stringview == "String" then {
+                if mn2.stringview == "length" then {
+                    e3: "\{bn2}.size"
+                    return e3
+                } else {}
+            } else {}
+        } else {}
+        return "/* zemitterc: unhandled dotted */0".string
     } case binop then {
         l: emitExpr symtab: symtab ctx: ctx n: n.lhs
         op: atomTextOf n: n.operator
@@ -348,6 +511,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         e9: "(\{l} \{op} \{r})"
         return e9
     } case call then {
+        dc: emitDottedCall symtab: symtab ctx: ctx call: n
+        if dc.length > 0.u64 then {
+            return dc
+        } else {}
         cn0: atomTextOf n: n.callable
         fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
         if fid > 0.u64 then {
@@ -557,6 +724,46 @@ bindLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
     }
 }
 
+# stringviewOfBase -- the base name of `X.stringview` over a String local
+# ("" otherwise).
+stringviewOfBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (stringviewOfBase symtab: symtab n: n.expression)
+    } case dottedpath then {
+        mn: atomTextOf n: n.child
+        if mn.stringview == "stringview" then {
+            bnid: atomNodeId9 n: n.parent
+            bt: stampNameOf symtab: symtab nid: bnid
+            if bt.stringview == "String" then {
+                return (atomTextOf n: n.parent)
+            } else {}
+        } else {}
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
+stringCopyLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (stringCopyLitIndex symtab: symtab ctx: ctx n: n.expression)
+    } case dottedpath then {
+        mn: atomTextOf n: n.child
+        if mn.stringview == "string" then {
+            return (bindLitIndex symtab: symtab ctx: ctx n: n.parent)
+        } else {
+            return 0.u64
+        }
+    } else {
+        return 0.u64
+    }
+}
+
 # emitStringBindValue -- bind an interpolated-literal value to a String
 # local (build chain + binding + scope-end free); false when the value
 # is not an interpolated literal.
@@ -654,13 +861,27 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             if lvN > 0.u64 then {
                 lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
                 buf.append lsv2.stringview
-            } else {
-                lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
-                buf.append lsv3.stringview
-            }
+                return
+            } else {}
+            svb: stringviewOfBase symtab: symtab n: n.value
+            if svb.length > 0.u64 then {
+                lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{svb}.data, \{svb}.size };\n"
+                buf.append lsv4.stringview
+                return
+            } else {}
+            lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
+            buf.append lsv3.stringview
             return
         } else {}
         if tn.stringview == "String" then {
+            fvN: stringCopyLitIndex symtab: symtab ctx: ctx n: n.value
+            if fvN > 0.u64 then {
+                lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
+                buf.append lsc.stringview
+                nmc2: nm.string
+                tmp.frees.append nmc2
+                return
+            } else {}
             did9: emitStringBindValue symtab: symtab ctx: ctx n: n.value nm: nm ind: ind tmp: tmp buf: buf
             if did9 then {} else {
                 lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
@@ -1230,6 +1451,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     litIds: (List of: u64)
     litTexts: (List of: String)
     collectUnitLiterals program: program ids: litIds texts: litTexts
+    poolBuf: "".string
     i: 0.u64
     n: litIds.length
     for while i < n loop {
@@ -1239,20 +1461,24 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         blen: tv.length
         idx: i + 1.u64
         l1: "static const char _zs\{idx}_d[] = \"\{esc}\";\n"
-        buf.append l1.stringview
+        poolBuf.append l1.stringview
         l2: "static const \{svC}_t _zs\{idx} = { _zs\{idx}_d, \{blen} };\n"
-        buf.append l2.stringview
+        poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    buf.append "\n"
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
-    emitFns program: program symtab: symtab ctx: ctx buf: buf
+    fnsBuf: "".string
+    emitFns program: program symtab: symtab ctx: ctx buf: fnsBuf
     hasMain: programHasMain program: program
     if hasMain then {} else {
-        buf.append "void z_main(void) {\n"
-        buf.append "}\n\n"
+        fnsBuf.append "void z_main(void) {\n"
+        fnsBuf.append "}\n\n"
     }
+    emitNeededNatives ctx: ctx runtimeDir: runtimeDir buf: buf
+    buf.append poolBuf.stringview
+    buf.append "\n"
+    buf.append fnsBuf.stringview
     buf.append "int main(int argc, char* argv[]) {\n"
     buf.append "    z_main();\n"
     buf.append "    return 0;\n"
@@ -1302,6 +1528,48 @@ unitHasMain9: function {mainOp: Node} out bool is {
     } else {
         return false
     }
+}
+
+# emitNeededNatives -- the gated native fragments for the needs the body
+# walk collected, in the reference's emission order.
+emitNeededNatives: function {ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    emitNativeIf ctx: ctx need: "isEmpty" frag: "_Z_SV_IS_EMPTY" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "isAscii" frag: "_Z_SV_IS_ASCII" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "startsWith" frag: "_Z_SV_STARTS_WITH" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "endsWith" frag: "_Z_SV_ENDS_WITH" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "contains" frag: "_Z_SV_INDEX_OF_RAW" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "contains" frag: "_Z_SV_CONTAINS" runtimeDir: runtimeDir buf: buf
+    hasTrim: needsHas ctx: ctx name: "trim"
+    hasTrimS: needsHas ctx: ctx name: "trimStart"
+    hasTrimE: needsHas ctx: ctx name: "trimEnd"
+    anyTrim: hasTrim
+    if hasTrimS then { anyTrim = true } else {}
+    if hasTrimE then { anyTrim = true } else {}
+    if anyTrim then {
+        p0: nativePath runtimeDir: runtimeDir frag: "_Z_SV_IS_ASCII_WS"
+        sc0: ctx.svC.copy
+        tc0: ctx.strC.copy
+        f0: loadFragment path: p0.stringview svC: sc0.stringview strC: tc0.stringview
+        buf.append f0.stringview
+    } else {}
+    emitNativeIf ctx: ctx need: "trim" frag: "_Z_SV_TRIM" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "trimStart" frag: "_Z_SV_TRIM_START" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "trimEnd" frag: "_Z_SV_TRIM_END" runtimeDir: runtimeDir buf: buf
+}
+
+nativePath: function {runtimeDir: StringView frag: StringView} out String is {
+    p: "\{runtimeDir}/natives/\{frag}.inc"
+    return p
+}
+
+emitNativeIf: function {ctx: Ctx need: StringView frag: StringView runtimeDir: StringView buf: String.borrow} is {
+    if (needsHas ctx: ctx name: need) then {
+        p9: nativePath runtimeDir: runtimeDir frag: frag
+        sc9: ctx.svC.copy
+        tc9: ctx.strC.copy
+        f9: loadFragment path: p9.stringview svC: sc9.stringview strC: tc9.stringview
+        buf.append f9.stringview
+    } else {}
 }
 
 mainNameOf9: function {program: Node} out String is {

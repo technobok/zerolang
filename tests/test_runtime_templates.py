@@ -274,3 +274,22 @@ def test_list_template_compiles_with_listview_methods():
     )
     rc, err = _gcc_compile(listview + body)
     assert rc == 0, err
+
+
+def test_native_fragments_in_sync():
+    """src/runtime/natives/*.inc mirror the _Z_* template constants (the
+    self-hosted emitter reads the exported files; regenerate with
+    tools/export_native_fragments.py)."""
+    import os
+    import zemitterc_runtime as rt
+
+    base = os.path.join(os.path.dirname(__file__), "..", "src", "runtime", "natives")
+    names = [
+        n for n in dir(rt) if n.startswith("_Z_") and isinstance(getattr(rt, n), str)
+    ]
+    assert names, "no native template constants found"
+    for n in names:
+        p = os.path.join(base, f"{n}.inc")
+        assert os.path.exists(p), f"missing export {n}"
+        with open(p, encoding="utf-8") as fh:
+            assert fh.read() == getattr(rt, n), f"stale export {n}"
