@@ -1320,7 +1320,11 @@ class CEmitter:
         """User file units other than main. Their TYPE definitions must be
         emitted cross-unit (their functions are already emitted by the
         file-unit-function loop). System library units and generic templates
-        are skipped."""
+        are skipped.
+
+        Ordered by the cross-unit type-reference graph (a ztyping class
+        holding a zast.Node field needs zast's structs first); load order
+        breaks ties and is kept verbatim on reference cycles."""
         out: "list[tuple[str, zast.Unit]]" = []
         for unitname, unit in self.program.units.items():
             if (
@@ -1331,7 +1335,51 @@ class CEmitter:
             if self._is_generic_template(unit):
                 continue
             out.append((unitname, cast(zast.Unit, unit)))
-        return out
+        if len(out) < 2:
+            return out
+        defined_in: "dict[int, str]" = {}
+        for rkey, rzt in self.typing.resolved.items():
+            if "." in rkey:
+                defined_in.setdefault(rzt.type_id, rkey.split(".", 1)[0])
+        name_set = {n for n, _ in out}
+        needs: "dict[str, set[str]]" = {n: set() for n, _ in out}
+        type_defs = (
+            NodeType.RECORD,
+            NodeType.CLASS,
+            NodeType.UNION,
+            NodeType.VARIANT,
+        )
+        for unitname, unit in out:
+            for defn in unit.body.values():
+                if defn.nodetype not in type_defs:
+                    continue
+                zt = self._node_ztype(defn)
+                if zt is None:
+                    continue
+                for _, child in self.typing.children_of(zt):
+                    if child.typetype == ZTypeType.FUNCTION:
+                        continue
+                    child_unit = defined_in.get(child.type_id)
+                    if child_unit and child_unit != unitname and child_unit in name_set:
+                        needs[unitname].add(child_unit)
+        ordered: "list[tuple[str, zast.Unit]]" = []
+        placed: "set[str]" = set()
+        pending = out
+        while pending:
+            rest: "list[tuple[str, zast.Unit]]" = []
+            progressed = False
+            for item in pending:
+                if needs[item[0]] <= placed:
+                    ordered.append(item)
+                    placed.add(item[0])
+                    progressed = True
+                else:
+                    rest.append(item)
+            if not progressed:
+                ordered.extend(rest)
+                break
+            pending = rest
+        return ordered
 
     def _emit_file_unit_functions(self, prefix: str, body: dict) -> None:
         """Emit functions from a file unit body, recursing into subunits."""
@@ -6516,6 +6564,13 @@ class CEmitter:
             else:
                 body_code = self._emit_statement(func.body)
                 lines.append(body_code)
+                if func.returntype is not None and not self._tail_diverges(func):
+                    # The tail is an all-arms-return match/if: C cannot see
+                    # the exhaustiveness, so land an unreachable guard
+                    # (panics over UB on any genuine fallthrough).
+                    lines.append(
+                        f'{self._indent()}z_panic("unreachable end of function");\n'
+                    )
 
         # scope-exit cleanup for string/class/union/protocol vars (void functions / fall-through)
         cleanup = self._emit_scope_cleanup(self._indent())
@@ -6532,6 +6587,25 @@ class CEmitter:
         self._alias_map = prev_alias_map
         if is_generator_call:
             self._generator_ctx = None
+
+    def _tail_diverges(self, func: zast.Function) -> bool:
+        """Last statement emits its own C terminator (return / noreturn call).
+
+        A never-typed match tail does NOT qualify: the language sees the
+        exhaustive all-return arms, but the emitted switch still falls off
+        the end as far as C is concerned.
+        """
+        if not func.body or not func.body.statements:
+            return False
+        last = func.body.statements[-1].statementline
+        if last.nodetype != zast.NodeType.EXPRESSION:
+            return False
+        last_expr = cast(zast.Expression, last)
+        return self._expr_call_kind(last_expr) in (
+            zast.CallKind.RETURN,
+            zast.CallKind.ERROR,
+            zast.CallKind.PANIC,
+        )
 
     def _is_implicit_return(self, func: zast.Function) -> bool:
         """Check if the function's last statement is an implicit return candidate."""
