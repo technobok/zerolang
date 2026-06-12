@@ -575,7 +575,9 @@ monoArgName: function {an: StringView thisName: StringView} out String is {
 recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView op: Node nid: u32} is {
     match (
         op
-    ) case call then {
+    ) case expression then {
+        recordPendingMono ty: ty unitName: unitName thisName: thisName op: op.expression nid: nid
+    } case call then {
         tname: atomName n: op.callable
         margs: (List of: String)
         margNames: (List of: String)
@@ -595,7 +597,18 @@ recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: 
                     margNames.append pn2
                 } else {
                     if an.length == 0.u64 then {
-                        allAtoms = false
+                        # a nested parameterized arg joins under its
+                        # mangled instance name and stages its own
+                        # stampless inner instantiation.
+                        mg: mangledTypeName op: arg.operation
+                        if mg.length == 0.u64 then {
+                            allAtoms = false
+                        } else {
+                            margs.append mg
+                            pn3: unitLabel o: arg.name
+                            margNames.append pn3
+                            recordPendingMono ty: ty unitName: unitName thisName: thisName op: arg.operation nid: 0.u32
+                        }
                     } else {
                         anc: monoArgName an: an.stringview thisName: thisName
                         if anc.length == 0.u64 then {
@@ -723,6 +736,40 @@ recordReturnType: function {ty: ztyping.ZTyping unitName: StringView thisName: S
     } case none then {}
 }
 
+# demandTyperefNames -- record demands for every name a type-expr
+# references (the head and, transitively, parameter-arg names), so the
+# demand walks resolve a signature's full closure. Creates no types.
+demandTyperefNames: function {reg: ztypes.ZTypeRegistry unitName: StringView typeExpr: Node} is {
+    match (
+        typeExpr
+    ) case atomid then {
+        if (isNumericLiteralName name: typeExpr.name.stringview) then {} else {
+            reg.recordDemand name: typeExpr.name.stringview
+            reg.recordSeededDemand un: unitName name: typeExpr.name.stringview
+        }
+    } case expression then {
+        demandTyperefNames reg: reg unitName: unitName typeExpr: typeExpr.expression
+    } case call then {
+        hn: atomName n: typeExpr.callable
+        if hn.length > 0.u64 then {
+            reg.recordDemand name: hn.stringview
+            reg.recordSeededDemand un: unitName name: hn.stringview
+        } else {
+        }
+        aiter: typeExpr.arguments.iterate
+        for arg: aiter loop {
+            match (
+                arg
+            ) case namedoperation then {
+                demandTyperefNames reg: reg unitName: unitName typeExpr: arg.operation
+            } else {}
+        }
+    } case dottedpath then {
+        demandTyperefNames reg: reg unitName: unitName typeExpr: typeExpr.parent
+    } else {
+    }
+}
+
 resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
@@ -746,6 +793,7 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView ty
                 an: atomName n: arg.operation
                 suffix.append "_"
                 suffix.append an.stringview
+                demandTyperefNames reg: reg unitName: unitName typeExpr: arg.operation
             } else {}
         }
         return (reg.newType name: suffix.stringview typetype: ztypes.ztypetype.RECORD)
@@ -1003,11 +1051,7 @@ demandReturnType: function {reg: ztypes.ZTypeRegistry unitName: StringView o: (O
     match (
         o
     ) case some then {
-        bn: paramTypeBaseName op: o
-        if bn.length == 0.u64 then {} else {
-            reg.recordDemand name: bn.stringview
-            reg.recordSeededDemand un: unitName name: bn.stringview
-        }
+        demandTyperefNames reg: reg unitName: unitName typeExpr: o
     } case none then {}
 }
 
@@ -3162,8 +3206,19 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                     if anyDemandedIo then {
                         if full then {
                             seedIoDemands reg: reg
-                            resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         } else {}
+                        # signature-closure fixpoint: a resolved signature
+                        # demands types an earlier body position already
+                        # passed (lstat -> filestat -> filekind).
+                        again9: true
+                        for while again9 loop {
+                            before9: reg.nextTypeId
+                            resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                            if reg.nextTypeId == before9 then {
+                                again9 = false
+                            } else {
+                            }
+                        }
                         resolveConformanceDefs ty: ty reg: reg unitName: "io" unitdef: u.operation
                     } else {}
                 } else {}
@@ -4039,6 +4094,12 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     rk9: "\{mainName}.\{name}".string
     rv9: mid
     st.typing.resolved.set key: rk9 value: rv9
+    # monos are global (defined_in_unit NULL): the system-keyed alias makes
+    # them resolvable from every unit's lookup chain (a pending instantiation
+    # staged while resolving io.z resolves nested args with mainName "io").
+    rk8: "system.\{name}".string
+    rv8: mid
+    st.typing.resolved.set key: rk8 value: rv8
     cNames: (List of: String)
     cIds: (List of: u64)
     with citer: st.typing.typeChild.iterate do for tc: citer loop {
@@ -4364,6 +4425,17 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     } else {
         return
     }
+    # One build per instance: the resolveMonos fixpoint re-walks every
+    # pending ref each pass, and the str/array rebuild below would mint
+    # fresh member types per pass (their instances copy template children
+    # at mint time, so childCount cannot signal "already built").
+    bgot: st.typing.collectionChildrenBuilt.get key: monoId
+    if (optBoolOr o: bgot d: false) then {
+        return
+    } else {
+    }
+    bk0: monoId
+    st.typing.collectionChildrenBuilt.set key: bk0 value: true
     isSized: false
     if templateName == "str" then { isSized = true } else {
     }
@@ -4650,126 +4722,155 @@ ResolvedMono: class {
 # List / ListView / ListIter instance also mints its iterator-family instances,
 # mirroring the reference's transitive method-signature instantiation; the
 # Set/Map chains land when an example needs them.
+# resolveMonosPass -- one stage+mint sweep over the pending instantiations.
+# Staging never mints (`staged` holds the pendingMono iterator while minting
+# mutates the registry); the driver loops passes to a fixpoint so an inner
+# mono registered by one pass resolves as an outer's argument in the next.
+resolveMonosPass: function {st: zenv.ZSymbolTable mainName: StringView} is {
+    staged: (List of: ResolvedMono)
+    with piter: st.typing.pendingMono.iterate do for pm: piter loop {
+        pmuv: pm.originUnit.stringview
+        pmu: pmuv.string
+        tplOpt: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: pm.template.stringview
+        match (
+            tplOpt
+        ) case some then {
+            allOk: true
+            sfx: "".string
+            subs: (Map key: String value: u64)
+            firstA: 0.u64
+            j: 0.u64
+            na: pm.args.length
+            for while j < na loop {
+                an: pm.args.get i: j
+                if (isNumericLiteralName name: an.stringview) then {
+                    sfx.append s: "_"
+                    sfx.append s: an.stringview
+                    j = j + 1.u64
+                    continue
+                } else {
+                }
+                ao: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: an.stringview
+                match (
+                    ao
+                ) case some then {
+                    sfx.append s: "_"
+                    sfx.append s: an.stringview
+                    if j == 0.u64 then {
+                        firstA = ao
+                    } else {
+                    }
+                    if j < pm.argNames.length then {
+                        pn: pm.argNames.get i: j
+                        sk: pn.copy
+                        sv: ao
+                        subs.set key: sk value: sv
+                    } else {
+                    }
+                } case none then {
+                    allOk = false
+                }
+                j = j + 1.u64
+            }
+            if allOk when sfx.length > 0.u64 then {
+                # generator wrapper collapse: the synth `.call` return's
+                # Option/OptionView over a VALTYPE element is optionval
+                # (ownership is a physical no-op for valtypes).
+                tplId2: tplOpt
+                tnOver: "".string
+                gwv: optBoolOr o: (st.typing.generatorWrapper.get key: pm.nodeid.u64) d: false
+                if gwv when firstA > 0.u64 then {
+                    faVal: false
+                    {
+                        fz: st.reg.typeById.get key: firstA
+                        match (
+                            fz
+                        ) case some then {
+                            fvo: fz.isValtype
+                            match (
+                                fvo
+                            ) case some then {
+                                if fvo then {
+                                    faVal = true
+                                } else {
+                                }
+                            } case none then {
+                            }
+                        } case none then {
+                        }
+                    }
+                    if faVal then {
+                        ovo: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: "optionval"
+                        match (
+                            ovo
+                        ) case some then {
+                            tplId2 = ovo
+                            tnOver = "optionval".string
+                        } case none then {
+                        }
+                    } else {
+                    }
+                } else {
+                }
+                tn: pm.template.copy
+                if tnOver.length > 0.u64 then {
+                    tn = tnOver
+                } else {
+                }
+                tid: tplId2
+                pnid: pm.nodeid
+                rm: (ResolvedMono template: tn suffix: sfx templateId: tid nodeid: pnid firstArgId: firstA subs: subs)
+                staged.append rm
+            } else {
+            }
+        } case none then {
+        }
+    }
+    riter: staged.iterate
+    for rm2: riter loop {
+        mname: "\{rm2.template}\{rm2.suffix}"
+        mid: mintMono st: st mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0.u64
+        if rm2.nodeid > 0.u32 then {
+            setn: mid
+            st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
+        } else {
+        }
+        # chain-family instances mint before the primary's children so the
+        # synthesized method return links can resolve by mono name.
+        vk: "value".string
+        vv: optU64Or o: (rm2.subs.get key: vk) d: 0.u64
+        tnvv: rm2.template.stringview
+        tnv: tnvv.string
+        sfvv: rm2.suffix.stringview
+        sfv: sfvv.string
+        mintTemplateChains st: st mainName: mainName tname: tnv.stringview suffix: sfv.stringview firstA: rm2.firstArgId valA: vv
+        mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: tnv.stringview suffix: sfv.stringview elemArg: rm2.firstArgId valArg: vv
+    }
+}
+
 resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
     match (
         program
     ) case program then {
         mainName: program.mainUnitName.stringview
-        staged: (List of: ResolvedMono)
-        with piter: st.typing.pendingMono.iterate do for pm: piter loop {
-            pmuv: pm.originUnit.stringview
-            pmu: pmuv.string
-            tplOpt: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: pm.template.stringview
-            match (
-                tplOpt
-            ) case some then {
-                allOk: true
-                sfx: "".string
-                subs: (Map key: String value: u64)
-                firstA: 0.u64
-                j: 0.u64
-                na: pm.args.length
-                for while j < na loop {
-                    an: pm.args.get i: j
-                    if (isNumericLiteralName name: an.stringview) then {
-                        sfx.append s: "_"
-                        sfx.append s: an.stringview
-                        j = j + 1.u64
-                        continue
-                    } else {
-                    }
-                    ao: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: an.stringview
-                    match (
-                        ao
-                    ) case some then {
-                        sfx.append s: "_"
-                        sfx.append s: an.stringview
-                        if j == 0.u64 then {
-                            firstA = ao
-                        } else {
-                        }
-                        if j < pm.argNames.length then {
-                            pn: pm.argNames.get i: j
-                            sk: pn.copy
-                            sv: ao
-                            subs.set key: sk value: sv
-                        } else {
-                        }
-                    } case none then {
-                        allOk = false
-                    }
-                    j = j + 1.u64
-                }
-                if allOk when sfx.length > 0.u64 then {
-                    # generator wrapper collapse: the synth `.call` return's
-                    # Option/OptionView over a VALTYPE element is optionval
-                    # (ownership is a physical no-op for valtypes).
-                    tplId2: tplOpt
-                    tnOver: "".string
-                    gwv: optBoolOr o: (st.typing.generatorWrapper.get key: pm.nodeid.u64) d: false
-                    if gwv when firstA > 0.u64 then {
-                        faVal: false
-                        {
-                            fz: st.reg.typeById.get key: firstA
-                            match (
-                                fz
-                            ) case some then {
-                                fvo: fz.isValtype
-                                match (
-                                    fvo
-                                ) case some then {
-                                    if fvo then {
-                                        faVal = true
-                                    } else {
-                                    }
-                                } case none then {
-                                }
-                            } case none then {
-                            }
-                        }
-                        if faVal then {
-                            ovo: lookupTyperef resolved: st.typing.resolved mainName: pmu.stringview base: "optionval"
-                            match (
-                                ovo
-                            ) case some then {
-                                tplId2 = ovo
-                                tnOver = "optionval".string
-                            } case none then {
-                            }
-                        } else {
-                        }
-                    } else {
-                    }
-                    tn: pm.template.copy
-                    if tnOver.length > 0.u64 then {
-                        tn = tnOver
-                    } else {
-                    }
-                    tid: tplId2
-                    pnid: pm.nodeid
-                    rm: (ResolvedMono template: tn suffix: sfx templateId: tid nodeid: pnid firstArgId: firstA subs: subs)
-                    staged.append rm
-                } else {
-                }
-            } case none then {
+        # nested instances resolve over passes: an inner mono
+        # (List_String) must register before an outer over it stages.
+        # The mono space is finite, so a non-converging loop means a
+        # mint re-creates types for the same instance every pass.
+        again7: true
+        passes7: 0.u64
+        for while again7 loop {
+            passes7 = passes7 + 1.u64
+            if passes7 > 64.u64 then {
+                panic msg: "resolveMonos: no fixpoint after 64 passes"
+            } else {
             }
-        }
-        riter: staged.iterate
-        for rm2: riter loop {
-            mname: "\{rm2.template}\{rm2.suffix}"
-            mid: mintMono st: st mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0.u64
-            setn: mid
-            st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
-            # chain-family instances mint before the primary's children so the
-            # synthesized method return links can resolve by mono name.
-            vk: "value".string
-            vv: optU64Or o: (rm2.subs.get key: vk) d: 0.u64
-            tnvv: rm2.template.stringview
-            tnv: tnvv.string
-            sfvv: rm2.suffix.stringview
-            sfv: sfvv.string
-            mintTemplateChains st: st mainName: mainName tname: tnv.stringview suffix: sfv.stringview firstA: rm2.firstArgId valA: vv
-            mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: tnv.stringview suffix: sfv.stringview elemArg: rm2.firstArgId valArg: vv
+            before7: st.reg.nextTypeId
+            resolveMonosPass st: st mainName: mainName
+            if st.reg.nextTypeId == before7 then {
+                again7 = false
+            } else {
+            }
         }
     } else {
     }

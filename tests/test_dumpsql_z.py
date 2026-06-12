@@ -587,6 +587,9 @@ CHECK_SMOKE = [
     "io_textreader",
     "io_textwriter",
     "io_write_text",
+    "io_list_dir",
+    "io_lstat",
+    "io_stat_mkdirp",
 ]
 
 # Examples whose full-mode typed_nodes also matches. hello and factorial pin
@@ -694,6 +697,9 @@ TYPED_NODES_CHECK = [
     "io_textreader",
     "io_textwriter",
     "io_write_text",
+    "io_list_dir",
+    "io_lstat",
+    "io_stat_mkdirp",
 ]
 
 # Id-independent symbol-table projections. scope: parent-by-name, kind, name,
