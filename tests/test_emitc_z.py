@@ -34,6 +34,7 @@ EMITC_SMOKE: "list[str]" = [
     "panic",
     "constfold",
     "control",
+    "strings",
 ]
 
 

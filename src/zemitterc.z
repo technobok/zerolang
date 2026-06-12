@@ -11,6 +11,7 @@ Node: zast.Node
 # TmpCtr -- per-function temp name counter.
 TmpCtr: class {
     n: u64
+    frees: (List of: String)
 } as {
     next: function {:this} out u64 is {
         v: this.n
@@ -381,6 +382,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
 # emitInterpPrint -- the interpolated-print temp chain: create, per-part
 # append (literal bytes or snprintf-formatted scalar), print, free.
 emitInterpPrint: function {symtab: zenv.ZSymbolTable ctx: Ctx parts: (List of: Node) ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    sN: emitInterpBuild symtab: symtab ctx: ctx parts: parts ind: ind tmp: tmp buf: buf
+    l1: "\{ind}\{ctx.strC}_print(&_s\{sN});\n"
+    buf.append l1.stringview
+    l2: "\{ind}\{ctx.strC}_free(&_s\{sN});\n"
+    buf.append l2.stringview
+}
+
+# emitInterpBuild -- the create/append chain for an interpolated literal;
+# returns the _sN temp index (caller prints/frees or binds it).
+emitInterpBuild: function {symtab: zenv.ZSymbolTable ctx: Ctx parts: (List of: Node) ind: StringView tmp: TmpCtr buf: String.borrow} out u64 is {
     est: 0.u64
     with piter: parts.iterate do for p: piter loop {
         isC: false
@@ -402,10 +413,7 @@ emitInterpPrint: function {symtab: zenv.ZSymbolTable ctx: Ctx parts: (List of: N
     for q: qiter loop {
         emitInterpPart symtab: symtab ctx: ctx n: q sN: sN ind: ind tmp: tmp buf: buf
     }
-    l1: "\{ind}\{ctx.strC}_print(&_s\{sN});\n"
-    buf.append l1.stringview
-    l2: "\{ind}\{ctx.strC}_free(&_s\{sN});\n"
-    buf.append l2.stringview
+    return sN
 }
 
 emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind: StringView tmp: TmpCtr buf: String.borrow} is {
@@ -430,6 +438,12 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
             buf.append l6.stringview
             l7: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
             buf.append l7.stringview
+        } else if tn.stringview == "StringView" then {
+            lsv: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.length);\n"
+            buf.append lsv.stringview
+        } else if tn.stringview == "String" then {
+            lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+            buf.append lss.stringview
         } else {
             l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
             buf.append l8.stringview
@@ -507,8 +521,63 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
                 buf.append "    /* zemitterc: unpooled literal */\n"
             }
         }
+    } case atomid then {
+        tn9: stampNameOf symtab: symtab nid: n.nodeid.u64
+        an9: n.name.stringview
+        anm: an9.string
+        if tn9.stringview == "String" then {
+            lps: "\{ind}\{ctx.strC}_print(&\{anm});\n"
+            buf.append lps.stringview
+        } else if tn9.stringview == "StringView" then {
+            lpv: "\{ind}\{ctx.svC}_print(\{anm});\n"
+            buf.append lpv.stringview
+        } else {
+            lpu: "\{ind}/* zemitterc: unhandled print of \{anm} type \{tn9} */\n"
+            buf.append lpu.stringview
+        }
     } else {
         buf.append "    /* zemitterc: unhandled print argument */\n"
+    }
+}
+
+# bindLitIndex -- the pool index of a plain-literal value node (0 = none).
+bindLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (bindLitIndex symtab: symtab ctx: ctx n: n.expression)
+    } case atomstring then {
+        if (isInterp parts: n.stringparts) then {
+            return 0.u64
+        } else {
+            return (litIndexOf ids: ctx.litIds nid: n.nodeid.u64)
+        }
+    } else {
+        return 0.u64
+    }
+}
+
+# emitStringBindValue -- bind an interpolated-literal value to a String
+# local (build chain + binding + scope-end free); false when the value
+# is not an interpolated literal.
+emitStringBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: StringView ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (emitStringBindValue symtab: symtab ctx: ctx n: n.expression nm: nm ind: ind tmp: tmp buf: buf)
+    } case atomstring then {
+        if (isInterp parts: n.stringparts) then {
+            sB: emitInterpBuild symtab: symtab ctx: ctx parts: n.stringparts ind: ind tmp: tmp buf: buf
+            lst: "\{ind}\{ctx.strC}_t \{nm} = _s\{sB};\n"
+            buf.append lst.stringview
+            nmc: nm.string
+            tmp.frees.append nmc
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
     }
 }
 
@@ -580,6 +649,25 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         tn: stampNameOf symtab: symtab nid: n.nodeid.u64
         ct: cTypeOf name: tn.stringview
         nm: n.name.stringview
+        if tn.stringview == "StringView" then {
+            lvN: bindLitIndex symtab: symtab ctx: ctx n: n.value
+            if lvN > 0.u64 then {
+                lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
+                buf.append lsv2.stringview
+            } else {
+                lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
+                buf.append lsv3.stringview
+            }
+            return
+        } else {}
+        if tn.stringview == "String" then {
+            did9: emitStringBindValue symtab: symtab ctx: ctx n: n.value nm: nm ind: ind tmp: tmp buf: buf
+            if did9 then {} else {
+                lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
+                buf.append lst2.stringview
+            }
+            return
+        } else {}
         rv: emitExpr symtab: symtab ctx: ctx n: n.value
         if ct.length > 0.u64 then {
             la: "\{ind}\{ct} \{nm} = \{rv};\n"
@@ -629,7 +717,9 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             emitForCond symtab: symtab ctx: ctx n: k cond: cond ind: ind tmp: tmp buf: buf
         }
         if cond.length == 0.u64 then {
-            cond.append "1"
+            # an unhandled loop header must not spin: emit a skipped
+            # loop (honest RUN-DIFF) rather than while(1).
+            cond.append "0 /* zemitterc: unhandled loop header */"
         } else {}
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
@@ -1024,8 +1114,13 @@ emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node buf: String.bo
     match (
         op
     ) case functiondef then {
-        tmp: (TmpCtr n: 0)
+        tmp: (TmpCtr n: 0 frees: (List of: String))
         emitBodyOpt symtab: symtab ctx: ctx o: op.body ind: "    " tmp: tmp buf: buf
+        fiter9: tmp.frees.iterate
+        for fv: fiter9 loop {
+            lf9: "    \{ctx.strC}_free(&\{fv});\n"
+            buf.append lf9.stringview
+        }
     } else {}
 }
 
