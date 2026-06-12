@@ -27,6 +27,11 @@ pytestmark = [pytest.mark.infra, pytest.mark.timeout(240)]
 # behavior (build parity + stdout + exit code). Admitted per slice.
 EMITC_SMOKE: "list[str]" = [
     "hello",
+    "factorial",
+    "fibonacci",
+    "arbprec_constants",
+    "chained_method_calls",
+    "panic",
 ]
 
 

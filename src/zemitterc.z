@@ -1,12 +1,23 @@
 # zemitterc -- the C emitter (Phase C port of src/zemitterc.py).
 #
-# C1: the fixed preamble, the String/StringView runtime fragments
-# (substituted to the registry's id-based names), the string-literal
-# pool, and a z_main statement walk that handles print-of-literal.
-# Unhandled statement shapes emit a marker comment so the C still
-# compiles and the differential gate reports honest RUN-DIFFs.
+# C1: preamble, String/StringView runtime fragments, string-literal pool,
+# user-function emission, and a statement/expression walk covering the
+# scalar core (locals, binops, if/for-while, return, recursion) plus
+# print of plain and interpolated literals. Unhandled shapes emit marker
+# comments so the C compiles and the gate reports honest RUN-DIFFs.
 
 Node: zast.Node
+
+# TmpCtr -- per-function temp name counter.
+TmpCtr: class {
+    n: u64
+} as {
+    next: function {:this} out u64 is {
+        v: this.n
+        this.n = this.n + 1.u64
+        return v
+    }
+}
 
 # cnameOf -- the id-based C name base for a type ("z_t{id}_{name}", dots
 # joined with underscores). Mirrors the reference's _assign_cname scheme;
@@ -29,6 +40,41 @@ cnameOf: function {tid: u64 name: StringView} out String is {
         biter = biter + 1.u64
     }
     return "z_t\{tid}_\{flat}"
+}
+
+# cTypeOf -- the C spelling of a scalar type name ("" when not scalar).
+cTypeOf: function {name: StringView} out String is {
+    if name == "i8" then { return "int8_t".string } else {}
+    if name == "i16" then { return "int16_t".string } else {}
+    if name == "i32" then { return "int32_t".string } else {}
+    if name == "i64" then { return "int64_t".string } else {}
+    if name == "u8" then { return "uint8_t".string } else {}
+    if name == "u16" then { return "uint16_t".string } else {}
+    if name == "u32" then { return "uint32_t".string } else {}
+    if name == "u64" then { return "uint64_t".string } else {}
+    if name == "f32" then { return "float".string } else {}
+    if name == "f64" then { return "double".string } else {}
+    if name == "bool" then { return "bool".string } else {}
+    return "".string
+}
+
+# isIntName -- integer scalar family check (snprintf %ld path).
+isIntName: function {name: StringView} out bool is {
+    if name == "i8" then { return true } else {}
+    if name == "i16" then { return true } else {}
+    if name == "i32" then { return true } else {}
+    if name == "i64" then { return true } else {}
+    if name == "u8" then { return true } else {}
+    if name == "u16" then { return true } else {}
+    if name == "u32" then { return true } else {}
+    if name == "u64" then { return true } else {}
+    return false
+}
+
+isFloatName: function {name: StringView} out bool is {
+    if name == "f32" then { return true } else {}
+    if name == "f64" then { return true } else {}
+    return false
 }
 
 # cEscape -- escape literal text for a C string body.
@@ -99,17 +145,12 @@ loadFragment: function {path: StringView svC: StringView strC: StringView} out S
     }
 }
 
-# chunkText -- the first chunk's text of a string-literal atom ("" for
-# interpolated or empty literals, which C1 does not handle).
-chunkText: function {parts: (List of: Node)} out String is {
-    if parts.length == 0.u64 then {
-        return "".string
-    }
-    p0: parts.get i: 0.u64
+# chunkText -- a stringchunk's text ("" for any other shape).
+chunkText9: function {n: Node} out String is {
     match (
-        p0
+        n
     ) case stringchunk then {
-        pv: p0.text.stringview
+        pv: n.text.stringview
         tc: pv.string
         return tc
     } else {
@@ -117,8 +158,37 @@ chunkText: function {parts: (List of: Node)} out String is {
     }
 }
 
-# collectLiterals -- pool every plain string-literal atom in walk order:
-# parallel lists of (nodeid, text).
+# isInterp -- true when a literal has any non-chunk part.
+isInterp: function {parts: (List of: Node)} out bool is {
+    piter: parts.iterate
+    for p: piter loop {
+        isC: false
+        match (
+            p
+        ) case stringchunk then {
+            isC = true
+        } else {}
+        if isC then {} else {
+            return true
+        }
+    }
+    return false
+}
+
+# wholeText -- a plain literal's joined chunk text.
+wholeText: function {parts: (List of: Node)} out String is {
+    buf: "".string
+    piter: parts.iterate
+    for p: piter loop {
+        t: chunkText9 n: p
+        buf.append t.stringview
+    }
+    return buf
+}
+
+# collectLiterals -- pool every PLAIN string-literal atom in walk order:
+# parallel lists of (nodeid, text). Interpolated literals build at the
+# use site instead.
 collectLiterals: function {n: Node ids: (List of: u64) texts: (List of: String)} is {
     match (
         n
@@ -138,11 +208,38 @@ collectLiterals: function {n: Node ids: (List of: u64) texts: (List of: String)}
         for a: aiter loop {
             collectLiterals n: a ids: ids texts: texts
         }
+    } case binop then {
+        collectLiterals n: n.lhs ids: ids texts: texts
+        collectLiterals n: n.rhs ids: ids texts: texts
+    } case assignment then {
+        collectLiterals n: n.value ids: ids texts: texts
+    } case reassignment then {
+        collectLiterals n: n.value ids: ids texts: texts
+    } case ifexpr then {
+        citer: n.clauses.iterate
+        for c: citer loop {
+            collectLiterals n: c ids: ids texts: texts
+        }
+        collectLiteralsOpt o: n.elseclause ids: ids texts: texts
+    } case ifclause then {
+        kiter: n.conditions.iterate
+        for k: kiter loop {
+            collectLiterals n: k ids: ids texts: texts
+        }
+        collectLiterals n: n.statement ids: ids texts: texts
+    } case forexpr then {
+        fiter: n.conditions.iterate
+        for f: fiter loop {
+            collectLiterals n: f ids: ids texts: texts
+        }
+        collectLiteralsOpt o: n.body ids: ids texts: texts
     } case atomstring then {
-        t: chunkText parts: n.stringparts
-        nid: n.nodeid.u64
-        ids.append nid
-        texts.append t
+        if (isInterp parts: n.stringparts) then {} else {
+            t: wholeText parts: n.stringparts
+            nid: n.nodeid.u64
+            ids.append nid
+            texts.append t
+        }
     } else {}
 }
 
@@ -181,17 +278,6 @@ atomTextOf: function {n: Node} out String is {
     }
 }
 
-# atomNodeId9 -- an atomid node's id (0 for any other shape).
-atomNodeId9: function {n: Node} out u64 is {
-    match (
-        n
-    ) case atomid then {
-        return n.nodeid.u64
-    } else {
-        return 0.u64
-    }
-}
-
 # stampNameOf -- the registry name of a node's stamped type ("" unstamped).
 stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     go: symtab.typing.nodeType.get key: nid
@@ -208,91 +294,427 @@ stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     return "".string
 }
 
-# emitPrintArg -- emit a print of one pooled-literal argument; false
-# when the argument shape is not yet handled.
-emitPrintArg: function {symtab: zenv.ZSymbolTable n: Node svC: StringView litIds: (List of: u64) buf: String.borrow} out bool is {
+# Ctx -- the per-program emission context (anchor cnames, main unit name,
+# the literal pool, and the resolved-name map access).
+Ctx: class {
+    mainName: String
+    strC: String
+    svC: String
+    litIds: (List of: u64)
+}
+
+# userFnId -- the resolved type id of a main-unit function name (0 absent).
+userFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64 is {
+    k: "\{ctx.mainName}.\{name}".string
+    go: symtab.typing.resolved.get key: k
     match (
-        n
-    ) case expression then {
-        return (emitPrintArg symtab: symtab n: n.expression svC: svC litIds: litIds buf: buf)
-    } case atomstring then {
-        li: litIndexOf ids: litIds nid: n.nodeid.u64
-        if li > 0.u64 then {
-            l9: "    \{svC}_print(_zs\{li});\n"
-            buf.append l9.stringview
-            return true
-        } else {}
-        return false
-    } else {
-        return false
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0.u64
     }
 }
 
-# emitCallStmt -- one call-shaped statement. C1 handles print with a
-# pooled-literal argument; everything else emits a marker comment.
-emitCallStmt: function {symtab: zenv.ZSymbolTable call: zast.CallData svC: StringView litIds: (List of: u64) buf: String.borrow} is {
-    isPrint: false
+# emitExpr -- the C expression text for a node (calls inline; the scalar
+# examples carry no order-sensitive multi-call arguments).
+emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (emitExpr symtab: symtab ctx: ctx n: n.expression)
+    } case atomid then {
+        av: n.name.stringview
+        ac: av.string
+        return ac
+    } case binop then {
+        l: emitExpr symtab: symtab ctx: ctx n: n.lhs
+        op: atomTextOf n: n.operator
+        r: emitExpr symtab: symtab ctx: ctx n: n.rhs
+        e9: "(\{l} \{op} \{r})"
+        return e9
+    } case call then {
+        cn0: atomTextOf n: n.callable
+        fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
+        if fid > 0.u64 then {
+            fc: cnameOf tid: fid name: cn0.stringview
+            args: "".string
+            first: true
+            aiter: n.arguments.iterate
+            for a: aiter loop {
+                match (
+                    a
+                ) case namedoperation then {
+                    av9: emitExpr symtab: symtab ctx: ctx n: a.operation
+                    if first then {
+                        first = false
+                    } else {
+                        args.append ", "
+                    }
+                    args.append av9.stringview
+                } else {}
+            }
+            e8: "\{fc}(\{args})"
+            return e8
+        } else {
+            m8: "/* zemitterc: unhandled callee \{cn0} */0"
+            return m8
+        }
+    } else {
+        return "/* zemitterc: unhandled expr */0".string
+    }
+}
+
+# emitInterpPrint -- the interpolated-print temp chain: create, per-part
+# append (literal bytes or snprintf-formatted scalar), print, free.
+emitInterpPrint: function {symtab: zenv.ZSymbolTable ctx: Ctx parts: (List of: Node) ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    est: 0.u64
+    with piter: parts.iterate do for p: piter loop {
+        isC: false
+        match (
+            p
+        ) case stringchunk then {
+            isC = true
+            tl: p.text.length
+            est = est + tl
+        } else {}
+        if isC then {} else {
+            est = est + 16.u64
+        }
+    }
+    sN: tmp.next
+    l0: "\{ind}\{ctx.strC}_t _s\{sN} = \{ctx.strC}_create((uint64_t)\{est});\n"
+    buf.append l0.stringview
+    qiter: parts.iterate
+    for q: qiter loop {
+        emitInterpPart symtab: symtab ctx: ctx n: q sN: sN ind: ind tmp: tmp buf: buf
+    }
+    l1: "\{ind}\{ctx.strC}_print(&_s\{sN});\n"
+    buf.append l1.stringview
+    l2: "\{ind}\{ctx.strC}_free(&_s\{sN});\n"
+    buf.append l2.stringview
+}
+
+emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case stringchunk then {
+        tv: n.text.stringview
+        esc: cEscape text: tv
+        l3: "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
+        buf.append l3.stringview
+    } else {
+        tn: stampNameDeep symtab: symtab n: n
+        val: emitExpr symtab: symtab ctx: ctx n: n
+        bN: tmp.next
+        if (isIntName name: tn.stringview) then {
+            l4: "\{ind}char _b\{bN}[32]; int _b\{bN}_n = snprintf(_b\{bN}, 32, \"%ld\", (long)(int64_t)\{val});\n"
+            buf.append l4.stringview
+            l5: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
+            buf.append l5.stringview
+        } else if (isFloatName name: tn.stringview) then {
+            l6: "\{ind}char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{val});\n"
+            buf.append l6.stringview
+            l7: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
+            buf.append l7.stringview
+        } else {
+            l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
+            buf.append l8.stringview
+        }
+    }
+}
+
+# nodeIdOf9 -- the nodeid of expression-ish shapes used by interp parts.
+nodeIdOf9: function {n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return n.nodeid.u64
+    } case atomid then {
+        return n.nodeid.u64
+    } case call then {
+        return n.nodeid.u64
+    } case binop then {
+        return n.nodeid.u64
+    } else {
+        return 0.u64
+    }
+}
+
+# stampNameDeep -- a node's stamped type name, peeling expression
+# wrappers when the wrapper itself is unstamped.
+stampNameDeep: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+    nid: nodeIdOf9 n: n
+    tn: stampNameOf symtab: symtab nid: nid
+    if tn.length > 0.u64 then {
+        return tn
+    } else {}
+    match (
+        n
+    ) case expression then {
+        return (stampNameDeep symtab: symtab n: n.expression)
+    } else {
+        return "".string
+    }
+}
+
+# emitPrintStmt -- a statement-position print call.
+emitPrintStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    emitted: false
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            if emitted then {} else {
+                emitted = true
+                emitPrintArg symtab: symtab ctx: ctx n: a.operation ind: ind tmp: tmp buf: buf
+            }
+        } else {}
+    }
+    if emitted then {} else {
+        buf.append "    /* zemitterc: print with no argument */\n"
+    }
+}
+
+emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case expression then {
+        emitPrintArg symtab: symtab ctx: ctx n: n.expression ind: ind tmp: tmp buf: buf
+    } case atomstring then {
+        if (isInterp parts: n.stringparts) then {
+            emitInterpPrint symtab: symtab ctx: ctx parts: n.stringparts ind: ind tmp: tmp buf: buf
+        } else {
+            li: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
+            if li > 0.u64 then {
+                l9: "\{ind}\{ctx.svC}_print(_zs\{li});\n"
+                buf.append l9.stringview
+            } else {
+                buf.append "    /* zemitterc: unpooled literal */\n"
+            }
+        }
+    } else {
+        buf.append "    /* zemitterc: unhandled print argument */\n"
+    }
+}
+
+# emitCallStmt -- one call-shaped statement: return / print / a plain call.
+emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView tmp: TmpCtr buf: String.borrow} is {
     cn0: atomTextOf n: call.callable
     if cn0.stringview == "print" then {
-        isPrint = true
+        emitPrintStmt symtab: symtab ctx: ctx call: call ind: ind tmp: tmp buf: buf
+        return
     } else {}
-    if isPrint then {
-        emitted: false
+    if cn0.stringview == "return" then {
+        hasArg: false
         aiter: call.arguments.iterate
         for a: aiter loop {
             match (
                 a
             ) case namedoperation then {
-                if emitted then {} else {
-                    did: emitPrintArg symtab: symtab n: a.operation svC: svC litIds: litIds buf: buf
-                    if did then {
-                        emitted = true
-                    } else {}
+                if hasArg then {} else {
+                    hasArg = true
+                    rv: emitExpr symtab: symtab ctx: ctx n: a.operation
+                    lr: "\{ind}return \{rv};\n"
+                    buf.append lr.stringview
                 }
             } else {}
         }
-        if emitted then {} else {
-            buf.append "    /* zemitterc: unhandled print argument */\n"
+        if hasArg then {} else {
+            lr2: "\{ind}return;\n"
+            buf.append lr2.stringview
         }
-    } else {
-        d9: "    /* zemitterc: unhandled call \{cn0} */\n"
-        buf.append d9.stringview
+        return
+    } else {}
+    ce: emitExpr symtab: symtab ctx: ctx n: (callAsNode9 call: call)
+    lc: "\{ind}\{ce};\n"
+    buf.append lc.stringview
+}
+
+# callAsNode9 -- rewrap CallData for the expression path. The walk hands
+# narrowed payloads around, so the statement leg re-enters via the call's
+# own fields rather than rebuilding a Node.
+callAsNode9: function {call: zast.CallData} out Node is {
+    return (Node.call (zast.CallData nodeid: call.nodeid lineno: call.lineno colno: call.colno callable: (cloneNode9 n: call.callable) arguments: (cloneArgs9 args: call.arguments)))
+}
+
+cloneNode9: function {n: Node} out Node is {
+    return (zgenerator.clonePath ids: (zgenerator.GenIds nextId: 0x60000000.u32) n: n)
+}
+
+cloneArgs9: function {args: (List of: Node)} out (List of: Node) is {
+    res: (List of: Node)
+    aiter: args.iterate
+    for a: aiter loop {
+        c: zgenerator.clonePath ids: (zgenerator.GenIds nextId: 0x60000000.u32) n: a
+        res.append c
     }
+    return res
 }
 
 # emitStmt -- one statement of a function body.
-emitStmt: function {symtab: zenv.ZSymbolTable n: Node svC: StringView litIds: (List of: u64) buf: String.borrow} is {
+emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
     ) case statementline then {
-        emitStmt symtab: symtab n: n.statementline svC: svC litIds: litIds buf: buf
+        emitStmt symtab: symtab ctx: ctx n: n.statementline ind: ind tmp: tmp buf: buf
     } case expression then {
-        emitStmt symtab: symtab n: n.expression svC: svC litIds: litIds buf: buf
+        emitStmt symtab: symtab ctx: ctx n: n.expression ind: ind tmp: tmp buf: buf
     } case call then {
-        emitCallStmt symtab: symtab call: n svC: svC litIds: litIds buf: buf
+        emitCallStmt symtab: symtab ctx: ctx call: n ind: ind tmp: tmp buf: buf
+    } case assignment then {
+        tn: stampNameOf symtab: symtab nid: n.nodeid.u64
+        ct: cTypeOf name: tn.stringview
+        nm: n.name.stringview
+        rv: emitExpr symtab: symtab ctx: ctx n: n.value
+        if ct.length > 0.u64 then {
+            la: "\{ind}\{ct} \{nm} = \{rv};\n"
+            buf.append la.stringview
+        } else {
+            lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
+            buf.append lb.stringview
+        }
+    } case reassignment then {
+        nm2: atomTextOf n: n.topath
+        rv2: emitExpr symtab: symtab ctx: ctx n: n.value
+        lc2: "\{ind}\{nm2} = \{rv2};\n"
+        buf.append lc2.stringview
+    } case ifexpr then {
+        first: true
+        citer: n.clauses.iterate
+        for c: citer loop {
+            isFirst: first
+            first = false
+            emitIfClause symtab: symtab ctx: ctx n: c isFirst: isFirst ind: ind tmp: tmp buf: buf
+        }
+        match (
+            n.elseclause
+        ) case some then {
+        } case none then {}
+        emitElse9 symtab: symtab ctx: ctx o: n.elseclause ind: ind tmp: tmp buf: buf
+        le: "\{ind}}\n"
+        buf.append le.stringview
+    } case forexpr then {
+        cond: "".string
+        kiter: n.conditions.iterate
+        for k: kiter loop {
+            emitForCond symtab: symtab ctx: ctx n: k cond: cond ind: ind tmp: tmp buf: buf
+        }
+        if cond.length == 0.u64 then {
+            cond.append "1"
+        } else {}
+        lw: "\{ind}while (\{cond}) {\n"
+        buf.append lw.stringview
+        ind2: "\{ind}    "
+        emitBodyOpt symtab: symtab ctx: ctx o: n.body ind: ind2.stringview tmp: tmp buf: buf
+        lwc: "\{ind}}\n"
+        buf.append lwc.stringview
     } else {
-        buf.append "    /* zemitterc: unhandled statement */\n"
+        lu: "\{ind}/* zemitterc: unhandled statement */\n"
+        buf.append lu.stringview
     }
 }
 
-emitBodyNode: function {symtab: zenv.ZSymbolTable n: Node svC: StringView litIds: (List of: u64) buf: String.borrow} is {
+# emitForCond -- one for-header arm: a `while:` arm joins the loop
+# condition; a named binding arm emits its init before the loop.
+emitForCond: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node cond: String.borrow ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case namedoperation then {
+        lbl: unitLabel9 o: n.name
+        if lbl.length == 0.u64 then {
+            cv: emitExpr symtab: symtab ctx: ctx n: n.operation
+            if cond.length > 0.u64 then {
+                cond.append " && "
+            } else {}
+            cond.append cv.stringview
+        } else {
+            onid: exprNodeId9 n: n.operation
+            tn: stampNameOf symtab: symtab nid: onid
+            ct: cTypeOf name: tn.stringview
+            iv: emitExpr symtab: symtab ctx: ctx n: n.operation
+            if ct.length > 0.u64 then {
+                li: "\{ind}\{ct} \{lbl} = \{iv};\n"
+                buf.append li.stringview
+            } else {
+                li2: "\{ind}int64_t \{lbl} = \{iv};\n"
+                buf.append li2.stringview
+            }
+        }
+    } else {}
+}
+
+exprNodeId9: function {n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return n.nodeid.u64
+    } case atomid then {
+        return n.nodeid.u64
+    } else {
+        return 0.u64
+    }
+}
+
+emitIfClause: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node isFirst: bool ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case ifclause then {
+        cond: "".string
+        kiter: n.conditions.iterate
+        for k: kiter loop {
+            match (
+                k
+            ) case namedoperation then {
+                cv: emitExpr symtab: symtab ctx: ctx n: k.operation
+                if cond.length > 0.u64 then {
+                    cond.append " && "
+                } else {}
+                cond.append cv.stringview
+            } else {}
+        }
+        if isFirst then {
+            lf: "\{ind}if (\{cond}) {\n"
+            buf.append lf.stringview
+        } else {
+            lg: "\{ind}} else if (\{cond}) {\n"
+            buf.append lg.stringview
+        }
+        ind2: "\{ind}    "
+        emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind2.stringview tmp: tmp buf: buf
+    } else {}
+}
+
+emitElse9: function {symtab: zenv.ZSymbolTable ctx: Ctx o: (Option t: Node) ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        o
+    ) case some then {
+        lh: "\{ind}} else {\n"
+        buf.append lh.stringview
+        ind2: "\{ind}    "
+        emitBodyNode symtab: symtab ctx: ctx n: o ind: ind2.stringview tmp: tmp buf: buf
+    } case none then {}
+}
+
+emitBodyNode: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
     ) case statement then {
         siter: n.statements.iterate
         for s: siter loop {
-            emitStmt symtab: symtab n: s svC: svC litIds: litIds buf: buf
+            emitStmt symtab: symtab ctx: ctx n: s ind: ind tmp: tmp buf: buf
         }
     } else {
-        emitStmt symtab: symtab n: n svC: svC litIds: litIds buf: buf
+        emitStmt symtab: symtab ctx: ctx n: n ind: ind tmp: tmp buf: buf
     }
 }
 
-emitBodyOpt: function {symtab: zenv.ZSymbolTable o: (Option t: Node) svC: StringView litIds: (List of: u64) buf: String.borrow} is {
+emitBodyOpt: function {symtab: zenv.ZSymbolTable ctx: Ctx o: (Option t: Node) ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         o
     ) case some then {
-        emitBodyNode symtab: symtab n: o svC: svC litIds: litIds buf: buf
+        emitBodyNode symtab: symtab ctx: ctx n: o ind: ind tmp: tmp buf: buf
     } case none then {}
 }
 
@@ -309,57 +731,94 @@ unitLabel9: function {o: (Option t: String)} out String is {
     }
 }
 
-emitMainFn: function {symtab: zenv.ZSymbolTable op: Node svC: StringView buf: String.borrow} is {
-    match (
-        op
-    ) case functiondef then {
-        litIds: (List of: u64)
-        litTexts: (List of: String)
-        collectLiteralsOpt o: op.body ids: litIds texts: litTexts
-        i: 0.u64
-        n: litIds.length
-        for while i < n loop {
-            t: litTexts.get i: i
-            tv: t.stringview
-            esc: cEscape text: tv
-            blen: tv.length
-            idx: i + 1.u64
-            l1: "static const char _zs\{idx}_d[] = \"\{esc}\";\n"
-            buf.append l1.stringview
-            l2: "static const \{svC}_t _zs\{idx} = { _zs\{idx}_d, \{blen} };\n"
-            buf.append l2.stringview
-            i = i + 1.u64
-        }
-        buf.append "\n"
-        buf.append "void z_main(void);\n"
-        buf.append "\n"
-        buf.append "void z_main(void) {\n"
-        emitBodyOpt symtab: symtab o: op.body svC: svC litIds: litIds buf: buf
-        buf.append "}\n"
+# fnSignature -- "RET cname(PARAMS)" for a user function from its
+# resolved type's children and return stamp (z_main for main).
+fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: u64 op: Node} out String is {
+    if name == "main" then {
+        return "void z_main(void)".string
     } else {}
-}
-
-emitMainBodyIn: function {symtab: zenv.ZSymbolTable mainOp: Node svC: StringView buf: String.borrow} is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
+    ret: "void".string
+    rbn: ztypecheck.fnReturnBaseNameOf op: op
+    if rbn.length > 0.u64 then {
+        rbc: cTypeOf name: rbn.stringview
+        if rbc.length > 0.u64 then {
+            ret = rbc
+        } else {}
+    } else {}
+    {
+        t: symtab.reg.typeById.get key: fid
+        match (
+            t
+        ) case some then {
+            rto: t.returnTypeId
             match (
-                bm
-            ) case namedoperation then {
-                bn: unitLabel9 o: bm.name
-                if bn.stringview == "main" then {
-                    emitMainFn symtab: symtab op: bm.operation svC: svC buf: buf
+                rto
+            ) case some then {
+                rn: typeNameOfReg9 symtab: symtab tid: rto
+                rc: cTypeOf name: rn.stringview
+                if rc.length > 0.u64 then {
+                    ret = rc
                 } else {}
-            } else {}
+            } case none then {}
+        } case none then {}
+    }
+    params: "".string
+    cNames: (List of: String)
+    cIds: (List of: u64)
+    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == fid then {
+            cto: symtab.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                cn0: tc.childName.copy
+                cNames.append cn0
+                cid2: cto
+                cIds.append cid2
+            } case none then {}
+        } else {}
+    }
+    pi: 0.u64
+    pn: cNames.length
+    for while pi < pn loop {
+        pname: cNames.get i: pi
+        pid: cIds.get i: pi
+        tn: typeNameOfReg9 symtab: symtab tid: pid
+        ct: cTypeOf name: tn.stringview
+        if pi > 0.u64 then {
+            params.append ", "
+        } else {}
+        if ct.length > 0.u64 then {
+            params.append ct.stringview
+        } else {
+            params.append "int64_t"
         }
+        params.append " "
+        params.append pname.stringview
+        pi = pi + 1.u64
+    }
+    if pn == 0.u64 then {
+        params.append "void"
     } else {}
+    fc: cnameOf tid: fid name: name
+    sig: "\{ret} \{fc}(\{params})"
+    return sig
 }
 
-# emitMainBody -- locate the main unit's `main` function and emit its
-# walked statements plus the literal pool it references.
-emitMainBody: function {program: Node symtab: zenv.ZSymbolTable svC: StringView buf: String.borrow} is {
+typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
+    t: symtab.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.name.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# emitFns -- the main unit's function declarations then definitions
+# (two-phase index walk so the body list is free during emission).
+emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
     match (
         program
     ) case program then {
@@ -370,10 +829,135 @@ emitMainBody: function {program: Node symtab: zenv.ZSymbolTable svC: StringView 
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
                 if un.stringview == mainName then {
-                    emitMainBodyIn symtab: symtab mainOp: u.operation svC: svC buf: buf
+                    emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation buf: buf
                 } else {}
             } else {}
         }
+    } else {}
+}
+
+emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String.borrow} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        idxs: (List of: u64)
+        names: (List of: String)
+        di: 0.u64
+        with biter: mainOp.body.iterate do for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (isFunctionDefWithBody9 n: bm.operation) then {
+                    dv: di
+                    idxs.append dv
+                    nm: unitLabel9 o: bm.name
+                    names.append nm
+                } else {}
+            } else {}
+            di = di + 1.u64
+        }
+        wi: 0.u64
+        wn: idxs.length
+        for while wi < wn loop {
+            nm2: names.get i: wi
+            didx: idxs.get i: wi
+            dm2: mainOp.body.get i: didx
+            match (
+                dm2
+            ) case namedoperation then {
+                fid: userFnId symtab: symtab ctx: ctx name: nm2.stringview
+                sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
+                ld: "\{sig};\n"
+                buf.append ld.stringview
+            } else {}
+            wi = wi + 1.u64
+        }
+        buf.append "\n"
+        wj: 0.u64
+        for while wj < wn loop {
+            bidx: idxs.get i: wj
+            nm3: names.get i: wj
+            bm2: mainOp.body.get i: bidx
+            match (
+                bm2
+            ) case namedoperation then {
+                fid2: userFnId symtab: symtab ctx: ctx name: nm3.stringview
+                sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
+                lo: "\{sig2} {\n"
+                buf.append lo.stringview
+                emitFnBody symtab: symtab ctx: ctx op: bm2.operation buf: buf
+                buf.append "}\n\n"
+            } else {}
+            wj = wj + 1.u64
+        }
+    } else {}
+}
+
+isFunctionDefWithBody9: function {n: Node} out bool is {
+    match (
+        n
+    ) case functiondef then {
+        match (
+            n.body
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node buf: String.borrow} is {
+    match (
+        op
+    ) case functiondef then {
+        tmp: (TmpCtr n: 0)
+        emitBodyOpt symtab: symtab ctx: ctx o: op.body ind: "    " tmp: tmp buf: buf
+    } else {}
+}
+
+# collectUnitLiterals -- pool the plain literals of every main-unit
+# function body.
+collectUnitLiterals: function {program: Node ids: (List of: u64) texts: (List of: String)} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    collectUnitLiteralsIn mainOp: u.operation ids: ids texts: texts
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+collectUnitLiteralsIn: function {mainOp: Node ids: (List of: u64) texts: (List of: String)} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                collectFnLiterals n: bm.operation ids: ids texts: texts
+            } else {}
+        }
+    } else {}
+}
+
+collectFnLiterals: function {n: Node ids: (List of: u64) texts: (List of: String)} is {
+    match (
+        n
+    ) case functiondef then {
+        collectLiteralsOpt o: n.body ids: ids texts: texts
     } else {}
 }
 
@@ -436,11 +1020,91 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     f2: loadFragment path: p2.stringview svC: svC.stringview strC: strC.stringview
     buf.append f2.stringview
     buf.append "\n"
-    emitMainBody program: program symtab: symtab svC: svC.stringview buf: buf
+    mn: mainNameOf9 program: program
+    litIds: (List of: u64)
+    litTexts: (List of: String)
+    collectUnitLiterals program: program ids: litIds texts: litTexts
+    i: 0.u64
+    n: litIds.length
+    for while i < n loop {
+        t: litTexts.get i: i
+        tv: t.stringview
+        esc: cEscape text: tv
+        blen: tv.length
+        idx: i + 1.u64
+        l1: "static const char _zs\{idx}_d[] = \"\{esc}\";\n"
+        buf.append l1.stringview
+        l2: "static const \{svC}_t _zs\{idx} = { _zs\{idx}_d, \{blen} };\n"
+        buf.append l2.stringview
+        i = i + 1.u64
+    }
     buf.append "\n"
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds)
+    emitFns program: program symtab: symtab ctx: ctx buf: buf
+    hasMain: programHasMain program: program
+    if hasMain then {} else {
+        buf.append "void z_main(void) {\n"
+        buf.append "}\n\n"
+    }
     buf.append "int main(int argc, char* argv[]) {\n"
     buf.append "    z_main();\n"
     buf.append "    return 0;\n"
     buf.append "}\n"
     return buf
+}
+
+programHasMain: function {program: Node} out bool is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    if (unitHasMain9 mainOp: u.operation) then {
+                        return true
+                    } else {}
+                } else {}
+            } else {}
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+unitHasMain9: function {mainOp: Node} out bool is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                bn: unitLabel9 o: bm.name
+                if bn.stringview == "main" then {
+                    return true
+                } else {}
+            } else {}
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+mainNameOf9: function {program: Node} out String is {
+    match (
+        program
+    ) case program then {
+        mv: program.mainUnitName.stringview
+        mc: mv.string
+        return mc
+    } else {
+        return "".string
+    }
 }
