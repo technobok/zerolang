@@ -2813,14 +2813,49 @@ class CEmitter:
         place that maps canonical -> actual, so id-based naming (which changes
         the base) flows through with no per-site edits. Longest canonical first
         so a prefix (`z_String`) is rewritten after its extension
-        (`z_StringView`) / its methods (`z_String_create`). A no-op while each
-        base equals its canonical spelling (today), hence byte-identical."""
+        (`z_StringView`) / its methods (`z_String_create`).
+
+        C string-literal bytes are user data and are never rewritten (a user
+        literal may legitimately contain a canonical spelling); the scan
+        tracks double-quoted strings with backslash escapes and substitutes
+        only outside them."""
         subs = self.typing.canonical_cname_base
-        for canonical in sorted(subs, key=str.__len__, reverse=True):
-            actual = subs[canonical]
-            if actual != canonical:
-                output = output.replace(canonical, actual)
-        return output
+        ordered = [
+            (canonical, subs[canonical])
+            for canonical in sorted(subs, key=str.__len__, reverse=True)
+            if subs[canonical] != canonical
+        ]
+        if not ordered:
+            return output
+
+        def _sub(seg: str) -> str:
+            for canonical, actual in ordered:
+                seg = seg.replace(canonical, actual)
+            return seg
+
+        parts: List[str] = []
+        seg_start = 0
+        i = 0
+        n = len(output)
+        in_str = False
+        while i < n:
+            c = output[i]
+            if in_str:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == '"':
+                    in_str = False
+                    parts.append(output[seg_start : i + 1])
+                    seg_start = i + 1
+            elif c == '"':
+                parts.append(_sub(output[seg_start:i]))
+                seg_start = i
+                in_str = True
+            i += 1
+        tail = output[seg_start:]
+        parts.append(tail if in_str else _sub(tail))
+        return "".join(parts)
 
     def _strip_unused_ft_typedefs(self, output: str) -> str:
         """Remove unreferenced auto-generated function typedefs.
