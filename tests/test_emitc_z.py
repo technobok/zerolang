@@ -61,6 +61,8 @@ EMITC_SMOKE: "list[str]" = [
     "classes",
     "forloop",
     "listiter",
+    "class_text_protocol",
+    "text_protocol",
 ]
 
 

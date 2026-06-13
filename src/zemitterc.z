@@ -1709,6 +1709,20 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 } case none then {}
             } else {}
         } else {}
+        # `.stringview` on a String/StringView projects an inline view, not a
+        # field access (matches the simple-base svValueForm path).
+        if mn2.stringview == "stringview" then {
+            ppid9: nodeIdOf9 n: n.parent
+            ptn9: stampNameOf symtab: symtab nid: ppid9
+            if ptn9.stringview == "String" then {
+                pbv9: emitExpr symtab: symtab ctx: ctx n: n.parent
+                sv9: svValueForm ctx: ctx expr: pbv9.stringview tname: "String"
+                return sv9
+            } else {}
+            if ptn9.stringview == "StringView" then {
+                return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+            } else {}
+        } else {}
         # a nested base (e.g. it.target.a): emit the base expression, then chain
         # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
         base9: emitExpr symtab: symtab ctx: ctx n: n.parent
@@ -2207,8 +2221,31 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
             lpv: "\{ind}\{ctx.svC}_print(\{anm});\n"
             buf.append lpv.stringview
         } else {
-            lpu: "\{ind}/* zemitterc: unhandled print of \{anm} type \{tn9} */\n"
-            buf.append lpu.stringview
+            argTid: stampIdOf symtab: symtab nid: n.nodeid.u64
+            svco: symtab.typing.childOf parentTypeId: argTid name: "stringview"
+            match (
+                svco
+            ) case some then {
+                mtn: typeNameOfReg9 symtab: symtab tid: svco
+                mcb: cnameOf tid: svco name: mtn.stringview
+                amn: monoOriginName symtab: symtab tid: argTid
+                usesAmp: false
+                if (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.CLASS when amn.length == 0.u64 then {
+                    if (isPtrVar ctx: ctx name: anm.stringview) then {} else {
+                        usesAmp = true
+                    }
+                } else {}
+                if usesAmp then {
+                    lpt: "\{ind}\{ctx.svC}_print(\{mcb}(&\{anm}));\n"
+                    buf.append lpt.stringview
+                } else {
+                    lpt2: "\{ind}\{ctx.svC}_print(\{mcb}(\{anm}));\n"
+                    buf.append lpt2.stringview
+                }
+            } case none then {
+                lpu: "\{ind}/* zemitterc: unhandled print of \{anm} type \{tn9} */\n"
+                buf.append lpu.stringview
+            }
         }
     } else {
         buf.append "    /* zemitterc: unhandled print argument */\n"
@@ -3643,6 +3680,11 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         rt6: "\{rc4}_t"
         return rt6
     } else {}
+    if ctt == ztypes.ztypetype.PROTOCOL then {
+        rc5: cnameOf tid: cid name: tn.stringview
+        rt5: "\{rc5}_t"
+        return rt5
+    } else {}
     return "".string
 }
 
@@ -3693,8 +3735,21 @@ armPayloadC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 arm: StringVi
     }
 }
 
+# isConformanceMarker -- is (tid, name) an as-block protocol/facet conformance
+# marker (`label: Spec` / `:Spec`) rather than a stored field? Such children
+# carry the spec type id but must never be emitted as struct fields.
+isConformanceMarker: function {conf: (List of: ztypes.ZConformance) tid: u64 name: StringView} out bool is {
+    found: false
+    with citer: conf.iterate do for row: citer loop {
+        if row.implTypeId == tid when row.label.stringview == name then {
+            found = true
+        } else {}
+    }
+    return found
+}
+
 # recFieldLists -- a record type's field names and type ids in order
-# (non-FUNCTION children).
+# (non-FUNCTION children, conformance markers excluded).
 recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: (List of: String) ids: (List of: u64)} is {
     with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
         if tc.parentTypeId == tid then {
@@ -3703,10 +3758,12 @@ recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: (List of: Str
                 cto
             ) case some then {
                 if (symtab.reg.typetypeOf typeId: cto) == ztypes.ztypetype.FUNCTION then {} else {
-                    cn0: tc.childName.copy
-                    names.append cn0
-                    cid0: cto
-                    ids.append cid0
+                    if (isConformanceMarker conf: symtab.typing.conformance tid: tid name: tc.childName.stringview) then {} else {
+                        cn0: tc.childName.copy
+                        names.append cn0
+                        cid0: cto
+                        ids.append cid0
+                    }
                 }
             } case none then {}
         } else {}
