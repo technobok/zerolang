@@ -48,6 +48,7 @@ EMITC_SMOKE: "list[str]" = [
     "swap",
     "data",
     "typed_data",
+    "lists",
 ]
 
 

@@ -12,6 +12,7 @@ Node: zast.Node
 TmpCtr: class {
     n: u64
     frees: (List of: String)
+    listFrees: (List of: String)
 } as {
     next: function {:this} out u64 is {
         v: this.n
@@ -652,6 +653,140 @@ emitDataIndexCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     return "".string
 }
 
+# listCapArg -- the capacity: argument of a list construction value, or
+# "0" when absent.
+listCapArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (listCapArg symtab: symtab ctx: ctx n: n.expression)
+    } case call then {
+        aiter: n.arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                an: unitLabel9 o: a.name
+                if an.stringview == "capacity" then {
+                    return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+                } else {}
+            } else {}
+        }
+        return "0".string
+    } else {
+        return "0".string
+    }
+}
+
+# emitListMethodCall -- a method call on a List-mono receiver. Maps the
+# labeled arguments to the runtime method's positional C signature.
+emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    mn: dottedChildText n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    bnid: dottedBaseNodeId n: call.callable
+    bt: stampIdOf symtab: symtab nid: bnid
+    omn: monoOriginName symtab: symtab tid: bt
+    if omn.stringview == "List" then {} else {
+        return "".string
+    }
+    btn: typeNameOfReg9 symtab: symtab tid: bt
+    cb: cnameOf tid: bt name: btn.stringview
+    if mn.stringview == "append" then {
+        v: listArg symtab: symtab ctx: ctx call: call label: "from"
+        e0: "\{cb}_append(&\{bn}, \{v})"
+        return e0
+    } else {}
+    if mn.stringview == "get" then {
+        v: listArg symtab: symtab ctx: ctx call: call label: "i"
+        e1: "\{cb}_get(&\{bn}, \{v})"
+        return e1
+    } else {}
+    if mn.stringview == "set" then {
+        vi: listArg symtab: symtab ctx: ctx call: call label: "i"
+        vv: listArg symtab: symtab ctx: ctx call: call label: "val"
+        e2: "\{cb}_set(&\{bn}, \{vi}, \{vv})"
+        return e2
+    } else {}
+    if mn.stringview == "pop" then {
+        e3: "\{cb}_pop(&\{bn})"
+        return e3
+    } else {}
+    if mn.stringview == "insert" then {
+        vf: listArg symtab: symtab ctx: ctx call: call label: "from"
+        va: listArg symtab: symtab ctx: ctx call: call label: "at"
+        e4: "\{cb}_insert(&\{bn}, \{vf}, \{va})"
+        return e4
+    } else {}
+    if mn.stringview == "extend" then {
+        ea: listTakeArgBase symtab: symtab ctx: ctx call: call label: "from"
+        e5: "\{cb}_extend(&\{bn}, &\{ea})"
+        return e5
+    } else {}
+    if mn.stringview == "contains" then {
+        vc: listArg symtab: symtab ctx: ctx call: call label: "item"
+        e6: "\{cb}_contains(&\{bn}, \{vc})"
+        return e6
+    } else {}
+    if mn.stringview == "sort" then {
+        e7: "\{cb}_sort(&\{bn})"
+        return e7
+    } else {}
+    return "".string
+}
+
+# listArg -- the C expression for a labeled list-method argument ("0" if
+# absent).
+listArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView} out String is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then {
+                return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+            } else {}
+        } else {}
+    }
+    return "0".string
+}
+
+# listTakeArgBase -- the base atom of a `x.take` list argument (the
+# extend source); the bare atom text otherwise.
+listTakeArgBase: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView} out String is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then {
+                return (takeArgBase n: a.operation)
+            } else {}
+        } else {}
+    }
+    return "0".string
+}
+
+takeArgBase: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (takeArgBase n: n.expression)
+    } case dottedpath then {
+        return (atomTextOf n: n.parent)
+    } case atomid then {
+        av: n.name.stringview
+        ac: av.string
+        return ac
+    } else {
+        return "0".string
+    }
+}
+
 # emitTypedefCreateCall -- `meters.create from: 42` / `meters 42`: a
 # zero-overhead cast; emit the single argument expression.
 emitTypedefCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
@@ -827,6 +962,66 @@ nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     return res
 }
 
+# emitCallValue -- the C expression for a call (the dispatch chain:
+# dotted/list/typedef/data/record-ctor/type-qual/variant/user-fn).
+# Shared by emitExpr's call arm and the statement-position call leg
+# so neither clones the node (clones lose the type stamps).
+emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    dc: emitDottedCall symtab: symtab ctx: ctx call: call
+    if dc.length > 0.u64 then {
+        return dc
+    } else {}
+    lmc: emitListMethodCall symtab: symtab ctx: ctx call: call
+    if lmc.length > 0.u64 then {
+        return lmc
+    } else {}
+    tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: call
+    if tdq.length > 0.u64 then {
+        return tdq
+    } else {}
+    ddq: emitDataIndexCall symtab: symtab ctx: ctx call: call
+    if ddq.length > 0.u64 then {
+        return ddq
+    } else {}
+    cn0: atomTextOf n: call.callable
+    fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
+    if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
+        return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
+    } else {}
+    tq: emitTypeQualCall symtab: symtab ctx: ctx call: call
+    if tq.length > 0.u64 then {
+        return tq
+    } else {}
+    vq: emitVariantCtorCall symtab: symtab ctx: ctx call: call
+    if vq.length > 0.u64 then {
+        return vq
+    } else {}
+    if fid > 0.u64 then {
+        fc: cnameOf tid: fid name: cn0.stringview
+        args: "".string
+        first: true
+        aiter: call.arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                av9: emitExpr symtab: symtab ctx: ctx n: a.operation
+                if first then {
+                    first = false
+                } else {
+                    args.append ", "
+                }
+                args.append av9.stringview
+            } else {}
+        }
+        e8: "\{fc}(\{args})"
+        return e8
+    } else {
+        m8: "/* zemitterc: unhandled callee \{cn0} */0"
+        return m8
+    }
+}
+
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
@@ -957,6 +1152,27 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 e9: "\{bn2}.data.\{mn2}"
                 return e9
             } else {}
+            bsmn: monoOriginName symtab: symtab tid: bstamp
+            if bsmn.stringview == "List" then {
+                if mn2.stringview == "length" then {
+                    el0: "\{bn2}.length"
+                    return el0
+                } else {}
+                if mn2.stringview == "capacity" then {
+                    el1: "\{bn2}.capacity"
+                    return el1
+                } else {}
+                bstn: typeNameOfReg9 symtab: symtab tid: bstamp
+                lcb2: cnameOf tid: bstamp name: bstn.stringview
+                if mn2.stringview == "pop" then {
+                    ep0: "\{lcb2}_pop(&\{bn2})"
+                    return ep0
+                } else {}
+                if mn2.stringview == "sort" then {
+                    ep1: "\{lcb2}_sort(&\{bn2})"
+                    return ep1
+                } else {}
+            } else {}
             if rtt == ztypes.ztypetype.DATA then {
                 if mn2.stringview == "length" then {
                     ed0: "z_\{bn2}_len"
@@ -1048,55 +1264,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         e9: "(\{l} \{op} \{r})"
         return e9
     } case call then {
-        dc: emitDottedCall symtab: symtab ctx: ctx call: n
-        if dc.length > 0.u64 then {
-            return dc
-        } else {}
-        tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: n
-        if tdq.length > 0.u64 then {
-            return tdq
-        } else {}
-        ddq: emitDataIndexCall symtab: symtab ctx: ctx call: n
-        if ddq.length > 0.u64 then {
-            return ddq
-        } else {}
-        cn0: atomTextOf n: n.callable
-        fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
-        if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
-            return (emitRecordCtor symtab: symtab ctx: ctx call: n tid: fid name: cn0.stringview)
-        } else {}
-        tq: emitTypeQualCall symtab: symtab ctx: ctx call: n
-        if tq.length > 0.u64 then {
-            return tq
-        } else {}
-        vq: emitVariantCtorCall symtab: symtab ctx: ctx call: n
-        if vq.length > 0.u64 then {
-            return vq
-        } else {}
-        if fid > 0.u64 then {
-            fc: cnameOf tid: fid name: cn0.stringview
-            args: "".string
-            first: true
-            aiter: n.arguments.iterate
-            for a: aiter loop {
-                match (
-                    a
-                ) case namedoperation then {
-                    av9: emitExpr symtab: symtab ctx: ctx n: a.operation
-                    if first then {
-                        first = false
-                    } else {
-                        args.append ", "
-                    }
-                    args.append av9.stringview
-                } else {}
-            }
-            e8: "\{fc}(\{args})"
-            return e8
-        } else {
-            m8: "/* zemitterc: unhandled callee \{cn0} */0"
-            return m8
-        }
+        return (emitCallValue symtab: symtab ctx: ctx call: n)
     } else {
         return "/* zemitterc: unhandled expr */0".string
     }
@@ -1549,30 +1717,21 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
         }
         return
     } else {}
-    ce: emitExpr symtab: symtab ctx: ctx n: (callAsNode9 call: call)
+    ce: emitCallValue symtab: symtab ctx: ctx call: call
     lc: "\{ind}\{ce};\n"
     buf.append lc.stringview
 }
 
-# callAsNode9 -- rewrap CallData for the expression path. The walk hands
-# narrowed payloads around, so the statement leg re-enters via the call's
-# own fields rather than rebuilding a Node.
-callAsNode9: function {call: zast.CallData} out Node is {
-    return (Node.call (zast.CallData nodeid: call.nodeid lineno: call.lineno colno: call.colno callable: (cloneNode9 n: call.callable) arguments: (cloneArgs9 args: call.arguments)))
-}
-
-cloneNode9: function {n: Node} out Node is {
-    return (zgenerator.clonePath ids: (zgenerator.GenIds nextId: 0x60000000.u32) n: n)
-}
-
-cloneArgs9: function {args: (List of: Node)} out (List of: Node) is {
-    res: (List of: Node)
-    aiter: args.iterate
-    for a: aiter loop {
-        c: zgenerator.clonePath ids: (zgenerator.GenIds nextId: 0x60000000.u32) n: a
-        res.append c
+# nodeIsDotted9 -- the node is a dotted-path auto-call (a no-arg method
+# reference used in statement position).
+nodeIsDotted9: function {n: Node} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        return true
+    } else {
+        return false
     }
-    return res
 }
 
 # emitStmt -- one statement of a function body.
@@ -1597,6 +1756,19 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } case none then {}
         } else {}
         nm: n.name.stringview
+        ltid: stampIdOf symtab: symtab nid: n.nodeid.u64
+        ltmn: monoOriginName symtab: symtab tid: ltid
+        if ltmn.stringview == "List" then {
+            lcb: cnameOf tid: ltid name: tn.stringview
+            lcap: listCapArg symtab: symtab ctx: ctx n: n.value
+            lb0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
+            buf.append lb0.stringview
+            lfree: "    \{lcb}_destroy(&\{nm});\n"
+            lfsv: lfree.stringview
+            lfv: lfsv.string
+            tmp.listFrees.append lfv
+            return
+        } else {}
         if tn.stringview == "StringView" then {
             lvN: bindLitIndex symtab: symtab ctx: ctx n: n.value
             if lvN > 0.u64 then {
@@ -2652,12 +2824,16 @@ emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node buf: String.bo
     match (
         op
     ) case functiondef then {
-        tmp: (TmpCtr n: 0 frees: (List of: String))
+        tmp: (TmpCtr n: 0 frees: (List of: String) listFrees: (List of: String))
         emitBodyOpt symtab: symtab ctx: ctx o: op.body ind: "    " tmp: tmp buf: buf
         fiter9: tmp.frees.iterate
         for fv: fiter9 loop {
             lf9: "    \{ctx.strC}_free(&\{fv});\n"
             buf.append lf9.stringview
+        }
+        lfi9: tmp.listFrees.iterate
+        for lfs: lfi9 loop {
+            buf.append lfs.stringview
         }
     } else {}
 }
@@ -2795,6 +2971,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         fnsBuf.append "}\n\n"
     }
     emitNeededNatives ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
     buf.append poolBuf.stringview
     buf.append "\n"
@@ -2907,6 +3084,166 @@ emitNativeIf: function {ctx: Ctx need: StringView frag: StringView runtimeDir: S
         f9: loadFragment path: p9.stringview svC: sc9.stringview strC: tc9.stringview
         buf.append f9.stringview
     } else {}
+}
+
+# cbaseNoPrefix -- the id-based cname without the leading "z_" (the runtime
+# templates spell z_@@NAME@@, so NAME omits the prefix).
+cbaseNoPrefix: function {tid: u64 name: StringView} out String is {
+    full: cnameOf tid: tid name: name
+    fl: full.length
+    rest: (full.stringview from: 2.u64 to: fl)
+    return rest.string
+}
+
+# applyTmpl -- substitute one @@KEY@@ placeholder in template text.
+applyTmpl: function {text: String key: StringView val: StringView} out String is {
+    needle: "@@\{key}@@".string
+    return (substituteAll text: text needle: needle.stringview repl: val)
+}
+
+# monoOriginName -- the template name a mono derives from (List/Map/Set),
+# "" when not a mono.
+monoOriginName: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
+    t: symtab.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        go: t.genericOriginId
+        match (
+            go
+        ) case some then {
+            return (typeNameOfReg9 symtab: symtab tid: go)
+        } case none then {}
+    } case none then {}
+    return "".string
+}
+
+# listElemType -- a List/ListView mono's element type id (the get-child
+# return), 0 when absent.
+listElemType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
+    go: symtab.typing.childOf parentTypeId: monoId name: "get"
+    match (
+        go
+    ) case some then {
+        t: symtab.reg.typeById.get key: go
+        match (
+            t
+        ) case some then {
+            rt: t.returnTypeId
+            match (
+                rt
+            ) case some then {
+                return rt
+            } case none then {}
+        } case none then {}
+    } case none then {}
+    return 0.u64
+}
+
+# ctypeOrI64 -- the given C type name as an owned String, or int64_t
+# when empty.
+ctypeOrI64: function {s: StringView} out String is {
+    if s.length > 0.u64 then {
+        return s.string
+    } else {
+        return "int64_t".string
+    }
+}
+
+# emitListMono -- substitute z_List.c.tmpl for a List instance + the
+# linear-scan contains companion (scalar element equality).
+emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    eid: listElemType symtab: symtab monoId: monoId
+    ect0: typeRefC symtab: symtab ctx: ctx tid: eid thisTid: 0.u64
+    ect: ctypeOrI64 s: ect0.stringview
+    p: "\{runtimeDir}/z_List.c.tmpl"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+        t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
+        t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: ""
+        t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: ""
+        buf.append t4.stringview
+        buf.append "\n"
+    } case err then {
+        return
+    }
+    co: symtab.typing.childOf parentTypeId: monoId name: "contains"
+    match (
+        co
+    ) case some then {
+        c0: "static bool z_\{nm}_contains(z_\{nm}_t* _this, \{ect} _needle);\n"
+        buf.append c0.stringview
+        c1: "static bool z_\{nm}_contains(z_\{nm}_t* _this, \{ect} _needle) {\n"
+        buf.append c1.stringview
+        buf.append "    for (uint64_t i = 0; i < _this->length; i++) {\n"
+        buf.append "        if (_this->data[i] == _needle) return true;\n"
+        buf.append "    }\n"
+        buf.append "    return false;\n"
+        buf.append "}\n\n"
+    } case none then {}
+    so: symtab.typing.childOf parentTypeId: monoId name: "sort"
+    match (
+        so
+    ) case some then {
+        emitListSort nm: nm.stringview ect: ect.stringview buf: buf
+    } case none then {}
+}
+
+# emitListSort -- stable in-place mergesort companion (scalar `<`).
+emitListSort: function {nm: StringView ect: StringView buf: String.borrow} is {
+    s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return _a < _b; }\n"
+    buf.append s0.stringview
+    s1: "static void z_\{nm}_sort_merge(\{ect}* data, \{ect}* scratch, uint64_t lo, uint64_t mid, uint64_t hi) {\n"
+    buf.append s1.stringview
+    buf.append "    uint64_t i = lo, j = mid, k = lo;\n"
+    buf.append "    while (i < mid && j < hi) {\n"
+    sm: "        if (!z_\{nm}_sort_lt(data[j], data[i])) scratch[k++] = data[i++];\n"
+    buf.append sm.stringview
+    buf.append "        else scratch[k++] = data[j++];\n"
+    buf.append "    }\n"
+    buf.append "    while (i < mid) scratch[k++] = data[i++];\n"
+    buf.append "    while (j < hi) scratch[k++] = data[j++];\n"
+    buf.append "    memcpy(&data[lo], &scratch[lo], (hi - lo) * sizeof(*data));\n"
+    buf.append "}\n"
+    s2: "static void z_\{nm}_sort_rec(\{ect}* data, \{ect}* scratch, uint64_t lo, uint64_t hi) {\n"
+    buf.append s2.stringview
+    buf.append "    if (hi - lo <= 1) return;\n"
+    buf.append "    uint64_t mid = lo + (hi - lo) / 2;\n"
+    sr1: "    z_\{nm}_sort_rec(data, scratch, lo, mid);\n"
+    buf.append sr1.stringview
+    sr2: "    z_\{nm}_sort_rec(data, scratch, mid, hi);\n"
+    buf.append sr2.stringview
+    sr3: "    z_\{nm}_sort_merge(data, scratch, lo, mid, hi);\n"
+    buf.append sr3.stringview
+    buf.append "}\n"
+    s3: "static void z_\{nm}_sort(z_\{nm}_t* _this) {\n"
+    buf.append s3.stringview
+    buf.append "    if (_this->length < 2) return;\n"
+    sa: "    \{ect}* scratch = (\{ect}*)z_xmalloc(_this->length * sizeof(\{ect}));\n"
+    buf.append sa.stringview
+    sd: "    z_\{nm}_sort_rec(_this->data, scratch, 0, _this->length);\n"
+    buf.append sd.stringview
+    buf.append "    free(scratch);\n"
+    buf.append "}\n\n"
+}
+
+# emitMonos -- emit every collection-mono instance in the registry (List
+# today; Map/Set/iterators land with their slices).
+emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    tid: 0.u64
+    last: symtab.reg.nextTypeId
+    for while tid < last loop {
+        onm: monoOriginName symtab: symtab tid: tid
+        if onm.stringview == "List" then {
+            emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
+        } else {}
+        tid = tid + 1.u64
+    }
 }
 
 # emitRecordDefs -- main-unit record structs + meta_create constructors
