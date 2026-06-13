@@ -421,6 +421,8 @@ Ctx: class {
     constVals: (Map key: String value: String)
     needs: (Map key: String value: bool)
     methodReturns: (Map key: String value: String)
+    dataElems: (Map key: String value: String)
+    dataConst: (Map key: String value: String)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -616,6 +618,40 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     return "".string
 }
 
+# emitDataIndexCall -- `primes.index i`: a data-block element read,
+# emitted as z_{name}[arg].
+emitDataIndexCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    mn: dottedChildText n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    bnid: dottedBaseNodeId n: call.callable
+    bt: stampNameOf symtab: symtab nid: bnid
+    dt: userFnId symtab: symtab ctx: ctx name: bn.stringview
+    isData: false
+    if dt > 0.u64 when (symtab.reg.typetypeOf typeId: dt) == ztypes.ztypetype.DATA then {
+        isData = true
+    } else {}
+    if isData then {} else {
+        return "".string
+    }
+    if mn.stringview == "index" then {
+        ax: "0".string
+        aiter: call.arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                ax = emitExpr symtab: symtab ctx: ctx n: a.operation
+            } else {}
+        }
+        e0: "z_\{bn}[\{ax}]"
+        return e0
+    } else {}
+    return "".string
+}
+
 # emitTypedefCreateCall -- `meters.create from: 42` / `meters 42`: a
 # zero-overhead cast; emit the single argument expression.
 emitTypedefCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
@@ -769,9 +805,35 @@ ctorArgByLabel: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     return "0".string
 }
 
+# nodeConstText -- the C literal for a node carrying a compile-time
+# const stamp (folded .LABEL data access, unit constants); "" otherwise.
+nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
+    if nid == 0.u64 then {
+        return "".string
+    } else {}
+    res: "".string
+    with citer: symtab.typing.nodeConst.iterate do for row: citer loop {
+        if row.nodeid == nid when res.length == 0.u64 then {
+            if row.value.kind == ztypes.zconstkind.IVAL then {
+                iv: row.value.ival
+                res = "\{iv}"
+            } else {}
+            if row.value.kind == ztypes.zconstkind.FVAL then {
+                fv: row.value.fval
+                res = "\{fv}"
+            } else {}
+        } else {}
+    }
+    return res
+}
+
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    cv9: nodeConstText symtab: symtab nid: (nodeIdOf9 n: n)
+    if cv9.length > 0.u64 then {
+        return cv9
+    } else {}
     match (
         n
     ) case expression then {
@@ -895,6 +957,21 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 e9: "\{bn2}.data.\{mn2}"
                 return e9
             } else {}
+            if rtt == ztypes.ztypetype.DATA then {
+                if mn2.stringview == "length" then {
+                    ed0: "z_\{bn2}_len"
+                    return ed0
+                } else {}
+                dck: "\{bn2}.\{mn2}".string
+                dco: ctx.dataConst.get key: dck
+                match (
+                    dco
+                ) case some then {
+                    dcv: dco.stringview
+                    dcc: dcv.string
+                    return dcc
+                } case none then {}
+            } else {}
         } else {}
         return "/* zemitterc: unhandled dotted */0".string
     } case atomstring then {
@@ -978,6 +1055,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: n
         if tdq.length > 0.u64 then {
             return tdq
+        } else {}
+        ddq: emitDataIndexCall symtab: symtab ctx: ctx call: n
+        if ddq.length > 0.u64 then {
+            return ddq
         } else {}
         cn0: atomTextOf n: n.callable
         fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
@@ -1090,6 +1171,31 @@ numericFormatName: function {symtab: zenv.ZSymbolTable ctx: Ctx tn: StringView} 
     return rr
 }
 
+dataIndexElemName: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (dataIndexElemName symtab: symtab ctx: ctx n: n.expression)
+    } case call then {
+        mn: dottedChildText n: n.callable
+        if mn.stringview == "index" then {
+            bn: dottedBaseAtom n: n.callable
+            dk: bn.string
+            go: ctx.dataElems.get key: dk
+            match (
+                go
+            ) case some then {
+                gv: go.stringview
+                gc: gv.string
+                return gc
+            } case none then {}
+        } else {}
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
 emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
@@ -1099,8 +1205,12 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
         l3: "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
         buf.append l3.stringview
     } else {
+        di0: dataIndexElemName symtab: symtab ctx: ctx n: n
         tn0: stampNameDeep symtab: symtab n: n
         tn: numericFormatName symtab: symtab ctx: ctx tn: tn0.stringview
+        if di0.length > 0.u64 then {
+            tn = di0
+        } else {}
         val: emitExpr symtab: symtab ctx: ctx n: n
         bN: tmp.next
         if (isIntName name: tn.stringview) then {
@@ -1558,6 +1668,26 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         rv2: emitExpr symtab: symtab ctx: ctx n: n.value
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
+    } case swapstmt then {
+        lx: emitExpr symtab: symtab ctx: ctx n: n.lhs
+        rx: emitExpr symtab: symtab ctx: ctx n: n.rhs
+        lnid: nodeIdOf9 n: n.lhs
+        lsid: stampIdOf symtab: symtab nid: lnid
+        lct: typeRefC symtab: symtab ctx: ctx tid: lsid thisTid: 0.u64
+        if lct.length == 0.u64 then {
+            lct = "int64_t".string
+        } else {}
+        sN: tmp.next
+        s0: "\{ind}{\n"
+        buf.append s0.stringview
+        s1: "\{ind}    \{lct} _sw\{sN} = \{lx};\n"
+        buf.append s1.stringview
+        s2: "\{ind}    \{lx} = \{rx};\n"
+        buf.append s2.stringview
+        s3: "\{ind}    \{rx} = _sw\{sN};\n"
+        buf.append s3.stringview
+        s4: "\{ind}}\n"
+        buf.append s4.stringview
     } case ifexpr then {
         ifAssign: "".string
         first: true
@@ -2246,6 +2376,84 @@ isConstShape: function {ctx: Ctx n: Node} out bool is {
 # fillMethodReturns -- record each main-unit type method's return
 # format name (TypeName.method -> i64/f64/...), so interpolation can
 # format auto-call results whose node carries only a FUNCTION stamp.
+fillDataElems: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    fillDataElemsIn symtab: symtab ctx: ctx mainOp: u.operation
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+fillDataElemsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                dnm: unitLabel9 o: bm.name
+                fillOneDataElem symtab: symtab ctx: ctx name: dnm.stringview op: bm.operation
+            } else {}
+        }
+    } else {}
+}
+
+fillOneDataElem: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView op: Node} is {
+    match (
+        op
+    ) case expression then {
+        fillOneDataElem symtab: symtab ctx: ctx name: name op: op.expression
+    } case datablock then {
+        ebn: dataElemBaseName o: op.outType
+        k9: name.string
+        if ebn.length > 0.u64 then {
+            ebv9: ebn.stringview
+            ev9: ebv9.string
+            ctx.dataElems.set key: k9 value: ev9
+        } else {
+            iv9: "i64".string
+            ctx.dataElems.set key: k9 value: iv9
+        }
+        idx9: 0.u64
+        eiter9: op.elements.iterate
+        for e9: eiter9 loop {
+            vx9: emitDataElem symtab: symtab ctx: ctx n: e9
+            ik9: "\{name}.\{idx9}".string
+            iv2: vx9.copy
+            ctx.dataConst.set key: ik9 value: iv2
+            elbl: dataElemLabel n: e9
+            if elbl.length > 0.u64 then {
+                lk9: "\{name}.\{elbl}".string
+                lv9: vx9.copy
+                ctx.dataConst.set key: lk9 value: lv9
+            } else {}
+            idx9 = idx9 + 1.u64
+        }
+    } else {}
+}
+
+dataElemLabel: function {n: Node} out String is {
+    match (
+        n
+    ) case namedoperation then {
+        return (unitLabel9 o: n.name)
+    } else {
+        return "".string
+    }
+}
+
 fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
     match (
         program
@@ -2575,9 +2783,10 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
+    fillDataElems program: program symtab: symtab ctx: ctx
     fnsBuf: "".string
     emitFns program: program symtab: symtab ctx: ctx buf: fnsBuf
     hasMain: programHasMain program: program
@@ -2743,9 +2952,68 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                         emitOneVariant symtab: symtab ctx: ctx tid: vid5 name: nm5.stringview buf: buf
                     } else {}
                 } else {}
+                nm6: unitLabel9 o: bm.name
+                emitDataBlock symtab: symtab ctx: ctx name: nm6.stringview op: bm.operation buf: buf
             } else {}
         }
     } else {}
+}
+
+# emitDataBlock -- `name: data { e0 e1 ... } out T`: a static const array
+# z_{name}[] plus z_{name}_len, with the element C type from out T (i64
+# default). The plain z_{name} cname matches the reference.
+emitDataBlock: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView op: Node buf: String.borrow} is {
+    match (
+        op
+    ) case expression then {
+        emitDataBlock symtab: symtab ctx: ctx name: name op: op.expression buf: buf
+    } case datablock then {
+        ect: "int64_t".string
+        rbn: dataElemBaseName o: op.outType
+        if rbn.length > 0.u64 then {
+            rc: cTypeOf name: rbn.stringview
+            if rc.length > 0.u64 then {
+                ect = rc
+            } else {}
+        } else {}
+        elems: "".string
+        cnt: 0.u64
+        eiter: op.elements.iterate
+        for e: eiter loop {
+            ev: emitDataElem symtab: symtab ctx: ctx n: e
+            if cnt > 0.u64 then {
+                elems.append ", "
+            } else {}
+            elems.append ev.stringview
+            cnt = cnt + 1.u64
+        }
+        l0: "static const \{ect} z_\{name}[] = {\{elems}};\n"
+        buf.append l0.stringview
+        l1: "static const \{ect} z_\{name}_len = \{cnt};\n\n"
+        buf.append l1.stringview
+    } else {}
+}
+
+# emitDataElem -- a data-block element (a NamedOperation wrapping the
+# value atom); emit its inner expression.
+emitDataElem: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case namedoperation then {
+        return (emitExpr symtab: symtab ctx: ctx n: n.operation)
+    } else {
+        return (emitExpr symtab: symtab ctx: ctx n: n)
+    }
+}
+
+dataElemBaseName: function {o: (Option t: Node)} out String is {
+    match (
+        o
+    ) case some then {
+        return (atomTextDeep n: o)
+    } case none then {
+        return "".string
+    }
 }
 
 isVariantDef9: function {n: Node} out bool is {

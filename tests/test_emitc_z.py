@@ -45,6 +45,9 @@ EMITC_SMOKE: "list[str]" = [
     "case",
     "ifexpr",
     "typedefs",
+    "swap",
+    "data",
+    "typed_data",
 ]
 
 
