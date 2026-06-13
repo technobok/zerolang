@@ -296,6 +296,17 @@ atomNodeId9: function {n: Node} out u64 is {
     }
 }
 
+stampIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    go: symtab.typing.nodeType.get key: nid
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0.u64
+    }
+}
+
 # stampNameOf -- the registry name of a node's stamped type ("" unstamped).
 stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     go: symtab.typing.nodeType.get key: nid
@@ -516,6 +527,89 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     return "".string
 }
 
+# emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
+# resolves to a record type and whose member is a FUNCTION child; args
+# reorder to the method's param order by label.
+emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    mn: dottedChildText n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    btid: userFnId symtab: symtab ctx: ctx name: bn.stringview
+    if btid == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.typetypeOf typeId: btid) == ztypes.ztypetype.RECORD then {} else {
+        return "".string
+    }
+    mco: symtab.typing.childOf parentTypeId: btid name: mn.stringview
+    match (
+        mco
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION then {
+            pnames: (List of: String)
+            pids: (List of: u64)
+            recFieldLists symtab: symtab tid: mco names: pnames ids: pids
+            args: "".string
+            pi: 0.u64
+            pn: pnames.length
+            for while pi < pn loop {
+                pname: pnames.get i: pi
+                av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname.stringview
+                if pi > 0.u64 then {
+                    args.append ", "
+                } else {}
+                args.append av.stringview
+                pi = pi + 1.u64
+            }
+            mtn3: typeNameOfReg9 symtab: symtab tid: mco
+            mc3: cnameOf tid: mco name: mtn3.stringview
+            e7: "\{mc3}(\{args})"
+            return e7
+        } else {}
+    } case none then {}
+    return "".string
+}
+
+# emitRecordCtor -- a record construction call: args reordered to field
+# order by label, emitted through the create alias.
+emitRecordCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData tid: u64 name: StringView} out String is {
+    fnames: (List of: String)
+    fids: (List of: u64)
+    recFieldLists symtab: symtab tid: tid names: fnames ids: fids
+    args: "".string
+    fi: 0.u64
+    fn0: fnames.length
+    for while fi < fn0 loop {
+        fname: fnames.get i: fi
+        av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: fname.stringview
+        if fi > 0.u64 then {
+            args.append ", "
+        } else {}
+        args.append av.stringview
+        fi = fi + 1.u64
+    }
+    rc: cnameOf tid: tid name: name
+    e0: "\{rc}_create(\{args})"
+    return e0
+}
+
+ctorArgByLabel: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView} out String is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then {
+                return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+            } else {}
+        } else {}
+    }
+    return "0".string
+}
+
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
@@ -575,6 +669,24 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return e3
                 } else {}
             } else {}
+            bstamp: stampIdOf symtab: symtab nid: bnid2
+            rtt: symtab.reg.typetypeOf typeId: bstamp
+            if rtt == ztypes.ztypetype.RECORD then {
+                mco: symtab.typing.childOf parentTypeId: bstamp name: mn2.stringview
+                match (
+                    mco
+                ) case some then {
+                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION then {
+                        # member auto-call: the method takes the value
+                        mtn2: typeNameOfReg9 symtab: symtab tid: mco
+                        mc2: cnameOf tid: mco name: mtn2.stringview
+                        e6: "\{mc2}(\{bn2})"
+                        return e6
+                    } else {}
+                } case none then {}
+                e5: "\{bn2}.\{mn2}"
+                return e5
+            } else {}
         } else {}
         return "/* zemitterc: unhandled dotted */0".string
     } case binop then {
@@ -608,6 +720,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         } else {}
         cn0: atomTextOf n: n.callable
         fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
+        if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
+            return (emitRecordCtor symtab: symtab ctx: ctx call: n tid: fid name: cn0.stringview)
+        } else {}
+        tq: emitTypeQualCall symtab: symtab ctx: ctx call: n
+        if tq.length > 0.u64 then {
+            return tq
+        } else {}
         if fid > 0.u64 then {
             fc: cnameOf tid: fid name: cn0.stringview
             args: "".string
@@ -946,6 +1065,14 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
     } case assignment then {
         tn: stampNameOf symtab: symtab nid: n.nodeid.u64
         ct: cTypeOf name: tn.stringview
+        if ct.length == 0.u64 then {
+            tgo: symtab.typing.nodeType.get key: n.nodeid.u64
+            match (
+                tgo
+            ) case some then {
+                ct = typeRefC symtab: symtab ctx: ctx tid: tgo thisTid: 0.u64
+            } case none then {}
+        } else {}
         nm: n.name.stringview
         if tn.stringview == "StringView" then {
             lvN: bindLitIndex symtab: symtab ctx: ctx n: n.value
@@ -1004,7 +1131,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             buf.append lb.stringview
         }
     } case reassignment then {
-        nm2: atomTextOf n: n.topath
+        nm2: emitExpr symtab: symtab ctx: ctx n: n.topath
         rv2: emitExpr symtab: symtab ctx: ctx n: n.value
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
@@ -1187,7 +1314,15 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
         rbc: cTypeOf name: rbn.stringview
         if rbc.length > 0.u64 then {
             ret = rbc
-        } else {}
+        } else {
+            rbi9: userFnId symtab: symtab ctx: ctx name: rbn.stringview
+            if rbi9 > 0.u64 then {
+                rr9: typeRefC symtab: symtab ctx: ctx tid: rbi9 thisTid: 0.u64
+                if rr9.length > 0.u64 then {
+                    ret = rr9
+                } else {}
+            } else {}
+        }
     } else {}
     {
         t: symtab.reg.typeById.get key: fid
@@ -1227,8 +1362,7 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
     for while pi < pn loop {
         pname: cNames.get i: pi
         pid: cIds.get i: pi
-        tn: typeNameOfReg9 symtab: symtab tid: pid
-        ct: cTypeOf name: tn.stringview
+        ct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0.u64
         if pi > 0.u64 then {
             params.append ", "
         } else {}
@@ -1247,6 +1381,54 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
     fc: cnameOf tid: fid name: name
     sig: "\{ret} \{fc}(\{params})"
     return sig
+}
+
+# typeRefC -- the C spelling for a type id: scalars by name, records by
+# their id-based cname ("" when unsupported).
+typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} out String is {
+    tn: typeNameOfReg9 symtab: symtab tid: tid
+    ct: cTypeOf name: tn.stringview
+    if ct.length > 0.u64 then {
+        return ct
+    } else {}
+    # canonicalize shells: a param/field child may be a fresh shell id
+    # named after the real type; this-typed params take the receiver.
+    cid: tid
+    if tn.stringview == "this" when thisTid > 0.u64 then {
+        cid = thisTid
+        tn = typeNameOfReg9 symtab: symtab tid: cid
+    } else {
+        rid9: userFnId symtab: symtab ctx: ctx name: tn.stringview
+        if rid9 > 0.u64 then {
+            cid = rid9
+        } else {}
+    }
+    if (symtab.reg.typetypeOf typeId: cid) == ztypes.ztypetype.RECORD then {
+        rc: cnameOf tid: cid name: tn.stringview
+        rt9: "\{rc}_t"
+        return rt9
+    } else {}
+    return "".string
+}
+
+# recFieldLists -- a record type's field names and type ids in order
+# (non-FUNCTION children).
+recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: (List of: String) ids: (List of: u64)} is {
+    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == tid then {
+            cto: symtab.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                if (symtab.reg.typetypeOf typeId: cto) == ztypes.ztypetype.FUNCTION then {} else {
+                    cn0: tc.childName.copy
+                    names.append cn0
+                    cid0: cto
+                    ids.append cid0
+                }
+            } case none then {}
+        } else {}
+    }
 }
 
 typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
@@ -1582,6 +1764,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         fnsBuf.append "}\n\n"
     }
     emitNeededNatives ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
     buf.append poolBuf.stringview
     buf.append "\n"
     buf.append fnsBuf.stringview
@@ -1693,6 +1876,227 @@ emitNativeIf: function {ctx: Ctx need: StringView frag: StringView runtimeDir: S
         f9: loadFragment path: p9.stringview svC: sc9.stringview strC: tc9.stringview
         buf.append f9.stringview
     } else {}
+}
+
+# emitRecordDefs -- main-unit record structs + meta_create constructors
+# (scalar/record fields; the create alias mirrors the reference).
+emitRecordDefs: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    emitRecordDefsIn symtab: symtab ctx: ctx mainOp: u.operation buf: buf
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String.borrow} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                if (isRecordDef9 n: bm.operation) then {
+                    nm: unitLabel9 o: bm.name
+                    rid: userFnId symtab: symtab ctx: ctx name: nm.stringview
+                    if rid > 0.u64 then {
+                        emitOneRecord symtab: symtab ctx: ctx tid: rid name: nm.stringview op: bm.operation buf: buf
+                    } else {}
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+isRecordDef9: function {n: Node} out bool is {
+    match (
+        n
+    ) case objectdef then {
+        if n.kind == zast.nodetype.RECORD then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView op: Node buf: String.borrow} is {
+    fnames: (List of: String)
+    fids: (List of: u64)
+    recFieldLists symtab: symtab tid: tid names: fnames ids: fids
+    rc: cnameOf tid: tid name: name
+    l0: "typedef struct {\n"
+    buf.append l0.stringview
+    fi: 0.u64
+    fn0: fnames.length
+    for while fi < fn0 loop {
+        fname: fnames.get i: fi
+        fid: fids.get i: fi
+        fct: typeRefC symtab: symtab ctx: ctx tid: fid thisTid: 0.u64
+        if fct.length == 0.u64 then {
+            fct = "int64_t".string
+        } else {}
+        l1: "    \{fct} \{fname};\n"
+        buf.append l1.stringview
+        fi = fi + 1.u64
+    }
+    l2: "} \{rc}_t;\n"
+    buf.append l2.stringview
+    params: "".string
+    inits: "".string
+    fj: 0.u64
+    for while fj < fn0 loop {
+        fname2: fnames.get i: fj
+        fid2: fids.get i: fj
+        fct2: typeRefC symtab: symtab ctx: ctx tid: fid2 thisTid: 0.u64
+        if fct2.length == 0.u64 then {
+            fct2 = "int64_t".string
+        } else {}
+        if fj > 0.u64 then {
+            params.append ", "
+            inits.append ", "
+        } else {}
+        params.append fct2.stringview
+        params.append " "
+        params.append fname2.stringview
+        inits.append fname2.stringview
+        fj = fj + 1.u64
+    }
+    l3: "static \{rc}_t \{rc}_meta_create(\{params}) {\n"
+    buf.append l3.stringview
+    l4: "    \{rc}_t z = { \{inits} };\n"
+    buf.append l4.stringview
+    buf.append "    return z;\n"
+    buf.append "}\n"
+    l5: "#define \{rc}_create \{rc}_meta_create\n\n"
+    buf.append l5.stringview
+    emitRecordMethods symtab: symtab ctx: ctx tid: tid op: op buf: buf
+}
+
+# emitRecordMethods -- the record's as-block functions as free C
+# functions taking the record by value (params from the method type's
+# children; the AST return fallback covers unstamped returns).
+emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Node buf: String.borrow} is {
+    match (
+        op
+    ) case objectdef then {
+        idxs: (List of: u64)
+        names: (List of: String)
+        ai: 0.u64
+        with aiter: op.asItems.iterate do for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (isFunctionDefWithBody9 n: am.operation) then {
+                    av: ai
+                    idxs.append av
+                    an: unitLabel9 o: am.name
+                    names.append an
+                } else {}
+            } else {}
+            ai = ai + 1.u64
+        }
+        wi: 0.u64
+        wn: idxs.length
+        for while wi < wn loop {
+            midx: idxs.get i: wi
+            mname: names.get i: wi
+            am2: op.asItems.get i: midx
+            match (
+                am2
+            ) case namedoperation then {
+                mo: symtab.typing.childOf parentTypeId: tid name: mname.stringview
+                match (
+                    mo
+                ) case some then {
+                    emitOneMethod symtab: symtab ctx: ctx mid: mo thisTid9: tid op: am2.operation buf: buf
+                } case none then {}
+            } else {}
+            wi = wi + 1.u64
+        }
+    } else {}
+}
+
+emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u64 op: Node buf: String.borrow} is {
+    mtn: typeNameOfReg9 symtab: symtab tid: mid
+    mc: cnameOf tid: mid name: mtn.stringview
+    ret: "void".string
+    {
+        t: symtab.reg.typeById.get key: mid
+        match (
+            t
+        ) case some then {
+            rto: t.returnTypeId
+            match (
+                rto
+            ) case some then {
+                rr: typeRefC symtab: symtab ctx: ctx tid: rto thisTid: 0.u64
+                if rr.length > 0.u64 then {
+                    ret = rr
+                } else {}
+            } case none then {}
+        } case none then {}
+    }
+    if ret.stringview == "void" then {
+        rbn: ztypecheck.fnReturnBaseNameOf op: op
+        if rbn.length > 0.u64 then {
+            rbi: userFnId symtab: symtab ctx: ctx name: rbn.stringview
+            if rbi > 0.u64 then {
+                rr2: typeRefC symtab: symtab ctx: ctx tid: rbi thisTid: 0.u64
+                if rr2.length > 0.u64 then {
+                    ret = rr2
+                } else {}
+            } else {
+                rr3: cTypeOf name: rbn.stringview
+                if rr3.length > 0.u64 then {
+                    ret = rr3
+                } else {}
+            }
+        } else {}
+    } else {}
+    params: "".string
+    pnames: (List of: String)
+    pids: (List of: u64)
+    recFieldLists symtab: symtab tid: mid names: pnames ids: pids
+    pi: 0.u64
+    pn: pnames.length
+    for while pi < pn loop {
+        pname: pnames.get i: pi
+        pid: pids.get i: pi
+        pt: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: thisTid9
+        if pt.length == 0.u64 then {
+            pt = "int64_t".string
+        } else {}
+        if pi > 0.u64 then {
+            params.append ", "
+        } else {}
+        params.append pt.stringview
+        params.append " "
+        params.append pname.stringview
+        pi = pi + 1.u64
+    }
+    if pn == 0.u64 then {
+        params.append "void"
+    } else {}
+    ld: "static \{ret} \{mc}(\{params});\n"
+    buf.append ld.stringview
+    lo: "static \{ret} \{mc}(\{params}) {\n"
+    buf.append lo.stringview
+    emitFnBody symtab: symtab ctx: ctx op: op buf: buf
+    buf.append "}\n\n"
 }
 
 mainNameOf9: function {program: Node} out String is {

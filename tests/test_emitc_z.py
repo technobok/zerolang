@@ -37,6 +37,8 @@ EMITC_SMOKE: "list[str]" = [
     "strings",
     "string_ordering",
     "string_transform",
+    "vector",
+    "records",
 ]
 
 
