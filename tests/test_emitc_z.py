@@ -79,6 +79,8 @@ EMITC_SMOKE: "list[str]" = [
     "io_stat_mkdirp",
     "io_lstat",
     "io_buffered",
+    "io_textwriter",
+    "io_textreader",
 ]
 
 
