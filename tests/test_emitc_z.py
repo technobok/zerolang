@@ -68,6 +68,7 @@ EMITC_SMOKE: "list[str]" = [
     "iterator",
     "io_read_text",
     "io_write_text",
+    "io_open",
 ]
 
 

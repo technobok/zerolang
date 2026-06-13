@@ -1380,6 +1380,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if ioc.length > 0.u64 then {
         return ioc
     } else {}
+    fmc: emitFileMethodCall symtab: symtab ctx: ctx call: call
+    if fmc.length > 0.u64 then {
+        return fmc
+    } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
         return dc
@@ -1571,7 +1575,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return e3
                 } else {}
             } else {}
-            vtid2: userFnId symtab: symtab ctx: ctx name: bn2.stringview
+            vtid2: resolveTypeIdByName symtab: symtab ctx: ctx name: bn2.stringview
             if vtid2 > 0.u64 when (symtab.reg.typetypeOf typeId: vtid2) == ztypes.ztypetype.VARIANT then {
                 pc2: armPayloadC symtab: symtab ctx: ctx tid: vtid2 arm: mn2.stringview
                 if pc2.length == 0.u64 then {
@@ -5173,6 +5177,37 @@ ioFragIf: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView ne
     } else {}
 }
 
+# emitIoFileClass -- the io.File value rep: { int32_t fd; bool closed } + a
+# destructor that closes the fd once (RAII). Emitted only when File is reachable
+# (in the demand-driven registry). The generic record path can't produce the
+# close-fd destructor, so File gets this dedicated emitter.
+emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    last: symtab.reg.nextTypeId
+    fid: 0.u64
+    ti: 1.u64
+    for while ti < last loop {
+        if fid == 0.u64 then {
+            if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+                tn: typeNameOfReg9 symtab: symtab tid: ti
+                if tn.stringview == "File" then {
+                    if (definedInNonMain symtab: symtab ctx: ctx tid: ti) then {
+                        fid = ti
+                    } else {}
+                } else {}
+            } else {}
+        } else {}
+        ti = ti + 1.u64
+    }
+    if fid == 0.u64 then {
+        return
+    } else {}
+    fc: cnameOf tid: fid name: "File"
+    l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
+    buf.append l0.stringview
+    l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
+    buf.append l1.stringview
+}
+
 # emitRuntimeIo -- the io runtime bodies (need-gated, dependency-ordered). The
 # universal helpers (z_sv_to_cstr inline, errno-map) emit whenever any io call
 # is present; the rest gate on their specific need.
@@ -5197,6 +5232,35 @@ emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_readText" frag: "_Z_IO_READ_TEXT" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_writeText" frag: "_Z_IO_WRITE_TEXT" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_appendText" frag: "_Z_IO_APPEND_TEXT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_open" frag: "_Z_IO_OPEN" buf: buf
+    needU64: needsHas ctx: ctx name: "io_file_read"
+    if (needsHas ctx: ctx name: "io_file_write") then {
+        needU64 = true
+    } else {}
+    if (needsHas ctx: ctx name: "io_file_seek") then {
+        needU64 = true
+    } else {}
+    if needU64 then {
+        pwu: nativePath runtimeDir: runtimeDir frag: "_Z_IO_WRAP_U64_RESULT"
+        fwu: loadIoFragment symtab: symtab ctx: ctx path: pwu.stringview
+        buf.append fwu.stringview
+        buf.append "\n"
+    } else {}
+    needNull: needsHas ctx: ctx name: "io_file_close"
+    if (needsHas ctx: ctx name: "io_file_flush") then {
+        needNull = true
+    } else {}
+    if needNull then {
+        pwn: nativePath runtimeDir: runtimeDir frag: "_Z_IO_WRAP_NULL_RESULT"
+        fwn: loadIoFragment symtab: symtab ctx: ctx path: pwn.stringview
+        buf.append fwn.stringview
+        buf.append "\n"
+    } else {}
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_close" frag: "_Z_FILE_CLOSE" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_write" frag: "_Z_FILE_WRITE" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_read" frag: "_Z_FILE_READ" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_seek" frag: "_Z_FILE_SEEK" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_flush" frag: "_Z_FILE_FLUSH" buf: buf
 }
 
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -5232,6 +5296,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         } else {}
         tsu = tsu + 1.u64
     }
+    emitIoFileClass symtab: symtab ctx: ctx buf: buf
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: 0.u64
@@ -5646,6 +5711,90 @@ conformanceLabelFor: function {symtab: zenv.ZSymbolTable implTid: u64 protoTid: 
 
 # emitProtocolDispatch -- a method call on a protocol-typed receiver routes
 # through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
+# fileTypeIdOf -- the io File class type id if `nid` stamps as File, else 0.
+fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is {
+    tid: stampIdOf symtab: symtab nid: nid
+    if tid == 0.u64 then {
+        return 0.u64
+    } else {}
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.CLASS then {} else {
+        return 0.u64
+    }
+    tn: typeNameOfReg9 symtab: symtab tid: tid
+    if tn.stringview == "File" then {} else {
+        return 0.u64
+    }
+    if (definedInNonMain symtab: symtab ctx: ctx tid: tid) then {} else {
+        return 0.u64
+    }
+    return tid
+}
+
+# emitFileMethodCall -- a File method (close/read/write/seek/flush), native,
+# taking the receiver by pointer and collection args (Bytes/ByteView) by
+# pointer. "" for any non-File receiver.
+emitFileMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    isFM: false
+    if mn.stringview == "close" then {
+        isFM = true
+    } else {}
+    if mn.stringview == "read" then {
+        isFM = true
+    } else {}
+    if mn.stringview == "write" then {
+        isFM = true
+    } else {}
+    if mn.stringview == "seek" then {
+        isFM = true
+    } else {}
+    if mn.stringview == "flush" then {
+        isFM = true
+    } else {}
+    if isFM then {} else {
+        return "".string
+    }
+    bnid: dottedBaseNodeId n: call.callable
+    fid: fileTypeIdOf symtab: symtab ctx: ctx nid: bnid
+    if fid == 0.u64 then {
+        return "".string
+    } else {}
+    fc: cnameOf tid: fid name: "File"
+    recv: aliasResolve ctx: ctx name: bn.stringview
+    recvExpr: "&\{recv}".string
+    if (isPtrVar ctx: ctx name: recv.stringview) then {
+        recvExpr = recv
+    } else {}
+    needsAdd ctx: ctx name: "io"
+    fmn: "io_file_\{mn}".string
+    needsAdd ctx: ctx name: fmn.stringview
+    if mn.stringview == "close" then {
+        return "\{fc}_close(\{recvExpr})"
+    } else {}
+    if mn.stringview == "flush" then {
+        return "\{fc}_flush(\{recvExpr})"
+    } else {}
+    if mn.stringview == "write" then {
+        fv: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "from"
+        return "\{fc}_write(\{recvExpr}, &\{fv})"
+    } else {}
+    if mn.stringview == "read" then {
+        iv: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "into"
+        mv: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "max"
+        return "\{fc}_read(\{recvExpr}, &\{iv}, \{mv})"
+    } else {}
+    if mn.stringview == "seek" then {
+        tv: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "to"
+        ov: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "from"
+        return "\{fc}_seek(\{recvExpr}, \{tv}, \{ov})"
+    } else {}
+    return "".string
+}
+
 # emitIoCall -- a free io.* native call (io.readText/writeText/appendText/
 # eprintln/open/exists/mkdir/.../stat/listDir): `z_io_<name>(args...)` in the
 # native's parameter order, setting the per-call need so emitRuntimeIo emits
@@ -5668,6 +5817,9 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
     } else {}
     if mn.stringview == "eprintln" then {
         fname = "z_io_eprintln".string
+    } else {}
+    if mn.stringview == "open" then {
+        fname = "z_io_open".string
     } else {}
     if fname.length == 0.u64 then {
         return "".string
