@@ -59,6 +59,7 @@ EMITC_SMOKE: "list[str]" = [
     "mapitems",
     "constructors",
     "classes",
+    "forloop",
 ]
 
 
