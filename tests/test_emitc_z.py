@@ -65,6 +65,7 @@ EMITC_SMOKE: "list[str]" = [
     "text_protocol",
     "protocols",
     "owned_protocol",
+    "iterator",
 ]
 
 
