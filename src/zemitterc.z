@@ -841,6 +841,47 @@ emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     return "".string
 }
 
+# emitMapMethodCall -- an arg-taking method on a Map-mono receiver (a heap
+# pointer). set/get/has/delete pass the pointer directly; "" otherwise. The
+# no-arg `.length`/`.capacity` reads ride the dottedpath leg.
+emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    mn: dottedChildText n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    bnid: dottedBaseNodeId n: call.callable
+    bt: stampIdOf symtab: symtab nid: bnid
+    omn: monoOriginName symtab: symtab tid: bt
+    if omn.stringview == "Map" then {} else {
+        return "".string
+    }
+    btn: typeNameOfReg9 symtab: symtab tid: bt
+    cb: cnameOf tid: bt name: btn.stringview
+    if mn.stringview == "set" then {
+        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        vv: listArg symtab: symtab ctx: ctx call: call label: "value"
+        e0: "\{cb}_set(\{bn}, \{vk}, \{vv})"
+        return e0
+    } else {}
+    if mn.stringview == "get" then {
+        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        e1: "\{cb}_get(\{bn}, \{vk})"
+        return e1
+    } else {}
+    if mn.stringview == "has" then {
+        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        e2: "\{cb}_has(\{bn}, \{vk})"
+        return e2
+    } else {}
+    if mn.stringview == "delete" then {
+        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        e3: "\{cb}_delete(\{bn}, \{vk})"
+        return e3
+    } else {}
+    return "".string
+}
+
 # listArg -- the C expression for a labeled list-method argument ("0" if
 # absent).
 listArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView} out String is {
@@ -1082,6 +1123,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     smc: emitSetMethodCall symtab: symtab ctx: ctx call: call
     if smc.length > 0.u64 then {
         return smc
+    } else {}
+    mmc: emitMapMethodCall symtab: symtab ctx: ctx call: call
+    if mmc.length > 0.u64 then {
+        return mmc
     } else {}
     tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: call
     if tdq.length > 0.u64 then {
@@ -1330,6 +1375,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 if mn2.stringview == "iterate" then {
                     esi: "\{scb2}_iterate(\{bn2})"
                     return esi
+                } else {}
+            } else {}
+            if bsmn.stringview == "Map" then {
+                if mn2.stringview == "length" then {
+                    eml: "\{bn2}->length"
+                    return eml
+                } else {}
+                if mn2.stringview == "capacity" then {
+                    emc: "\{bn2}->capacity"
+                    return emc
                 } else {}
             } else {}
             if rtt == ztypes.ztypetype.DATA then {
@@ -1938,6 +1993,18 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             sfsv: sfree.stringview
             sfv: sfsv.string
             tmp.listFrees.append sfv
+            return
+        } else {}
+        if ltmn.stringview == "Map" then {
+            mtn: typeNameOfReg9 symtab: symtab tid: ltid
+            mcb: cnameOf tid: ltid name: mtn.stringview
+            mcap: listCapArg symtab: symtab ctx: ctx n: n.value
+            mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
+            buf.append mb0.stringview
+            mfree: "    \{mcb}_destroy(\{nm});\n"
+            mfsv: mfree.stringview
+            mfv: mfsv.string
+            tmp.listFrees.append mfv
             return
         } else {}
         if tn.stringview == "StringView" then {
@@ -4114,6 +4181,104 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     }
 }
 
+# mapKeyName -- a Map mono's key segment: "Map_<K>_<V>" minus the "Map_"
+# prefix and the trailing "_<V>" (vlen is the value name's length).
+mapKeyName: function {full: String vlen: u64} out String is {
+    fl: full.length
+    endx: fl - vlen - 1.u64
+    rest: (full.stringview from: 4.u64 to: endx)
+    return rest.string
+}
+
+# mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- String-key cleanup
+# fragments: per-entry key free on destroy, incoming-key free when a set hits
+# an existing key, stored-key free on delete. Empty for non-heap keys.
+mapDestroyEntries: function {isStr: bool strC: StringView} out String is {
+    if isStr then {
+        return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n            \{strC}_free(&p->entries[i].key);\n        }\n    }\n".string
+    } else {}
+    return "".string
+}
+
+mapFreeKeyDup: function {isStr: bool strC: StringView} out String is {
+    if isStr then {
+        return "        \{strC}_free(&_key);\n".string
+    } else {}
+    return "".string
+}
+
+mapFreeKeyDel: function {isStr: bool strC: StringView} out String is {
+    if isStr then {
+        return "    \{strC}_free(&_this->entries[idx].key);\n".string
+    } else {}
+    return "".string
+}
+
+# emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
+# set/get/has/delete). The value's optionval mono (get's return) supplies the
+# value type and the OPTIONVAL placeholders; the key name is the remainder.
+emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    mcr: cUpperOf text: nm.stringview
+    ovId: 0.u64
+    go: symtab.typing.childOf parentTypeId: monoId name: "get"
+    match (
+        go
+    ) case some then {
+        gt: symtab.reg.typeById.get key: go
+        match (
+            gt
+        ) case some then {
+            rto: gt.returnTypeId
+            match (
+                rto
+            ) case some then {
+                ovId = rto
+            } case none then {}
+        } case none then {}
+    } case none then {}
+    if ovId == 0.u64 then {
+        return
+    } else {}
+    ovName: typeNameOfReg9 symtab: symtab tid: ovId
+    ovOrigin: monoOriginName symtab: symtab tid: ovId
+    ovPrefixLen: ovOrigin.length + 1.u64
+    valName: monoElemName full: ovName prefixLen: ovPrefixLen
+    valT: cTypeForName symtab: symtab ctx: ctx name: valName.stringview
+    ov: cbaseNoPrefix tid: ovId name: ovName.stringview
+    ovu: cUpperOf text: ovName.stringview
+    keyName: mapKeyName full: mn vlen: valName.length
+    keyT: cTypeForName symtab: symtab ctx: ctx name: keyName.stringview
+    keyIsStr: keyName.stringview == "String"
+    hashKeyBody: setHashBody isStr: keyIsStr
+    keysEqBody: setEqBody isStr: keyIsStr
+    destroyEntries: mapDestroyEntries isStr: keyIsStr strC: ctx.strC.stringview
+    freeKeyDup: mapFreeKeyDup isStr: keyIsStr strC: ctx.strC.stringview
+    freeKeyDel: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview
+    p: "\{runtimeDir}/z_Map.c.tmpl"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+        t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
+        t3: applyTmpl text: t2 key: "KEY_T" val: keyT.stringview
+        t4: applyTmpl text: t3 key: "VAL_T" val: valT.stringview
+        t5: applyTmpl text: t4 key: "HASH_KEY_BODY" val: hashKeyBody.stringview
+        t6: applyTmpl text: t5 key: "KEYS_EQUAL_BODY" val: keysEqBody.stringview
+        t7: applyTmpl text: t6 key: "DESTROY_ENTRIES" val: destroyEntries.stringview
+        t8: applyTmpl text: t7 key: "FREE_KEY_DUP" val: freeKeyDup.stringview
+        t9: applyTmpl text: t8 key: "FREE_KEY_DEL" val: freeKeyDel.stringview
+        t10: applyTmpl text: t9 key: "OPTIONVAL" val: ov.stringview
+        t11: applyTmpl text: t10 key: "OPTIONVAL_TAG" val: ovu.stringview
+        buf.append t11.stringview
+        buf.append "\n"
+    } case err then {
+        return
+    }
+}
+
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -4197,6 +4362,16 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tset buf: buf
         } else {}
         tset = tset + 1.u64
+    }
+    # Map monos -- the compact-dict over key+value; get's return optionval
+    # (emitted above) supplies the value type.
+    tmap: 0.u64
+    for while tmap < last loop {
+        mnm: monoOriginName symtab: symtab tid: tmap
+        if mnm.stringview == "Map" then {
+            emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tmap buf: buf
+        } else {}
+        tmap = tmap + 1.u64
     }
 }
 

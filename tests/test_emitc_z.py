@@ -55,6 +55,7 @@ EMITC_SMOKE: "list[str]" = [
     "string_slice",
     "string_parse",
     "set_uniq",
+    "maps",
 ]
 
 
