@@ -471,6 +471,33 @@ isPtrVar: function {ctx: Ctx name: StringView} out bool is {
     return false
 }
 
+# pathIsPointer -- does the expression evaluate to a C pointer? A ptrVar atom
+# (pointer receiver / lock param) or a dotted read of a `.lock` field both do,
+# so field access on them chains with `->`.
+pathIsPointer: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (pathIsPointer symtab: symtab ctx: ctx n: n.expression)
+    } case atomid then {
+        rn: aliasResolve ctx: ctx name: n.name.stringview
+        return (isPtrVar ctx: ctx name: rn.stringview)
+    } case dottedpath then {
+        cn: atomTextOf n: n.child
+        pnid: atomNodeId9 n: n.parent
+        pstamp: stampIdOf symtab: symtab nid: pnid
+        pstn: typeNameOfReg9 symtab: symtab tid: pstamp
+        prid: resolveTypeIdByName symtab: symtab ctx: ctx name: pstn.stringview
+        ptid: pstamp
+        if prid > 0.u64 then {
+            ptid = prid
+        } else {}
+        return (symtab.typing.isChildLockField parentTypeId: ptid name: cn.stringview)
+    } else {
+        return false
+    }
+}
+
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
 aliasResolve: function {ctx: Ctx name: StringView} out String is {
     ao: ctx.aliases.get key: name.string
@@ -1467,6 +1494,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         bn2r: atomTextOf n: n.parent
         bn2: aliasResolve ctx: ctx name: bn2r.stringview
         mn2: atomTextOf n: n.child
+        # `.private` is a compile-time friend marker -- it emits the receiver itself.
+        if mn2.stringview == "private" then {
+            return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+        } else {}
         if bn2.length > 0.u64 then {
             # typed numeric literal (3.u64): the base text is the C literal
             b1: bn2.stringview.byteAt i: 0.u64
@@ -1678,7 +1709,19 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 } case none then {}
             } else {}
         } else {}
-        return "/* zemitterc: unhandled dotted */0".string
+        # a nested base (e.g. it.target.a): emit the base expression, then chain
+        # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
+        base9: emitExpr symtab: symtab ctx: ctx n: n.parent
+        if (base9.stringview.startsWith prefix: "/*") then {
+            return "/* zemitterc: unhandled dotted */0".string
+        } else {}
+        if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) then {
+            ep9: "\{base9}->\{mn2}"
+            return ep9
+        } else {
+            ed9: "\{base9}.\{mn2}"
+            return ed9
+        }
     } case atomstring then {
         li9: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
         if li9 > 0.u64 then {
@@ -5061,12 +5104,37 @@ emitRecordDefs: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: 
     } else {}
 }
 
+# emitDefMethods -- emit a record/class def's as-block methods (forward decls
+# when declOnly, bodies otherwise). Used by the method passes of emitRecordDefsIn.
+emitDefMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx bm: Node declOnly: bool buf: String.borrow} is {
+    match (
+        bm
+    ) case namedoperation then {
+        if (isRecordDef9 n: bm.operation) then {
+            nm: unitLabel9 o: bm.name
+            rid: userFnId symtab: symtab ctx: ctx name: nm.stringview
+            if rid > 0.u64 then {
+                emitRecordMethods symtab: symtab ctx: ctx tid: rid op: bm.operation declOnly: declOnly buf: buf
+            } else {}
+        } else {}
+        if (isClassDef9 n: bm.operation) then {
+            nmc: unitLabel9 o: bm.name
+            cid9: userFnId symtab: symtab ctx: ctx name: nmc.stringview
+            if cid9 > 0.u64 then {
+                emitRecordMethods symtab: symtab ctx: ctx tid: cid9 op: bm.operation declOnly: declOnly buf: buf
+            } else {}
+        } else {}
+    } else {}
+}
+
+# emitRecordDefsIn -- three passes so cross-class references resolve: all structs
+# (+ variants + data blocks), then all method forward decls, then all method
+# bodies (a method may return/construct a class defined later in the unit).
 emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String.borrow} is {
     match (
         mainOp
     ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
+        with biterA: mainOp.body.iterate do for bm: biterA loop {
             match (
                 bm
             ) case namedoperation then {
@@ -5094,6 +5162,12 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                 nm6: unitLabel9 o: bm.name
                 emitDataBlock symtab: symtab ctx: ctx name: nm6.stringview op: bm.operation buf: buf
             } else {}
+        }
+        with biterB: mainOp.body.iterate do for bmd: biterB loop {
+            emitDefMethods symtab: symtab ctx: ctx bm: bmd declOnly: true buf: buf
+        }
+        with biterC: mainOp.body.iterate do for bmb: biterC loop {
+            emitDefMethods symtab: symtab ctx: ctx bm: bmb declOnly: false buf: buf
         }
     } else {}
 }
@@ -5304,19 +5378,22 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
     for while fi < fn0 loop {
         fname: fnames.get i: fi
         fid: fids.get i: fi
-        ftn: typeNameOfReg9 symtab: symtab tid: fid
-        if ftn.stringview == "String" then {
-            ds: "    \{ctx.strC}_free(&p->\{fname});\n"
-            buf.append ds.stringview
-        } else {
-            frid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: ftn.stringview)
-            if frid > 0.u64 then {
-                if (symtab.reg.hasDestructorName typeId: frid) then {
-                    fcb: cnameOf tid: frid name: ftn.stringview
-                    df: "    \{fcb}_destroy(&p->\{fname});\n"
-                    buf.append df.stringview
+        # a `.lock` field is a borrowed pointer -- never freed by the destructor.
+        if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) then {} else {
+            ftn: typeNameOfReg9 symtab: symtab tid: fid
+            if ftn.stringview == "String" then {
+                ds: "    \{ctx.strC}_free(&p->\{fname});\n"
+                buf.append ds.stringview
+            } else {
+                frid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: ftn.stringview)
+                if frid > 0.u64 then {
+                    if (symtab.reg.hasDestructorName typeId: frid) then {
+                        fcb: cnameOf tid: frid name: ftn.stringview
+                        df: "    \{fcb}_destroy(&p->\{fname});\n"
+                        buf.append df.stringview
+                    } else {}
                 } else {}
-            } else {}
+            }
         }
         fi = fi + 1.u64
     }
@@ -5325,9 +5402,8 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
 
 emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView op: Node buf: String.borrow} is {
     if (isTypedefType symtab: symtab tid: tid) then {
-        # typedef records are zero-overhead aliases of their base; emit
-        # only their methods (as free functions over the base type).
-        emitRecordMethods symtab: symtab ctx: ctx tid: tid op: op buf: buf
+        # typedef records are zero-overhead aliases of their base; they have no
+        # struct of their own. Their methods are emitted in the later passes.
         return
     } else {}
     fnames: (List of: String)
@@ -5345,6 +5421,10 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         if fct.length == 0.u64 then {
             fct = "int64_t".string
         } else {}
+        # a `.lock` field borrows the container -- store it as a pointer.
+        if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) then {
+            fct = "\{fct}*"
+        } else {}
         l1: "    \{fct} \{fname};\n"
         buf.append l1.stringview
         fi = fi + 1.u64
@@ -5360,6 +5440,10 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         fct2: typeRefC symtab: symtab ctx: ctx tid: fid2 thisTid: 0.u64
         if fct2.length == 0.u64 then {
             fct2 = "int64_t".string
+        } else {}
+        # a `.lock` field's meta_create param matches the pointer field.
+        if (symtab.typing.isChildLockField parentTypeId: tid name: fname2.stringview) then {
+            fct2 = "\{fct2}*"
         } else {}
         if fj > 0.u64 then {
             params.append ", "
@@ -5430,13 +5514,12 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     if (symtab.reg.hasDestructorName typeId: tid) then {
         emitStructDestructor symtab: symtab ctx: ctx tid: tid name: name fnames: fnames fids: fids buf: buf
     } else {}
-    emitRecordMethods symtab: symtab ctx: ctx tid: tid op: op buf: buf
 }
 
 # emitRecordMethods -- the record's as-block functions as free C
 # functions taking the record by value (params from the method type's
 # children; the AST return fallback covers unstamped returns).
-emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Node buf: String.borrow} is {
+emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Node declOnly: bool buf: String.borrow} is {
     match (
         op
     ) case objectdef then {
@@ -5469,7 +5552,7 @@ emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Nod
                 match (
                     mo
                 ) case some then {
-                    emitOneMethod symtab: symtab ctx: ctx mid: mo thisTid9: tid op: am2.operation buf: buf
+                    emitOneMethod symtab: symtab ctx: ctx mid: mo thisTid9: tid op: am2.operation declOnly: declOnly buf: buf
                 } case none then {}
             } else {}
             wi = wi + 1.u64
@@ -5477,7 +5560,7 @@ emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Nod
     } else {}
 }
 
-emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u64 op: Node buf: String.borrow} is {
+emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u64 op: Node declOnly: bool buf: String.borrow} is {
     mtn: typeNameOfReg9 symtab: symtab tid: mid
     mc: cnameOf tid: mid name: mtn.stringview
     ret: "void".string
@@ -5573,7 +5656,28 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
                 pt = "\{pt}*"
                 pnc9: pname.string
                 ctx.ptrVars.append pnc9
-            } else {}
+            } else {
+                # a LOCK/BORROW class param borrows the container -> pass by pointer.
+                own9: symtab.typing.childOwnershipText parentTypeId: mid name: pname.stringview
+                isLB9: false
+                if own9.stringview == "LOCK" then {
+                    isLB9 = true
+                } else {}
+                if own9.stringview == "BORROW" then {
+                    isLB9 = true
+                } else {}
+                if isLB9 then {
+                    prid9: resolveTypeIdByName symtab: symtab ctx: ctx name: ptn9.stringview
+                    if prid9 > 0.u64 when (symtab.reg.typetypeOf typeId: prid9) == ztypes.ztypetype.CLASS then {
+                        pmo9: monoOriginName symtab: symtab tid: prid9
+                        if pmo9.length == 0.u64 then {
+                            pt = "\{pt}*"
+                            pnc9b: pname.string
+                            ctx.ptrVars.append pnc9b
+                        } else {}
+                    } else {}
+                } else {}
+            }
         } else {}
         if pi > 0.u64 then {
             params.append ", "
@@ -5586,12 +5690,15 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     if pn == 0.u64 then {
         params.append "void"
     } else {}
-    ld: "static \{ret} \{mc}(\{params});\n"
-    buf.append ld.stringview
-    lo: "static \{ret} \{mc}(\{params}) {\n"
-    buf.append lo.stringview
-    emitFnBody symtab: symtab ctx: ctx op: op buf: buf
-    buf.append "}\n\n"
+    if declOnly then {
+        ld: "static \{ret} \{mc}(\{params});\n"
+        buf.append ld.stringview
+    } else {
+        lo: "static \{ret} \{mc}(\{params}) {\n"
+        buf.append lo.stringview
+        emitFnBody symtab: symtab ctx: ctx op: op buf: buf
+        buf.append "}\n\n"
+    }
     ctx.ptrVars = (List of: String)
 }
 

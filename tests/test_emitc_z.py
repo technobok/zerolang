@@ -60,6 +60,7 @@ EMITC_SMOKE: "list[str]" = [
     "constructors",
     "classes",
     "forloop",
+    "listiter",
 ]
 
 
