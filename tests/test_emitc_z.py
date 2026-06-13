@@ -39,6 +39,8 @@ EMITC_SMOKE: "list[str]" = [
     "string_transform",
     "vector",
     "records",
+    "narrowing",
+    "variants",
 ]
 
 
