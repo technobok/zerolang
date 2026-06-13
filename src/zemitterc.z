@@ -1015,7 +1015,15 @@ emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
     if btid == 0.u64 then {
         return "".string
     } else {}
-    if (symtab.reg.typetypeOf typeId: btid) == ztypes.ztypetype.RECORD then {} else {
+    bttq: symtab.reg.typetypeOf typeId: btid
+    isStructQ: false
+    if bttq == ztypes.ztypetype.RECORD then {
+        isStructQ = true
+    } else {}
+    if bttq == ztypes.ztypetype.CLASS then {
+        isStructQ = true
+    } else {}
+    if isStructQ then {} else {
         return "".string
     }
     mco: symtab.typing.childOf parentTypeId: btid name: mn.stringview
@@ -1026,6 +1034,11 @@ emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
             pnames: (List of: String)
             pids: (List of: u64)
             recFieldLists symtab: symtab tid: mco names: pnames ids: pids
+            # the default (synth) `create` carries no params -- route it to the
+            # type's ctor (field-label args), the same path bare-name uses.
+            if mn.stringview == "create" when pnames.length == 0.u64 then {
+                return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: btid name: bn.stringview)
+            } else {}
             args: "".string
             pi: 0.u64
             pn: pnames.length
@@ -1050,6 +1063,36 @@ emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
 # emitRecordCtor -- a record construction call: args reordered to field
 # order by label, emitted through the create alias.
 emitRecordCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData tid: u64 name: StringView} out String is {
+    # a user-defined `create` (non-empty params) overrides the field-wise ctor:
+    # bare-name construction routes through it, args by the create's own labels.
+    cco: symtab.typing.childOf parentTypeId: tid name: "create"
+    match (
+        cco
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.FUNCTION then {
+            cpn: (List of: String)
+            cpi: (List of: u64)
+            recFieldLists symtab: symtab tid: cco names: cpn ids: cpi
+            if cpn.length > 0.u64 then {
+                cargs: "".string
+                ci: 0.u64
+                ccn: cpn.length
+                for while ci < ccn loop {
+                    cpname: cpn.get i: ci
+                    cav: ctorArgByLabel symtab: symtab ctx: ctx call: call label: cpname.stringview
+                    if ci > 0.u64 then {
+                        cargs.append ", "
+                    } else {}
+                    cargs.append cav.stringview
+                    ci = ci + 1.u64
+                }
+                ccbn: typeNameOfReg9 symtab: symtab tid: cco
+                ccb: cnameOf tid: cco name: ccbn.stringview
+                ce: "\{ccb}(\{cargs})"
+                return ce
+            } else {}
+        } else {}
+    } case none then {}
     fnames: (List of: String)
     fids: (List of: u64)
     recFieldLists symtab: symtab tid: tid names: fnames ids: fids
@@ -1107,11 +1150,52 @@ nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     return res
 }
 
+# emitMetaCreateCall -- `meta.create field: val ...`, the enclosing type's raw
+# allocator (its field children as params). The typecheck stamps the call node
+# with that type; emit `{type}_meta_create(args)` (never `_create`, which the
+# user's own create may override -> recursion). "" when not a meta.create.
+emitMetaCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    mcb: ztypecheck.metaCreateBaseId n: call.callable
+    match (
+        mcb
+    ) case some then {
+        et: stampIdOf symtab: symtab nid: call.nodeid.u64
+        if et == 0.u64 then {
+            return "".string
+        } else {}
+        etn: typeNameOfReg9 symtab: symtab tid: et
+        fnames: (List of: String)
+        fids: (List of: u64)
+        recFieldLists symtab: symtab tid: et names: fnames ids: fids
+        args: "".string
+        fi: 0.u64
+        fn0: fnames.length
+        for while fi < fn0 loop {
+            fname: fnames.get i: fi
+            av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: fname.stringview
+            if fi > 0.u64 then {
+                args.append ", "
+            } else {}
+            args.append av.stringview
+            fi = fi + 1.u64
+        }
+        ecb: cnameOf tid: et name: etn.stringview
+        e0: "\{ecb}_meta_create(\{args})"
+        return e0
+    } case none then {
+        return "".string
+    }
+}
+
 # emitCallValue -- the C expression for a call (the dispatch chain:
 # dotted/list/typedef/data/record-ctor/type-qual/variant/user-fn).
 # Shared by emitExpr's call arm and the statement-position call leg
 # so neither clones the node (clones lose the type stamps).
 emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    mcc: emitMetaCreateCall symtab: symtab ctx: ctx call: call
+    if mcc.length > 0.u64 then {
+        return mcc
+    } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
         return dc
@@ -1139,6 +1223,9 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     cn0: atomTextOf n: call.callable
     fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
     if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
+        return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
+    } else {}
+    if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.CLASS then {
         return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
     } else {}
     tq: emitTypeQualCall symtab: symtab ctx: ctx call: call
@@ -1310,7 +1397,19 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 bstamp = bcid
             } else {}
             rtt: symtab.reg.typetypeOf typeId: bstamp
+            isRecOrCls: false
             if rtt == ztypes.ztypetype.RECORD then {
+                isRecOrCls = true
+            } else {}
+            if rtt == ztypes.ztypetype.CLASS then {
+                # user classes only -- collection monos (List/Set/Map, with a
+                # generic origin) keep their own dottedpath legs below.
+                bsoNm0: monoOriginName symtab: symtab tid: bstamp
+                if bsoNm0.length == 0.u64 then {
+                    isRecOrCls = true
+                } else {}
+            } else {}
+            if isRecOrCls then {
                 mco: symtab.typing.childOf parentTypeId: bstamp name: mn2.stringview
                 match (
                     mco
@@ -4527,6 +4626,13 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                         emitOneRecord symtab: symtab ctx: ctx tid: rid name: nm.stringview op: bm.operation buf: buf
                     } else {}
                 } else {}
+                if (isClassDef9 n: bm.operation) then {
+                    nmc: unitLabel9 o: bm.name
+                    cid9: userFnId symtab: symtab ctx: ctx name: nmc.stringview
+                    if cid9 > 0.u64 then {
+                        emitOneRecord symtab: symtab ctx: ctx tid: cid9 name: nmc.stringview op: bm.operation buf: buf
+                    } else {}
+                } else {}
                 if (isVariantDef9 n: bm.operation) then {
                     nm5: unitLabel9 o: bm.name
                     vid5: userFnId symtab: symtab ctx: ctx name: nm5.stringview
@@ -4704,6 +4810,20 @@ emitOneVariant: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Stri
     buf.append "}\n\n"
 }
 
+isClassDef9: function {n: Node} out bool is {
+    match (
+        n
+    ) case objectdef then {
+        if n.kind == zast.nodetype.CLASS then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
 isRecordDef9: function {n: Node} out bool is {
     match (
         n
@@ -4876,19 +4996,27 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
             match (
                 rto
             ) case some then {
-                rr: typeRefC symtab: symtab ctx: ctx tid: rto thisTid: 0.u64
+                rr: typeRefC symtab: symtab ctx: ctx tid: rto thisTid: thisTid9
                 if rr.length > 0.u64 then {
                     ret = rr
                 } else {}
             } case none then {}
         } case none then {}
     }
+    if ret.stringview == "void" when thisTid9 > 0.u64 then {
+        rbn0: ztypecheck.fnReturnBaseNameOf op: op
+        if rbn0.stringview == "this" then {
+            ttn: typeNameOfReg9 symtab: symtab tid: thisTid9
+            tcb: cnameOf tid: thisTid9 name: ttn.stringview
+            ret = "\{tcb}_t"
+        } else {}
+    } else {}
     if ret.stringview == "void" then {
         rbn: ztypecheck.fnReturnBaseNameOf op: op
         if rbn.length > 0.u64 then {
             rbi: userFnId symtab: symtab ctx: ctx name: rbn.stringview
             if rbi > 0.u64 then {
-                rr2: typeRefC symtab: symtab ctx: ctx tid: rbi thisTid: 0.u64
+                rr2: typeRefC symtab: symtab ctx: ctx tid: rbi thisTid: thisTid9
                 if rr2.length > 0.u64 then {
                     ret = rr2
                 } else {}

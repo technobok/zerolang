@@ -57,6 +57,7 @@ EMITC_SMOKE: "list[str]" = [
     "set_uniq",
     "maps",
     "mapitems",
+    "constructors",
 ]
 
 
