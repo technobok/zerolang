@@ -354,6 +354,34 @@ needsHas: function {ctx: Ctx name: StringView} out bool is {
     }
 }
 
+isCompareOp: function {name: StringView} out bool is {
+    if name == "==" then { return true } else {}
+    if name == "!=" then { return true } else {}
+    if name == "<" then { return true } else {}
+    if name == "<=" then { return true } else {}
+    if name == ">" then { return true } else {}
+    if name == ">=" then { return true } else {}
+    return false
+}
+
+isStringy: function {name: StringView} out bool is {
+    if name == "String" then { return true } else {}
+    if name == "StringView" then { return true } else {}
+    return false
+}
+
+# svValueForm -- a String/StringView operand as a by-value StringView C
+# expression (Strings view-convert via a compound literal).
+svValueForm: function {ctx: Ctx expr: StringView tname: StringView} out String is {
+    if tname == "String" then {
+        v1: "((\{ctx.svC}_t){ \{expr}.data, \{expr}.size })"
+        return v1
+    } else {
+        v2: expr.string
+        return v2
+    }
+}
+
 # dottedBaseAtom / dottedChildText -- the parent atom and member name of
 # a dotted path ("" when the shape is deeper than one segment).
 dottedBaseAtom: function {n: Node} out String is {
@@ -398,6 +426,8 @@ isSvSimpleNative: function {name: StringView} out bool is {
     if name == "trim" then { return true } else {}
     if name == "trimStart" then { return true } else {}
     if name == "trimEnd" then { return true } else {}
+    if name == "toLowerAscii" then { return true } else {}
+    if name == "toUpperAscii" then { return true } else {}
     return false
 }
 
@@ -435,6 +465,26 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     } else {}
     bnid: dottedBaseNodeId n: call.callable
     bt: stampNameOf symtab: symtab nid: bnid
+    if (isStringy name: bt.stringview) when mn.stringview == "compare" then {
+        # compare maps to the by-value cmp in the base fragment
+        bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
+        cargs: "".string
+        citer: call.arguments.iterate
+        for ca: citer loop {
+            match (
+                ca
+            ) case namedoperation then {
+                cae: emitExpr symtab: symtab ctx: ctx n: ca.operation
+                cat: stampNameDeep symtab: symtab n: ca.operation
+                caf: svValueForm ctx: ctx expr: cae.stringview tname: cat.stringview
+                if cargs.length == 0.u64 then {
+                    cargs.append caf.stringview
+                } else {}
+            } else {}
+        }
+        ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
+        return ce
+    } else {}
     if bt.stringview == "StringView" then {
         if (isSvSimpleNative name: mn.stringview) then {
             needsAdd ctx: ctx name: mn.stringview
@@ -508,6 +558,24 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         l: emitExpr symtab: symtab ctx: ctx n: n.lhs
         op: atomTextOf n: n.operator
         r: emitExpr symtab: symtab ctx: ctx n: n.rhs
+        if (isCompareOp name: op.stringview) then {
+            lt: stampNameDeep symtab: symtab n: n.lhs
+            if (isStringy name: lt.stringview) then {
+                rt: stampNameDeep symtab: symtab n: n.rhs
+                lf: svValueForm ctx: ctx expr: l.stringview tname: lt.stringview
+                rf: svValueForm ctx: ctx expr: r.stringview tname: rt.stringview
+                if op.stringview == "==" then {
+                    eq1: "\{ctx.svC}_eq(\{lf}, \{rf})"
+                    return eq1
+                } else {}
+                if op.stringview == "!=" then {
+                    eq2: "!\{ctx.svC}_eq(\{lf}, \{rf})"
+                    return eq2
+                } else {}
+                cm1: "(\{ctx.svC}_cmp(\{lf}, \{rf}) \{op} 0)"
+                return cm1
+            } else {}
+        } else {}
         e9: "(\{l} \{op} \{r})"
         return e9
     } case call then {
@@ -883,9 +951,18 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 return
             } else {}
             did9: emitStringBindValue symtab: symtab ctx: ctx n: n.value nm: nm ind: ind tmp: tmp buf: buf
-            if did9 then {} else {
+            if did9 then {
+                return
+            } else {}
+            sx: emitExpr symtab: symtab ctx: ctx n: n.value
+            if (sx.stringview.startsWith prefix: "/*") then {
                 lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
                 buf.append lst2.stringview
+            } else {
+                lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
+                buf.append lst3.stringview
+                nmc3: nm.string
+                tmp.frees.append nmc3
             }
             return
         } else {}
@@ -1555,6 +1632,8 @@ emitNeededNatives: function {ctx: Ctx runtimeDir: StringView buf: String.borrow}
     emitNativeIf ctx: ctx need: "trim" frag: "_Z_SV_TRIM" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "trimStart" frag: "_Z_SV_TRIM_START" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "trimEnd" frag: "_Z_SV_TRIM_END" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "toLowerAscii" frag: "_Z_SV_TO_LOWER_ASCII" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "toUpperAscii" frag: "_Z_SV_TO_UPPER_ASCII" runtimeDir: runtimeDir buf: buf
 }
 
 nativePath: function {runtimeDir: StringView frag: StringView} out String is {

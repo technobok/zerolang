@@ -35,6 +35,7 @@ EMITC_SMOKE: "list[str]" = [
     "constfold",
     "control",
     "strings",
+    "string_ordering",
 ]
 
 
