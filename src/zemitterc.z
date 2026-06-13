@@ -439,6 +439,8 @@ Ctx: class {
     methodReturns: (Map key: String value: String)
     dataElems: (Map key: String value: String)
     dataConst: (Map key: String value: String)
+    ptrVars: (List of: String)
+    aliases: (Map key: String value: String)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -451,6 +453,71 @@ userFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64
         return go
     } case none then {
         return 0.u64
+    }
+}
+
+# isPtrVar -- true when a local name is a pointer-receiver param of the current
+# class method body (so field reads emit `->` instead of `.`).
+isPtrVar: function {ctx: Ctx name: StringView} out bool is {
+    pi: 0.u64
+    pn: ctx.ptrVars.length
+    for while pi < pn loop {
+        pv: ctx.ptrVars.get i: pi
+        if pv.stringview == name then {
+            return true
+        } else {}
+        pi = pi + 1.u64
+    }
+    return false
+}
+
+# aliasResolve -- a `.take` alias's base C name, or the name itself if none.
+aliasResolve: function {ctx: Ctx name: StringView} out String is {
+    ao: ctx.aliases.get key: name.string
+    match (
+        ao
+    ) case some then {
+        return ao.string
+    } case none then {
+        return name.string
+    }
+}
+
+# takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
+# ownership-transfer alias: the binding reuses the source storage), else "".
+takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (takeAliasBase symtab: symtab n: n.expression)
+    } case statementline then {
+        return (takeAliasBase symtab: symtab n: n.statementline)
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview == "take" then {} else {
+            return "".string
+        }
+        bnid9: atomNodeId9 n: n.parent
+        bt9: stampIdOf symtab: symtab nid: bnid9
+        bo9: monoOriginName symtab: symtab tid: bt9
+        if bo9.length == 0.u64 then {} else {
+            return "".string
+        }
+        btt9: symtab.reg.typetypeOf typeId: bt9
+        isUC9: false
+        if btt9 == ztypes.ztypetype.RECORD then {
+            isUC9 = true
+        } else {}
+        if btt9 == ztypes.ztypetype.CLASS then {
+            isUC9 = true
+        } else {}
+        if isUC9 then {
+            return (atomTextOf n: n.parent)
+        } else {
+            return "".string
+        }
+    } else {
+        return "".string
     }
 }
 
@@ -1039,17 +1106,55 @@ emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
             if mn.stringview == "create" when pnames.length == 0.u64 then {
                 return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: btid name: bn.stringview)
             } else {}
-            args: "".string
-            pi: 0.u64
             pn: pnames.length
-            for while pi < pn loop {
-                pname: pnames.get i: pi
-                av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname.stringview
-                if pi > 0.u64 then {
-                    args.append ", "
-                } else {}
-                args.append av.stringview
-                pi = pi + 1.u64
+            args: "".string
+            if mn.stringview == "create" then {
+                # user create: args by the create's own param labels
+                pi: 0.u64
+                for while pi < pn loop {
+                    pname: pnames.get i: pi
+                    av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname.stringview
+                    if pi > 0.u64 then {
+                        args.append ", "
+                    } else {}
+                    args.append av.stringview
+                    pi = pi + 1.u64
+                }
+            } else {
+                # a method: positional args; a CLASS receiver passes by address
+                clsNmQ: typeNameOfReg9 symtab: symtab tid: btid
+                ai9: 0.u64
+                with aiterQ: call.arguments.iterate do for aQ: aiterQ loop {
+                    match (
+                        aQ
+                    ) case namedoperation then {
+                        avq: emitExpr symtab: symtab ctx: ctx n: aQ.operation
+                        byRef9: false
+                        if bttq == ztypes.ztypetype.CLASS when ai9 < pn then {
+                            ppid9: pids.get i: ai9
+                            pptn9: typeNameOfReg9 symtab: symtab tid: ppid9
+                            if pptn9.stringview == "this" then {
+                                byRef9 = true
+                            } else {}
+                            if pptn9.stringview == clsNmQ.stringview then {
+                                byRef9 = true
+                            } else {}
+                            if ppid9 == btid then {
+                                byRef9 = true
+                            } else {}
+                        } else {}
+                        if ai9 > 0.u64 then {
+                            args.append ", "
+                        } else {}
+                        if byRef9 then {
+                            argq9: "&\{avq}"
+                            args.append argq9.stringview
+                        } else {
+                            args.append avq.stringview
+                        }
+                        ai9 = ai9 + 1.u64
+                    } else {}
+                }
             }
             mtn3: typeNameOfReg9 symtab: symtab tid: mco
             mc3: cnameOf tid: mco name: mtn3.stringview
@@ -1304,7 +1409,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             be0: "((\{brc}_t){0})"
             return be0
         } else {}
-        ac2: av.string
+        ac2: aliasResolve ctx: ctx name: av
         return ac2
     } case dottedpath then {
         mnc0: atomTextOf n: n.child
@@ -1315,7 +1420,8 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 return se0
             } else {}
         } else {}
-        bn2: atomTextOf n: n.parent
+        bn2r: atomTextOf n: n.parent
+        bn2: aliasResolve ctx: ctx name: bn2r.stringview
         mn2: atomTextOf n: n.child
         if bn2.length > 0.u64 then {
             # typed numeric literal (3.u64): the base text is the C literal
@@ -1422,6 +1528,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         return e6
                     } else {}
                 } case none then {}
+                if (isPtrVar ctx: ctx name: bn2.stringview) then {
+                    e5p: "\{bn2}->\{mn2}"
+                    return e5p
+                } else {}
                 e5: "\{bn2}.\{mn2}"
                 return e5
             } else {}
@@ -1722,6 +1832,52 @@ interpBaseIsMapEntry: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
     }
 }
 
+# interpBaseIsOwnedStructField -- a `<inst>.field` read off a user record/class:
+# the projected String VIEWS the owner's field (freed by the owner's destructor),
+# so it appends inline -- freeing a hoisted copy would double-free the field.
+interpBaseIsOwnedStructField: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (interpBaseIsOwnedStructField symtab: symtab n: n.expression)
+    } case statementline then {
+        return (interpBaseIsOwnedStructField symtab: symtab n: n.statementline)
+    } case dottedpath then {
+        bnid: atomNodeId9 n: n.parent
+        bt: stampIdOf symtab: symtab nid: bnid
+        bo: monoOriginName symtab: symtab tid: bt
+        if bo.length == 0.u64 then {} else {
+            return false
+        }
+        btt: symtab.reg.typetypeOf typeId: bt
+        isUC: false
+        if btt == ztypes.ztypetype.RECORD then {
+            isUC = true
+        } else {}
+        if btt == ztypes.ztypetype.CLASS then {
+            isUC = true
+        } else {}
+        if isUC then {} else {
+            return false
+        }
+        cn: atomTextOf n: n.child
+        co: symtab.typing.childOf parentTypeId: bt name: cn.stringview
+        match (
+            co
+        ) case some then {
+            if (symtab.reg.typetypeOf typeId: co) == ztypes.ztypetype.FUNCTION then {
+                return false
+            } else {
+                return true
+            }
+        } case none then {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
 emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
@@ -1759,6 +1915,9 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
                 isAtomP = true
             } else {}
             if (interpBaseIsMapEntry symtab: symtab n: n) then {
+                isAtomP = true
+            } else {}
+            if (interpBaseIsOwnedStructField symtab: symtab n: n) then {
                 isAtomP = true
             } else {}
             if isAtomP then {
@@ -2117,6 +2276,15 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } case none then {}
         } else {}
         nm: n.name.stringview
+        # `x: <inst>.take` over a record/class is an ownership alias: record
+        # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
+        tabA: takeAliasBase symtab: symtab n: n.value
+        if tabA.length > 0.u64 then {
+            lalA: "\{ind}/* alias: \{nm} => \{tabA} */\n"
+            buf.append lalA.stringview
+            ctx.aliases.set key: nm.string value: tabA
+            return
+        } else {}
         ltid: stampIdOf symtab: symtab nid: n.nodeid.u64
         ltmn: monoOriginName symtab: symtab tid: ltid
         if ltmn.stringview == "List" then {
@@ -2216,6 +2384,14 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if ct.length > 0.u64 then {
             la: "\{ind}\{ct} \{nm} = \{rv};\n"
             buf.append la.stringview
+            # an owned class/record local with heap fields is destroyed at scope
+            # exit (String/collection locals returned earlier; take-aliases too).
+            if (symtab.reg.hasDestructorName typeId: ltid) then {
+                ldcb: cnameOf tid: ltid name: tn.stringview
+                ldf: "    \{ldcb}_destroy(&\{nm});\n"
+                ldfs: ldf.string
+                tmp.listFrees.append ldfs
+            } else {}
         } else {
             lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
             buf.append lb.stringview
@@ -3716,7 +3892,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -4838,6 +5014,40 @@ isRecordDef9: function {n: Node} out bool is {
     }
 }
 
+# emitStructDestructor -- a record/class destructor freeing each heap-owning
+# field: String fields via the String free, aggregate fields with a destructor
+# recursively; scalars are skipped. Emitted only when the type has a destructor.
+emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView fnames: (List of: String) fids: (List of: u64) buf: String.borrow} is {
+    rc: cnameOf tid: tid name: name
+    d0: "static void \{rc}_destroy(\{rc}_t* p);\n"
+    buf.append d0.stringview
+    d1: "static void \{rc}_destroy(\{rc}_t* p) {\n"
+    buf.append d1.stringview
+    buf.append "    if (!p) return;\n"
+    fi: 0.u64
+    fn0: fnames.length
+    for while fi < fn0 loop {
+        fname: fnames.get i: fi
+        fid: fids.get i: fi
+        ftn: typeNameOfReg9 symtab: symtab tid: fid
+        if ftn.stringview == "String" then {
+            ds: "    \{ctx.strC}_free(&p->\{fname});\n"
+            buf.append ds.stringview
+        } else {
+            frid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: ftn.stringview)
+            if frid > 0.u64 then {
+                if (symtab.reg.hasDestructorName typeId: frid) then {
+                    fcb: cnameOf tid: frid name: ftn.stringview
+                    df: "    \{fcb}_destroy(&p->\{fname});\n"
+                    buf.append df.stringview
+                } else {}
+            } else {}
+        }
+        fi = fi + 1.u64
+    }
+    buf.append "}\n\n"
+}
+
 emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView op: Node buf: String.borrow} is {
     if (isTypedefType symtab: symtab tid: tid) then {
         # typedef records are zero-overhead aliases of their base; emit
@@ -4894,6 +5104,11 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     buf.append "}\n"
     l5: "#define \{rc}_create \{rc}_meta_create\n"
     buf.append l5.stringview
+    skipEqR: false
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.CLASS then {
+        skipEqR = true
+    } else {}
+    if skipEqR then {} else {
     lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
     buf.append lq.stringview
     if fn0 == 0.u64 then {
@@ -4936,6 +5151,10 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         buf.append lr.stringview
     }
     buf.append "}\n\n"
+    }
+    if (symtab.reg.hasDestructorName typeId: tid) then {
+        emitStructDestructor symtab: symtab ctx: ctx tid: tid name: name fnames: fnames fids: fids buf: buf
+    } else {}
     emitRecordMethods symtab: symtab ctx: ctx tid: tid op: op buf: buf
 }
 
@@ -5032,6 +5251,15 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     pnames: (List of: String)
     pids: (List of: u64)
     recFieldLists symtab: symtab tid: mid names: pnames ids: pids
+    # a CLASS method takes its `this` receiver by pointer (reference semantics):
+    # the receiver param gets a `*` and its name is recorded so the body emits
+    # `c->field`. Reset for this method (names must not leak into other bodies).
+    ctx.ptrVars = (List of: String)
+    encIsClass: false
+    if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.CLASS then {
+        encIsClass = true
+    } else {}
+    clsNm9: typeNameOfReg9 symtab: symtab tid: thisTid9
     pi: 0.u64
     pn: pnames.length
     for while pi < pn loop {
@@ -5040,6 +5268,24 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
         pt: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: thisTid9
         if pt.length == 0.u64 then {
             pt = "int64_t".string
+        } else {}
+        if encIsClass then {
+            ptn9: typeNameOfReg9 symtab: symtab tid: pid
+            isRecv9: false
+            if ptn9.stringview == "this" then {
+                isRecv9 = true
+            } else {}
+            if ptn9.stringview == clsNm9.stringview then {
+                isRecv9 = true
+            } else {}
+            if pid == thisTid9 then {
+                isRecv9 = true
+            } else {}
+            if isRecv9 then {
+                pt = "\{pt}*"
+                pnc9: pname.string
+                ctx.ptrVars.append pnc9
+            } else {}
         } else {}
         if pi > 0.u64 then {
             params.append ", "
@@ -5058,6 +5304,7 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     buf.append lo.stringview
     emitFnBody symtab: symtab ctx: ctx op: op buf: buf
     buf.append "}\n\n"
+    ctx.ptrVars = (List of: String)
 }
 
 # emitMonoNative -- a native fragment substituting z_StringView and (when
