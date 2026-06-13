@@ -1908,6 +1908,9 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
         emitStmt symtab: symtab ctx: ctx n: n.body ind: ind tmp: tmp buf: buf
     } case forexpr then {
+        if (emitIntRangeFor symtab: symtab ctx: ctx m: n ind: ind tmp: tmp buf: buf) then {
+            return
+        } else {}
         cond: "".string
         kiter: n.conditions.iterate
         for k: kiter loop {
@@ -2119,6 +2122,102 @@ emitIfBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: String
         return true
     } else {
         return false
+    }
+}
+
+# emitIntRangeFor -- `for x: N.iterate loop` / `for x: (N.iterate from: F)`:
+# a counted C for-loop `for (T x = F; x < N; x++)`. Returns false when the
+# header is not a single integer-range binding.
+emitIntRangeFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
+    if m.conditions.length != 1.u64 then {
+        return false
+    } else {}
+    c0: m.conditions.get i: 0.u64
+    match (
+        c0
+    ) case namedoperation then {
+        lbl: unitLabel9 o: c0.name
+        if lbl.length == 0.u64 then {
+            return false
+        } else {}
+        bound: rangeBoundExpr symtab: symtab ctx: ctx n: c0.operation
+        if bound.length == 0.u64 then {
+            return false
+        } else {}
+        fromx: rangeFromExpr symtab: symtab ctx: ctx n: c0.operation
+        lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
+        buf.append lh.stringview
+        ind2: "\{ind}    "
+        emitBodyOpt symtab: symtab ctx: ctx o: m.body ind: ind2.stringview tmp: tmp buf: buf
+        lc: "\{ind}}\n"
+        buf.append lc.stringview
+        return true
+    } else {
+        return false
+    }
+}
+
+# rangeBoundExpr -- the upper bound of an `N.iterate` range (the dotted
+# receiver N); "" when the operation is not an iterate call.
+rangeBoundExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (rangeBoundExpr symtab: symtab ctx: ctx n: n.expression)
+    } case call then {
+        mn: dottedChildText n: n.callable
+        if mn.stringview == "iterate" then {
+            return (rangeReceiver symtab: symtab ctx: ctx n: n.callable)
+        } else {}
+        return "".string
+    } case dottedpath then {
+        cmn: atomTextOf n: n.child
+        if cmn.stringview == "iterate" then {
+            bt: stampIdOf symtab: symtab nid: (atomNodeId9 n: n.parent)
+            btn: typeNameOfReg9 symtab: symtab tid: bt
+            if (cTypeOf name: btn.stringview).length > 0.u64 then {
+                return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+            } else {}
+        } else {}
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# rangeReceiver -- the C expression for the receiver of a `.iterate`
+# dotted callable.
+rangeReceiver: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+# rangeFromExpr -- the `from:` argument of an iterate range, or "0".
+rangeFromExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (rangeFromExpr symtab: symtab ctx: ctx n: n.expression)
+    } case call then {
+        aiter: n.arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                an: unitLabel9 o: a.name
+                if an.stringview == "from" then {
+                    return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+                } else {}
+            } else {}
+        }
+        return "0".string
+    } else {
+        return "0".string
     }
 }
 
