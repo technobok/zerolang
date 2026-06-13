@@ -3873,19 +3873,18 @@ payloadDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 arm: St
         pn: typeNameOfReg9 symtab: symtab tid: co
         rid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: pn.stringview)
         if rid > 0.u64 then {
-            rt: symtab.reg.typeById.get key: rid
-            match (
-                rt
-            ) case some then {
-                dno: rt.destructorName
-                match (
-                    dno
-                ) case some then {
-                    dnv: dno.stringview
-                    dnc: dnv.string
-                    return dnc
-                } case none then {}
-            } case none then {}
+            # Build the destructor cname the way the emitter NAMES its definitions
+            # (cnameOf + suffix), not from the stored destructorName String -- the
+            # latter is a plain name (`String_destroy`) the port never substitutes
+            # to the id-based form, and binding it off the borrowed registry value
+            # would move out of the borrow (scope-exit free -> UAF). String, the
+            # only native `_free` type, always owns its heap and is freed here.
+            if pn.stringview == "String" then {
+                return "\{ctx.strC}_free".string
+            } else if (symtab.reg.hasDestructorName typeId: rid) then {
+                cb: cnameOf tid: rid name: pn.stringview
+                return "\{cb}_destroy".string
+            } else {}
         } else {}
     } case none then {}
     return "".string
