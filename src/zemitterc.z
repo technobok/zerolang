@@ -1372,6 +1372,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if mcc.length > 0.u64 then {
         return mcc
     } else {}
+    pdc: emitProtocolDispatch symtab: symtab ctx: ctx call: call
+    if pdc.length > 0.u64 then {
+        return pdc
+    } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
         return dc
@@ -1391,6 +1395,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: call
     if tdq.length > 0.u64 then {
         return tdq
+    } else {}
+    pcc: emitProtocolCreateCall symtab: symtab ctx: ctx call: call
+    if pcc.length > 0.u64 then {
+        return pcc
     } else {}
     ddq: emitDataIndexCall symtab: symtab ctx: ctx call: call
     if ddq.length > 0.u64 then {
@@ -1595,6 +1603,17 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 match (
                     mco
                 ) case some then {
+                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.PROTOCOL then {
+                        # borrowed conformance projection: f.myreader ->
+                        # {Impl}_{label}_create(&f) (a borrowed fat pointer).
+                        ib9: cnameOf tid: bstamp name: bsn0.stringview
+                        if (isPtrVar ctx: ctx name: bn2.stringview) then {
+                            pj9: "\{ib9}_\{mn2}_create(\{bn2})"
+                            return pj9
+                        } else {}
+                        pj9b: "\{ib9}_\{mn2}_create(&\{bn2})"
+                        return pj9b
+                    } else {}
                     if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION then {
                         # member auto-call: the method takes the value
                         mtn2: typeNameOfReg9 symtab: symtab tid: mco
@@ -5184,6 +5203,372 @@ emitDefMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx bm: Node declOnly: 
     } else {}
 }
 
+# isProtocolDef9 -- an objectdef whose kind is PROTOCOL.
+isProtocolDef9: function {n: Node} out bool is {
+    match (
+        n
+    ) case objectdef then {
+        if n.kind == zast.nodetype.PROTOCOL then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+# protoChildMethods -- a protocol's spec-method children (FUNCTION children,
+# excluding the synth create/borrow), names + ids in registration order.
+protoChildMethods: function {symtab: zenv.ZSymbolTable tid: u64 names: (List of: String) ids: (List of: u64)} is {
+    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == tid then {
+            cto: symtab.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                if (symtab.reg.typetypeOf typeId: cto) == ztypes.ztypetype.FUNCTION then {
+                    cn0: tc.childName.copy
+                    isSynth: false
+                    if cn0.stringview == "create" then {
+                        isSynth = true
+                    } else {}
+                    if cn0.stringview == "borrow" then {
+                        isSynth = true
+                    } else {}
+                    if isSynth then {} else {
+                        names.append cn0
+                        ids.append cto
+                    }
+                } else {}
+            } case none then {}
+        } else {}
+    }
+}
+
+# methodRetCtype -- a method's C return type via the registry returnTypeId
+# (scalars/records/classes resolve through typeRefC); "void" when unset.
+methodRetCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid: u64} out String is {
+    mro: ztypecheck.methodReturnOf st: symtab mid: mid
+    match (
+        mro
+    ) case some then {
+        rr: typeRefC symtab: symtab ctx: ctx tid: mro thisTid: thisTid
+        if rr.length > 0.u64 then {
+            return rr
+        } else {}
+    } case none then {}
+    return "void".string
+}
+
+# emitOneProtocol -- the protocol value representation: vtable typedef (one
+# function pointer per spec method, `this` dropped for a leading void*),
+# the fat-pointer struct {data, vtable, destroy}, and the destroy helper.
+emitOneProtocol: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
+    pbase: cnameOf tid: tid name: name
+    mnames: (List of: String)
+    mids: (List of: u64)
+    protoChildMethods symtab: symtab tid: tid names: mnames ids: mids
+    vfuncs: "".string
+    mi: 0.u64
+    mn: mnames.length
+    for while mi < mn loop {
+        mname: mnames.get i: mi
+        smid: mids.get i: mi
+        ret: methodRetCtype symtab: symtab ctx: ctx mid: smid thisTid: tid
+        vparams: "void*".string
+        pnames: (List of: String)
+        pids: (List of: u64)
+        recFieldLists symtab: symtab tid: smid names: pnames ids: pids
+        pi: 0.u64
+        pn: pnames.length
+        for while pi < pn loop {
+            pnm: pnames.get i: pi
+            pid: pids.get i: pi
+            ptn: typeNameOfReg9 symtab: symtab tid: pid
+            isThis: false
+            if pnm.stringview == "this" then {
+                isThis = true
+            } else {}
+            if ptn.stringview == "this" then {
+                isThis = true
+            } else {}
+            if ptn.stringview == name then {
+                isThis = true
+            } else {}
+            if pid == tid then {
+                isThis = true
+            } else {}
+            if isThis then {} else {
+                pct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: tid
+                if pct.length == 0.u64 then {
+                    pct = "int64_t".string
+                } else {}
+                vparams.append ", "
+                vparams.append pct.stringview
+            }
+            pi = pi + 1.u64
+        }
+        vline: "    \{ret} (*\{mname})(\{vparams});\n"
+        vfuncs.append vline.stringview
+        mi = mi + 1.u64
+    }
+    l0: "typedef struct {\n\{vfuncs}} \{pbase}_vtable_t;\n\n"
+    buf.append l0.stringview
+    l1: "typedef struct {\n    void* data;\n    \{pbase}_vtable_t* vtable;\n    void (*destroy)(void*);\n} \{pbase}_t;\n\n"
+    buf.append l1.stringview
+    l2: "static void \{pbase}_destroy(\{pbase}_t* proto) {\n    if (!proto) return;\n    if (proto->destroy) proto->destroy(proto->data);\n    proto->destroy = NULL;\n}\n\n"
+    buf.append l2.stringview
+}
+
+# emitProtocolImpl -- the per-(impl,label) conformance helpers: one wrapper per
+# spec method (casts void* -> impl, calls the impl method), the static vtable
+# instance, the borrowed create (data=val, no destroy), and the owned
+# create/destroy (heap-box the value, free + impl-destroy on drop).
+emitProtocolImpl: function {symtab: zenv.ZSymbolTable ctx: Ctx implTid: u64 implName: StringView protoTid: u64 protoName: StringView label: StringView buf: String.borrow} is {
+    omn: monoOriginName symtab: symtab tid: implTid
+    if omn.length == 0.u64 then {} else {
+        return
+    }
+    implBase: cnameOf tid: implTid name: implName
+    implCtype: "\{implBase}_t"
+    protoBase: cnameOf tid: protoTid name: protoName
+    protoCtype: "\{protoBase}_t"
+    vtableCtype: "\{protoBase}_vtable_t"
+    wbase: "\{implBase}_\{label}"
+    implIsClass: false
+    if (symtab.reg.typetypeOf typeId: implTid) == ztypes.ztypetype.CLASS then {
+        implIsClass = true
+    } else {}
+    mnames: (List of: String)
+    mids: (List of: u64)
+    protoChildMethods symtab: symtab tid: protoTid names: mnames ids: mids
+    mi: 0.u64
+    mn: mnames.length
+    for while mi < mn loop {
+        mname: mnames.get i: mi
+        smid: mids.get i: mi
+        ret: methodRetCtype symtab: symtab ctx: ctx mid: smid thisTid: protoTid
+        wparams: "void* _data".string
+        cargs: "_self".string
+        if implIsClass then {} else {
+            cargs = "(*_self)".string
+        }
+        pnames: (List of: String)
+        pids: (List of: u64)
+        recFieldLists symtab: symtab tid: smid names: pnames ids: pids
+        pi: 0.u64
+        pn: pnames.length
+        for while pi < pn loop {
+            pnm: pnames.get i: pi
+            pid: pids.get i: pi
+            ptn: typeNameOfReg9 symtab: symtab tid: pid
+            isThis: false
+            if pnm.stringview == "this" then {
+                isThis = true
+            } else {}
+            if ptn.stringview == "this" then {
+                isThis = true
+            } else {}
+            if ptn.stringview == protoName then {
+                isThis = true
+            } else {}
+            if pid == protoTid then {
+                isThis = true
+            } else {}
+            if isThis then {} else {
+                pct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: protoTid
+                if pct.length == 0.u64 then {
+                    pct = "int64_t".string
+                } else {}
+                wparams.append ", "
+                wparams.append pct.stringview
+                wparams.append " "
+                wparams.append pnm.stringview
+                cargs.append ", "
+                cargs.append pnm.stringview
+            }
+            pi = pi + 1.u64
+        }
+        implMid: 0.u64
+        imo: symtab.typing.childOf parentTypeId: implTid name: mname.stringview
+        match (
+            imo
+        ) case some then {
+            implMid = imo
+        } case none then {}
+        implMtn: typeNameOfReg9 symtab: symtab tid: implMid
+        implMc: cnameOf tid: implMid name: implMtn.stringview
+        retkw: "return ".string
+        if ret.stringview == "void" then {
+            retkw = "".string
+        } else {}
+        w0: "static \{ret} \{wbase}_\{mname}_wrapper(\{wparams}) {\n"
+        buf.append w0.stringview
+        w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
+        buf.append w1.stringview
+        w2: "    \{retkw}\{implMc}(\{cargs});\n"
+        buf.append w2.stringview
+        buf.append "}\n\n"
+        mi = mi + 1.u64
+    }
+    vi0: "static \{vtableCtype} \{wbase}_vtable = {\n"
+    buf.append vi0.stringview
+    mj: 0.u64
+    for while mj < mn loop {
+        mname2: mnames.get i: mj
+        vrow: "    .\{mname2} = \{wbase}_\{mname2}_wrapper,\n"
+        buf.append vrow.stringview
+        mj = mj + 1.u64
+    }
+    buf.append "};\n\n"
+    bc0: "static \{protoCtype} \{wbase}_create(\{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    proto.data = val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
+    buf.append bc0.stringview
+    od0: "static void \{wbase}_owned_destroy(void* p) {\n"
+    buf.append od0.stringview
+    if (symtab.reg.hasDestructorName typeId: implTid) then {
+        od1: "    \{implBase}_destroy((\{implCtype}*)p);\n"
+        buf.append od1.stringview
+    } else {}
+    buf.append "    free(p);\n}\n\n"
+    oc0: "static \{protoCtype} \{wbase}_create_owned(\{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    \{implCtype}* boxed = (\{implCtype}*)z_xmalloc(sizeof(\{implCtype}));\n    *boxed = *val;\n    proto.data = boxed;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = \{wbase}_owned_destroy;\n    return proto;\n}\n\n"
+    buf.append oc0.stringview
+}
+
+# emitProtocolImplsForType -- emit conformance helpers for every PROTOCOL the
+# given impl type satisfies (facet conformances, e.g. :Text, get no vtable).
+emitProtocolImplsForType: function {symtab: zenv.ZSymbolTable ctx: Ctx implTid: u64 implName: StringView buf: String.borrow} is {
+    ptids: (List of: u64)
+    plabels: (List of: String)
+    with citer: symtab.typing.conformance.iterate do for row: citer loop {
+        if row.implTypeId == implTid then {
+            ptids.append row.specTypeId
+            plabels.append row.label.copy
+        } else {}
+    }
+    pi: 0.u64
+    pn: ptids.length
+    for while pi < pn loop {
+        ptid: ptids.get i: pi
+        plabel: plabels.get i: pi
+        if (symtab.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.PROTOCOL then {
+            pname: typeNameOfReg9 symtab: symtab tid: ptid
+            emitProtocolImpl symtab: symtab ctx: ctx implTid: implTid implName: implName protoTid: ptid protoName: pname.stringview label: plabel.stringview buf: buf
+        } else {}
+        pi = pi + 1.u64
+    }
+}
+
+# conformanceLabelFor -- the as-block label under which implTid satisfies
+# protoTid (e.g. "myreader"); "" when not found.
+conformanceLabelFor: function {symtab: zenv.ZSymbolTable implTid: u64 protoTid: u64} out String is {
+    res: "".string
+    with citer: symtab.typing.conformance.iterate do for row: citer loop {
+        if row.implTypeId == implTid when row.specTypeId == protoTid then {
+            if res.length == 0.u64 then {
+                res.append row.label.stringview
+            } else {}
+        } else {}
+    }
+    return res
+}
+
+# emitProtocolDispatch -- a method call on a protocol-typed receiver routes
+# through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
+emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    if mn.stringview == "create" then {
+        return "".string
+    } else {}
+    if mn.stringview == "borrow" then {
+        return "".string
+    } else {}
+    bnid: dottedBaseNodeId n: call.callable
+    baseTid: stampIdOf symtab: symtab nid: bnid
+    if (symtab.reg.typetypeOf typeId: baseTid) == ztypes.ztypetype.PROTOCOL then {} else {
+        return "".string
+    }
+    recv: aliasResolve ctx: ctx name: bn.stringview
+    acc: ".".string
+    if (isPtrVar ctx: ctx name: recv.stringview) then {
+        acc = "->".string
+    } else {}
+    dargs: "\{recv}\{acc}data".string
+    with aiter: call.arguments.iterate do for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            av: emitExpr symtab: symtab ctx: ctx n: a.operation
+            dargs.append ", "
+            dargs.append av.stringview
+        } else {}
+    }
+    de: "\{recv}\{acc}vtable->\{mn}(\{dargs})"
+    return de
+}
+
+# emitProtocolCreateCall -- `Reader.create from: g.take` (owned, heap-box +
+# source invalidation) / `Provider.borrow from: m.lock` (borrowed, shares the
+# source). Both route to the impl's conformance helper for the protocol.
+emitProtocolCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    isCreate: false
+    if mn.stringview == "create" then {
+        isCreate = true
+    } else {}
+    if mn.stringview == "borrow" then {
+        isCreate = true
+    } else {}
+    if isCreate then {} else {
+        return "".string
+    }
+    protoTid: resolveTypeIdByName symtab: symtab ctx: ctx name: bn.stringview
+    if (symtab.reg.typetypeOf typeId: protoTid) == ztypes.ztypetype.PROTOCOL then {} else {
+        return "".string
+    }
+    suffix: "create_owned".string
+    if mn.stringview == "borrow" then {
+        suffix = "create".string
+    } else {}
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == "from" then {
+                fromBase: takeAliasBase symtab: symtab n: a.operation
+                if fromBase.length == 0.u64 then {
+                    fromBase = (atomTextOf n: a.operation)
+                } else {}
+                fdn: stampNameDeep symtab: symtab n: a.operation
+                fromTid: resolveTypeIdByName symtab: symtab ctx: ctx name: fdn.stringview
+                if fromTid == 0.u64 then {
+                    return "".string
+                } else {}
+                implName: typeNameOfReg9 symtab: symtab tid: fromTid
+                implBase: cnameOf tid: fromTid name: implName.stringview
+                label: conformanceLabelFor symtab: symtab implTid: fromTid protoTid: protoTid
+                if label.length == 0.u64 then {
+                    return "".string
+                } else {}
+                valVar: aliasResolve ctx: ctx name: fromBase.stringview
+                ce: "\{implBase}_\{label}_\{suffix}(&\{valVar})"
+                return ce
+            } else {}
+        } else {}
+    }
+    return "".string
+}
+
 # emitRecordDefsIn -- three passes so cross-class references resolve: all structs
 # (+ variants + data blocks), then all method forward decls, then all method
 # bodies (a method may return/construct a class defined later in the unit).
@@ -5191,6 +5576,19 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
     match (
         mainOp
     ) case unitdef then {
+        with biterP: mainOp.body.iterate do for bp: biterP loop {
+            match (
+                bp
+            ) case namedoperation then {
+                if (isProtocolDef9 n: bp.operation) then {
+                    nmp: unitLabel9 o: bp.name
+                    pid7: userFnId symtab: symtab ctx: ctx name: nmp.stringview
+                    if pid7 > 0.u64 then {
+                        emitOneProtocol symtab: symtab ctx: ctx tid: pid7 name: nmp.stringview buf: buf
+                    } else {}
+                } else {}
+            } else {}
+        }
         with biterA: mainOp.body.iterate do for bm: biterA loop {
             match (
                 bm
@@ -5222,6 +5620,26 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
         }
         with biterB: mainOp.body.iterate do for bmd: biterB loop {
             emitDefMethods symtab: symtab ctx: ctx bm: bmd declOnly: true buf: buf
+        }
+        with biterI: mainOp.body.iterate do for bi: biterI loop {
+            match (
+                bi
+            ) case namedoperation then {
+                isImpl7: false
+                if (isClassDef9 n: bi.operation) then {
+                    isImpl7 = true
+                } else {}
+                if (isRecordDef9 n: bi.operation) then {
+                    isImpl7 = true
+                } else {}
+                if isImpl7 then {
+                    nmi7: unitLabel9 o: bi.name
+                    iid7: userFnId symtab: symtab ctx: ctx name: nmi7.stringview
+                    if iid7 > 0.u64 then {
+                        emitProtocolImplsForType symtab: symtab ctx: ctx implTid: iid7 implName: nmi7.stringview buf: buf
+                    } else {}
+                } else {}
+            } else {}
         }
         with biterC: mainOp.body.iterate do for bmb: biterC loop {
             emitDefMethods symtab: symtab ctx: ctx bm: bmb declOnly: false buf: buf

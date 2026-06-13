@@ -63,6 +63,8 @@ EMITC_SMOKE: "list[str]" = [
     "listiter",
     "class_text_protocol",
     "text_protocol",
+    "protocols",
+    "owned_protocol",
 ]
 
 
