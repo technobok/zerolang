@@ -2025,27 +2025,46 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
     }
 }
 
+# resolveTypeIdByName -- a type id for a name: main-unit, then mono table,
+# then the cross-unit lookup. 0 when unresolved.
+resolveTypeIdByName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64 is {
+    f: userFnId symtab: symtab ctx: ctx name: name
+    if f > 0.u64 then {
+        return f
+    } else {}
+    mo: symtab.typing.monoByName.get key: name.string
+    match (
+        mo
+    ) case some then {
+        return mo
+    } case none then {}
+    return (optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: name))
+}
+
 # emitMatchStmt -- a variant-subject match as a tag switch over a temp;
 # payload arms shadow the subject name with the payload value.
 emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
     sx: emitExpr symtab: symtab ctx: ctx n: m.subject
     stn: stampNameDeep symtab: symtab n: m.subject
-    vtid: userFnId symtab: symtab ctx: ctx name: stn.stringview
+    vtid: resolveTypeIdByName symtab: symtab ctx: ctx name: stn.stringview
     isVar: false
+    isUni: false
     if vtid > 0.u64 then {
-        if (symtab.reg.typetypeOf typeId: vtid) == ztypes.ztypetype.VARIANT then {
-            isVar = true
-        } else {}
+        vtt0: symtab.reg.typetypeOf typeId: vtid
+        if vtt0 == ztypes.ztypetype.VARIANT then { isVar = true } else {}
+        if vtt0 == ztypes.ztypetype.UNION then { isUni = true } else {}
     } else {}
     if isVar then {} else {
-        sct: cTypeOf name: stn.stringview
-        if sct.length > 0.u64 then {
-            emitScalarMatch symtab: symtab ctx: ctx m: m subj: sx.stringview assignTo: assignTo ind: ind tmp: tmp buf: buf
+        if isUni then {} else {
+            sct: cTypeOf name: stn.stringview
+            if sct.length > 0.u64 then {
+                emitScalarMatch symtab: symtab ctx: ctx m: m subj: sx.stringview assignTo: assignTo ind: ind tmp: tmp buf: buf
+                return
+            } else {}
+            lu0: "\{ind}/* zemitterc: unhandled match subject type \{stn} */\n"
+            buf.append lu0.stringview
             return
-        } else {}
-        lu0: "\{ind}/* zemitterc: unhandled match subject type \{stn} */\n"
-        buf.append lu0.stringview
-        return
+        }
     }
     vn: typeNameOfReg9 symtab: symtab tid: vtid
     vc: cnameOf tid: vtid name: vn.stringview
@@ -2058,7 +2077,7 @@ emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData ass
     ind2: "\{ind}    "
     citer: m.clauses.iterate
     for c: citer loop {
-        emitMatchClause symtab: symtab ctx: ctx c: c vtid: vtid mN: mN sname: sname.stringview assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
+        emitMatchClause symtab: symtab ctx: ctx c: c vtid: vtid isUni: isUni mN: mN sname: sname.stringview assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
     }
     emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
     l9: "\{ind}}\n"
@@ -2120,7 +2139,7 @@ emitScalarClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node assignTo:
     } else {}
 }
 
-emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 mN: u64 sname: StringView assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 isUni: bool mN: u64 sname: StringView assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         c
     ) case caseclause then {
@@ -2131,8 +2150,13 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
         pc: armPayloadC symtab: symtab ctx: ctx tid: vtid arm: arm
         ind3: "\{ind}    "
         if pc.length > 0.u64 when sname.length > 0.u64 then {
-            l3: "\{ind}    \{pc} \{sname} = _m\{mN}.data.\{arm};\n"
-            buf.append l3.stringview
+            if isUni then {
+                l3u: "\{ind}    \{pc} \{sname} = *(\{pc}*)_m\{mN}.data;\n"
+                buf.append l3u.stringview
+            } else {
+                l3: "\{ind}    \{pc} \{sname} = _m\{mN}.data.\{arm};\n"
+                buf.append l3.stringview
+            }
             l4: "\{ind}    (void)\{sname};\n"
             buf.append l4.stringview
         } else {}

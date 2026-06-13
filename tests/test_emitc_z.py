@@ -52,6 +52,8 @@ EMITC_SMOKE: "list[str]" = [
     "listview",
     "string_codepoints",
     "string_query",
+    "string_slice",
+    "string_parse",
 ]
 
 
