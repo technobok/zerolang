@@ -1376,6 +1376,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if pdc.length > 0.u64 then {
         return pdc
     } else {}
+    ioc: emitIoCall symtab: symtab ctx: ctx call: call
+    if ioc.length > 0.u64 then {
+        return ioc
+    } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
         return dc
@@ -4309,6 +4313,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "\n"
     emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitNeededNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitRuntimeIo symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
     buf.append fnsBuf.stringview
     buf.append "int main(int argc, char* argv[]) {\n"
@@ -5074,8 +5079,159 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
 
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
+# ioCanonCname -- the id-based cname for an io canonical stem (the part after
+# `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via monoByName,
+# else a named system type (IoError/File/filestat/Reader/...) by registry name.
+# "" when the type is not in the (demand-driven) registry for this program.
+ioCanonCname: function {symtab: zenv.ZSymbolTable ctx: Ctx canon: StringView} out String is {
+    mo: symtab.typing.monoByName.get key: canon.string
+    match (
+        mo
+    ) case some then {
+        return (cnameOf tid: mo name: canon)
+    } case none then {}
+    last: symtab.reg.nextTypeId
+    found: 0.u64
+    ti: 1.u64
+    for while ti < last loop {
+        if found == 0.u64 then {
+            if (definedInNonMain symtab: symtab ctx: ctx tid: ti) then {
+                tn: typeNameOfReg9 symtab: symtab tid: ti
+                if tn.stringview == canon then {
+                    found = ti
+                } else {}
+            } else {}
+        } else {}
+        ti = ti + 1.u64
+    }
+    if found > 0.u64 then {
+        return (cnameOf tid: found name: canon)
+    } else {}
+    return "".string
+}
+
+# loadIoFragment -- read an io runtime `.inc` and substitute the canonical
+# names it references (`z_<canon>` -> the typecheck cname) plus StringView/
+# String. Tags (Z_IOERROR_TAG_*) are name-based and already match. Unregistered
+# canons resolve to "" and are skipped. StringView before String (prefix).
+loadIoFragment: function {symtab: zenv.ZSymbolTable ctx: Ctx path: StringView} out String is {
+    rd: io.readText path: path
+    match (
+        rd
+    ) case ok then {
+        cur: substituteAll text: rd needle: "z_StringView" repl: ctx.svC.stringview
+        canons: (List of: String)
+        canons.append "Result_List_String_IoError".string
+        canons.append "Result_filestat_IoError".string
+        canons.append "Result_String_IoError".string
+        canons.append "Result_File_IoError".string
+        canons.append "Result_null_IoError".string
+        canons.append "Result_u64_IoError".string
+        canons.append "Option_String".string
+        canons.append "ListView_u8".string
+        canons.append "List_String".string
+        canons.append "List_u8".string
+        canons.append "BufWriter".string
+        canons.append "BufReader".string
+        canons.append "TextWriter".string
+        canons.append "TextReader".string
+        canons.append "IoError".string
+        canons.append "filestat".string
+        canons.append "openmode".string
+        canons.append "seekorigin".string
+        canons.append "filekind".string
+        canons.append "Reader".string
+        canons.append "Writer".string
+        canons.append "Closer".string
+        canons.append "Seeker".string
+        canons.append "File".string
+        ci: 0.u64
+        cn: canons.length
+        for while ci < cn loop {
+            canon: canons.get i: ci
+            cc: ioCanonCname symtab: symtab ctx: ctx canon: canon.stringview
+            if cc.length > 0.u64 then {
+                needle: "z_\{canon}".string
+                cur = substituteAll text: cur needle: needle.stringview repl: cc.stringview
+            } else {}
+            ci = ci + 1.u64
+        }
+        cur = substituteAll text: cur needle: "z_String" repl: ctx.strC.stringview
+        return cur
+    } case err then {
+        return "/* zemitterc: missing io fragment \{path} */\n".string
+    }
+}
+
+# ioFragIf -- emit an io runtime fragment when its need flag is set.
+ioFragIf: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView need: StringView frag: StringView buf: String.borrow} is {
+    if (needsHas ctx: ctx name: need) then {
+        p9: nativePath runtimeDir: runtimeDir frag: frag
+        f9: loadIoFragment symtab: symtab ctx: ctx path: p9.stringview
+        buf.append f9.stringview
+        buf.append "\n"
+    } else {}
+}
+
+# emitRuntimeIo -- the io runtime bodies (need-gated, dependency-ordered). The
+# universal helpers (z_sv_to_cstr inline, errno-map) emit whenever any io call
+# is present; the rest gate on their specific need.
+emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    if (needsHas ctx: ctx name: "io") then {} else {
+        return
+    }
+    csc: "static char* z_sv_to_cstr(\{ctx.svC}_t v) {\n    char* buf = (char*)z_xmalloc(v.length + 1);\n    if (v.length > 0) memcpy(buf, v.data, v.length);\n    buf[v.length] = '\\0';\n    return buf;\n}\n\n"
+    buf.append csc.stringview
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io" frag: "_Z_IO_ERRNO_MAP" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_eprintln" frag: "_Z_IO_EPRINTLN" buf: buf
+    needWC: needsHas ctx: ctx name: "io_writeText"
+    if (needsHas ctx: ctx name: "io_appendText") then {
+        needWC = true
+    } else {}
+    if needWC then {
+        p8: nativePath runtimeDir: runtimeDir frag: "_Z_IO_WRITE_COMMON"
+        f8: loadIoFragment symtab: symtab ctx: ctx path: p8.stringview
+        buf.append f8.stringview
+        buf.append "\n"
+    } else {}
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_readText" frag: "_Z_IO_READ_TEXT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_writeText" frag: "_Z_IO_WRITE_TEXT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_appendText" frag: "_Z_IO_APPEND_TEXT" buf: buf
+}
+
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     last: symtab.reg.nextTypeId
+    # reachable non-mono system UNIONs (IoError) -- the error payload of the
+    # Result monos; emit before them so the mono destructors can call IoError's.
+    tsu: 0.u64
+    for while tsu < last loop {
+        if (symtab.reg.typetypeOf typeId: tsu) == ztypes.ztypetype.UNION then {
+            iuo: monoOriginName symtab: symtab tid: tsu
+            iugen: isGenericType symtab: symtab tid: tsu
+            if iuo.length == 0.u64 when iugen == false then {
+                iduo: symtab.typing.definedInUnit.get key: tsu
+                isIoUnit: false
+                match (
+                    iduo
+                ) case some then {
+                    if iduo.stringview == "io" then {
+                        isIoUnit = true
+                    } else {}
+                    if iduo.stringview == "os" then {
+                        isIoUnit = true
+                    } else {}
+                    if iduo.stringview == "cli" then {
+                        isIoUnit = true
+                    } else {}
+                } case none then {}
+                if isIoUnit then {
+                    iun: typeNameOfReg9 symtab: symtab tid: tsu
+                    emitUnionMono symtab: symtab ctx: ctx tid: tsu name: iun.stringview buf: buf
+                } else {}
+            } else {}
+        } else {}
+        tsu = tsu + 1.u64
+    }
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: 0.u64
@@ -5112,7 +5268,14 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tiu: 0.u64
     for while tiu < last loop {
         uonm: monoOriginName symtab: symtab tid: tiu
+        isUM: false
         if uonm.stringview == "Option" then {
+            isUM = true
+        } else {}
+        if uonm.stringview == "Result" then {
+            isUM = true
+        } else {}
+        if isUM then {
             uvn: typeNameOfReg9 symtab: symtab tid: tiu
             emitUnionMono symtab: symtab ctx: ctx tid: tiu name: uvn.stringview buf: buf
         } else {}
@@ -5483,6 +5646,53 @@ conformanceLabelFor: function {symtab: zenv.ZSymbolTable implTid: u64 protoTid: 
 
 # emitProtocolDispatch -- a method call on a protocol-typed receiver routes
 # through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
+# emitIoCall -- a free io.* native call (io.readText/writeText/appendText/
+# eprintln/open/exists/mkdir/.../stat/listDir): `z_io_<name>(args...)` in the
+# native's parameter order, setting the per-call need so emitRuntimeIo emits
+# the body. Returns "" for any non-io callee.
+emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.stringview == "io" then {} else {
+        return "".string
+    }
+    mn: dottedChildText n: call.callable
+    fname: "".string
+    if mn.stringview == "readText" then {
+        fname = "z_io_readText".string
+    } else {}
+    if mn.stringview == "writeText" then {
+        fname = "z_io_writeText".string
+    } else {}
+    if mn.stringview == "appendText" then {
+        fname = "z_io_appendText".string
+    } else {}
+    if mn.stringview == "eprintln" then {
+        fname = "z_io_eprintln".string
+    } else {}
+    if fname.length == 0.u64 then {
+        return "".string
+    } else {}
+    needsAdd ctx: ctx name: "io"
+    iname: "io_\{mn}".string
+    needsAdd ctx: ctx name: iname.stringview
+    args: "".string
+    first: true
+    with aiter: call.arguments.iterate do for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            av: emitExpr symtab: symtab ctx: ctx n: a.operation
+            if first then {
+                first = false
+            } else {
+                args.append ", "
+            }
+            args.append av.stringview
+        } else {}
+    }
+    return "\{fname}(\{args})"
+}
+
 emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     if bn.length == 0.u64 then {
