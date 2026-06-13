@@ -71,6 +71,9 @@ EMITC_SMOKE: "list[str]" = [
     "io_open",
     "io_readwrite",
     "io_seek",
+    "io_protocol_closer",
+    "io_protocol_rw",
+    "io_stdstreams",
 ]
 
 
