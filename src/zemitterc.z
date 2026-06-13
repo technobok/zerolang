@@ -737,6 +737,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         ac2: av.string
         return ac2
     } case dottedpath then {
+        mnc0: atomTextOf n: n.child
+        if mnc0.stringview == "string" then {
+            scl: bindLitIndex symtab: symtab ctx: ctx n: n.parent
+            if scl > 0.u64 then {
+                se0: "\{ctx.strC}_from_view(_zs\{scl})"
+                return se0
+            } else {}
+        } else {}
         bn2: atomTextOf n: n.parent
         mn2: atomTextOf n: n.child
         if bn2.length > 0.u64 then {
@@ -969,8 +977,24 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
             lsv: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.length);\n"
             buf.append lsv.stringview
         } else if tn.stringview == "String" then {
-            lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
-            buf.append lss.stringview
+            isAtomP: false
+            an0: atomTextDeep n: n
+            if an0.length > 0.u64 then {
+                isAtomP = true
+            } else {}
+            if isAtomP then {
+                lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+                buf.append lss.stringview
+            } else {
+                # owned call result: hoist, append, free
+                hN: tmp.next
+                lh0: "\{ind}\{ctx.strC}_t _h\{hN} = \{val};\n"
+                buf.append lh0.stringview
+                lh1: "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{hN}.data, _h\{hN}.size);\n"
+                buf.append lh1.stringview
+                lh2: "\{ind}\{ctx.strC}_free(&_h\{hN});\n"
+                buf.append lh2.stringview
+            }
         } else {
             l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
             buf.append l8.stringview
@@ -1362,6 +1386,11 @@ emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData ass
         } else {}
     } else {}
     if isVar then {} else {
+        sct: cTypeOf name: stn.stringview
+        if sct.length > 0.u64 then {
+            emitScalarMatch symtab: symtab ctx: ctx m: m subj: sx.stringview assignTo: assignTo ind: ind tmp: tmp buf: buf
+            return
+        } else {}
         lu0: "\{ind}/* zemitterc: unhandled match subject type \{stn} */\n"
         buf.append lu0.stringview
         return
@@ -1382,6 +1411,61 @@ emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData ass
     emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
     l9: "\{ind}}\n"
     buf.append l9.stringview
+}
+
+# emitScalarMatch -- a value match over a scalar subject: a C switch with
+# constant arm labels (arm names resolve through the constant pool).
+emitScalarMatch: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData subj: StringView assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    l0: "\{ind}switch (\{subj}) {\n"
+    buf.append l0.stringview
+    ind2: "\{ind}    "
+    citer: m.clauses.iterate
+    for c: citer loop {
+        emitScalarClause symtab: symtab ctx: ctx c: c assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
+    }
+    emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
+    l9: "\{ind}}\n"
+    buf.append l9.stringview
+}
+
+# scalarArmLabel -- the C case label for a scalar arm: the constant
+# pool's rendering when the arm names a constant, else the name itself.
+scalarArmLabel: function {ctx: Ctx arm: StringView} out String is {
+    ck: arm.string
+    cgo: ctx.constVals.get key: ck
+    match (
+        cgo
+    ) case some then {
+        cvv: cgo.stringview
+        cvc: cvv.string
+        return cvc
+    } case none then {
+        ac: arm.string
+        return ac
+    }
+}
+
+emitScalarClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        c
+    ) case caseclause then {
+        arm: c.name.stringview
+    lbl: scalarArmLabel ctx: ctx arm: arm
+        l2: "\{ind}case \{lbl}: {\n"
+        buf.append l2.stringview
+        ind3: "\{ind}    "
+        if assignTo.length > 0.u64 then {
+            vx9: emitExpr symtab: symtab ctx: ctx n: c.statement
+            la9: "\{ind}    \{assignTo} = \{vx9};\n"
+            buf.append la9.stringview
+        } else {
+            emitBodyNode symtab: symtab ctx: ctx n: c.statement ind: ind3.stringview tmp: tmp buf: buf
+        }
+        l5: "\{ind}    break;\n"
+        buf.append l5.stringview
+        l6: "\{ind}}\n"
+        buf.append l6.stringview
+    } else {}
 }
 
 emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 mN: u64 sname: StringView assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
@@ -1580,7 +1664,13 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
     rbn: ztypecheck.fnReturnBaseNameOf op: op
     if rbn.length > 0.u64 then {
         rbc: cTypeOf name: rbn.stringview
-        if rbc.length > 0.u64 then {
+        if rbn.stringview == "String" then {
+            rs0: "\{ctx.strC}_t"
+            ret = rs0
+        } else if rbn.stringview == "StringView" then {
+            rs1: "\{ctx.svC}_t"
+            ret = rs1
+        } else if rbc.length > 0.u64 then {
             ret = rbc
         } else {
             rbi9: userFnId symtab: symtab ctx: ctx name: rbn.stringview
@@ -1671,6 +1761,14 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
             cid = rid9
         } else {}
     }
+    if tn.stringview == "String" then {
+        ts0: "\{ctx.strC}_t"
+        return ts0
+    } else {}
+    if tn.stringview == "StringView" then {
+        ts1: "\{ctx.svC}_t"
+        return ts1
+    } else {}
     ctt: symtab.reg.typetypeOf typeId: cid
     if ctt == ztypes.ztypetype.RECORD then {
         rc: cnameOf tid: cid name: tn.stringview

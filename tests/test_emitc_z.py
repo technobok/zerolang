@@ -42,6 +42,7 @@ EMITC_SMOKE: "list[str]" = [
     "narrowing",
     "variants",
     "equality",
+    "case",
 ]
 
 
