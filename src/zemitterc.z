@@ -553,6 +553,18 @@ isSvSimpleNative: function {name: StringView} out bool is {
     return false
 }
 
+# isSvArgNative -- an arg-taking StringView native returning optionval/
+# Option (indexOf/byteAt/lastIndexOf/stripPrefix/stripSuffix/splitOnce).
+isSvArgNative: function {name: StringView} out bool is {
+    if name == "indexOf" then { return true } else {}
+    if name == "lastIndexOf" then { return true } else {}
+    if name == "byteAt" then { return true } else {}
+    if name == "stripPrefix" then { return true } else {}
+    if name == "stripSuffix" then { return true } else {}
+    if name == "splitOnce" then { return true } else {}
+    return false
+}
+
 # svArgAddr -- the &-form of a StringView native argument (pooled
 # literal or local view); "" when unsupported.
 svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
@@ -606,6 +618,43 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         }
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return ce
+    } else {}
+    if (isStringy name: bt.stringview) when (isSvArgNative name: mn.stringview) then {
+        bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
+        needsAdd ctx: ctx name: mn.stringview
+        argx: "".string
+        with aiter9: call.arguments.iterate do for a9: aiter9 loop {
+            match (
+                a9
+            ) case namedoperation then {
+                if argx.length == 0.u64 then {
+                    av9: svArgAddr symtab: symtab ctx: ctx n: a9.operation
+                    if av9.length > 0.u64 then {
+                        argx.append av9.stringview
+                    } else {
+                        sx9: emitExpr symtab: symtab ctx: ctx n: a9.operation
+                        argx.append sx9.stringview
+                    }
+                } else {}
+            } else {}
+        }
+        if mn.stringview == "byteAt" then {
+            barg: "".string
+            with biter: call.arguments.iterate do for ba: biter loop {
+                match (
+                    ba
+                ) case namedoperation then {
+                    if barg.length == 0.u64 then {
+                        bx: emitExpr symtab: symtab ctx: ctx n: ba.operation
+                        barg.append bx.stringview
+                    } else {}
+                } else {}
+            }
+            eb9: "\{ctx.svC}_byteAt(&\{bn}, \{barg})"
+            return eb9
+        } else {}
+        ea9: "\{ctx.svC}_\{mn}(&\{bn}, \{argx})"
+        return ea9
     } else {}
     if bt.stringview == "StringView" then {
         if (isSvSimpleNative name: mn.stringview) then {
@@ -3406,7 +3455,12 @@ emitNeededNatives: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: Stri
     emitNativeIf ctx: ctx need: "isAscii" frag: "_Z_SV_IS_ASCII" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "startsWith" frag: "_Z_SV_STARTS_WITH" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "endsWith" frag: "_Z_SV_ENDS_WITH" runtimeDir: runtimeDir buf: buf
-    emitNativeIf ctx: ctx need: "contains" frag: "_Z_SV_INDEX_OF_RAW" runtimeDir: runtimeDir buf: buf
+    needRaw: needsHas ctx: ctx name: "contains"
+    if (needsHas ctx: ctx name: "indexOf") then { needRaw = true } else {}
+    if (needsHas ctx: ctx name: "lastIndexOf") then { needRaw = true } else {}
+    if needRaw then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_INDEX_OF_RAW" mono: "" buf: buf
+    } else {}
     emitNativeIf ctx: ctx need: "contains" frag: "_Z_SV_CONTAINS" runtimeDir: runtimeDir buf: buf
     hasTrim: needsHas ctx: ctx name: "trim"
     hasTrimS: needsHas ctx: ctx name: "trimStart"
@@ -3455,6 +3509,24 @@ emitNeededNatives: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: Stri
     emitNativeIf ctx: ctx need: "count" frag: "_Z_SV_COUNT" runtimeDir: runtimeDir buf: buf
     if hasCp then {
         emitCodepointsNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "indexOf") then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_INDEX_OF" mono: "optionval_u64" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "lastIndexOf") then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_LAST_INDEX_OF" mono: "optionval_u64" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "byteAt") then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_BYTE_AT" mono: "optionval_u8" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "stripPrefix") then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_STRIP_PREFIX" mono: "Option_StringView" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "stripSuffix") then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_STRIP_SUFFIX" mono: "Option_StringView" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "splitOnce") then {
+        emitMonoNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_SPLIT_ONCE" mono: "optionval_u64" buf: buf
     } else {}
     if (needsHas ctx: ctx name: "parseI64") then {
         emitParseNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_PARSE_I64" mono: "resultval_i64_parseerror" buf: buf
@@ -3713,6 +3785,88 @@ definedInNonMain: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out boo
     }
 }
 
+# emitUnionMono -- a UNION mono (Option/Result): tag enum + { tag; void*
+# data } heap-payload struct + destroy (free the payload on non-null arms,
+# recursing into an aggregate payload's destructor first).
+emitUnionMono: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
+    anames: (List of: String)
+    aids: (List of: u64)
+    variantArms symtab: symtab tid: tid names: anames ids: aids
+    vc: cnameOf tid: tid name: name
+    buf.append "typedef enum {\n"
+    ai: 0.u64
+    an: anames.length
+    for while ai < an loop {
+        aname: anames.get i: ai
+        tg: variantTag symtab: symtab tid: tid arm: aname.stringview
+        lt: "    \{tg},\n"
+        buf.append lt.stringview
+        ai = ai + 1.u64
+    }
+    le: "} \{vc}_tag_t;\n"
+    buf.append le.stringview
+    buf.append "typedef struct {\n"
+    lf: "    \{vc}_tag_t tag;\n"
+    buf.append lf.stringview
+    buf.append "    void* data;\n"
+    lg: "} \{vc}_t;\n"
+    buf.append lg.stringview
+    ld: "static void \{vc}_destroy(\{vc}_t* u) {\n"
+    buf.append ld.stringview
+    buf.append "    if (!u) return;\n"
+    buf.append "    if (!u->data) return;\n"
+    buf.append "    switch (u->tag) {\n"
+    pj: 0.u64
+    for while pj < an loop {
+        pname: anames.get i: pj
+        pc: armPayloadC symtab: symtab ctx: ctx tid: tid arm: pname.stringview
+        if pc.length > 0.u64 then {
+            ptg: variantTag symtab: symtab tid: tid arm: pname.stringview
+            lcase: "        case \{ptg}:\n"
+            buf.append lcase.stringview
+            pdtr: payloadDestructor symtab: symtab ctx: ctx tid: tid arm: pname.stringview
+            if pdtr.length > 0.u64 then {
+                ldd: "            \{pdtr}((\{pc}*)u->data);\n"
+                buf.append ldd.stringview
+            } else {}
+            buf.append "            free(u->data);\n"
+            buf.append "            break;\n"
+        } else {}
+        pj = pj + 1.u64
+    }
+    buf.append "        default: break;\n"
+    buf.append "    }\n"
+    buf.append "}\n\n"
+}
+
+# payloadDestructor -- the destructor cname for an arm whose payload is an
+# aggregate with a destructor ("" for scalar/view payloads).
+payloadDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 arm: StringView} out String is {
+    co: symtab.typing.childOf parentTypeId: tid name: arm
+    match (
+        co
+    ) case some then {
+        pn: typeNameOfReg9 symtab: symtab tid: co
+        rid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: pn.stringview)
+        if rid > 0.u64 then {
+            rt: symtab.reg.typeById.get key: rid
+            match (
+                rt
+            ) case some then {
+                dno: rt.destructorName
+                match (
+                    dno
+                ) case some then {
+                    dnv: dno.stringview
+                    dnc: dnv.string
+                    return dnc
+                } case none then {}
+            } case none then {}
+        } else {}
+    } case none then {}
+    return "".string
+}
+
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -3747,6 +3901,17 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitOneVariant symtab: symtab ctx: ctx tid: tido name: oovn.stringview buf: buf
         } else {}
         tido = tido + 1.u64
+    }
+    # Option union monos (tag + void* data heap payload) -- reftype
+    # option returns (string strip/split, map get over reftype).
+    tiu: 0.u64
+    for while tiu < last loop {
+        uonm: monoOriginName symtab: symtab tid: tiu
+        if uonm.stringview == "Option" then {
+            uvn: typeNameOfReg9 symtab: symtab tid: tiu
+            emitUnionMono symtab: symtab ctx: ctx tid: tiu name: uvn.stringview buf: buf
+        } else {}
+        tiu = tiu + 1.u64
     }
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
@@ -4207,6 +4372,34 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     buf.append lo.stringview
     emitFnBody symtab: symtab ctx: ctx op: op buf: buf
     buf.append "}\n\n"
+}
+
+# emitMonoNative -- a native fragment substituting z_StringView and (when
+# mono is non-empty) the canonical z_{mono} to the mono's id-based cname.
+emitMonoNative: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView frag: StringView mono: StringView buf: String.borrow} is {
+    p: "\{runtimeDir}/natives/\{frag}.inc"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        scv: ctx.svC.copy
+        cur: substituteAll text: raw needle: "z_StringView" repl: scv.stringview
+        if mono.length > 0.u64 then {
+            mid: 0.u64
+            mok: mono.string
+            moo: symtab.typing.monoByName.get key: mok
+            match (
+                moo
+            ) case some then {
+                mid = moo
+            } case none then {}
+            mc: cnameOf tid: mid name: mono
+            cn: "z_\{mono}"
+            cur = substituteAll text: cur needle: cn.stringview repl: mc.stringview
+        } else {}
+        buf.append cur.stringview
+        buf.append "\n"
+    } case err then {}
 }
 
 # emitParseNative -- a parse fragment, substituting the canonical
