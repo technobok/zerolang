@@ -41,6 +41,7 @@ EMITC_SMOKE: "list[str]" = [
     "records",
     "narrowing",
     "variants",
+    "equality",
 ]
 
 
