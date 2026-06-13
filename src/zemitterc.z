@@ -306,6 +306,45 @@ litIndexOf: function {ids: (List of: u64) nid: u64} out u64 is {
     return 0.u64
 }
 
+# ternaryClause / ternaryElse -- if-expression rendering as nested C
+# ternaries: each clause opens "(cond ? value : " and the else closes.
+ternaryClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node} out String is {
+    match (
+        c
+    ) case ifclause then {
+        cond: "".string
+        kiter: c.conditions.iterate
+        for k: kiter loop {
+            match (
+                k
+            ) case namedoperation then {
+                cv: emitExpr symtab: symtab ctx: ctx n: k.operation
+                if cond.length > 0.u64 then {
+                    cond.append " && "
+                } else {}
+                cond.append cv.stringview
+            } else {}
+        }
+        vx: emitExpr symtab: symtab ctx: ctx n: c.statement
+        t0: "((\{cond}) ? (\{vx}) : "
+        return t0
+    } else {
+        return "(0 ? 0 : ".string
+    }
+}
+
+ternaryElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: (Option t: Node)} out String is {
+    match (
+        o
+    ) case some then {
+        ev: emitExpr symtab: symtab ctx: ctx n: o
+        e0: "(\{ev})"
+        return e0
+    } case none then {
+        return "(0)".string
+    }
+}
+
 # atomTextOf -- an atomid node's name text ("" for any other shape).
 atomTextOf: function {n: Node} out String is {
     match (
@@ -730,6 +769,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         brid: userFnId symtab: symtab ctx: ctx name: av
         if brid > 0.u64 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.RECORD then {
             btn: typeNameOfReg9 symtab: symtab tid: brid
+            if (cTypeOf name: btn.stringview).length > 0.u64 then {
+                bsv: btn.stringview
+                bsc: bsv.string
+                return bsc
+            } else {}
             brc: cnameOf tid: brid name: btn.stringview
             be0: "((\{brc}_t){0})"
             return be0
@@ -818,6 +862,30 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             } else {}
         } else {}
         return "/* zemitterc: unhandled dotted */0".string
+    } case atomstring then {
+        li9: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
+        if li9 > 0.u64 then {
+            se9: "_zs\{li9}"
+            return se9
+        } else {}
+        return "/* zemitterc: unhandled atomstring expr */0".string
+    } case ifexpr then {
+        tx: "".string
+        depth: 0.u64
+        citer: n.clauses.iterate
+        for c: citer loop {
+            cx: ternaryClause symtab: symtab ctx: ctx c: c
+            tx.append cx.stringview
+            depth = depth + 1.u64
+        }
+        ex9: ternaryElse symtab: symtab ctx: ctx o: n.elseclause
+        tx.append ex9.stringview
+        dk: 0.u64
+        for while dk < depth loop {
+            tx.append ")"
+            dk = dk + 1.u64
+        }
+        return tx
     } case binop then {
         l: emitExpr symtab: symtab ctx: ctx n: n.lhs
         op: atomTextOf n: n.operator
@@ -1305,6 +1373,10 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             if dm9 then {
                 return
             } else {}
+            di9: emitIfBindValue symtab: symtab ctx: ctx n: n.value nm: nm ct: ct.stringview ind: ind tmp: tmp buf: buf
+            if di9 then {
+                return
+            } else {}
         } else {}
         rv: emitExpr symtab: symtab ctx: ctx n: n.value
         if ct.length > 0.u64 then {
@@ -1320,18 +1392,19 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
     } case ifexpr then {
+        ifAssign: "".string
         first: true
         citer: n.clauses.iterate
         for c: citer loop {
             isFirst: first
             first = false
-            emitIfClause symtab: symtab ctx: ctx n: c isFirst: isFirst ind: ind tmp: tmp buf: buf
+            emitIfClause symtab: symtab ctx: ctx n: c isFirst: isFirst assignTo: ifAssign.stringview ind: ind tmp: tmp buf: buf
         }
         match (
             n.elseclause
         ) case some then {
         } case none then {}
-        emitElse9 symtab: symtab ctx: ctx o: n.elseclause ind: ind tmp: tmp buf: buf
+        emitElse9 symtab: symtab ctx: ctx o: n.elseclause assignTo: ifAssign.stringview ind: ind tmp: tmp buf: buf
         le: "\{ind}}\n"
         buf.append le.stringview
     } case caseexpr then {
@@ -1539,6 +1612,32 @@ emitMatchBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: Str
     }
 }
 
+# emitIfBindValue -- `s: if c then a else b`: declare the local and emit
+# an if-statement assigning the branch value to it; false otherwise.
+emitIfBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: StringView ct: StringView ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (emitIfBindValue symtab: symtab ctx: ctx n: n.expression nm: nm ct: ct ind: ind tmp: tmp buf: buf)
+    } case ifexpr then {
+        ld: "\{ind}\{ct} \{nm};\n"
+        buf.append ld.stringview
+        first: true
+        citer: n.clauses.iterate
+        for c: citer loop {
+            isFirst: first
+            first = false
+            emitIfClause symtab: symtab ctx: ctx n: c isFirst: isFirst assignTo: nm ind: ind tmp: tmp buf: buf
+        }
+        emitElse9 symtab: symtab ctx: ctx o: n.elseclause assignTo: nm ind: ind tmp: tmp buf: buf
+        le: "\{ind}}\n"
+        buf.append le.stringview
+        return true
+    } else {
+        return false
+    }
+}
+
 # emitForCond -- one for-header arm: a `while:` arm joins the loop
 # condition; a named binding arm emits its init before the loop.
 emitForCond: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node cond: String.borrow ind: StringView tmp: TmpCtr buf: String.borrow} is {
@@ -1580,7 +1679,7 @@ exprNodeId9: function {n: Node} out u64 is {
     }
 }
 
-emitIfClause: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node isFirst: bool ind: StringView tmp: TmpCtr buf: String.borrow} is {
+emitIfClause: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node isFirst: bool assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
     ) case ifclause then {
@@ -1605,19 +1704,54 @@ emitIfClause: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node isFirst: bool
             buf.append lg.stringview
         }
         ind2: "\{ind}    "
-        emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind2.stringview tmp: tmp buf: buf
+        if assignTo.length > 0.u64 then {
+            emitBranchAssign symtab: symtab ctx: ctx n: n.statement target: assignTo ind: ind2.stringview tmp: tmp buf: buf
+        } else {
+            emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind2.stringview tmp: tmp buf: buf
+        }
     } else {}
 }
 
-emitElse9: function {symtab: zenv.ZSymbolTable ctx: Ctx o: (Option t: Node) ind: StringView tmp: TmpCtr buf: String.borrow} is {
+emitElse9: function {symtab: zenv.ZSymbolTable ctx: Ctx o: (Option t: Node) assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         o
     ) case some then {
         lh: "\{ind}} else {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
-        emitBodyNode symtab: symtab ctx: ctx n: o ind: ind2.stringview tmp: tmp buf: buf
+        if assignTo.length > 0.u64 then {
+            emitBranchAssign symtab: symtab ctx: ctx n: o target: assignTo ind: ind2.stringview tmp: tmp buf: buf
+        } else {
+            emitBodyNode symtab: symtab ctx: ctx n: o ind: ind2.stringview tmp: tmp buf: buf
+        }
     } case none then {}
+}
+
+# emitBranchAssign -- emit an if/match branch whose final value assigns
+# to a target: a block emits all but its last statement normally, the
+# last as `target = <value>`; a single node assigns directly.
+emitBranchAssign: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node target: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case statement then {
+        cnt: n.statements.length
+        si: 0.u64
+        for while si < cnt loop {
+            sx: n.statements.get i: si
+            if si + 1.u64 == cnt then {
+                vx: emitExpr symtab: symtab ctx: ctx n: sx
+                la: "\{ind}\{target} = \{vx};\n"
+                buf.append la.stringview
+            } else {
+                emitStmt symtab: symtab ctx: ctx n: sx ind: ind tmp: tmp buf: buf
+            }
+            si = si + 1.u64
+        }
+    } else {
+        vx2: emitExpr symtab: symtab ctx: ctx n: n
+        la2: "\{ind}\{target} = \{vx2};\n"
+        buf.append la2.stringview
+    }
 }
 
 emitBodyNode: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} is {
@@ -1896,6 +2030,8 @@ isConstShape: function {ctx: Ctx n: Node} out bool is {
         } else {
             return false
         }
+    } case ifexpr then {
+        return true
     } else {
         return false
     }

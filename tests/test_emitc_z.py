@@ -43,6 +43,7 @@ EMITC_SMOKE: "list[str]" = [
     "variants",
     "equality",
     "case",
+    "ifexpr",
 ]
 
 
