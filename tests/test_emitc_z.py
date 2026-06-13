@@ -49,6 +49,7 @@ EMITC_SMOKE: "list[str]" = [
     "data",
     "typed_data",
     "lists",
+    "listview",
 ]
 
 

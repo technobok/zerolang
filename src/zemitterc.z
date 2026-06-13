@@ -689,8 +689,13 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     bnid: dottedBaseNodeId n: call.callable
     bt: stampIdOf symtab: symtab nid: bnid
     omn: monoOriginName symtab: symtab tid: bt
+    isLV: false
     if omn.stringview == "List" then {} else {
-        return "".string
+        if omn.stringview == "ListView" then {
+            isLV = true
+        } else {
+            return "".string
+        }
     }
     btn: typeNameOfReg9 symtab: symtab tid: bt
     cb: cnameOf tid: bt name: btn.stringview
@@ -1171,6 +1176,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 if mn2.stringview == "sort" then {
                     ep1: "\{lcb2}_sort(&\{bn2})"
                     return ep1
+                } else {}
+                if mn2.stringview == "listview" then {
+                    ep2: "\{lcb2}_listview(&\{bn2})"
+                    return ep2
+                } else {}
+            } else {}
+            if bsmn.stringview == "ListView" then {
+                if mn2.stringview == "length" then {
+                    elv: "\{bn2}.length"
+                    return elv
                 } else {}
             } else {}
             if rtt == ztypes.ztypetype.DATA then {
@@ -2379,6 +2394,21 @@ isTypedefType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     }
 }
 
+# isCollectionOrigin -- a generic-origin template name that mints a C
+# struct type (List/ListView/Set/Map/MapEntry and the iterators).
+isCollectionOrigin: function {name: StringView} out bool is {
+    if name == "List" then { return true } else {}
+    if name == "ListView" then { return true } else {}
+    if name == "Set" then { return true } else {}
+    if name == "Map" then { return true } else {}
+    if name == "MapEntry" then { return true } else {}
+    if name == "ListIter" then { return true } else {}
+    if name == "SetIter" then { return true } else {}
+    if name == "MapKeyIter" then { return true } else {}
+    if name == "MapItemIter" then { return true } else {}
+    return false
+}
+
 # typeRefC -- the C spelling for a type id: scalars by name, records by
 # their id-based cname ("" when unsupported).
 typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} out String is {
@@ -2410,6 +2440,12 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
     if tn.stringview == "StringView" then {
         ts1: "\{ctx.svC}_t"
         return ts1
+    } else {}
+    omn9: monoOriginName symtab: symtab tid: cid
+    if (isCollectionOrigin name: omn9.stringview) then {
+        cc9: cnameOf tid: cid name: tn.stringview
+        ct9: "\{cc9}_t"
+        return ct9
     } else {}
     ctt: symtab.reg.typetypeOf typeId: cid
     if ctt == ztypes.ztypetype.RECORD then {
@@ -3166,7 +3202,8 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
         t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: ""
-        t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: ""
+        lvm: listviewMethods symtab: symtab ctx: ctx monoId: monoId nm: nm.stringview ect: ect.stringview
+        t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringview
         buf.append t4.stringview
         buf.append "\n"
     } case err then {
@@ -3232,17 +3269,81 @@ emitListSort: function {nm: StringView ect: StringView buf: String.borrow} is {
     buf.append "}\n\n"
 }
 
+# emitListViewMono -- substitute z_ListView.c.tmpl for a ListView mono.
+emitListViewMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    eid: listElemType symtab: symtab monoId: monoId
+    ect0: typeRefC symtab: symtab ctx: ctx tid: eid thisTid: 0.u64
+    ect: ctypeOrI64 s: ect0.stringview
+    p: "\{runtimeDir}/z_ListView.c.tmpl"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+        t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
+        buf.append t2.stringview
+        buf.append "\n"
+    } case err then {}
+}
+
+# listviewMethods -- the _listview cast + _extendView companions when a
+# List mono carries a listview child; "" otherwise.
+listviewMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 nm: StringView ect: StringView} out String is {
+    lo: symtab.typing.childOf parentTypeId: monoId name: "listview"
+    match (
+        lo
+    ) case some then {
+        t: symtab.reg.typeById.get key: lo
+        match (
+            t
+        ) case some then {
+            rt: t.returnTypeId
+            match (
+                rt
+            ) case some then {
+                lvn0: typeNameOfReg9 symtab: symtab tid: rt
+                lvc: cnameOf tid: rt name: lvn0.stringview
+                buf: "".string
+                m0: "static \{lvc}_t z_\{nm}_listview(z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
+                buf.append m0.stringview
+                m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
+                buf.append m1.stringview
+                m2: "    z_\{nm}_grow(_this, _this->length + _from.length);\n"
+                buf.append m2.stringview
+                m3: "    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(\{ect}));\n"
+                buf.append m3.stringview
+                buf.append "    _this->length += _from.length;\n"
+                buf.append "}\n\n"
+                return buf
+            } case none then {}
+        } case none then {}
+    } case none then {}
+    return "".string
+}
+
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
-    tid: 0.u64
     last: symtab.reg.nextTypeId
+    # ListView structs first -- a List's listview companion references
+    # the ListView struct by value.
+    tid: 0.u64
     for while tid < last loop {
         onm: monoOriginName symtab: symtab tid: tid
-        if onm.stringview == "List" then {
-            emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
+        if onm.stringview == "ListView" then {
+            emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
         } else {}
         tid = tid + 1.u64
+    }
+    tid2: 0.u64
+    for while tid2 < last loop {
+        onm2: monoOriginName symtab: symtab tid: tid2
+        if onm2.stringview == "List" then {
+            emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid2 buf: buf
+        } else {}
+        tid2 = tid2 + 1.u64
     }
 }
 
