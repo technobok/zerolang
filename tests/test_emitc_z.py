@@ -69,6 +69,8 @@ EMITC_SMOKE: "list[str]" = [
     "io_read_text",
     "io_write_text",
     "io_open",
+    "io_readwrite",
+    "io_seek",
 ]
 
 

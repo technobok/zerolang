@@ -846,6 +846,7 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     } else {}
     bnid: dottedBaseNodeId n: call.callable
     bt: stampIdOf symtab: symtab nid: bnid
+    bt = chaseColMono symtab: symtab tid: bt
     omn: monoOriginName symtab: symtab tid: bt
     isLV: false
     if omn.stringview == "List" then {} else {
@@ -1140,6 +1141,37 @@ emitVariantCtorCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     return (emitInlineVariantCtor symtab: symtab ctx: ctx call: call tid: vtid arm: mn.stringview)
 }
 
+# emitColTypedefCall -- `ByteView.borrow from: X` / `Bytes.create from: X` on a
+# collection-typedef-class (Bytes/ByteView): the typedef is a zero-overhead
+# alias, so the borrow/create is transparent -- emit the underlying arg. ""
+# for any non-collection-typedef base.
+emitColTypedefCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    isBC: false
+    if mn.stringview == "borrow" then {
+        isBC = true
+    } else {}
+    if mn.stringview == "create" then {
+        isBC = true
+    } else {}
+    if isBC then {} else {
+        return "".string
+    }
+    bid: resolveTypeIdByName symtab: symtab ctx: ctx name: bn.stringview
+    if bid == 0.u64 then {
+        return "".string
+    } else {}
+    mid: chaseColMono symtab: symtab tid: bid
+    if mid == bid then {
+        return "".string
+    } else {}
+    return (ctorArgByLabel symtab: symtab ctx: ctx call: call label: "from")
+}
+
 # emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
 # resolves to a record type and whose member is a FUNCTION child; args
 # reorder to the method's param order by label.
@@ -1420,6 +1452,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.CLASS then {
         return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
     } else {}
+    ctc: emitColTypedefCall symtab: symtab ctx: ctx call: call
+    if ctc.length > 0.u64 then {
+        return ctc
+    } else {}
     tq: emitTypeQualCall symtab: symtab ctx: ctx call: call
     if tq.length > 0.u64 then {
         return tq
@@ -1593,6 +1629,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if bcid > 0.u64 then {
                 bstamp = bcid
             } else {}
+            bstamp = chaseColMono symtab: symtab tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
             isRecOrCls: false
             if rtt == ztypes.ztypetype.RECORD then {
@@ -1607,6 +1644,31 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 } else {}
             } else {}
             if isRecOrCls then {
+                fbtn9: typeNameOfReg9 symtab: symtab tid: bstamp
+                isFile9: false
+                if fbtn9.stringview == "File" when (definedInNonMain symtab: symtab ctx: ctx tid: bstamp) then {
+                    isFile9 = true
+                } else {}
+                if isFile9 then {
+                    isFN9: false
+                    if mn2.stringview == "close" then {
+                        isFN9 = true
+                    } else {}
+                    if mn2.stringview == "flush" then {
+                        isFN9 = true
+                    } else {}
+                    if isFN9 then {
+                        ffc9: cnameOf tid: bstamp name: "File"
+                        needsAdd ctx: ctx name: "io"
+                        ffn9: "io_file_\{mn2}".string
+                        needsAdd ctx: ctx name: ffn9.stringview
+                        frecv9: "&\{bn2}".string
+                        if (isPtrVar ctx: ctx name: bn2.stringview) then {
+                            frecv9 = "\{bn2}".string
+                        } else {}
+                        return "\{ffc9}_\{mn2}(\{frecv9})"
+                    } else {}
+                } else {}
                 mco: symtab.typing.childOf parentTypeId: bstamp name: mn2.stringview
                 match (
                     mco
@@ -2507,9 +2569,11 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             return
         } else {}
         ltid: stampIdOf symtab: symtab nid: n.nodeid.u64
+        ltid = chaseColMono symtab: symtab tid: ltid
+        ltnm: typeNameOfReg9 symtab: symtab tid: ltid
         ltmn: monoOriginName symtab: symtab tid: ltid
         if ltmn.stringview == "List" then {
-            lcb: cnameOf tid: ltid name: tn.stringview
+            lcb: cnameOf tid: ltid name: ltnm.stringview
             if (forexprValue n: n.value) then {
                 # list comprehension: `xs: for ... loop { expr }` create + populate
                 lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
@@ -2823,6 +2887,20 @@ scalarArmLabel: function {ctx: Ctx arm: StringView} out String is {
     }
 }
 
+# flushBlockFrees -- emit + reclaim the heap/collection destructors registered
+# since (fL, lL) so a local declared inside a block (a match arm) is freed at
+# block end, not function end (where it is out of C scope). LIFO order.
+flushBlockFrees: function {ctx: Ctx tmp: TmpCtr fL: u64 lL: u64 buf: String.borrow} is {
+    for while tmp.listFrees.length > lL loop {
+        lvo: tmp.listFrees.pop
+        buf.append lvo.stringview
+    }
+    for while tmp.frees.length > fL loop {
+        fvo: tmp.frees.pop
+        buf.append fvo.stringview
+    }
+}
+
 emitScalarClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         c
@@ -2837,7 +2915,10 @@ emitScalarClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node assignTo:
             la9: "\{ind}    \{assignTo} = \{vx9};\n"
             buf.append la9.stringview
         } else {
+            fL9: tmp.frees.length
+            lL9: tmp.listFrees.length
             emitBodyNode symtab: symtab ctx: ctx n: c.statement ind: ind3.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fL9 lL: lL9 buf: buf
         }
         l5: "\{ind}    break;\n"
         buf.append l5.stringview
@@ -2872,7 +2953,10 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
             la9: "\{ind}    \{assignTo} = \{vx9};\n"
             buf.append la9.stringview
         } else {
+            fL9: tmp.frees.length
+            lL9: tmp.listFrees.length
             emitBodyNode symtab: symtab ctx: ctx n: c.statement ind: ind3.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fL9 lL: lL9 buf: buf
         }
         l5: "\{ind}    break;\n"
         buf.append l5.stringview
@@ -3658,6 +3742,27 @@ cTypeForName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out
 
 # typeRefC -- the C spelling for a type id: scalars by name, records by
 # their id-based cname ("" when unsupported).
+# chaseColMono -- if tid is a typedef-class over a collection mono (Bytes ->
+# List_u8, ByteView -> ListView_u8), the underlying mono id; else tid. The
+# emitter treats Bytes/ByteView as zero-overhead aliases of their collection.
+chaseColMono: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
+    bo: symtab.typing.typedefBaseMangled.get key: tid
+    match (
+        bo
+    ) case some then {
+        mo: symtab.typing.monoByName.get key: bo.string
+        match (
+            mo
+        ) case some then {
+            cmo9: monoOriginName symtab: symtab tid: mo
+            if (isCollectionOrigin name: cmo9.stringview) then {
+                return mo
+            } else {}
+        } case none then {}
+    } case none then {}
+    return tid
+}
+
 typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} out String is {
     tn: typeNameOfReg9 symtab: symtab tid: tid
     ct: cTypeOf name: tn.stringview
@@ -3676,6 +3781,12 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
             cid = rid9
         } else {}
     }
+    cmid9: chaseColMono symtab: symtab tid: cid
+    if cmid9 != cid then {
+        cmn9: typeNameOfReg9 symtab: symtab tid: cmid9
+        cmc9: cnameOf tid: cmid9 name: cmn9.stringview
+        return "\{cmc9}_t"
+    } else {}
     tdc: typedefChaseC symtab: symtab ctx: ctx tid: cid
     if tdc.length > 0.u64 then {
         return tdc
