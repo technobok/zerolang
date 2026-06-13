@@ -10237,6 +10237,15 @@ class CEmitter:
             self.needs_hash = True
             parent = self._emit_path_value(path.parent)
             return f"z_siphash_stringview({parent})"
+        # .stringview on a StringView value is the identity (the native
+        # returns self); emitting it as field access would reference a
+        # nonexistent member.
+        if (
+            parent_type_dp
+            and child == "stringview"
+            and parent_type_dp.subtype == ZSubType.STRINGVIEW
+        ):
+            return self._emit_path_value(path.parent)
         # .stringview conversion at path-access position, for both `string`
         # (reftype) and `str_N` (valtype). Only str differs in the length
         # field name (`len` vs `size`); pointer-vs-value access depends on
