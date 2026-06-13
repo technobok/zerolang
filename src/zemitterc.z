@@ -1386,6 +1386,28 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     emc: "\{bn2}->capacity"
                     return emc
                 } else {}
+                bstnm: typeNameOfReg9 symtab: symtab tid: bstamp
+                mcb2: cnameOf tid: bstamp name: bstnm.stringview
+                if mn2.stringview == "iterate" then {
+                    emi: "\{mcb2}_iterate(\{bn2})"
+                    return emi
+                } else {}
+                if mn2.stringview == "iterateItems" then {
+                    emii: "\{mcb2}_iterateItems(\{bn2})"
+                    return emii
+                } else {}
+            } else {}
+            if bsmn.stringview == "MapEntry" then {
+                # a borrowed entry yielded by iterateItems: key/value project
+                # the entry struct's fields through the borrowed pointer.
+                if mn2.stringview == "key" then {
+                    eek: "\{bn2}->key"
+                    return eek
+                } else {}
+                if mn2.stringview == "value" then {
+                    eev: "\{bn2}->value"
+                    return eev
+                } else {}
             } else {}
             if rtt == ztypes.ztypetype.DATA then {
                 if mn2.stringview == "length" then {
@@ -1578,6 +1600,29 @@ dataIndexElemName: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
     }
 }
 
+# interpBaseIsMapEntry -- true when an interp part is `<entry>.key`/`.value`
+# off a borrowed MapEntry: the projected String views the bucket, so it must
+# be appended inline (freeing the hoisted copy would double-free the bucket key).
+interpBaseIsMapEntry: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (interpBaseIsMapEntry symtab: symtab n: n.expression)
+    } case statementline then {
+        return (interpBaseIsMapEntry symtab: symtab n: n.statementline)
+    } case dottedpath then {
+        bnid: atomNodeId9 n: n.parent
+        bt: stampIdOf symtab: symtab nid: bnid
+        bo: monoOriginName symtab: symtab tid: bt
+        if bo.stringview == "MapEntry" then {
+            return true
+        } else {}
+        return false
+    } else {
+        return false
+    }
+}
+
 emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
@@ -1612,6 +1657,9 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
             isAtomP: false
             an0: atomTextDeep n: n
             if an0.length > 0.u64 then {
+                isAtomP = true
+            } else {}
+            if (interpBaseIsMapEntry symtab: symtab n: n) then {
                 isAtomP = true
             } else {}
             if isAtomP then {
@@ -2523,9 +2571,19 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
             buf.append l2.stringview
             if oovorig.stringview == "OptionView" then {
-                # borrowed-view yield: data is a void* into the container
-                l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
-                buf.append l3v.stringview
+                # borrowed-view yield: scalar payloads copy by value; aggregate
+                # payloads bind a borrowed pointer (no copy -> the shared fields
+                # are never double-freed).
+                payElemPfx: oovorig.length + 1.u64
+                payElemName: monoElemName full: ovn prefixLen: payElemPfx
+                payScalarC: cTypeOf name: payElemName.stringview
+                if payScalarC.length > 0.u64 then {
+                    l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
+                    buf.append l3v.stringview
+                } else {
+                    l3p: "\{ind}    \{payC}* \{lbl} = (\{payC}*)_iter\{mN}.data;\n"
+                    buf.append l3p.stringview
+                }
             } else {
                 l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
                 buf.append l3.stringview
@@ -4214,6 +4272,63 @@ mapFreeKeyDel: function {isStr: bool strC: StringView} out String is {
     return "".string
 }
 
+# emitMapIters -- the MapKeyIter/MapItemIter/MapEntry block for a Map mono,
+# emitted only when those iterator monos were minted. Their OptionView returns
+# (OptionView_<K>, OptionView_MapEntry_<K>_<V>) are defined by the earlier
+# OptionView leg.
+emitMapIters: function {symtab: zenv.ZSymbolTable runtimeDir: StringView nm: StringView keyName: StringView valName: StringView keyT: StringView valT: StringView buf: String.borrow} is {
+    miiName: "MapItemIter_\{keyName}_\{valName}".string
+    miiId: monoIdByName symtab: symtab name: miiName.stringview
+    if miiId == 0.u64 then {
+        return
+    } else {}
+    mkiName: "MapKeyIter_\{keyName}_\{valName}".string
+    mkiId: monoIdByName symtab: symtab name: mkiName.stringview
+    meName: "MapEntry_\{keyName}_\{valName}".string
+    meId: monoIdByName symtab: symtab name: meName.stringview
+    ovkName: "OptionView_\{keyName}".string
+    ovkId: monoIdByName symtab: symtab name: ovkName.stringview
+    oveName: "OptionView_\{meName}".string
+    oveId: monoIdByName symtab: symtab name: oveName.stringview
+    if mkiId == 0.u64 then {
+        return
+    } else {}
+    if meId == 0.u64 then {
+        return
+    } else {}
+    if ovkId == 0.u64 then {
+        return
+    } else {}
+    if oveId == 0.u64 then {
+        return
+    } else {}
+    mki: cbaseNoPrefix tid: mkiId name: mkiName.stringview
+    mii: cbaseNoPrefix tid: miiId name: miiName.stringview
+    me: cbaseNoPrefix tid: meId name: meName.stringview
+    ovk: cbaseNoPrefix tid: ovkId name: ovkName.stringview
+    ovku: cUpperOf text: ovkName.stringview
+    ove: cbaseNoPrefix tid: oveId name: oveName.stringview
+    oveu: cUpperOf text: oveName.stringview
+    pi: "\{runtimeDir}/z_MapIter.c.tmpl"
+    rawi: io.readText path: pi.stringview
+    match (
+        rawi
+    ) case ok then {
+        i1: applyTmpl text: rawi key: "NAME" val: nm
+        i2: applyTmpl text: i1 key: "KEY_T" val: keyT
+        i3: applyTmpl text: i2 key: "VAL_T" val: valT
+        i4: applyTmpl text: i3 key: "MAPKEYITER" val: mki.stringview
+        i5: applyTmpl text: i4 key: "OPTIONVIEW_K" val: ovk.stringview
+        i6: applyTmpl text: i5 key: "OPTIONVIEW_K_TAG" val: ovku.stringview
+        i7: applyTmpl text: i6 key: "MAPENTRY" val: me.stringview
+        i8: applyTmpl text: i7 key: "MAPITEMITER" val: mii.stringview
+        i9: applyTmpl text: i8 key: "OPTIONVIEW_ENTRY" val: ove.stringview
+        i10: applyTmpl text: i9 key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringview
+        buf.append i10.stringview
+        buf.append "\n"
+    } case err then {}
+}
+
 # emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
 # set/get/has/delete). The value's optionval mono (get's return) supplies the
 # value type and the OPTIONVAL placeholders; the key name is the remainder.
@@ -4277,6 +4392,7 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     } case err then {
         return
     }
+    emitMapIters symtab: symtab runtimeDir: runtimeDir nm: nm.stringview keyName: keyName.stringview valName: valName.stringview keyT: keyT.stringview valT: valT.stringview buf: buf
 }
 
 # emitMonos -- emit every collection-mono instance in the registry (List
