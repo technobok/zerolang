@@ -1452,6 +1452,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.CLASS then {
         return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
     } else {}
+    iwc: emitIoWrapperCreate symtab: symtab ctx: ctx call: call
+    if iwc.length > 0.u64 then {
+        return iwc
+    } else {}
     ctc: emitColTypedefCall symtab: symtab ctx: ctx call: call
     if ctc.length > 0.u64 then {
         return ctc
@@ -1683,9 +1687,20 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if isRecOrCls then {
                 fbtn9: typeNameOfReg9 symtab: symtab tid: bstamp
                 isFile9: false
-                if fbtn9.stringview == "File" when (definedInNonMain symtab: symtab ctx: ctx tid: bstamp) then {
-                    isFile9 = true
-                } else {}
+                fduo9: symtab.typing.definedInUnit.get key: bstamp
+                match (
+                    fduo9
+                ) case some then {
+                    if fduo9.stringview == "io" then {
+                        isFile9 = true
+                    } else {}
+                    if fduo9.stringview == "os" then {
+                        isFile9 = true
+                    } else {}
+                    if fduo9.stringview == "cli" then {
+                        isFile9 = true
+                    } else {}
+                } case none then {}
                 if isFile9 then {
                     isFN9: false
                     if mn2.stringview == "close" then {
@@ -1694,8 +1709,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     if mn2.stringview == "flush" then {
                         isFN9 = true
                     } else {}
+                    if mn2.stringview == "readLine" then {
+                        isFN9 = true
+                    } else {}
                     if isFN9 then {
-                        ffc9: cnameOf tid: bstamp name: "File"
+                        ffc9: cnameOf tid: bstamp name: fbtn9.stringview
                         needsAdd ctx: ctx name: "io"
                         ffn9: "io_file_\{mn2}".string
                         needsAdd ctx: ctx name: ffn9.stringview
@@ -3813,10 +3831,22 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         cid = thisTid
         tn = typeNameOfReg9 symtab: symtab tid: cid
     } else {
-        rid9: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
-        if rid9 > 0.u64 then {
-            cid = rid9
-        } else {}
+        # only canonicalize a SHELL (no defining unit) by name; a fully-registered
+        # type is used directly, so a cross-unit same-name type (io.Reader vs a
+        # main-unit Reader) is not re-resolved to the main unit's.
+        hasUnit9: false
+        duo0: symtab.typing.definedInUnit.get key: tid
+        match (
+            duo0
+        ) case some then {
+            hasUnit9 = true
+        } case none then {}
+        if hasUnit9 then {} else {
+            rid9: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
+            if rid9 > 0.u64 then {
+                cid = rid9
+            } else {}
+        }
     }
     cmid9: chaseColMono symtab: symtab tid: cid
     if cmid9 != cid then {
@@ -5366,14 +5396,87 @@ ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx} out u64 is {
     return 0.u64
 }
 
-# emitIoFileConformance -- File's protocol conformance helpers (File satisfies
-# Reader/Writer/Closer/Seeker), emitted after the File natives the wrappers call.
+# ioClassReferenced -- a reachable io/os/cli class named `name`.
+ioClassReferenced: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out bool is {
+    last: symtab.reg.nextTypeId
+    ti: 1.u64
+    for while ti < last loop {
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+            tn: typeNameOfReg9 symtab: symtab tid: ti
+            if tn.stringview == name then {
+                duo: symtab.typing.definedInUnit.get key: ti
+                match (
+                    duo
+                ) case some then {
+                    if duo.stringview == "io" then {
+                        return true
+                    } else {}
+                    if duo.stringview == "os" then {
+                        return true
+                    } else {}
+                    if duo.stringview == "cli" then {
+                        return true
+                    } else {}
+                } case none then {}
+            } else {}
+        } else {}
+        ti = ti + 1.u64
+    }
+    return false
+}
+
+# ioFrag -- load + append an io runtime fragment unconditionally.
+ioFrag: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView frag: StringView buf: String.borrow} is {
+    p9: nativePath runtimeDir: runtimeDir frag: frag
+    f9: loadIoFragment symtab: symtab ctx: ctx path: p9.stringview
+    buf.append f9.stringview
+    buf.append "\n"
+}
+
+# emitIoFileConformance -- protocol conformance helpers for every reachable io
+# class (File -> Reader/Writer/Closer/Seeker; BufWriter -> Writer; BufReader ->
+# Reader), emitted after the io natives the wrappers forward to.
 emitIoFileConformance: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
-    fid: ioFileId symtab: symtab ctx: ctx
-    if fid == 0.u64 then {
-        return
-    } else {}
-    emitProtocolImplsForType symtab: symtab ctx: ctx implTid: fid implName: "File" buf: buf
+    last: symtab.reg.nextTypeId
+    ti: 1.u64
+    for while ti < last loop {
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+            cmo9: monoOriginName symtab: symtab tid: ti
+            if cmo9.length == 0.u64 then {
+                duo9: symtab.typing.definedInUnit.get key: ti
+                isIoC9: false
+                match (
+                    duo9
+                ) case some then {
+                    if duo9.stringview == "io" then {
+                        isIoC9 = true
+                    } else {}
+                    if duo9.stringview == "os" then {
+                        isIoC9 = true
+                    } else {}
+                    if duo9.stringview == "cli" then {
+                        isIoC9 = true
+                    } else {}
+                } case none then {}
+                if isIoC9 then {
+                    cn9: typeNameOfReg9 symtab: symtab tid: ti
+                    okEmit9: false
+                    if cn9.stringview == "File" then {
+                        okEmit9 = true
+                    } else {
+                        unc9: "io_uses_\{cn9}".string
+                        if (needsHas ctx: ctx name: unc9.stringview) then {
+                            okEmit9 = true
+                        } else {}
+                    }
+                    if okEmit9 then {
+                        emitProtocolImplsForType symtab: symtab ctx: ctx implTid: ti implName: cn9.stringview buf: buf
+                    } else {}
+                } else {}
+            } else {}
+        } else {}
+        ti = ti + 1.u64
+    }
 }
 
 # emitIoStdStreams -- io.stdin/stdout/stderr: a borrowed Reader/Writer over a
@@ -5527,6 +5630,15 @@ emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_stat" frag: "_Z_IO_STAT" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_lstat" frag: "_Z_IO_LSTAT" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_listDir" frag: "_Z_IO_LIST_DIR" buf: buf
+    if (needsHas ctx: ctx name: "io_uses_BufWriter") then {
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_BUFWRITER_CREATE" buf: buf
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_BUFWRITER_FLUSH" buf: buf
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_BUFWRITER_WRITE" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "io_uses_BufReader") then {
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_BUFREADER_CREATE" buf: buf
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_BUFREADER_READ" buf: buf
+    } else {}
 }
 
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -5705,6 +5817,41 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             }
         } else {}
         tsp = tsp + 1.u64
+    }
+    # reachable io wrapper CLASSes (BufWriter/BufReader/TextWriter/TextReader) --
+    # after the protocols their .lock fields hold. File has its own emitter.
+    tsc: 0.u64
+    for while tsc < last loop {
+        if (symtab.reg.typetypeOf typeId: tsc) == ztypes.ztypetype.CLASS then {
+            scgen: isGenericType symtab: symtab tid: tsc
+            scmo: monoOriginName symtab: symtab tid: tsc
+            if scmo.length == 0.u64 when scgen == false then {
+                scn: typeNameOfReg9 symtab: symtab tid: tsc
+                cduo: symtab.typing.definedInUnit.get key: tsc
+                isIoC: false
+                match (
+                    cduo
+                ) case some then {
+                    if cduo.stringview == "io" then {
+                        isIoC = true
+                    } else {}
+                    if cduo.stringview == "os" then {
+                        isIoC = true
+                    } else {}
+                    if cduo.stringview == "cli" then {
+                        isIoC = true
+                    } else {}
+                } case none then {}
+                if isIoC when scn.stringview == "File" then {
+                    isIoC = false
+                } else {}
+                unb9: "io_uses_\{scn}".string
+                if isIoC when (needsHas ctx: ctx name: unb9.stringview) then {
+                    emitOneRecord symtab: symtab ctx: ctx tid: tsc name: scn.stringview buf: buf
+                } else {}
+            } else {}
+        } else {}
+        tsc = tsc + 1.u64
     }
 }
 
@@ -6062,14 +6209,29 @@ fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is 
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.CLASS then {} else {
         return 0.u64
     }
-    tn: typeNameOfReg9 symtab: symtab tid: tid
-    if tn.stringview == "File" then {} else {
+    omn9: monoOriginName symtab: symtab tid: tid
+    if omn9.length == 0.u64 then {} else {
         return 0.u64
     }
-    if (definedInNonMain symtab: symtab ctx: ctx tid: tid) then {} else {
-        return 0.u64
-    }
-    return tid
+    duo9: symtab.typing.definedInUnit.get key: tid
+    isIoT9: false
+    match (
+        duo9
+    ) case some then {
+        if duo9.stringview == "io" then {
+            isIoT9 = true
+        } else {}
+        if duo9.stringview == "os" then {
+            isIoT9 = true
+        } else {}
+        if duo9.stringview == "cli" then {
+            isIoT9 = true
+        } else {}
+    } case none then {}
+    if isIoT9 then {
+        return tid
+    } else {}
+    return 0.u64
 }
 
 # emitFileMethodCall -- a File method (close/read/write/seek/flush), native,
@@ -6105,7 +6267,8 @@ emitFileMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     if fid == 0.u64 then {
         return "".string
     } else {}
-    fc: cnameOf tid: fid name: "File"
+    fcn9: typeNameOfReg9 symtab: symtab tid: fid
+    fc: cnameOf tid: fid name: fcn9.stringview
     recv: aliasResolve ctx: ctx name: bn.stringview
     recvExpr: "&\{recv}".string
     if (isPtrVar ctx: ctx name: recv.stringview) then {
@@ -6135,6 +6298,104 @@ emitFileMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
         return "\{fc}_seek(\{recvExpr}, \{tv}, \{ov})"
     } else {}
     return "".string
+}
+
+# ioCreateWrapper -- the wrapper name X of an `io.X.create` callable, else "".
+ioCreateWrapper: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        ccn: atomTextOf n: n.child
+        if ccn.stringview == "create" then {
+            pb: dottedBaseAtom n: n.parent
+            if pb.stringview == "io" then {
+                return (dottedChildText n: n.parent)
+            } else {}
+        } else {}
+    } else {}
+    return "".string
+}
+
+# wrapperCreateArg -- one io-wrapper create arg by the create-param type: a
+# protocol-lock param projects the `.lock` base to that protocol; a class-lock
+# param takes the base's address; a scalar param emits the arg directly.
+wrapperCreateArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView ptid: u64} out String is {
+    prtn: typeNameOfReg9 symtab: symtab tid: ptid
+    prtid: resolveTypeIdByName symtab: symtab ctx: ctx name: prtn.stringview
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            al: unitLabel9 o: a.name
+            if al.stringview == label then {
+                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.PROTOCOL then {
+                    ab: dottedBaseAtom n: a.operation
+                    abr: aliasResolve ctx: ctx name: ab.stringview
+                    abnid: dottedBaseNodeId n: a.operation
+                    abtid: stampIdOf symtab: symtab nid: abnid
+                    abtn: typeNameOfReg9 symtab: symtab tid: abtid
+                    abcb: cnameOf tid: abtid name: abtn.stringview
+                    ablab: conformanceLabelFor symtab: symtab implTid: abtid protoTid: prtid
+                    return "\{abcb}_\{ablab}_create(&\{abr})"
+                } else {}
+                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.CLASS then {
+                    ab2: dottedBaseAtom n: a.operation
+                    abr2: aliasResolve ctx: ctx name: ab2.stringview
+                    return "&\{abr2}"
+                } else {}
+                return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+            } else {}
+        } else {}
+    }
+    return "0".string
+}
+
+# emitIoWrapperCreate -- `io.BufWriter.create to: w.lock capacity: 16` ->
+# z_t{id}_BufWriter_create(<projected/addressed args in param order>). "" for
+# any non-io-wrapper-create callee.
+emitIoWrapperCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    wn: ioCreateWrapper n: call.callable
+    if wn.length == 0.u64 then {
+        return "".string
+    } else {}
+    wid: resolveTypeIdByName symtab: symtab ctx: ctx name: wn.stringview
+    if wid == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.typetypeOf typeId: wid) == ztypes.ztypetype.CLASS then {} else {
+        return "".string
+    }
+    cco: symtab.typing.childOf parentTypeId: wid name: "create"
+    cid: 0.u64
+    match (
+        cco
+    ) case some then {
+        cid = cco
+    } case none then {}
+    if cid == 0.u64 then {
+        return "".string
+    } else {}
+    pnames: (List of: String)
+    pids: (List of: u64)
+    recFieldLists symtab: symtab tid: cid names: pnames ids: pids
+    args: "".string
+    pi: 0.u64
+    pn: pnames.length
+    for while pi < pn loop {
+        pnm: pnames.get i: pi
+        ptid: pids.get i: pi
+        astr: wrapperCreateArg symtab: symtab ctx: ctx call: call label: pnm.stringview ptid: ptid
+        if pi > 0.u64 then {
+            args.append ", "
+        } else {}
+        args.append astr.stringview
+        pi = pi + 1.u64
+    }
+    wcn: cnameOf tid: wid name: wn.stringview
+    un9w: "io_uses_\{wn}".string
+    needsAdd ctx: ctx name: un9w.stringview
+    return "\{wcn}_create(\{args})"
 }
 
 # emitIoCall -- a free io.* native call (io.readText/writeText/appendText/
@@ -6611,8 +6872,10 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
             } else {
                 frid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: ftn.stringview)
                 if frid > 0.u64 then {
+                    frid = chaseColMono symtab: symtab tid: frid
+                    frn2: typeNameOfReg9 symtab: symtab tid: frid
                     if (symtab.reg.hasDestructorName typeId: frid) then {
-                        fcb: cnameOf tid: frid name: ftn.stringview
+                        fcb: cnameOf tid: frid name: frn2.stringview
                         df: "    \{fcb}_destroy(&p->\{fname});\n"
                         buf.append df.stringview
                     } else {}
@@ -6622,6 +6885,18 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
         fi = fi + 1.u64
     }
     buf.append "}\n\n"
+}
+
+# lockFieldIsProtocol -- a `.lock` field whose locked type is a protocol stores
+# the protocol fat pointer BY VALUE (the borrow lives in its data); a class-typed
+# `.lock` stores a pointer to the container.
+lockFieldIsProtocol: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
+    ftn: typeNameOfReg9 symtab: symtab tid: fid
+    ftid: resolveTypeIdByName symtab: symtab ctx: ctx name: ftn.stringview
+    if ftid > 0.u64 when (symtab.reg.typetypeOf typeId: ftid) == ztypes.ztypetype.PROTOCOL then {
+        return true
+    } else {}
+    return false
 }
 
 emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
@@ -6645,9 +6920,12 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         if fct.length == 0.u64 then {
             fct = "int64_t".string
         } else {}
-        # a `.lock` field borrows the container -- store it as a pointer.
+        # a `.lock` field borrows the container: protocol-typed -> fat pointer by
+        # value; class-typed -> a pointer to the container.
         if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) then {
-            fct = "\{fct}*"
+            if (lockFieldIsProtocol symtab: symtab ctx: ctx fid: fid) then {} else {
+                fct = "\{fct}*"
+            }
         } else {}
         l1: "    \{fct} \{fname};\n"
         buf.append l1.stringview
@@ -6665,9 +6943,11 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         if fct2.length == 0.u64 then {
             fct2 = "int64_t".string
         } else {}
-        # a `.lock` field's meta_create param matches the pointer field.
+        # a `.lock` field's meta_create param matches the field (protocol by value).
         if (symtab.typing.isChildLockField parentTypeId: tid name: fname2.stringview) then {
-            fct2 = "\{fct2}*"
+            if (lockFieldIsProtocol symtab: symtab ctx: ctx fid: fid2) then {} else {
+                fct2 = "\{fct2}*"
+            }
         } else {}
         if fj > 0.u64 then {
             params.append ", "
@@ -6685,8 +6965,10 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     buf.append l4.stringview
     buf.append "    return z;\n"
     buf.append "}\n"
-    l5: "#define \{rc}_create \{rc}_meta_create\n"
-    buf.append l5.stringview
+    if (definedInNonMain symtab: symtab ctx: ctx tid: tid) then {} else {
+        l5: "#define \{rc}_create \{rc}_meta_create\n"
+        buf.append l5.stringview
+    }
     skipEqR: false
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.CLASS then {
         skipEqR = true
