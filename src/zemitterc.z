@@ -1109,6 +1109,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     e2: "\{bn2}.length"
                     return e2
                 } else {}
+                if mn2.stringview == "count" then {
+                    needsAdd ctx: ctx name: "count"
+                    ec2: "\{ctx.svC}_count(&\{bn2})"
+                    return ec2
+                } else {}
+                if mn2.stringview == "codepoints" then {
+                    needsAdd ctx: ctx name: "codepoints"
+                    ecp: "\{ctx.svC}_codepoints(&\{bn2})"
+                    return ecp
+                } else {}
                 if (isSvSimpleNative name: mn2.stringview) then {
                     # a no-paren method reference auto-calls
                     needsAdd ctx: ctx name: mn2.stringview
@@ -1901,7 +1911,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         wn9: n.name.stringview
         wnm: wn9.string
         wtn: stampNameDeep symtab: symtab n: n.value
-        wct: cTypeOf name: wtn.stringview
+        wct: cTypeForName symtab: symtab ctx: ctx name: wtn.stringview
         wv: emitExpr symtab: symtab ctx: ctx n: n.value
         if wct.length > 0.u64 then {
             lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
@@ -1912,6 +1922,9 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
         emitStmt symtab: symtab ctx: ctx n: n.body ind: ind tmp: tmp buf: buf
     } case forexpr then {
+        if (emitObjIterFor symtab: symtab ctx: ctx m: n ind: ind tmp: tmp buf: buf) then {
+            return
+        } else {}
         if (emitIntRangeFor symtab: symtab ctx: ctx m: n ind: ind tmp: tmp buf: buf) then {
             return
         } else {}
@@ -2124,6 +2137,167 @@ emitIfBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: String
         le: "\{ind}}\n"
         buf.append le.stringview
         return true
+    } else {
+        return false
+    }
+}
+
+# childExists -- does the type have a child of this name.
+childExists: function {symtab: zenv.ZSymbolTable tid: u64 name: StringView} out bool is {
+    co: symtab.typing.childOf parentTypeId: tid name: name
+    match (
+        co
+    ) case some then {
+        return true
+    } case none then {
+        return false
+    }
+}
+
+# loopVarTypeName -- the yield type name of an iterator loop, read from
+# the loop variable's first stamped reference in the body ("" if none).
+loopVarTypeName: function {symtab: zenv.ZSymbolTable body: (Option t: Node) lbl: StringView} out String is {
+    res: "".string
+    match (
+        body
+    ) case some then {
+        scanLoopVar symtab: symtab n: body lbl: lbl res: res
+    } case none then {}
+    return res
+}
+
+scanLoopVar: function {symtab: zenv.ZSymbolTable n: Node lbl: StringView res: String.borrow} is {
+    if res.length > 0.u64 then {
+        return
+    } else {}
+    match (
+        n
+    ) case atomid then {
+        if n.name.stringview == lbl then {
+            tid: stampIdOf symtab: symtab nid: n.nodeid.u64
+            if tid > 0.u64 then {
+                tn: typeNameOfReg9 symtab: symtab tid: tid
+                if tn.length > 0.u64 then {
+                    tv: tn.stringview
+                    res.append tv
+                } else {}
+            } else {}
+        } else {}
+    } case expression then {
+        scanLoopVar symtab: symtab n: n.expression lbl: lbl res: res
+    } case statement then {
+        with sit: n.statements.iterate do for s: sit loop {
+            scanLoopVar symtab: symtab n: s lbl: lbl res: res
+        }
+    } case statementline then {
+        scanLoopVar symtab: symtab n: n.statementline lbl: lbl res: res
+    } case call then {
+        with ait: n.arguments.iterate do for a: ait loop {
+            scanLoopVar symtab: symtab n: a lbl: lbl res: res
+        }
+    } case namedoperation then {
+        scanLoopVar symtab: symtab n: n.operation lbl: lbl res: res
+    } case binop then {
+        scanLoopVar symtab: symtab n: n.lhs lbl: lbl res: res
+        scanLoopVar symtab: symtab n: n.rhs lbl: lbl res: res
+    } case atomstring then {
+        with pit: n.stringparts.iterate do for p: pit loop {
+            scanLoopVar symtab: symtab n: p lbl: lbl res: res
+        }
+    } else {}
+}
+
+# emitObjIterFor -- `for x: <iter> loop` where <iter> is an iterator value
+# (a type with a `.call` child returning optionval/Option). Emits the
+# while(1) / call / tag==NONE break / payload-extract pattern. Value
+# payloads (optionval) extract `.data.some`; reftype payloads (Option)
+# wait on the heap-extract slice. Returns false when not an iterator loop.
+emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
+    if m.conditions.length != 1.u64 then {
+        return false
+    } else {}
+    c0: m.conditions.get i: 0.u64
+    match (
+        c0
+    ) case namedoperation then {
+        lbl: unitLabel9 o: c0.name
+        if lbl.length == 0.u64 then {
+            return false
+        } else {}
+        oeid: exprNodeId9 n: c0.operation
+        itid0: stampIdOf symtab: symtab nid: oeid
+        if itid0 == 0.u64 then {
+            return false
+        } else {}
+        itid: itid0
+        itn0: typeNameOfReg9 symtab: symtab tid: itid0
+        cano: ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: itn0.stringview
+        match (
+            cano
+        ) case some then {
+            if (childExists symtab: symtab tid: cano name: "call") then {
+                itid = cano
+            } else {}
+        } case none then {}
+        cco: symtab.typing.childOf parentTypeId: itid name: "call"
+        match (
+            cco
+        ) case some then {
+            ovid: 0.u64
+            {
+                ct: symtab.reg.typeById.get key: cco
+                match (
+                    ct
+                ) case some then {
+                    rto: ct.returnTypeId
+                    match (
+                        rto
+                    ) case some then {
+                        ovid = rto
+                    } case none then {}
+                } case none then {}
+            }
+            if ovid == 0.u64 then {
+                # native iterator call: returnTypeId unset. Resolve the
+                # yield type from the loop var's body usage -> optionval_T.
+                ytn: loopVarTypeName symtab: symtab body: m.body lbl: lbl.stringview
+                if ytn.length == 0.u64 then {
+                    return false
+                } else {}
+                ovnm: "optionval_\{ytn}".string
+                ovo: symtab.typing.monoByName.get key: ovnm.stringview.string
+                match (
+                    ovo
+                ) case some then {
+                    ovid = ovo
+                } case none then {
+                    return false
+                }
+            } else {}
+            iterv: emitExpr symtab: symtab ctx: ctx n: c0.operation
+            itn: typeNameOfReg9 symtab: symtab tid: itid
+            itc: cnameOf tid: itid name: itn.stringview
+            ovn: typeNameOfReg9 symtab: symtab tid: ovid
+            ovc: cnameOf tid: ovid name: ovn.stringview
+            ovu: cUpperOf text: ovn.stringview
+            payC: armPayloadC symtab: symtab ctx: ctx tid: ovid arm: "some"
+            mN: tmp.next
+            l0: "\{ind}while (1) {\n"
+            buf.append l0.stringview
+            l1: "\{ind}    \{ovc}_t _iter\{mN} = \{itc}_call(&\{iterv});\n"
+            buf.append l1.stringview
+            l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
+            buf.append l2.stringview
+            l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
+            buf.append l3.stringview
+            ind2: "\{ind}    "
+            emitBodyOpt symtab: symtab ctx: ctx o: m.body ind: ind2.stringview tmp: tmp buf: buf
+            l9: "\{ind}}\n"
+            buf.append l9.stringview
+            return true
+        } case none then {
+            return false
+        }
     } else {
         return false
     }
@@ -2512,6 +2686,23 @@ isCollectionOrigin: function {name: StringView} out bool is {
     return false
 }
 
+# cTypeForName -- the C type for a type NAME: scalar via cTypeOf, else
+# resolve the type id (across units) and use typeRefC; "" when unknown.
+cTypeForName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out String is {
+    sc: cTypeOf name: name
+    if sc.length > 0.u64 then {
+        return sc
+    } else {}
+    to: ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: name
+    match (
+        to
+    ) case some then {
+        return (typeRefC symtab: symtab ctx: ctx tid: to thisTid: 0.u64)
+    } case none then {
+        return "".string
+    }
+}
+
 # typeRefC -- the C spelling for a type id: scalars by name, records by
 # their id-based cname ("" when unsupported).
 typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} out String is {
@@ -2560,6 +2751,16 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         rc2: cnameOf tid: cid name: tn.stringview
         rt8: "\{rc2}_t"
         return rt8
+    } else {}
+    if ctt == ztypes.ztypetype.CLASS then {
+        rc3: cnameOf tid: cid name: tn.stringview
+        rt7: "\{rc3}_t"
+        return rt7
+    } else {}
+    if ctt == ztypes.ztypetype.UNION then {
+        rc4: cnameOf tid: cid name: tn.stringview
+        rt6: "\{rc4}_t"
+        return rt6
     } else {}
     return "".string
 }
@@ -3109,8 +3310,8 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         fnsBuf.append "void z_main(void) {\n"
         fnsBuf.append "}\n\n"
     }
-    emitNeededNatives ctx: ctx runtimeDir: runtimeDir buf: buf
     emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitNeededNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
     buf.append poolBuf.stringview
     buf.append "\n"
@@ -3168,7 +3369,7 @@ unitHasMain9: function {mainOp: Node} out bool is {
 
 # emitNeededNatives -- the gated native fragments for the needs the body
 # walk collected, in the reference's emission order.
-emitNeededNatives: function {ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+emitNeededNatives: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     emitNativeIf ctx: ctx need: "isEmpty" frag: "_Z_SV_IS_EMPTY" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "isAscii" frag: "_Z_SV_IS_ASCII" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "startsWith" frag: "_Z_SV_STARTS_WITH" runtimeDir: runtimeDir buf: buf
@@ -3208,6 +3409,21 @@ emitNeededNatives: function {ctx: Ctx runtimeDir: StringView buf: String.borrow}
     emitNativeIf ctx: ctx need: "repeated" frag: "_Z_SV_REPEAT" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "concat" frag: "_Z_SV_CONCAT" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "toUpperAscii" frag: "_Z_SV_TO_UPPER_ASCII" runtimeDir: runtimeDir buf: buf
+    hasCount: needsHas ctx: ctx name: "count"
+    hasCp: needsHas ctx: ctx name: "codepoints"
+    anyUtf8: hasCount
+    if hasCp then { anyUtf8 = true } else {}
+    if anyUtf8 then {
+        pu: nativePath runtimeDir: runtimeDir frag: "_Z_SV_UTF8_DECODE"
+        scu: ctx.svC.copy
+        tcu: ctx.strC.copy
+        fu: loadFragment path: pu.stringview svC: scu.stringview strC: tcu.stringview
+        buf.append fu.stringview
+    } else {}
+    emitNativeIf ctx: ctx need: "count" frag: "_Z_SV_COUNT" runtimeDir: runtimeDir buf: buf
+    if hasCp then {
+        emitCodepointsNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    } else {}
 }
 
 nativePath: function {runtimeDir: StringView frag: StringView} out String is {
@@ -3900,6 +4116,44 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     buf.append lo.stringview
     emitFnBody symtab: symtab ctx: ctx op: op buf: buf
     buf.append "}\n\n"
+}
+
+# emitCodepointsNatives -- the CpIter struct + codepoints factory + call,
+# substituting the canonical z_CpIter / z_optionval_u32 to id-based cnames.
+emitCodepointsNatives: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    cpId: 0.u64
+    cpo: symtab.typing.resolved.get key: "system.CpIter".string
+    match (
+        cpo
+    ) case some then {
+        cpId = cpo
+    } case none then {}
+    ovId: 0.u64
+    ovo: symtab.typing.monoByName.get key: "optionval_u32".string
+    match (
+        ovo
+    ) case some then {
+        ovId = ovo
+    } case none then {}
+    cpc: cnameOf tid: cpId name: "CpIter"
+    ovc: cnameOf tid: ovId name: "optionval_u32"
+    emitCpFrag runtimeDir: runtimeDir frag: "_Z_SV_CPITER_STRUCT" svC: ctx.svC.stringview cpc: cpc.stringview ovc: ovc.stringview buf: buf
+    emitCpFrag runtimeDir: runtimeDir frag: "_Z_SV_CODEPOINTS" svC: ctx.svC.stringview cpc: cpc.stringview ovc: ovc.stringview buf: buf
+    emitCpFrag runtimeDir: runtimeDir frag: "_Z_SV_CPITER_CALL" svC: ctx.svC.stringview cpc: cpc.stringview ovc: ovc.stringview buf: buf
+}
+
+emitCpFrag: function {runtimeDir: StringView frag: StringView svC: StringView cpc: StringView ovc: StringView buf: String.borrow} is {
+    p: "\{runtimeDir}/natives/\{frag}.inc"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        s1: substituteAll text: raw needle: "z_CpIter" repl: cpc
+        s2: substituteAll text: s1 needle: "z_optionval_u32" repl: ovc
+        s3: substituteAll text: s2 needle: "z_StringView" repl: svC
+        buf.append s3.stringview
+        buf.append "\n"
+    } case err then {}
 }
 
 mainNameOf9: function {program: Node} out String is {
