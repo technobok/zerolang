@@ -806,6 +806,41 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     return "".string
 }
 
+# emitSetMethodCall -- an arg-taking method on a Set-mono receiver (a heap
+# pointer, so the receiver passes directly without `&`). "" when not a Set
+# call; the no-arg `.length`/`.iterate` reads ride the dottedpath leg.
+emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    mn: dottedChildText n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    bnid: dottedBaseNodeId n: call.callable
+    bt: stampIdOf symtab: symtab nid: bnid
+    omn: monoOriginName symtab: symtab tid: bt
+    if omn.stringview == "Set" then {} else {
+        return "".string
+    }
+    btn: typeNameOfReg9 symtab: symtab tid: bt
+    cb: cnameOf tid: bt name: btn.stringview
+    if mn.stringview == "add" then {
+        v: listArg symtab: symtab ctx: ctx call: call label: "item"
+        e0: "\{cb}_add(\{bn}, \{v})"
+        return e0
+    } else {}
+    if mn.stringview == "has" then {
+        v: listArg symtab: symtab ctx: ctx call: call label: "item"
+        e1: "\{cb}_has(\{bn}, \{v})"
+        return e1
+    } else {}
+    if mn.stringview == "delete" then {
+        v: listArg symtab: symtab ctx: ctx call: call label: "item"
+        e2: "\{cb}_delete(\{bn}, \{v})"
+        return e2
+    } else {}
+    return "".string
+}
+
 # listArg -- the C expression for a labeled list-method argument ("0" if
 # absent).
 listArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView} out String is {
@@ -1044,6 +1079,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if lmc.length > 0.u64 then {
         return lmc
     } else {}
+    smc: emitSetMethodCall symtab: symtab ctx: ctx call: call
+    if smc.length > 0.u64 then {
+        return smc
+    } else {}
     tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: call
     if tdq.length > 0.u64 then {
         return tdq
@@ -1275,6 +1314,22 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 if mn2.stringview == "length" then {
                     elv: "\{bn2}.length"
                     return elv
+                } else {}
+            } else {}
+            if bsmn.stringview == "Set" then {
+                if mn2.stringview == "length" then {
+                    esl: "\{bn2}->length"
+                    return esl
+                } else {}
+                if mn2.stringview == "capacity" then {
+                    esc: "\{bn2}->capacity"
+                    return esc
+                } else {}
+                bstns: typeNameOfReg9 symtab: symtab tid: bstamp
+                scb2: cnameOf tid: bstamp name: bstns.stringview
+                if mn2.stringview == "iterate" then {
+                    esi: "\{scb2}_iterate(\{bn2})"
+                    return esi
                 } else {}
             } else {}
             if rtt == ztypes.ztypetype.DATA then {
@@ -1873,6 +1928,18 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             tmp.listFrees.append lfv
             return
         } else {}
+        if ltmn.stringview == "Set" then {
+            stn: typeNameOfReg9 symtab: symtab tid: ltid
+            scb: cnameOf tid: ltid name: stn.stringview
+            scap: listCapArg symtab: symtab ctx: ctx n: n.value
+            sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
+            buf.append sb0.stringview
+            sfree: "    \{scb}_destroy(\{nm});\n"
+            sfsv: sfree.stringview
+            sfv: sfsv.string
+            tmp.listFrees.append sfv
+            return
+        } else {}
         if tn.stringview == "StringView" then {
             lvN: bindLitIndex symtab: symtab ctx: ctx n: n.value
             if lvN > 0.u64 then {
@@ -2380,6 +2447,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             ovc: cnameOf tid: ovid name: ovn.stringview
             ovu: cUpperOf text: ovn.stringview
             payC: armPayloadC symtab: symtab ctx: ctx tid: ovid arm: "some"
+            oovorig: monoOriginName symtab: symtab tid: ovid
             mN: tmp.next
             l0: "\{ind}while (1) {\n"
             buf.append l0.stringview
@@ -2387,8 +2455,14 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             buf.append l1.stringview
             l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
             buf.append l2.stringview
-            l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
-            buf.append l3.stringview
+            if oovorig.stringview == "OptionView" then {
+                # borrowed-view yield: data is a void* into the container
+                l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
+                buf.append l3v.stringview
+            } else {
+                l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
+                buf.append l3.stringview
+            }
             ind2: "\{ind}    "
             emitBodyOpt symtab: symtab ctx: ctx o: m.body ind: ind2.stringview tmp: tmp buf: buf
             l9: "\{ind}}\n"
@@ -3323,9 +3397,13 @@ collectFnLiterals: function {n: Node ids: (List of: u64) texts: (List of: String
 # emitC -- emit the C translation unit for a typechecked program.
 emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView} out String is {
     buf: "".string
+    needsHash: usesHashCollections symtab: symtab
     buf.append "/* Generated by zerolang compiler */\n"
     buf.append "\n"
     buf.append "#define _POSIX_C_SOURCE 200809L\n"
+    if needsHash then {
+        buf.append "#define _DEFAULT_SOURCE\n"
+    } else {}
     buf.append "\n"
     buf.append "#include <stdio.h>\n"
     buf.append "#include <stdint.h>\n"
@@ -3338,6 +3416,10 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "#include <sys/stat.h>\n"
     buf.append "#include <sys/types.h>\n"
     buf.append "#include <dirent.h>\n"
+    if needsHash then {
+        buf.append "#include <sys/random.h>\n"
+        buf.append "#include <sys/syscall.h>\n"
+    } else {}
     buf.append "\n"
     buf.append "static _Noreturn void z_panic(const char* msg) {\n"
     buf.append "    fprintf(stderr, \"zpanic: %s\\n\", msg);\n"
@@ -3385,6 +3467,12 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     f2: loadFragment path: p2.stringview svC: svC.stringview strC: strC.stringview
     buf.append f2.stringview
     buf.append "\n"
+    if needsHash then {
+        ph: "\{runtimeDir}/z_hash.inc"
+        fh: loadFragment path: ph.stringview svC: svC.stringview strC: strC.stringview
+        buf.append fh.stringview
+        buf.append "\n"
+    } else {}
     mn: mainNameOf9 program: program
     litIds: (List of: u64)
     litTexts: (List of: String)
@@ -3422,6 +3510,9 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "\n"
     buf.append fnsBuf.stringview
     buf.append "int main(int argc, char* argv[]) {\n"
+    if needsHash then {
+        buf.append "    z_siphash_init();\n"
+    } else {}
     buf.append "    z_main();\n"
     buf.append "    return 0;\n"
     buf.append "}\n"
@@ -3890,6 +3981,139 @@ payloadDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 arm: St
     return "".string
 }
 
+# usesHashCollections -- true when the program instantiates any Set or Map
+# mono (gates the SipHash runtime + its startup seed).
+usesHashCollections: function {symtab: zenv.ZSymbolTable} out bool is {
+    last: symtab.reg.nextTypeId
+    t: 0.u64
+    for while t < last loop {
+        onm: monoOriginName symtab: symtab tid: t
+        if onm.stringview == "Set" then {
+            return true
+        } else {}
+        if onm.stringview == "Map" then {
+            return true
+        } else {}
+        t = t + 1.u64
+    }
+    return false
+}
+
+# monoIdByName -- a mono instance id looked up by its registry name, 0 absent.
+monoIdByName: function {symtab: zenv.ZSymbolTable name: StringView} out u64 is {
+    mo: symtab.typing.monoByName.get key: name.string
+    match (
+        mo
+    ) case some then {
+        return mo
+    } case none then {
+        return 0.u64
+    }
+}
+
+# monoElemName -- a mono name's element segment, dropping a known prefix
+# (e.g. "Set_i64" with prefixLen 4 -> "i64"). Substring rides String.stringview
+# (a bare StringView receiver mis-resolves `from:/to:` to a .create).
+monoElemName: function {full: String prefixLen: u64} out String is {
+    fl: full.length
+    rest: (full.stringview from: prefixLen to: fl)
+    return rest.string
+}
+
+# setHashBody / setEqBody / setDestroyItems -- the element-kind-specific
+# fragments of a Set mono: SipHash + memcmp + per-item free for String keys,
+# the integer hash + `==` + no item cleanup otherwise.
+setHashBody: function {isStr: bool} out String is {
+    if isStr then {
+        return "z_siphash_string(_key)".string
+    } else {}
+    return "z_hash_u64((uint64_t)_key)".string
+}
+
+setEqBody: function {isStr: bool} out String is {
+    if isStr then {
+        return "_a.size == _b.size && memcmp(_a.data, _b.data, _a.size) == 0".string
+    } else {}
+    return "_a == _b".string
+}
+
+setDestroyItems: function {isStr: bool strC: StringView} out String is {
+    if isStr then {
+        return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n            \{strC}_free(&p->entries[i].item);\n        }\n    }\n".string
+    } else {}
+    return "".string
+}
+
+# emitOptionViewMono -- the borrowed-view option a collection iterator yields:
+# a {tag; void* data} struct with a no-op destroy (the view owns nothing).
+emitOptionViewMono: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    ovu: cUpperOf text: mn.stringview
+    buf.append "typedef enum {\n"
+    l1: "    Z_\{ovu}_TAG_NONE,\n"
+    buf.append l1.stringview
+    l2: "    Z_\{ovu}_TAG_SOME,\n"
+    buf.append l2.stringview
+    l3: "} z_\{nm}_tag_t;\n"
+    buf.append l3.stringview
+    buf.append "typedef struct {\n"
+    l4: "    z_\{nm}_tag_t tag;\n"
+    buf.append l4.stringview
+    buf.append "    void* data;\n"
+    l5: "} z_\{nm}_t;\n"
+    buf.append l5.stringview
+    l6: "static void z_\{nm}_destroy(z_\{nm}_t* u) { (void)u; }\n\n"
+    buf.append l6.stringview
+}
+
+# emitSetMono -- substitute z_Set.c.tmpl for a Set instance (compact-dict
+# struct + add/has/delete/iterate + the SetIter companion). Depends on the
+# element's OptionView mono being emitted first (the iterator yields it).
+emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    mcr: cUpperOf text: nm.stringview
+    elemName: monoElemName full: mn prefixLen: 4.u64
+    itemT: cTypeForName symtab: symtab ctx: ctx name: elemName.stringview
+    isStr: elemName.stringview == "String"
+    ovName: "OptionView_\{elemName}".string
+    ovId: monoIdByName symtab: symtab name: ovName.stringview
+    siName: "SetIter_\{elemName}".string
+    siId: monoIdByName symtab: symtab name: siName.stringview
+    if ovId == 0.u64 then {
+        return
+    } else {}
+    if siId == 0.u64 then {
+        return
+    } else {}
+    ov: cbaseNoPrefix tid: ovId name: ovName.stringview
+    ovu: cUpperOf text: ovName.stringview
+    si: cbaseNoPrefix tid: siId name: siName.stringview
+    hashBody: setHashBody isStr: isStr
+    eqBody: setEqBody isStr: isStr
+    destroyItems: setDestroyItems isStr: isStr strC: ctx.strC.stringview
+    p: "\{runtimeDir}/z_Set.c.tmpl"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+        t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
+        t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringview
+        t4: applyTmpl text: t3 key: "HASH_BODY" val: hashBody.stringview
+        t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringview
+        t6: applyTmpl text: t5 key: "DESTROY_ITEMS" val: destroyItems.stringview
+        t7: applyTmpl text: t6 key: "OPTIONVIEW" val: ov.stringview
+        t8: applyTmpl text: t7 key: "OPTIONVIEW_TAG" val: ovu.stringview
+        t9: applyTmpl text: t8 key: "SETITER" val: si.stringview
+        buf.append t9.stringview
+        buf.append "\n"
+    } case err then {
+        return
+    }
+}
+
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -3936,6 +4160,16 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         } else {}
         tiu = tiu + 1.u64
     }
+    # OptionView structs -- the borrowed-view option every collection
+    # iterator yields; emitted before the collections that reference it.
+    tiov: 0.u64
+    for while tiov < last loop {
+        oovnm: monoOriginName symtab: symtab tid: tiov
+        if oovnm.stringview == "OptionView" then {
+            emitOptionViewMono symtab: symtab ctx: ctx monoId: tiov buf: buf
+        } else {}
+        tiov = tiov + 1.u64
+    }
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
     tid: 0.u64
@@ -3953,6 +4187,16 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid2 buf: buf
         } else {}
         tid2 = tid2 + 1.u64
+    }
+    # Set monos last -- the compact-dict + SetIter; needs its element's
+    # OptionView (above) already defined.
+    tset: 0.u64
+    for while tset < last loop {
+        snm: monoOriginName symtab: symtab tid: tset
+        if snm.stringview == "Set" then {
+            emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tset buf: buf
+        } else {}
+        tset = tset + 1.u64
     }
 }
 

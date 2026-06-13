@@ -1,0 +1,192 @@
+#define Z_@@MACRO@@_INDEX_EMPTY (-1)
+#define Z_@@MACRO@@_INDEX_DELETED (-2)
+
+typedef struct {
+    uint8_t alive;
+    uint64_t hash;
+    @@ITEM_T@@ item;
+} z_@@NAME@@_entry_t;
+
+typedef struct z_@@NAME@@_t {
+    uint64_t capacity;
+    uint64_t length;
+    uint64_t entries_len;
+    uint64_t entries_cap;
+    int64_t* indices;
+    z_@@NAME@@_entry_t* entries;
+} z_@@NAME@@_t;
+
+static uint64_t z_@@NAME@@_hash_item(@@ITEM_T@@ _key);
+static uint64_t z_@@NAME@@_hash_item(@@ITEM_T@@ _key) {
+    return @@HASH_BODY@@;
+}
+
+static int z_@@NAME@@_items_equal(@@ITEM_T@@ _a, @@ITEM_T@@ _b);
+static int z_@@NAME@@_items_equal(@@ITEM_T@@ _a, @@ITEM_T@@ _b) {
+    return @@EQ_BODY@@;
+}
+
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* p);
+static void z_@@NAME@@_destroy(z_@@NAME@@_t* p) {
+    if (!p) return;
+@@DESTROY_ITEMS@@    free(p->indices);
+    free(p->entries);
+    free(p);
+}
+
+static z_@@NAME@@_t* z_@@NAME@@_create(uint64_t _capacity);
+static z_@@NAME@@_t* z_@@NAME@@_create(uint64_t _capacity) {
+    z_@@NAME@@_t* _this = (z_@@NAME@@_t*)z_xmalloc(sizeof(z_@@NAME@@_t));
+    *_this = (z_@@NAME@@_t){0};
+    if (_capacity < 8) _capacity = 0;
+    _this->capacity = _capacity;
+    _this->entries_cap = _capacity;
+    if (_capacity > 0) {
+        _this->indices = (int64_t*)z_xmalloc(_capacity * sizeof(int64_t));
+        for (uint64_t i = 0; i < _capacity; i++) {
+            _this->indices[i] = Z_@@MACRO@@_INDEX_EMPTY;
+        }
+        _this->entries = (z_@@NAME@@_entry_t*)z_xcalloc(_capacity, sizeof(z_@@NAME@@_entry_t));
+    }
+    return _this;
+}
+
+static void z_@@NAME@@_grow(z_@@NAME@@_t* _this);
+static void z_@@NAME@@_grow(z_@@NAME@@_t* _this) {
+    uint64_t old_cap = _this->capacity;
+    uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;
+    z_@@NAME@@_entry_t* old_entries = _this->entries;
+    uint64_t old_entries_len = _this->entries_len;
+    int64_t* new_indices = (int64_t*)z_xmalloc(new_cap * sizeof(int64_t));
+    for (uint64_t i = 0; i < new_cap; i++) {
+        new_indices[i] = Z_@@MACRO@@_INDEX_EMPTY;
+    }
+    z_@@NAME@@_entry_t* new_entries = (z_@@NAME@@_entry_t*)z_xcalloc(new_cap, sizeof(z_@@NAME@@_entry_t));
+    uint64_t new_entries_len = 0;
+    for (uint64_t i = 0; i < old_entries_len; i++) {
+        if (!old_entries[i].alive) continue;
+        new_entries[new_entries_len] = old_entries[i];
+        uint64_t probe = old_entries[i].hash & (new_cap - 1);
+        while (new_indices[probe] != Z_@@MACRO@@_INDEX_EMPTY) {
+            probe = (probe + 1) & (new_cap - 1);
+        }
+        new_indices[probe] = (int64_t)new_entries_len;
+        new_entries_len++;
+    }
+    free(_this->indices);
+    free(old_entries);
+    _this->indices = new_indices;
+    _this->entries = new_entries;
+    _this->capacity = new_cap;
+    _this->entries_cap = new_cap;
+    _this->entries_len = new_entries_len;
+}
+
+static int64_t z_@@NAME@@_find(z_@@NAME@@_t* _this, @@ITEM_T@@ _item, uint64_t _hash, int64_t* _slot_out);
+static int64_t z_@@NAME@@_find(z_@@NAME@@_t* _this, @@ITEM_T@@ _item, uint64_t _hash, int64_t* _slot_out) {
+    if (_this->capacity == 0) return -1;
+    uint64_t probe = _hash & (_this->capacity - 1);
+    for (uint64_t i = 0; i < _this->capacity; i++) {
+        int64_t slot = _this->indices[probe];
+        if (slot == Z_@@MACRO@@_INDEX_EMPTY) {
+            if (_slot_out) *_slot_out = (int64_t)probe;
+            return -1;
+        }
+        if (slot != Z_@@MACRO@@_INDEX_DELETED) {
+            if (_this->entries[slot].hash == _hash && z_@@NAME@@_items_equal(_this->entries[slot].item, _item)) {
+                if (_slot_out) *_slot_out = (int64_t)probe;
+                return slot;
+            }
+        }
+        probe = (probe + 1) & (_this->capacity - 1);
+    }
+    return -1;
+}
+
+static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+static int z_@@NAME@@_add(z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+    uint64_t h = z_@@NAME@@_hash_item(_item);
+    int64_t existing = z_@@NAME@@_find(_this, _item, h, NULL);
+    if (existing >= 0) {
+        return 0;
+    }
+    if (_this->capacity == 0 || (_this->length + 1) * 3 >= _this->capacity * 2) {
+        z_@@NAME@@_grow(_this);
+    }
+    uint64_t probe = h & (_this->capacity - 1);
+    int64_t first_deleted = -1;
+    for (uint64_t i = 0; i < _this->capacity; i++) {
+        int64_t slot = _this->indices[probe];
+        if (slot == Z_@@MACRO@@_INDEX_EMPTY) {
+            if (first_deleted >= 0) probe = (uint64_t)first_deleted;
+            break;
+        }
+        if (slot == Z_@@MACRO@@_INDEX_DELETED && first_deleted < 0) {
+            first_deleted = (int64_t)probe;
+        }
+        probe = (probe + 1) & (_this->capacity - 1);
+    }
+    if (_this->entries_len >= _this->entries_cap) {
+        uint64_t new_ec = _this->entries_cap == 0 ? 8 : _this->entries_cap * 2;
+        _this->entries = (z_@@NAME@@_entry_t*)z_xrealloc(_this->entries, new_ec * sizeof(z_@@NAME@@_entry_t));
+        for (uint64_t i = _this->entries_cap; i < new_ec; i++) {
+            _this->entries[i] = (z_@@NAME@@_entry_t){0};
+        }
+        _this->entries_cap = new_ec;
+    }
+    int64_t new_idx = (int64_t)_this->entries_len;
+    _this->entries[new_idx].alive = 1;
+    _this->entries[new_idx].hash = h;
+    _this->entries[new_idx].item = _item;
+    _this->entries_len++;
+    _this->indices[probe] = new_idx;
+    _this->length++;
+    return 1;
+}
+
+static int z_@@NAME@@_has(z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+static int z_@@NAME@@_has(z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+    uint64_t h = z_@@NAME@@_hash_item(_item);
+    return z_@@NAME@@_find(_this, _item, h, NULL) >= 0;
+}
+
+static int z_@@NAME@@_delete(z_@@NAME@@_t* _this, @@ITEM_T@@ _item);
+static int z_@@NAME@@_delete(z_@@NAME@@_t* _this, @@ITEM_T@@ _item) {
+    uint64_t h = z_@@NAME@@_hash_item(_item);
+    int64_t slot = -1;
+    int64_t idx = z_@@NAME@@_find(_this, _item, h, &slot);
+    if (idx < 0) return 0;
+    _this->entries[idx].alive = 0;
+    _this->indices[slot] = Z_@@MACRO@@_INDEX_DELETED;
+    _this->length--;
+    return 1;
+}
+
+typedef struct {
+    z_@@NAME@@_t* s;
+    uint64_t idx;
+} z_@@SETITER@@_t;
+
+static z_@@OPTIONVIEW@@_t z_@@SETITER@@_call(z_@@SETITER@@_t* _it);
+static z_@@OPTIONVIEW@@_t z_@@SETITER@@_call(z_@@SETITER@@_t* _it) {
+    z_@@OPTIONVIEW@@_t _out = {0};
+    while (_it->idx < _it->s->entries_len) {
+        if (_it->s->entries[_it->idx].alive) {
+            _out.tag = Z_@@OPTIONVIEW_TAG@@_TAG_SOME;
+            _out.data = &_it->s->entries[_it->idx].item;
+            _it->idx++;
+            return _out;
+        }
+        _it->idx++;
+    }
+    _out.tag = Z_@@OPTIONVIEW_TAG@@_TAG_NONE;
+    return _out;
+}
+
+static z_@@SETITER@@_t z_@@NAME@@_iterate(z_@@NAME@@_t* _this);
+static z_@@SETITER@@_t z_@@NAME@@_iterate(z_@@NAME@@_t* _this) {
+    z_@@SETITER@@_t _it = {0};
+    _it.s = _this;
+    _it.idx = 0;
+    return _it;
+}
