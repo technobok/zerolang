@@ -21,6 +21,17 @@ TmpCtr: class {
     }
 }
 
+# optU64Or9 -- an (optionval t: u64) to a plain u64 (0 when none).
+optU64Or9: function {o: (optionval t: u64)} out u64 is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return 0.u64
+    }
+}
+
 # cnameOf -- the id-based C name base for a type ("z_t{id}_{name}", dots
 # joined with underscores). Mirrors the reference's _assign_cname scheme;
 # ids differ between the two typecheckers by design.
@@ -1118,6 +1129,21 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     needsAdd ctx: ctx name: "codepoints"
                     ecp: "\{ctx.svC}_codepoints(&\{bn2})"
                     return ecp
+                } else {}
+                if mn2.stringview == "parseI64" then {
+                    needsAdd ctx: ctx name: "parseI64"
+                    epi: "\{ctx.svC}_parseI64(&\{bn2})"
+                    return epi
+                } else {}
+                if mn2.stringview == "parseU64" then {
+                    needsAdd ctx: ctx name: "parseU64"
+                    epu: "\{ctx.svC}_parseU64(&\{bn2})"
+                    return epu
+                } else {}
+                if mn2.stringview == "parseF64" then {
+                    needsAdd ctx: ctx name: "parseF64"
+                    epf: "\{ctx.svC}_parseF64(&\{bn2})"
+                    return epf
                 } else {}
                 if (isSvSimpleNative name: mn2.stringview) then {
                     # a no-paren method reference auto-calls
@@ -3233,6 +3259,12 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "#include <stdlib.h>\n"
     buf.append "#include <stdbool.h>\n"
     buf.append "#include <string.h>\n"
+    buf.append "#include <errno.h>\n"
+    buf.append "#include <fcntl.h>\n"
+    buf.append "#include <unistd.h>\n"
+    buf.append "#include <sys/stat.h>\n"
+    buf.append "#include <sys/types.h>\n"
+    buf.append "#include <dirent.h>\n"
     buf.append "\n"
     buf.append "static _Noreturn void z_panic(const char* msg) {\n"
     buf.append "    fprintf(stderr, \"zpanic: %s\\n\", msg);\n"
@@ -3423,6 +3455,15 @@ emitNeededNatives: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: Stri
     emitNativeIf ctx: ctx need: "count" frag: "_Z_SV_COUNT" runtimeDir: runtimeDir buf: buf
     if hasCp then {
         emitCodepointsNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "parseI64") then {
+        emitParseNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_PARSE_I64" mono: "resultval_i64_parseerror" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "parseU64") then {
+        emitParseNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_PARSE_U64" mono: "resultval_u64_parseerror" buf: buf
+    } else {}
+    if (needsHas ctx: ctx name: "parseF64") then {
+        emitParseNative symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_PARSE_F64" mono: "resultval_f64_parseerror" buf: buf
     } else {}
 }
 
@@ -3642,16 +3683,66 @@ listviewMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 nm: St
     return "".string
 }
 
+# isGenericType -- the type is a generic template (arms typed by generic
+# params; never emitted as a concrete struct).
+isGenericType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
+    t: symtab.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.isgeneric
+    } case none then {
+        return false
+    }
+}
+
+# definedInNonMain -- the type is defined in a non-main (system/io/...)
+# unit (a reachable library type to emit alongside the main closure).
+definedInNonMain: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    duo: symtab.typing.definedInUnit.get key: tid
+    match (
+        duo
+    ) case some then {
+        if duo.stringview == ctx.mainName.stringview then {
+            return false
+        } else {
+            return true
+        }
+    } case none then {
+        return false
+    }
+}
+
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     last: symtab.reg.nextTypeId
-    # optionval variant monos first -- iterators/collection-gets return
-    # them by value; payloads are numerics (now incl. i128/u128).
+    # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
+    # payloads of the variant monos / used directly.
+    tsv: 0.u64
+    for while tsv < last loop {
+        if (symtab.reg.typetypeOf typeId: tsv) == ztypes.ztypetype.VARIANT then {
+            svo: monoOriginName symtab: symtab tid: tsv
+            svgen: isGenericType symtab: symtab tid: tsv
+            if svo.length == 0.u64 when svgen == false then {
+                svu: definedInNonMain symtab: symtab ctx: ctx tid: tsv
+                if svu then {
+                    svn: typeNameOfReg9 symtab: symtab tid: tsv
+                    emitOneVariant symtab: symtab ctx: ctx tid: tsv name: svn.stringview buf: buf
+                } else {}
+            } else {}
+        } else {}
+        tsv = tsv + 1.u64
+    }
+    # optionval + resultval variant monos -- iterators/collection-gets /
+    # parsers return them by value (payloads now resolvable).
     tido: 0.u64
     for while tido < last loop {
         oonm: monoOriginName symtab: symtab tid: tido
-        if oonm.stringview == "optionval" then {
+        isVm: false
+        if oonm.stringview == "optionval" then { isVm = true } else {}
+        if oonm.stringview == "resultval" then { isVm = true } else {}
+        if isVm then {
             oovn: typeNameOfReg9 symtab: symtab tid: tido
             emitOneVariant symtab: symtab ctx: ctx tid: tido name: oovn.stringview buf: buf
         } else {}
@@ -3859,7 +3950,7 @@ emitOneVariant: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Stri
                     qtn: typeNameOfReg9 symtab: symtab tid: qco
                     qsc: cTypeOf name: qtn.stringview
                     if qsc.length == 0.u64 then {
-                        qrid: userFnId symtab: symtab ctx: ctx name: qtn.stringview
+                        qrid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: qtn.stringview)
                         if qrid > 0.u64 then {
                             qtt: symtab.reg.typetypeOf typeId: qrid
                             isAgg: false
@@ -3978,7 +4069,7 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
             fscalar: cTypeOf name: ftn.stringview
             fdone: false
             if fscalar.length == 0.u64 then {
-                frid: userFnId symtab: symtab ctx: ctx name: ftn.stringview
+                frid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: ftn.stringview)
                 if frid > 0.u64 then {
                     ftt: symtab.reg.typetypeOf typeId: frid
                     isAggF: false
@@ -4116,6 +4207,31 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     buf.append lo.stringview
     emitFnBody symtab: symtab ctx: ctx op: op buf: buf
     buf.append "}\n\n"
+}
+
+# emitParseNative -- a parse fragment, substituting the canonical
+# z_resultval_*_parseerror to the mono's id-based cname and z_StringView.
+emitParseNative: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView frag: StringView mono: StringView buf: String.borrow} is {
+    mid: 0.u64
+    mo: symtab.typing.monoByName.get key: mono.string
+    match (
+        mo
+    ) case some then {
+        mid = mo
+    } case none then {}
+    mc: cnameOf tid: mid name: mono
+    p: "\{runtimeDir}/natives/\{frag}.inc"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        cn: "z_\{mono}"
+        s1: substituteAll text: raw needle: cn.stringview repl: mc.stringview
+        scv: ctx.svC.copy
+        s2: substituteAll text: s1 needle: "z_StringView" repl: scv.stringview
+        buf.append s2.stringview
+        buf.append "\n"
+    } case err then {}
 }
 
 # emitCodepointsNatives -- the CpIter struct + codepoints factory + call,
