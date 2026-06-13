@@ -74,6 +74,10 @@ EMITC_SMOKE: "list[str]" = [
     "io_protocol_closer",
     "io_protocol_rw",
     "io_stdstreams",
+    "io_fs_ops",
+    "io_list_dir",
+    "io_stat_mkdirp",
+    "io_lstat",
 ]
 
 

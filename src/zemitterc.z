@@ -4709,6 +4709,11 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
     mn: typeNameOfReg9 symtab: symtab tid: monoId
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
     eid: listElemType symtab: symtab monoId: monoId
+    eln9: typeNameOfReg9 symtab: symtab tid: eid
+    isStrEl9: false
+    if eln9.stringview == "String" then {
+        isStrEl9 = true
+    } else {}
     ect0: typeRefC symtab: symtab ctx: ctx tid: eid thisTid: 0.u64
     ect: ctypeOrI64 s: ect0.stringview
     p: "\{runtimeDir}/z_List.c.tmpl"
@@ -4735,7 +4740,11 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
         c1: "static bool z_\{nm}_contains(z_\{nm}_t* _this, \{ect} _needle) {\n"
         buf.append c1.stringview
         buf.append "    for (uint64_t i = 0; i < _this->length; i++) {\n"
-        buf.append "        if (_this->data[i] == _needle) return true;\n"
+        if isStrEl9 then {
+            buf.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
+        } else {
+            buf.append "        if (_this->data[i] == _needle) return true;\n"
+        }
         buf.append "    }\n"
         buf.append "    return false;\n"
         buf.append "}\n\n"
@@ -4744,14 +4753,19 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
     match (
         so
     ) case some then {
-        emitListSort nm: nm.stringview ect: ect.stringview buf: buf
+        emitListSort nm: nm.stringview ect: ect.stringview isStr: isStrEl9 strC: ctx.strC.stringview buf: buf
     } case none then {}
 }
 
 # emitListSort -- stable in-place mergesort companion (scalar `<`).
-emitListSort: function {nm: StringView ect: StringView buf: String.borrow} is {
-    s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return _a < _b; }\n"
-    buf.append s0.stringview
+emitListSort: function {nm: StringView ect: StringView isStr: bool strC: StringView buf: String.borrow} is {
+    if isStr then {
+        s0s: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return \{strC}_cmp(&_a, &_b) < 0; }\n"
+        buf.append s0s.stringview
+    } else {
+        s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return _a < _b; }\n"
+        buf.append s0.stringview
+    }
     s1: "static void z_\{nm}_sort_merge(\{ect}* data, \{ect}* scratch, uint64_t lo, uint64_t mid, uint64_t hi) {\n"
     buf.append s1.stringview
     buf.append "    uint64_t i = lo, j = mid, k = lo;\n"
@@ -5472,6 +5486,18 @@ emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     if (needsHas ctx: ctx name: "io_file_flush") then {
         needNull = true
     } else {}
+    if (needsHas ctx: ctx name: "io_mkdir") then {
+        needNull = true
+    } else {}
+    if (needsHas ctx: ctx name: "io_mkdirp") then {
+        needNull = true
+    } else {}
+    if (needsHas ctx: ctx name: "io_remove") then {
+        needNull = true
+    } else {}
+    if (needsHas ctx: ctx name: "io_rename") then {
+        needNull = true
+    } else {}
     if needNull then {
         pwn: nativePath runtimeDir: runtimeDir frag: "_Z_IO_WRAP_NULL_RESULT"
         fwn: loadIoFragment symtab: symtab ctx: ctx path: pwn.stringview
@@ -5483,6 +5509,24 @@ emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_read" frag: "_Z_FILE_READ" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_seek" frag: "_Z_FILE_SEEK" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_file_flush" frag: "_Z_FILE_FLUSH" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_exists" frag: "_Z_IO_EXISTS" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_mkdir" frag: "_Z_IO_MKDIR" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_mkdirp" frag: "_Z_IO_MKDIRP" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_remove" frag: "_Z_IO_REMOVE" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_rename" frag: "_Z_IO_RENAME" buf: buf
+    needFstat: needsHas ctx: ctx name: "io_stat"
+    if (needsHas ctx: ctx name: "io_lstat") then {
+        needFstat = true
+    } else {}
+    if needFstat then {
+        psf: nativePath runtimeDir: runtimeDir frag: "_Z_IO_STAT_FILL"
+        fsf: loadIoFragment symtab: symtab ctx: ctx path: psf.stringview
+        buf.append fsf.stringview
+        buf.append "\n"
+    } else {}
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_stat" frag: "_Z_IO_STAT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_lstat" frag: "_Z_IO_LSTAT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_listDir" frag: "_Z_IO_LIST_DIR" buf: buf
 }
 
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -5535,6 +5579,37 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             } else {}
         } else {}
         tsv = tsv + 1.u64
+    }
+    # reachable non-mono system RECORDs (filestat) -- the ok payload of a Result
+    # mono; after its filekind variant, before the Result monos that box it.
+    tsr: 0.u64
+    for while tsr < last loop {
+        if (symtab.reg.typetypeOf typeId: tsr) == ztypes.ztypetype.RECORD then {
+            sro: monoOriginName symtab: symtab tid: tsr
+            srgen: isGenericType symtab: symtab tid: tsr
+            if sro.length == 0.u64 when srgen == false then {
+                rduo: symtab.typing.definedInUnit.get key: tsr
+                isIoR: false
+                match (
+                    rduo
+                ) case some then {
+                    if rduo.stringview == "io" then {
+                        isIoR = true
+                    } else {}
+                    if rduo.stringview == "os" then {
+                        isIoR = true
+                    } else {}
+                    if rduo.stringview == "cli" then {
+                        isIoR = true
+                    } else {}
+                } case none then {}
+                if isIoR then {
+                    srn: typeNameOfReg9 symtab: symtab tid: tsr
+                    emitOneRecord symtab: symtab ctx: ctx tid: tsr name: srn.stringview buf: buf
+                } else {}
+            } else {}
+        } else {}
+        tsr = tsr + 1.u64
     }
     # optionval + resultval variant monos -- iterators/collection-gets /
     # parsers return them by value (payloads now resolvable).
@@ -6088,6 +6163,30 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
     if mn.stringview == "open" then {
         fname = "z_io_open".string
     } else {}
+    if mn.stringview == "exists" then {
+        fname = "z_io_exists".string
+    } else {}
+    if mn.stringview == "mkdir" then {
+        fname = "z_io_mkdir".string
+    } else {}
+    if mn.stringview == "mkdirp" then {
+        fname = "z_io_mkdirp".string
+    } else {}
+    if mn.stringview == "remove" then {
+        fname = "z_io_remove".string
+    } else {}
+    if mn.stringview == "rename" then {
+        fname = "z_io_rename".string
+    } else {}
+    if mn.stringview == "stat" then {
+        fname = "z_io_stat".string
+    } else {}
+    if mn.stringview == "lstat" then {
+        fname = "z_io_lstat".string
+    } else {}
+    if mn.stringview == "listDir" then {
+        fname = "z_io_listDir".string
+    } else {}
     if fname.length == 0.u64 then {
         return "".string
     } else {}
@@ -6247,14 +6346,14 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                     nm: unitLabel9 o: bm.name
                     rid: userFnId symtab: symtab ctx: ctx name: nm.stringview
                     if rid > 0.u64 then {
-                        emitOneRecord symtab: symtab ctx: ctx tid: rid name: nm.stringview op: bm.operation buf: buf
+                        emitOneRecord symtab: symtab ctx: ctx tid: rid name: nm.stringview buf: buf
                     } else {}
                 } else {}
                 if (isClassDef9 n: bm.operation) then {
                     nmc: unitLabel9 o: bm.name
                     cid9: userFnId symtab: symtab ctx: ctx name: nmc.stringview
                     if cid9 > 0.u64 then {
-                        emitOneRecord symtab: symtab ctx: ctx tid: cid9 name: nmc.stringview op: bm.operation buf: buf
+                        emitOneRecord symtab: symtab ctx: ctx tid: cid9 name: nmc.stringview buf: buf
                     } else {}
                 } else {}
                 if (isVariantDef9 n: bm.operation) then {
@@ -6525,7 +6624,7 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
     buf.append "}\n\n"
 }
 
-emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView op: Node buf: String.borrow} is {
+emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
     if (isTypedefType symtab: symtab tid: tid) then {
         # typedef records are zero-overhead aliases of their base; they have no
         # struct of their own. Their methods are emitted in the later passes.
