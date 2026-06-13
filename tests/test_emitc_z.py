@@ -44,6 +44,7 @@ EMITC_SMOKE: "list[str]" = [
     "equality",
     "case",
     "ifexpr",
+    "typedefs",
 ]
 
 

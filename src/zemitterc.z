@@ -420,6 +420,7 @@ Ctx: class {
     litIds: (List of: u64)
     constVals: (Map key: String value: String)
     needs: (Map key: String value: bool)
+    methodReturns: (Map key: String value: String)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -613,6 +614,34 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         } else {}
     } else {}
     return "".string
+}
+
+# emitTypedefCreateCall -- `meters.create from: 42` / `meters 42`: a
+# zero-overhead cast; emit the single argument expression.
+emitTypedefCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        bn = atomTextOf n: call.callable
+    } else {}
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    tid: userFnId symtab: symtab ctx: ctx name: bn.stringview
+    if tid == 0.u64 then {
+        return "".string
+    } else {}
+    if (isTypedefType symtab: symtab tid: tid) then {} else {
+        return "".string
+    }
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+        } else {}
+    }
+    return "0".string
 }
 
 # emitVariantCtorCall -- `result.ok 42`: a dotted callee whose base is a
@@ -838,7 +867,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return e8
                 } else {}
             } else {}
-            bstamp: stampIdOf symtab: symtab nid: bnid2
+            bstamp0: stampIdOf symtab: symtab nid: bnid2
+            bstamp: bstamp0
+            bsn0: typeNameOfReg9 symtab: symtab tid: bstamp0
+            bcid: userFnId symtab: symtab ctx: ctx name: bsn0.stringview
+            if bcid > 0.u64 then {
+                bstamp = bcid
+            } else {}
             rtt: symtab.reg.typetypeOf typeId: bstamp
             if rtt == ztypes.ztypetype.RECORD then {
                 mco: symtab.typing.childOf parentTypeId: bstamp name: mn2.stringview
@@ -940,6 +975,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         if dc.length > 0.u64 then {
             return dc
         } else {}
+        tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: n
+        if tdq.length > 0.u64 then {
+            return tdq
+        } else {}
         cn0: atomTextOf n: n.callable
         fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
         if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
@@ -1019,6 +1058,38 @@ emitInterpBuild: function {symtab: zenv.ZSymbolTable ctx: Ctx parts: (List of: N
     return sN
 }
 
+numericFormatName: function {symtab: zenv.ZSymbolTable ctx: Ctx tn: StringView} out String is {
+    mrk: tn.string
+    mro: ctx.methodReturns.get key: mrk
+    match (
+        mro
+    ) case some then {
+        mrv: mro.stringview
+        return (numericFormatName symtab: symtab ctx: ctx tn: mrv)
+    } case none then {}
+    if (isIntName name: tn) then {
+        r0: tn.string
+        return r0
+    } else {}
+    if (isFloatName name: tn) then {
+        r1: tn.string
+        return r1
+    } else {}
+    tid: userFnId symtab: symtab ctx: ctx name: tn
+    if tid > 0.u64 then {
+        bc: typedefChaseC symtab: symtab ctx: ctx tid: tid
+        if bc.stringview == "double" then {
+            return "f64".string
+        } else if bc.stringview == "float" then {
+            return "f32".string
+        } else if bc.length > 0.u64 then {
+            return "i64".string
+        } else {}
+    } else {}
+    rr: tn.string
+    return rr
+}
+
 emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
@@ -1028,7 +1099,8 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
         l3: "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
         buf.append l3.stringview
     } else {
-        tn: stampNameDeep symtab: symtab n: n
+        tn0: stampNameDeep symtab: symtab n: n
+        tn: numericFormatName symtab: symtab ctx: ctx tn: tn0.stringview
         val: emitExpr symtab: symtab ctx: ctx n: n
         bN: tmp.next
         if (isIntName name: tn.stringview) then {
@@ -1093,11 +1165,106 @@ nodeIdOf9: function {n: Node} out u64 is {
 
 # stampNameDeep -- a node's stamped type name, peeling expression
 # wrappers when the wrapper itself is unstamped.
+# methodReturnByName -- given a "Base.member" method name, resolve the
+# base type's member child and return its return-type name ("" if not).
+methodReturnByName: function {symtab: zenv.ZSymbolTable dotted: StringView} out String is {
+    base: "".string
+    member: "".string
+    seenDot: false
+    di: 0.u64
+    dn: dotted.length
+    for while di < dn loop {
+        bo0: dotted.byteAt i: di
+        match (
+            bo0
+        ) case some then {
+            if bo0 == 46.u8 then {
+                seenDot = true
+            } else {
+                if seenDot then {
+                    member.appendByte b: bo0
+                } else {
+                    base.appendByte b: bo0
+                }
+            }
+        } case none then {}
+        di = di + 1.u64
+    }
+    if seenDot then {} else {
+        return "".string
+    }
+    # scan for a parent type named `base` that actually declares the
+    # `member` child (a typedef has both a shell and a canonical id;
+    # only the canonical bears children).
+    pids: (List of: u64)
+    cids: (List of: u64)
+    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
+        if tc.childName.stringview == member.stringview then {
+            cto: symtab.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                pv9: tc.parentTypeId
+                pids.append pv9
+                cv9: cto
+                cids.append cv9
+            } case none then {}
+        } else {}
+    }
+    found: 0.u64
+    si: 0.u64
+    sn: pids.length
+    for while si < sn loop {
+        pid: pids.get i: si
+        pn: typeNameOfReg9 symtab: symtab tid: pid
+        if pn.stringview == base.stringview when found == 0.u64 then {
+            found = cids.get i: si
+        } else {}
+        si = si + 1.u64
+    }
+    if found > 0.u64 then {
+        mt: symtab.reg.typeById.get key: found
+        match (
+            mt
+        ) case some then {
+            rt2: mt.returnTypeId
+            match (
+                rt2
+            ) case some then {
+                return (typeNameOfReg9 symtab: symtab tid: rt2)
+            } case none then {}
+        } case none then {}
+    } else {}
+    return "".string
+}
+
 stampNameDeep: function {symtab: zenv.ZSymbolTable n: Node} out String is {
     nid: nodeIdOf9 n: n
-    tn: stampNameOf symtab: symtab nid: nid
-    if tn.length > 0.u64 then {
-        return tn
+    sid: stampIdOf symtab: symtab nid: nid
+    if sid > 0.u64 then {
+        # a value-position FUNCTION stamp is an auto-call; its value
+        # type is the method's return.
+        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.FUNCTION then {
+            t: symtab.reg.typeById.get key: sid
+            match (
+                t
+            ) case some then {
+                rto: t.returnTypeId
+                match (
+                    rto
+                ) case some then {
+                    return (typeNameOfReg9 symtab: symtab tid: rto)
+                } case none then {}
+            } case none then {}
+            # a shell FUNCTION named "Base.member": resolve the method
+            # through the base type's child and read its return.
+            fnm: typeNameOfReg9 symtab: symtab tid: sid
+            rmn: methodReturnByName symtab: symtab dotted: fnm.stringview
+            if rmn.length > 0.u64 then {
+                return rmn
+            } else {}
+        } else {}
+        return (typeNameOfReg9 symtab: symtab tid: sid)
     } else {}
     match (
         n
@@ -1875,6 +2042,41 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
     return sig
 }
 
+# typedefChaseC -- the underlying C scalar of a typedef record, chasing
+# the typedef-base chain (meters -> i64, height -> meters -> i64); ""
+# when the type is not a typedef.
+typedefChaseC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out String is {
+    bo: symtab.typing.typedefBaseName.get key: tid
+    match (
+        bo
+    ) case some then {
+        bn: bo.stringview.string
+        bc: cTypeOf name: bn.stringview
+        if bc.length > 0.u64 then {
+            return bc
+        } else {}
+        bid: userFnId symtab: symtab ctx: ctx name: bn.stringview
+        if bid > 0.u64 then {
+            return (typeRefC symtab: symtab ctx: ctx tid: bid thisTid: 0.u64)
+        } else {}
+        return "int64_t".string
+    } case none then {
+        return "".string
+    }
+}
+
+# isTypedefType -- the type id carries a typedef base.
+isTypedefType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
+    bo: symtab.typing.typedefBaseName.get key: tid
+    match (
+        bo
+    ) case some then {
+        return true
+    } case none then {
+        return false
+    }
+}
+
 # typeRefC -- the C spelling for a type id: scalars by name, records by
 # their id-based cname ("" when unsupported).
 typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} out String is {
@@ -1895,6 +2097,10 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
             cid = rid9
         } else {}
     }
+    tdc: typedefChaseC symtab: symtab ctx: ctx tid: cid
+    if tdc.length > 0.u64 then {
+        return tdc
+    } else {}
     if tn.stringview == "String" then {
         ts0: "\{ctx.strC}_t"
         return ts0
@@ -2035,6 +2241,66 @@ isConstShape: function {ctx: Ctx n: Node} out bool is {
     } else {
         return false
     }
+}
+
+# fillMethodReturns -- record each main-unit type method's return
+# format name (TypeName.method -> i64/f64/...), so interpolation can
+# format auto-call results whose node carries only a FUNCTION stamp.
+fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    fillMethodReturnsIn symtab: symtab ctx: ctx mainOp: u.operation
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+fillMethodReturnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                tnm: unitLabel9 o: bm.name
+                fillTypeMethodReturns symtab: symtab ctx: ctx typeName: tnm.stringview op: bm.operation
+            } else {}
+        }
+    } else {}
+}
+
+fillTypeMethodReturns: function {symtab: zenv.ZSymbolTable ctx: Ctx typeName: StringView op: Node} is {
+    match (
+        op
+    ) case objectdef then {
+        with aiter: op.asItems.iterate do for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                if (isFunctionDefWithBody9 n: am.operation) then {
+                    mnm: unitLabel9 o: am.name
+                    rbn: ztypecheck.fnReturnBaseNameOf op: am.operation
+                    if rbn.length > 0.u64 then {
+                        k9: "\{typeName}.\{mnm}".string
+                        rbv: rbn.stringview
+                        v9: rbv.string
+                        ctx.methodReturns.set key: k9 value: v9
+                    } else {}
+                } else {}
+            } else {}
+        }
+    } else {}
 }
 
 # fillConstVals -- pre-render each main-unit constant's C text in
@@ -2309,8 +2575,9 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String))
     fillConstVals program: program symtab: symtab ctx: ctx
+    fillMethodReturns program: program symtab: symtab ctx: ctx
     fnsBuf: "".string
     emitFns program: program symtab: symtab ctx: ctx buf: fnsBuf
     hasMain: programHasMain program: program
@@ -2602,6 +2869,12 @@ isRecordDef9: function {n: Node} out bool is {
 }
 
 emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView op: Node buf: String.borrow} is {
+    if (isTypedefType symtab: symtab tid: tid) then {
+        # typedef records are zero-overhead aliases of their base; emit
+        # only their methods (as free functions over the base type).
+        emitRecordMethods symtab: symtab ctx: ctx tid: tid op: op buf: buf
+        return
+    } else {}
     fnames: (List of: String)
     fids: (List of: u64)
     recFieldLists symtab: symtab tid: tid names: fnames ids: fids
