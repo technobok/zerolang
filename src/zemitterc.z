@@ -428,6 +428,10 @@ isSvSimpleNative: function {name: StringView} out bool is {
     if name == "trimEnd" then { return true } else {}
     if name == "toLowerAscii" then { return true } else {}
     if name == "toUpperAscii" then { return true } else {}
+    if name == "replace" then { return true } else {}
+    if name == "replaceFirst" then { return true } else {}
+    if name == "repeated" then { return true } else {}
+    if name == "concat" then { return true } else {}
     return false
 }
 
@@ -498,7 +502,11 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                     if av.length > 0.u64 then {
                         args.append ", "
                         args.append av.stringview
-                    } else {}
+                    } else {
+                        sv9: emitExpr symtab: symtab ctx: ctx n: a.operation
+                        args.append ", "
+                        args.append sv9.stringview
+                    }
                 } else {}
             }
             e1: "\{ctx.svC}_\{mn}(&\{bn}\{args})"
@@ -532,6 +540,21 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         bn2: atomTextOf n: n.parent
         mn2: atomTextOf n: n.child
         if bn2.length > 0.u64 then {
+            # typed numeric literal (3.u64): the base text is the C literal
+            b1: bn2.stringview.byteAt i: 0.u64
+            match (
+                b1
+            ) case some then {
+                if b1 >= 48.u8 then {
+                    if b1 <= 57.u8 then {
+                        if (cTypeOf name: mn2.stringview).length > 0.u64 then {
+                            bv1: bn2.stringview
+                            bc1: bv1.string
+                            return bc1
+                        } else {}
+                    } else {}
+                } else {}
+            } case none then {}
             bnid2: atomNodeId9 n: n.parent
             bt2: stampNameOf symtab: symtab nid: bnid2
             if bt2.stringview == "StringView" then {
@@ -937,8 +960,14 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 buf.append lsv4.stringview
                 return
             } else {}
-            lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
-            buf.append lsv3.stringview
+            vx: emitExpr symtab: symtab ctx: ctx n: n.value
+            if (vx.stringview.startsWith prefix: "/*") then {
+                lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
+                buf.append lsv3.stringview
+            } else {
+                lsv5: "\{ind}\{ctx.svC}_t \{nm} = \{vx};\n"
+                buf.append lsv5.stringview
+            }
             return
         } else {}
         if tn.stringview == "String" then {
@@ -1633,6 +1662,21 @@ emitNeededNatives: function {ctx: Ctx runtimeDir: StringView buf: String.borrow}
     emitNativeIf ctx: ctx need: "trimStart" frag: "_Z_SV_TRIM_START" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "trimEnd" frag: "_Z_SV_TRIM_END" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "toLowerAscii" frag: "_Z_SV_TO_LOWER_ASCII" runtimeDir: runtimeDir buf: buf
+    hasRep: needsHas ctx: ctx name: "replace"
+    hasRepF: needsHas ctx: ctx name: "replaceFirst"
+    anyRep: hasRep
+    if hasRepF then { anyRep = true } else {}
+    if anyRep then {
+        pR: nativePath runtimeDir: runtimeDir frag: "_Z_SV_REPLACE_IMPL"
+        scR: ctx.svC.copy
+        tcR: ctx.strC.copy
+        fR: loadFragment path: pR.stringview svC: scR.stringview strC: tcR.stringview
+        buf.append fR.stringview
+    } else {}
+    emitNativeIf ctx: ctx need: "replace" frag: "_Z_SV_REPLACE" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "replaceFirst" frag: "_Z_SV_REPLACE_FIRST" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "repeated" frag: "_Z_SV_REPEAT" runtimeDir: runtimeDir buf: buf
+    emitNativeIf ctx: ctx need: "concat" frag: "_Z_SV_CONCAT" runtimeDir: runtimeDir buf: buf
     emitNativeIf ctx: ctx need: "toUpperAscii" frag: "_Z_SV_TO_UPPER_ASCII" runtimeDir: runtimeDir buf: buf
 }
 
