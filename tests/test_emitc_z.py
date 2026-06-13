@@ -81,6 +81,7 @@ EMITC_SMOKE: "list[str]" = [
     "io_buffered",
     "io_textwriter",
     "io_textreader",
+    "cli_basic",
 ]
 
 

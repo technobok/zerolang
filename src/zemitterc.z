@@ -1416,6 +1416,18 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if fmc.length > 0.u64 then {
         return fmc
     } else {}
+    clic: emitCliCall symtab: symtab ctx: ctx call: call
+    if clic.length > 0.u64 then {
+        return clic
+    } else {}
+    clisc: emitCliSpecCreate symtab: symtab ctx: ctx call: call
+    if clisc.length > 0.u64 then {
+        return clisc
+    } else {}
+    pmc: emitParsedMethodCall symtab: symtab ctx: ctx call: call
+    if pmc.length > 0.u64 then {
+        return pmc
+    } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
         return dc
@@ -1566,6 +1578,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 sname9: "io_\{mn2}".string
                 needsAdd ctx: ctx name: sname9.stringview
                 return "z_io_\{mn2}()"
+            } else {}
+        } else {}
+        if bn2r.stringview == "os" then {
+            if mn2.stringview == "args" then {
+                needsAdd ctx: ctx name: "os"
+                needsAdd ctx: ctx name: "os_args"
+                return "z_os_args()".string
             } else {}
         } else {}
         # `.private` is a compile-time friend marker -- it emits the receiver itself.
@@ -2952,7 +2971,8 @@ flushBlockFrees: function {ctx: Ctx tmp: TmpCtr fL: u64 lL: u64 buf: String.borr
     }
     for while tmp.frees.length > fL loop {
         fvo: tmp.frees.pop
-        buf.append fvo.stringview
+        ff9: "    \{ctx.strC}_free(&\{fvo});\n"
+        buf.append ff9.stringview
     }
 }
 
@@ -4507,9 +4527,15 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     emitRuntimeIo symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitIoFileConformance symtab: symtab ctx: ctx buf: buf
     emitIoStdStreams symtab: symtab ctx: ctx buf: buf
+    emitRuntimeCli symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitRuntimeOs symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
     buf.append fnsBuf.stringview
     buf.append "int main(int argc, char* argv[]) {\n"
+    if (needsHas ctx: ctx name: "os_args") then {
+        buf.append "    z_os_argc_g = argc;\n"
+        buf.append "    z_os_argv_g = argv;\n"
+    } else {}
     if needsHash then {
         buf.append "    z_siphash_init();\n"
     } else {}
@@ -5260,6 +5286,19 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     destroyEntries: mapDestroyEntries isStr: keyIsStr strC: ctx.strC.stringview
     freeKeyDup: mapFreeKeyDup isStr: keyIsStr strC: ctx.strC.stringview
     freeKeyDel: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview
+    getBody: "".string
+    if ovOrigin.stringview == "optionval" then {
+        gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
+        getBody = gbV
+    } else {
+        if valName.stringview == "String" then {
+            gbS: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        _copy->size = _this->entries[idx].value.size;\n        _copy->capacity = _copy->size + 1;\n        _copy->data = (char*)z_xmalloc(_copy->capacity);\n        memcpy(_copy->data, _this->entries[idx].value.data, _copy->size);\n        _copy->data[_copy->size] = 0;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+            getBody = gbS
+        } else {
+            gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        *_copy = _this->entries[idx].value;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+            getBody = gbR
+        }
+    }
     p: "\{runtimeDir}/z_Map.c.tmpl"
     raw: io.readText path: p.stringview
     match (
@@ -5276,7 +5315,8 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         t9: applyTmpl text: t8 key: "FREE_KEY_DEL" val: freeKeyDel.stringview
         t10: applyTmpl text: t9 key: "OPTIONVAL" val: ov.stringview
         t11: applyTmpl text: t10 key: "OPTIONVAL_TAG" val: ovu.stringview
-        buf.append t11.stringview
+        t12: applyTmpl text: t11 key: "GET_BODY" val: getBody.stringview
+        buf.append t12.stringview
         buf.append "\n"
     } case err then {
         return
@@ -5317,7 +5357,7 @@ ioCanonCname: function {symtab: zenv.ZSymbolTable ctx: Ctx canon: StringView} ou
     return "".string
 }
 
-# loadIoFragment -- read an io runtime `.inc` and substitute the canonical
+# loadIoFragment -- read an io/cli runtime `.inc` and substitute the canonical
 # names it references (`z_<canon>` -> the typecheck cname) plus StringView/
 # String. Tags (Z_IOERROR_TAG_*) are name-based and already match. Unregistered
 # canons resolve to "" and are skipped. StringView before String (prefix).
@@ -5352,6 +5392,17 @@ loadIoFragment: function {symtab: zenv.ZSymbolTable ctx: Ctx path: StringView} o
         canons.append "Closer".string
         canons.append "Seeker".string
         canons.append "File".string
+        canons.append "Result_Parsed_CliError".string
+        canons.append "Map_String_String".string
+        canons.append "List_PositionalDef".string
+        canons.append "List_OptionDef".string
+        canons.append "List_FlagDef".string
+        canons.append "PositionalDef".string
+        canons.append "OptionDef".string
+        canons.append "FlagDef".string
+        canons.append "CliError".string
+        canons.append "Parsed".string
+        canons.append "Spec".string
         ci: 0.u64
         cn: canons.length
         for while ci < cn loop {
@@ -5423,6 +5474,105 @@ ioClassReferenced: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView
         ti = ti + 1.u64
     }
     return false
+}
+
+# cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
+cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64 is {
+    last: symtab.reg.nextTypeId
+    ti: 1.u64
+    for while ti < last loop {
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+            tn: typeNameOfReg9 symtab: symtab tid: ti
+            if tn.stringview == name then {
+                duo: symtab.typing.definedInUnit.get key: ti
+                match (
+                    duo
+                ) case some then {
+                    if duo.stringview == "cli" then {
+                        return ti
+                    } else {}
+                } case none then {}
+            } else {}
+        } else {}
+        ti = ti + 1.u64
+    }
+    return 0.u64
+}
+
+# isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
+# embedded by value); a struct field of one is a pointer, freed without `&`.
+# fieldMonoId -- resolve a field/param type id to its real collection-mono id.
+# A field child is often a fresh SHELL id (named after the type, no defining
+# unit); `typeRefC` resolves it by name, and so must any origin/destructor query
+# (else monoOriginName of the shell is "" and a Map/List field looks scalar).
+fieldMonoId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
+    cid: tid
+    duo: symtab.typing.definedInUnit.get key: tid
+    match (
+        duo
+    ) case some then {} case none then {
+        tn: typeNameOfReg9 symtab: symtab tid: tid
+        rid: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
+        if rid > 0.u64 then {
+            cid = rid
+        } else {}
+    }
+    return (chaseColMono symtab: symtab tid: cid)
+}
+
+isHeapPtrCollection: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    cm: fieldMonoId symtab: symtab ctx: ctx tid: tid
+    onm: monoOriginName symtab: symtab tid: cm
+    if onm.stringview == "Map" then {
+        return true
+    } else {}
+    if onm.stringview == "Set" then {
+        return true
+    } else {}
+    return false
+}
+
+# cliClassIsComposite -- a cli class holding any List/Map/Set field; such a
+# class must be emitted after the collection monos it embeds (Spec/Parsed),
+# while leaf classes (FlagDef/OptionDef/PositionalDef) emit before them.
+cliClassIsComposite: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    fnames: (List of: String)
+    fids: (List of: u64)
+    recFieldLists symtab: symtab tid: tid names: fnames ids: fids
+    fi: 0.u64
+    fn0: fnames.length
+    for while fi < fn0 loop {
+        fid: fids.get i: fi
+        cm: fieldMonoId symtab: symtab ctx: ctx tid: fid
+        onm: monoOriginName symtab: symtab tid: cm
+        if onm.stringview == "List" then {
+            return true
+        } else {}
+        if onm.stringview == "Map" then {
+            return true
+        } else {}
+        if onm.stringview == "Set" then {
+            return true
+        } else {}
+        fi = fi + 1.u64
+    }
+    return false
+}
+
+# emitCliFwdDecls -- Parsed is the ok-arm payload of Result_Parsed_CliError,
+# whose destructor (emitted with the Option/Result monos) casts to and frees a
+# Parsed before Parsed's own body emits (late, after its collection monos). A
+# named-tag forward typedef + a destructor prototype satisfy that forward use.
+emitCliFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    pid: cliClassTypeId symtab: symtab ctx: ctx name: "Parsed"
+    if pid == 0.u64 then {
+        return
+    } else {}
+    pc: cnameOf tid: pid name: "Parsed"
+    l0: "typedef struct \{pc}_t \{pc}_t;\n"
+    buf.append l0.stringview
+    l1: "static void \{pc}_destroy(\{pc}_t* p);\n"
+    buf.append l1.stringview
 }
 
 # ioFrag -- load + append an io runtime fragment unconditionally.
@@ -5653,8 +5803,41 @@ emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     } else {}
 }
 
+# emitRuntimeCli -- the cli runtime bodies (need-gated, dependency-ordered),
+# reusing the io fragment loader/gate. The helpers ride the parse need (parse is
+# their only caller) and precede parse's body for a clean forward declaration.
+emitRuntimeCli: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    if (needsHas ctx: ctx name: "cli") then {} else {
+        return
+    }
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_spec_create" frag: "_Z_CLI_SPEC_CREATE" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_addFlag" frag: "_Z_CLI_ADD_FLAG" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_addOption" frag: "_Z_CLI_ADD_OPTION" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_addPositional" frag: "_Z_CLI_ADD_POSITIONAL" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_parse" frag: "_Z_CLI_HELPERS" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_parse" frag: "_Z_CLI_PARSE" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_helpText" frag: "_Z_CLI_HELP_TEXT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_hasFlag" frag: "_Z_PARSED_HAS_FLAG" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_option" frag: "_Z_PARSED_GET_OPTION" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "cli_positional" frag: "_Z_PARSED_GET_POSITIONAL" buf: buf
+}
+
+# emitRuntimeOs -- the os runtime bodies (need-gated). Only os.args is wired so
+# far: its argc/argv globals + the args() copy, both gated on the os_args need
+# (main() captures argc/argv into the globals when the same need is set).
+emitRuntimeOs: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    if (needsHas ctx: ctx name: "os") then {} else {
+        return
+    }
+    if (needsHas ctx: ctx name: "os_args") then {
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_OS_ARGV_GLOBALS" buf: buf
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_OS_ARGS" buf: buf
+    } else {}
+}
+
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     last: symtab.reg.nextTypeId
+    emitCliFwdDecls symtab: symtab ctx: ctx buf: buf
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
     # Result monos; emit before them so the mono destructors can call IoError's.
     tsu: 0.u64
@@ -5687,6 +5870,34 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         tsu = tsu + 1.u64
     }
     emitIoFileClass symtab: symtab ctx: ctx buf: buf
+    # reachable cli LEAF classes (FlagDef/OptionDef/PositionalDef) -- pure-string
+    # classes the List monos below embed; emitted before those monos.
+    tclf: 0.u64
+    for while tclf < last loop {
+        if (symtab.reg.typetypeOf typeId: tclf) == ztypes.ztypetype.CLASS then {
+            clfgen: isGenericType symtab: symtab tid: tclf
+            clfmo: monoOriginName symtab: symtab tid: tclf
+            if clfmo.length == 0.u64 when clfgen == false then {
+                clfduo: symtab.typing.definedInUnit.get key: tclf
+                isCliLeaf: false
+                match (
+                    clfduo
+                ) case some then {
+                    if clfduo.stringview == "cli" then {
+                        isCliLeaf = true
+                    } else {}
+                } case none then {}
+                if isCliLeaf when (cliClassIsComposite symtab: symtab ctx: ctx tid: tclf) then {
+                    isCliLeaf = false
+                } else {}
+                if isCliLeaf then {
+                    clfn: typeNameOfReg9 symtab: symtab tid: tclf
+                    emitOneRecord symtab: symtab ctx: ctx tid: tclf name: clfn.stringview buf: buf
+                } else {}
+            } else {}
+        } else {}
+        tclf = tclf + 1.u64
+    }
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: 0.u64
@@ -5814,6 +6025,38 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tmap buf: buf
         } else {}
         tmap = tmap + 1.u64
+    }
+    # reachable cli COMPOSITE classes (Spec/Parsed) -- after the List/Map monos
+    # they embed; Parsed was forward-declared above for the Result mono destroy.
+    tclc: 0.u64
+    for while tclc < last loop {
+        if (symtab.reg.typetypeOf typeId: tclc) == ztypes.ztypetype.CLASS then {
+            clcgen: isGenericType symtab: symtab tid: tclc
+            clcmo: monoOriginName symtab: symtab tid: tclc
+            if clcmo.length == 0.u64 when clcgen == false then {
+                clcduo: symtab.typing.definedInUnit.get key: tclc
+                isCliComp: false
+                match (
+                    clcduo
+                ) case some then {
+                    if clcduo.stringview == "cli" then {
+                        isCliComp = true
+                    } else {}
+                } case none then {}
+                if isCliComp when (cliClassIsComposite symtab: symtab ctx: ctx tid: tclc) then {} else {
+                    isCliComp = false
+                }
+                if isCliComp then {
+                    clcn: typeNameOfReg9 symtab: symtab tid: tclc
+                    fwd9: false
+                    if clcn.stringview == "Parsed" then {
+                        fwd9 = true
+                    } else {}
+                    emitCliCompositeClass symtab: symtab ctx: ctx tid: tclc name: clcn.stringview fwdDeclared: fwd9 buf: buf
+                } else {}
+            } else {}
+        } else {}
+        tclc = tclc + 1.u64
     }
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.
@@ -6491,6 +6734,190 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
     return "\{fname}(\{args})"
 }
 
+# cliSpecArg -- the `spec:` argument of a cli free-function call, addressed
+# (the natives take `z_Spec_t* spec`); a pointer receiver is passed as-is.
+cliSpecArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            al: unitLabel9 o: a.name
+            if al.stringview == "spec" then {
+                at: atomTextOf n: a.operation
+                ar: aliasResolve ctx: ctx name: at.stringview
+                if (isPtrVar ctx: ctx name: ar.stringview) then {
+                    return ar
+                } else {}
+                return "&\{ar}".string
+            } else {}
+        } else {}
+    }
+    return "0".string
+}
+
+# emitCliCall -- a cli free-function (addFlag/addOption/addPositional/parse/
+# helpText): `z_cli_<name>(&spec, …)` in the native's param order. "" otherwise.
+emitCliCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.stringview == "cli" then {} else {
+        return "".string
+    }
+    mn: dottedChildText n: call.callable
+    isMod: false
+    if mn.stringview == "addFlag" then {
+        isMod = true
+    } else {}
+    if mn.stringview == "addOption" then {
+        isMod = true
+    } else {}
+    if mn.stringview == "addPositional" then {
+        isMod = true
+    } else {}
+    if mn.stringview == "parse" then {
+        isMod = true
+    } else {}
+    if mn.stringview == "helpText" then {
+        isMod = true
+    } else {}
+    if isMod then {} else {
+        return "".string
+    }
+    needsAdd ctx: ctx name: "cli"
+    cneed: "cli_\{mn}".string
+    needsAdd ctx: ctx name: cneed.stringview
+    sp9: cliSpecArg symtab: symtab ctx: ctx call: call
+    if mn.stringview == "addFlag" then {
+        na: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "name"
+        sa: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "shortName"
+        ha: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "help"
+        return "z_cli_addFlag(\{sp9}, \{na}, \{sa}, \{ha})"
+    } else {}
+    if mn.stringview == "addOption" then {
+        na2: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "name"
+        sa2: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "shortName"
+        ha2: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "help"
+        ra2: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "required"
+        return "z_cli_addOption(\{sp9}, \{na2}, \{sa2}, \{ha2}, \{ra2})"
+    } else {}
+    if mn.stringview == "addPositional" then {
+        na3: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "name"
+        ha3: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "help"
+        ra3: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "required"
+        return "z_cli_addPositional(\{sp9}, \{na3}, \{ha3}, \{ra3})"
+    } else {}
+    if mn.stringview == "parse" then {
+        pa: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "args"
+        return "z_cli_parse(\{sp9}, \{pa})"
+    } else {}
+    if mn.stringview == "helpText" then {
+        return "z_cli_helpText(\{sp9})"
+    } else {}
+    return "".string
+}
+
+# cliCreateClass -- the class name X of a `cli.X.create` callable, else "".
+cliCreateClass: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        ccn: atomTextOf n: n.child
+        if ccn.stringview == "create" then {
+            pb: dottedBaseAtom n: n.parent
+            if pb.stringview == "cli" then {
+                return (dottedChildText n: n.parent)
+            } else {}
+        } else {}
+    } else {}
+    return "".string
+}
+
+# emitCliSpecCreate -- `cli.Spec.create programName: … summary: …` ->
+# z_t{id}_Spec_create(<args in param order>). "" for any non-cli-create callee.
+emitCliSpecCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    cn: cliCreateClass n: call.callable
+    if cn.length == 0.u64 then {
+        return "".string
+    } else {}
+    cid: cliClassTypeId symtab: symtab ctx: ctx name: cn.stringview
+    if cid == 0.u64 then {
+        return "".string
+    } else {}
+    cco: symtab.typing.childOf parentTypeId: cid name: "create"
+    crid: 0.u64
+    match (
+        cco
+    ) case some then {
+        crid = cco
+    } case none then {}
+    if crid == 0.u64 then {
+        return "".string
+    } else {}
+    pnames: (List of: String)
+    pids: (List of: u64)
+    recFieldLists symtab: symtab tid: crid names: pnames ids: pids
+    args: "".string
+    pi: 0.u64
+    pn: pnames.length
+    for while pi < pn loop {
+        pnm: pnames.get i: pi
+        astr: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pnm.stringview
+        if pi > 0.u64 then {
+            args.append ", "
+        } else {}
+        args.append astr.stringview
+        pi = pi + 1.u64
+    }
+    needsAdd ctx: ctx name: "cli"
+    needsAdd ctx: ctx name: "cli_spec_create"
+    ccb: cnameOf tid: cid name: cn.stringview
+    return "\{ccb}_create(\{args})"
+}
+
+# emitParsedMethodCall -- a Parsed accessor (hasFlag/option/positional), native,
+# receiver by pointer (incl. the narrowed Result ok-arm projection) and the
+# StringView name by pointer. "" for any non-Parsed receiver.
+emitParsedMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    isPM: false
+    if mn.stringview == "hasFlag" then {
+        isPM = true
+    } else {}
+    if mn.stringview == "option" then {
+        isPM = true
+    } else {}
+    if mn.stringview == "positional" then {
+        isPM = true
+    } else {}
+    if isPM then {} else {
+        return "".string
+    }
+    bnid: dottedBaseNodeId n: call.callable
+    pid: fileTypeIdOf symtab: symtab ctx: ctx nid: bnid
+    if pid == 0.u64 then {
+        return "".string
+    } else {}
+    pcn: typeNameOfReg9 symtab: symtab tid: pid
+    if pcn.stringview == "Parsed" then {} else {
+        return "".string
+    }
+    pc: cnameOf tid: pid name: pcn.stringview
+    recv: aliasResolve ctx: ctx name: bn.stringview
+    recvExpr: "&\{recv}".string
+    if (isPtrVar ctx: ctx name: recv.stringview) then {
+        recvExpr = recv
+    } else {}
+    needsAdd ctx: ctx name: "cli"
+    pneed: "cli_\{mn}".string
+    needsAdd ctx: ctx name: pneed.stringview
+    nameArg: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "name"
+    return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
+}
+
 emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     if bn.length == 0.u64 then {
@@ -7039,6 +7466,100 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     if (symtab.reg.hasDestructorName typeId: tid) then {
         emitStructDestructor symtab: symtab ctx: ctx tid: tid name: name fnames: fnames fids: fids buf: buf
     } else {}
+}
+
+# emitCliCompositeClass -- a cli class holding collection fields (Spec/Parsed).
+# Lists embed by value; Maps/Sets are heap pointers. Parsed is forward-declared
+# (named tag) so the Result_Parsed_CliError destructor can reference it before
+# this body emits; Spec emits its own typedef inline. No `_create` alias (the
+# create is native / inline) and no `_eq` (a class).
+emitCliCompositeClass: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView fwdDeclared: bool buf: String.borrow} is {
+    fnames: (List of: String)
+    fids: (List of: u64)
+    recFieldLists symtab: symtab tid: tid names: fnames ids: fids
+    rc: cnameOf tid: tid name: name
+    if fwdDeclared then {} else {
+        lt: "typedef struct \{rc}_t \{rc}_t;\n"
+        buf.append lt.stringview
+    }
+    l0: "struct \{rc}_t {\n"
+    buf.append l0.stringview
+    fi: 0.u64
+    fn0: fnames.length
+    for while fi < fn0 loop {
+        fname: fnames.get i: fi
+        fid: fids.get i: fi
+        fct: typeRefC symtab: symtab ctx: ctx tid: fid thisTid: 0.u64
+        if fct.length == 0.u64 then {
+            fct = "int64_t".string
+        } else {}
+        if (isHeapPtrCollection symtab: symtab ctx: ctx tid: fid) then {
+            fct = "\{fct}*"
+        } else {}
+        l1: "    \{fct} \{fname};\n"
+        buf.append l1.stringview
+        fi = fi + 1.u64
+    }
+    buf.append "};\n"
+    params: "".string
+    inits: "".string
+    fj: 0.u64
+    for while fj < fn0 loop {
+        fname2: fnames.get i: fj
+        fid2: fids.get i: fj
+        fct2: typeRefC symtab: symtab ctx: ctx tid: fid2 thisTid: 0.u64
+        if fct2.length == 0.u64 then {
+            fct2 = "int64_t".string
+        } else {}
+        if (isHeapPtrCollection symtab: symtab ctx: ctx tid: fid2) then {
+            fct2 = "\{fct2}*"
+        } else {}
+        if fj > 0.u64 then {
+            params.append ", "
+            inits.append ", "
+        } else {}
+        params.append fct2.stringview
+        params.append " "
+        params.append fname2.stringview
+        inits.append fname2.stringview
+        fj = fj + 1.u64
+    }
+    l3: "static \{rc}_t \{rc}_meta_create(\{params}) {\n"
+    buf.append l3.stringview
+    l4: "    \{rc}_t z = { \{inits} };\n"
+    buf.append l4.stringview
+    buf.append "    return z;\n"
+    buf.append "}\n"
+    d0: "static void \{rc}_destroy(\{rc}_t* p);\n"
+    buf.append d0.stringview
+    d1: "static void \{rc}_destroy(\{rc}_t* p) {\n"
+    buf.append d1.stringview
+    buf.append "    if (!p) return;\n"
+    dk: 0.u64
+    for while dk < fn0 loop {
+        dfn: fnames.get i: dk
+        dfi: fids.get i: dk
+        dtn: typeNameOfReg9 symtab: symtab tid: dfi
+        if dtn.stringview == "String" then {
+            ds: "    \{ctx.strC}_free(&p->\{dfn});\n"
+            buf.append ds.stringview
+        } else {
+            dcm: fieldMonoId symtab: symtab ctx: ctx tid: dfi
+            if (symtab.reg.hasDestructorName typeId: dcm) then {
+                dcn: typeNameOfReg9 symtab: symtab tid: dcm
+                dcb: cnameOf tid: dcm name: dcn.stringview
+                if (isHeapPtrCollection symtab: symtab ctx: ctx tid: dfi) then {
+                    df: "    \{dcb}_destroy(p->\{dfn});\n"
+                    buf.append df.stringview
+                } else {
+                    df2: "    \{dcb}_destroy(&p->\{dfn});\n"
+                    buf.append df2.stringview
+                }
+            } else {}
+        }
+        dk = dk + 1.u64
+    }
+    buf.append "}\n\n"
 }
 
 # emitRecordMethods -- the record's as-block functions as free C
