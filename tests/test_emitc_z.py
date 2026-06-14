@@ -114,6 +114,7 @@ EMITC_CORPUS: "list[str]" = [
     "protocol_create_take",
     "protocol_union_method",
     "union_take_arg",
+    "provider_ctor",
 ]
 
 
