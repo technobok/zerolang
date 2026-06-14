@@ -92,3 +92,38 @@ def test_zlexer_binary_matches_golden(example_name, zlexer_binary):
             f"out/zlexer output diverged from golden for {example_name}.\n"
             f"--- expected ---\n{expected}--- actual ---\n{actual}"
         )
+
+
+@pytest.mark.infra
+@pytest.mark.emitter
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("example_name", _list_example_names())
+def test_zlexer_selfhost_matches_golden(example_name, zlexer_selfhost_binary):
+    """zlexer compiled by the PORTED zc must match the reference goldens.
+
+    The self-host gate for the lexer: stage1 (the reference-built ported
+    compiler) emits zlexer's C, which builds and tokenizes every example
+    byte-identically to the Python reference. Distinct from
+    test_zlexer_binary_matches_golden, which builds zlexer with zc.py -- this
+    proves the *ported* emitter produces a correct lexer end to end.
+    """
+    example_path = os.path.join(EXAMPLES_DIR, example_name)
+    proc = subprocess.run(
+        [zlexer_selfhost_binary, example_path], capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            f"self-host zlexer exited {proc.returncode} on {example_name}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    actual = proc.stdout
+
+    golden_path = os.path.join(GOLDEN_DIR, example_name[:-2] + ".tokens")
+    with open(golden_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+
+    if actual != expected:
+        pytest.fail(
+            f"self-host zlexer output diverged from golden for {example_name}.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{actual}"
+        )

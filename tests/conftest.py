@@ -108,6 +108,61 @@ def _build_zerolang_unit(unitname: str, tmp_path_factory) -> str:
     return bin_path
 
 
+_SYSTEM_DIR = os.path.join(_REPO_ROOT, "lib", "system")
+
+
+def _build_unit_with_ported_zc(unitname: str, zc_bin: str, tmp_path_factory) -> str:
+    """Build src/<unitname>.z -> C -> binary using the PORTED compiler
+    (`zc_bin`, itself the reference-built stage1), not zc.py. This is the
+    self-host loop: the ported zc compiles the unit, and the binary's behavior
+    is then checked against the reference goldens."""
+    if shutil.which(_CC) is None:
+        pytest.skip(f"{_CC} not on PATH; cannot build {unitname} binary")
+    builddir = tmp_path_factory.mktemp(unitname + "_selfhost")
+    c_path = str(builddir / f"{unitname}.c")
+    bin_path = str(builddir / unitname)
+    zc_proc = subprocess.run(
+        [
+            zc_bin,
+            unitname,
+            "--src",
+            _SRC_DIR,
+            "--system",
+            _SYSTEM_DIR,
+            "--emit-c",
+            c_path,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+    )
+    assert zc_proc.returncode == 0, (
+        f"ported zc {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
+        f"stderr:\n{zc_proc.stderr}"
+    )
+    cc_proc = subprocess.run(
+        [_CC, *_CFLAGS, "-o", bin_path, c_path],
+        capture_output=True,
+        text=True,
+    )
+    assert cc_proc.returncode == 0, (
+        f"{_CC} {unitname} (self-host) failed:\nstdout:\n{cc_proc.stdout}\n"
+        f"stderr:\n{cc_proc.stderr}"
+    )
+    return bin_path
+
+
+@pytest.fixture(scope="session")
+def zlexer_selfhost_binary(zc_binary, tmp_path_factory):
+    """Build src/zlexer.z with the PORTED zc (the self-host loop), not zc.py.
+
+    The headline self-host gate for the lexer: stage1 (zc_binary) compiles
+    zlexer, whose tokens must then match the reference goldens on every
+    example -- both that the ported compiler emits buildable C and that the
+    emitted lexer is behaviorally correct."""
+    return _build_unit_with_ported_zc("zlexer", zc_binary, tmp_path_factory)
+
+
 @pytest.fixture(scope="session")
 def zlexer_binary(tmp_path_factory):
     """Build the self-hosted lexer (src/zlexer.z) once per session."""
