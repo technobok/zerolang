@@ -284,6 +284,8 @@ collectLiterals: function {n: Node ids: (List of: u64) texts: (List of: String)}
     } case withexpr then {
         collectLiterals n: n.value ids: ids texts: texts
         collectLiterals n: n.body ids: ids texts: texts
+    } case doexpr then {
+        collectLiterals n: n.statement ids: ids texts: texts
     } case forexpr then {
         fiter: n.conditions.iterate
         for f: fiter loop {
@@ -447,6 +449,7 @@ Ctx: class {
     genWrap: String
     genSomeTag: String
     genNoneTag: String
+    genHasValue: bool
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -1414,6 +1417,9 @@ emitMetaCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
                 if ffct.length == 0.u64 then {
                     ffct = "int64_t".string
                 } else {}
+                if (symtab.typing.isChildLockField parentTypeId: et name: fname.stringview) when (lockFieldIsReftypePtr symtab: symtab ctx: ctx fid: ffid) then {
+                    ffct = "\{ffct}*"
+                } else {}
                 av = "(\{ffct}){0}".string
             }
             if fi > 0.u64 then {
@@ -1462,6 +1468,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     pmc: emitParsedMethodCall symtab: symtab ctx: ctx call: call
     if pmc.length > 0.u64 then {
         return pmc
+    } else {}
+    uic: emitUserIterCall symtab: symtab ctx: ctx call: call
+    if uic.length > 0.u64 then {
+        return uic
     } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
@@ -1627,6 +1637,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         } else {}
         # `.private` is a compile-time friend marker -- it emits the receiver itself.
         if mn2.stringview == "private" then {
+            return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+        } else {}
+        # `.lock` on a value is a borrow marker (no type has a literal `lock`
+        # field); emit the base, which the borrow param then addresses.
+        if mn2.stringview == "lock" then {
             return (emitExpr symtab: symtab ctx: ctx n: n.parent)
         } else {}
         if bn2.length > 0.u64 then {
@@ -2662,6 +2677,13 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         emitStmt symtab: symtab ctx: ctx n: n.statementline ind: ind tmp: tmp buf: buf
     } case expression then {
         emitStmt symtab: symtab ctx: ctx n: n.expression ind: ind tmp: tmp buf: buf
+    } case statement then {
+        siter9: n.statements.iterate
+        for s9: siter9 loop {
+            emitStmt symtab: symtab ctx: ctx n: s9 ind: ind tmp: tmp buf: buf
+        }
+    } case doexpr then {
+        emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind tmp: tmp buf: buf
     } case call then {
         emitCallStmt symtab: symtab ctx: ctx call: n ind: ind tmp: tmp buf: buf
     } case assignment then {
@@ -2676,6 +2698,10 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } case none then {}
         } else {}
         nm: n.name.stringview
+        if ctx.genActive when (isYieldNode n: n.value) then {
+            emitExprFormYield symtab: symtab ctx: ctx value: n.value aid: n.nodeid.u64 nm: nm.stringview ind: ind tmp: tmp buf: buf
+            return
+        } else {}
         # `x: <inst>.take` over a record/class is an ownership alias: record
         # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
         tabA: takeAliasBase symtab: symtab n: n.value
@@ -2861,7 +2887,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
             buf.append lwv2.stringview
         }
-        emitStmt symtab: symtab ctx: ctx n: n.body ind: ind tmp: tmp buf: buf
+        emitBodyNode symtab: symtab ctx: ctx n: n.body ind: ind tmp: tmp buf: buf
     } case forexpr then {
         if (emitObjIterFor symtab: symtab ctx: ctx m: n ind: ind tmp: tmp buf: buf) then {
             return
@@ -4630,7 +4656,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string)
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -7050,6 +7076,97 @@ emitParsedMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Ca
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
 }
 
+# isLockArg -- the argument (through expression wrappers) is an `x.lock` borrow
+# projection; such a value passes by address to a borrow param.
+isLockArg: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isLockArg n: n.expression)
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        return cn9.stringview == "lock"
+    } else {
+        return false
+    }
+}
+
+# emitUserIterCall -- a manual `g.call value: X` on a user iterator class (a
+# generator's iter): `z_t{id}_{Fn}_iter_call(&g, X)`; a `.lock` borrow value
+# passes by address. "" for any non-user-iter `.call`.
+emitUserIterCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    if mn.stringview == "call" then {} else {
+        return "".string
+    }
+    bnid: dottedBaseNodeId n: call.callable
+    rid0: stampIdOf symtab: symtab nid: bnid
+    if rid0 == 0.u64 then {
+        return "".string
+    } else {}
+    iterId: rid0
+    rtn9: typeNameOfReg9 symtab: symtab tid: rid0
+    cano9: ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: rtn9.stringview
+    match (
+        cano9
+    ) case some then {
+        if (childExists symtab: symtab tid: cano9 name: "call") then {
+            iterId = cano9
+        } else {}
+    } case none then {}
+    if (symtab.reg.typetypeOf typeId: iterId) == ztypes.ztypetype.CLASS then {} else {
+        return "".string
+    }
+    itorig9: monoOriginName symtab: symtab tid: iterId
+    if itorig9.length == 0.u64 then {} else {
+        return "".string
+    }
+    itn9: typeNameOfReg9 symtab: symtab tid: iterId
+    if (userFnId symtab: symtab ctx: ctx name: itn9.stringview) > 0.u64 then {} else {
+        return "".string
+    }
+    cco9: symtab.typing.childOf parentTypeId: iterId name: "call"
+    match (
+        cco9
+    ) case some then {
+        ccn9: typeNameOfReg9 symtab: symtab tid: cco9
+        callC9: cnameOf tid: cco9 name: ccn9.stringview
+        recv9: aliasResolve ctx: ctx name: bn.stringview
+        recvExpr9: "&\{recv9}".string
+        if (isPtrVar ctx: ctx name: recv9.stringview) then {
+            recvExpr9 = recv9
+        } else {}
+        valArg9: "".string
+        hasVal9: false
+        with aiter9: call.arguments.iterate do for av9: aiter9 loop {
+            match (
+                av9
+            ) case namedoperation then {
+                al9: unitLabel9 o: av9.name
+                if al9.stringview == "value" then {
+                    hasVal9 = true
+                    ve9: emitExpr symtab: symtab ctx: ctx n: av9.operation
+                    if (isLockArg n: av9.operation) then {
+                        valArg9 = "&\{ve9}".string
+                    } else {
+                        valArg9 = ve9
+                    }
+                } else {}
+            } else {}
+        }
+        if hasVal9 then {
+            return "\{callC9}(\{recvExpr9}, \{valArg9})"
+        } else {}
+        return "\{callC9}(\{recvExpr9})"
+    } case none then {
+        return "".string
+    }
+}
+
 emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     if bn.length == 0.u64 then {
@@ -7493,6 +7610,26 @@ lockFieldIsProtocol: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out 
     return false
 }
 
+# lockFieldIsReftypePtr -- a `.lock` field is stored as a pointer to its container
+# only when that container is a reftype (class/union); a protocol lock is the fat
+# pointer by value, and a valtype lock (a bidirectional generator's bool resume
+# input) is stored by value.
+lockFieldIsReftypePtr: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
+    ftn: typeNameOfReg9 symtab: symtab tid: fid
+    ftid: resolveTypeIdByName symtab: symtab ctx: ctx name: ftn.stringview
+    if ftid == 0.u64 then {
+        ftid = fid
+    } else {}
+    tt: symtab.reg.typetypeOf typeId: ftid
+    if tt == ztypes.ztypetype.CLASS then {
+        return true
+    } else {}
+    if tt == ztypes.ztypetype.UNION then {
+        return true
+    } else {}
+    return false
+}
+
 emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
     if (isTypedefType symtab: symtab tid: tid) then {
         # typedef records are zero-overhead aliases of their base; they have no
@@ -7517,9 +7654,9 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         # a `.lock` field borrows the container: protocol-typed -> fat pointer by
         # value; class-typed -> a pointer to the container.
         if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) then {
-            if (lockFieldIsProtocol symtab: symtab ctx: ctx fid: fid) then {} else {
+            if (lockFieldIsReftypePtr symtab: symtab ctx: ctx fid: fid) then {
                 fct = "\{fct}*"
-            }
+            } else {}
         } else {}
         l1: "    \{fct} \{fname};\n"
         buf.append l1.stringview
@@ -7539,9 +7676,9 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         } else {}
         # a `.lock` field's meta_create param matches the field (protocol by value).
         if (symtab.typing.isChildLockField parentTypeId: tid name: fname2.stringview) then {
-            if (lockFieldIsProtocol symtab: symtab ctx: ctx fid: fid2) then {} else {
+            if (lockFieldIsReftypePtr symtab: symtab ctx: ctx fid: fid2) then {
                 fct2 = "\{fct2}*"
-            }
+            } else {}
         } else {}
         if fj > 0.u64 then {
             params.append ", "
@@ -7855,12 +7992,31 @@ setupGenCtx: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 op: Node} out
     ctx.genWrap = "\{rc}_t".string
     ctx.genSomeTag = "Z_\{ru}_TAG_SOME".string
     ctx.genNoneTag = "Z_\{ru}_TAG_NONE".string
+    hasVal9: false
+    match (
+        op
+    ) case functiondef then {
+        with piter9: op.parameters.iterate do for pm9: piter9 loop {
+            match (
+                pm9
+            ) case namedoperation then {
+                pl9: unitLabel9 o: pm9.name
+                if pl9.stringview == "value" then {
+                    hasVal9 = true
+                } else {}
+            } else {}
+        }
+    } else {}
+    ctx.genHasValue = hasVal9
     return true
 }
 
 # emitGenPrologue -- the resume dispatch: switch on this->state to L_entry / the
 # per-yield resume labels / L_done.
 emitGenPrologue: function {ctx: Ctx buf: String.borrow} is {
+    if ctx.genHasValue then {
+        buf.append "    this->_resume_input = value;\n"
+    } else {}
     buf.append "    switch (this->state) {\n"
     buf.append "        case 0: goto L_entry;\n"
     k: 1.u64
@@ -7883,6 +8039,62 @@ emitGenEpilogue: function {ctx: Ctx buf: String.borrow} is {
     lt: "    _r_done.tag = \{ctx.genNoneTag};\n"
     buf.append lt.stringview
     buf.append "    return _r_done;\n"
+}
+
+# isYieldNode -- the node (through expression wrappers) is a yield expression.
+isYieldNode: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isYieldNode n: n.expression)
+    } case yieldexpr then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# emitYieldFromNode -- emit the suspension for a yield reached through expression
+# wrappers (the expression-form `name: yield E`).
+emitYieldFromNode: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case expression then {
+        emitYieldFromNode symtab: symtab ctx: ctx n: n.expression ind: ind tmp: tmp buf: buf
+    } case yieldexpr then {
+        emitYieldStmt symtab: symtab ctx: ctx yd: n ind: ind tmp: tmp buf: buf
+    } else {}
+}
+
+# emitExprFormYield -- `name: yield E` in a bidirectional generator: suspend
+# (yield E), then bind name to the resume input the next `.call value:` provides.
+# A valtype binds the value directly; a borrowed reftype binds a pointer alias.
+emitExprFormYield: function {symtab: zenv.ZSymbolTable ctx: Ctx value: Node aid: u64 nm: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    emitYieldFromNode symtab: symtab ctx: ctx n: value ind: ind tmp: tmp buf: buf
+    ltid9: stampIdOf symtab: symtab nid: aid
+    ct9: typeRefC symtab: symtab ctx: ctx tid: ltid9 thisTid: 0.u64
+    if ct9.length == 0.u64 then {
+        ct9 = "int64_t".string
+    } else {}
+    tt9: symtab.reg.typetypeOf typeId: ltid9
+    isRef9: false
+    if tt9 == ztypes.ztypetype.CLASS then {
+        isRef9 = true
+    } else {}
+    if tt9 == ztypes.ztypetype.UNION then {
+        isRef9 = true
+    } else {}
+    if isRef9 then {
+        lp0: "\{ind}\{ct9}* __borrow_\{nm} = this->_resume_input;\n"
+        buf.append lp0.stringview
+        lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
+        buf.append lp1.stringview
+        av9: "(*__borrow_\{nm})".string
+        ctx.aliases.set key: nm.string value: av9
+    } else {
+        lp2: "\{ind}\{ct9} \{nm} = this->_resume_input;\n"
+        buf.append lp2.stringview
+    }
 }
 
 # emitYieldStmt -- one `yield E` suspension: set the resume state, return the

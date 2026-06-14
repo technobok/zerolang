@@ -86,6 +86,9 @@ EMITC_SMOKE: "list[str]" = [
     "generator_intrange",
     "generator_chain",
     "generator_map_filter",
+    "generator_listiter",
+    "generator_bidirectional",
+    "generator_accepts_borrow",
 ]
 
 
