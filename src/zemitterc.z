@@ -1140,6 +1140,33 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
     return "".string
 }
 
+# emitEmptyColCreate -- an empty collection construction `(List of: T)` /
+# `(Set of: T)` / `(Map ...)` as a value: emit the collection mono's create with
+# capacity 0, resolved from the call-node stamp. "" when not such a construction.
+emitEmptyColCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData cn0: StringView} out String is {
+    isCol9: false
+    if cn0 == "List" then {
+        isCol9 = true
+    } else {}
+    if cn0 == "Set" then {
+        isCol9 = true
+    } else {}
+    if cn0 == "Map" then {
+        isCol9 = true
+    } else {}
+    if isCol9 then {} else {
+        return "".string
+    }
+    mid9: stampIdOf symtab: symtab nid: call.nodeid.u64
+    mid9 = chaseColMono symtab: symtab tid: mid9
+    if (monoOriginName symtab: symtab tid: mid9).length > 0.u64 then {} else {
+        return "".string
+    }
+    mn9: typeNameOfReg9 symtab: symtab tid: mid9
+    cb9: cnameOf tid: mid9 name: mn9.stringview
+    return "\{cb9}_create((uint64_t)0)"
+}
+
 emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     mn: dottedChildText n: call.callable
     bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
@@ -1802,6 +1829,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         return ddq
     } else {}
     cn0: atomTextOf n: call.callable
+    ecc9: emitEmptyColCreate symtab: symtab ctx: ctx call: call cn0: cn0.stringview
+    if ecc9.length > 0.u64 then {
+        return ecc9
+    } else {}
     fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
     if fid > 0.u64 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
         return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
@@ -2344,6 +2375,25 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             nsm9: emitStringMethod ctx: ctx recv: base9.stringview recvIsPtr: nptr9 mn: mn2.stringview
             if nsm9.length > 0.u64 then {
                 return nsm9
+            } else {}
+        } else {}
+        # a no-arg List method on a nested receiver (this.field.pop): the bsmn
+        # leg above missed it (bstamp keys off an atom base, 0 for a nested
+        # path). Resolve the List mono from the base node and emit the call.
+        nlid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+        nlid9 = chaseColMono symtab: symtab tid: nlid9
+        nlomn9: monoOriginName symtab: symtab tid: nlid9
+        if nlomn9.stringview == "List" then {
+            nltn9: typeNameOfReg9 symtab: symtab tid: nlid9
+            nlcb9: cnameOf tid: nlid9 name: nltn9.stringview
+            if mn2.stringview == "pop" then {
+                return "\{nlcb9}_pop(&\{base9})"
+            } else {}
+            if mn2.stringview == "sort" then {
+                return "\{nlcb9}_sort(&\{base9})"
+            } else {}
+            if mn2.stringview == "listview" then {
+                return "\{nlcb9}_listview(&\{base9})"
             } else {}
         } else {}
         if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) then {
@@ -4290,6 +4340,26 @@ unitLabel9: function {o: (Option t: String)} out String is {
 
 # fnSignature -- "RET cname(PARAMS)" for a user function from its
 # resolved type's children and return stamp (z_main for main).
+# fnReturnTypeId -- the stamped type id of a function's return-type node (the
+# typecheck stamps `op.returntype`, even for concrete fns whose registry
+# returnTypeId is unset). 0 when the fn has no return type.
+fnReturnTypeId: function {symtab: zenv.ZSymbolTable op: Node} out u64 is {
+    match (
+        op
+    ) case functiondef then {
+        rtopt9: op.returntype
+        match (
+            rtopt9
+        ) case some then {
+            return (stampIdOf symtab: symtab nid: (nodeIdOf9 n: rtopt9))
+        } case none then {
+            return 0.u64
+        }
+    } else {
+        return 0.u64
+    }
+}
+
 # isReftypeParam -- a user reftype (class/union) param, passed BY REFERENCE: a
 # function param that is a CLASS or UNION, not a collection mono (List/Map/Set),
 # and not a value-native (String/StringView live in the system/collections
@@ -4408,10 +4478,30 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
                 rc: cTypeOf name: rn.stringview
                 if rc.length > 0.u64 then {
                     ret = rc
-                } else {}
+                } else {
+                    # a non-scalar return the rbn block didn't resolve -- e.g. an
+                    # optionval/resultval (or other) mono. Use typeRefC, which
+                    # gives the mono's C type. Only when ret is still void, so a
+                    # resolution from rbn above is never overridden.
+                    if ret.stringview == "void" then {
+                        rr2: typeRefC symtab: symtab ctx: ctx tid: rto thisTid: 0.u64
+                        if rr2.length > 0.u64 then {
+                            ret = rr2
+                        } else {}
+                    } else {}
+                }
             } case none then {}
         } case none then {}
     }
+    if ret.stringview == "void" then {
+        rtnid9: fnReturnTypeId symtab: symtab op: op
+        if rtnid9 > 0.u64 then {
+            rtr9: typeRefC symtab: symtab ctx: ctx tid: rtnid9 thisTid: 0.u64
+            if rtr9.length > 0.u64 then {
+                ret = rtr9
+            } else {}
+        } else {}
+    } else {}
     params: "".string
     cNames: (List of: String)
     cIds: (List of: u64)
