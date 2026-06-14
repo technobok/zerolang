@@ -108,6 +108,7 @@ EMITC_CORPUS: "list[str]" = [
     "nested_list_method",
     "optionval_return",
     "take_string",
+    "string_param_mut",
 ]
 
 

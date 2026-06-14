@@ -1934,7 +1934,18 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                 byref8: false
                 if ai8 < fpIds.length then {
                     fpid8: fpIds.get i: ai8
+                    ptra8: false
                     if (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                        ptra8 = true
+                    } else {
+                        if ai8 < fpNames.length then {
+                            fpn8: fpNames.get i: ai8
+                            if (isBorrowStringParam symtab: symtab fid: fid pname: fpn8.stringview pid: fpid8) then {
+                                ptra8 = true
+                            } else {}
+                        } else {}
+                    }
+                    if ptra8 then {
                         if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
                             byref8 = true
                         }
@@ -4478,6 +4489,24 @@ isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool 
     return true
 }
 
+# isBorrowStringParam -- a String param with BORROW/LOCK ownership, passed BY
+# REFERENCE so the callee's mutations (append/reserve) persist to the caller. A
+# `.take` String param is moved by value instead; StringView is value-passed.
+isBorrowStringParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView pid: u64} out bool is {
+    ptn9: typeNameOfReg9 symtab: symtab tid: pid
+    if ptn9.stringview == "String" then {} else {
+        return false
+    }
+    own9: symtab.typing.childOwnershipText parentTypeId: fid name: pname
+    if own9.stringview == "BORROW" then {
+        return true
+    } else {}
+    if own9.stringview == "LOCK" then {
+        return true
+    } else {}
+    return false
+}
+
 # registerReftypeParams -- add a top-level function's reftype (class/union)
 # params to ctx.ptrVars, so the body reads them as `param->field` and method
 # calls pass them directly (they arrive as pointers). Caller resets ptrVars.
@@ -4500,8 +4529,16 @@ registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is
     rn: pNames.length
     for while ri < rn loop {
         rpid: pIds.get i: ri
+        rpn: pNames.get i: ri
+        regp9: false
         if (isReftypeParam symtab: symtab ctx: ctx tid: rpid) then {
-            rpn: pNames.get i: ri
+            regp9 = true
+        } else {
+            if (isBorrowStringParam symtab: symtab fid: fid pname: rpn.stringview pid: rpid) then {
+                regp9 = true
+            } else {}
+        }
+        if regp9 then {
             rpc: rpn.string
             ctx.ptrVars.append rpc
         } else {}
@@ -4594,7 +4631,15 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
         pname: cNames.get i: pi
         pid: cIds.get i: pi
         ct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0.u64
+        ptrp9: false
         if (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
+            ptrp9 = true
+        } else {
+            if (isBorrowStringParam symtab: symtab fid: fid pname: pname.stringview pid: pid) then {
+                ptrp9 = true
+            } else {}
+        }
+        if ptrp9 then {
             if ct.length > 0.u64 then {
                 ctp9: "\{ct}*"
                 ct = ctp9
