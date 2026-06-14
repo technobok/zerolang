@@ -1671,6 +1671,35 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     }
 }
 
+# emitStringMethod -- a String value-context method call. String is a native
+# singleton whose struct + methods emit once under ctx.strC; dispatch by name so
+# the cname is canonical (not a per-shell receiver id). `recv` is the receiver C
+# expression; recvIsPtr picks `->`/no-`&`. "" for an unrecognized method.
+emitStringMethod: function {ctx: Ctx recv: StringView recvIsPtr: bool mn: StringView} out String is {
+    if mn == "copy" then {
+        if recvIsPtr then {
+            return "\{ctx.strC}_copy(\{recv})"
+        } else {}
+        return "\{ctx.strC}_copy(&\{recv})"
+    } else {}
+    if mn == "length" then {
+        if recvIsPtr then {
+            return "\{recv}->size"
+        } else {}
+        return "\{recv}.size"
+    } else {}
+    if mn == "capacity" then {
+        if recvIsPtr then {
+            return "\{recv}->capacity"
+        } else {}
+        return "\{recv}.capacity"
+    } else {}
+    if mn == "stringview" then {
+        return (svValueForm ctx: ctx expr: recv tname: "String")
+    } else {}
+    return "".string
+}
+
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
@@ -1851,7 +1880,21 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             bcid: userFnId symtab: symtab ctx: ctx name: bsn0.stringview
             if bcid > 0.u64 then {
                 bstamp = bcid
-            } else {}
+            } else {
+                # canonicalize a SHELL (no defining unit) by name: a system type
+                # like String reached via a fresh shell id resolves to the
+                # registered class whose struct + methods are emitted (mirrors
+                # the typeRefC canonicalization, so method cnames match).
+                bduo9: symtab.typing.definedInUnit.get key: bstamp0
+                match (
+                    bduo9
+                ) case some then {} case none then {
+                    brid9: resolveTypeIdByName symtab: symtab ctx: ctx name: bsn0.stringview
+                    if brid9 > 0.u64 then {
+                        bstamp = brid9
+                    } else {}
+                }
+            }
             bstamp = chaseColMono symtab: symtab tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
             if rtt == ztypes.ztypetype.PROTOCOL then {
@@ -1887,6 +1930,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             } else {}
             if isRecOrCls then {
                 fbtn9: typeNameOfReg9 symtab: symtab tid: bstamp
+                if fbtn9.stringview == "String" then {
+                    sptr9: isPtrVar ctx: ctx name: bn2.stringview
+                    sm9: emitStringMethod ctx: ctx recv: bn2.stringview recvIsPtr: sptr9 mn: mn2.stringview
+                    if sm9.length > 0.u64 then {
+                        return sm9
+                    } else {}
+                } else {}
                 isFile9: false
                 fduo9: symtab.typing.definedInUnit.get key: bstamp
                 match (
@@ -2073,6 +2123,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         base9: emitExpr symtab: symtab ctx: ctx n: n.parent
         if (base9.stringview.startsWith prefix: "/*") then {
             return "/* zemitterc: unhandled dotted */0".string
+        } else {}
+        nptn9: stampNameDeep symtab: symtab n: n.parent
+        if nptn9.stringview == "String" then {
+            nptr9: pathIsPointer symtab: symtab ctx: ctx n: n.parent
+            nsm9: emitStringMethod ctx: ctx recv: base9.stringview recvIsPtr: nptr9 mn: mn2.stringview
+            if nsm9.length > 0.u64 then {
+                return nsm9
+            } else {}
         } else {}
         if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) then {
             ep9: "\{base9}->\{mn2}"
