@@ -1473,6 +1473,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if uic.length > 0.u64 then {
         return uic
     } else {}
+    osc: emitOsCall symtab: symtab ctx: ctx call: call
+    if osc.length > 0.u64 then {
+        return osc
+    } else {}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0.u64 then {
         return dc
@@ -1629,10 +1633,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             } else {}
         } else {}
         if bn2r.stringview == "os" then {
-            if mn2.stringview == "args" then {
+            if (isOsNoArgFn name: mn2.stringview) then {
                 needsAdd ctx: ctx name: "os"
-                needsAdd ctx: ctx name: "os_args"
-                return "z_os_args()".string
+                osn9: "os_\{mn2}".string
+                needsAdd ctx: ctx name: osn9.stringview
+                return "z_os_\{mn2}()".string
             } else {}
         } else {}
         # `.private` is a compile-time friend marker -- it emits the receiver itself.
@@ -2717,15 +2722,22 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         ltmn: monoOriginName symtab: symtab tid: ltid
         if ltmn.stringview == "List" then {
             lcb: cnameOf tid: ltid name: ltnm.stringview
-            if (forexprValue n: n.value) then {
-                # list comprehension: `xs: for ... loop { expr }` create + populate
-                lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
-                buf.append lc0.stringview
-                emitListComprehension symtab: symtab ctx: ctx forNode: n.value listCb: lcb.stringview listVar: nm ind: ind tmp: tmp buf: buf
+            if (osNoArgCallRhs n: n.value) then {
+                # owned List returned by os.args / os.envNames: emit the call.
+                losr: emitExpr symtab: symtab ctx: ctx n: n.value
+                losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
+                buf.append losb.stringview
             } else {
-                lcap: listCapArg symtab: symtab ctx: ctx n: n.value
-                lb0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
-                buf.append lb0.stringview
+                if (forexprValue n: n.value) then {
+                    # list comprehension: `xs: for ... loop { expr }` create + populate
+                    lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
+                    buf.append lc0.stringview
+                    emitListComprehension symtab: symtab ctx: ctx forNode: n.value listCb: lcb.stringview listVar: nm ind: ind tmp: tmp buf: buf
+                } else {
+                    lcap: listCapArg symtab: symtab ctx: ctx n: n.value
+                    lb0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
+                    buf.append lb0.stringview
+                }
             }
             lfree: "    \{lcb}_destroy(&\{nm});\n"
             lfsv: lfree.stringview
@@ -4580,6 +4592,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "#include <sys/stat.h>\n"
     buf.append "#include <sys/types.h>\n"
     buf.append "#include <dirent.h>\n"
+    buf.append "#include <pwd.h>\n"
     if needsHash then {
         buf.append "#include <sys/random.h>\n"
         buf.append "#include <sys/syscall.h>\n"
@@ -5561,6 +5574,8 @@ loadIoFragment: function {symtab: zenv.ZSymbolTable ctx: Ctx path: StringView} o
         canons.append "CliError".string
         canons.append "Parsed".string
         canons.append "Spec".string
+        canons.append "platformkind".string
+        canons.append "archkind".string
         ci: 0.u64
         cn: canons.length
         for while ci < cn loop {
@@ -5859,12 +5874,27 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
 # universal helpers (z_sv_to_cstr inline, errno-map) emit whenever any io call
 # is present; the rest gate on their specific need.
 emitRuntimeIo: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
-    if (needsHas ctx: ctx name: "io") then {} else {
+    ioAct9: needsHas ctx: ctx name: "io"
+    osEr9: osNeedsErrno ctx: ctx
+    runIo9: ioAct9
+    if (osNeedsSvCstr ctx: ctx) then {
+        runIo9 = true
+    } else {}
+    if osEr9 then {
+        runIo9 = true
+    } else {}
+    if runIo9 then {} else {
         return
     }
     csc: "static char* z_sv_to_cstr(\{ctx.svC}_t v) {\n    char* buf = (char*)z_xmalloc(v.length + 1);\n    if (v.length > 0) memcpy(buf, v.data, v.length);\n    buf[v.length] = '\\0';\n    return buf;\n}\n\n"
     buf.append csc.stringview
-    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io" frag: "_Z_IO_ERRNO_MAP" buf: buf
+    needErr9: ioAct9
+    if osEr9 then {
+        needErr9 = true
+    } else {}
+    if needErr9 then {
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_IO_ERRNO_MAP" buf: buf
+    } else {}
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "io_eprintln" frag: "_Z_IO_EPRINTLN" buf: buf
     needWC: needsHas ctx: ctx name: "io_writeText"
     if (needsHas ctx: ctx name: "io_appendText") then {
@@ -5991,6 +6021,20 @@ emitRuntimeOs: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
         ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_OS_ARGV_GLOBALS" buf: buf
         ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_OS_ARGS" buf: buf
     } else {}
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_env" frag: "_Z_OS_GET_ENV" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_setEnv" frag: "_Z_OS_SET_ENV" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_unsetEnv" frag: "_Z_OS_UNSET_ENV" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_envNames" frag: "_Z_OS_ENV_NAMES" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_cwd" frag: "_Z_OS_CWD" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_setCwd" frag: "_Z_OS_SET_CWD" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_pid" frag: "_Z_OS_PID" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_ppid" frag: "_Z_OS_PPID" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_userName" frag: "_Z_OS_USER_NAME" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_homeDir" frag: "_Z_OS_HOME_DIR" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_platform" frag: "_Z_OS_PLATFORM" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_arch" frag: "_Z_OS_ARCH" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_hostname" frag: "_Z_OS_HOSTNAME" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_exit" frag: "_Z_OS_EXIT" buf: buf
 }
 
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -6822,6 +6866,104 @@ emitIoWrapperCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
 # eprintln/open/exists/mkdir/.../stat/listDir): `z_io_<name>(args...)` in the
 # native's parameter order, setting the per-call need so emitRuntimeIo emits
 # the body. Returns "" for any non-io callee.
+# isOsNoArgFn -- a no-arg os.* function (auto-called bare: os.pid / os.platform
+# / os.cwd / ...). args is here too (the existing os.args leg).
+isOsNoArgFn: function {name: StringView} out bool is {
+    if name == "args" then { return true } else {}
+    if name == "pid" then { return true } else {}
+    if name == "ppid" then { return true } else {}
+    if name == "platform" then { return true } else {}
+    if name == "arch" then { return true } else {}
+    if name == "cwd" then { return true } else {}
+    if name == "hostname" then { return true } else {}
+    if name == "userName" then { return true } else {}
+    if name == "homeDir" then { return true } else {}
+    if name == "envNames" then { return true } else {}
+    return false
+}
+
+# osNoArgCallRhs -- a binding RHS that is a bare `os.<noArgFn>` auto-call
+# (os.args / os.envNames return an owned List, so the binding's List branch
+# must emit the call, not a fresh empty list).
+osNoArgCallRhs: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (osNoArgCallRhs n: n.expression)
+    } case statementline then {
+        return (osNoArgCallRhs n: n.statementline)
+    } case dottedpath then {
+        base9: atomTextOf n: n.parent
+        if base9.stringview == "os" then {} else {
+            return false
+        }
+        memb9: atomTextOf n: n.child
+        return (isOsNoArgFn name: memb9.stringview)
+    } else {
+        return false
+    }
+}
+
+# osNeedsSvCstr -- an os native that converts a StringView arg to a C string.
+osNeedsSvCstr: function {ctx: Ctx} out bool is {
+    if (needsHas ctx: ctx name: "os_env") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_setEnv") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_unsetEnv") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_setCwd") then { return true } else {}
+    return false
+}
+
+# osNeedsErrno -- an os native that maps errno to an IoError.
+osNeedsErrno: function {ctx: Ctx} out bool is {
+    if (needsHas ctx: ctx name: "os_setEnv") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_unsetEnv") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_cwd") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_setCwd") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_userName") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_homeDir") then { return true } else {}
+    if (needsHas ctx: ctx name: "os_hostname") then { return true } else {}
+    return false
+}
+
+# emitOsCall -- an arg-taking os.* native (env/setEnv/unsetEnv/setCwd/exit):
+# `z_os_<name>(args...)` in source order. "" for any non-os callee. (No-arg os
+# fns ride the emitExpr dotted leg.)
+emitOsCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.stringview == "os" then {} else {
+        return "".string
+    }
+    mn: dottedChildText n: call.callable
+    isOsC: false
+    if mn.stringview == "env" then { isOsC = true } else {}
+    if mn.stringview == "setEnv" then { isOsC = true } else {}
+    if mn.stringview == "unsetEnv" then { isOsC = true } else {}
+    if mn.stringview == "setCwd" then { isOsC = true } else {}
+    if mn.stringview == "exit" then { isOsC = true } else {}
+    if isOsC then {} else {
+        return "".string
+    }
+    needsAdd ctx: ctx name: "os"
+    oname9: "os_\{mn}".string
+    needsAdd ctx: ctx name: oname9.stringview
+    args: "".string
+    first: true
+    with aiter: call.arguments.iterate do for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            av: emitExpr symtab: symtab ctx: ctx n: a.operation
+            if first then {
+                first = false
+            } else {
+                args.append ", "
+            }
+            args.append av.stringview
+        } else {}
+    }
+    return "z_os_\{mn}(\{args})"
+}
+
 emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     if bn.stringview == "io" then {} else {

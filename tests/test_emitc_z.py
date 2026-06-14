@@ -89,6 +89,10 @@ EMITC_SMOKE: "list[str]" = [
     "generator_listiter",
     "generator_bidirectional",
     "generator_accepts_borrow",
+    "os_basics",
+    "os_env",
+    "os_platform",
+    "os_process",
 ]
 
 
