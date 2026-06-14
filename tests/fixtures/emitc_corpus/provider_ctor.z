@@ -1,7 +1,11 @@
 # provider_ctor.z -- reproduce zvfs's unstamped provider construction binding.
 # The trigger is constructing a protocol-impl class INSIDE A METHOD of another
 # class (zvfs's ProviderTable.registerNull does `np: NullProvider ...`), not in a
-# top-level function (where it stamps fine).
+# top-level function (where it stamps fine). `NullP`/`Prov` are referenced ONLY
+# inside `Table.register`'s body, so the demand scan (scanDefCalls) must descend
+# into objectdef method bodies for them to resolve. The constructed protocol is
+# CONSUMED (`p.walk`) so a dropped/unstamped construction changes the output --
+# without that the binding is dead and the broken emission is invisible.
 
 Prov: protocol {
     walk: function {:this n: u32} out u32
@@ -22,7 +26,7 @@ Table: class {
     register: function {:this} out u32 is {
         np: NullP _unused: false
         p: Prov.create from: np.take
-        return 0.u32
+        return (p.walk n: 7)
     }
 }
 
