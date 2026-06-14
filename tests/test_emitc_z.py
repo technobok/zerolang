@@ -84,6 +84,8 @@ EMITC_SMOKE: "list[str]" = [
     "cli_basic",
     "generator_counter",
     "generator_intrange",
+    "generator_chain",
+    "generator_map_filter",
 ]
 
 

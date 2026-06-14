@@ -1368,6 +1368,22 @@ nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
 # allocator (its field children as params). The typecheck stamps the call node
 # with that type; emit `{type}_meta_create(args)` (never `_create`, which the
 # user's own create may override -> recursion). "" when not a meta.create.
+# ctorHasLabel -- whether a call carries a named argument with this label.
+ctorHasLabel: function {call: zast.CallData label: StringView} out bool is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then {
+                return true
+            } else {}
+        } else {}
+    }
+    return false
+}
+
 emitMetaCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     mcb: ztypecheck.metaCreateBaseId n: call.callable
     match (
@@ -1386,7 +1402,20 @@ emitMetaCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
         fn0: fnames.length
         for while fi < fn0 loop {
             fname: fnames.get i: fi
-            av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: fname.stringview
+            av: "".string
+            if (ctorHasLabel call: call label: fname.stringview) then {
+                av = ctorArgByLabel symtab: symtab ctx: ctx call: call label: fname.stringview
+            } else {
+                # a field absent from the meta.create args (a generator's promoted
+                # local: an inner iterator struct or a loop counter) is value-
+                # initialized; a typed zero compiles for both scalars and structs.
+                ffid: fids.get i: fi
+                ffct: typeRefC symtab: symtab ctx: ctx tid: ffid thisTid: 0.u64
+                if ffct.length == 0.u64 then {
+                    ffct = "int64_t".string
+                } else {}
+                av = "(\{ffct}){0}".string
+            }
             if fi > 0.u64 then {
                 args.append ", "
             } else {}
@@ -3193,6 +3222,25 @@ scanLoopVar: function {symtab: zenv.ZSymbolTable n: Node lbl: StringView res: St
 # while(1) / call / tag==NONE break / payload-extract pattern. Value
 # payloads (optionval) extract `.data.some`; reftype payloads (Option)
 # wait on the heap-extract slice. Returns false when not an iterator loop.
+# iterableNodeId -- the stamped node id of a for-loop iterable: peel expression
+# wrappers, then take the inner atom / dotted-field / call node (the expression
+# wrapper itself may be unstamped for a `this._iterN` field iterator).
+iterableNodeId: function {n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (iterableNodeId n: n.expression)
+    } case atomid then {
+        return n.nodeid.u64
+    } case dottedpath then {
+        return n.nodeid.u64
+    } case call then {
+        return n.nodeid.u64
+    } else {
+        return 0.u64
+    }
+}
+
 # isForIterCall -- the for-loop iterable is a call expression (an rvalue that
 # must be hoisted to a temp before `&recv`); a bare atom / dotted field is an
 # lvalue used directly.
@@ -3220,8 +3268,12 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
         if lbl.length == 0.u64 then {
             return false
         } else {}
-        oeid: exprNodeId9 n: c0.operation
+        oeid: iterableNodeId n: c0.operation
         itid0: stampIdOf symtab: symtab nid: oeid
+        if itid0 == 0.u64 then {
+            oeidF: exprNodeId9 n: c0.operation
+            itid0 = stampIdOf symtab: symtab nid: oeidF
+        } else {}
         itid: itid0
         # bare generator-fn iterable (`for x: counter loop`): itid0 is the
         # generator function itself; resolve via its return type (the iterator
@@ -7174,6 +7226,22 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                     if iid7 > 0.u64 then {
                         emitProtocolImplsForType symtab: symtab ctx: ctx implTid: iid7 implName: nmi7.stringview buf: buf
                     } else {}
+                } else {}
+            } else {}
+        }
+        # main-unit function forward decls, after the struct defs (so a generator
+        # function returning its synth iter class resolves) and before the method
+        # bodies (a synth iterator's call body may call another generator's fn).
+        with biterFD: mainOp.body.iterate do for bfd: biterFD loop {
+            match (
+                bfd
+            ) case namedoperation then {
+                if (isFunctionDefWithBody9 n: bfd.operation) then {
+                    fdn: unitLabel9 o: bfd.name
+                    fdid: userFnId symtab: symtab ctx: ctx name: fdn.stringview
+                    fdsig: fnSignature symtab: symtab ctx: ctx name: fdn.stringview fid: fdid op: bfd.operation
+                    fdl: "\{fdsig};\n"
+                    buf.append fdl.stringview
                 } else {}
             } else {}
         }
