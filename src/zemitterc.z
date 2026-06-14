@@ -1003,6 +1003,52 @@ dottedReceiverIsPtr: function {symtab: zenv.ZSymbolTable ctx: Ctx callable: Node
     }
 }
 
+# emitStringArgMethod -- a String mutating method WITH an arg (appendByte /
+# reserve): emit \{ctx.strC}_<native>(&recv, arg). The native cname is
+# snake_case (append_byte). "" when the receiver is not a String or the method
+# is not one of these. String is a value-native, so the cname is always ctx.strC.
+emitStringArgMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    mn: dottedChildText n: call.callable
+    nativeM: "".string
+    if mn.stringview == "appendByte" then {
+        nativeM = "append_byte".string
+    } else {}
+    if mn.stringview == "reserve" then {
+        nativeM = "reserve".string
+    } else {}
+    if nativeM.length == 0.u64 then {
+        return "".string
+    } else {}
+    recvExpr: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
+    if recvExpr.length == 0.u64 then {
+        return "".string
+    } else {}
+    rtid0: dottedReceiverStampId symtab: symtab callable: call.callable
+    rtid: chaseColMono symtab: symtab tid: rtid0
+    rtn: typeNameOfReg9 symtab: symtab tid: rtid
+    if rtn.stringview == "String" then {} else {
+        return "".string
+    }
+    rptr: dottedReceiverIsPtr symtab: symtab ctx: ctx callable: call.callable
+    recvAddr: "&\{recvExpr}"
+    if rptr then {
+        recvAddr = "\{recvExpr}"
+    } else {}
+    argval: "".string
+    with aiter: call.arguments.iterate do for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            if argval.length == 0.u64 then {
+                av: emitExpr symtab: symtab ctx: ctx n: a.operation
+                argval = av
+            } else {}
+        } else {}
+    }
+    r: "\{ctx.strC}_\{nativeM}(\{recvAddr}, \{argval})"
+    return r
+}
+
 # emitInstanceMethodCall -- `recv.method args` on a user CLASS instance (not a
 # Type qualifier, not a collection / system native): emit
 # {methodCname}(&recv, posArgs) with the receiver mapped to the :this param and
@@ -1727,6 +1773,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if dc.length > 0.u64 then {
         return dc
     } else {}
+    sam9: emitStringArgMethod symtab: symtab ctx: ctx call: call
+    if sam9.length > 0.u64 then {
+        return sam9
+    } else {}
     lmc: emitListMethodCall symtab: symtab ctx: ctx call: call
     if lmc.length > 0.u64 then {
         return lmc
@@ -1846,6 +1896,12 @@ emitStringMethod: function {ctx: Ctx recv: StringView recvIsPtr: bool mn: String
     } else {}
     if mn == "stringview" then {
         return (svValueForm ctx: ctx expr: recv tname: "String")
+    } else {}
+    if mn == "shrink" then {
+        if recvIsPtr then {
+            return "\{ctx.strC}_shrink(\{recv})"
+        } else {}
+        return "\{ctx.strC}_shrink(&\{recv})"
     } else {}
     return "".string
 }

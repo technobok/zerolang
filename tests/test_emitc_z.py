@@ -103,6 +103,7 @@ EMITC_SMOKE: "list[str]" = [
 CORPUS_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "emitc_corpus")
 EMITC_CORPUS: "list[str]" = [
     "reftype_param",
+    "string_mut",
 ]
 
 
