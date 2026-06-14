@@ -441,6 +441,12 @@ Ctx: class {
     dataConst: (Map key: String value: String)
     ptrVars: (List of: String)
     aliases: (Map key: String value: String)
+    genActive: bool
+    genYieldCount: u64
+    genYieldNext: u64
+    genWrap: String
+    genSomeTag: String
+    genNoneTag: String
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -1550,6 +1556,9 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         } else {}
         ac2: aliasResolve ctx: ctx name: av
         return ac2
+    } case labelvalue then {
+        lvn9: n.name.stringview
+        return (aliasResolve ctx: ctx name: lvn9)
     } case dottedpath then {
         mnc0: atomTextOf n: n.child
         if mnc0.stringview == "string" then {
@@ -2589,8 +2598,13 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
             } else {}
         }
         if hasArg then {} else {
-            lr2: "\{ind}return;\n"
-            buf.append lr2.stringview
+            if ctx.genActive then {
+                lgd: "\{ind}goto L_done;\n"
+                buf.append lgd.stringview
+            } else {
+                lr2: "\{ind}return;\n"
+                buf.append lr2.stringview
+            }
         }
         return
     } else {}
@@ -2864,6 +2878,8 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         emitBodyOpt symtab: symtab ctx: ctx o: n.body ind: ind2.stringview tmp: tmp buf: buf
         lwc: "\{ind}}\n"
         buf.append lwc.stringview
+    } case yieldexpr then {
+        emitYieldStmt symtab: symtab ctx: ctx yd: n ind: ind tmp: tmp buf: buf
     } else {
         lu: "\{ind}/* zemitterc: unhandled statement */\n"
         buf.append lu.stringview
@@ -3177,6 +3193,21 @@ scanLoopVar: function {symtab: zenv.ZSymbolTable n: Node lbl: StringView res: St
 # while(1) / call / tag==NONE break / payload-extract pattern. Value
 # payloads (optionval) extract `.data.some`; reftype payloads (Option)
 # wait on the heap-extract slice. Returns false when not an iterator loop.
+# isForIterCall -- the for-loop iterable is a call expression (an rvalue that
+# must be hoisted to a temp before `&recv`); a bare atom / dotted field is an
+# lvalue used directly.
+isForIterCall: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isForIterCall n: n.expression)
+    } case call then {
+        return true
+    } else {
+        return false
+    }
+}
+
 emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
     if m.conditions.length != 1.u64 then {
         return false
@@ -3191,19 +3222,51 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
         } else {}
         oeid: exprNodeId9 n: c0.operation
         itid0: stampIdOf symtab: symtab nid: oeid
-        if itid0 == 0.u64 then {
+        itid: itid0
+        # bare generator-fn iterable (`for x: counter loop`): itid0 is the
+        # generator function itself; resolve via its return type (the iterator
+        # class) and auto-call it below.
+        bareFnId9: 0.u64
+        if (symtab.reg.typetypeOf typeId: itid0) == ztypes.ztypetype.FUNCTION then {
+            brt9: 0.u64
+            btx9: symtab.reg.typeById.get key: itid0
+            match (
+                btx9
+            ) case some then {
+                brto9: btx9.returnTypeId
+                match (
+                    brto9
+                ) case some then {
+                    brt9 = brto9
+                } case none then {}
+            } case none then {}
+            if brt9 == 0.u64 then {
+                mro9: ztypecheck.methodReturnOf st: symtab mid: itid0
+                match (
+                    mro9
+                ) case some then {
+                    brt9 = mro9
+                } case none then {}
+            } else {}
+            if brt9 > 0.u64 when (childExists symtab: symtab tid: brt9 name: "call") then {
+                itid = brt9
+                bareFnId9 = itid0
+            } else {}
+        } else {}
+        if itid == 0.u64 then {
             return false
         } else {}
-        itid: itid0
-        itn0: typeNameOfReg9 symtab: symtab tid: itid0
-        cano: ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: itn0.stringview
-        match (
-            cano
-        ) case some then {
-            if (childExists symtab: symtab tid: cano name: "call") then {
-                itid = cano
-            } else {}
-        } case none then {}
+        if bareFnId9 == 0.u64 then {
+            itn0: typeNameOfReg9 symtab: symtab tid: itid0
+            cano: ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: itn0.stringview
+            match (
+                cano
+            ) case some then {
+                if (childExists symtab: symtab tid: cano name: "call") then {
+                    itid = cano
+                } else {}
+            } case none then {}
+        } else {}
         cco: symtab.typing.childOf parentTypeId: itid name: "call"
         match (
             cco
@@ -3249,7 +3312,6 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                     return false
                 }
             } else {}
-            iterv: emitExpr symtab: symtab ctx: ctx n: c0.operation
             itn: typeNameOfReg9 symtab: symtab tid: itid
             # a main-unit user-class iterator's .call is emitted by emitOneMethod
             # (its own cname id); native/collection iterators (CpIter, SetIter,
@@ -3277,9 +3339,27 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             payC: armPayloadC symtab: symtab ctx: ctx tid: ovid arm: "some"
             oovorig: monoOriginName symtab: symtab tid: ovid
             mN: tmp.next
+            itCb9: cnameOf tid: itid name: itn.stringview
+            iterRecv9: "".string
+            if bareFnId9 > 0.u64 then {
+                bnm9: typeNameOfReg9 symtab: symtab tid: bareFnId9
+                bcn9: cnameOf tid: bareFnId9 name: bnm9.stringview
+                lgh9: "\{ind}\{itCb9}_t _git\{mN} = \{bcn9}();\n"
+                buf.append lgh9.stringview
+                iterRecv9 = "_git\{mN}".string
+            } else {
+                ivex9: emitExpr symtab: symtab ctx: ctx n: c0.operation
+                if (isForIterCall n: c0.operation) then {
+                    lgi9: "\{ind}\{itCb9}_t _git\{mN} = \{ivex9};\n"
+                    buf.append lgi9.stringview
+                    iterRecv9 = "_git\{mN}".string
+                } else {
+                    iterRecv9 = ivex9
+                }
+            }
             l0: "\{ind}while (1) {\n"
             buf.append l0.stringview
-            l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterv});\n"
+            l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv9});\n"
             buf.append l1.stringview
             if oovorig.stringview == "Option" then {
                 # owned heap-payload union: destroy the box on the NONE arm too.
@@ -4498,7 +4578,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -7606,6 +7686,158 @@ emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Nod
     } else {}
 }
 
+# nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
+# not nest). Mirrors the typechecker's subtreeHasYield walk. Used to detect a
+# generator `call` body and size its resume-state switch.
+nodeYieldCount: function {n: Node} out u64 is {
+    match (
+        n
+    ) case yieldexpr then {
+        return 1.u64
+    } case statement then {
+        c: 0.u64
+        siter: n.statements.iterate
+        for st: siter loop {
+            c = c + (nodeYieldCount n: st)
+        }
+        return c
+    } case statementline then {
+        return (nodeYieldCount n: n.statementline)
+    } case expression then {
+        return (nodeYieldCount n: n.expression)
+    } case assignment then {
+        return (nodeYieldCount n: n.value)
+    } case forexpr then {
+        return (optNodeYieldCount o: n.body)
+    } case ifexpr then {
+        c2: 0.u64
+        cliter: n.clauses.iterate
+        for cl: cliter loop {
+            c2 = c2 + (nodeYieldCount n: cl)
+        }
+        c2 = c2 + (optNodeYieldCount o: n.elseclause)
+        return c2
+    } case ifclause then {
+        return (nodeYieldCount n: n.statement)
+    } else {
+        return 0.u64
+    }
+}
+
+optNodeYieldCount: function {o: (Option t: Node)} out u64 is {
+    match (
+        o
+    ) case some then {
+        return (nodeYieldCount n: o)
+    } case none then {
+        return 0.u64
+    }
+}
+
+# fnYieldCount -- yields in a functiondef body (0 for a non-generator).
+fnYieldCount: function {op: Node} out u64 is {
+    match (
+        op
+    ) case functiondef then {
+        return (optNodeYieldCount o: op.body)
+    } else {
+        return 0.u64
+    }
+}
+
+# setupGenCtx -- arm the generator state-machine context on ctx when `op` is a
+# generator `call` (its body yields). Resolves the optionval wrapper from the
+# method's return type. Returns false (and disarms) for a normal method.
+setupGenCtx: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 op: Node} out bool is {
+    gyc: fnYieldCount op: op
+    if gyc == 0.u64 then {
+        ctx.genActive = false
+        return false
+    } else {}
+    rid: 0.u64
+    t: symtab.reg.typeById.get key: mid
+    match (
+        t
+    ) case some then {
+        rto: t.returnTypeId
+        match (
+            rto
+        ) case some then {
+            rid = rto
+        } case none then {}
+    } case none then {}
+    if rid == 0.u64 then {
+        mro: ztypecheck.methodReturnOf st: symtab mid: mid
+        match (
+            mro
+        ) case some then {
+            rid = mro
+        } case none then {}
+    } else {}
+    if rid == 0.u64 then {
+        ctx.genActive = false
+        return false
+    } else {}
+    rn: typeNameOfReg9 symtab: symtab tid: rid
+    ru: cUpperOf text: rn.stringview
+    rc: cnameOf tid: rid name: rn.stringview
+    ctx.genActive = true
+    ctx.genYieldCount = gyc
+    ctx.genYieldNext = 1.u64
+    ctx.genWrap = "\{rc}_t".string
+    ctx.genSomeTag = "Z_\{ru}_TAG_SOME".string
+    ctx.genNoneTag = "Z_\{ru}_TAG_NONE".string
+    return true
+}
+
+# emitGenPrologue -- the resume dispatch: switch on this->state to L_entry / the
+# per-yield resume labels / L_done.
+emitGenPrologue: function {ctx: Ctx buf: String.borrow} is {
+    buf.append "    switch (this->state) {\n"
+    buf.append "        case 0: goto L_entry;\n"
+    k: 1.u64
+    for while k <= ctx.genYieldCount loop {
+        lk: "        case \{k}: goto L_resume_\{k};\n"
+        buf.append lk.stringview
+        k = k + 1.u64
+    }
+    buf.append "        default: goto L_done;\n"
+    buf.append "    }\n"
+    buf.append "L_entry:;\n"
+}
+
+# emitGenEpilogue -- the terminal landing: mark done and return the NONE wrapper.
+emitGenEpilogue: function {ctx: Ctx buf: String.borrow} is {
+    buf.append "L_done:;\n"
+    buf.append "    this->state = -1;\n"
+    le: "    \{ctx.genWrap} _r_done = {0};\n"
+    buf.append le.stringview
+    lt: "    _r_done.tag = \{ctx.genNoneTag};\n"
+    buf.append lt.stringview
+    buf.append "    return _r_done;\n"
+}
+
+# emitYieldStmt -- one `yield E` suspension: set the resume state, return the
+# SOME-wrapped value, then drop a resume label at column 0 (goto-reachable into
+# the enclosing block).
+emitYieldStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx yd: zast.YieldExprData ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    k: ctx.genYieldNext
+    ctx.genYieldNext = k + 1.u64
+    ve: emitExpr symtab: symtab ctx: ctx n: yd.expr
+    ls: "\{ind}this->state = \{k};\n"
+    buf.append ls.stringview
+    lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
+    buf.append lw.stringview
+    lg: "\{ind}_ry_\{k}.tag = \{ctx.genSomeTag};\n"
+    buf.append lg.stringview
+    ld: "\{ind}_ry_\{k}.data.some = \{ve};\n"
+    buf.append ld.stringview
+    lr: "\{ind}return _ry_\{k};\n"
+    buf.append lr.stringview
+    ll: "L_resume_\{k}:;\n"
+    buf.append ll.stringview
+}
+
 emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u64 op: Node declOnly: bool buf: String.borrow} is {
     mtn: typeNameOfReg9 symtab: symtab tid: mid
     mc: cnameOf tid: mid name: mtn.stringview
@@ -7742,7 +7974,15 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     } else {
         lo: "static \{ret} \{mc}(\{params}) {\n"
         buf.append lo.stringview
+        isGen9: setupGenCtx symtab: symtab ctx: ctx mid: mid op: op
+        if isGen9 then {
+            emitGenPrologue ctx: ctx buf: buf
+        } else {}
         emitFnBody symtab: symtab ctx: ctx op: op buf: buf
+        if isGen9 then {
+            emitGenEpilogue ctx: ctx buf: buf
+            ctx.genActive = false
+        } else {}
         buf.append "}\n\n"
     }
     ctx.ptrVars = (List of: String)

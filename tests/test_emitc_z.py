@@ -82,6 +82,8 @@ EMITC_SMOKE: "list[str]" = [
     "io_textwriter",
     "io_textreader",
     "cli_basic",
+    "generator_counter",
+    "generator_intrange",
 ]
 
 
