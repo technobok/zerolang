@@ -3094,7 +3094,10 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             ldw: "\{ind}do {\n"
             buf.append ldw.stringview
             ind2d: "\{ind}    "
+            fLd9: tmp.frees.length
+            lLd9: tmp.listFrees.length
             emitBodyOpt symtab: symtab ctx: ctx o: n.body ind: ind2d.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fLd9 lL: lLd9 buf: buf
             pcond: "".string
             pkiter: n.postconditions.iterate
             for pk: pkiter loop {
@@ -3124,14 +3127,40 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
         ind2: "\{ind}    "
+        fLw9: tmp.frees.length
+        lLw9: tmp.listFrees.length
         emitBodyOpt symtab: symtab ctx: ctx o: n.body ind: ind2.stringview tmp: tmp buf: buf
+        flushBlockFrees ctx: ctx tmp: tmp fL: fLw9 lL: lLw9 buf: buf
         lwc: "\{ind}}\n"
         buf.append lwc.stringview
     } case yieldexpr then {
         emitYieldStmt symtab: symtab ctx: ctx yd: n ind: ind tmp: tmp buf: buf
     } else {
-        lu: "\{ind}/* zemitterc: unhandled statement */\n"
-        buf.append lu.stringview
+        # bare control keywords parse as an AtomId reference (no value): a
+        # no-value `return` (goto L_done inside a generator), `break`, `continue`.
+        bkw9: atomTextOf n: n
+        if bkw9.stringview == "return" then {
+            if ctx.genActive then {
+                lgd9: "\{ind}goto L_done;\n"
+                buf.append lgd9.stringview
+            } else {
+                lrt9: "\{ind}return;\n"
+                buf.append lrt9.stringview
+            }
+        } else {
+            if bkw9.stringview == "break" then {
+                lbk9: "\{ind}break;\n"
+                buf.append lbk9.stringview
+            } else {
+                if bkw9.stringview == "continue" then {
+                    lct9: "\{ind}continue;\n"
+                    buf.append lct9.stringview
+                } else {
+                    lu: "\{ind}/* zemitterc: unhandled statement */\n"
+                    buf.append lu.stringview
+                }
+            }
+        }
     }
 }
 
@@ -3852,7 +3881,10 @@ emitIfClause: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node isFirst: bool
         if assignTo.length > 0.u64 then {
             emitBranchAssign symtab: symtab ctx: ctx n: n.statement target: assignTo ind: ind2.stringview tmp: tmp buf: buf
         } else {
+            fLi9: tmp.frees.length
+            lLi9: tmp.listFrees.length
             emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind2.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fLi9 lL: lLi9 buf: buf
         }
     } else {}
 }
@@ -3867,7 +3899,10 @@ emitElse9: function {symtab: zenv.ZSymbolTable ctx: Ctx o: (Option t: Node) assi
         if assignTo.length > 0.u64 then {
             emitBranchAssign symtab: symtab ctx: ctx n: o target: assignTo ind: ind2.stringview tmp: tmp buf: buf
         } else {
+            fLe9: tmp.frees.length
+            lLe9: tmp.listFrees.length
             emitBodyNode symtab: symtab ctx: ctx n: o ind: ind2.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fLe9 lL: lLe9 buf: buf
         }
     } case none then {}
 }
