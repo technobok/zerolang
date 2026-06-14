@@ -663,6 +663,9 @@ takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
         if btt9 == ztypes.ztypetype.CLASS then {
             isUC9 = true
         } else {}
+        if btt9 == ztypes.ztypetype.UNION then {
+            isUC9 = true
+        } else {}
         if isUC9 then {
             return (atomTextOf n: n.parent)
         } else {
@@ -1485,6 +1488,54 @@ emitInlineVariantCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.C
     }
 }
 
+# emitUnionCtor -- a main-unit user union arm construction (`U.arm payload`):
+# a GCC statement-expression building the heap-payload union value (tag + a
+# malloc'd box for the payload, or NULL data for a payload-less arm). Generic
+# monos (Option/Result) keep their own emission paths.
+emitUnionCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.length == 0.u64 then {
+        return "".string
+    } else {}
+    mn: dottedChildText n: call.callable
+    if mn.length == 0.u64 then {
+        return "".string
+    } else {}
+    utid: resolveTypeIdByName symtab: symtab ctx: ctx name: bn.stringview
+    if utid == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.typetypeOf typeId: utid) == ztypes.ztypetype.UNION then {} else {
+        return "".string
+    }
+    if (monoOriginName symtab: symtab tid: utid).length == 0.u64 then {} else {
+        return "".string
+    }
+    vc: cnameOf tid: utid name: bn.stringview
+    tg: variantTag symtab: symtab tid: utid arm: mn.stringview
+    payC: armPayloadC symtab: symtab ctx: ctx tid: utid arm: mn.stringview
+    if payC.length > 0.u64 then {
+        av: "".string
+        got: false
+        aiter: call.arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                if got then {} else {
+                    got = true
+                    av = emitExpr symtab: symtab ctx: ctx n: a.operation
+                }
+            } else {}
+        }
+        e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
+        return e
+    } else {
+        e2: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
+        return e2
+    }
+}
+
 emitVariantCtorCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     mn: dottedChildText n: call.callable
@@ -1913,6 +1964,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     vq: emitVariantCtorCall symtab: symtab ctx: ctx call: call
     if vq.length > 0.u64 then {
         return vq
+    } else {}
+    uq: emitUnionCtor symtab: symtab ctx: ctx call: call
+    if uq.length > 0.u64 then {
+        return uq
     } else {}
     imc9: emitInstanceMethodCall symtab: symtab ctx: ctx call: call
     if imc9.length > 0.u64 then {
@@ -4498,14 +4553,10 @@ isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool 
         } else {}
     } else {}
     tt: symtab.reg.typetypeOf typeId: cid
-    isRT: false
-    if tt == ztypes.ztypetype.CLASS then {
-        isRT = true
-    } else {}
-    if tt == ztypes.ztypetype.UNION then {
-        isRT = true
-    } else {}
-    if isRT then {} else {
+    # Only CLASS params pass by reference. A UNION is a small value-stable
+    # {tag, void* data} struct passed BY VALUE (the data pointer is shared with
+    # the source; the borrow is tracked separately), matching the reference.
+    if tt == ztypes.ztypetype.CLASS then {} else {
         return false
     }
     if (monoOriginName symtab: symtab tid: cid).length > 0.u64 then {
@@ -8300,6 +8351,13 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                         emitOneVariant symtab: symtab ctx: ctx tid: vid5 name: nm5.stringview buf: buf
                     } else {}
                 } else {}
+                if (isUnionDef9 n: bm.operation) then {
+                    nm7: unitLabel9 o: bm.name
+                    uid7: userFnId symtab: symtab ctx: ctx name: nm7.stringview
+                    if uid7 > 0.u64 then {
+                        emitUnionMono symtab: symtab ctx: ctx tid: uid7 name: nm7.stringview buf: buf
+                    } else {}
+                } else {}
                 nm6: unitLabel9 o: bm.name
                 emitDataBlock symtab: symtab ctx: ctx name: nm6.stringview op: bm.operation buf: buf
             } else {}
@@ -8411,6 +8469,20 @@ isVariantDef9: function {n: Node} out bool is {
         n
     ) case objectdef then {
         if n.kind == zast.nodetype.VARIANT then {
+            return true
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
+isUnionDef9: function {n: Node} out bool is {
+    match (
+        n
+    ) case objectdef then {
+        if n.kind == zast.nodetype.UNION then {
             return true
         } else {
             return false

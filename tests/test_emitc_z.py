@@ -110,6 +110,8 @@ EMITC_CORPUS: "list[str]" = [
     "take_string",
     "string_param_mut",
     "panic_stmt",
+    "union_basic",
+    "protocol_create_take",
 ]
 
 
