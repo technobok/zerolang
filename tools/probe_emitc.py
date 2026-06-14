@@ -57,17 +57,17 @@ def _run(args, timeout, mem, **kw):
     )
 
 
-def emit_ref(unit, out_c):
+def emit_ref(unit, out_c, src_dir=EXAMPLES_DIR):
     proc = _run(
-        [sys.executable, "src/zc.py", unit, "--src", EXAMPLES_DIR, "-o", out_c],
+        [sys.executable, "src/zc.py", unit, "--src", src_dir, "-o", out_c],
         240,
         ZC_MEM_LIMIT,
     )
     return proc
 
 
-def emit_z(zc, unit, out_c):
-    args = [zc, unit, "--src", EXAMPLES_DIR, "--system", SYSTEM_DIR, "--emit-c", out_c]
+def emit_z(zc, unit, out_c, src_dir=EXAMPLES_DIR):
+    args = [zc, unit, "--src", src_dir, "--system", SYSTEM_DIR, "--emit-c", out_c]
     try:
         return _run(args, ZC_TIMEOUT_S, ZC_MEM_LIMIT)
     except subprocess.TimeoutExpired:
@@ -87,19 +87,19 @@ def run_binary(bin_path, workdir):
         return None, "", f"timed out (>{RUN_TIMEOUT_S}s)"
 
 
-def probe(unit, zc, keep):
+def probe(unit, zc, keep, src_dir=EXAMPLES_DIR):
     tmp = tempfile.mkdtemp(prefix=f"emitc_{unit}_")
     ref_c = os.path.join(tmp, "ref.c")
     z_c = os.path.join(tmp, "z.c")
     ok = True
     try:
-        rp = emit_ref(unit, ref_c)
+        rp = emit_ref(unit, ref_c, src_dir)
         if rp.returncode != 0:
             print(f"== REF-FAIL: zc.py exited {rp.returncode}\n{rp.stderr[:800]}")
             return False
         print(f"== ref emit: OK ({sum(1 for _ in open(ref_c))} lines)")
 
-        zp = emit_z(zc, unit, z_c)
+        zp = emit_z(zc, unit, z_c, src_dir)
         if zp.returncode != 0 or not os.path.exists(z_c):
             print(f"== ZC-FAIL: zc exited {zp.returncode}\nstderr:\n{zp.stderr[:800]}")
             return False
@@ -147,8 +147,14 @@ def main():
     ap.add_argument("unit")
     ap.add_argument("--zc", default="/tmp/zc")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument(
+        "--src-dir",
+        default=EXAMPLES_DIR,
+        help="source directory for the unit (default: examples/; "
+        "use tests/fixtures/emitc_corpus for corpus programs)",
+    )
     args = ap.parse_args()
-    sys.exit(0 if probe(args.unit, args.zc, args.keep) else 1)
+    sys.exit(0 if probe(args.unit, args.zc, args.keep, args.src_dir) else 1)
 
 
 if __name__ == "__main__":

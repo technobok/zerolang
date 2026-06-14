@@ -95,6 +95,16 @@ EMITC_SMOKE: "list[str]" = [
     "os_process",
 ]
 
+# Corpus of targeted programs (tests/fixtures/emitc_corpus/), each exercising one
+# emitter gap the compiler's own source needs but the examples never hit. Same
+# differential as EMITC_SMOKE, but built with --src pointed at the corpus dir so
+# adding a program is emitter-differential-only (no lexer/parser/typecheck
+# goldens). Grows per self-host slice.
+CORPUS_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "emitc_corpus")
+EMITC_CORPUS: "list[str]" = [
+    "reftype_param",
+]
+
 
 def test_emitc_scaffold_compiles(tmp_path, zc_binary):
     """C0 baseline: the skeleton's C compiles standalone under golden flags."""
@@ -112,6 +122,27 @@ def test_emitc_matches_reference(unit, tmp_path, zc_binary):
     rp = emit_ref(unit, ref_c)
     assert rp.returncode == 0, rp.stderr
     zp = emit_z(zc_binary, unit, z_c)
+    assert zp.returncode == 0, zp.stderr
+    rb = build(ref_c, str(tmp_path / "ref.bin"))
+    assert rb.returncode == 0, rb.stderr
+    zb = build(z_c, str(tmp_path / "z.bin"))
+    assert zb.returncode == 0, zb.stderr
+    ref_dir = tmp_path / "ref_run"
+    ref_dir.mkdir()
+    z_dir = tmp_path / "z_run"
+    z_dir.mkdir()
+    ref_res = run_binary(str(tmp_path / "ref.bin"), str(ref_dir))
+    z_res = run_binary(str(tmp_path / "z.bin"), str(z_dir))
+    assert ref_res[:2] == z_res[:2], f"ref={ref_res!r} z={z_res!r}"
+
+
+@pytest.mark.parametrize("unit", EMITC_CORPUS)
+def test_emitc_corpus_matches_reference(unit, tmp_path, zc_binary):
+    ref_c = str(tmp_path / "ref.c")
+    z_c = str(tmp_path / "z.c")
+    rp = emit_ref(unit, ref_c, CORPUS_DIR)
+    assert rp.returncode == 0, rp.stderr
+    zp = emit_z(zc_binary, unit, z_c, CORPUS_DIR)
     assert zp.returncode == 0, zp.stderr
     rb = build(ref_c, str(tmp_path / "ref.bin"))
     assert rb.returncode == 0, rb.stderr

@@ -1781,20 +1781,36 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     } else {}
     if fid > 0.u64 then {
         fc: cnameOf tid: fid name: cn0.stringview
+        fpNames: (List of: String)
+        fpIds: (List of: u64)
+        recFieldLists symtab: symtab tid: fid names: fpNames ids: fpIds
         args: "".string
-        first: true
+        ai8: 0.u64
         aiter: call.arguments.iterate
         for a: aiter loop {
             match (
                 a
             ) case namedoperation then {
                 av9: emitExpr symtab: symtab ctx: ctx n: a.operation
-                if first then {
-                    first = false
-                } else {
+                byref8: false
+                if ai8 < fpIds.length then {
+                    fpid8: fpIds.get i: ai8
+                    if (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                        if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
+                            byref8 = true
+                        }
+                    } else {}
+                } else {}
+                if ai8 > 0.u64 then {
                     args.append ", "
+                } else {}
+                if byref8 then {
+                    ab8: "&\{av9}"
+                    args.append ab8.stringview
+                } else {
+                    args.append av9.stringview
                 }
-                args.append av9.stringview
+                ai8 = ai8 + 1.u64
             } else {}
         }
         e8: "\{fc}(\{args})"
@@ -2125,10 +2141,18 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         return pj9b
                     } else {}
                     if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION then {
-                        # member auto-call: the method takes the value
+                        # member auto-call: a CLASS method takes its receiver by
+                        # pointer (&recv, or recv when already a ptrVar); a RECORD
+                        # method takes it by value.
                         mtn2: typeNameOfReg9 symtab: symtab tid: mco
                         mc2: cnameOf tid: mco name: mtn2.stringview
-                        e6: "\{mc2}(\{bn2})"
+                        mrecv6: "\{bn2}"
+                        if rtt == ztypes.ztypetype.CLASS then {
+                            if (isPtrVar ctx: ctx name: bn2.stringview) then {} else {
+                                mrecv6 = "&\{bn2}"
+                            }
+                        } else {}
+                        e6: "\{mc2}(\{mrecv6})"
                         return e6
                     } else {}
                 } case none then {}
@@ -4210,6 +4234,85 @@ unitLabel9: function {o: (Option t: String)} out String is {
 
 # fnSignature -- "RET cname(PARAMS)" for a user function from its
 # resolved type's children and return stamp (z_main for main).
+# isReftypeParam -- a user reftype (class/union) param, passed BY REFERENCE: a
+# function param that is a CLASS or UNION, not a collection mono (List/Map/Set),
+# and not a value-native (String/StringView live in the system/collections
+# units). Records/variants/facets (valtypes) and natives stay by value.
+isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    cid: tid
+    rduo0: symtab.typing.definedInUnit.get key: tid
+    isShell0: true
+    match (
+        rduo0
+    ) case some then {
+        isShell0 = false
+    } case none then {}
+    if isShell0 then {
+        rtn0: typeNameOfReg9 symtab: symtab tid: tid
+        rrid0: resolveTypeIdByName symtab: symtab ctx: ctx name: rtn0.stringview
+        if rrid0 > 0.u64 then {
+            cid = rrid0
+        } else {}
+    } else {}
+    tt: symtab.reg.typetypeOf typeId: cid
+    isRT: false
+    if tt == ztypes.ztypetype.CLASS then {
+        isRT = true
+    } else {}
+    if tt == ztypes.ztypetype.UNION then {
+        isRT = true
+    } else {}
+    if isRT then {} else {
+        return false
+    }
+    if (monoOriginName symtab: symtab tid: cid).length > 0.u64 then {
+        return false
+    } else {}
+    duo: symtab.typing.definedInUnit.get key: cid
+    match (
+        duo
+    ) case some then {
+        if duo.stringview == "system" then {
+            return false
+        } else {}
+        if duo.stringview == "collections" then {
+            return false
+        } else {}
+    } case none then {}
+    return true
+}
+
+# registerReftypeParams -- add a top-level function's reftype (class/union)
+# params to ctx.ptrVars, so the body reads them as `param->field` and method
+# calls pass them directly (they arrive as pointers). Caller resets ptrVars.
+registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is {
+    pNames: (List of: String)
+    pIds: (List of: u64)
+    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == fid then {
+            cto: symtab.typing.childTypeById.get key: tc.childNameId
+            match (
+                cto
+            ) case some then {
+                nm: tc.childName.copy
+                pNames.append nm
+                pIds.append cto
+            } case none then {}
+        } else {}
+    }
+    ri: 0.u64
+    rn: pNames.length
+    for while ri < rn loop {
+        rpid: pIds.get i: ri
+        if (isReftypeParam symtab: symtab ctx: ctx tid: rpid) then {
+            rpn: pNames.get i: ri
+            rpc: rpn.string
+            ctx.ptrVars.append rpc
+        } else {}
+        ri = ri + 1.u64
+    }
+}
+
 fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: u64 op: Node} out String is {
     if name == "main" then {
         return "void z_main(void)".string
@@ -4275,6 +4378,12 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
         pname: cNames.get i: pi
         pid: cIds.get i: pi
         ct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0.u64
+        if (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
+            if ct.length > 0.u64 then {
+                ctp9: "\{ct}*"
+                ct = ctp9
+            } else {}
+        } else {}
         if pi > 0.u64 then {
             params.append ", "
         } else {}
@@ -4854,6 +4963,8 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String
                 sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
                 lo: "\{sig2} {\n"
                 buf.append lo.stringview
+                ctx.ptrVars = (List of: String)
+                registerReftypeParams symtab: symtab ctx: ctx fid: fid2
                 emitFnBody symtab: symtab ctx: ctx op: bm2.operation buf: buf
                 buf.append "}\n\n"
             } else {}
