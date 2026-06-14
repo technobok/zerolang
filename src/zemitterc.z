@@ -95,6 +95,121 @@ isFloatName: function {name: StringView} out bool is {
     return false
 }
 
+# numBits -- integer numeric type bit width (0 if not an integer type).
+numBits: function {name: StringView} out u64 is {
+    if name == "i8" then { return 8.u64 } else {}
+    if name == "u8" then { return 8.u64 } else {}
+    if name == "c8" then { return 8.u64 } else {}
+    if name == "i16" then { return 16.u64 } else {}
+    if name == "u16" then { return 16.u64 } else {}
+    if name == "i32" then { return 32.u64 } else {}
+    if name == "u32" then { return 32.u64 } else {}
+    if name == "c32" then { return 32.u64 } else {}
+    if name == "i64" then { return 64.u64 } else {}
+    if name == "u64" then { return 64.u64 } else {}
+    if name == "i128" then { return 128.u64 } else {}
+    if name == "u128" then { return 128.u64 } else {}
+    return 0.u64
+}
+
+# numSigned -- true for the signed integer family.
+numSigned: function {name: StringView} out bool is {
+    if name == "i8" then { return true } else {}
+    if name == "i16" then { return true } else {}
+    if name == "i32" then { return true } else {}
+    if name == "i64" then { return true } else {}
+    if name == "i128" then { return true } else {}
+    return false
+}
+
+# numLoStr / numHiStr -- decimal range bounds, the comparands of the
+# overflow check emitted on a narrowing cast.
+numLoStr: function {name: StringView} out String is {
+    if name == "i8" then { return "-128".string } else {}
+    if name == "i16" then { return "-32768".string } else {}
+    if name == "i32" then { return "-2147483648".string } else {}
+    if name == "i64" then { return "-9223372036854775808".string } else {}
+    if name == "i128" then { return "-170141183460469231731687303715884105728".string } else {}
+    return "0".string
+}
+numHiStr: function {name: StringView} out String is {
+    if name == "i8" then { return "127".string } else {}
+    if name == "i16" then { return "32767".string } else {}
+    if name == "i32" then { return "2147483647".string } else {}
+    if name == "i64" then { return "9223372036854775807".string } else {}
+    if name == "i128" then { return "170141183460469231731687303715884105727".string } else {}
+    if name == "u8" then { return "255".string } else {}
+    if name == "c8" then { return "255".string } else {}
+    if name == "u16" then { return "65535".string } else {}
+    if name == "u32" then { return "4294967295".string } else {}
+    if name == "c32" then { return "4294967295".string } else {}
+    if name == "u64" then { return "18446744073709551615".string } else {}
+    if name == "u128" then { return "340282366920938463463374607431768211455".string } else {}
+    return "0".string
+}
+
+# emitNumericCast -- a runtime numeric conversion `<val>.<dstName>` from source
+# type `srcName`. Widening (source range fully inside dest) is a plain cast;
+# narrowing emits an overflow-checked statement-expression (z_panic when out of
+# range), mirroring the reference. Unknown / non-integer source falls back to a
+# plain cast -- the typechecker has already validated the conversion is legal.
+emitNumericCast: function {srcName: StringView dstName: StringView val: StringView} out String is {
+    dct: cTypeOf name: dstName
+    if dct.length == 0.u64 then {
+        return val.string
+    } else {}
+    dbits: numBits name: dstName
+    if dbits == 0.u64 then {
+        return "((\{dct})\{val})".string
+    } else {}
+    sbits: numBits name: srcName
+    if sbits == 0.u64 then {
+        return "((\{dct})\{val})".string
+    } else {}
+    ssig: numSigned name: srcName
+    dsig: numSigned name: dstName
+    needsLo: true
+    needsHi: true
+    if ssig then {
+        if dsig then {
+            if sbits <= dbits then { needsLo = false } else {}
+        } else {}
+    } else {
+        needsLo = false
+    }
+    if ssig == dsig then {
+        if sbits <= dbits then { needsHi = false } else {}
+    } else {
+        if ssig then {
+            if sbits <= dbits then { needsHi = false } else {}
+        } else {
+            if sbits < dbits then { needsHi = false } else {}
+        }
+    }
+    if needsLo then {} else {
+        if needsHi then {} else {
+            return "((\{dct})\{val})".string
+        }
+    }
+    sct: cTypeOf name: srcName
+    cond: "".string
+    if needsLo then {
+        if needsHi then {
+            lo: numLoStr name: dstName
+            hi: numHiStr name: dstName
+            cond = "_v < \{lo} || _v > \{hi}".string
+        } else {
+            lo2: numLoStr name: dstName
+            cond = "_v < \{lo2}".string
+        }
+    } else {
+        hi2: numHiStr name: dstName
+        cond = "_v > \{hi2}".string
+    }
+    r: "({ \{sct} _v = \{val}; if (\{cond}) z_panic(\"numeric cast overflow: \{srcName} to \{dstName}\"); (\{dct})_v; })".string
+    return r
+}
+
 # cUpperOf -- ASCII upper-case for tag spellings.
 cUpperOf: function {text: StringView} out String is {
     buf: "".string
@@ -450,6 +565,7 @@ Ctx: class {
     genSomeTag: String
     genNoneTag: String
     genHasValue: bool
+    emittedUserTypes: (Map key: u64 value: bool)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -1648,6 +1764,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         # field); emit the base, which the borrow param then addresses.
         if mn2.stringview == "lock" then {
             return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+        } else {}
+        if (cTypeOf name: mn2.stringview).length > 0.u64 then {
+            # runtime numeric conversion `<expr>.<numtype>` -> a C cast (checked
+            # on narrowing). Works for any base (atom or compound binop/dotted);
+            # folded literal conversions return earlier via nodeConstText.
+            ncSrc9: stampNameOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+            ncVal9: emitExpr symtab: symtab ctx: ctx n: n.parent
+            return (emitNumericCast srcName: ncSrc9.stringview dstName: mn2.stringview val: ncVal9.stringview)
         } else {}
         if bn2.length > 0.u64 then {
             # typed numeric literal (3.u64): the base text is the C literal
@@ -4669,7 +4793,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false)
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -6037,6 +6161,41 @@ emitRuntimeOs: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_exit" frag: "_Z_OS_EXIT" buf: buf
 }
 
+# maybePreEmitElem -- a main-unit user type (variant/record/class) used as a
+# collection element is embedded BY VALUE by the List/ListView mono, so its
+# struct must precede the mono. Emit it here (guarded by ctx.emittedUserTypes);
+# its methods still emit later in emitRecordDefsIn. Monos / generics / typedefs
+# and non-main types are handled by their own sweeps and skipped.
+maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: String.borrow} is {
+    if eid == 0.u64 then {
+        return
+    } else {}
+    cid: chaseColMono symtab: symtab tid: eid
+    if (monoOriginName symtab: symtab tid: cid).length > 0.u64 then {
+        return
+    } else {}
+    if (isGenericType symtab: symtab tid: cid) then {
+        return
+    } else {}
+    if (definedInNonMain symtab: symtab ctx: ctx tid: cid) then {
+        return
+    } else {}
+    nm: typeNameOfReg9 symtab: symtab tid: cid
+    if nm.length == 0.u64 then {
+        return
+    } else {}
+    tt: symtab.reg.typetypeOf typeId: cid
+    if tt == ztypes.ztypetype.VARIANT then {
+        emitOneVariant symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
+    } else {}
+    if tt == ztypes.ztypetype.RECORD then {
+        emitOneRecord symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
+    } else {}
+    if tt == ztypes.ztypetype.CLASS then {
+        emitOneRecord symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
+    } else {}
+}
+
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     last: symtab.reg.nextTypeId
     emitCliFwdDecls symtab: symtab ctx: ctx buf: buf
@@ -6189,6 +6348,25 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitOptionViewMono symtab: symtab ctx: ctx monoId: tiov buf: buf
         } else {}
         tiov = tiov + 1.u64
+    }
+    # element types first: a main-unit user type used as a List/ListView element
+    # is embedded by value, so its struct must precede the collection mono.
+    # Iterating all monos covers nesting (a List of List_T processes List_T too).
+    tpe: 0.u64
+    for while tpe < last loop {
+        peo: monoOriginName symtab: symtab tid: tpe
+        isCol9: false
+        if peo.stringview == "List" then {
+            isCol9 = true
+        } else {}
+        if peo.stringview == "ListView" then {
+            isCol9 = true
+        } else {}
+        if isCol9 then {
+            elemId9: listElemType symtab: symtab monoId: tpe
+            maybePreEmitElem symtab: symtab ctx: ctx eid: elemId9 buf: buf
+        } else {}
+        tpe = tpe + 1.u64
     }
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
@@ -7584,6 +7762,13 @@ isVariantDef9: function {n: Node} out bool is {
 # emitOneVariant -- tag enum + tagged struct (+ payload union when any
 # arm carries one) + the by-tag/value eq helper.
 emitOneVariant: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
+    egv9: ctx.emittedUserTypes.get key: tid
+    match (
+        egv9
+    ) case some then {
+        return
+    } case none then {}
+    ctx.emittedUserTypes.set key: tid.u64 value: true
     anames: (List of: String)
     aids: (List of: u64)
     variantArms symtab: symtab tid: tid names: anames ids: aids
@@ -7773,6 +7958,13 @@ lockFieldIsReftypePtr: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} ou
 }
 
 emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
+    egr9: ctx.emittedUserTypes.get key: tid
+    match (
+        egr9
+    ) case some then {
+        return
+    } case none then {}
+    ctx.emittedUserTypes.set key: tid.u64 value: true
     if (isTypedefType symtab: symtab tid: tid) then {
         # typedef records are zero-overhead aliases of their base; they have no
         # struct of their own. Their methods are emitted in the later passes.
