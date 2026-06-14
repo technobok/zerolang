@@ -692,12 +692,44 @@ takeStringSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Stri
             return "".string
         }
         bnid9: atomNodeId9 n: n.parent
+        bid9: stampIdOf symtab: symtab nid: bnid9
         btn9: stampNameOf symtab: symtab nid: bnid9
-        if btn9.stringview == "String" then {} else {
+        isMv9: false
+        if btn9.stringview == "String" then {
+            isMv9 = true
+        } else {}
+        if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.UNION then {
+            isMv9 = true
+        } else {}
+        if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.CLASS then {
+            bn9c: atomTextOf n: n.parent
+            if (isPtrVar ctx: ctx name: bn9c.stringview) then {} else {
+                isMv9 = true
+            }
+        } else {}
+        if isMv9 then {} else {
             return "".string
         }
         bn9r: atomTextOf n: n.parent
         return (aliasResolve ctx: ctx name: bn9r.stringview)
+    } else {
+        return "".string
+    }
+}
+
+# takeMoveCtype -- the C type of a `<atom>.take` source (for the `(T){0}`
+# zeroing), via typeRefC on the base's stamp (canonicalizes String to strC).
+takeMoveCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (takeMoveCtype symtab: symtab ctx: ctx n: n.expression)
+    } case statementline then {
+        return (takeMoveCtype symtab: symtab ctx: ctx n: n.statementline)
+    } case dottedpath then {
+        bnid: atomNodeId9 n: n.parent
+        bid: stampIdOf symtab: symtab nid: bnid
+        return (typeRefC symtab: symtab ctx: ctx tid: bid thisTid: 0.u64)
     } else {
         return "".string
     }
@@ -713,7 +745,8 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
         ) case namedoperation then {
             ts9: takeStringSource symtab: symtab ctx: ctx n: a9.operation
             if ts9.length > 0.u64 then {
-                inv9: "\{ind}\{ts9} = (\{ctx.strC}_t){0};\n"
+                tc9: takeMoveCtype symtab: symtab ctx: ctx n: a9.operation
+                inv9: "\{ind}\{ts9} = (\{tc9}){0};\n"
                 buf.append inv9.stringview
             } else {}
         } else {}
@@ -2155,13 +2188,28 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         if mn2.stringview == "lock" then {
             return (emitExpr symtab: symtab ctx: ctx n: n.parent)
         } else {}
-        # `.take` on a String value is an ownership MOVE: emit the base value.
-        # The statement-level emitter zeroes the source after the call so its
-        # scope-exit free is a no-op (the callee now owns the heap buffer).
+        # `.take` on a heap reftype (String / union / by-value class) is an
+        # ownership MOVE: emit the base value. The statement-level emitter zeroes
+        # the source after the call so its scope-exit free is a no-op (the callee
+        # now owns the heap). A borrowed pointer-param class is not a move source.
         if mn2.stringview == "take" then {
             tknid9: atomNodeId9 n: n.parent
+            tkt9: stampIdOf symtab: symtab nid: tknid9
             tktn9: stampNameOf symtab: symtab nid: tknid9
+            isMove9: false
             if tktn9.stringview == "String" then {
+                isMove9 = true
+            } else {}
+            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.UNION then {
+                isMove9 = true
+            } else {}
+            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.CLASS then {
+                tkbn9: atomTextOf n: n.parent
+                if (isPtrVar ctx: ctx name: tkbn9.stringview) then {} else {
+                    isMove9 = true
+                }
+            } else {}
+            if isMove9 then {
                 return (emitExpr symtab: symtab ctx: ctx n: n.parent)
             } else {}
         } else {}
