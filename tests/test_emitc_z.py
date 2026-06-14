@@ -109,6 +109,7 @@ EMITC_CORPUS: "list[str]" = [
     "optionval_return",
     "take_string",
     "string_param_mut",
+    "panic_stmt",
 ]
 
 

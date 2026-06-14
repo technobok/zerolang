@@ -2939,6 +2939,38 @@ emitPrintStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData 
     }
 }
 
+# emitPanicStmt -- `panic "msg"` routes through the shared z_panic runtime
+# helper. msg is a StringLike (String/StringView); both expose `.data` as a
+# char pointer. A non-string or unhandled arg falls back to a bare marker.
+emitPanicStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView buf: String.borrow} is {
+    av: "".string
+    got: false
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            if got then {} else {
+                got = true
+                av = emitExpr symtab: symtab ctx: ctx n: a.operation
+            }
+        } else {}
+    }
+    okArg: false
+    if got then {
+        if (av.stringview.startsWith prefix: "/*") then {} else {
+            okArg = true
+        }
+    } else {}
+    if okArg then {
+        pl: "\{ind}z_panic((const char*)\{av}.data);\n"
+        buf.append pl.stringview
+    } else {
+        pf: "\{ind}z_panic(\"(panic)\");\n"
+        buf.append pf.stringview
+    }
+}
+
 emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} is {
     match (
         n
@@ -3148,6 +3180,10 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
     cn0: atomTextOf n: call.callable
     if cn0.stringview == "print" then {
         emitPrintStmt symtab: symtab ctx: ctx call: call ind: ind tmp: tmp buf: buf
+        return
+    } else {}
+    if cn0.stringview == "panic" then {
+        emitPanicStmt symtab: symtab ctx: ctx call: call ind: ind buf: buf
         return
     } else {}
     if cn0.stringview == "return" then {
