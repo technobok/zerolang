@@ -673,6 +673,64 @@ takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
     }
 }
 
+# takeStringSource -- if `n` is a `<atom>.take` over a String value, the resolved
+# C name of the source local to zero after the move (the callee now owns the
+# heap buffer), else "". Used at the statement level to suppress a double free.
+takeStringSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (takeStringSource symtab: symtab ctx: ctx n: n.expression)
+    } case statementline then {
+        return (takeStringSource symtab: symtab ctx: ctx n: n.statementline)
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview == "take" then {} else {
+            return "".string
+        }
+        bnid9: atomNodeId9 n: n.parent
+        btn9: stampNameOf symtab: symtab nid: bnid9
+        if btn9.stringview == "String" then {} else {
+            return "".string
+        }
+        bn9r: atomTextOf n: n.parent
+        return (aliasResolve ctx: ctx name: bn9r.stringview)
+    } else {
+        return "".string
+    }
+}
+
+# emitCallTakeInvalidations -- zero the source local of each String `.take` arg
+# of a call so its scope-exit free is a no-op (the move transferred ownership).
+emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView buf: String.borrow} is {
+    aiter9: call.arguments.iterate
+    for a9: aiter9 loop {
+        match (
+            a9
+        ) case namedoperation then {
+            ts9: takeStringSource symtab: symtab ctx: ctx n: a9.operation
+            if ts9.length > 0.u64 then {
+                inv9: "\{ind}\{ts9} = (\{ctx.strC}_t){0};\n"
+                buf.append inv9.stringview
+            } else {}
+        } else {}
+    }
+}
+
+# emitValueTakeInvalidations -- statement-level source zeroing for a value node
+# that reduces to a call (unwraps expression/statementline wrappers).
+emitValueTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView buf: String.borrow} is {
+    match (
+        n
+    ) case expression then {
+        emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.expression ind: ind buf: buf
+    } case statementline then {
+        emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.statementline ind: ind buf: buf
+    } case call then {
+        emitCallTakeInvalidations symtab: symtab ctx: ctx call: n ind: ind buf: buf
+    } else {}
+}
+
 needsAdd: function {ctx: Ctx name: StringView} is {
     k: name.string
     v: true
@@ -2031,6 +2089,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         if mn2.stringview == "lock" then {
             return (emitExpr symtab: symtab ctx: ctx n: n.parent)
         } else {}
+        # `.take` on a String value is an ownership MOVE: emit the base value.
+        # The statement-level emitter zeroes the source after the call so its
+        # scope-exit free is a no-op (the callee now owns the heap buffer).
+        if mn2.stringview == "take" then {
+            tknid9: atomNodeId9 n: n.parent
+            tktn9: stampNameOf symtab: symtab nid: tknid9
+            if tktn9.stringview == "String" then {
+                return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+            } else {}
+        } else {}
         if (cTypeOf name: mn2.stringview).length > 0.u64 then {
             # runtime numeric conversion `<expr>.<numtype>` -> a C cast (checked
             # on narrowing). Works for any base (atom or compound binop/dotted);
@@ -3106,6 +3174,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
     ce: emitCallValue symtab: symtab ctx: ctx call: call
     lc: "\{ind}\{ce};\n"
     buf.append lc.stringview
+    emitCallTakeInvalidations symtab: symtab ctx: ctx call: call ind: ind buf: buf
 }
 
 # nodeIsDotted9 -- the node is a dotted-path auto-call (a no-arg method
@@ -3277,6 +3346,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if ct.length > 0.u64 then {
             la: "\{ind}\{ct} \{nm} = \{rv};\n"
             buf.append la.stringview
+            emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
             if (symtab.reg.hasDestructorName typeId: ltid) then {
