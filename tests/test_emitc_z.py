@@ -112,6 +112,7 @@ EMITC_CORPUS: "list[str]" = [
     "panic_stmt",
     "union_basic",
     "protocol_create_take",
+    "protocol_union_method",
 ]
 
 
