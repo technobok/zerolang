@@ -963,15 +963,145 @@ listCapArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is 
 
 # emitListMethodCall -- a method call on a List-mono receiver. Maps the
 # labeled arguments to the runtime method's positional C signature.
-emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: dottedBaseAtom n: call.callable
+# emitDottedReceiver -- the C expression for the receiver of a dotted method
+# call (call.callable = recv.method). Uses emitExpr on the base node so a nested
+# receiver (this.field.method, obj.a.b.method) works, not just a bare atom. ""
+# when the callable is not a dotted path.
+emitDottedReceiver: function {symtab: zenv.ZSymbolTable ctx: Ctx callable: Node} out String is {
+    match (
+        callable
+    ) case dottedpath then {
+        return (emitExpr symtab: symtab ctx: ctx n: callable.parent)
+    } else {
+        return "".string
+    }
+}
+
+# dottedReceiverStampId -- the stamped type id of a dotted method call's
+# receiver (the base node, via nodeIdOf9 which handles a nested dottedpath base).
+# 0 when not a dotted path.
+dottedReceiverStampId: function {symtab: zenv.ZSymbolTable callable: Node} out u64 is {
+    match (
+        callable
+    ) case dottedpath then {
+        return (stampIdOf symtab: symtab nid: (nodeIdOf9 n: callable.parent))
+    } else {
+        return 0.u64
+    }
+}
+
+# dottedReceiverIsPtr -- true when a dotted method call's receiver is already a
+# C pointer (a ptrVar like `this`, or a `.lock` field), so the call passes it
+# directly rather than taking its address.
+dottedReceiverIsPtr: function {symtab: zenv.ZSymbolTable ctx: Ctx callable: Node} out bool is {
+    match (
+        callable
+    ) case dottedpath then {
+        return (pathIsPointer symtab: symtab ctx: ctx n: callable.parent)
+    } else {
+        return false
+    }
+}
+
+# emitInstanceMethodCall -- `recv.method args` on a user CLASS instance (not a
+# Type qualifier, not a collection / system native): emit
+# {methodCname}(&recv, posArgs) with the receiver mapped to the :this param and
+# the explicit args reordered by the method's param labels. "" when the receiver
+# is not a user class or the method is unresolved.
+emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     mn: dottedChildText n: call.callable
+    if mn.length == 0.u64 then {
+        return "".string
+    } else {}
+    recvExpr: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
+    if recvExpr.length == 0.u64 then {
+        return "".string
+    } else {}
+    rtid0: dottedReceiverStampId symtab: symtab callable: call.callable
+    rtid: chaseColMono symtab: symtab tid: rtid0
+    if rtid == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.CLASS then {} else {
+        return "".string
+    }
+    if (monoOriginName symtab: symtab tid: rtid).length > 0.u64 then {
+        return "".string
+    } else {}
+    # system natives (String/StringView/io/cli/os) have dedicated dispatchers.
+    rdu9: symtab.typing.definedInUnit.get key: rtid
+    match (
+        rdu9
+    ) case some then {
+        if rdu9.stringview == "system" then {
+            return "".string
+        } else {}
+        if rdu9.stringview == "collections" then {
+            return "".string
+        } else {}
+        if rdu9.stringview == "io" then {
+            return "".string
+        } else {}
+        if rdu9.stringview == "cli" then {
+            return "".string
+        } else {}
+        if rdu9.stringview == "os" then {
+            return "".string
+        } else {}
+    } case none then {}
+    mco9: symtab.typing.childOf parentTypeId: rtid name: mn.stringview
+    match (
+        mco9
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: mco9) == ztypes.ztypetype.FUNCTION then {
+            rptr9: dottedReceiverIsPtr symtab: symtab ctx: ctx callable: call.callable
+            mtn9: typeNameOfReg9 symtab: symtab tid: mco9
+            mcn9: cnameOf tid: mco9 name: mtn9.stringview
+            pnames: (List of: String)
+            pids: (List of: u64)
+            recFieldLists symtab: symtab tid: mco9 names: pnames ids: pids
+            args: "".string
+            pi9: 0.u64
+            pn9: pnames.length
+            for while pi9 < pn9 loop {
+                pname9: pnames.get i: pi9
+                pid9: pids.get i: pi9
+                if pi9 > 0.u64 then {
+                    args.append ", "
+                } else {}
+                if pname9.stringview == "this" then {
+                    if rptr9 then {
+                        args.append recvExpr.stringview
+                    } else {
+                        ra9: "&\{recvExpr}"
+                        args.append ra9.stringview
+                    }
+                } else {
+                    av9: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname9.stringview
+                    if (symtab.reg.typetypeOf typeId: pid9) == ztypes.ztypetype.CLASS then {
+                        ab9: "&\{av9}"
+                        args.append ab9.stringview
+                    } else {
+                        args.append av9.stringview
+                    }
+                }
+                pi9 = pi9 + 1.u64
+            }
+            r9: "\{mcn9}(\{args})"
+            return r9
+        } else {}
+    } case none then {}
+    return "".string
+}
+
+emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    mn: dottedChildText n: call.callable
+    bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
     if bn.length == 0.u64 then {
         return "".string
     } else {}
-    bnid: dottedBaseNodeId n: call.callable
-    bt: stampIdOf symtab: symtab nid: bnid
-    bt = chaseColMono symtab: symtab tid: bt
+    brid9: dottedReceiverStampId symtab: symtab callable: call.callable
+    bt: chaseColMono symtab: symtab tid: brid9
     omn: monoOriginName symtab: symtab tid: bt
     isLV: false
     if omn.stringview == "List" then {} else {
@@ -1644,6 +1774,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     vq: emitVariantCtorCall symtab: symtab ctx: ctx call: call
     if vq.length > 0.u64 then {
         return vq
+    } else {}
+    imc9: emitInstanceMethodCall symtab: symtab ctx: ctx call: call
+    if imc9.length > 0.u64 then {
+        return imc9
     } else {}
     if fid > 0.u64 then {
         fc: cnameOf tid: fid name: cn0.stringview
