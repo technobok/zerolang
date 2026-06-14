@@ -7508,6 +7508,12 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
     }
     walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: fornode.body
     elemT9: lastStmtTypeOpt st: st bodyOpt: fornode.body
+    if (st.isUnreachable) then {
+        # a diverging loop body cannot reach a next iteration: drop its take
+        # overlays so they don't bubble up as spurious outer-scope takes.
+        st.discardTakenInCurrentScope
+    } else {
+    }
     st.popTo marker: forMarker
     # for-as-expression: a value-producing body makes the loop a List of
     # that element type (the comprehension form).
@@ -7561,6 +7567,11 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
         btc: bt9
         branchTypes.append btc
         if (st.isUnreachable) then {
+            # a diverging arm transfers ownership on a path that never reaches
+            # fall-through: drop its take overlays before pop so they don't
+            # bubble into the parent scope (where post-if uses would see the
+            # variable as taken).
+            st.discardTakenInCurrentScope
         } else {
             allDiverge = false
         }
@@ -7577,6 +7588,7 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
         etc9: et9
         branchTypes.append etc9
         if (st.isUnreachable) then {
+            st.discardTakenInCurrentScope
         } else {
             allDiverge = false
         }
@@ -9477,6 +9489,10 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
             }
             cn2: armName.copy
             covered.append cn2
+            if (st.isUnreachable) then {
+                st.discardTakenInCurrentScope
+            } else {
+            }
             st.popTo marker: armMarker
         } else {
         }
@@ -9500,6 +9516,10 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List 
         walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: casenode.elseclause
         et: lastStmtTypeOpt st: st bodyOpt: casenode.elseclause
         armTypes.append et
+        if (st.isUnreachable) then {
+            st.discardTakenInCurrentScope
+        } else {
+        }
         st.popTo marker: elseMarker
     } else {
     }
