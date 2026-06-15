@@ -123,6 +123,7 @@ EMITC_CORPUS: "list[str]" = [
     "sv_split_lines",
     "string_param_view",
     "class_map_field",
+    "interp_string",
 ]
 
 
