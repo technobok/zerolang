@@ -41,6 +41,7 @@ EMITC_SMOKE: "list[str]" = [
     "records",
     "narrowing",
     "variants",
+    "unions",
     "equality",
     "case",
     "ifexpr",
@@ -118,6 +119,7 @@ EMITC_CORPUS: "list[str]" = [
     "variant_payload_order",
     "protocol_field_order",
     "protocol_field_dispatch",
+    "union_noarg_arm",
 ]
 
 
