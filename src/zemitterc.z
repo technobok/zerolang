@@ -6930,7 +6930,20 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if eid == 0.u64 then {
         return
     } else {}
-    cid: chaseColMono symtab: symtab tid: eid
+    rid0: eid
+    snm0: typeNameOfReg9 symtab: symtab tid: eid
+    sduo: symtab.typing.definedInUnit.get key: eid
+    match (
+        sduo
+    ) case some then {} case none then {
+        if snm0.length > 0.u64 then {
+            srid: resolveTypeIdByName symtab: symtab ctx: ctx name: snm0.stringview
+            if srid > 0.u64 then {
+                rid0 = srid
+            } else {}
+        } else {}
+    }
+    cid: chaseColMono symtab: symtab tid: rid0
     if (monoOriginName symtab: symtab tid: cid).length > 0.u64 then {
         return
     } else {}
@@ -6954,6 +6967,19 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if tt == ztypes.ztypetype.CLASS then {
         emitOneRecord symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
     } else {}
+}
+
+# preEmitEmbeddedTypes -- emit the main-unit user types a variant/record/class
+# embeds BY VALUE (arm payloads, field types) before its own struct, so they are
+# declared first. Idempotent via ctx.emittedUserTypes, which also breaks cycles.
+preEmitEmbeddedTypes: function {symtab: zenv.ZSymbolTable ctx: Ctx ids: (List of: u64) buf: String.borrow} is {
+    pi: 0.u64
+    pn: ids.length
+    for while pi < pn loop {
+        eidv: ids.get i: pi
+        maybePreEmitElem symtab: symtab ctx: ctx eid: eidv buf: buf
+        pi = pi + 1.u64
+    }
 }
 
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
@@ -8559,6 +8585,7 @@ emitOneVariant: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Stri
     anames: (List of: String)
     aids: (List of: u64)
     variantArms symtab: symtab tid: tid names: anames ids: aids
+    preEmitEmbeddedTypes symtab: symtab ctx: ctx ids: aids buf: buf
     vc: cnameOf tid: tid name: name
     buf.append "typedef enum {\n"
     ai: 0.u64
@@ -8760,6 +8787,7 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     fnames: (List of: String)
     fids: (List of: u64)
     recFieldLists symtab: symtab tid: tid names: fnames ids: fids
+    preEmitEmbeddedTypes symtab: symtab ctx: ctx ids: fids buf: buf
     rc: cnameOf tid: tid name: name
     l0: "typedef struct {\n"
     buf.append l0.stringview
