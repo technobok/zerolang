@@ -2439,7 +2439,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     } else {}
                 } else {}
             } case none then {}
-            bnid2: atomNodeId9 n: n.parent
+            bnid2: nodeIdOf9 n: n.parent
             bt2: stampNameOf symtab: symtab nid: bnid2
             if bt2.stringview == "StringView" then {
                 if mn2.stringview == "length" then {
@@ -2676,6 +2676,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 if mn2.stringview == "listview" then {
                     ep2: "\{lcb2}_listview(&\{bn2})"
                     return ep2
+                } else {}
+                if mn2.stringview == "iterate" then {
+                    epLi: "\{lcb2}_iterate(&\{bn2})"
+                    return epLi
                 } else {}
             } else {}
             if bsmn.stringview == "ListView" then {
@@ -6274,6 +6278,47 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
     ) case some then {
         emitListSort nm: nm.stringview ect: ect.stringview isStr: isStrEl9 strC: ctx.strC.stringview buf: buf
     } case none then {}
+    emitListIter symtab: symtab ctx: ctx monoId: monoId nm: nm.stringview elemName: eln9.stringview buf: buf
+}
+
+# emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
+# cursor yielding OptionView<T> by reference), emitted only when List.iterate is
+# used (the ListIter / OptionView monos were minted). The OptionView mono is
+# emitted by the earlier OptionView pass, so this can reference it.
+emitListIter: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 nm: StringView elemName: StringView buf: String.borrow} is {
+    liName: "ListIter_\{elemName}".string
+    liId: monoIdByName symtab: symtab name: liName.stringview
+    if liId == 0.u64 then {
+        return
+    } else {}
+    ovName: "OptionView_\{elemName}".string
+    ovId: monoIdByName symtab: symtab name: ovName.stringview
+    if ovId == 0.u64 then {
+        return
+    } else {}
+    li: cbaseNoPrefix tid: liId name: liName.stringview
+    ov: cbaseNoPrefix tid: ovId name: ovName.stringview
+    ovu: cUpperOf text: ovName.stringview
+    s0: "typedef struct {\n    z_\{nm}_t* list;\n    uint64_t idx;\n} z_\{li}_t;\n"
+    buf.append s0.stringview
+    s1: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it);\n"
+    buf.append s1.stringview
+    s2: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it) {\n"
+    buf.append s2.stringview
+    s3: "    z_\{ov}_t _out = {0};\n"
+    buf.append s3.stringview
+    s4: "    if (_it->idx >= _it->list->length) { _out.tag = Z_\{ovu}_TAG_NONE; return _out; }\n"
+    buf.append s4.stringview
+    s5: "    _out.tag = Z_\{ovu}_TAG_SOME;\n"
+    buf.append s5.stringview
+    s6: "    _out.data = &_it->list->data[_it->idx];\n"
+    buf.append s6.stringview
+    s7: "    _it->idx++;\n    return _out;\n}\n"
+    buf.append s7.stringview
+    s8: "static z_\{li}_t z_\{nm}_iterate(z_\{nm}_t* _this);\n"
+    buf.append s8.stringview
+    s9: "static z_\{li}_t z_\{nm}_iterate(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.list = _this;\n    _it.idx = 0;\n    return _it;\n}\n\n"
+    buf.append s9.stringview
 }
 
 # emitListSort -- stable in-place mergesort companion (scalar `<`).

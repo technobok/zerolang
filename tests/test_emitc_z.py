@@ -132,6 +132,7 @@ EMITC_CORPUS: "list[str]" = [
     "list_fn_call_binding",
     "list_get_borrow",
     "fwd_recursive_union",
+    "list_iterate",
 ]
 
 
