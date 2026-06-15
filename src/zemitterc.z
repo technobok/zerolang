@@ -3414,6 +3414,37 @@ emitOptionBoxHoist: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: St
     }
 }
 
+# emitStringReturnValue -- a `return "\{...}".string` whose value is an
+# interpolated-String literal: build it (emitInterpBuild) then return the owned
+# temp. Mirrors emitStringBindValue but the built String is the return value
+# (ownership transfers to the caller -> no free registered). false when the
+# value is not an interp-String-literal (caller falls back to emitExpr).
+emitStringReturnValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (emitStringReturnValue symtab: symtab ctx: ctx n: n.expression ind: ind tmp: tmp buf: buf)
+    } case atomstring then {
+        if (isInterp parts: n.stringparts) then {
+            sB: emitInterpBuild symtab: symtab ctx: ctx parts: n.stringparts ind: ind tmp: tmp buf: buf
+            lst: "\{ind}return _s\{sB};\n"
+            buf.append lst.stringview
+            return true
+        } else {
+            return false
+        }
+    } case dottedpath then {
+        cnd9: atomTextOf n: n.child
+        if cnd9.stringview == "string" then {
+            return (emitStringReturnValue symtab: symtab ctx: ctx n: n.parent ind: ind tmp: tmp buf: buf)
+        } else {
+            return false
+        }
+    } else {
+        return false
+    }
+}
+
 # emitCallStmt -- one call-shaped statement: return / print / a plain call.
 emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView tmp: TmpCtr buf: String.borrow} is {
     relmn: dottedChildText n: call.callable
@@ -3447,9 +3478,12 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                         lrb: "\{ind}return \{bx};\n"
                         buf.append lrb.stringview
                     } else {
-                        rv: emitExpr symtab: symtab ctx: ctx n: a.operation
-                        lr: "\{ind}return \{rv};\n"
-                        buf.append lr.stringview
+                        sret: emitStringReturnValue symtab: symtab ctx: ctx n: a.operation ind: ind tmp: tmp buf: buf
+                        if sret then {} else {
+                            rv: emitExpr symtab: symtab ctx: ctx n: a.operation
+                            lr: "\{ind}return \{rv};\n"
+                            buf.append lr.stringview
+                        }
                     }
                 }
             } else {}
