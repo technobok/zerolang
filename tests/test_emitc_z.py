@@ -129,6 +129,8 @@ EMITC_CORPUS: "list[str]" = [
     "interp_string_return",
     "take_string_if_branches",
     "string_append",
+    "list_fn_call_binding",
+    "list_get_borrow",
 ]
 
 

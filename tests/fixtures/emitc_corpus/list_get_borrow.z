@@ -1,0 +1,29 @@
+# list_get_borrow.z -- `b: bag.items.get i:` over a FIELD list of a reftype is a
+# non-owning shallow copy (the list owns the element + its heap fields). The
+# emitter wrongly registered a scope-exit destroy; in a void helper (no early
+# return, so the destroy is reached) called repeatedly on the same index, the
+# first call freed the element's String and the second double-freed it -> abort.
+# Mirrors zvfs dispatchAddFile (`box: providers.providers.get i: pid`, a void
+# dispatcher invoked once per addFile line).
+Box: class {
+    tag:  u32
+    name: String
+}
+
+Bag: class {
+    items: (List of: Box)
+}
+
+showItem: function {bag: Bag i: u64} is {
+    b: bag.items.get i: i
+    print "item=\{b.name}"
+}
+
+main: function is {
+    bag: Bag items: (List of: Box)
+    bag.items.append (Box tag: 1.u32 name: "aaa".string)
+    bag.items.append (Box tag: 2.u32 name: "bb".string)
+    showItem bag: bag i: 0.u64
+    showItem bag: bag i: 1.u64
+    showItem bag: bag i: 0.u64
+}

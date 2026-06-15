@@ -1357,6 +1357,78 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
     return "".string
 }
 
+# listValueCallRhs -- the binding RHS is a CALL to a user function (a value-
+# producing call returning a List), as opposed to a collection construction
+# (`(List of: T)` / `(Set ...)` / `(Map ...)` calls, or a bare typedef-collection
+# atom like `Bytes` / `ByteView`). Only such a call must be emitted as the call;
+# constructions emit the binding's mono create. Excludes the collection-
+# constructor names; a non-simple-atom callable (e.g. a method) is conservatively
+# not treated as a value call here.
+listValueCallRhs: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (listValueCallRhs n: n.expression)
+    } case statementline then {
+        return (listValueCallRhs n: n.statementline)
+    } case call then {
+        cn: atomTextOf n: n.callable
+        if cn.length == 0.u64 then {
+            return false
+        } else {}
+        if cn.stringview == "List" then {
+            return false
+        } else {}
+        if cn.stringview == "Set" then {
+            return false
+        } else {}
+        if cn.stringview == "Map" then {
+            return false
+        } else {}
+        if cn.stringview == "Bytes" then {
+            return false
+        } else {}
+        if cn.stringview == "ByteView" then {
+            return false
+        } else {}
+        return true
+    } else {
+        return false
+    }
+}
+
+# listGetBorrowRhs -- the binding RHS is a `<list>.get i:` over a List/ListView,
+# whose result is a non-owning shallow copy of the list's element. The binding
+# therefore must NOT be freed at scope exit (the list owns the element); freeing
+# it prematurely frees the element -> use-after-free on the next get. (Map.get
+# returns an owned Option, handled elsewhere -- only List/ListView here.)
+listGetBorrowRhs: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (listGetBorrowRhs symtab: symtab n: n.expression)
+    } case statementline then {
+        return (listGetBorrowRhs symtab: symtab n: n.statementline)
+    } case call then {
+        ch: dottedChildText n: n.callable
+        if ch.stringview == "get" then {} else {
+            return false
+        }
+        rid: dottedReceiverStampId symtab: symtab callable: n.callable
+        rid = chaseColMono symtab: symtab tid: rid
+        omn: monoOriginName symtab: symtab tid: rid
+        if omn.stringview == "List" then {
+            return true
+        } else {}
+        if omn.stringview == "ListView" then {
+            return true
+        } else {}
+        return false
+    } else {
+        return false
+    }
+}
+
 # emitEmptyColCreate -- an empty collection construction `(List of: T)` /
 # `(Set of: T)` / `(Map ...)` as a value: emit the collection mono's create with
 # capacity 0, resolved from the call-node stamp. "" when not such a construction.
@@ -3584,9 +3656,15 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                     buf.append lc0.stringview
                     emitListComprehension symtab: symtab ctx: ctx forNode: n.value listCb: lcb.stringview listVar: nm ind: ind tmp: tmp buf: buf
                 } else {
-                    lcap: listCapArg symtab: symtab ctx: ctx n: n.value
-                    lb0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
-                    buf.append lb0.stringview
+                    if (listValueCallRhs n: n.value) then {
+                        lvr0: emitExpr symtab: symtab ctx: ctx n: n.value
+                        lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
+                        buf.append lb0.stringview
+                    } else {
+                        lcap: listCapArg symtab: symtab ctx: ctx n: n.value
+                        lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
+                        buf.append lb1.stringview
+                    }
                 }
             }
             lfree: "    \{lcb}_destroy(&\{nm});\n"
@@ -3666,8 +3744,10 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } else {
                 lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
                 buf.append lst3.stringview
-                nmc3: nm.string
-                tmp.frees.append nmc3
+                if (listGetBorrowRhs symtab: symtab n: n.value) then {} else {
+                    nmc3: nm.string
+                    tmp.frees.append nmc3
+                }
             }
             return
         } else {}
@@ -3689,10 +3769,12 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
             if (symtab.reg.hasDestructorName typeId: ltid) then {
-                ldcb: cnameOf tid: ltid name: tn.stringview
-                ldf: "    \{ldcb}_destroy(&\{nm});\n"
-                ldfs: ldf.string
-                tmp.listFrees.append ldfs
+                if (listGetBorrowRhs symtab: symtab n: n.value) then {} else {
+                    ldcb: cnameOf tid: ltid name: tn.stringview
+                    ldf: "    \{ldcb}_destroy(&\{nm});\n"
+                    ldfs: ldf.string
+                    tmp.listFrees.append ldfs
+                }
             } else {}
         } else {
             lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
