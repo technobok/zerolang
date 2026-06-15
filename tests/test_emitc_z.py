@@ -134,6 +134,7 @@ EMITC_CORPUS: "list[str]" = [
     "fwd_recursive_union",
     "list_iterate",
     "narrowed_field_iterate",
+    "option_some_positions",
 ]
 
 
