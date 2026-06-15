@@ -1,0 +1,56 @@
+# class_map_field_methods.z -- .set/.get on a Map FIELD and .add/.has on a Set
+# FIELD (`this.counts` / `this.seen`). emitMapMethodCall/emitSetMethodCall took
+# the receiver via atom-only dottedBaseAtom (-> "" for a nested `this.field`) +
+# stampIdOf(dottedBaseNodeId) (no chaseColMono) -> dispatch bailed ->
+# `/* unhandled callee */0`. Fix mirrors emitListMethodCall: emitDottedReceiver +
+# chaseColMono(dottedReceiverStampId). Mirrors zvfs StringProvider.addChild/walk.
+
+Store: class {
+    counts: (Map key: String value: u32)
+    seen:   (Set of: u32)
+} as {
+    bump: function {:this k: String.take n: u32} is {
+        this.counts.set key: k.take value: n.u32
+    }
+
+    lookup: function {:this k: String.take} out u32 is {
+        r: this.counts.get key: k.copy
+        match (
+            r
+        ) case some then {
+            return r
+        } case none then {
+            return 0.u32
+        }
+    }
+
+    mark: function {:this x: u32} out bool is {
+        return (this.seen.add item: x.u32)
+    }
+
+    saw: function {:this x: u32} out bool is {
+        return (this.seen.has item: x.u32)
+    }
+}
+
+main: function is {
+    s: Store counts: (Map key: String value: u32) seen: (Set of: u32)
+    s.bump k: "a".string n: 7.u32
+    s.bump k: "b".string n: 9.u32
+    va: s.lookup k: "a".string
+    vb: s.lookup k: "b".string
+    vc: s.lookup k: "c".string
+    added: 0.u32
+    if (s.mark x: 7.u32) then {
+        added = 1.u32
+    } else {}
+    saw7: 0.u32
+    if (s.saw x: 7.u32) then {
+        saw7 = 1.u32
+    } else {}
+    saw8: 0.u32
+    if (s.saw x: 8.u32) then {
+        saw8 = 1.u32
+    } else {}
+    print "a=\{va} b=\{vb} c=\{vc} added=\{added} saw7=\{saw7} saw8=\{saw8}"
+}
