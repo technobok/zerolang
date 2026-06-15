@@ -566,6 +566,7 @@ Ctx: class {
     genNoneTag: String
     genHasValue: bool
     emittedUserTypes: (Map key: u64 value: bool)
+    fwdDeclaredTypes: (Map key: u64 value: bool)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -5958,7 +5959,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -6429,12 +6430,21 @@ emitUnionMono: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     }
     le: "} \{vc}_tag_t;\n"
     buf.append le.stringview
-    buf.append "typedef struct {\n"
+    if (isFwdDeclared ctx: ctx tid: tid) then {
+        lopenU: "struct \{vc}_t {\n"
+        buf.append lopenU.stringview
+    } else {
+        buf.append "typedef struct {\n"
+    }
     lf: "    \{vc}_tag_t tag;\n"
     buf.append lf.stringview
     buf.append "    void* data;\n"
-    lg: "} \{vc}_t;\n"
-    buf.append lg.stringview
+    if (isFwdDeclared ctx: ctx tid: tid) then {
+        buf.append "};\n"
+    } else {
+        lg: "} \{vc}_t;\n"
+        buf.append lg.stringview
+    }
     ld: "static void \{vc}_destroy(\{vc}_t* u) {\n"
     buf.append ld.stringview
     buf.append "    if (!u) return;\n"
@@ -7426,9 +7436,80 @@ preEmitEmbeddedTypes: function {symtab: zenv.ZSymbolTable ctx: Ctx ids: (List of
     }
 }
 
+# isFwdDeclared -- the type was forward-declared by emitMainFwdDecls, so its
+# body must be emitted as a named `struct X_t { ... };` (the typedef is already
+# in the forward-decl block).
+isFwdDeclared: function {ctx: Ctx tid: u64} out bool is {
+    o: ctx.fwdDeclaredTypes.get key: tid
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return false
+    }
+}
+
+# emitMainFwdDecls -- forward-declare the main unit's RECORD + UNION types
+# (named-struct typedef + a destructor prototype) before the monos. The AST is
+# a self-referential Node union: Node_destroy + the Option/List monos + the
+# print functions reference Node and the arm *Data structs by pointer (or call
+# their destroys) ahead of the bodies, so without forward declarations they are
+# undeclared. Mirrors the reference's forward-decl block; the bodies then emit
+# as plain `struct X_t { ... };` via isFwdDeclared.
+emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    last: symtab.reg.nextTypeId
+    t: 0.u64
+    for while t < last loop {
+        tt: symtab.reg.typetypeOf typeId: t
+        isStructType: false
+        isUnion: false
+        if tt == ztypes.ztypetype.RECORD then {
+            isStructType = true
+        } else {}
+        if tt == ztypes.ztypetype.UNION then {
+            isStructType = true
+            isUnion = true
+        } else {}
+        if tt == ztypes.ztypetype.CLASS then {
+            isStructType = true
+        } else {}
+        if isStructType then {
+            gen: isGenericType symtab: symtab tid: t
+            mo: monoOriginName symtab: symtab tid: t
+            if mo.length == 0.u64 when gen == false then {
+                duo: symtab.typing.definedInUnit.get key: t
+                match (
+                    duo
+                ) case some then {
+                    if duo.stringview == ctx.mainName then {
+                        if (isTypedefType symtab: symtab tid: t) then {} else {
+                            tn: typeNameOfReg9 symtab: symtab tid: t
+                            cn: cnameOf tid: t name: tn.stringview
+                            ctx.fwdDeclaredTypes.set key: t.u64 value: true
+                            l0: "typedef struct \{cn}_t \{cn}_t;\n"
+                            buf.append l0.stringview
+                            needDtor: isUnion
+                            if (symtab.reg.hasDestructorName typeId: t) then {
+                                needDtor = true
+                            } else {}
+                            if needDtor then {
+                                l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
+                                buf.append l1.stringview
+                            } else {}
+                        }
+                    } else {}
+                } case none then {}
+            } else {}
+        } else {}
+        t = t + 1.u64
+    }
+}
+
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     last: symtab.reg.nextTypeId
     emitCliFwdDecls symtab: symtab ctx: ctx buf: buf
+    emitMainFwdDecls symtab: symtab ctx: ctx buf: buf
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
     # Result monos; emit before them so the mono destructors can call IoError's.
     tsu: 0.u64
@@ -9257,8 +9338,12 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
     recFieldLists symtab: symtab tid: tid names: fnames ids: fids
     preEmitEmbeddedTypes symtab: symtab ctx: ctx ids: fids buf: buf
     rc: cnameOf tid: tid name: name
-    l0: "typedef struct {\n"
-    buf.append l0.stringview
+    if (isFwdDeclared ctx: ctx tid: tid) then {
+        lopenR: "struct \{rc}_t {\n"
+        buf.append lopenR.stringview
+    } else {
+        buf.append "typedef struct {\n"
+    }
     fi: 0.u64
     fn0: fnames.length
     for while fi < fn0 loop {
@@ -9282,8 +9367,12 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
         buf.append l1.stringview
         fi = fi + 1.u64
     }
-    l2: "} \{rc}_t;\n"
-    buf.append l2.stringview
+    if (isFwdDeclared ctx: ctx tid: tid) then {
+        buf.append "};\n"
+    } else {
+        l2: "} \{rc}_t;\n"
+        buf.append l2.stringview
+    }
     params: "".string
     inits: "".string
     fj: 0.u64
