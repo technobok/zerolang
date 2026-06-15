@@ -1,0 +1,39 @@
+# narrowed_field_iterate.z -- `.iterate` on a List FIELD of a narrowed union arm
+# (mirrors zast's `case atomstring then { for part: n.stringparts.iterate ... }`).
+# Two gaps: (1) the auto-call base `th.kids` (a field of the narrowed subject) is a
+# nested DottedPath, so the atom-keyed List `.iterate` leg is skipped -- the
+# nested-receiver handler must dispatch it; (2) an aggregate borrowed-view loop var
+# binds a pointer (`Thing*`), so a by-value call `doThing k` must deref via the
+# `__borrow_k` alias. The list carries one element so the loop body runs.
+
+Item: class {
+    label: String
+    kids:  (List of: Thing)
+}
+
+Thing: union {
+    item:  Item
+    blank: Item
+}
+
+doThing: function {t: Thing} is {
+    print "thing"
+}
+
+main: function is {
+    kids: (List of: Thing)
+    leaf: Item label: "leaf".string kids: (List of: Thing)
+    kids.append (Thing.blank leaf.take)
+    box: Item label: "root".string kids: kids.take
+    th: Thing.item box.take
+    match (
+        th
+    ) case item then {
+        it: th.kids.iterate
+        for k: it loop {
+            doThing k
+        }
+    } case blank then {
+        print "blank"
+    }
+}

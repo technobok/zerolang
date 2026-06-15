@@ -2726,13 +2726,19 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             } else {}
             if bsmn.stringview == "MapEntry" then {
                 # a borrowed entry yielded by iterateItems: key/value project
-                # the entry struct's fields through the borrowed pointer.
+                # the entry struct's fields. The loop var binds a deref alias
+                # (`(*__borrow_e)`, a value), so access uses `.`; a genuine
+                # entry pointer base keeps `->`.
+                entryAcc: ".".string
+                if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) then {
+                    entryAcc = "->".string
+                } else {}
                 if mn2.stringview == "key" then {
-                    eek: "\{bn2}->key"
+                    eek: "\{bn2}\{entryAcc}key"
                     return eek
                 } else {}
                 if mn2.stringview == "value" then {
-                    eev: "\{bn2}->value"
+                    eev: "\{bn2}\{entryAcc}value"
                     return eev
                 } else {}
             } else {}
@@ -2797,6 +2803,9 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             } else {}
             if mn2.stringview == "listview" then {
                 return "\{nlcb9}_listview(&\{base9})"
+            } else {}
+            if mn2.stringview == "iterate" then {
+                return "\{nlcb9}_iterate(&\{base9})"
             } else {}
         } else {}
         if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) then {
@@ -4467,8 +4476,12 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                     l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
                     buf.append l3v.stringview
                 } else {
-                    l3p: "\{ind}    \{payC}* \{lbl} = (\{payC}*)_iter\{mN}.data;\n"
+                    l3p: "\{ind}    \{payC}* __borrow_\{lbl} = (\{payC}*)_iter\{mN}.data;\n"
                     buf.append l3p.stringview
+                    l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
+                    buf.append l3pa.stringview
+                    av3p: "(*__borrow_\{lbl})".string
+                    ctx.aliases.set key: lbl.copy value: av3p
                 }
             } else if oovorig.stringview == "Option" then {
                 # owned heap yield: move the payload out, free just the box; the
