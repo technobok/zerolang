@@ -127,6 +127,7 @@ EMITC_CORPUS: "list[str]" = [
     "class_map_field_methods",
     "io_stat_in_method",
     "interp_string_return",
+    "take_string_if_branches",
 ]
 
 

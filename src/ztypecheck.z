@@ -7598,8 +7598,36 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List o
 # checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
 # and an `if_else` scope for the else; when every branch diverges (returns) the
 # if resolves to never and marks the enclosing scope unreachable.
+# restoreTakenArm -- after a NON-diverging if arm, undo any takes of outer-scope
+# owned vars (clearTaken) so the next arm + the restore see them live, recording
+# them in `taken` for a single post-if invalidate. Without this a take in one arm
+# propagates (via popTo) into the sibling arm, which then sees the var as gone and
+# never stamps its type (e.g. an else-arm's `childpath.take` emitting `.take` on a
+# String). Mirrors the reference _check_if_inner per-arm restore; the port's take
+# is an overlay over a persisting entry, so clearTaken alone restores (no redefine).
+restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (Set of: String) taken: (Set of: String)} is {
+    liveAfter: st.getLiveOwnedVars
+    for vn: liveBefore.iterate loop {
+        if (liveAfter.has item: vn) then {} else {
+            taken.add item: vn.copy
+            st.clearTaken name: vn.stringview
+        }
+    }
+}
+
+# invalidateTakenAcross -- after the whole if, mark every var taken in some arm as
+# taken in the enclosing scope (it is consumed on at least one path, so a later use
+# is use-after-take).
+invalidateTakenAcross: function {st: zenv.ZSymbolTable names: (Set of: String)} is {
+    for vn: names.iterate loop {
+        st.invalidate name: vn.stringview loc: (optionval.none ztypes.zsrcpos)
+    }
+}
+
 checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of: Node) ifnode: zast.IfData} out u64 is {
     ifMarker: st.pushBlock name: "if"
+    liveBefore: st.getLiveOwnedVars
+    takenAcross: (Set of: String)
     nvId: optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: "never") d: 0.u64
     branchTypes: (List of: u64)
     allDiverge: true
@@ -7617,6 +7645,7 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
             st.discardTakenInCurrentScope
         } else {
             allDiverge = false
+            restoreTakenArm st: st liveBefore: liveBefore taken: takenAcross
         }
         st.popTo marker: bm
     }
@@ -7634,6 +7663,7 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
             st.discardTakenInCurrentScope
         } else {
             allDiverge = false
+            restoreTakenArm st: st liveBefore: liveBefore taken: takenAcross
         }
         st.popTo marker: ebm
     } case none then {
@@ -7672,6 +7702,7 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (List of
         }
     }
     st.popTo marker: ifMarker
+    invalidateTakenAcross st: st names: takenAcross
     if allDiverge then {
         st.markUnreachable
     } else {
