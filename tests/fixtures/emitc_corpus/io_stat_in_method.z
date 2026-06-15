@@ -1,0 +1,38 @@
+# io_stat_in_method.z -- io.stat called from a CLASS METHOD body. Free-function
+# io calls register their need via emitFns (which precedes emitRuntimeIo), but a
+# native used only inside a type method emits via emitRecordDefs AFTER the
+# runtime -> z_io_stat was never emitted -> implicit declaration / invalid init.
+# The fillNeeds prepass pre-collects method-body io/os needs. Mirrors zvfs's
+# FSProvider.registerFS / ZVfs.registerFS (io.stat inside provider methods).
+
+Prober: class {
+    tag: u32
+} as {
+    probe: function {:this p: StringView} out u32 is {
+        sr: io.stat p
+        match (
+            sr
+        ) case ok then {
+            match (
+                sr.kind
+            ) case file then {
+                return 1.u32
+            } case dir then {
+                return 2.u32
+            } case symlink then {
+                return 3.u32
+            } case other then {
+                return 4.u32
+            }
+        } case err then {
+            return 0.u32
+        }
+    }
+}
+
+main: function is {
+    pr: Prober tag: 0.u32
+    a: pr.probe p: "."
+    b: pr.probe p: "no_such_path_zzqq"
+    print "dot=\{a} missing=\{b}"
+}

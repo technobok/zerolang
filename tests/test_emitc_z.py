@@ -125,6 +125,7 @@ EMITC_CORPUS: "list[str]" = [
     "class_map_field",
     "interp_string",
     "class_map_field_methods",
+    "io_stat_in_method",
 ]
 
 

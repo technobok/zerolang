@@ -5337,6 +5337,140 @@ dataElemLabel: function {n: Node} out String is {
     }
 }
 
+fillNeeds: function {program: Node ctx: Ctx} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        with uiter: program.units.iterate do for u: uiter loop {
+            match (
+                u
+            ) case namedoperation then {
+                un: unitLabel9 o: u.name
+                if un.stringview == mainName then {
+                    fillNeedsIn ctx: ctx mainOp: u.operation
+                } else {}
+            } else {}
+        }
+    } else {}
+}
+
+fillNeedsIn: function {ctx: Ctx mainOp: Node} is {
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                scanNeeds ctx: ctx n: bm.operation
+            } else {}
+        }
+    } else {}
+}
+
+# scanNeeds -- recursively register io/os native needs for every call in a
+# def/body. Structurally mirrors collectLiterals; emitFns registers free-fn
+# needs ahead of emitRuntimeIo, but type-method bodies emit afterwards (via
+# emitRecordDefs), so a native used only inside a method (e.g. io.stat in
+# zvfs's providers) would never have its runtime body emitted. At a call node
+# it inspects the callable's `base.member` shape and registers io/os +
+# io_<m>/os_<m> (an unrecognized member gates no fragment, so over-registering
+# is harmless).
+scanNeeds: function {ctx: Ctx n: Node} is {
+    match (
+        n
+    ) case functiondef then {
+        scanNeedsOpt ctx: ctx o: n.body
+    } case objectdef then {
+        with aiter: n.asItems.iterate do for am: aiter loop {
+            match (
+                am
+            ) case namedoperation then {
+                scanNeeds ctx: ctx n: am.operation
+            } else {}
+        }
+    } case statement then {
+        siter: n.statements.iterate
+        for s: siter loop {
+            scanNeeds ctx: ctx n: s
+        }
+    } case statementline then {
+        scanNeeds ctx: ctx n: n.statementline
+    } case expression then {
+        scanNeeds ctx: ctx n: n.expression
+    } case namedoperation then {
+        scanNeeds ctx: ctx n: n.operation
+    } case call then {
+        bn0: dottedBaseAtom n: n.callable
+        mn0: dottedChildText n: n.callable
+        if bn0.stringview == "io" when mn0.length > 0.u64 then {
+            needsAdd ctx: ctx name: "io"
+            iname0: "io_\{mn0}".string
+            needsAdd ctx: ctx name: iname0.stringview
+        } else {}
+        if bn0.stringview == "os" when mn0.length > 0.u64 then {
+            needsAdd ctx: ctx name: "os"
+            oname0: "os_\{mn0}".string
+            needsAdd ctx: ctx name: oname0.stringview
+        } else {}
+        aiter2: n.arguments.iterate
+        for a: aiter2 loop {
+            scanNeeds ctx: ctx n: a
+        }
+    } case dottedpath then {
+        scanNeeds ctx: ctx n: n.parent
+    } case binop then {
+        scanNeeds ctx: ctx n: n.lhs
+        scanNeeds ctx: ctx n: n.rhs
+    } case assignment then {
+        scanNeeds ctx: ctx n: n.value
+    } case reassignment then {
+        scanNeeds ctx: ctx n: n.value
+    } case ifexpr then {
+        citer: n.clauses.iterate
+        for c: citer loop {
+            scanNeeds ctx: ctx n: c
+        }
+        scanNeedsOpt ctx: ctx o: n.elseclause
+    } case caseexpr then {
+        scanNeeds ctx: ctx n: n.subject
+        miter9: n.clauses.iterate
+        for mc9: miter9 loop {
+            scanNeeds ctx: ctx n: mc9
+        }
+        scanNeedsOpt ctx: ctx o: n.elseclause
+    } case caseclause then {
+        scanNeeds ctx: ctx n: n.statement
+    } case ifclause then {
+        kiter: n.conditions.iterate
+        for k: kiter loop {
+            scanNeeds ctx: ctx n: k
+        }
+        scanNeeds ctx: ctx n: n.statement
+    } case withexpr then {
+        scanNeeds ctx: ctx n: n.value
+        scanNeeds ctx: ctx n: n.body
+    } case doexpr then {
+        scanNeeds ctx: ctx n: n.statement
+    } case forexpr then {
+        fiter: n.conditions.iterate
+        for f: fiter loop {
+            scanNeeds ctx: ctx n: f
+        }
+        scanNeedsOpt ctx: ctx o: n.body
+    } else {}
+}
+
+scanNeedsOpt: function {ctx: Ctx o: (Option t: Node)} is {
+    match (
+        o
+    ) case some then {
+        scanNeeds ctx: ctx n: o
+    } case none then {}
+}
+
 fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
     match (
         program
@@ -5705,6 +5839,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
+    fillNeeds program: program ctx: ctx
     fnsBuf: "".string
     emitFns program: program symtab: symtab ctx: ctx buf: fnsBuf
     hasMain: programHasMain program: program
