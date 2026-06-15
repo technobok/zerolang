@@ -785,6 +785,15 @@ implicitTakeFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
 # reftype local moved into a TAKE param is an implicit move (the hasDestructorName
 # gate excludes borrow/lock views and scalars, which carry no destructor).
 isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out bool is {
+    smidO: stampIdOf symtab: symtab nid: call.nodeid.u64
+    soO: monoOriginName symtab: symtab tid: smidO
+    bnO: dottedBaseAtom n: call.callable
+    if soO.stringview == "Option" when bnO.stringview == "Option" then {
+        return true
+    } else {}
+    if soO.stringview == "Result" when bnO.stringview == "Result" then {
+        return true
+    } else {}
     cn0: atomTextOf n: call.callable
     ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
     if ct == 0.u64 then {
@@ -802,6 +811,11 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
 emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView buf: String.borrow} is {
     ftid9: implicitTakeFnId symtab: symtab ctx: ctx call: call
     ctorOwner9: isCtorOwnerCall symtab: symtab ctx: ctx call: call
+    mmn9: dottedChildText n: call.callable
+    collMove9: false
+    if mmn9.stringview == "append" then { collMove9 = true } else {}
+    if mmn9.stringview == "insert" then { collMove9 = true } else {}
+    if mmn9.stringview == "push" then { collMove9 = true } else {}
     aiter9: call.arguments.iterate
     for a9: aiter9 loop {
         match (
@@ -814,6 +828,7 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                 buf.append inv9.stringview
             } else {
                 isTake9: ctorOwner9
+                if collMove9 then { isTake9 = true } else {}
                 lbl9: unitLabel9 o: a9.name
                 if lbl9.length > 0.u64 then {
                     own9: symtab.typing.childOwnershipText parentTypeId: ftid9 name: lbl9.stringview
@@ -6282,7 +6297,23 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
     ) case ok then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
-        t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: ""
+        delems9: "".string
+        if isStrEl9 then {
+            delems9 = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ctx.strC}_free(&p->data[_di]);\n    }\n"
+        } else {
+            ecid9: eid
+            if (symtab.reg.hasDestructorName typeId: ecid9) then {} else {
+                rbn9: resolveTypeIdByName symtab: symtab ctx: ctx name: eln9.stringview
+                if rbn9 > 0.u64 then {
+                    ecid9 = rbn9
+                } else {}
+            }
+            if (symtab.reg.hasDestructorName typeId: ecid9) then {
+                ecb9: cnameOf tid: ecid9 name: eln9.stringview
+                delems9 = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ecb9}_destroy(&p->data[_di]);\n    }\n"
+            } else {}
+        }
+        t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: delems9.stringview
         lvm: listviewMethods symtab: symtab ctx: ctx monoId: monoId nm: nm.stringview ect: ect.stringview
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringview
         buf.append t4.stringview
@@ -7581,7 +7612,17 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                         }
                     } else {}
                 } case none then {}
-            } else {}
+            } else {
+                if mo.length > 0.u64 when (symtab.reg.hasDestructorName typeId: t) then {
+                    tnX: typeNameOfReg9 symtab: symtab tid: t
+                    cnX: cnameOf tid: t name: tnX.stringview
+                    ctx.fwdDeclaredTypes.set key: t.u64 value: true
+                    lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
+                    buf.append lx0.stringview
+                    lx1: "static void \{cnX}_destroy(\{cnX}_t* p);\n"
+                    buf.append lx1.stringview
+                } else {}
+            }
         } else {}
         t = t + 1.u64
     }
