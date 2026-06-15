@@ -5999,6 +5999,13 @@ definedInNonMain: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out boo
 # data } heap-payload struct + destroy (free the payload on non-null arms,
 # recursing into an aggregate payload's destructor first).
 emitUnionMono: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
+    egu9: ctx.emittedUserTypes.get key: tid
+    match (
+        egu9
+    ) case some then {
+        return
+    } case none then {}
+    ctx.emittedUserTypes.set key: tid.u64 value: true
     anames: (List of: String)
     aids: (List of: u64)
     variantArms symtab: symtab tid: tid names: anames ids: aids
@@ -6967,6 +6974,12 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if tt == ztypes.ztypetype.CLASS then {
         emitOneRecord symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
     } else {}
+    if tt == ztypes.ztypetype.PROTOCOL then {
+        emitOneProtocol symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
+    } else {}
+    if tt == ztypes.ztypetype.UNION then {
+        emitUnionMono symtab: symtab ctx: ctx tid: cid name: nm.stringview buf: buf
+    } else {}
 }
 
 # preEmitEmbeddedTypes -- emit the main-unit user types a variant/record/class
@@ -7412,6 +7425,13 @@ protoParamCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx pid: u64 thisTid: 
 # function pointer per spec method, `this` dropped for a leading void*),
 # the fat-pointer struct {data, vtable, destroy}, and the destroy helper.
 emitOneProtocol: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: StringView buf: String.borrow} is {
+    egp9: ctx.emittedUserTypes.get key: tid
+    match (
+        egp9
+    ) case some then {
+        return
+    } case none then {}
+    ctx.emittedUserTypes.set key: tid.u64 value: true
     pbase: cnameOf tid: tid name: name
     mnames: (List of: String)
     mids: (List of: u64)
@@ -7422,11 +7442,18 @@ emitOneProtocol: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Str
     for while mi < mn loop {
         mname: mnames.get i: mi
         smid: mids.get i: mi
+        mroP: ztypecheck.methodReturnOf st: symtab mid: smid
+        match (
+            mroP
+        ) case some then {
+            maybePreEmitElem symtab: symtab ctx: ctx eid: mroP buf: buf
+        } case none then {}
         ret: methodRetCtype symtab: symtab ctx: ctx mid: smid thisTid: tid
         vparams: "void*".string
         pnames: (List of: String)
         pids: (List of: u64)
         recFieldLists symtab: symtab tid: smid names: pnames ids: pids
+        preEmitEmbeddedTypes symtab: symtab ctx: ctx ids: pids buf: buf
         pi: 0.u64
         pn: pnames.length
         for while pi < pn loop {

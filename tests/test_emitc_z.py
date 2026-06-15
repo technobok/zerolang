@@ -116,6 +116,7 @@ EMITC_CORPUS: "list[str]" = [
     "union_take_arg",
     "provider_ctor",
     "variant_payload_order",
+    "protocol_field_order",
 ]
 
 
