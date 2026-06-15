@@ -128,6 +128,7 @@ EMITC_CORPUS: "list[str]" = [
     "io_stat_in_method",
     "interp_string_return",
     "take_string_if_branches",
+    "string_append",
 ]
 
 
