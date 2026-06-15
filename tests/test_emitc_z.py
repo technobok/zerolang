@@ -122,6 +122,7 @@ EMITC_CORPUS: "list[str]" = [
     "union_noarg_arm",
     "sv_split_lines",
     "string_param_view",
+    "class_map_field",
 ]
 
 
