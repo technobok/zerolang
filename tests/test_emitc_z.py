@@ -120,6 +120,7 @@ EMITC_CORPUS: "list[str]" = [
     "protocol_field_order",
     "protocol_field_dispatch",
     "union_noarg_arm",
+    "sv_split_lines",
 ]
 
 

@@ -1021,6 +1021,33 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return ce
     } else {}
+    if (isStringy name: bt.stringview) when mn.stringview == "split" then {
+        needsAdd ctx: ctx name: "sv_split"
+        sepx9: "".string
+        with siter9: call.arguments.iterate do for sa9: siter9 loop {
+            match (
+                sa9
+            ) case namedoperation then {
+                if sepx9.length == 0.u64 then {
+                    sav9: svArgAddr symtab: symtab ctx: ctx n: sa9.operation
+                    if sav9.length > 0.u64 then {
+                        sepx9.append sav9.stringview
+                    } else {
+                        sxe9: emitExpr symtab: symtab ctx: ctx n: sa9.operation
+                        sepx9.append "&"
+                        sepx9.append sxe9.stringview
+                    }
+                } else {}
+            } else {}
+        }
+        es9: "\{ctx.svC}_split(&\{bn}, \{sepx9})"
+        return es9
+    } else {}
+    if (isStringy name: bt.stringview) when mn.stringview == "lines" then {
+        needsAdd ctx: ctx name: "sv_lines"
+        el9: "\{ctx.svC}_lines(&\{bn})"
+        return el9
+    } else {}
     if (isStringy name: bt.stringview) when (isSvArgNative name: mn.stringview) then {
         bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
         needsAdd ctx: ctx name: mn.stringview
@@ -2238,6 +2265,12 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 se0: "\{ctx.strC}_from_view(_zs\{scl})"
                 return se0
             } else {}
+            sbtn0: stampNameOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+            if sbtn0.stringview == "StringView" then {
+                sbv0: emitExpr symtab: symtab ctx: ctx n: n.parent
+                se1: "\{ctx.strC}_from_view(\{sbv0})"
+                return se1
+            } else {}
         } else {}
         bn2r: atomTextOf n: n.parent
         bn2: aliasResolve ctx: ctx name: bn2r.stringview
@@ -2363,6 +2396,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     needsAdd ctx: ctx name: mn2.stringview
                     e4: "\{ctx.svC}_\{mn2}(&\{bn2})"
                     return e4
+                } else {}
+                if mn2.stringview == "lines" then {
+                    needsAdd ctx: ctx name: "sv_lines"
+                    eln2: "\{ctx.svC}_lines(&\{bn2})"
+                    return eln2
                 } else {}
             } else {}
             if bt2.stringview == "String" then {
@@ -5668,6 +5706,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append poolBuf.stringview
     buf.append "\n"
     emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitRuntimeSvIter symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitNeededNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     fidF9: ioFileId symtab: symtab ctx: ctx
     if fidF9 > 0.u64 then {
@@ -6529,6 +6568,9 @@ loadIoFragment: function {symtab: zenv.ZSymbolTable ctx: Ctx path: StringView} o
     ) case ok then {
         cur: substituteAll text: rd needle: "z_StringView" repl: ctx.svC.stringview
         canons: (List of: String)
+        canons.append "Option_StringView".string
+        canons.append "Splitter".string
+        canons.append "LinesIter".string
         canons.append "Result_List_String_IoError".string
         canons.append "Result_filestat_IoError".string
         canons.append "Result_String_IoError".string
@@ -6858,6 +6900,27 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
     buf.append l0.stringview
     l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
     buf.append l1.stringview
+}
+
+# emitRuntimeSvIter -- the StringView split/lines iterator natives (Splitter +
+# LinesIter struct, builders, and .call). Need-gated; emitted after the monos so
+# Option_StringView (the .call yield) is already defined.
+emitRuntimeSvIter: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    anyNeed: false
+    if (needsHas ctx: ctx name: "sv_split") then {
+        anyNeed = true
+    } else {}
+    if (needsHas ctx: ctx name: "sv_lines") then {
+        anyNeed = true
+    } else {}
+    if anyNeed then {} else {
+        return
+    }
+    ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_SPLITTER_STRUCT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_split" frag: "_Z_SV_SPLIT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_split" frag: "_Z_SV_SPLITTER_CALL" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_lines" frag: "_Z_SV_LINES" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_lines" frag: "_Z_SV_LINES_CALL" buf: buf
 }
 
 # emitRuntimeIo -- the io runtime bodies (need-gated, dependency-ordered). The
