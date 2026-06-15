@@ -735,9 +735,72 @@ takeMoveCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String 
     }
 }
 
-# emitCallTakeInvalidations -- zero the source local of each String `.take` arg
-# of a call so its scope-exit free is a no-op (the move transferred ownership).
+# implicitTakeSource -- the C source local of a bare reftype/String atom arg
+# (alias-resolved); "" for a type/fn definition reference or any non-atom shape.
+# The source of an implicit ownership move (no explicit `.take`).
+implicitTakeSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (implicitTakeSource symtab: symtab ctx: ctx n: n.expression)
+    } case atomid then {
+        nm: n.name.stringview
+        rid: resolveTypeIdByName symtab: symtab ctx: ctx name: nm
+        if rid > 0.u64 then {
+            return "".string
+        } else {}
+        return (aliasResolve ctx: ctx name: nm)
+    } else {
+        return "".string
+    }
+}
+
+# implicitTakeFnId -- the param-bearing type for a call's implicit-take check: a
+# direct FUNCTION callable, else the constructed type's `create` child, else the
+# type itself (a field-wise construction reads field ownership from the type).
+implicitTakeFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out u64 is {
+    cn0: atomTextOf n: call.callable
+    ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
+    if ct == 0.u64 then {
+        return (stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable))
+    } else {}
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.FUNCTION then {
+        return ct
+    } else {}
+    cco: symtab.typing.childOf parentTypeId: ct name: "create"
+    match (
+        cco
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.FUNCTION then {
+            return cco
+        } else {}
+    } case none then {}
+    return ct
+}
+
+# emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
+# of a call so its scope-exit destructor is a no-op (the move transferred
+# ownership). An explicit `<atom>.take` uses takeStringSource; a bare owning-
+# reftype local moved into a TAKE param is an implicit move (the hasDestructorName
+# gate excludes borrow/lock views and scalars, which carry no destructor).
+isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out bool is {
+    cn0: atomTextOf n: call.callable
+    ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
+    if ct == 0.u64 then {
+        return false
+    } else {}
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.CLASS then {
+        return true
+    } else {}
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.UNION then {
+        return true
+    } else {}
+    return false
+}
+
 emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData ind: StringView buf: String.borrow} is {
+    ftid9: implicitTakeFnId symtab: symtab ctx: ctx call: call
+    ctorOwner9: isCtorOwnerCall symtab: symtab ctx: ctx call: call
     aiter9: call.arguments.iterate
     for a9: aiter9 loop {
         match (
@@ -748,7 +811,33 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                 tc9: takeMoveCtype symtab: symtab ctx: ctx n: a9.operation
                 inv9: "\{ind}\{ts9} = (\{tc9}){0};\n"
                 buf.append inv9.stringview
-            } else {}
+            } else {
+                isTake9: ctorOwner9
+                lbl9: unitLabel9 o: a9.name
+                if lbl9.length > 0.u64 then {
+                    own9: symtab.typing.childOwnershipText parentTypeId: ftid9 name: lbl9.stringview
+                    if own9.stringview == "TAKE" then {
+                        isTake9 = true
+                    } else {}
+                    if own9.stringview == "BORROW" then {
+                        isTake9 = false
+                    } else {}
+                    if own9.stringview == "LOCK" then {
+                        isTake9 = false
+                    } else {}
+                } else {}
+                if isTake9 then {
+                    isrc9: implicitTakeSource symtab: symtab ctx: ctx n: a9.operation
+                    if isrc9.length > 0.u64 then {
+                        istid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a9.operation)
+                        if (symtab.reg.hasDestructorName typeId: istid9) then {
+                            itc9: typeRefC symtab: symtab ctx: ctx tid: istid9 thisTid: 0.u64
+                            iinv9: "\{ind}\{isrc9} = (\{itc9}){0};\n"
+                            buf.append iinv9.stringview
+                        } else {}
+                    } else {}
+                } else {}
+            }
         } else {}
     }
 }
@@ -8301,11 +8390,10 @@ emitUserIterCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
 }
 
 emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: dottedBaseAtom n: call.callable
-    if bn.length == 0.u64 then {
+    mn: dottedChildText n: call.callable
+    if mn.length == 0.u64 then {
         return "".string
     } else {}
-    mn: dottedChildText n: call.callable
     if mn.stringview == "create" then {
         return "".string
     } else {}
@@ -8315,14 +8403,25 @@ emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Ca
     if mn.stringview == "release" then {
         return "".string
     } else {}
-    bnid: dottedBaseNodeId n: call.callable
-    baseTid: stampIdOf symtab: symtab nid: bnid
-    if (symtab.reg.typetypeOf typeId: baseTid) == ztypes.ztypetype.PROTOCOL then {} else {
+    rtid: dottedReceiverStampId symtab: symtab callable: call.callable
+    if (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.PROTOCOL then {} else {
+        rtn0: typeNameOfReg9 symtab: symtab tid: rtid
+        if rtn0.length > 0.u64 then {
+            brid: resolveTypeIdByName symtab: symtab ctx: ctx name: rtn0.stringview
+            if (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.PROTOCOL then {
+                rtid = brid
+            } else {}
+        } else {}
+    }
+    if (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.PROTOCOL then {} else {
         return "".string
     }
-    recv: aliasResolve ctx: ctx name: bn.stringview
+    recv: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
+    if recv.length == 0.u64 then {
+        return "".string
+    } else {}
     acc: ".".string
-    if (isPtrVar ctx: ctx name: recv.stringview) then {
+    if (dottedReceiverIsPtr symtab: symtab ctx: ctx callable: call.callable) then {
         acc = "->".string
     } else {}
     dargs: "\{recv}\{acc}data".string
