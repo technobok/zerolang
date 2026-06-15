@@ -176,6 +176,17 @@ def zvfs_binary(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def zvfs_selfhost_binary(zc_binary, tmp_path_factory):
+    """Build src/zvfs.z with the PORTED zc (the self-host loop), not zc.py.
+
+    The headline self-host gate for the VFS: stage1 (zc_binary) compiles
+    zvfs, whose dispatcher output must then match the reference goldens on
+    every zvfs_ops script -- both that the ported compiler emits buildable
+    C and that the emitted VFS is behaviorally correct."""
+    return _build_unit_with_ported_zc("zvfs", zc_binary, tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
 def zast_binary(tmp_path_factory):
     """Build the self-hosted AST skeleton (src/zast.z) once per session."""
     return _build_zerolang_unit("zast", tmp_path_factory)

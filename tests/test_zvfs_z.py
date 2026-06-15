@@ -1,17 +1,15 @@
 """End-to-end tests for the self-hosted VFS (src/zvfs.z).
 
-PR 2 turned the binary into a script-driven dispatcher: it reads a
-script file (one operation per line, '#' comments, whitespace-
-separated tokens) and emits one line per verb to stdout. The test
-parametrises over every `.script` fixture under
-tests/fixtures/zvfs_ops/, asserting byte-for-byte equality with the
-matching `.expected` golden.
+The binary is a script-driven dispatcher: it reads a script file (one
+operation per line, '#' comments, whitespace-separated tokens) and emits
+one line per verb to stdout. Both tests parametrise over every `.script`
+fixture under tests/fixtures/zvfs_ops/ and assert byte-for-byte equality
+with the matching `.expected` golden:
 
-PR 3+ will add new verbs (`provider`, `walk`, `bind`, `open`,
-`getline`) and new fixtures. PR 7 will wire the same fixtures
-against the Python ref running through an equivalent dispatcher.
+- test_zvfs_script_matches_golden runs the reference-built binary (zc.py).
+- test_zvfs_selfhost_matches_golden runs the binary built by the PORTED zc.
 
-The `zvfs_binary` fixture lives in tests/conftest.py.
+The fixtures live in tests/conftest.py.
 """
 
 import os
@@ -35,18 +33,15 @@ def _list_script_names():
     return names
 
 
-@pytest.mark.parametrize("script_name", _list_script_names())
-def test_zvfs_script_matches_golden(script_name, zvfs_binary, tmp_path):
-    """The dispatcher's stdout must match the checked-in golden for
-    each fixture script byte-for-byte.
+def _run_zvfs_script(binary, script_name, tmp_path):
+    """Run `binary` over a zvfs_ops `.script` fixture; return (proc, expected).
 
-    FSProvider-style fixtures opt in by checking in a sibling
-    `<base>.tree/` directory. When present, the runner copies the
-    tree into `tmp_path/root/`, substitutes `{ROOT}` in the script
-    text with that path, and writes the substituted script back to
-    tmp_path before invoking the binary. The .expected golden uses
-    paths relative to the provider's parentpath (stable across runs)
-    so the {ROOT} substitution does not leak into stdout.
+    FSProvider-style fixtures opt in by checking in a sibling `<base>.tree/`
+    directory. When present, the tree is copied into `tmp_path/root/`, `{ROOT}`
+    in the script text is substituted with that path, and the rewritten script
+    is run. The `.expected` golden uses paths relative to the provider's
+    parentpath (stable across runs), so the substituted root never leaks into
+    stdout.
     """
     base = script_name[:-7]
     script_path = os.path.join(FIXTURE_DIR, script_name)
@@ -61,16 +56,41 @@ def test_zvfs_script_matches_golden(script_name, zvfs_binary, tmp_path):
         script_path = str(tmp_path / "ops.script")
         with open(script_path, "w", encoding="utf-8") as f:
             f.write(script_text)
-    proc = subprocess.run([zvfs_binary, script_path], capture_output=True, text=True)
+    proc = subprocess.run([binary, script_path], capture_output=True, text=True)
+    with open(expected_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+    return proc, expected
+
+
+@pytest.mark.parametrize("script_name", _list_script_names())
+def test_zvfs_script_matches_golden(script_name, zvfs_binary, tmp_path):
+    """The reference-built dispatcher's stdout matches the golden byte-for-byte."""
+    proc, expected = _run_zvfs_script(zvfs_binary, script_name, tmp_path)
     if proc.returncode != 0:
         pytest.fail(
             f"zvfs exited {proc.returncode} on {script_name}.\n"
             f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
         )
-    with open(expected_path, "r", encoding="utf-8") as f:
-        expected = f.read()
     if proc.stdout != expected:
         pytest.fail(
             f"zvfs output diverged from golden for {script_name}.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
+        )
+
+
+@pytest.mark.parametrize("script_name", _list_script_names())
+def test_zvfs_selfhost_matches_golden(script_name, zvfs_selfhost_binary, tmp_path):
+    """zvfs compiled by the PORTED zc matches the reference goldens -- the
+    headline self-host gate: the ported compiler emits buildable C and the
+    emitted VFS dispatcher is behaviorally correct on every script."""
+    proc, expected = _run_zvfs_script(zvfs_selfhost_binary, script_name, tmp_path)
+    if proc.returncode != 0:
+        pytest.fail(
+            f"self-host zvfs exited {proc.returncode} on {script_name}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    if proc.stdout != expected:
+        pytest.fail(
+            f"self-host zvfs output diverged from golden for {script_name}.\n"
             f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
         )
