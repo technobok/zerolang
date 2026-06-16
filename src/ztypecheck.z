@@ -10379,6 +10379,9 @@ depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} i
     match (
         unitOp
     ) case unitdef then {
+        if (hasGenericParam items: unitOp.body) then {
+            return
+        } else {}
         emptyD: (List of: Node)
         idxs: (List of: u64)
         di0: 0.u64
@@ -10389,7 +10392,16 @@ depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} i
                 if (isFunctionDefWithBody o: bm.operation) then {
                     dv0: di0
                     idxs.append dv0
-                } else {}
+                } else {
+                    hasm0: objectdefHasMethodBodies op: bm.operation
+                    if hasm0 when (objectdefIsGeneric o: bm.operation) then {
+                        hasm0 = false
+                    } else {}
+                    if hasm0 then {
+                        dv1: di0
+                        idxs.append dv1
+                    } else {}
+                }
             } else {}
             di0 = di0 + 1.u64
         }
@@ -10400,36 +10412,57 @@ depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} i
             match (
                 bm2
             ) case namedoperation then {
-                fn: unitLabel o: bm2.name
-                rk: "\{depName}.\{fn}".string
-                rgo: st.typing.resolved.get key: rk
-                match (
-                    rgo
-                ) case some then {
-                    isGenD9: false
-                    {
-                        gz9: st.reg.typeById.get key: rgo
-                        match (
-                            gz9
-                        ) case some then {
-                            if gz9.isgeneric then {
-                                isGenD9 = true
-                            } else {
+                if (isFunctionDefWithBody o: bm2.operation) then {
+                    fn: unitLabel o: bm2.name
+                    rk: "\{depName}.\{fn}".string
+                    rgo: st.typing.resolved.get key: rk
+                    match (
+                        rgo
+                    ) case some then {
+                        isGenD9: false
+                        {
+                            gz9: st.reg.typeById.get key: rgo
+                            match (
+                                gz9
+                            ) case some then {
+                                if gz9.isgeneric then {
+                                    isGenD9 = true
+                                } else {
+                                }
+                            } case none then {
                             }
-                        } case none then {
                         }
-                    }
-                    walked: optBoolOr o: (st.typing.walkedMethodOwners.get key: rk) d: false
-                    if walked then {} else {
-                        wv: true
-                        wk2: "\{depName}.\{fn}".string
-                        st.typing.walkedMethodOwners.set key: wk2 value: wv
-                        if isGenD9 then {} else {
-                            dq: "\{depName}.\{fn}".string
-                            checkFunctionBody st: st unitName: depName defName: dq.stringview defn: bm2.operation thisName: "" unitBody: unitOp.body depUnits: emptyD
+                        walked: optBoolOr o: (st.typing.walkedMethodOwners.get key: rk) d: false
+                        if walked then {} else {
+                            wv: true
+                            wk2: "\{depName}.\{fn}".string
+                            st.typing.walkedMethodOwners.set key: wk2 value: wv
+                            if isGenD9 then {} else {
+                                dq: "\{depName}.\{fn}".string
+                                checkFunctionBody st: st unitName: depName defName: dq.stringview defn: bm2.operation thisName: "" unitBody: unitOp.body depUnits: emptyD
+                            }
                         }
-                    }
-                } case none then {}
+                    } case none then {}
+                } else {
+                    cls: unitLabel o: bm2.name
+                    crk: "\{depName}.\{cls}".string
+                    crgo: st.typing.resolved.get key: crk
+                    match (
+                        crgo
+                    ) case some then {
+                        cwalked: optBoolOr o: (st.typing.walkedMethodOwners.get key: crk) d: false
+                        if cwalked then {} else {
+                            cwv: true
+                            cwk: "\{depName}.\{cls}".string
+                            st.typing.walkedMethodOwners.set key: cwk value: cwv
+                            cprev: st.typing.synthLabel.copy
+                            cprevThis: st.typing.currentThisName.copy
+                            checkMethodBodies st: st unitName: depName unitBody: unitOp.body typeName: cls.stringview op: bm2.operation
+                            st.typing.synthLabel = cprev
+                            st.typing.currentThisName = cprevThis
+                        }
+                    } case none then {}
+                }
             } else {}
             wi = wi + 1.u64
         }

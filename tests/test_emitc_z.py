@@ -138,6 +138,7 @@ EMITC_CORPUS: "list[str]" = [
     "cross_unit_type",
     "cross_unit_lit",
     "cross_unit_tag",
+    "cross_unit_cls",
 ]
 
 
