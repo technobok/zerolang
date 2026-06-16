@@ -2131,6 +2131,85 @@ emitMetaCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     }
 }
 
+# emitCrossUnitFnCall -- a cross-unit free-function call `unit.fn args`
+# (e.g. zparser calling a zast/zlexer helper). The callee is a dottedpath whose
+# base is a unit name; the function's shared id lives in resolved["{unit}.{fn}"],
+# so emit z_t{id}_{fn}(args) with the same reftype-by-ref arg handling as a bare
+# free-function call. "" when the callee is not a cross-unit function.
+emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    base: dottedBaseAtom n: call.callable
+    child: dottedChildText n: call.callable
+    if base.length == 0.u64 then {
+        return "".string
+    } else {}
+    if child.length == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.isUnitName name: base.stringview) then {} else {
+        return "".string
+    }
+    k: "\{base}.\{child}".string
+    go: symtab.typing.resolved.get key: k
+    fid: 0.u64
+    match (
+        go
+    ) case some then {
+        fid = go
+    } case none then {}
+    if fid == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.FUNCTION then {} else {
+        return "".string
+    }
+    fc: cnameOf tid: fid name: child.stringview
+    fpNames: (List of: String)
+    fpIds: (List of: u64)
+    recFieldLists symtab: symtab tid: fid names: fpNames ids: fpIds
+    args: "".string
+    ai8: 0.u64
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            av9: emitExpr symtab: symtab ctx: ctx n: a.operation
+            byref8: false
+            if ai8 < fpIds.length then {
+                fpid8: fpIds.get i: ai8
+                ptra8: false
+                if (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                    ptra8 = true
+                } else {
+                    if ai8 < fpNames.length then {
+                        fpn8: fpNames.get i: ai8
+                        if (isBorrowStringParam symtab: symtab fid: fid pname: fpn8.stringview pid: fpid8) then {
+                            ptra8 = true
+                        } else {}
+                    } else {}
+                }
+                if ptra8 then {
+                    if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
+                        byref8 = true
+                    }
+                } else {}
+            } else {}
+            if ai8 > 0.u64 then {
+                args.append ", "
+            } else {}
+            if byref8 then {
+                ab8: "&\{av9}"
+                args.append ab8.stringview
+            } else {
+                args.append av9.stringview
+            }
+            ai8 = ai8 + 1.u64
+        } else {}
+    }
+    e8: "\{fc}(\{args})"
+    return e8
+}
+
 # emitCallValue -- the C expression for a call (the dispatch chain:
 # dotted/list/typedef/data/record-ctor/type-qual/variant/user-fn).
 # Shared by emitExpr's call arm and the statement-position call leg
@@ -2203,6 +2282,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     ddq: emitDataIndexCall symtab: symtab ctx: ctx call: call
     if ddq.length > 0.u64 then {
         return ddq
+    } else {}
+    cufc: emitCrossUnitFnCall symtab: symtab ctx: ctx call: call
+    if cufc.length > 0.u64 then {
+        return cufc
     } else {}
     cn0: atomTextOf n: call.callable
     ecc9: emitEmptyColCreate symtab: symtab ctx: ctx call: call cn0: cn0.stringview
@@ -4010,7 +4093,25 @@ resolveTypeIdByName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringVi
     ) case some then {
         return mo
     } case none then {}
-    return (optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: name))
+    lr9: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: name)
+    if lr9 > 0.u64 then {
+        return lr9
+    } else {}
+    # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
+    # lookupTyperef's main+system search list. Scan every known unit's resolved scope.
+    found2: 0.u64
+    with uit: symtab.typing.unitTypes.iterateItems do for ue: uit loop {
+        if found2 == 0.u64 then {
+            k2: "\{ue.key}.\{name}".string
+            r2: symtab.typing.resolved.get key: k2
+            match (
+                r2
+            ) case some then {
+                found2 = r2
+            } case none then {}
+        } else {}
+    }
+    return found2
 }
 
 # emitMatchStmt -- a variant-subject match as a tag switch over a temp;
@@ -5753,25 +5854,56 @@ fillConstValsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node} is {
 
 # emitFns -- the main unit's function declarations then definitions
 # (two-phase index walk so the body list is free during emission).
+# isEmittableFileUnit -- a user FILE unit (main or a dependency) whose defs are
+# emitted as zerolang C; system library units (their types ride the registry
+# sweeps, their fns are native fragments) are skipped.
+isEmittableFileUnit: function {name: StringView} out bool is {
+    if name == "system" then { return false } else {}
+    if name == "core" then { return false } else {}
+    if name == "collections" then { return false } else {}
+    if name == "io" then { return false } else {}
+    if name == "os" then { return false } else {}
+    if name == "cli" then { return false } else {}
+    return true
+}
+
 emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
+        # every file unit's fn DECLARATIONS first, then every file unit's
+        # DEFINITIONS -- a main-unit body may call a dep-unit fn declared
+        # earlier (and vice versa).
         with uiter: program.units.iterate do for u: uiter loop {
             match (
                 u
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
-                if un.stringview == mainName then {
-                    emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation buf: buf
+                if (isEmittableFileUnit name: un.stringview) then {
+                    sm: ctx.mainName.copy
+                    ctx.mainName = un.copy
+                    emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation declOnly: true buf: buf
+                    ctx.mainName = sm
+                } else {}
+            } else {}
+        }
+        with uiter2: program.units.iterate do for u2: uiter2 loop {
+            match (
+                u2
+            ) case namedoperation then {
+                un2: unitLabel9 o: u2.name
+                if (isEmittableFileUnit name: un2.stringview) then {
+                    sm2: ctx.mainName.copy
+                    ctx.mainName = un2.copy
+                    emitFnsIn symtab: symtab ctx: ctx mainOp: u2.operation declOnly: false buf: buf
+                    ctx.mainName = sm2
                 } else {}
             } else {}
         }
     } else {}
 }
 
-emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String.borrow} is {
+emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: bool buf: String.borrow} is {
     match (
         mainOp
     ) case unitdef then {
@@ -5791,41 +5923,44 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String
             } else {}
             di = di + 1.u64
         }
-        wi: 0.u64
         wn: idxs.length
-        for while wi < wn loop {
-            nm2: names.get i: wi
-            didx: idxs.get i: wi
-            dm2: mainOp.body.get i: didx
-            match (
-                dm2
-            ) case namedoperation then {
-                fid: userFnId symtab: symtab ctx: ctx name: nm2.stringview
-                sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
-                ld: "\{sig};\n"
-                buf.append ld.stringview
-            } else {}
-            wi = wi + 1.u64
-        }
-        buf.append "\n"
-        wj: 0.u64
-        for while wj < wn loop {
-            bidx: idxs.get i: wj
-            nm3: names.get i: wj
-            bm2: mainOp.body.get i: bidx
-            match (
-                bm2
-            ) case namedoperation then {
-                fid2: userFnId symtab: symtab ctx: ctx name: nm3.stringview
-                sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
-                lo: "\{sig2} {\n"
-                buf.append lo.stringview
-                ctx.ptrVars = (List of: String)
-                registerReftypeParams symtab: symtab ctx: ctx fid: fid2
-                emitFnBody symtab: symtab ctx: ctx op: bm2.operation buf: buf
-                buf.append "}\n\n"
-            } else {}
-            wj = wj + 1.u64
+        if declOnly then {
+            wi: 0.u64
+            for while wi < wn loop {
+                nm2: names.get i: wi
+                didx: idxs.get i: wi
+                dm2: mainOp.body.get i: didx
+                match (
+                    dm2
+                ) case namedoperation then {
+                    fid: userFnId symtab: symtab ctx: ctx name: nm2.stringview
+                    sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
+                    ld: "\{sig};\n"
+                    buf.append ld.stringview
+                } else {}
+                wi = wi + 1.u64
+            }
+            buf.append "\n"
+        } else {
+            wj: 0.u64
+            for while wj < wn loop {
+                bidx: idxs.get i: wj
+                nm3: names.get i: wj
+                bm2: mainOp.body.get i: bidx
+                match (
+                    bm2
+                ) case namedoperation then {
+                    fid2: userFnId symtab: symtab ctx: ctx name: nm3.stringview
+                    sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
+                    lo: "\{sig2} {\n"
+                    buf.append lo.stringview
+                    ctx.ptrVars = (List of: String)
+                    registerReftypeParams symtab: symtab ctx: ctx fid: fid2
+                    emitFnBody symtab: symtab ctx: ctx op: bm2.operation buf: buf
+                    buf.append "}\n\n"
+                } else {}
+                wj = wj + 1.u64
+            }
         }
     } else {}
 }
@@ -7929,16 +8064,24 @@ emitRecordDefs: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: 
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
-        with uiter: program.units.iterate do for u: uiter loop {
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if un.stringview == mainName then {
-                    emitRecordDefsIn symtab: symtab ctx: ctx mainOp: u.operation buf: buf
+        # 3 phases across ALL file units so cross-unit refs resolve: every unit's
+        # structs, then every unit's fwd-decls, then every unit's method bodies.
+        ph: 1.u64
+        for while ph <= 3.u64 loop {
+            with uiter: program.units.iterate do for u: uiter loop {
+                match (
+                    u
+                ) case namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if (isEmittableFileUnit name: un.stringview) then {
+                        sm: ctx.mainName.copy
+                        ctx.mainName = un.copy
+                        emitRecordDefsIn symtab: symtab ctx: ctx mainOp: u.operation phase: ph buf: buf
+                        ctx.mainName = sm
+                    } else {}
                 } else {}
-            } else {}
+            }
+            ph = ph + 1.u64
         }
     } else {}
 }
@@ -9054,10 +9197,11 @@ emitProtocolCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
 # emitRecordDefsIn -- three passes so cross-class references resolve: all structs
 # (+ variants + data blocks), then all method forward decls, then all method
 # bodies (a method may return/construct a class defined later in the unit).
-emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf: String.borrow} is {
+emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node phase: u64 buf: String.borrow} is {
     match (
         mainOp
     ) case unitdef then {
+        if phase == 1.u64 then {
         with biterU: mainOp.body.iterate do for bu: biterU loop {
             match (
                 bu
@@ -9113,6 +9257,8 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                 emitDataBlock symtab: symtab ctx: ctx name: nm6.stringview op: bm.operation buf: buf
             } else {}
         }
+        } else {}
+        if phase == 2.u64 then {
         with biterB: mainOp.body.iterate do for bmd: biterB loop {
             emitDefMethods symtab: symtab ctx: ctx bm: bmd declOnly: true buf: buf
         }
@@ -9152,9 +9298,12 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node buf:
                 } else {}
             } else {}
         }
+        } else {}
+        if phase == 3.u64 then {
         with biterC: mainOp.body.iterate do for bmb: biterC loop {
             emitDefMethods symtab: symtab ctx: ctx bm: bmb declOnly: false buf: buf
         }
+        } else {}
     } else {}
 }
 

@@ -135,6 +135,7 @@ EMITC_CORPUS: "list[str]" = [
     "list_iterate",
     "narrowed_field_iterate",
     "option_some_positions",
+    "cross_unit_type",
 ]
 
 

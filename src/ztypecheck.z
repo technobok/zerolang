@@ -691,28 +691,35 @@ recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: Stri
         # A `.typedef` marker only recurses -- the dotted node itself resolves to a
         # NULL-defined typedef wrapper the dump filters out.
         cn: atomName n: node.child
-        if (isStripMarker name: cn.stringview) then {
-            bn: baseTypeName n: node.parent
-            recordResolvedName ty: ty unitName: unitName thisName: thisName name: bn.stringview nid: node.nodeid.u64
-            # a parameterized parent ((List of: String).take) has no base
-            # name; the marker dp wears the parent's mono stamp.
-            if bn.length == 0.u64 then {
-                recordPendingMono ty: ty unitName: unitName thisName: thisName op: node.parent nid: node.nodeid
-            } else {
-            }
-            # Ownership markers peel and stamp the inner ref; `.private` /
-            # `.public` resolve the pair atomically (no base-atom stamp).
-            if cn.stringview == "private" then {
-            } else {
-                if cn.stringview == "public" then {
-                } else {
-                    recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
-                }
-            }
+        pn: atomName n: node.parent
+        if (ty.unitTypes.has key: pn) then {
+            # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
+            # its DEFINING unit (the parent) so stampTyperefs bridges this node.
+            recordResolvedName ty: ty unitName: pn.stringview thisName: thisName name: cn.stringview nid: node.nodeid.u64
         } else {
-            if cn.stringview == "typedef" then {
-                recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
-            } else {}
+            if (isStripMarker name: cn.stringview) then {
+                bn: baseTypeName n: node.parent
+                recordResolvedName ty: ty unitName: unitName thisName: thisName name: bn.stringview nid: node.nodeid.u64
+                # a parameterized parent ((List of: String).take) has no base
+                # name; the marker dp wears the parent's mono stamp.
+                if bn.length == 0.u64 then {
+                    recordPendingMono ty: ty unitName: unitName thisName: thisName op: node.parent nid: node.nodeid
+                } else {
+                }
+                # Ownership markers peel and stamp the inner ref; `.private` /
+                # `.public` resolve the pair atomically (no base-atom stamp).
+                if cn.stringview == "private" then {
+                } else {
+                    if cn.stringview == "public" then {
+                    } else {
+                        recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
+                    }
+                }
+            } else {
+                if cn.stringview == "typedef" then {
+                    recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
+                } else {}
+            }
         }
     } case atomid then {
         recordResolvedName ty: ty unitName: unitName thisName: thisName name: node.name.stringview nid: node.nodeid.u64
@@ -829,10 +836,20 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView ty
         }
         return (reg.newType name: suffix.stringview typetype: ztypes.ztypetype.RECORD)
     } case dottedpath then {
-        # A dotted type-expr peels to its parent: an ownership/access strip marker
-        # (Container.private.lock) or a variant/union subtype default where the arm is
-        # the default value and the type is the parent (direction.north -> direction).
-        return (resolveTyperefShell reg: reg unitName: unitName typeExpr: typeExpr.parent thisName: thisName)
+        # A cross-unit qualified type ref (zlexer.Token) names the MEMBER in the
+        # referenced unit -- resolve the child like a bare atom. Otherwise a dotted
+        # type-expr peels to its parent: an ownership/access strip marker
+        # (Container.private.lock) or a variant/union subtype default where the arm
+        # is the default value and the type is the parent (direction.north).
+        pNm: atomName n: typeExpr.parent
+        if (reg.isUnitName name: pNm.stringview) then {
+            cNm: atomName n: typeExpr.child
+            reg.recordDemand name: cNm.stringview
+            reg.recordSeededDemand un: unitName name: cNm.stringview
+            return (resolveAtomType reg: reg nm: cNm.stringview thisName: thisName)
+        } else {
+            return (resolveTyperefShell reg: reg unitName: unitName typeExpr: typeExpr.parent thisName: thisName)
+        }
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
     }
@@ -2444,30 +2461,56 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
 # registerAndResolveMain -- register a UNIT type per unit, then resolve the main
 # unit's definition signatures. Iterates program.units transiently so the demand
 # pass can re-iterate it without an overlapping exclusive lock.
+# isFileUnit -- a user FILE unit (main or a loaded dependency like zlexer/zast/
+# zvfs) whose body must be fully resolved + checked so its types/functions emit;
+# system library units ride the demand pass + native fragments instead.
+isFileUnit: function {name: StringView} out bool is {
+    if name == "system" then { return false } else {}
+    if name == "core" then { return false } else {}
+    if name == "collections" then { return false } else {}
+    if name == "io" then { return false } else {}
+    if name == "os" then { return false } else {}
+    if name == "cli" then { return false } else {}
+    return true
+}
+
 registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
     match (
         program
     ) case program then {
         mainName: program.mainUnitName.stringview
-        uiter: program.units.iterate
-        for u: uiter loop {
+        # Pass 1: register a UNIT type + name for EVERY unit before resolving the
+        # main signatures. The main unit precedes its deps in unit order, so a
+        # cross-unit qualified type ref (zlexer.Token) must already see the dep as
+        # a unit -- both to resolve the member (not a unit-named shell) and to
+        # record it under its defining unit for post-demand stamping.
+        # unit-qualified member paths type their base as the UNIT type via a
+        # name-keyed side map -- never the resolution chain, where a main unit
+        # sharing a type's name (str.z, panic.z) would shadow it.
+        with riter: program.units.iterate do for ru: riter loop {
             match (
-                u
+                ru
             ) case namedoperation then {
-                nm: unitLabel o: u.name
+                nm: unitLabel o: ru.name
                 uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
                 uid2: uid
-                opid: unitdefNodeId n: u.operation
+                opid: unitdefNodeId n: ru.operation
                 ty.unitTypesById.set key: opid.u64 value: uid
-                # unit-qualified member paths type their base as the
-                # UNIT type via a name-keyed side map -- never the
-                # resolution chain, where a main unit sharing a type's
-                # name (str.z, panic.z) would shadow it.
                 unk: nm.copy
                 ty.unitTypes.set key: unk value: uid2
                 reg.setUnitName name: nm.stringview
-                if nm.stringview == mainName then {
-                    resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: u.operation full: full
+            } else {}
+        }
+        # Pass 2: resolve EVERY file unit's definition signatures (main + deps
+        # like zlexer/zast/zvfs), so cross-unit type refs resolve to the dep's
+        # own type and the dep's type/fn def nodes get stamped for emission.
+        with miter: program.units.iterate do for mu: miter loop {
+            match (
+                mu
+            ) case namedoperation then {
+                nm: unitLabel o: mu.name
+                if (isFileUnit name: nm.stringview) then {
+                    resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: mu.operation full: full
                 } else {}
             } else {}
         }
