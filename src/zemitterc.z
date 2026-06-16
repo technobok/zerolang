@@ -2210,6 +2210,56 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     return e8
 }
 
+# emitCrossUnitTag -- a 3-segment cross-unit variant/enum tag value
+# `unit.Type.arm` (zlexer.TT.DOT, zast.err.BADREFERENCE): pbase=unit, ptype=Type,
+# arm=arm. Resolve the variant via the shared cross-unit identity and emit the
+# no-payload tag value. "" when not such a reference.
+emitCrossUnitTag: function {symtab: zenv.ZSymbolTable ctx: Ctx pbase: StringView ptype: StringView arm: StringView} out String is {
+    if pbase.length == 0.u64 then {
+        return "".string
+    } else {}
+    if ptype.length == 0.u64 then {
+        return "".string
+    } else {}
+    if arm.length == 0.u64 then {
+        return "".string
+    } else {}
+    if (symtab.reg.isUnitName name: pbase) then {} else {
+        return "".string
+    }
+    k: "\{pbase}.\{ptype}".string
+    go: symtab.typing.resolved.get key: k
+    vtid: 0.u64
+    match (
+        go
+    ) case some then {
+        vtid = go
+    } case none then {}
+    if vtid == 0.u64 then {
+        return "".string
+    } else {}
+    vtt: symtab.reg.typetypeOf typeId: vtid
+    isTagged: false
+    if vtt == ztypes.ztypetype.VARIANT then {
+        isTagged = true
+    } else {}
+    if vtt == ztypes.ztypetype.UNION then {
+        isTagged = true
+    } else {}
+    if isTagged then {} else {
+        return "".string
+    }
+    pc: armPayloadC symtab: symtab ctx: ctx tid: vtid arm: arm
+    if pc.length == 0.u64 then {
+        tg: variantTag symtab: symtab tid: vtid arm: arm
+        vn: typeNameOfReg9 symtab: symtab tid: vtid
+        vc: cnameOf tid: vtid name: vn.stringview
+        e: "((\{vc}_t){ .tag = \{tg} })"
+        return e
+    } else {}
+    return "".string
+}
+
 # emitCallValue -- the C expression for a call (the dispatch chain:
 # dotted/list/typedef/data/record-ctor/type-qual/variant/user-fn).
 # Shared by emitExpr's call arm and the statement-position call leg
@@ -2472,6 +2522,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 se1: "\{ctx.strC}_from_view(\{sbv0})"
                 return se1
             } else {}
+        } else {}
+        xpb9: dottedBaseAtom n: n.parent
+        xpt9: dottedChildText n: n.parent
+        xar9: atomTextOf n: n.child
+        xtag9: emitCrossUnitTag symtab: symtab ctx: ctx pbase: xpb9.stringview ptype: xpt9.stringview arm: xar9.stringview
+        if xtag9.length > 0.u64 then {
+            return xtag9
         } else {}
         bn2r: atomTextOf n: n.parent
         bn2: aliasResolve ctx: ctx name: bn2r.stringview
@@ -2967,6 +3024,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         if (isCompareOp name: op.stringview) then {
             lt: stampNameDeep symtab: symtab n: n.lhs
             lti: userFnId symtab: symtab ctx: ctx name: lt.stringview
+            if lti == 0.u64 then {
+                ltSc9: cTypeOf name: lt.stringview
+                if ltSc9.length == 0.u64 then {
+                    if (isStringy name: lt.stringview) then {} else {
+                        lti = resolveTypeIdByName symtab: symtab ctx: ctx name: lt.stringview
+                    }
+                } else {}
+            } else {}
             if lti > 0.u64 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.RECORD then {
                 rne: typeNameOfReg9 symtab: symtab tid: lti
                 rce: cnameOf tid: lti name: rne.stringview

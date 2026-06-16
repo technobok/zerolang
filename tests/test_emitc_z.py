@@ -137,6 +137,7 @@ EMITC_CORPUS: "list[str]" = [
     "option_some_positions",
     "cross_unit_type",
     "cross_unit_lit",
+    "cross_unit_tag",
 ]
 
 
