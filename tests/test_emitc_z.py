@@ -140,6 +140,7 @@ EMITC_CORPUS: "list[str]" = [
     "cross_unit_tag",
     "cross_unit_cls",
     "cross_unit_union_byval",
+    "cross_unit_record_ctor",
 ]
 
 
