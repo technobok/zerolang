@@ -3207,6 +3207,42 @@ scanDefCalls: function {reg: ztypes.ZTypeRegistry op: Node} is {
     }
 }
 
+# scanDemandedDepClassBodies -- a dependency unit's DEMANDED class methods are
+# body-walked (depWalkUnit), so a type constructed only inside those methods
+# (e.g. zvfs ProviderTable.registerNull -> NullProvider) must be demanded here
+# or it never resolves and the construction stamps type 0. Mirrors scanDefCalls
+# over the reached (isDemanded) non-generic objectdef members; the cross-unit
+# demand fixpoint then resolves the newly-demanded types and depWalkUnit walks
+# them. The isDemanded gate matches the reference's reached-only closure.
+scanDemandedDepClassBodies: function {reg: ztypes.ZTypeRegistry unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        for bm: unitdef.body.iterate loop {
+            match (
+                bm
+            ) case namedoperation then {
+                cn: unitLabel o: bm.name
+                if (reg.isDemanded name: cn.stringview) then {
+                    hasm: objectdefHasMethodBodies op: bm.operation
+                    if hasm when (objectdefIsGeneric o: bm.operation) then {
+                        hasm = false
+                    } else {
+                    }
+                    if hasm then {
+                        scanDefCalls reg: reg op: bm.operation
+                    } else {
+                    }
+                } else {
+                }
+            } else {
+            }
+        }
+    } else {
+    }
+}
+
+
 # scanMainBodyCalls -- record call-target demands for every function body in the
 # main unit (the full-mode body walk reaches them; demand must precede the pass).
 scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
@@ -3485,6 +3521,7 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                         if anyDemandedUser then {
                             reg.recordDemand name: "return"
                             reg.recordDemand name: "never"
+                            scanDemandedDepClassBodies reg: reg unitdef: u.operation
                             again12: true
                             for while again12 loop {
                                 before12: reg.nextTypeId
