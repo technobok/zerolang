@@ -2372,7 +2372,64 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
         ) case some then {
             ty.nodeType.set key: defn.nodeid.u64 value: objrid
         } case none then {}
+    } case dottedpath then {
+        # A unit-level type alias (`Node: zast.Node`): resolve the cross-unit dotted
+        # ref to a (shell) type id and register it under the unit's name, so bare-alias
+        # return types and value uses resolve. Replicates resolveTyperefShell's
+        # cross-unit leg; mirrors the reference's _type_of_definition dotted-path
+        # fallback (ztypecheck.py:1184).
+        apNm9: atomName n: defn.parent
+        if (reg.isUnitName name: apNm9.stringview) then {
+            acNm9: atomName n: defn.child
+            reg.recordDemand name: acNm9.stringview
+            reg.recordSeededDemand un: unitName name: acNm9.stringview
+            tgtKey9: "\{apNm9}.\{acNm9}".string
+            ark9: "\{unitName}.\{defName}".string
+            # Record alias -> target; resolveTypeAliases repoints the alias to the
+            # target's canonical id once the demand fixpoint has resolved it. The
+            # target is usually still unresolved here, so the placeholder below would
+            # otherwise leave the alias a phantom RECORD shell (a second empty `Node`
+            # beside the real zast.Node union).
+            fk9: ark9.copy
+            fv9: tgtKey9.copy
+            ty.funcAliases.set key: fk9 value: fv9
+            # Use the canonical id if already resolved; else a shell placeholder
+            # (overwritten by resolveTypeAliases) so the demand fixpoint terminates.
+            tgo9: ty.resolved.get key: tgtKey9
+            aid9: 0.u64
+            match (
+                tgo9
+            ) case some then {
+                aid9 = tgo9
+            } case none then {
+                aid9 = resolveAtomType reg: reg nm: acNm9.stringview thisName: ""
+            }
+            ark9b: ark9.copy
+            arv9: aid9
+            ty.resolved.set key: ark9b value: arv9
+            sda9: aid9
+            ty.nodeType.set key: defn.nodeid.u64 value: sda9
+        } else {}
     } else {}
+}
+
+# resolveTypeAliases -- repoint each unit-level type alias (recorded in funcAliases
+# during resolveDef as "{unit}.{alias}" -> "{targetUnit}.{target}") to its target's
+# canonical type id, now that the cross-unit demand fixpoint has resolved targets.
+# Without this an alias whose target was unresolved when first walked stays bound to a
+# phantom RECORD shell (a second empty `Node` beside the real zast.Node union), which
+# breaks cross-unit return types and union-arm construction.
+resolveTypeAliases: function {ty: ztyping.ZTyping} is {
+    with it: ty.funcAliases.iterateItems do for e: it loop {
+        tgo: ty.resolved.get key: e.value
+        match (
+            tgo
+        ) case some then {
+            ak: "\{e.key}".string
+            tv: tgo
+            ty.resolved.set key: ak value: tv
+        } case none then {}
+    }
 }
 
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
@@ -11390,6 +11447,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     } else {
     }
     resolveCrossUnitDemand ty: ty reg: reg program: program full: full
+    resolveTypeAliases ty: ty
     match (
         program
     ) case program then {
