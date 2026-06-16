@@ -7680,11 +7680,13 @@ emitRuntimeOs: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_exit" frag: "_Z_OS_EXIT" buf: buf
 }
 
-# maybePreEmitElem -- a main-unit user type (variant/record/class) used as a
+# maybePreEmitElem -- a user type (variant/record/class/union) used as a
 # collection element is embedded BY VALUE by the List/ListView mono, so its
 # struct must precede the mono. Emit it here (guarded by ctx.emittedUserTypes);
-# its methods still emit later in emitRecordDefsIn. Monos / generics / typedefs
-# and non-main types are handled by their own sweeps and skipped.
+# its methods still emit later in emitRecordDefsIn. Covers main-unit AND dep
+# file-unit element types (the cross-unit Node union returned by value from a
+# ListView_Node mono); monos / generics / typedefs and system-unit types (which
+# have their own dedicated sweeps above) are skipped.
 maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: String.borrow} is {
     if eid == 0.u64 then {
         return
@@ -7709,9 +7711,14 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if (isGenericType symtab: symtab tid: cid) then {
         return
     } else {}
-    if (definedInNonMain symtab: symtab ctx: ctx tid: cid) then {
-        return
-    } else {}
+    duoPe: symtab.typing.definedInUnit.get key: cid
+    match (
+        duoPe
+    ) case some then {
+        if (isEmittableFileUnit name: duoPe.stringview) then {} else {
+            return
+        }
+    } case none then {}
     nm: typeNameOfReg9 symtab: symtab tid: cid
     if nm.length == 0.u64 then {
         return
