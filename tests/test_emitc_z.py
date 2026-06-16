@@ -143,6 +143,7 @@ EMITC_CORPUS: "list[str]" = [
     "cross_unit_record_ctor",
     "alias_loop_leak",
     "class_zero_create",
+    "cross_unit_bind",
 ]
 
 
