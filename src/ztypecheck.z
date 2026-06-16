@@ -470,6 +470,19 @@ hasGenericParam: function {items: (List of: Node)} out bool is {
     return false
 }
 
+# unitDefIsGeneric -- a unit definition is generic when its body declares a generic
+# param. Mirrors objectdefIsGeneric; gates dep-signature-stamp suppression off generic
+# units, whose template signatures resolve differently.
+unitDefIsGeneric: function {o: Node} out bool is {
+    match (
+        o
+    ) case unitdef then {
+        return (hasGenericParam items: o.body)
+    } else {
+        return false
+    }
+}
+
 # pathOwnership -- the ownership a param/field type expr declares via a `.lock`/
 # `.borrow`/`.take` dotted-path leaf, or none. (Only `.lock` is valid on a field; all
 # three on a param.)
@@ -552,6 +565,11 @@ recordNodeName: function {ty: ztyping.ZTyping unitName: StringView name: StringV
         ty.pendingTyperef.set key: kc value: name.string
         kc2: nid
         ty.pendingTyperefUnit.set key: kc2 value: unitName.string
+        if ty.suppressSigStamp then {
+            kc3: nid
+            sv0: true
+            ty.noStampNode.set key: kc3 value: sv0
+        } else {}
     }
 }
 
@@ -2510,7 +2528,21 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             ) case namedoperation then {
                 nm: unitLabel o: mu.name
                 if (isFileUnit name: nm.stringview) then {
+                    # Skeleton mode (full=false): the reference resolves dep
+                    # signatures lazily and never stamps their type-ref atoms, so
+                    # suppress the dep sig stamps to match. Full mode stamps them
+                    # (the reference does too), so leave it on there.
+                    supp: false
+                    if full then {} else {
+                        if (nm.stringview == mainName) then {} else {
+                            if (unitDefIsGeneric o: mu.operation) then {} else {
+                                supp = true
+                            }
+                        }
+                    }
+                    ty.suppressSigStamp = supp
                     resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: mu.operation full: full
+                    ty.suppressSigStamp = false
                 } else {}
             } else {}
         }
