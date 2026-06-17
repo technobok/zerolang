@@ -152,6 +152,7 @@ EMITC_CORPUS: "list[str]" = [
     "method_strarg_temp",
     "method_strarg_fwd",
     "narrowed_arm_iterate",
+    "cross_unit_variant_eq",
 ]
 
 
