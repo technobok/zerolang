@@ -559,6 +559,7 @@ Ctx: class {
     dataConst: (Map key: String value: String)
     ptrVars: (List of: String)
     aliases: (Map key: String value: String)
+    narrowBox: (Map key: String value: String)
     genActive: bool
     genYieldCount: u64
     genYieldNext: u64
@@ -640,6 +641,20 @@ aliasResolve: function {ctx: Ctx name: StringView} out String is {
     }
 }
 
+# takeSourceResolve -- the C lvalue to zero after a take of `name`: a match-arm
+# narrowing's union box payload (narrowBox) takes priority over a plain `.take`
+# alias, so the source zeroing invalidates the box, not just the narrowed copy.
+takeSourceResolve: function {ctx: Ctx name: StringView} out String is {
+    nbo: ctx.narrowBox.get key: name.string
+    match (
+        nbo
+    ) case some then {
+        return nbo.string
+    } case none then {
+        return (aliasResolve ctx: ctx name: name)
+    }
+}
+
 # takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
 # ownership-transfer alias: the binding reuses the source storage), else "".
 takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
@@ -716,7 +731,7 @@ takeStringSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Stri
             return "".string
         }
         bn9r: atomTextOf n: n.parent
-        return (aliasResolve ctx: ctx name: bn9r.stringview)
+        return (takeSourceResolve ctx: ctx name: bn9r.stringview)
     } else {
         return "".string
     }
@@ -754,7 +769,7 @@ implicitTakeSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
         if rid > 0.u64 then {
             return "".string
         } else {}
-        return (aliasResolve ctx: ctx name: nm)
+        return (takeSourceResolve ctx: ctx name: nm)
     } else {
         return "".string
     }
@@ -4466,10 +4481,23 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
         buf.append l2.stringview
         pc: armPayloadC symtab: symtab ctx: ctx tid: vtid arm: arm
         ind3: "\{ind}    "
+        didSeed: false
         if pc.length > 0.u64 when sname.length > 0.u64 then {
             if isUni then {
                 l3u: "\{ind}    \{pc} \{sname} = *(\{pc}*)_m\{mN}.data;\n"
                 buf.append l3u.stringview
+                co: symtab.typing.childOf parentTypeId: vtid name: arm
+                match (
+                    co
+                ) case some then {
+                    pn: typeNameOfReg9 symtab: symtab tid: co
+                    sc: cTypeOf name: pn.stringview
+                    if sc.length == 0.u64 then {
+                        nbv: "(*(\{pc}*)_m\{mN}.data)".string
+                        ctx.narrowBox.set key: sname.string value: nbv
+                        didSeed = true
+                    } else {}
+                } case none then {}
             } else {
                 l3: "\{ind}    \{pc} \{sname} = _m\{mN}.data.\{arm};\n"
                 buf.append l3.stringview
@@ -4487,6 +4515,9 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
             emitBodyNode symtab: symtab ctx: ctx n: c.statement ind: ind3.stringview tmp: tmp buf: buf
             flushBlockFrees ctx: ctx tmp: tmp fL: fL9 lL: lL9 buf: buf
         }
+        if didSeed then {
+            ctx.narrowBox.delete key: sname.string
+        } else {}
         l5: "\{ind}    break;\n"
         buf.append l5.stringview
         l6: "\{ind}}\n"
@@ -6391,7 +6422,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1.u64
     }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool) argHoistNames: (List of: String) argHoistVals: (List of: String) argHoistCtr: 0.u64)
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) narrowBox: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool) argHoistNames: (List of: String) argHoistVals: (List of: String) argHoistCtr: 0.u64)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
