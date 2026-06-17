@@ -148,6 +148,9 @@ EMITC_CORPUS: "list[str]" = [
     "cross_unit_preemit_create",
     "cross_unit_dataconst",
     "strparam_stringview",
+    "method_strarg",
+    "method_strarg_temp",
+    "method_strarg_fwd",
 ]
 
 

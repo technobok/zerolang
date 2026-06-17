@@ -567,6 +567,9 @@ Ctx: class {
     genHasValue: bool
     emittedUserTypes: (Map key: u64 value: bool)
     fwdDeclaredTypes: (Map key: u64 value: bool)
+    argHoistNames: (List of: String)
+    argHoistVals: (List of: String)
+    argHoistCtr: u64
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -1287,6 +1290,40 @@ emitStringArgMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     return r
 }
 
+# isNonLvalueArg -- true when an emitted arg expression is a non-addressable
+# rvalue (a call/cast result, e.g. `String_from_view(...)`) so `&expr` is invalid
+# C and the arg must be hoisted to a named temp first. A deref projection
+# `(*__borrow_x)` IS an lvalue, so it is excluded.
+isNonLvalueArg: function {s: StringView} out bool is {
+    if (s.contains needle: "(") then {} else {
+        return false
+    }
+    if (s.startsWith prefix: "(*") then {
+        return false
+    } else {}
+    return true
+}
+
+# flushArgHoists -- emit the `String_t _ahN = <rvalue>;` declarations recorded by
+# emitInstanceMethodCall for borrow-String args that needed `&` on a non-lvalue.
+# Called at statement level (which holds ind/tmp/buf) right after the call
+# expression is built; registers each temp for scope-exit free.
+flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    i: 0.u64
+    n: ctx.argHoistNames.length
+    for while i < n loop {
+        nmo: ctx.argHoistNames.get i: i
+        vlo: ctx.argHoistVals.get i: i
+        decl: "\{ind}\{ctx.strC}_t \{nmo} = \{vlo};\n"
+        buf.append decl.stringview
+        frnm: nmo.copy
+        tmp.frees.append frnm
+        i = i + 1.u64
+    }
+    ctx.argHoistNames = (List of: String)
+    ctx.argHoistVals = (List of: String)
+}
+
 # emitInstanceMethodCall -- `recv.method args` on a user CLASS instance (not a
 # Type qualifier, not a collection / system native): emit
 # {methodCname}(&recv, posArgs) with the receiver mapped to the :this param and
@@ -1362,9 +1399,35 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                     }
                 } else {
                     av9: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname9.stringview
+                    ptra9: false
+                    isStrBorrow9: false
                     if (symtab.reg.typetypeOf typeId: pid9) == ztypes.ztypetype.CLASS then {
-                        ab9: "&\{av9}"
-                        args.append ab9.stringview
+                        ptra9 = true
+                    } else {
+                        if (isBorrowStringParam symtab: symtab fid: mco9 pname: pname9.stringview pid: pid9) then {
+                            ptra9 = true
+                            isStrBorrow9 = true
+                        } else {}
+                    }
+                    byref9: false
+                    if ptra9 then {
+                        if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
+                            byref9 = true
+                        }
+                    } else {}
+                    if byref9 then {
+                        if isStrBorrow9 when (isNonLvalueArg s: av9.stringview) then {
+                            hn9: ctx.argHoistCtr
+                            ctx.argHoistCtr = ctx.argHoistCtr + 1.u64
+                            nmH9: "_ah\{hn9}".string
+                            abh9: "&\{nmH9}"
+                            args.append abh9.stringview
+                            ctx.argHoistNames.append nmH9
+                            ctx.argHoistVals.append av9
+                        } else {
+                            ab9: "&\{av9}"
+                            args.append ab9.stringview
+                        }
                     } else {
                         args.append av9.stringview
                     }
@@ -3834,6 +3897,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
         return
     } else {}
     ce: emitCallValue symtab: symtab ctx: ctx call: call
+    flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
     lc: "\{ind}\{ce};\n"
     buf.append lc.stringview
     emitCallTakeInvalidations symtab: symtab ctx: ctx call: call ind: ind buf: buf
@@ -4017,6 +4081,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } else {}
         } else {}
         rv: emitExpr symtab: symtab ctx: ctx n: n.value
+        flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
         if ct.length > 0.u64 then {
             la: "\{ind}\{ct} \{nm} = \{rv};\n"
             buf.append la.stringview
@@ -6268,7 +6333,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         poolBuf.append l2.stringview
         i = i + 1.u64
     }
-    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool))
+    ctx: (Ctx mainName: mn strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool) argHoistNames: (List of: String) argHoistVals: (List of: String) argHoistCtr: 0.u64)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
