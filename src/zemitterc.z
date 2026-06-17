@@ -1021,11 +1021,23 @@ svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
 emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     mn: dottedChildText n: call.callable
+    bt: "".string
     if bn.length == 0.u64 then {
-        return "".string
-    } else {}
-    bnid: dottedBaseNodeId n: call.callable
-    bt: stampNameOf symtab: symtab nid: bnid
+        # nested/projected base (el.text.stringview.stripPrefix): no base atom, but
+        # the base is a stamped String/StringView -- emit it as an expression (a
+        # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
+        rsid9: dottedReceiverStampId symtab: symtab callable: call.callable
+        bTy9: typeNameOfReg9 symtab: symtab tid: rsid9
+        if (isStringy name: bTy9.stringview) then {
+            bn = emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
+            bt = bTy9
+        } else {
+            return "".string
+        }
+    } else {
+        bnid: dottedBaseNodeId n: call.callable
+        bt = stampNameOf symtab: symtab nid: bnid
+    }
     if (isStringy name: bt.stringview) when mn.stringview == "compare" then {
         # compare maps to the by-value cmp in the base fragment
         bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
@@ -5909,6 +5921,12 @@ scanNeeds: function {ctx: Ctx n: Node} is {
             needsAdd ctx: ctx name: "os"
             oname0: "os_\{mn0}".string
             needsAdd ctx: ctx name: oname0.stringview
+        } else {}
+        if (isSvArgNative name: mn0.stringview) then {
+            needsAdd ctx: ctx name: mn0.stringview
+        } else {}
+        if (isSvSimpleNative name: mn0.stringview) then {
+            needsAdd ctx: ctx name: mn0.stringview
         } else {}
         aiter2: n.arguments.iterate
         for a: aiter2 loop {

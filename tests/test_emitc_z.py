@@ -159,6 +159,7 @@ EMITC_CORPUS: "list[str]" = [
     "cross_unit_listelem",
     "match_else_owned",
     "nested_method_call",
+    "sv_method_projected",
 ]
 
 
