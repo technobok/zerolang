@@ -154,6 +154,7 @@ EMITC_CORPUS: "list[str]" = [
     "narrowed_arm_iterate",
     "cross_unit_variant_eq",
     "cross_unit_main",
+    "cross_unit_data_topfn",
 ]
 
 
