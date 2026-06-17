@@ -156,6 +156,7 @@ EMITC_CORPUS: "list[str]" = [
     "cross_unit_main",
     "cross_unit_data_topfn",
     "cross_unit_io_method",
+    "cross_unit_listelem",
 ]
 
 

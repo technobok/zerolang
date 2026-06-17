@@ -1868,6 +1868,31 @@ dottedParentName: function {n: Node} out String is {
     }
 }
 
+# dottedTyperefId -- the type id of a cross-unit qualified type ref `unit.Type`
+# (e.g. the `zvfs.ProviderBox` element of a `(List of: zvfs.ProviderBox)`),
+# resolved through the defining unit's scope. lookupTyperef searches only
+# main+system, so a dep element misses there; this bridges via unitTypes +
+# resolved. 0 when not a dotted ref or unresolved.
+dottedTyperefId: function {st: zenv.ZSymbolTable op: Node} out u64 is {
+    match (
+        op
+    ) case expression then {
+        return (dottedTyperefId st: st op: op.expression)
+    } case dottedpath then {
+        pn: atomName n: op.parent
+        cn: atomName n: op.child
+        if (st.typing.unitTypes.has key: pn) then {
+            k: "\{pn}.\{cn}".string
+            ro: st.typing.resolved.get key: k
+            return (optU64Or o: ro d: 0.u64)
+        } else {
+            return 0.u64
+        }
+    } else {
+        return 0.u64
+    }
+}
+
 # unionCustomTagId -- a union's custom DATA tag, if any: an `as { tag: <data>.tag }`
 # item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
 # none when absent or not a DATA (the union then synthesizes its own tag wrapper).
@@ -5980,6 +6005,9 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
             } else {
                 ao: lookupTyperef resolved: st.typing.resolved mainName: unitName base: an.stringview
                 aid: optU64Or o: ao d: 0.u64
+                if aid == 0.u64 then {
+                    aid = dottedTyperefId st: st op: arg.operation
+                } else {}
                 if aid > 0.u64 then {
                     atn: typeNameOf st: st tid: aid
                     nsfx: "\{sfx}_\{atn}"
