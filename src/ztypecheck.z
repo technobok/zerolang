@@ -6577,6 +6577,45 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     }
 }
 
+# canonicalChildBase -- a cross-unit narrowed match-arm base can be a shell id
+# (distinct from the canonical defining-unit id) whose member children are not
+# registered. Find a same-named type in any unit's resolved scope that has the
+# named member; 0 when none. Mirrors the emitter's resolveTypeIdByName scan.
+canonicalChildBase: function {st: zenv.ZSymbolTable bt: u64 child: StringView} out u64 is {
+    nm: typeNameOf st: st tid: bt
+    if nm.length == 0.u64 then {
+        return 0.u64
+    } else {}
+    cands9: (List of: u64)
+    with uit: st.typing.unitTypes.iterateItems do for ue: uit loop {
+        k: "\{ue.key}.\{nm}".string
+        ro9: st.typing.resolved.get key: k
+        match (
+            ro9
+        ) case some then {
+            if ro9 != bt then {
+                cands9.append ro9
+            } else {}
+        } case none then {}
+    }
+    found: 0.u64
+    ci9: 0.u64
+    cnn9: cands9.length
+    for while ci9 < cnn9 loop {
+        if found == 0.u64 then {
+            cand9: cands9.get i: ci9
+            rc9: st.typing.childOf parentTypeId: cand9 name: child
+            match (
+                rc9
+            ) case some then {
+                found = cand9
+            } case none then {}
+        } else {}
+        ci9 = ci9 + 1.u64
+    }
+    return found
+}
+
 # checkDotted -- a dotted method reference in a body: type the base, look the
 # member up on the base's type, and stamp the dotted node -- with the method's
 # return when the method takes no user parameters beyond the receiver (the
@@ -6931,6 +6970,32 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: (Lis
             bt = tdd9
         } else {
         }
+    }
+    # A cross-unit narrowed match-arm base can be a SHELL whose member
+    # children are not registered (cross-unit demand mints a shell id distinct
+    # from the canonical defining-unit id); on a member miss retarget the base
+    # to a same-named type in another unit's resolved scope that has the member.
+    preMo9: st.typing.childOf parentTypeId: bt name: cn.stringview
+    preHas9: false
+    match (
+        preMo9
+    ) case some then {
+        preHas9 = true
+    } case none then {}
+    if preHas9 then {} else {
+        dioShell9: st.typing.definedInUnit.get key: bt
+        isShell9: true
+        match (
+            dioShell9
+        ) case some then {
+            isShell9 = false
+        } case none then {}
+        if isShell9 then {
+            cb9: canonicalChildBase st: st bt: bt child: cn.stringview
+            if cb9 > 0.u64 then {
+                bt = cb9
+            } else {}
+        } else {}
     }
     mo: st.typing.childOf parentTypeId: bt name: cn.stringview
     match (
