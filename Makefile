@@ -25,14 +25,14 @@ check:
 	@$(MAKE) --no-print-directory style-lint-fast
 
 # Style ratchets over src/*.z (tools/lint_style.py), pinned at 0.
-# style-lint-fast is the parse-only empty-clause check (fast; runs in `check`).
+# style-lint-fast is the parse-only empty-clause + first-arg-elision check (fast; runs in `check`).
 # style-lint adds the typecheck-based redundant-suffix check (~minutes; run
 # pre-push). See doc/styleguide.pdoc "Literal Type Inference" / "Empty Clauses".
 style-lint-fast:
-	uv run python tools/lint_style.py --empty-only --check
+	uv run python tools/lint_style.py --empty-only --check --check-elide
 
 style-lint:
-	uv run python tools/lint_style.py --check
+	uv run python tools/lint_style.py --check --check-elide
 
 # Baseline counts of existing violations (update when migrating away)
 # isinstance:0  comprehension:8  lambda:0  try/except:8  hasattr:6
