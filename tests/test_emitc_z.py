@@ -162,6 +162,7 @@ EMITC_CORPUS: "list[str]" = [
     "nested_method_call",
     "sv_method_projected",
     "cross_unit_method_param_byref",
+    "list_out_param",
 ]
 
 

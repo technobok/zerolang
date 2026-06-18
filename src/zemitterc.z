@@ -1510,6 +1510,11 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                             isStrBorrow9 = true
                         } else {}
                     }
+                    if ptra9 then {} else {
+                        if (isListPtrParam symtab: symtab fid: mco9 pname: pname9.stringview tid: pid9) then {
+                            ptra9 = true
+                        } else {}
+                    }
                     byref9: false
                     if ptra9 then {
                         if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
@@ -1672,6 +1677,16 @@ emitEmptyColCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     return "\{cb9}_create((uint64_t)0)"
 }
 
+# colRecvRef -- a collection (List) receiver as a C lvalue for a method call: a
+# ptrVar List (a by-pointer param) is already a pointer and passes directly; a
+# value List passes its address.
+colRecvRef: function {ctx: Ctx bn: StringView} out String is {
+    if (isPtrVar ctx: ctx name: bn) then {
+        return bn.string
+    } else {}
+    return "&\{bn}"
+}
+
 emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     mn: dottedChildText n: call.callable
     bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
@@ -1691,44 +1706,45 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     }
     btn: typeNameOfReg9 symtab: symtab tid: bt
     cb: cnameOf tid: bt name: btn.stringview
+    recvR9: colRecvRef ctx: ctx bn: bn.stringview
     if mn.stringview == "append" then {
         v: listArg symtab: symtab ctx: ctx call: call label: "from"
-        e0: "\{cb}_append(&\{bn}, \{v})"
+        e0: "\{cb}_append(\{recvR9}, \{v})"
         return e0
     } else {}
     if mn.stringview == "get" then {
         v: listArg symtab: symtab ctx: ctx call: call label: "i"
-        e1: "\{cb}_get(&\{bn}, \{v})"
+        e1: "\{cb}_get(\{recvR9}, \{v})"
         return e1
     } else {}
     if mn.stringview == "set" then {
         vi: listArg symtab: symtab ctx: ctx call: call label: "i"
         vv: listArg symtab: symtab ctx: ctx call: call label: "val"
-        e2: "\{cb}_set(&\{bn}, \{vi}, \{vv})"
+        e2: "\{cb}_set(\{recvR9}, \{vi}, \{vv})"
         return e2
     } else {}
     if mn.stringview == "pop" then {
-        e3: "\{cb}_pop(&\{bn})"
+        e3: "\{cb}_pop(\{recvR9})"
         return e3
     } else {}
     if mn.stringview == "insert" then {
         vf: listArg symtab: symtab ctx: ctx call: call label: "from"
         va: listArg symtab: symtab ctx: ctx call: call label: "at"
-        e4: "\{cb}_insert(&\{bn}, \{vf}, \{va})"
+        e4: "\{cb}_insert(\{recvR9}, \{vf}, \{va})"
         return e4
     } else {}
     if mn.stringview == "extend" then {
         ea: listTakeArgBase symtab: symtab ctx: ctx call: call label: "from"
-        e5: "\{cb}_extend(&\{bn}, &\{ea})"
+        e5: "\{cb}_extend(\{recvR9}, &\{ea})"
         return e5
     } else {}
     if mn.stringview == "contains" then {
         vc: listArg symtab: symtab ctx: ctx call: call label: "item"
-        e6: "\{cb}_contains(&\{bn}, \{vc})"
+        e6: "\{cb}_contains(\{recvR9}, \{vc})"
         return e6
     } else {}
     if mn.stringview == "sort" then {
-        e7: "\{cb}_sort(&\{bn})"
+        e7: "\{cb}_sort(\{recvR9})"
         return e7
     } else {}
     return "".string
@@ -2335,6 +2351,45 @@ emitMetaCreateCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
 # base is a unit name; the function's shared id lives in resolved["{unit}.{fn}"],
 # so emit z_t{id}_{fn}(args) with the same reftype-by-ref arg handling as a bare
 # free-function call. "" when the callee is not a cross-unit function.
+emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u64} out String is {
+    if (isNonLvalueArg s: av) then {} else {
+        return "&\{av}"
+    }
+    hn: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1.u64
+    nmH: "_ah\{hn}".string
+    hcty: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0.u64
+    htyc: hcty.string
+    hrid: pid
+    hduo: symtab.typing.definedInUnit.get key: pid
+    match (
+        hduo
+    ) case none then {
+        htn0: typeNameOfReg9 symtab: symtab tid: pid
+        hrr: resolveTypeIdByName symtab: symtab ctx: ctx name: htn0.stringview
+        if hrr > 0.u64 then {
+            hrid = hrr
+        } else {}
+    } case some then {}
+    htn: typeNameOfReg9 symtab: symtab tid: hrid
+    hdt: "".string
+    if htn.stringview == "String" then {
+        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
+    } else {
+        if (symtab.reg.hasDestructorName typeId: hrid) then {
+            hcb: cnameOf tid: hrid name: htn.stringview
+            hdt = "    \{hcb}_destroy(&\{nmH});\n"
+        } else {}
+    }
+    avc: av.string
+    r: "&\{nmH}"
+    ctx.argHoistVals.append avc
+    ctx.argHoistTypes.append htyc
+    ctx.argHoistDtors.append hdt
+    ctx.argHoistNames.append nmH
+    return r
+}
+
 emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     base: dottedBaseAtom n: call.callable
     child: dottedChildText n: call.callable
@@ -2374,6 +2429,7 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
         ) case namedoperation then {
             av9: emitExpr symtab: symtab ctx: ctx n: a.operation
             byref8: false
+            argRef8: "".string
             if ai8 < fpIds.length then {
                 fpid8: fpIds.get i: ai8
                 ptra8: false
@@ -2387,9 +2443,18 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
                         } else {}
                     } else {}
                 }
+                if ptra8 then {} else {
+                    if ai8 < fpNames.length then {
+                        fpnL8: fpNames.get i: ai8
+                        if (isListPtrParam symtab: symtab fid: fid pname: fpnL8.stringview tid: fpid8) then {
+                            ptra8 = true
+                        } else {}
+                    } else {}
+                }
                 if ptra8 then {
                     if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
                         byref8 = true
+                        argRef8 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8
                     }
                 } else {}
             } else {}
@@ -2397,8 +2462,7 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
                 args.append ", "
             } else {}
             if byref8 then {
-                ab8: "&\{av9}"
-                args.append ab8.stringview
+                args.append argRef8.stringview
             } else {
                 args.append av9.stringview
             }
@@ -2631,6 +2695,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
             ) case namedoperation then {
                 av9: emitExpr symtab: symtab ctx: ctx n: a.operation
                 byref8: false
+                argRef8: "".string
                 if ai8 < fpIds.length then {
                     fpid8: fpIds.get i: ai8
                     ptra8: false
@@ -2644,9 +2709,18 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                             } else {}
                         } else {}
                     }
+                    if ptra8 then {} else {
+                        if ai8 < fpNames.length then {
+                            fpnL8: fpNames.get i: ai8
+                            if (isListPtrParam symtab: symtab fid: fid pname: fpnL8.stringview tid: fpid8) then {
+                                ptra8 = true
+                            } else {}
+                        } else {}
+                    }
                     if ptra8 then {
                         if (isPtrVar ctx: ctx name: av9.stringview) then {} else {
                             byref8 = true
+                            argRef8 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8
                         }
                     } else {}
                 } else {}
@@ -2654,8 +2728,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                     args.append ", "
                 } else {}
                 if byref8 then {
-                    ab8: "&\{av9}"
-                    args.append ab8.stringview
+                    args.append argRef8.stringview
                 } else {
                     args.append av9.stringview
                 }
@@ -3081,38 +3154,43 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 e9: "\{bn2}.data.\{mn2}"
                 return e9
             } else {}
+            accB2: ".".string
+            if (isPtrVar ctx: ctx name: bn2.stringview) then {
+                accB2 = "->".string
+            } else {}
+            recvB2: colRecvRef ctx: ctx bn: bn2.stringview
             bsmn: monoOriginName symtab: symtab tid: bstamp
             if bsmn.stringview == "List" then {
                 if mn2.stringview == "length" then {
-                    el0: "\{bn2}.length"
+                    el0: "\{bn2}\{accB2}length"
                     return el0
                 } else {}
                 if mn2.stringview == "capacity" then {
-                    el1: "\{bn2}.capacity"
+                    el1: "\{bn2}\{accB2}capacity"
                     return el1
                 } else {}
                 bstn: typeNameOfReg9 symtab: symtab tid: bstamp
                 lcb2: cnameOf tid: bstamp name: bstn.stringview
                 if mn2.stringview == "pop" then {
-                    ep0: "\{lcb2}_pop(&\{bn2})"
+                    ep0: "\{lcb2}_pop(\{recvB2})"
                     return ep0
                 } else {}
                 if mn2.stringview == "sort" then {
-                    ep1: "\{lcb2}_sort(&\{bn2})"
+                    ep1: "\{lcb2}_sort(\{recvB2})"
                     return ep1
                 } else {}
                 if mn2.stringview == "listview" then {
-                    ep2: "\{lcb2}_listview(&\{bn2})"
+                    ep2: "\{lcb2}_listview(\{recvB2})"
                     return ep2
                 } else {}
                 if mn2.stringview == "iterate" then {
-                    epLi: "\{lcb2}_iterate(&\{bn2})"
+                    epLi: "\{lcb2}_iterate(\{recvB2})"
                     return epLi
                 } else {}
             } else {}
             if bsmn.stringview == "ListView" then {
                 if mn2.stringview == "length" then {
-                    elv: "\{bn2}.length"
+                    elv: "\{bn2}\{accB2}length"
                     return elv
                 } else {}
             } else {}
@@ -3231,17 +3309,18 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         if nlomn9.stringview == "List" then {
             nltn9: typeNameOfReg9 symtab: symtab tid: nlid9
             nlcb9: cnameOf tid: nlid9 name: nltn9.stringview
+            recvB9: colRecvRef ctx: ctx bn: base9.stringview
             if mn2.stringview == "pop" then {
-                return "\{nlcb9}_pop(&\{base9})"
+                return "\{nlcb9}_pop(\{recvB9})"
             } else {}
             if mn2.stringview == "sort" then {
-                return "\{nlcb9}_sort(&\{base9})"
+                return "\{nlcb9}_sort(\{recvB9})"
             } else {}
             if mn2.stringview == "listview" then {
-                return "\{nlcb9}_listview(&\{base9})"
+                return "\{nlcb9}_listview(\{recvB9})"
             } else {}
             if mn2.stringview == "iterate" then {
-                return "\{nlcb9}_iterate(&\{base9})"
+                return "\{nlcb9}_iterate(\{recvB9})"
             } else {}
         } else {}
         if nlid9 > 0.u64 then {
@@ -5458,6 +5537,35 @@ isBorrowStringParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringV
 # registerReftypeParams -- add a top-level function's reftype (class/union)
 # params to ctx.ptrVars, so the body reads them as `param->field` and method
 # calls pass them directly (they arrive as pointers). Caller resets ptrVars.
+# isListPtrParam -- a non-TAKE List param (a value-struct collection) passes BY
+# POINTER so the callee's append/pop/set persist to the caller. A `.take` List is
+# moved by value; Set/Map monos are already heap pointers (no extra `*`).
+isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView tid: u64} out bool is {
+    own: symtab.typing.childOwnershipText parentTypeId: fid name: pname
+    if own.stringview == "TAKE" then {
+        return false
+    } else {}
+    cid: tid
+    omn0: monoOriginName symtab: symtab tid: tid
+    if omn0.stringview == "List" then {} else {
+        # a param type is a List SHELL (no genericOriginId, definedInUnit none);
+        # resolve the canonical mono by its mangled name to read its origin.
+        tn: typeNameOfReg9 symtab: symtab tid: tid
+        mo: symtab.typing.monoByName.get key: tn.copy
+        match (
+            mo
+        ) case some then {
+            cid = mo
+        } case none then {}
+    }
+    bt: chaseColMono symtab: symtab tid: cid
+    omn: monoOriginName symtab: symtab tid: bt
+    if omn.stringview == "List" then {
+        return true
+    } else {}
+    return false
+}
+
 registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is {
     pNames: (List of: String)
     pIds: (List of: u64)
@@ -5486,6 +5594,9 @@ registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is
                 regp9 = true
             } else {}
         }
+        if (isListPtrParam symtab: symtab fid: fid pname: rpn.stringview tid: rpid) then {
+            regp9 = true
+        } else {}
         if regp9 then {
             rpc: rpn.string
             ctx.ptrVars.append rpc
@@ -5587,6 +5698,9 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
                 ptrp9 = true
             } else {}
         }
+        if (isListPtrParam symtab: symtab fid: fid pname: pname.stringview tid: pid) then {
+            ptrp9 = true
+        } else {}
         if ptrp9 then {
             if ct.length > 0.u64 then {
                 ctp9: "\{ct}*"
@@ -10625,6 +10739,9 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
                     } else {}
                 }
                 if (isBorrowStringParam symtab: symtab fid: mid pname: pname.stringview pid: pid) then {
+                    giveptr9 = true
+                } else {}
+                if (isListPtrParam symtab: symtab fid: mid pname: pname.stringview tid: pid) then {
                     giveptr9 = true
                 } else {}
                 if giveptr9 then {

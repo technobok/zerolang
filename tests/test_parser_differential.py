@@ -160,19 +160,13 @@ def test_zparser_selfhost_matches_golden(example_name, zparser_selfhost_binary):
 @pytest.mark.infra
 @pytest.mark.emitter
 @pytest.mark.timeout(600)
-@pytest.mark.xfail(
-    reason="program-mode multi-unit load needs collection out-params passed "
-    "by pointer (loadUnit outBody/outExterns/outNames); the ported emitter "
-    "passes collections by value, so the appends don't persist (units=0). "
-    "Per-file self-host is green; this is the next port slice.",
-    strict=True,
-)
 @pytest.mark.parametrize("fixture", _list_program_fixtures())
 def test_zparser_program_selfhost_matches_golden(
     fixture, zparser_selfhost_binary, tmp_path
 ):
-    """Self-host lock-in for whole-program load (--program). Currently xfail
-    pending collection-out-param-by-pointer in the ported emitter."""
+    """Self-host lock-in for whole-program load (--program): the ported-zc-built
+    parser must match the reference golden on multi-unit load + extern
+    resolution + subunit recursion."""
     root = tmp_path / "root"
     shutil.copytree(os.path.join(PROGRAM_DIR, fixture + ".tree"), root)
     proc = subprocess.run(
