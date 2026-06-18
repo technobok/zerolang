@@ -128,6 +128,65 @@ def test_zparser_binary_matches_golden(example_name, zparser_binary):
         )
 
 
+@pytest.mark.infra
+@pytest.mark.emitter
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("example_name", _list_example_names())
+def test_zparser_selfhost_matches_golden(example_name, zparser_selfhost_binary):
+    """Self-host lock-in: the parser built by the PORTED zc (not zc.py) must
+    match the reference golden on every example -- the ported compiler emits a
+    behaviorally correct copy of its own parser."""
+    if example_name in SKIP:
+        pytest.skip(SKIP[example_name])
+    example_path = os.path.join(EXAMPLES_DIR, example_name)
+    proc = subprocess.run(
+        [zparser_selfhost_binary, example_path], capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            f"selfhost zparser exited {proc.returncode} on {example_name}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    golden_path = os.path.join(GOLDEN_DIR, example_name[:-2] + ".ast")
+    with open(golden_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+    if proc.stdout != expected:
+        pytest.fail(
+            f"selfhost zparser diverged from golden for {example_name}.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
+        )
+
+
+@pytest.mark.infra
+@pytest.mark.emitter
+@pytest.mark.timeout(600)
+@pytest.mark.xfail(
+    reason="program-mode multi-unit load needs collection out-params passed "
+    "by pointer (loadUnit outBody/outExterns/outNames); the ported emitter "
+    "passes collections by value, so the appends don't persist (units=0). "
+    "Per-file self-host is green; this is the next port slice.",
+    strict=True,
+)
+@pytest.mark.parametrize("fixture", _list_program_fixtures())
+def test_zparser_program_selfhost_matches_golden(
+    fixture, zparser_selfhost_binary, tmp_path
+):
+    """Self-host lock-in for whole-program load (--program). Currently xfail
+    pending collection-out-param-by-pointer in the ported emitter."""
+    root = tmp_path / "root"
+    shutil.copytree(os.path.join(PROGRAM_DIR, fixture + ".tree"), root)
+    proc = subprocess.run(
+        [zparser_selfhost_binary, "--program", str(root), "main"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    expected_path = os.path.join(PROGRAM_DIR, fixture + ".expected")
+    with open(expected_path, "r", encoding="utf-8") as f:
+        expected = f.read()
+    assert proc.stdout == expected
+
+
 @pytest.mark.parametrize("fixture", _list_program_fixtures())
 def test_python_program_matches_golden(fixture, tmp_path):
     """Reference whole-program dump must match the checked-in golden.

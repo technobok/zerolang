@@ -210,6 +210,17 @@ def zparser_binary(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def zparser_selfhost_binary(zc_binary, tmp_path_factory):
+    """Build src/zparser.z with the PORTED zc (the self-host loop), not zc.py.
+
+    The headline self-host gate for the parser: stage1 (zc_binary) compiles
+    zparser, whose AST dump must then match the reference goldens on every
+    example -- both that the ported compiler emits buildable C and that the
+    emitted parser is behaviorally correct."""
+    return _build_unit_with_ported_zc("zparser", zc_binary, tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
 def ztypes_binary(tmp_path_factory):
     """Build the self-hosted type-model skeleton (src/ztypes.z) once per session."""
     return _build_zerolang_unit("ztypes", tmp_path_factory)

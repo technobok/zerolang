@@ -571,7 +571,12 @@ Ctx: class {
     fwdDeclaredTypes: (Map key: u64 value: bool)
     argHoistNames: (List of: String)
     argHoistVals: (List of: String)
+    argHoistTypes: (List of: String)
+    argHoistDtors: (List of: String)
     argHoistCtr: u64
+    breakLabels: (List of: u64)
+    breakLabelCtr: u64
+    breakLabelUsed: (Map key: u64 value: bool)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -782,6 +787,20 @@ implicitTakeFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
     cn0: atomTextOf n: call.callable
     ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
     if ct == 0.u64 then {
+        # a cross-unit construction's callable is a dotted path (e.g.
+        # `zast.UnitData`); atomTextOf is empty, so resolve the type by its
+        # child name to reach its consuming `create` below (the same-unit path
+        # resolves via the bare-atom userFnId above). Without this the moved-in
+        # owned arg is never zeroed -> double free at the owner's destructor.
+        dn0: dottedChildText n: call.callable
+        if dn0.length > 0.u64 then {
+            rt0: resolveTypeIdByName symtab: symtab ctx: ctx name: dn0.stringview
+            if rt0 > 0.u64 then {
+                ct = rt0
+            } else {}
+        } else {}
+    } else {}
+    if ct == 0.u64 then {
         return (stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable))
     } else {}
     if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.FUNCTION then {
@@ -816,12 +835,30 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     cn0: atomTextOf n: call.callable
     ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
     if ct == 0.u64 then {
+        # cross-unit construction (dotted callable, e.g. `zast.UnitData`):
+        # resolve the constructed type by its child name so an owned arg moved
+        # into a record/variant/class/union field is zeroed (else double free).
+        dn0: dottedChildText n: call.callable
+        if dn0.length > 0.u64 then {
+            rt0: resolveTypeIdByName symtab: symtab ctx: ctx name: dn0.stringview
+            if rt0 > 0.u64 then {
+                ct = rt0
+            } else {}
+        } else {}
+    } else {}
+    if ct == 0.u64 then {
         return false
     } else {}
     if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.CLASS then {
         return true
     } else {}
     if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.UNION then {
+        return true
+    } else {}
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.RECORD then {
+        return true
+    } else {}
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.VARIANT then {
         return true
     } else {}
     return false
@@ -1338,14 +1375,44 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
     for while i < n loop {
         nmo: ctx.argHoistNames.get i: i
         vlo: ctx.argHoistVals.get i: i
-        decl: "\{ind}\{ctx.strC}_t \{nmo} = \{vlo};\n"
+        cty: ctx.argHoistTypes.get i: i
+        decl: "\{ind}\{cty} \{nmo} = \{vlo};\n"
         buf.append decl.stringview
-        frnm: nmo.copy
-        tmp.frees.append frnm
+        dto: ctx.argHoistDtors.get i: i
+        if dto.length > 0.u64 then {
+            dtc: dto.copy
+            tmp.listFrees.append dtc
+        } else {}
         i = i + 1.u64
     }
     ctx.argHoistNames = (List of: String)
     ctx.argHoistVals = (List of: String)
+    ctx.argHoistTypes = (List of: String)
+    ctx.argHoistDtors = (List of: String)
+}
+
+# pushLoopLabel -- allocate a unique break-target label for a loop and push it.
+# A zerolang `break` inside the loop emits `goto __zbrk_<id>`: a bare C `break`
+# would only leave an enclosing match->switch, not the loop. The label is
+# emitted after the loop by popLoopLabel, but only if a break referenced it.
+pushLoopLabel: function {ctx: Ctx} out u64 is {
+    id: ctx.breakLabelCtr
+    ctx.breakLabelCtr = id + 1.u64
+    ctx.breakLabels.append id
+    return ctx.breakLabelCtr - 1.u64
+}
+
+popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
+    if ctx.breakLabels.length > 0.u64 then {
+        dropped: ctx.breakLabels.pop
+    } else {}
+    uo: ctx.breakLabelUsed.get key: id
+    match (
+        uo
+    ) case some then {
+        lbl9: "\{ind}__zbrk_\{id}: ;\n"
+        buf.append lbl9.stringview
+    } case none then {}
 }
 
 # emitInstanceMethodCall -- `recv.method args` on a user CLASS instance (not a
@@ -1425,7 +1492,17 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                     av9: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname9.stringview
                     ptra9: false
                     isStrBorrow9: false
-                    if (symtab.reg.typetypeOf typeId: pid9) == ztypes.ztypetype.CLASS then {
+                    # a non-TAKE class arg passes by pointer (mirrors the method
+                    # signature); isReftypeParam resolves a cross-unit class shell that
+                    # a bare typetypeOf==CLASS check misses.
+                    pown9: symtab.typing.childOwnershipText parentTypeId: mco9 name: pname9.stringview
+                    isRef9: false
+                    if pown9.stringview == "TAKE" then {} else {
+                        if (isReftypeParam symtab: symtab ctx: ctx tid: pid9) then {
+                            isRef9 = true
+                        } else {}
+                    }
+                    if isRef9 then {
                         ptra9 = true
                     } else {
                         if (isBorrowStringParam symtab: symtab fid: mco9 pname: pname9.stringview pid: pid9) then {
@@ -1440,14 +1517,42 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                         }
                     } else {}
                     if byref9 then {
-                        if isStrBorrow9 when (isNonLvalueArg s: av9.stringview) then {
+                        if (isNonLvalueArg s: av9.stringview) then {
+                            # `&` of a non-lvalue (a call result) is invalid C: hoist
+                            # to a typed temp + destroy at block exit, mirroring the
+                            # reference (`T _t = expr; f(&_t); T_destroy(&_t)`).
                             hn9: ctx.argHoistCtr
                             ctx.argHoistCtr = ctx.argHoistCtr + 1.u64
                             nmH9: "_ah\{hn9}".string
+                            hcty9: typeRefC symtab: symtab ctx: ctx tid: pid9 thisTid: 0.u64
+                            htyc9: hcty9.string
+                            hdt9: "".string
+                            if isStrBorrow9 then {
+                                hdt9 = "    \{ctx.strC}_free(&\{nmH9});\n"
+                            } else {
+                                hrid9: pid9
+                                hduo9: symtab.typing.definedInUnit.get key: pid9
+                                match (
+                                    hduo9
+                                ) case none then {
+                                    htn9: typeNameOfReg9 symtab: symtab tid: pid9
+                                    hrr9: resolveTypeIdByName symtab: symtab ctx: ctx name: htn9.stringview
+                                    if hrr9 > 0.u64 then {
+                                        hrid9 = hrr9
+                                    } else {}
+                                } case some then {}
+                                if (symtab.reg.hasDestructorName typeId: hrid9) then {
+                                    hnm9: typeNameOfReg9 symtab: symtab tid: hrid9
+                                    hcb9: cnameOf tid: hrid9 name: hnm9.stringview
+                                    hdt9 = "    \{hcb9}_destroy(&\{nmH9});\n"
+                                } else {}
+                            }
                             abh9: "&\{nmH9}"
                             args.append abh9.stringview
-                            ctx.argHoistNames.append nmH9
                             ctx.argHoistVals.append av9
+                            ctx.argHoistTypes.append htyc9
+                            ctx.argHoistDtors.append hdt9
+                            ctx.argHoistNames.append nmH9
                         } else {
                             ab9: "&\{av9}"
                             args.append ab9.stringview
@@ -1482,7 +1587,10 @@ listValueCallRhs: function {n: Node} out bool is {
     } case call then {
         cn: atomTextOf n: n.callable
         if cn.length == 0.u64 then {
-            return false
+            # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
+            # returning a List is a value-producing call, not a construction --
+            # emit the call rather than falling to the empty-collection default.
+            return (dottedChildText n: n.callable).length > 0.u64
         } else {}
         if cn.stringview == "List" then {
             return false
@@ -3934,6 +4042,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                         sret: emitStringReturnValue symtab: symtab ctx: ctx n: a.operation ind: ind tmp: tmp buf: buf
                         if sret then {} else {
                             rv: emitExpr symtab: symtab ctx: ctx n: a.operation
+                            flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
                             lr: "\{ind}return \{rv};\n"
                             buf.append lr.stringview
                         }
@@ -4222,6 +4331,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         } else {}
         # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
         if n.conditions.length == 0.u64 when n.postconditions.length > 0.u64 then {
+            lidDW: pushLoopLabel ctx: ctx
             ldw: "\{ind}do {\n"
             buf.append ldw.stringview
             ind2d: "\{ind}    "
@@ -4243,6 +4353,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } else {}
             lpw: "\{ind}} while (\{pcond});\n"
             buf.append lpw.stringview
+            popLoopLabel ctx: ctx id: lidDW ind: ind buf: buf
             return
         } else {}
         cond: "".string
@@ -4255,6 +4366,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             # loop (honest RUN-DIFF) rather than while(1).
             cond.append "0 /* zemitterc: unhandled loop header */"
         } else {}
+        lidW: pushLoopLabel ctx: ctx
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
         ind2: "\{ind}    "
@@ -4264,6 +4376,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         flushBlockFrees ctx: ctx tmp: tmp fL: fLw9 lL: lLw9 buf: buf
         lwc: "\{ind}}\n"
         buf.append lwc.stringview
+        popLoopLabel ctx: ctx id: lidW ind: ind buf: buf
     } case yieldexpr then {
         emitYieldStmt symtab: symtab ctx: ctx yd: n ind: ind tmp: tmp buf: buf
     } else {
@@ -4306,8 +4419,16 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             }
         } else {
             if bkw9.stringview == "break" then {
-                lbk9: "\{ind}break;\n"
-                buf.append lbk9.stringview
+                if ctx.breakLabels.length > 0.u64 then {
+                    bid9: ctx.breakLabels.get i: (ctx.breakLabels.length - 1.u64)
+                    lbkg9: "\{ind}goto __zbrk_\{bid9};\n"
+                    buf.append lbkg9.stringview
+                    ubk9: true
+                    ctx.breakLabelUsed.set key: bid9 value: ubk9
+                } else {
+                    lbk9: "\{ind}break;\n"
+                    buf.append lbk9.stringview
+                }
             } else {
                 if bkw9.stringview == "continue" then {
                     lct9: "\{ind}continue;\n"
@@ -4852,6 +4973,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                     iterRecv9 = ivex9
                 }
             }
+            lidO: pushLoopLabel ctx: ctx
             l0: "\{ind}while (1) {\n"
             buf.append l0.stringview
             l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv9});\n"
@@ -4904,6 +5026,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             } else {}
             l9: "\{ind}}\n"
             buf.append l9.stringview
+            popLoopLabel ctx: ctx id: lidO ind: ind buf: buf
             return true
         } case none then {
             return false
@@ -4933,12 +5056,14 @@ emitIntRangeFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData in
             return false
         } else {}
         fromx: rangeFromExpr symtab: symtab ctx: ctx n: c0.operation
+        lidR: pushLoopLabel ctx: ctx
         lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
         emitBodyOpt symtab: symtab ctx: ctx o: m.body ind: ind2.stringview tmp: tmp buf: buf
         lc: "\{ind}}\n"
         buf.append lc.stringview
+        popLoopLabel ctx: ctx id: lidR ind: ind buf: buf
         return true
     } else {
         return false
@@ -6422,7 +6547,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1.u64
     }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) narrowBox: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool) argHoistNames: (List of: String) argHoistVals: (List of: String) argHoistCtr: 0.u64)
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map key: String value: String) needs: (Map key: String value: bool) methodReturns: (Map key: String value: String) dataElems: (Map key: String value: String) dataConst: (Map key: String value: String) ptrVars: (List of: String) aliases: (Map key: String value: String) narrowBox: (Map key: String value: String) genActive: false genYieldCount: 0.u64 genYieldNext: 0.u64 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map key: u64 value: bool) fwdDeclaredTypes: (Map key: u64 value: bool) argHoistNames: (List of: String) argHoistVals: (List of: String) argHoistTypes: (List of: String) argHoistDtors: (List of: String) argHoistCtr: 0.u64 breakLabels: (List of: u64) breakLabelCtr: 0.u64 breakLabelUsed: (Map key: u64 value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -10488,25 +10613,24 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
                 pnc9: pname.string
                 ctx.ptrVars.append pnc9
             } else {
-                # a LOCK/BORROW class param borrows the container -> pass by pointer.
+                # a non-TAKE class param borrows the container (LOCK/BORROW, or the
+                # borrow-default whose ownership a cross-unit shell records as "none")
+                # -> pass by pointer. A `.take` (owning) class param stays by value:
+                # a create/meta_create moves it into the struct.
                 own9: symtab.typing.childOwnershipText parentTypeId: mid name: pname.stringview
-                isLB9: false
-                if own9.stringview == "LOCK" then {
-                    isLB9 = true
-                } else {}
-                if own9.stringview == "BORROW" then {
-                    isLB9 = true
-                } else {}
-                if isLB9 then {
-                    prid9: resolveTypeIdByName symtab: symtab ctx: ctx name: ptn9.stringview
-                    if prid9 > 0.u64 when (symtab.reg.typetypeOf typeId: prid9) == ztypes.ztypetype.CLASS then {
-                        pmo9: monoOriginName symtab: symtab tid: prid9
-                        if pmo9.length == 0.u64 then {
-                            pt = "\{pt}*"
-                            pnc9b: pname.string
-                            ctx.ptrVars.append pnc9b
-                        } else {}
+                giveptr9: false
+                if own9.stringview == "TAKE" then {} else {
+                    if (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
+                        giveptr9 = true
                     } else {}
+                }
+                if (isBorrowStringParam symtab: symtab fid: mid pname: pname.stringview pid: pid) then {
+                    giveptr9 = true
+                } else {}
+                if giveptr9 then {
+                    pt = "\{pt}*"
+                    pnc9b: pname.string
+                    ctx.ptrVars.append pnc9b
                 } else {}
             }
         } else {}
