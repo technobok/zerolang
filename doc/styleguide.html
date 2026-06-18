@@ -101,11 +101,15 @@ Table of Contents</div>
 </li>
 <li><a href="#numeric-literals">Numeric Literals</a>
 </li>
+<li><a href="#literal-type-inference">Literal Type Inference</a>
+</li>
 <li><a href="#data-blocks">Data Blocks</a>
 </li>
 </ul>
 </li>
 <li><a href="#match-and-case">Match and Case</a>
+</li>
+<li><a href="#empty-clauses">Empty Clauses</a>
 </li>
 <li><a href="#naming">Naming</a>
 <ul>
@@ -276,7 +280,28 @@ print (format value: 42 width: 6)</code></pre>
 mask: 0xFFFF_FFFF
 marker: 0b1010_0101
 byte: 65.u8</code></pre>
-<h3 id="data-blocks"><a href="#data-blocks">1.10. Data Blocks</a></h3>
+<h3 id="literal-type-inference"><a href="#literal-type-inference">1.10. Literal Type Inference</a></h3>
+<p>A typed suffix declares a literal's type at its <em><strong>origin</strong></em>. Most literals do
+not need one: the type checker coerces a bare literal to the surrounding type
+wherever the context fixes it -- an adjacent typed operand, the function return
+type, the other side of a comparison, a typed parameter, or an assignment
+target. Write the suffix only where no such context exists.</p>
+<pre><code class="language-zerolang"># context fixes the type -- leave the literal bare
+this.n = this.n + 1        # this.n is u64, so 1 is u64
+return 0                   # function is 'out u64', so 0 is u64
+if count &lt; 2 then ...      # count is u64, so 2 is u64
+resize cap: 8              # parameter 'cap' is usize, so 8 is usize
+
+# genuine origin -- the suffix carries the type
+seq: 0.u64                 # a bare binding would default to i64
+total: 60.u32 * 60 * 24    # all-literal expression: one suffix anchors
+                           # the whole expression (the bare operands
+                           # coerce to u32); with none it folds to i64</code></pre>
+<p>A bare binding (<code>x: 0</code>) defaults to <code>i64</code>, and an all-literal expression
+with no typed operand folds to <code>i64</code>. In those positions the suffix is
+load-bearing, not noise. Inside a <code>data</code> block, prefer <code>out T</code> over
+per-element suffixes -- see Data Blocks below.</p>
+<h3 id="data-blocks"><a href="#data-blocks">1.11. Data Blocks</a></h3>
 <p>When every element of a <code>data</code> block should share a type, use the
 <code>out T</code> form. Per-element type tags (<code>name: 0.T</code>) are redundant
 when <code>out T</code> is present and prohibited in conflicting combinations.
@@ -315,15 +340,39 @@ previous arm.</p>
 } case err then {
     print "failed: \{result.detail}"
 }</code></pre>
-<h2 id="naming"><a href="#naming">3. Naming</a></h2>
-<h3 id="units"><a href="#units">3.1. Units</a></h3>
+<h2 id="empty-clauses"><a href="#empty-clauses">3. Empty Clauses</a></h2>
+<p>Do not write empty clause bodies to satisfy structure. They are noise and
+usually signal that the control flow can be expressed more directly.</p>
+<ul>
+<li>A statement <code>if</code> (its value is discarded) needs no <code>else</code>. Drop an
+  empty <code>else {}</code> entirely.</li>
+<li>Never pair an empty <code>then {}</code> with a working <code>else</code>. Negate the
+  condition with <code>not</code> or <code>!=</code> and put the work in the <code>then</code> block.</li>
+<li>A <code>match</code> on a union/variant stays exhaustive even as a statement, so
+  a single required no-op arm is acceptable. When several arms are no-ops,
+  collapse them into one <code>else {}</code> rather than listing each empty.</li>
+</ul>
+<pre><code class="language-zerolang"># avoid: empty else on a statement if
+if name == "i8" then { return "int8_t".string } else {}
+# prefer: drop the empty else
+if name == "i8" then return "int8_t".string
+
+# avoid: empty then, with the work in else
+if isC then {} else { return true }
+# prefer: negate the condition, work in then
+if not isC then return true
+
+# acceptable: a union match's one required no-op arm
+match (o) case some then { collect n: o } case none then {}</code></pre>
+<h2 id="naming"><a href="#naming">4. Naming</a></h2>
+<h3 id="units"><a href="#units">4.1. Units</a></h3>
 <p>Unit names are lowercase printable ASCII with no whitespace; this is mandated
 by the language for filesystem compatibility. In addition:</p>
 <ul>
 <li>Aim for a single word.</li>
 <li>Do not use underscores.</li>
 </ul>
-<h3 id="valtype-definitions"><a href="#valtype-definitions">3.2. Valtype Definitions</a></h3>
+<h3 id="valtype-definitions"><a href="#valtype-definitions">4.2. Valtype Definitions</a></h3>
 <p><code>record</code>, <code>variant</code> and <code>facet</code> definitions use a lowercase name. Aim
 for a single word. If the name needs more than one word, run the words
 together without underscores.</p>
@@ -334,7 +383,7 @@ filekind: variant {
     symlink: null
     other: null
 }</code></pre>
-<h3 id="reftype-definitions"><a href="#reftype-definitions">3.3. Reftype Definitions</a></h3>
+<h3 id="reftype-definitions"><a href="#reftype-definitions">4.3. Reftype Definitions</a></h3>
 <p><code>class</code>, <code>union</code> and <code>protocol</code> definitions use PascalCase. The
 casing distinguishes reftypes from valtypes at the point of use. Compound
 names split on word boundaries: <code>BufWriter</code>, not <code>Bufwriter</code>;
@@ -345,7 +394,7 @@ names split on word boundaries: <code>BufWriter</code>, not <code>Bufwriter</cod
 <pre><code class="language-zerolang">File: class { ... }
 ListView: class { ... }
 ReadStream: protocol { ... }</code></pre>
-<h3 id="variant-tags"><a href="#variant-tags">3.4. Variant Tags</a></h3>
+<h3 id="variant-tags"><a href="#variant-tags">4.4. Variant Tags</a></h3>
 <p>Variant arm names are values, not types, and are written lowercase. Aim for
 a single word; if more is needed, use <code>lowerCamelCase</code>.</p>
 <pre><code class="language-zerolang">filekind: variant {
@@ -354,7 +403,7 @@ a single word; if more is needed, use <code>lowerCamelCase</code>.</p>
     symlink: null
     other: null
 }</code></pre>
-<h3 id="functions-methods-and-fields"><a href="#functions-methods-and-fields">3.5. Functions, Methods and Fields</a></h3>
+<h3 id="functions-methods-and-fields"><a href="#functions-methods-and-fields">4.5. Functions, Methods and Fields</a></h3>
 <p>Aim for a single lowercase word. If the name needs more than one word, use
 <code>lowerCamelCase</code>.</p>
 <ul>
@@ -370,12 +419,12 @@ f.size # not f.getSize
 user.setName name: "alice"
 conn.isOpen
 doc.hasErrors</code></pre>
-<h3 id="constants"><a href="#constants">3.6. Constants</a></h3>
+<h3 id="constants"><a href="#constants">4.6. Constants</a></h3>
 <p>Top-level value definitions use <code>lowerCamelCase</code>. Do not use uppercase or
 shouting snake case.</p>
 <pre><code class="language-zerolang">maxRetries: 3
 defaultPort: 8080</code></pre>
-<h3 id="prefer-full-words-over-contractions"><a href="#prefer-full-words-over-contractions">3.7. Prefer Full Words Over Contractions</a></h3>
+<h3 id="prefer-full-words-over-contractions"><a href="#prefer-full-words-over-contractions">4.7. Prefer Full Words Over Contractions</a></h3>
 <p>Prefer full words over contractions for type, member, and value names.
 Short forms are acceptable only when they match an established industry term
 (e.g. <code>u8</code>, <code>paren</code>, <code>tab</code>) or a one-letter scratch variable in a tight
@@ -392,7 +441,7 @@ stringBody: 0b0100
 <p>ASCII control-byte mnemonics (<code>nul</code>, <code>bs</code>, <code>ht</code>, <code>lf</code>, <code>cr</code>,
 <code>del</code>) are an exception: the two/three-letter forms are the ASCII-standard
 names for those bytes.</p>
-<h3 id="receivers"><a href="#receivers">3.8. Receivers</a></h3>
+<h3 id="receivers"><a href="#receivers">4.8. Receivers</a></h3>
 <p>The receiver in a method should be a short name -- preferably a single
 letter -- that relates to the type. For multi-word reftype names, an
 acronym is acceptable.</p>
@@ -410,7 +459,7 @@ ListView: class { ... } as {
     length: function {lv: this} out u64 is { ... }
     first: function {lv: this} out (Option t: of) is { ... }
 }</code></pre>
-<h3 id="platform-and-architecture-identifiers"><a href="#platform-and-architecture-identifiers">3.9. Platform and Architecture Identifiers</a></h3>
+<h3 id="platform-and-architecture-identifiers"><a href="#platform-and-architecture-identifiers">4.9. Platform and Architecture Identifiers</a></h3>
 <p>Platform and architecture identifiers may use their conventional external
 spelling and are exempt from the no-underscores rule. Identifiability across
 the wider ecosystem (Linux, Rust, Go, package metadata) outweighs the
@@ -420,7 +469,7 @@ in-language consistency cost.</p>
     aarch64: null
     other: null
 }</code></pre>
-<h2 id="calls"><a href="#calls">4. Calls</a></h2>
+<h2 id="calls"><a href="#calls">5. Calls</a></h2>
 <p>When a function or method call has exactly one argument and that argument is
 the leading parameter, omit the argument name.</p>
 <pre><code class="language-zerolang">print "hello"
@@ -434,7 +483,7 @@ List.append item
 
 # bare argument's role is not obvious -- name it
 buf.write from: chunk</code></pre>
-<h2 id="item-definitions"><a href="#item-definitions">5. Item Definitions</a></h2>
+<h2 id="item-definitions"><a href="#item-definitions">6. Item Definitions</a></h2>
 <p>When an item is generic, declare each generic parameter in the <code>as</code>
 section as <code>name: &lt;Constraint&gt;.generic</code>. Place the generic declarations
 first in <code>as</code>, before any conformances or static members. Instance
@@ -447,8 +496,8 @@ names directly.</p>
     a: Any.generic
     b: Any.generic
 }</code></pre>
-<h2 id="functions"><a href="#functions">6. Functions</a></h2>
-<h3 id="guard-clauses-and-early-return"><a href="#guard-clauses-and-early-return">6.1. Guard Clauses and Early Return</a></h3>
+<h2 id="functions"><a href="#functions">7. Functions</a></h2>
+<h3 id="guard-clauses-and-early-return"><a href="#guard-clauses-and-early-return">7.1. Guard Clauses and Early Return</a></h3>
 <p>Use <code>if</code> guards with early return to handle errors and edge cases up
 front. The remaining body is then the happy path with one less indent
 level.</p>
@@ -458,13 +507,13 @@ level.</p>
     ...
     return Result.ok value: data
 }</code></pre>
-<h3 id="last-expression-return"><a href="#last-expression-return">6.2. Last-Expression Return</a></h3>
+<h3 id="last-expression-return"><a href="#last-expression-return">7.2. Last-Expression Return</a></h3>
 <p>For short functions, return the last expression and omit the explicit
 <code>return</code>.</p>
 <pre><code class="language-zerolang">abs: function {n: i64} out i64 is {
     if n &lt; 0 then 0 - n else n
 }</code></pre>
-<h3 id="expression-forms"><a href="#expression-forms">6.3. Expression Forms</a></h3>
+<h3 id="expression-forms"><a href="#expression-forms">7.3. Expression Forms</a></h3>
 <p>Prefer <code>if</code> and <code>for</code> as expressions to produce values. Avoid
 side-effecting an accumulator when an expression form is available.</p>
 <pre><code class="language-zerolang"># prefer
@@ -473,10 +522,10 @@ squares: for x: 5.iterate loop { x * x }
 # avoid
 squares: List of: i64
 for x: 5.iterate loop { squares.append x * x }</code></pre>
-<h2 id="ownership-annotations"><a href="#ownership-annotations">7. Ownership Annotations</a></h2>
+<h2 id="ownership-annotations"><a href="#ownership-annotations">8. Ownership Annotations</a></h2>
 <p>Ownership annotations behave differently in parameter declarations and in
 inline code. The two are covered separately below.</p>
-<h3 id="parameter-declarations"><a href="#parameter-declarations">7.1. Parameter Declarations</a></h3>
+<h3 id="parameter-declarations"><a href="#parameter-declarations">8.1. Parameter Declarations</a></h3>
 <ul>
 <li><code>.borrow</code> is the default for <code>in</code> parameters. Do not write
 <code>.borrow</code> on an <code>in</code> parameter.</li>
@@ -494,7 +543,7 @@ area: function {p: point} out f64 is { ... }
 
 # borrowed return: explicit .borrow on out, .lock on the parent
 first: function {l: List.lock t: of} out of.borrow is { ... }</code></pre>
-<h3 id="inline-code"><a href="#inline-code">7.2. Inline Code</a></h3>
+<h3 id="inline-code"><a href="#inline-code">8.2. Inline Code</a></h3>
 <ul>
 <li>Do not write <code>.borrow</code> in function bodies or on call arguments.
   Borrow is implicit at every position where it is the default.</li>
@@ -511,7 +560,7 @@ Use <code>.release</code>.</li>
 <li><code>.release</code> is a standalone statement. It returns null and may
 not appear inside an assignment, expression, or call argument.</li>
 </ul>
-<h3 id="lock-and-release-methods"><a href="#lock-and-release-methods">7.3. Lock and Release Methods</a></h3>
+<h3 id="lock-and-release-methods"><a href="#lock-and-release-methods">8.3. Lock and Release Methods</a></h3>
 <ul>
 <li><code>.lock</code> is permitted as a borrow-projection on a reftype variable
 to produce a borrowed reference for the duration of an expression or
@@ -523,15 +572,15 @@ statement, ends the borrow.</li>
 borrowed.use
 borrowed.release
 print "m2 still alive: factor=\{m2.factor}"</code></pre>
-<h2 id="comments-and-documentation"><a href="#comments-and-documentation">8. Comments and Documentation</a></h2>
-<h3 id="line-comments"><a href="#line-comments">8.1. Line Comments</a></h3>
+<h2 id="comments-and-documentation"><a href="#comments-and-documentation">9. Comments and Documentation</a></h2>
+<h3 id="line-comments"><a href="#line-comments">9.1. Line Comments</a></h3>
 <p>Zerolang line comments begin with <code>#</code>. Comments document why, not
 what; do not paraphrase code that names itself. Place comments on the line
 above the item they describe, not trailing the code.</p>
 <p>Reach for a comment when the reader needs context the code cannot give:
 non-obvious invariants, lock ordering, ownership intent on exported APIs,
 references to specifications.</p>
-<h3 id="native-declaration-doc-blocks"><a href="#native-declaration-doc-blocks">8.2. Native Declaration Doc Blocks</a></h3>
+<h3 id="native-declaration-doc-blocks"><a href="#native-declaration-doc-blocks">9.2. Native Declaration Doc Blocks</a></h3>
 <p>For <code>native</code> declarations in standard library units, precede the
 declaration with a short doc block. The first line is the declared
 identifier, two dashes, and a one-sentence description. Further lines
@@ -539,7 +588,7 @@ describe parameter and return semantics.</p>
 <pre><code class="language-zerolang"># env -- look up environment variable `key`. Returns Option.none if
 # the variable is not set; Option.some with the value otherwise.
 env: function {key: StringView} out (Option t: String) is native</code></pre>
-<h2 id="errors-and-panics"><a href="#errors-and-panics">9. Errors and Panics</a></h2>
+<h2 id="errors-and-panics"><a href="#errors-and-panics">10. Errors and Panics</a></h2>
 <p><code>error msg: "..."</code> is the compile-time form; <code>panic msg: "..."</code> is
 its runtime counterpart. Apply the same phrasing rules to both:</p>
 <ul>
@@ -551,7 +600,7 @@ its runtime counterpart. Apply the same phrasing rules to both:</p>
 <pre><code class="language-zerolang">if size &gt; limit then error msg: "buffer exceeds maximum capacity"
 
 if conn.closed then panic msg: "write on closed connection"</code></pre>
-<h2 id="file-hygiene"><a href="#file-hygiene">10. File Hygiene</a></h2>
+<h2 id="file-hygiene"><a href="#file-hygiene">11. File Hygiene</a></h2>
 <ul>
 <li>One trailing newline at end of file.</li>
 <li>No trailing whitespace on any line.</li>
