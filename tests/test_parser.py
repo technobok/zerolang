@@ -506,6 +506,55 @@ class TestWithExpression:
         assert isinstance(body["f"], zast.Function)
 
 
+class TestParamReturnTypeOperations:
+    """Grammar (doc/grammar.pdoc): function `in`/`out` types are operations,
+    so a generic type with an unnamed first arg (`List u8`) is valid bare with
+    no parentheses. Named-arg generics (`Map u8 value: u32`) are calls, not
+    operations, so they still need parentheses to delimit them."""
+
+    def test_bare_generic_param_type(self):
+        body = get_unit_body(
+            parse_unit("g: function {x: List u8} out u64 is { return x.length }")
+        )
+        assert list(body["g"].parameters.keys()) == ["x"]
+
+    def test_bare_generic_param_matches_parenthesized_shape(self):
+        bare = get_unit_body(parse_unit("g: function {x: List u8} is {}"))["g"]
+        paren = get_unit_body(parse_unit("g: function {x: (List u8)} is {}"))["g"]
+        for fn in (bare, paren):
+            t = fn.parameters["x"]
+            assert t.nodetype == zast.NodeType.EXPRESSION
+            assert t.expression.nodetype == zast.NodeType.CALL
+
+    def test_bare_generic_return_type(self):
+        body = get_unit_body(
+            parse_unit("g: function {} out List u8 is { return (List u8) }")
+        )
+        assert body["g"].returntype is not None
+        assert body["g"].returntype.nodetype == zast.NodeType.EXPRESSION
+
+    def test_param_boundary_label_stops_operation(self):
+        # `x: List u8 y: u8` is two params, not List with a `y` arg
+        body = get_unit_body(parse_unit("g: function {x: List u8 y: u8} is {}"))
+        assert list(body["g"].parameters.keys()) == ["x", "y"]
+
+    def test_single_token_param_unchanged(self):
+        body = get_unit_body(parse_unit("g: function {x: u64} is {}"))
+        assert list(body["g"].parameters.keys()) == ["x"]
+
+    def test_named_arg_generic_param_needs_parens(self):
+        # bare named-arg generic leaks its named arg as a separate parameter;
+        # parentheses are required to keep it a single typed parameter.
+        bare = get_unit_body(parse_unit("g: function {x: Map u8 value: u32} is {}"))[
+            "g"
+        ]
+        assert "value" in bare.parameters
+        paren = get_unit_body(parse_unit("g: function {x: (Map u8 value: u32)} is {}"))[
+            "g"
+        ]
+        assert list(paren.parameters.keys()) == ["x"]
+
+
 class TestFacetDefinition:
     def test_simple_facet(self):
         """facet definition with specs (like protocol)"""

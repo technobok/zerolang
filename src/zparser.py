@@ -1066,7 +1066,7 @@ class Parser:
                 msg = f"Duplicate parameter name: {paramname}"
                 return zast.Error(start=paramnametok, err=ERR.BADPARAMETER, msg=msg)
 
-            val = self._accept_path(lex)
+            val = self._accept_typeref_operation(lex)
             if val is None:
                 msg = "Expected typeref or number for parameter type"
                 return zast.Error(start=lex.peek(), err=ERR.BADPARAMETER, msg=msg)
@@ -1076,7 +1076,7 @@ class Parser:
 
             # params can refer to other params; locality is enforced after the loop
             promoteexterns(addto=block.externparam, addfrom=val.extern)
-            # store the parameter type path as-is. Ownership annotations
+            # store the parameter type operation as-is. Ownership annotations
             # (.take/.borrow/.lock) are recognised by the type checker
             # during resolution.
             block.parameters[paramname] = val.node
@@ -1168,7 +1168,7 @@ class Parser:
                     msg = "Duplicate 'out'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
-                typeref = self._accept_path(lex)
+                typeref = self._accept_typeref_operation(lex)
                 if typeref is None:
                     msg = "Expected type reference for 'out'"
                     return zast.Error(
@@ -1179,7 +1179,7 @@ class Parser:
                     return cast(zast.Error, typeref)  # propagate any other error
                 typeref = cast(NodeX[zast.Path], typeref)
 
-                # store the return type path as-is. Ownership annotations
+                # store the return type operation as-is. Ownership annotations
                 # (.take/.borrow/.lock) are recognised by the type
                 # checker during resolution.
                 returntype = typeref.node
@@ -2413,6 +2413,36 @@ class Parser:
             start=callablex.node.start,
         )
         return NodeX(node=call, extern=extern)
+
+    def _accept_typeref_operation(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Path], zast.Error, None]:
+        """
+        Accept a parameter / return type as a grammar `operation`
+        (doc/grammar.pdoc: `in`/`out` types are operations, not bare paths).
+        The `(term binop)` unnamed-argument form (e.g. `List u8`) is
+        materialised by `_accept_operation` as a `Call`; wrap it in an
+        `Expression` so it matches the parenthesised `(List u8)` shape the type
+        checker already resolves and conforms to the Path-typed parameter /
+        return slots.
+
+        Named-argument generics (`Map u8 value: u32`) are calls, not
+        operations, so they still require parentheses to delimit them from a
+        following parameter -- `_accept_operation` stops at the label.
+
+        Returns NodeX[zast.Path], zast.Error, or None (same shape as the former
+        `_accept_path`, so call sites are unchanged).
+        """
+        res = self._accept_operation(lex)
+        if res is None:
+            return None
+        if res.is_error:
+            return cast(zast.Error, res)
+        res = cast(NodeX[zast.Operation], res)
+        node: zast.Operation = res.node
+        if node.nodetype == NodeType.CALL:
+            node = zast.Expression(expression=node, start=node.start)
+        return NodeX(node=cast(zast.Path, node), extern=res.extern)
 
     def _accept_block(
         self, lex: Lexer

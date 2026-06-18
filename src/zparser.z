@@ -832,6 +832,32 @@ Parser: class {
         return (Option.some (this.operationFromPaths paths: paths lex: lex))
     }
 
+    # parseTyperefOperation -- a parameter / return type parsed as a grammar
+    # `operation` (doc/grammar.pdoc: `in`/`out` types are operations, not bare
+    # paths). The `(term binop)` unnamed-argument form (e.g. `List u8`)
+    # materialises as a Call; wrap it in an Expression so it matches the
+    # parenthesised `(List u8)` shape the type checker already resolves.
+    # Named-argument generics (`Map u8 value: u32`) are calls, not operations,
+    # so operationPaths stops at the label and they still need parentheses.
+    # Mirrors Python `_accept_typeref_operation`.
+    parseTyperefOperation: function {:this lex: zlexer.Lexer} out Node is {
+        paths: this.operationPaths lex: lex
+        n: paths.length
+        if n == 0 then {
+            bad: lex.peek
+            return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected type reference".string)
+        }
+        half: n / 2
+        isCall: (half * 2) == n
+        node: this.operationFromPaths paths: paths lex: lex
+        nerr: this.isError node: node
+        if nerr then return node
+        if isCall then {
+            return (this.wrapExpression inner: node)
+        }
+        return node
+    }
+
     # operation-or-call: the top-level entry that also accepts named
     # arguments. Dispatch on the pre-parsed path count: (count == 1 and
     # the next token is a label) or count is even -> call; else binop.
@@ -1587,7 +1613,7 @@ Parser: class {
                         opName: lblTok.tokstr.copy
                         la: this.atomLookahead lex: lex
                         if la then {
-                            pathNode: this.parsePath lex: lex
+                            pathNode: this.parseTyperefOperation lex: lex
                             pErr: this.isError node: pathNode
                             if pErr then {
                                 params.append pathNode
@@ -1631,7 +1657,7 @@ Parser: class {
             lex.advance
             la: this.atomLookahead lex: lex
             if la then {
-                rt: this.parsePath lex: lex
+                rt: this.parseTyperefOperation lex: lex
                 rErr: this.isError node: rt
                 if rErr then return rt
                 return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.some rt) body: body gotIn: gotIn hasOut: true hasIs: hasIs isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
