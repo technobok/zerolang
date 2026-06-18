@@ -247,6 +247,49 @@ def redundant_suffixes(program):
     return out
 
 
+# ---- elidable first generic-argument name (parse only) -----------------------
+
+# The primary (first) generic parameter of each built-in template — the one
+# name a type specifier may omit (spec.pdoc 825-843). Map keeps `value:`; only
+# its `key:` is elidable. Index 0 ONLY: eliding a later argument's name (Map's
+# `value`, Result's second) would break monomorphisation.
+PRIMARY_GENERIC_PARAM = {
+    "List": "of",
+    "Set": "of",
+    "array": "of",
+    "Map": "key",
+    "option": "t",
+    "optionval": "t",
+    "Option": "t",
+    "OptionView": "t",
+    "Result": "t",
+}
+
+
+def elidable_type_arg_names(target):
+    """Return (line, col, name, valline, valcol) for every type specifier whose
+    first generic argument carries its primary parameter name — the name the
+    spec allows to be omitted. Parse-only, keyed on the built-in template name;
+    an already-elided first arg (`name is None`) is left alone."""
+    out = []
+    for node in walk(target):
+        if node.nodetype != NodeType.CALL:
+            continue
+        call = cast(Call, node)
+        if call.callable is None or call.callable.nodetype != NodeType.ATOMID:
+            continue
+        primary = PRIMARY_GENERIC_PARAM.get(cast(AtomId, call.callable).name)
+        if primary is None or not call.arguments:
+            continue
+        first = call.arguments[0]
+        if first.name != primary:
+            continue
+        nl, nc = pos(first)
+        vl, vc = pos(cast(NamedOperation, first).valtype)
+        out.append((nl, nc, primary, vl, vc))
+    return out
+
+
 # ---- driver ------------------------------------------------------------------
 
 
@@ -255,13 +298,16 @@ def main():
     ap.add_argument("--src", default=os.path.join(REPO_ROOT, "src"))
     ap.add_argument("--list", action="store_true", help="print every violation")
     ap.add_argument("--check", action="store_true", help="exit 1 if any violation")
+    ap.add_argument(
+        "--check-elide", action="store_true", help="also gate elide-name in --check"
+    )
     ap.add_argument("--empty-only", action="store_true", help="skip the suffix check")
     args = ap.parse_args()
 
     units = sorted(
         os.path.splitext(os.path.basename(p))[0] for p in glob.glob(f"{args.src}/*.z")
     )
-    tot_else = tot_then = tot_suf = 0
+    tot_else = tot_then = tot_suf = tot_elide = 0
     for unit in units:
         program = parse_unit(unit, args.src)
         if program is None:
@@ -269,6 +315,7 @@ def main():
             continue
         target = program.units[program.mainunitname]
         e_else, e_then = empty_clauses(target)
+        elides = elidable_type_arg_names(target)
         sufs = []
         if not args.empty_only:
             try:
@@ -278,10 +325,11 @@ def main():
         tot_else += len(e_else)
         tot_then += len(e_then)
         tot_suf += len(sufs)
-        if e_else or e_then or sufs:
+        tot_elide += len(elides)
+        if e_else or e_then or sufs or elides:
             print(
                 f"{unit:14s} empty-else={len(e_else):4d}  empty-then={len(e_then):4d}"
-                f"  suffix={len(sufs):4d}"
+                f"  suffix={len(sufs):4d}  elide-name={len(elides):4d}"
             )
         if args.list:
             for ln, col in sorted(e_else):
@@ -290,12 +338,20 @@ def main():
                 print(f"  src/{unit}.z:{ln}:{col}  empty-then")
             for ln, col, tn in sorted(sufs):
                 print(f"  src/{unit}.z:{ln}:{col}  suffix .{tn}")
-    total = tot_else + tot_then + tot_suf
+            for ln, col, name, *_ in sorted(elides):
+                print(f"  src/{unit}.z:{ln}:{col}  elide-name {name}:")
+    total = tot_else + tot_then + tot_suf + tot_elide
     print(
         f"{'TOTAL':14s} empty-else={tot_else:4d}  empty-then={tot_then:4d}"
-        f"  suffix={tot_suf:4d}  ({total} total)"
+        f"  suffix={tot_suf:4d}  elide-name={tot_elide:4d}  ({total} total)"
     )
-    if args.check and total:
+    # `--check` gates the checks that the corpus already satisfies. `elide-name`
+    # is reported but not gated until the sweep that drives it to zero; passing
+    # `--check-elide` opts into gating it (used once the sweep has landed).
+    gated = tot_else + tot_then + tot_suf
+    if args.check_elide:
+        gated += tot_elide
+    if args.check and gated:
         sys.exit(1)
 
 

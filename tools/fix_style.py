@@ -281,6 +281,46 @@ def negate_swap_empty_then(unit, srcdir, apply):
     return len(keep), skipped
 
 
+def strip_first_generic_name(unit, srcdir, apply):
+    """Elide the redundant primary-parameter name on a type specifier's first
+    generic argument (`(List of: String)` -> `(List String)`). Map keeps
+    `value:`; only `key:` drops. Token-position surgery, right-to-left per line
+    so earlier columns stay valid; the removed span is guard-verified to be the
+    name+colon (plus trailing whitespace). Returns (stripped, skipped)."""
+    program = L.parse_unit(unit, srcdir)
+    if program is None:
+        print(f"{unit}: PARSE-ERROR")
+        return 0, 0
+    target = program.units[program.mainunitname]
+    sites = L.elidable_type_arg_names(target)
+    path = os.path.join(srcdir, f"{unit}.z")
+    lines = read_lines(path)
+    by_line = {}
+    skipped = 0
+    for ln, col, name, vln, vcol in sites:
+        if vln != ln:
+            print(f"  SKIP src/{unit}.z:{ln}:{col} '{name}:' spans lines")
+            skipped += 1
+            continue
+        by_line.setdefault(ln, []).append((col, name, vcol))
+    stripped = 0
+    for ln, items in by_line.items():
+        s = lines[ln - 1]
+        for col, name, vcol in sorted(items, reverse=True):
+            removed = s[col - 1 : vcol - 1]
+            prefix = name + ":"
+            if not (removed.startswith(prefix) and removed[len(prefix) :].strip() == ""):
+                print(f"  SKIP src/{unit}.z:{ln}:{col} expected '{name}: ' got {removed!r}")
+                skipped += 1
+                continue
+            s = s[: col - 1] + s[vcol - 1 :]
+            stripped += 1
+        lines[ln - 1] = s
+    if apply and stripped:
+        write_lines(path, lines)
+    return stripped, skipped
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.path.join(os.getcwd(), "src"))
@@ -288,6 +328,7 @@ def main():
     ap.add_argument("--suffix", action="store_true", help="strip redundant suffixes")
     ap.add_argument("--empty-then", action="store_true", help="negate+swap empty then")
     ap.add_argument("--empty-else", action="store_true", help="delete empty else {}")
+    ap.add_argument("--elide-name", action="store_true", help="elide first generic arg name")
     ap.add_argument("--apply", action="store_true", help="write changes")
     args = ap.parse_args()
 
@@ -317,6 +358,12 @@ def main():
             n, sk = delete_empty_else(unit, args.src, args.apply)
             if n or sk:
                 print(f"{unit:14s} else-delete={n:4d}  skip={sk:3d}")
+            tot_fix += n
+            tot_skip += sk
+        if args.elide_name:
+            n, sk = strip_first_generic_name(unit, args.src, args.apply)
+            if n or sk:
+                print(f"{unit:14s} elide-name={n:4d}  skip={sk:3d}")
             tot_fix += n
             tot_skip += sk
     verb = "fixed" if args.apply else "would fix"

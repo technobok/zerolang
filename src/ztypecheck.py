@@ -718,10 +718,20 @@ class TypeChecker:
                 err = ERR.CALLERROR
             else:
                 err = ERR.TYPEERROR
+        start = loc or zast._ERROR_TOKEN
+        # A type specifier can be resolved several times (signature, body,
+        # generator lowering); emit each distinct diagnostic only once.
+        for prev in self.errors:
+            ps = prev.start
+            if (
+                prev.msg == msg
+                and ps.lineno == start.lineno
+                and ps.colno == start.colno
+                and ps.fsno == start.fsno
+            ):
+                return
         self.errors.append(
-            zast.Error(
-                start=loc or zast._ERROR_TOKEN, err=err, msg=msg, note=note, hint=hint
-            )
+            zast.Error(start=start, err=err, msg=msg, note=note, hint=hint)
         )
 
     def _set_child(self, parent: ZType, name: str, child: ZType) -> None:
@@ -1904,15 +1914,6 @@ class TypeChecker:
         call_node = cast(zast.Call, inner)
         gives_arg: Optional[zast.NamedOperation] = None
         for arg in call_node.arguments:
-            if arg.name == "takes":  # ztc-string-compare-ok: legacy iterator arg name
-                self._error(
-                    "'takes:' on an Iterator return type was renamed "
-                    "to 'accepts:' (to remove the collision with the "
-                    "'.take' ownership method). Replace 'takes:' with "
-                    "'accepts:'.",
-                    loc=arg.start,
-                    err=ERR.BADARGUMENT,
-                )
             if arg.name == "gives":  # noqa: E501  ztc-string-compare-ok: iterator gives arg name
                 gives_arg = arg
         if gives_arg is None:
@@ -4371,20 +4372,58 @@ class TypeChecker:
 
         generic_args: dict[str, ZType] = {}
         has_unresolved = False
-        for arg in call.arguments:
-            if not arg.name or arg.name not in template.generic_params:
-                continue
+        param_names = list(template.generic_params)
+        for i, arg in enumerate(call.arguments):
+            # The primary (first) generic argument's name may be omitted; every
+            # other argument must be named. No argument is silently dropped:
+            # each binds to a generic parameter or raises an error.
+            if arg.name is None:
+                if i != 0:
+                    self._error(
+                        f"only the first type argument of '{template.name}' "
+                        "may omit its name",
+                        loc=arg.start,
+                    )
+                    return None
+                eff_name = param_names[0]
+            else:
+                eff_name = arg.name
+                if eff_name not in template.generic_params:
+                    if eff_name == "takes":  # ztc-string-compare-ok: migration
+                        # The Iterator 'takes:' generic arg was renamed to
+                        # 'accepts:' (to free the '.take' ownership method).
+                        self._error(
+                            "'takes:' on an Iterator return type was renamed "
+                            "to 'accepts:' (to remove the collision with the "
+                            "'.take' ownership method). Replace 'takes:' with "
+                            "'accepts:'.",
+                            loc=arg.start,
+                            err=ERR.BADARGUMENT,
+                        )
+                    else:
+                        suggestion = _suggest_similar(
+                            eff_name, list(template.generic_params)
+                        )
+                        self._error(
+                            f"unknown type argument '{eff_name}' for "
+                            f"generic type '{template.name}'",
+                            loc=arg.start,
+                            hint=(
+                                f"did you mean '{suggestion}:'?" if suggestion else None
+                            ),
+                        )
+                    return None
             # numeric generic param: resolve as numeric value
-            if arg.name in template.numeric_generic_params:
+            if eff_name in template.numeric_generic_params:
                 arg_type = self._resolve_numeric_generic_arg(
-                    arg.valtype, template.generic_params[arg.name].name, loc=call.start
+                    arg.valtype, template.generic_params[eff_name].name, loc=call.start
                 )
                 if arg_type:
-                    generic_args[arg.name] = arg_type
+                    generic_args[eff_name] = arg_type
                 else:
                     has_unresolved = True
                 continue
-            # resolve the type arg — could be a concrete type or a generic param
+            # resolve the type arg — a concrete type or a generic param
             if arg.valtype.nodetype not in (
                 NodeType.ATOMID,
                 NodeType.DOTTEDPATH,
@@ -4392,10 +4431,15 @@ class TypeChecker:
                 NodeType.EXPRESSION,
                 NodeType.LABELVALUE,
             ):
-                continue
+                self._error(
+                    f"type argument '{eff_name}' for generic type "
+                    f"'{template.name}' is not a type",
+                    loc=arg.start,
+                )
+                return None
             arg_type = self._resolve_typeref(cast(zast.Path, arg.valtype))
             if arg_type:
-                generic_args[arg.name] = arg_type
+                generic_args[eff_name] = arg_type
             else:
                 has_unresolved = True
 
@@ -6752,6 +6796,47 @@ class TypeChecker:
                 return t
         return None
 
+    def _elided_first_generic_arg(
+        self, template: ZType, call: zast.Call
+    ) -> Optional[tuple[str, ZType]]:
+        """The primary generic parameter bound from an elided (unnamed) leading
+        argument, or None. The spec permits omitting only the first generic
+        argument's name, so in a construction `(List String)` binds element
+        type `String` to `of` exactly as `(List of: String)` would. Returns
+        None when the first arg is named, when the template has no primary
+        parameter, or when the leading value is not a type — a user-generic
+        value construction like `(box 5)` falls through to value inference."""
+        if not call.arguments or call.arguments[0].name is not None:
+            return None
+        param_names = list(template.generic_params)
+        if not param_names:
+            return None
+        primary = param_names[0]
+        if primary in template.numeric_generic_params:
+            return None
+        cand = self._resolve_typeref_from_operation(call.arguments[0].valtype)
+        if cand is None:
+            return None
+        return (primary, cand)
+
+    def _construction_has_value_args(self, callee_type: ZType, call: zast.Call) -> bool:
+        """True if a generic construction carries value arguments, as opposed to
+        a type-args-only invocation (`(myrec t: i64)`) that returns the mono
+        type. An elided first generic argument (unnamed but naming a type) is a
+        type arg, not a value arg, so it does not force the value-arg path."""
+        if any(
+            arg.name not in callee_type.generic_params
+            for arg in call.arguments
+            if arg.name
+        ):
+            return True
+        elided = self._elided_first_generic_arg(callee_type, call)
+        return any(
+            not arg.name
+            for i, arg in enumerate(call.arguments)
+            if not (i == 0 and elided is not None)
+        )
+
     def _infer_generic_record_construction(
         self, template: ZType, call: zast.Call
     ) -> Optional[ZType]:
@@ -6766,8 +6851,13 @@ class TypeChecker:
                 field_to_gparam[child_name] = child_type.name
             field_names.append(child_name)
 
+        elided = self._elided_first_generic_arg(template, call)
         positional_idx = 0
-        for arg in call.arguments:
+        for i, arg in enumerate(call.arguments):
+            # the first generic argument's name may be elided (`(List String)`)
+            if i == 0 and elided is not None:
+                generic_args[elided[0]] = elided[1]
+                continue
             # explicit generic arg: named arg matching a generic param
             if arg.name and arg.name in template.generic_params:
                 if arg.name in template.numeric_generic_params:
@@ -9393,11 +9483,7 @@ class TypeChecker:
                 self.typing.node_type[call.nodeid] = mono_type
                 self.typing.node_type[call.callable.nodeid] = mono_type
                 self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
-                has_value_args = any(
-                    arg.name not in callee_type.generic_params
-                    for arg in call.arguments
-                    if arg.name
-                ) or any(not arg.name for arg in call.arguments)
+                has_value_args = self._construction_has_value_args(callee_type, call)
                 if not has_value_args:
                     # Type-args-only invocation: return the mono type
                     # without value-arg processing.
@@ -9488,11 +9574,7 @@ class TypeChecker:
                 self.typing.node_type[call.nodeid] = mono_type
                 self.typing.node_type[call.callable.nodeid] = mono_type
                 self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
-                has_value_args = any(
-                    arg.name not in callee_type.generic_params
-                    for arg in call.arguments
-                    if arg.name
-                ) or any(not arg.name for arg in call.arguments)
+                has_value_args = self._construction_has_value_args(callee_type, call)
                 # Type-args-only invocation (e.g. `(myrec t: i64)` as a
                 # partial-instantiation expression) returns the mono
                 # type as a value without going through value-arg

@@ -13481,6 +13481,55 @@ class TestIteratorReturnType:
         assert rt_zt.generic_origin.name == "OptionView"
 
 
+class TestFirstArgNameElision:
+    """The spec allows a generic type specifier or construction to omit the
+    name of its first (primary) generic argument: `(List String)` ==
+    `(List of: String)`. The elided form must resolve in every position —
+    type annotations AND value constructions — and any further argument must
+    still be named (no argument is silently dropped)."""
+
+    def test_elided_param_type(self):
+        check_ok("f: function {o: (List String)} is {}\nmain: function is {}")
+
+    def test_elided_return_type(self):
+        check_ok("f: function out (List String) is { return (List String) }")
+
+    def test_elided_class_field(self):
+        check_ok("C: class { xs: (List String) }\nmain: function is {}")
+
+    def test_elided_local_construction(self):
+        check_ok("f: function is { xs: (List String) }\nmain: function is {}")
+
+    def test_elided_map_keeps_value_name(self):
+        check_ok("f: function is { m: (Map String value: u64) }\nmain: function is {}")
+
+    def test_elided_set_construction(self):
+        check_ok("f: function is { s: (Set u64) }\nmain: function is {}")
+
+    def test_elided_nested_type_arg(self):
+        check_ok(
+            "f: function {o: (Map String value: (List String))} is {}\n"
+            "main: function is {}"
+        )
+
+    def test_named_form_still_resolves(self):
+        check_ok("f: function {o: (List of: String)} is {}\nmain: function is {}")
+
+    def test_unknown_arg_name_errors(self):
+        """An argument whose name matches no generic parameter is an error,
+        not a silent drop."""
+        errors = check_errors("f: function {o: (List foo: String)} is {}")
+        assert any("foo" in e.msg for e in errors), [e.msg for e in errors]
+
+    def test_trailing_positional_after_named_errors(self):
+        """Only the first generic argument may be positional. A trailing
+        positional after a named arg is folded by the parser into that arg's
+        value (a binop), which is not a type — so it errors rather than being
+        silently accepted."""
+        errors = check_errors("f: function {o: (Map key: String i64)} is {}")
+        assert any("not a type" in e.msg for e in errors), [e.msg for e in errors]
+
+
 class TestGeneratorDesugaring:
     """Phase G3: desugar generator functions into a synthesized
     iterator class + factory pair.
