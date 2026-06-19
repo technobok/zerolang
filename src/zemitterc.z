@@ -6965,6 +6965,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     emitIoStdStreams symtab: symtab ctx: ctx buf: buf
     emitRuntimeCli symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRuntimeOs symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    emitUserStructsOrdered symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
     buf.append fnsBuf.stringview
     buf.append "int main(int argc, char* argv[]) {\n"
@@ -7625,7 +7626,6 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     mcr: cUpperOf text: nm.stringview
     elemName: monoElemName full: mn prefixLen: 4
     itemT: cTypeForName symtab: symtab ctx: ctx name: elemName.stringview
-    preEmitColUserType symtab: symtab ctx: ctx name: elemName.stringview buf: buf
     isStr: elemName.stringview == "String"
     ovName: "OptionView_\{elemName}".string
     ovId: monoIdByName symtab: symtab name: ovName.stringview
@@ -7790,8 +7790,6 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     ovu: cUpperOf text: ovName.stringview
     keyName: mapKeyName full: mn vlen: valName.length
     keyT: cTypeForName symtab: symtab ctx: ctx name: keyName.stringview
-    preEmitColUserType symtab: symtab ctx: ctx name: valName.stringview buf: buf
-    preEmitColUserType symtab: symtab ctx: ctx name: keyName.stringview buf: buf
     keyIsStr: keyName.stringview == "String"
     hashKeyBody: setHashBody isStr: keyIsStr
     keysEqBody: setEqBody isStr: keyIsStr
@@ -8562,14 +8560,34 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     }
                 } case none then {}
             } else {
-                if mo.length > 0 when (symtab.reg.hasDestructorName typeId: t) then {
+                fwdM9: false
+                if mo.length > 0 then {
+                    if (symtab.reg.hasDestructorName typeId: t) then {
+                        fwdM9 = true
+                    }
+                    if mo.stringview == "List" then {
+                        fwdM9 = true
+                    }
+                    if mo.stringview == "ListView" then {
+                        fwdM9 = true
+                    }
+                    if mo.stringview == "Set" then {
+                        fwdM9 = true
+                    }
+                    if mo.stringview == "Map" then {
+                        fwdM9 = true
+                    }
+                }
+                if fwdM9 then {
                     tnX: typeNameOfReg9 symtab: symtab tid: t
                     cnX: cnameOf tid: t name: tnX.stringview
                     ctx.fwdDeclaredTypes.set key: t.u64 value: true
                     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
                     buf.append lx0.stringview
-                    lx1: "static void \{cnX}_destroy(\{cnX}_t* p);\n"
-                    buf.append lx1.stringview
+                    if (symtab.reg.hasDestructorName typeId: t) then {
+                        lx1: "static void \{cnX}_destroy(\{cnX}_t* p);\n"
+                        buf.append lx1.stringview
+                    }
                 }
             }
         }
@@ -8577,8 +8595,469 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
     }
 }
 
+# monoMapKV -- a Map/MapEntry mono's value + key type ids. The port has no
+# concrete generic-arg rows on monos (setGenericArg stamps a 0 placeholder), so
+# resolve the value via the get-return OptionView's element name and the key via
+# the mangled-name remainder, mirroring emitMapMono.
+monoMapKV: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    go: symtab.typing.childOf parentTypeId: monoId name: "get"
+    match (
+        go
+    ) case some then {
+        gt: symtab.reg.typeById.get key: go
+        match (
+            gt
+        ) case some then {
+            rto: gt.returnTypeId
+            match (
+                rto
+            ) case some then {
+                ovName: typeNameOfReg9 symtab: symtab tid: rto
+                ovOrigin: monoOriginName symtab: symtab tid: rto
+                ovPrefixLen: ovOrigin.length + 1
+                valName: monoElemName full: ovName prefixLen: ovPrefixLen
+                vid: resolveTypeIdByName symtab: symtab ctx: ctx name: valName.stringview
+                if vid > 0 then {
+                    acc.append vid
+                }
+                keyName: mapKeyName full: mn vlen: valName.length
+                kid: resolveTypeIdByName symtab: symtab ctx: ctx name: keyName.stringview
+                if kid > 0 then {
+                    acc.append kid
+                }
+            } case none then {}
+        } case none then {}
+    } case none then {}
+}
+
+# monoElemIdsOf -- the type ids a collection/wrapper mono references by its
+# element/key/value (List/ListView/Set/Map) or arm payloads (optionval/resultval/
+# Option/Result/OptionView), or its fields for a user-generic record/class mono.
+# Used by the early/late split to find which monos embed a user type.
+monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
+    origin: monoOriginName symtab: symtab tid: monoId
+    isLV: false
+    if origin.stringview == "List" then {
+        isLV = true
+    }
+    if origin.stringview == "ListView" then {
+        isLV = true
+    }
+    if isLV then {
+        e: listElemType symtab: symtab monoId: monoId
+        if e > 0 then {
+            acc.append e
+        }
+        return
+    }
+    if origin.stringview == "Set" then {
+        snm: typeNameOfReg9 symtab: symtab tid: monoId
+        en: monoElemName full: snm prefixLen: 4
+        eid: resolveTypeIdByName symtab: symtab ctx: ctx name: en.stringview
+        if eid > 0 then {
+            acc.append eid
+        }
+        return
+    }
+    if origin.stringview == "Map" then {
+        monoMapKV symtab: symtab ctx: ctx monoId: monoId acc: acc
+        return
+    }
+    isWrap: false
+    if origin.stringview == "optionval" then {
+        isWrap = true
+    }
+    if origin.stringview == "resultval" then {
+        isWrap = true
+    }
+    if origin.stringview == "Option" then {
+        isWrap = true
+    }
+    if origin.stringview == "Result" then {
+        isWrap = true
+    }
+    if origin.stringview == "OptionView" then {
+        isWrap = true
+    }
+    if isWrap then {
+        anames: (List String)
+        aids: (List u64)
+        variantArms symtab: symtab tid: monoId names: anames ids: aids
+        ai: 0.u64
+        an: aids.length
+        for while ai < an loop {
+            av: aids.get i: ai
+            acc.append av
+            ai = ai + 1
+        }
+        return
+    }
+    fnames: (List String)
+    fids: (List u64)
+    recFieldLists symtab: symtab tid: monoId names: fnames ids: fids
+    fi: 0.u64
+    fn: fids.length
+    for while fi < fn loop {
+        fv: fids.get i: fi
+        acc.append fv
+        fi = fi + 1
+    }
+}
+
+# buildUserTypeList -- the file-unit (main + dep) struct types: RECORD / CLASS /
+# UNION / VARIANT that are not monos and not generic templates. A mono embedding
+# one of these by value must be emitted after it.
+buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx acc: List u64} is {
+    last: symtab.reg.nextTypeId
+    t: 0.u64
+    for while t < last loop {
+        tt: symtab.reg.typetypeOf typeId: t
+        isStruct: false
+        if tt == ztypes.ztypetype.RECORD then {
+            isStruct = true
+        }
+        if tt == ztypes.ztypetype.CLASS then {
+            isStruct = true
+        }
+        if tt == ztypes.ztypetype.UNION then {
+            isStruct = true
+        }
+        if tt == ztypes.ztypetype.VARIANT then {
+            isStruct = true
+        }
+        if isStruct then {
+            mo: monoOriginName symtab: symtab tid: t
+            gen: isGenericType symtab: symtab tid: t
+            if mo.length == 0 when gen == false then {
+                duo: symtab.typing.definedInUnit.get key: t
+                match (
+                    duo
+                ) case some then {
+                    if (isEmittableFileUnit name: duo.stringview) then {
+                        acc.append t.u64
+                    }
+                } case none then {}
+            }
+        }
+        t = t + 1
+    }
+}
+
+# monoDependsOnUser -- does the mono's layout reference a user type, directly or
+# through a nested mono? Mirrors the reference _mono_depends_on_user; the seen
+# list breaks cycles through boxed monos.
+monoDependsOnUser: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 userList: List u64 seen: List u64} out bool is {
+    if (seen.contains item: monoId) then {
+        return false
+    }
+    seen.append monoId.u64
+    elems: (List u64)
+    monoElemIdsOf symtab: symtab ctx: ctx monoId: monoId acc: elems
+    ei: 0.u64
+    en: elems.length
+    for while ei < en loop {
+        eid: elems.get i: ei
+        ceid: fieldMonoId symtab: symtab ctx: ctx tid: eid
+        if (userList.contains item: ceid) then {
+            return true
+        }
+        emo: monoOriginName symtab: symtab tid: ceid
+        if emo.length > 0 then {
+            if (monoDependsOnUser symtab: symtab ctx: ctx monoId: ceid userList: userList seen: seen) then {
+                return true
+            }
+        }
+        ei = ei + 1
+    }
+    return false
+}
+
+# monoIsLate -- the mono embeds a user type by value (a fresh seen per query).
+monoIsLate: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 userList: List u64} out bool is {
+    seen: (List u64)
+    return (monoDependsOnUser symtab: symtab ctx: ctx monoId: monoId userList: userList seen: seen)
+}
+
+# userDefnRefsUnemitted -- does the user type have a by-value field whose type is
+# in groupList but not yet in emittedList? Map/Set fields are heap pointers in the
+# port (fwd-decl suffices) so they impose no ordering edge; a UNION is boxed so it
+# is never dragged by its own arms. Passing an empty emittedList answers the plain
+# "references any group member" question used by the late-type closure.
+userDefnRefsUnemitted: function {symtab: zenv.ZSymbolTable ctx: Ctx typeId: u64 groupList: List u64 emittedList: List u64} out bool is {
+    tt: symtab.reg.typetypeOf typeId: typeId
+    if tt == ztypes.ztypetype.UNION then {
+        return false
+    }
+    fnames: (List String)
+    fids: (List u64)
+    if tt == ztypes.ztypetype.VARIANT then {
+        variantArms symtab: symtab tid: typeId names: fnames ids: fids
+    } else {
+        recFieldLists symtab: symtab tid: typeId names: fnames ids: fids
+    }
+    fi: 0.u64
+    fn: fids.length
+    for while fi < fn loop {
+        fid: fids.get i: fi
+        cfid: fieldMonoId symtab: symtab ctx: ctx tid: fid
+        skip: isHeapPtrCollection symtab: symtab ctx: ctx tid: fid
+        if skip == false then {
+            if (groupList.contains item: cfid) then {
+                if (emittedList.contains item: cfid) == false then {
+                    return true
+                }
+            }
+        }
+        fi = fi + 1
+    }
+    return false
+}
+
+# monoLateDepsMet -- every late-group member the mono references by value is
+# already emitted (so the mono can be emitted now).
+monoLateDepsMet: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 groupList: List u64 emittedList: List u64 seen: List u64} out bool is {
+    if (seen.contains item: monoId) then {
+        return true
+    }
+    seen.append monoId.u64
+    elems: (List u64)
+    monoElemIdsOf symtab: symtab ctx: ctx monoId: monoId acc: elems
+    ei: 0.u64
+    en: elems.length
+    for while ei < en loop {
+        eid: elems.get i: ei
+        ceid: fieldMonoId symtab: symtab ctx: ctx tid: eid
+        if (groupList.contains item: ceid) then {
+            if (emittedList.contains item: ceid) == false then {
+                return false
+            }
+        }
+        emo: monoOriginName symtab: symtab tid: ceid
+        if emo.length > 0 then {
+            if (monoLateDepsMet symtab: symtab ctx: ctx monoId: ceid groupList: groupList emittedList: emittedList seen: seen) == false then {
+                return false
+            }
+        }
+        ei = ei + 1
+    }
+    return true
+}
+
+# emitUserTypeById -- emit one user RECORD/CLASS/UNION/VARIANT/PROTOCOL struct by
+# id, with ctx.mainName set to its defining unit (cross-unit create macros and
+# resolution read it). Idempotent via ctx.emittedUserTypes inside each emitter.
+emitUserTypeById: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: String.borrow} is {
+    nm: typeNameOfReg9 symtab: symtab tid: tid
+    if nm.length == 0 then {
+        return
+    }
+    duo: symtab.typing.definedInUnit.get key: tid
+    sm: ctx.mainName.copy
+    match (
+        duo
+    ) case some then {
+        ctx.mainName = duo.copy
+    } case none then {}
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.VARIANT then {
+        emitOneVariant symtab: symtab ctx: ctx tid: tid name: nm.stringview buf: buf
+    }
+    if tt == ztypes.ztypetype.RECORD then {
+        emitOneRecord symtab: symtab ctx: ctx tid: tid name: nm.stringview buf: buf
+    }
+    if tt == ztypes.ztypetype.CLASS then {
+        emitOneRecord symtab: symtab ctx: ctx tid: tid name: nm.stringview buf: buf
+    }
+    if tt == ztypes.ztypetype.UNION then {
+        emitUnionMono symtab: symtab ctx: ctx tid: tid name: nm.stringview buf: buf
+    }
+    if tt == ztypes.ztypetype.PROTOCOL then {
+        emitOneProtocol symtab: symtab ctx: ctx tid: tid name: nm.stringview buf: buf
+    }
+    ctx.mainName = sm
+}
+
+# emitMonoById -- emit one late collection/variant mono by id (dispatch on origin).
+emitMonoById: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    origin: monoOriginName symtab: symtab tid: monoId
+    if origin.stringview == "optionval" then {
+        nm: typeNameOfReg9 symtab: symtab tid: monoId
+        emitOneVariant symtab: symtab ctx: ctx tid: monoId name: nm.stringview buf: buf
+        return
+    }
+    if origin.stringview == "resultval" then {
+        nm2: typeNameOfReg9 symtab: symtab tid: monoId
+        emitOneVariant symtab: symtab ctx: ctx tid: monoId name: nm2.stringview buf: buf
+        return
+    }
+    if origin.stringview == "ListView" then {
+        emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
+        return
+    }
+    if origin.stringview == "List" then {
+        emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
+        return
+    }
+    if origin.stringview == "Set" then {
+        emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
+        return
+    }
+    if origin.stringview == "Map" then {
+        emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
+        return
+    }
+}
+
+# emitUserStructsOrdered -- emit user struct defs and the collection monos that
+# embed them by value in dependency order, resolving the bidirectional
+# constraint: a user record embeds an early (system-element) mono, while a late
+# mono embeds a user type. Order: protocols -> early-user structs -> a fixpoint
+# interleaving late monos and late-user structs. Mirrors the reference emitter's
+# early/late split + fixpoint (zemitterc.py). The early collection monos and the
+# system scaffolding are already emitted by emitMonos; this owns user struct
+# layout (emitRecordDefsIn phase 1 no longer emits structs).
+# collectLateMonosKind -- append late monos of one origin to acc. Called in
+# kind-priority order so a mono returned by value by another (List.listview ->
+# ListView, Map.get -> optionval) is collected, and thus emitted, before it.
+collectLateMonosKind: function {symtab: zenv.ZSymbolTable ctx: Ctx kind: StringView userList: List u64 acc: List u64 last: u64} is {
+    tm: 0.u64
+    for while tm < last loop {
+        tmo: monoOriginName symtab: symtab tid: tm
+        if tmo.stringview == kind then {
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tm userList: userList) then {
+                acc.append tm.u64
+            }
+        }
+        tm = tm + 1
+    }
+}
+
+emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
+    last: symtab.reg.nextTypeId
+    userList: (List u64)
+    buildUserTypeList symtab: symtab ctx: ctx acc: userList
+    # user PROTOCOLs upfront (fat pointer; no by-value user embedding)
+    tp: 0.u64
+    for while tp < last loop {
+        if (symtab.reg.typetypeOf typeId: tp) == ztypes.ztypetype.PROTOCOL then {
+            pgen: isGenericType symtab: symtab tid: tp
+            pmo: monoOriginName symtab: symtab tid: tp
+            if pmo.length == 0 when pgen == false then {
+                pduo: symtab.typing.definedInUnit.get key: tp
+                match (
+                    pduo
+                ) case some then {
+                    if (isEmittableFileUnit name: pduo.stringview) then {
+                        emitUserTypeById symtab: symtab ctx: ctx tid: tp buf: buf
+                    }
+                } case none then {}
+            }
+        }
+        tp = tp + 1
+    }
+    # late collection/variant monos (the by-value kinds embedding a user type)
+    lateGroup: (List u64)
+    collectLateMonosKind symtab: symtab ctx: ctx kind: "optionval" userList: userList acc: lateGroup last: last
+    collectLateMonosKind symtab: symtab ctx: ctx kind: "resultval" userList: userList acc: lateGroup last: last
+    collectLateMonosKind symtab: symtab ctx: ctx kind: "ListView" userList: userList acc: lateGroup last: last
+    collectLateMonosKind symtab: symtab ctx: ctx kind: "List" userList: userList acc: lateGroup last: last
+    collectLateMonosKind symtab: symtab ctx: ctx kind: "Set" userList: userList acc: lateGroup last: last
+    collectLateMonosKind symtab: symtab ctx: ctx kind: "Map" userList: userList acc: lateGroup last: last
+    # closure: a user struct embedding a late-group member by value is late too
+    emptyList: (List u64)
+    changed: true
+    for while changed loop {
+        changed = false
+        ui: 0.u64
+        un: userList.length
+        for while ui < un loop {
+            uid: userList.get i: ui
+            if (lateGroup.contains item: uid) == false then {
+                if (userDefnRefsUnemitted symtab: symtab ctx: ctx typeId: uid groupList: lateGroup emittedList: emptyList) then {
+                    lateGroup.append uid.u64
+                    changed = true
+                }
+            }
+            ui = ui + 1
+        }
+    }
+    # early-user structs: users not in the late group, in type-id order
+    # (preEmitEmbeddedTypes inside each emitter fixes intra-pass user->user order)
+    e0: 0.u64
+    n0: userList.length
+    for while e0 < n0 loop {
+        uid0: userList.get i: e0
+        if (lateGroup.contains item: uid0) == false then {
+            emitUserTypeById symtab: symtab ctx: ctx tid: uid0 buf: buf
+        }
+        e0 = e0 + 1
+    }
+    # fixpoint: emit late monos + late-user structs in dependency order
+    emittedList: (List u64)
+    totalPend: lateGroup.length
+    emittedCount: 0.u64
+    done: false
+    stuck: false
+    for while done == false loop {
+        progressed: false
+        pi: 0.u64
+        pn: lateGroup.length
+        for while pi < pn loop {
+            x: lateGroup.get i: pi
+            if (emittedList.contains item: x) == false then {
+                xorigin: monoOriginName symtab: symtab tid: x
+                if xorigin.length > 0 then {
+                    seen: (List u64)
+                    if (monoLateDepsMet symtab: symtab ctx: ctx monoId: x groupList: lateGroup emittedList: emittedList seen: seen) then {
+                        emitMonoById symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: x buf: buf
+                        emittedList.append x.u64
+                        emittedCount = emittedCount + 1
+                        progressed = true
+                    }
+                } else {
+                    if (userDefnRefsUnemitted symtab: symtab ctx: ctx typeId: x groupList: lateGroup emittedList: emittedList) == false then {
+                        emitUserTypeById symtab: symtab ctx: ctx tid: x buf: buf
+                        emittedList.append x.u64
+                        emittedCount = emittedCount + 1
+                        progressed = true
+                    }
+                }
+            }
+            pi = pi + 1
+        }
+        if emittedCount >= totalPend then {
+            done = true
+        } else {
+            if progressed == false then {
+                done = true
+                stuck = true
+            }
+        }
+    }
+    if stuck then {
+        f0: 0.u64
+        f1: lateGroup.length
+        for while f0 < f1 loop {
+            x2: lateGroup.get i: f0
+            if (emittedList.contains item: x2) == false then {
+                xo2: monoOriginName symtab: symtab tid: x2
+                if xo2.length > 0 then {
+                    emitMonoById symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: x2 buf: buf
+                } else {
+                    emitUserTypeById symtab: symtab ctx: ctx tid: x2 buf: buf
+                }
+                emittedList.append x2.u64
+            }
+            f0 = f0 + 1
+        }
+    }
+}
+
 emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     last: symtab.reg.nextTypeId
+    userListM: (List u64)
+    buildUserTypeList symtab: symtab ctx: ctx acc: userListM
     emitCliFwdDecls symtab: symtab ctx: ctx buf: buf
     emitMainFwdDecls symtab: symtab ctx: ctx buf: buf
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
@@ -8698,8 +9177,10 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         if oonm.stringview == "optionval" then { isVm = true }
         if oonm.stringview == "resultval" then { isVm = true }
         if isVm then {
-            oovn: typeNameOfReg9 symtab: symtab tid: tido
-            emitOneVariant symtab: symtab ctx: ctx tid: tido name: oovn.stringview buf: buf
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tido userList: userListM) == false then {
+                oovn: typeNameOfReg9 symtab: symtab tid: tido
+                emitOneVariant symtab: symtab ctx: ctx tid: tido name: oovn.stringview buf: buf
+            }
         }
         tido = tido + 1
     }
@@ -8731,32 +9212,15 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         }
         tiov = tiov + 1
     }
-    # element types first: a main-unit user type used as a List/ListView element
-    # is embedded by value, so its struct must precede the collection mono.
-    # Iterating all monos covers nesting (a List of List_T processes List_T too).
-    tpe: 0.u64
-    for while tpe < last loop {
-        peo: monoOriginName symtab: symtab tid: tpe
-        isCol9: false
-        if peo.stringview == "List" then {
-            isCol9 = true
-        }
-        if peo.stringview == "ListView" then {
-            isCol9 = true
-        }
-        if isCol9 then {
-            elemId9: listElemType symtab: symtab monoId: tpe
-            maybePreEmitElem symtab: symtab ctx: ctx eid: elemId9 buf: buf
-        }
-        tpe = tpe + 1
-    }
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
     tid: 0.u64
     for while tid < last loop {
         onm: monoOriginName symtab: symtab tid: tid
         if onm.stringview == "ListView" then {
-            emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tid userList: userListM) == false then {
+                emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
+            }
         }
         tid = tid + 1
     }
@@ -8764,7 +9228,9 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     for while tid2 < last loop {
         onm2: monoOriginName symtab: symtab tid: tid2
         if onm2.stringview == "List" then {
-            emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid2 buf: buf
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tid2 userList: userListM) == false then {
+                emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid2 buf: buf
+            }
         }
         tid2 = tid2 + 1
     }
@@ -8774,7 +9240,9 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     for while tset < last loop {
         snm: monoOriginName symtab: symtab tid: tset
         if snm.stringview == "Set" then {
-            emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tset buf: buf
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tset userList: userListM) == false then {
+                emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tset buf: buf
+            }
         }
         tset = tset + 1
     }
@@ -8784,7 +9252,9 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     for while tmap < last loop {
         mnm: monoOriginName symtab: symtab tid: tmap
         if mnm.stringview == "Map" then {
-            emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tmap buf: buf
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tmap userList: userListM) == false then {
+                emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tmap buf: buf
+            }
         }
         tmap = tmap + 1
     }
