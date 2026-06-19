@@ -362,6 +362,7 @@ collectLiterals: function {n: Node ids: List u64 texts: List String} is {
     } case namedoperation then {
         collectLiterals n: n.operation ids: ids texts: texts
     } case call then {
+        collectLiterals n: n.callable ids: ids texts: texts
         aiter: n.arguments.iterate
         for a: aiter loop {
             collectLiterals n: a ids: ids texts: texts
@@ -1011,6 +1012,22 @@ dottedBaseNodeId: function {n: Node} out u64 is {
     }
 }
 
+# isSvParseNative -- a StringView parse native (parseF64/I64/U64) returning a
+# resultval. Dispatched via ctx.svC so the canonical StringView cname is used
+# (not a shell id stamped on a nested `.stringview` projection).
+isSvParseNative: function {name: StringView} out bool is {
+    if name == "parseF64" then {
+        return true
+    }
+    if name == "parseI64" then {
+        return true
+    }
+    if name == "parseU64" then {
+        return true
+    }
+    return false
+}
+
 # svNativeName -- the simple StringView-native set C2b supports (the
 # pointer-arg predicates and trims; indexOf/byteAt wait on optionval
 # struct emission).
@@ -1063,6 +1080,16 @@ svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         an: n.name.stringview
         a2: "&\{an}"
         return a2
+    } case dottedpath then {
+        dpm: atomTextOf n: n.child
+        if dpm.stringview == "stringview" then {
+            pe: emitExpr symtab: symtab ctx: ctx n: n.parent
+            pt: stampNameOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+            sv: svValueForm ctx: ctx expr: pe.stringview tname: pt.stringview
+            a3: "&\{sv}"
+            return a3
+        }
+        return "".string
     } else {
         return "".string
     }
@@ -1136,6 +1163,12 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         needsAdd ctx: ctx name: "sv_lines"
         el9: "\{ctx.svC}_lines(&\{bn})"
         return el9
+    }
+    if (isStringy name: bt.stringview) when (isSvParseNative name: mn.stringview) then {
+        bfp9: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
+        needsAdd ctx: ctx name: mn.stringview
+        epn9: "\{ctx.svC}_\{mn}(&\{bfp9})"
+        return epn9
     }
     if (isStringy name: bt.stringview) when (isSvArgNative name: mn.stringview) then {
         bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
@@ -1768,17 +1801,17 @@ emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     btn: typeNameOfReg9 symtab: symtab tid: bt
     cb: cnameOf tid: bt name: btn.stringview
     if mn.stringview == "add" then {
-        v: listArg symtab: symtab ctx: ctx call: call label: "item"
+        v: colArg symtab: symtab ctx: ctx call: call label: "item" consumes: true
         e0: "\{cb}_add(\{bn}, \{v})"
         return e0
     }
     if mn.stringview == "has" then {
-        v: listArg symtab: symtab ctx: ctx call: call label: "item"
+        v: colArg symtab: symtab ctx: ctx call: call label: "item" consumes: false
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
     if mn.stringview == "delete" then {
-        v: listArg symtab: symtab ctx: ctx call: call label: "item"
+        v: colArg symtab: symtab ctx: ctx call: call label: "item" consumes: false
         e2: "\{cb}_delete(\{bn}, \{v})"
         return e2
     }
@@ -1803,27 +1836,120 @@ emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     btn: typeNameOfReg9 symtab: symtab tid: bt
     cb: cnameOf tid: bt name: btn.stringview
     if mn.stringview == "set" then {
-        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
-        vv: listArg symtab: symtab ctx: ctx call: call label: "value"
+        vk: colArg symtab: symtab ctx: ctx call: call label: "key" consumes: true
+        vv: colArg symtab: symtab ctx: ctx call: call label: "value" consumes: true
         e0: "\{cb}_set(\{bn}, \{vk}, \{vv})"
         return e0
     }
     if mn.stringview == "get" then {
-        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        vk: colArg symtab: symtab ctx: ctx call: call label: "key" consumes: false
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
     }
     if mn.stringview == "has" then {
-        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        vk: colArg symtab: symtab ctx: ctx call: call label: "key" consumes: false
         e2: "\{cb}_has(\{bn}, \{vk})"
         return e2
     }
     if mn.stringview == "delete" then {
-        vk: listArg symtab: symtab ctx: ctx call: call label: "key"
+        vk: colArg symtab: symtab ctx: ctx call: call label: "key" consumes: false
         e3: "\{cb}_delete(\{bn}, \{vk})"
         return e3
     }
     return "".string
+}
+
+# emitInterpArgExpr -- if n is (or wraps/projects via .string/.stringview) an
+# interpolated string literal, return a self-contained statement expression that
+# builds and yields the owned String; "" otherwise. Used for inline argument
+# positions, where the pure emitExpr cannot emit the multi-statement interp build.
+emitInterpArgExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (emitInterpArgExpr symtab: symtab ctx: ctx n: n.expression)
+    } case atomstring then {
+        if (isInterp parts: n.stringparts) then {
+            ltmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String))
+            lbuf: "".string
+            sM: emitInterpBuild symtab: symtab ctx: ctx parts: n.stringparts ind: " " tmp: ltmp buf: lbuf
+            r: "({ \{lbuf}_s\{sM}; })".string
+            return r
+        }
+        return "".string
+    } case dottedpath then {
+        cm: atomTextOf n: n.child
+        if cm.stringview == "string" then {
+            return (emitInterpArgExpr symtab: symtab ctx: ctx n: n.parent)
+        }
+        if cm.stringview == "stringview" then {
+            return (emitInterpArgExpr symtab: symtab ctx: ctx n: n.parent)
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# emitColInterpArg -- an interpolated-string collection-method argument hoisted to
+# an owned String temp via the argHoist mechanism (flushed at the statement). When
+# the method BORROWS the arg (consumes == false: has/delete/get), a scope-exit
+# free is registered; a consuming method (add/set) moves the temp in. "" when n is
+# not an interpolated string.
+emitColInterpArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node consumes: bool} out String is {
+    sx: emitInterpArgExpr symtab: symtab ctx: ctx n: n
+    if sx.length == 0 then {
+        return "".string
+    }
+    hn: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    nmH: "_ah\{hn}".string
+    hdt: "".string
+    if (consumes) == false then {
+        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
+    }
+    retx: nmH.copy
+    ctx.argHoistVals.append sx
+    ctx.argHoistTypes.append "\{ctx.strC}_t".string
+    ctx.argHoistDtors.append hdt
+    ctx.argHoistNames.append nmH
+    return retx
+}
+
+# colArg -- a collection-method argument: the interp-string hoist when the arg is
+# an interpolated literal, else the plain expression (mirrors listArg). consumes
+# distinguishes take params (add/set) from borrow params (has/delete/get).
+colArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData label: StringView consumes: bool} out String is {
+    posFirst: "".string
+    havePos: false
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then {
+                ic: emitColInterpArg symtab: symtab ctx: ctx n: a.operation consumes: consumes
+                if ic.length > 0 then {
+                    return ic
+                }
+                return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+            }
+            if an.length == 0 when havePos == false then {
+                havePos = true
+                icp: emitColInterpArg symtab: symtab ctx: ctx n: a.operation consumes: consumes
+                if icp.length > 0 then {
+                    posFirst = icp
+                } else {
+                    posFirst = emitExpr symtab: symtab ctx: ctx n: a.operation
+                }
+            }
+        } else {}
+    }
+    if havePos then {
+        return posFirst
+    }
+    return "0".string
 }
 
 # listArg -- the C expression for a labeled list-method argument ("0" if
@@ -2820,6 +2946,18 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             be0: "((\{brc}_t){0})"
             return be0
         }
+        if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.FUNCTION then {
+            # a bare no-arg unit fn that typecheck coerced to a CALL (its atom
+            # stamp is the RETURN type, not FUNCTION) is invoked here; a genuine
+            # fn reference (stamped FUNCTION) keeps the bare cname.
+            fbtn9: typeNameOfReg9 symtab: symtab tid: brid
+            fbcn9: cnameOf tid: brid name: fbtn9.stringview
+            fastid9: stampIdOf symtab: symtab nid: n.nodeid.u64
+            if fastid9 > 0 when (symtab.reg.typetypeOf typeId: fastid9) == ztypes.ztypetype.FUNCTION then {
+                return fbcn9
+            }
+            return "\{fbcn9}()"
+        }
         ac2: aliasResolve ctx: ctx name: av
         return ac2
     } case labelvalue then {
@@ -3299,6 +3437,12 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if nsm9.length > 0 then {
                 return nsm9
             }
+        }
+        if (isStringy name: nptn9.stringview) when (isSvParseNative name: mn2.stringview) then {
+            needsAdd ctx: ctx name: mn2.stringview
+            pnv9: svValueForm ctx: ctx expr: base9.stringview tname: nptn9.stringview
+            epnv9: "\{ctx.svC}_\{mn2}(&\{pnv9})"
+            return epnv9
         }
         # a no-arg List method on a nested receiver (this.field.pop): the bsmn
         # leg above missed it (bstamp keys off an atom base, 0 for a nested
@@ -3905,6 +4049,22 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
                 buf.append lpu.stringview
             }
         }
+    } case call then {
+        ce9: emitCallValue symtab: symtab ctx: ctx call: n
+        flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
+        rtn9: stampNameOf symtab: symtab nid: n.nodeid.u64
+        if rtn9.stringview == "StringView" then {
+            lpcv9: "\{ind}\{ctx.svC}_print(\{ce9});\n"
+            buf.append lpcv9.stringview
+        } else {
+            hpc9: tmp.next
+            lpa9: "\{ind}\{ctx.strC}_t _h\{hpc9} = \{ce9};\n"
+            buf.append lpa9.stringview
+            lpb9: "\{ind}\{ctx.strC}_print(&_h\{hpc9});\n"
+            buf.append lpb9.stringview
+            lpf9: "\{ind}\{ctx.strC}_free(&_h\{hpc9});\n"
+            buf.append lpf9.stringview
+        }
     } else {
         buf.append "    /* zemitterc: unhandled print argument */\n"
     }
@@ -4345,7 +4505,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             buf.append lb.stringview
         }
     } case reassignment then {
-        nm2: emitExpr symtab: symtab ctx: ctx n: n.topath
+        nm2: emitReassignLvalue symtab: symtab ctx: ctx n: n.topath
         rv2: emitExpr symtab: symtab ctx: ctx n: n.value
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
@@ -4555,11 +4715,39 @@ resolveTypeIdByName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringVi
     return found2
 }
 
+# emitReassignLvalue -- the C lvalue for a reassignment target. A `got.field`
+# whose base atom is a narrowed match-arm binding over a borrowed reftype view
+# (seeded in narrowBox) writes THROUGH the box into the live entry; the local
+# read-copy is not the backing storage. Other targets emit normally.
+emitReassignLvalue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        ba9: atomTextOf n: n.parent
+        if ba9.length > 0 then {
+            nbo9: ctx.narrowBox.get key: ba9.string
+            match (
+                nbo9
+            ) case some then {
+                mem9: atomTextOf n: n.child
+                bx9: nbo9.string
+                lvx9: "\{bx9}.\{mem9}".string
+                return lvx9
+            } case none then {}
+        }
+    } else {}
+    return (emitExpr symtab: symtab ctx: ctx n: n)
+}
+
 # emitMatchStmt -- a variant-subject match as a tag switch over a temp;
 # payload arms shadow the subject name with the payload value.
 emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
     sx: emitExpr symtab: symtab ctx: ctx n: m.subject
     stn: stampNameDeep symtab: symtab n: m.subject
+    if stn.stringview == "bool" then {
+        emitBoolMatch symtab: symtab ctx: ctx m: m subj: sx.stringview assignTo: assignTo ind: ind tmp: tmp buf: buf
+        return
+    }
     vtid: resolveTypeIdByName symtab: symtab ctx: ctx name: stn.stringview
     isVar: false
     isUni: false
@@ -4611,6 +4799,69 @@ emitScalarMatch: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData s
     emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
     l9: "\{ind}}\n"
     buf.append l9.stringview
+}
+
+# emitBoolMatch -- a match over a bool subject. `case true`/`case false` become
+# an if (subj) / else if (!subj) chain (a bool is a primitive C bool, not a
+# tagged variant), the optional else arm a trailing `else`. assignTo writes the
+# arm value in each branch.
+emitBoolMatch: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData subj: StringView assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    firstB9: true
+    citer: m.clauses.iterate
+    for c: citer loop {
+        match (
+            c
+        ) case caseclause then {
+            condB9: subj.string
+            if c.name.stringview == "false" then {
+                condB9 = "!\{subj}".string
+            }
+            kwB9: "if"
+            if (firstB9) == false then {
+                kwB9 = "else if"
+            }
+            firstB9 = false
+            lhB9: "\{ind}\{kwB9} (\{condB9}) {\n"
+            buf.append lhB9.stringview
+            indB9: "\{ind}    "
+            if assignTo.length > 0 then {
+                vxB9: emitExpr symtab: symtab ctx: ctx n: c.statement
+                laB9: "\{ind}    \{assignTo} = \{vxB9};\n"
+                buf.append laB9.stringview
+            } else {
+                fLB9: tmp.frees.length
+                lLB9: tmp.listFrees.length
+                emitBodyNode symtab: symtab ctx: ctx n: c.statement ind: indB9.stringview tmp: tmp buf: buf
+                flushBlockFrees ctx: ctx tmp: tmp fL: fLB9 lL: lLB9 buf: buf
+            }
+            lcB9: "\{ind}}\n"
+            buf.append lcB9.stringview
+        } else {}
+    }
+    emitBoolElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind tmp: tmp buf: buf
+}
+
+# emitBoolElse -- the trailing `else { ... }` of a bool match (none = nothing).
+emitBoolElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        o
+    ) case some then {
+        leB9: "\{ind}else {\n"
+        buf.append leB9.stringview
+        indE9: "\{ind}    "
+        if assignTo.length > 0 then {
+            veB9: emitExpr symtab: symtab ctx: ctx n: o
+            laE9: "\{ind}    \{assignTo} = \{veB9};\n"
+            buf.append laE9.stringview
+        } else {
+            fLE9: tmp.frees.length
+            lLE9: tmp.listFrees.length
+            emitBodyNode symtab: symtab ctx: ctx n: o ind: indE9.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fLE9 lL: lLE9 buf: buf
+        }
+        lceB9: "\{ind}}\n"
+        buf.append lceB9.stringview
+    } case none then {}
 }
 
 # scalarArmLabel -- the C case label for a scalar arm: the constant
@@ -6198,11 +6449,24 @@ scanNeeds: function {ctx: Ctx n: Node} is {
         if (isSvSimpleNative name: mn0.stringview) then {
             needsAdd ctx: ctx name: mn0.stringview
         }
+        if (isSvParseNative name: mn0.stringview) then {
+            needsAdd ctx: ctx name: mn0.stringview
+        }
         aiter2: n.arguments.iterate
         for a: aiter2 loop {
             scanNeeds ctx: ctx n: a
         }
     } case dottedpath then {
+        pdm9: atomTextOf n: n.child
+        if pdm9.stringview == "parseF64" then {
+            needsAdd ctx: ctx name: "parseF64"
+        }
+        if pdm9.stringview == "parseI64" then {
+            needsAdd ctx: ctx name: "parseI64"
+        }
+        if pdm9.stringview == "parseU64" then {
+            needsAdd ctx: ctx name: "parseU64"
+        }
         scanNeeds ctx: ctx n: n.parent
     } case binop then {
         scanNeeds ctx: ctx n: n.lhs
@@ -7354,6 +7618,7 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     mcr: cUpperOf text: nm.stringview
     elemName: monoElemName full: mn prefixLen: 4
     itemT: cTypeForName symtab: symtab ctx: ctx name: elemName.stringview
+    preEmitColUserType symtab: symtab ctx: ctx name: elemName.stringview buf: buf
     isStr: elemName.stringview == "String"
     ovName: "OptionView_\{elemName}".string
     ovId: monoIdByName symtab: symtab name: ovName.stringview
@@ -7518,6 +7783,8 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     ovu: cUpperOf text: ovName.stringview
     keyName: mapKeyName full: mn vlen: valName.length
     keyT: cTypeForName symtab: symtab ctx: ctx name: keyName.stringview
+    preEmitColUserType symtab: symtab ctx: ctx name: valName.stringview buf: buf
+    preEmitColUserType symtab: symtab ctx: ctx name: keyName.stringview buf: buf
     keyIsStr: keyName.stringview == "String"
     hashKeyBody: setHashBody isStr: keyIsStr
     keysEqBody: setEqBody isStr: keyIsStr
@@ -7533,7 +7800,7 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
             gbS: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        _copy->size = _this->entries[idx].value.size;\n        _copy->capacity = _copy->size + 1;\n        _copy->data = (char*)z_xmalloc(_copy->capacity);\n        memcpy(_copy->data, _this->entries[idx].value.data, _copy->size);\n        _copy->data[_copy->size] = 0;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
             getBody = gbS
         } else {
-            gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        *_copy = _this->entries[idx].value;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+            gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
             getBody = gbR
         }
     }
@@ -8205,6 +8472,22 @@ preEmitEmbeddedTypes: function {symtab: zenv.ZSymbolTable ctx: Ctx ids: List u64
         maybePreEmitElem symtab: symtab ctx: ctx eid: eidv buf: buf
         pi = pi + 1
     }
+}
+
+# preEmitColUserType -- pre-emit a collection element/key/value user-type struct
+# (resolved by name) before the collection mono that embeds it by value. A Map or
+# Set entry stores its value/key/element BY VALUE, so the user type's full struct
+# must precede the mono. No-op for system/mono/generic types (maybePreEmitElem
+# filters them); idempotent via ctx.emittedUserTypes.
+preEmitColUserType: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView buf: String.borrow} is {
+    if name.length == 0 then {
+        return
+    }
+    tid: resolveTypeIdByName symtab: symtab ctx: ctx name: name
+    if tid == 0 then {
+        return
+    }
+    maybePreEmitElem symtab: symtab ctx: ctx eid: tid buf: buf
 }
 
 # isFwdDeclared -- the type was forward-declared by emitMainFwdDecls, so its

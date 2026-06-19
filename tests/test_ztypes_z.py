@@ -159,6 +159,25 @@ def test_ztypes_smoke_matches_golden(ztypes_binary):
         )
 
 
+@pytest.mark.emitter
+@pytest.mark.timeout(240)
+def test_ztypes_selfhost_matches_golden(ztypes_selfhost_binary):
+    """ztypes built by the PORTED zc (stage1) must produce the same golden
+    smoke dump as the reference -- the self-host gate for the type-model unit."""
+    proc = subprocess.run([ztypes_selfhost_binary], capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.fail(
+            f"self-host ztypes exited {proc.returncode}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    expected = _read_golden()
+    if proc.stdout != expected:
+        pytest.fail(
+            "self-host ztypes smoke output diverged from golden.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
+        )
+
+
 def test_pure_fn_battery_matches_python():
     """The Python reference must reproduce the golden's pure-function
     sections exactly -- the slice's Python-vs-port differential. Guards both
