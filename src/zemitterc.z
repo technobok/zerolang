@@ -1543,6 +1543,7 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
             pids: (List u64)
             recFieldLists symtab: symtab tid: mco9 names: pnames ids: pids
             args: "".string
+            posIdx9: 0.u64
             pi9: 0.u64
             pn9: pnames.length
             for while pi9 < pn9 loop {
@@ -1560,6 +1561,13 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                     }
                 } else {
                     av9: ctorArgByLabel symtab: symtab ctx: ctx call: call label: pname9.stringview
+                    if (ctorHasLabel call: call label: pname9.stringview) == false then {
+                        pv9: ctorArgByPosition symtab: symtab ctx: ctx call: call idx: posIdx9
+                        if pv9.length > 0 then {
+                            av9 = pv9
+                        }
+                        posIdx9 = posIdx9 + 1
+                    }
                     ptra9: false
                     isStrBorrow9: false
                     # a non-TAKE class arg passes by pointer (mirrors the method
@@ -2418,6 +2426,28 @@ ctorArgByLabel: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     return "0".string
 }
 
+# ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
+# method call passing args positionally (`this.formatLockHolder holder`) rather
+# than by label; "" when there is no such arg.
+ctorArgByPosition: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData idx: u64} out String is {
+    seen9: 0.u64
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.length == 0 then {
+                if seen9 == idx then {
+                    return (emitExpr symtab: symtab ctx: ctx n: a.operation)
+                }
+                seen9 = seen9 + 1
+            }
+        } else {}
+    }
+    return "".string
+}
+
 # nodeConstText -- the C literal for a node carrying a compile-time
 # const stamp (folded .LABEL data access, unit constants); "" otherwise.
 nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
@@ -2596,7 +2626,12 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
             if ai8 < fpIds.length then {
                 fpid8: fpIds.get i: ai8
                 ptra8: false
-                if (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                ownC8: "".string
+                if ai8 < fpNames.length then {
+                    fpnO8: fpNames.get i: ai8
+                    ownC8 = symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
+                }
+                if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
                     ptra8 = true
                 } else {
                     if ai8 < fpNames.length then {
@@ -2862,7 +2897,12 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                 if ai8 < fpIds.length then {
                     fpid8: fpIds.get i: ai8
                     ptra8: false
-                    if (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                    ownC8: "".string
+                    if ai8 < fpNames.length then {
+                        fpnO8: fpNames.get i: ai8
+                        ownC8 = symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
+                    }
+                    if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
                         ptra8 = true
                     } else {
                         if ai8 < fpNames.length then {
@@ -5955,7 +5995,8 @@ registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is
         rpid: pIds.get i: ri
         rpn: pNames.get i: ri
         regp9: false
-        if (isReftypeParam symtab: symtab ctx: ctx tid: rpid) then {
+        ownR9: symtab.typing.childOwnershipText parentTypeId: fid name: rpn.stringview
+        if ownR9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: rpid) then {
             regp9 = true
         } else {
             if (isBorrowStringParam symtab: symtab fid: fid pname: rpn.stringview pid: rpid) then {
@@ -6062,7 +6103,8 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
         pid: cIds.get i: pi
         ct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0
         ptrp9: false
-        if (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
+        ownF9: symtab.typing.childOwnershipText parentTypeId: fid name: pname.stringview
+        if ownF9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
             ptrp9 = true
         } else {
             if (isBorrowStringParam symtab: symtab fid: fid pname: pname.stringview pid: pid) then {
