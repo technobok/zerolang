@@ -414,6 +414,11 @@ collectLiterals: function {n: Node ids: List u64 texts: List String} is {
             nid: n.nodeid.u64
             ids.append nid
             texts.append t
+        } else {
+            piter: n.stringparts.iterate
+            for p: piter loop {
+                collectLiterals n: p ids: ids texts: texts
+            }
         }
     } else {}
 }
@@ -5822,6 +5827,36 @@ isBorrowStringParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringV
 # registerReftypeParams -- add a top-level function's reftype (class/union)
 # params to ctx.ptrVars, so the body reads them as `param->field` and method
 # calls pass them directly (they arrive as pointers). Caller resets ptrVars.
+# isSetMapPtrParam -- a non-TAKE Set/Map param. Set/Map are heap pointers, so the
+# param is passed BY POINTER (Set_t*) and its arg (a Set/Map local/field, also a
+# pointer) is passed directly -- unlike a by-value List param which needs &.
+isSetMapPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView tid: u64} out bool is {
+    own: symtab.typing.childOwnershipText parentTypeId: fid name: pname
+    if own.stringview == "TAKE" then {
+        return false
+    }
+    cid: tid
+    omn0: monoOriginName symtab: symtab tid: tid
+    if omn0.length == 0 then {
+        tn: typeNameOfReg9 symtab: symtab tid: tid
+        mo: symtab.typing.monoByName.get key: tn.copy
+        match (
+            mo
+        ) case some then {
+            cid = mo
+        } case none then {}
+    }
+    bt: chaseColMono symtab: symtab tid: cid
+    omn: monoOriginName symtab: symtab tid: bt
+    if omn.stringview == "Set" then {
+        return true
+    }
+    if omn.stringview == "Map" then {
+        return true
+    }
+    return false
+}
+
 # isListPtrParam -- a non-TAKE List param (a value-struct collection) passes BY
 # POINTER so the callee's append/pop/set persist to the caller. A `.take` List is
 # moved by value; Set/Map monos are already heap pointers (no extra `*`).
@@ -5880,6 +5915,9 @@ registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is
             }
         }
         if (isListPtrParam symtab: symtab fid: fid pname: rpn.stringview tid: rpid) then {
+            regp9 = true
+        }
+        if (isSetMapPtrParam symtab: symtab fid: fid pname: rpn.stringview tid: rpid) then {
             regp9 = true
         }
         if regp9 then {
@@ -5984,6 +6022,9 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
             }
         }
         if (isListPtrParam symtab: symtab fid: fid pname: pname.stringview tid: pid) then {
+            ptrp9 = true
+        }
+        if (isSetMapPtrParam symtab: symtab fid: fid pname: pname.stringview tid: pid) then {
             ptrp9 = true
         }
         if ptrp9 then {
@@ -11536,6 +11577,9 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
                     giveptr9 = true
                 }
                 if (isListPtrParam symtab: symtab fid: mid pname: pname.stringview tid: pid) then {
+                    giveptr9 = true
+                }
+                if (isSetMapPtrParam symtab: symtab fid: mid pname: pname.stringview tid: pid) then {
                     giveptr9 = true
                 }
                 if giveptr9 then {
