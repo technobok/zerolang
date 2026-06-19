@@ -2692,6 +2692,74 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
 # `unit.TypeName field: val ...` (e.g. a Node arm's zast.ErrorData payload):
 # resolve the type via the shared cross-unit identity and route to the field-wise
 # (or user-create) constructor. "" when not such a construction.
+# dottedParentChild -- the middle segment of a 3-segment dotted path `a.b.c`:
+# the child text of the parent (`b`). "" when not a nested dotted path.
+dottedParentChild: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (dottedParentChild n: n.expression)
+    } case dottedpath then {
+        return (dottedChildText n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+# emitCrossUnitExplicitCreate -- an explicit cross-unit construction
+# `unit.Type.create args`: resolve `unit.Type` and emit the user `create` call
+# `<Type>_create(args)` (no receiver). "" when not such a 3-segment create.
+emitCrossUnitExplicitCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    pbase: dottedBaseAtom n: call.callable
+    ptype: dottedParentChild n: call.callable
+    if pbase.length == 0 then {
+        return "".string
+    }
+    if ptype.length == 0 then {
+        return "".string
+    }
+    if (symtab.reg.isUnitName name: pbase.stringview) == false then {
+        return "".string
+    }
+    k: "\{pbase}.\{ptype}".string
+    go: symtab.typing.resolved.get key: k
+    tid: 0.u64
+    match (
+        go
+    ) case some then {
+        tid = go
+    } case none then {}
+    if tid == 0 then {
+        return "".string
+    }
+    cco: symtab.typing.childOf parentTypeId: tid name: "create"
+    match (
+        cco
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.FUNCTION then {
+            cpn: (List String)
+            cpi: (List u64)
+            recFieldLists symtab: symtab tid: cco names: cpn ids: cpi
+            cargs: "".string
+            ci: 0.u64
+            ccn: cpn.length
+            for while ci < ccn loop {
+                cpname: cpn.get i: ci
+                cav: ctorArgByLabel symtab: symtab ctx: ctx call: call label: cpname.stringview
+                if ci > 0 then {
+                    cargs.append ", "
+                }
+                cargs.append cav.stringview
+                ci = ci + 1
+            }
+            ccbn: typeNameOfReg9 symtab: symtab tid: cco
+            ccb: cnameOf tid: cco name: ccbn.stringview
+            return "\{ccb}(\{cargs})"
+        }
+    } case none then {}
+    return "".string
+}
+
 emitCrossUnitCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     base: dottedBaseAtom n: call.callable
     child: dottedChildText n: call.callable
@@ -2700,6 +2768,12 @@ emitCrossUnitCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     }
     if child.length == 0 then {
         return "".string
+    }
+    if child.stringview == "create" then {
+        ce9: emitCrossUnitExplicitCreate symtab: symtab ctx: ctx call: call
+        if ce9.length > 0 then {
+            return ce9
+        }
     }
     if (symtab.reg.isUnitName name: base.stringview) == false then {
         return "".string
@@ -3109,6 +3183,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 return (emitExpr symtab: symtab ctx: ctx n: n.parent)
             }
         }
+        if mnc0.stringview == "stringview" then {
+            # `.stringview` on a value that is ALREADY a StringView is identity:
+            # emit the base (mirrors the nested-base leg's StringView case).
+            svbtn0: stampNameOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+            if svbtn0.stringview == "StringView" then {
+                return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+            }
+        }
         xpb9: dottedBaseAtom n: n.parent
         xpt9: dottedChildText n: n.parent
         xar9: atomTextOf n: n.child
@@ -3160,6 +3242,9 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         # now owns the heap). A borrowed pointer-param class is not a move source.
         if mn2.stringview == "take" then {
             tknid9: atomNodeId9 n: n.parent
+            if tknid9 == 0 then {
+                tknid9 = nodeIdOf9 n: n.parent
+            }
             tkt9: stampIdOf symtab: symtab nid: tknid9
             tktn9: stampNameOf symtab: symtab nid: tknid9
             isMove9: false
@@ -3249,7 +3334,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             if bt2.stringview == "String" then {
                 if mn2.stringview == "length" then {
-                    e3: "\{bn2}.size"
+                    sacc3: ".".string
+                    if (isPtrVar ctx: ctx name: bn2.stringview) then {
+                        sacc3 = "->".string
+                    }
+                    e3: "\{bn2}\{sacc3}size"
                     return e3
                 }
             }
@@ -4265,6 +4354,70 @@ stringviewOfBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
     }
 }
 
+# svSliceBaseAtom -- the base atom name of a `<atom>.stringview` projection over
+# a String value (the base of a `from:/to:` slice), else "".
+svSliceBaseAtom: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (svSliceBaseAtom symtab: symtab n: n.expression)
+    } case dottedpath then {
+        mc: atomTextOf n: n.child
+        if mc.stringview != "stringview" then {
+            return "".string
+        }
+        ba: atomTextOf n: n.parent
+        if ba.length == 0 then {
+            return "".string
+        }
+        bpid: nodeIdOf9 n: n.parent
+        btn: stampNameOf symtab: symtab nid: bpid
+        if btn.stringview == "String" then {
+            return ba
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# emitSvSliceBinding -- a `nm: (<atom>.stringview from: A to: B)` StringView slice
+# binding: a bounds-check then `(SV){ base.data + A, B - A }`. The base is a
+# String (`.size`/`.data`, `->` for a borrow-pointer param). Returns true if
+# handled. Mirrors the reference _emit_stringview_value with from/to present.
+emitSvSliceBinding: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: StringView ind: StringView buf: String.borrow} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (emitSvSliceBinding symtab: symtab ctx: ctx n: n.expression nm: nm ind: ind buf: buf)
+    } case call then {
+        cab: svSliceBaseAtom symtab: symtab n: n.callable
+        if cab.length == 0 then {
+            return false
+        }
+        if (ctorHasLabel call: n label: "from") == false then {
+            return false
+        }
+        if (ctorHasLabel call: n label: "to") == false then {
+            return false
+        }
+        sacc: ".".string
+        if (isPtrVar ctx: ctx name: cab.stringview) then {
+            sacc = "->".string
+        }
+        baseC: aliasResolve ctx: ctx name: cab.stringview
+        fromV: ctorArgByLabel symtab: symtab ctx: ctx call: n label: "from"
+        toV: ctorArgByLabel symtab: symtab ctx: ctx call: n label: "to"
+        bchk: "\{ind}if ((uint64_t)\{fromV} > \{baseC}\{sacc}size || (uint64_t)\{toV} > \{baseC}\{sacc}size || (uint64_t)\{fromV} > (uint64_t)\{toV}) z_panic(\"stringview: bounds error\");\n"
+        buf.append bchk.stringview
+        slc: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{baseC}\{sacc}data + (uint64_t)\{fromV}, (uint64_t)\{toV} - (uint64_t)\{fromV} };\n"
+        buf.append slc.stringview
+        return true
+    } else {
+        return false
+    }
+}
+
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
 stringCopyLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
     match (
@@ -4306,9 +4459,30 @@ emitStringBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: St
         cnd9: atomTextOf n: n.child
         if cnd9.stringview == "string" then {
             return (emitStringBindValue symtab: symtab ctx: ctx n: n.parent nm: nm ind: ind tmp: tmp buf: buf)
-        } else {
+        }
+        if cnd9.stringview == "copy" then {
+            # `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`): the
+            # receiver is a non-lvalue, so hoist it to a borrowed temp (List.get
+            # returns a shallow view -- never freed) before String_copy(&temp).
+            pnm9: stampNameDeep symtab: symtab n: n.parent
+            if pnm9.stringview == "String" then {
+                pv9: emitExpr symtab: symtab ctx: ctx n: n.parent
+                if (isNonLvalueArg s: pv9.stringview) then {
+                    hn9: ctx.argHoistCtr
+                    ctx.argHoistCtr = ctx.argHoistCtr + 1
+                    tnm9: "_cpv\{hn9}".string
+                    th9: "\{ind}\{ctx.strC}_t \{tnm9} = \{pv9};\n"
+                    buf.append th9.stringview
+                    lc9: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_copy(&\{tnm9});\n"
+                    buf.append lc9.stringview
+                    nmc9: nm.string
+                    tmp.frees.append nmc9
+                    return true
+                }
+            }
             return false
         }
+        return false
     } else {
         return false
     }
@@ -4603,6 +4777,9 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 }
                 lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{svb}\{svacc4}data, \{svb}\{svacc4}size };\n"
                 buf.append lsv4.stringview
+                return
+            }
+            if (emitSvSliceBinding symtab: symtab ctx: ctx n: n.value nm: nm ind: ind buf: buf) then {
                 return
             }
             vx: emitExpr symtab: symtab ctx: ctx n: n.value
@@ -6550,6 +6727,23 @@ isConstShape: function {ctx: Ctx n: Node} out bool is {
         }
     } case ifexpr then {
         return true
+    } case dottedpath then {
+        # a typed numeric literal `0x7F.u64` / `42.i128` folds to a C constant.
+        pc9: atomTextOf n: n.child
+        if (cTypeOf name: pc9.stringview).length > 0 then {
+            pb9: atomTextOf n: n.parent
+            db9: pb9.stringview.byteAt i: 0
+            match (
+                db9
+            ) case some then {
+                if db9 >= 48 then {
+                    if db9 <= 57 then {
+                        return true
+                    }
+                }
+            } case none then {}
+        }
+        return false
     } else {
         return false
     }
@@ -6855,14 +7049,16 @@ fillConstVals: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
         with uiter: program.units.iterate do for u: uiter loop {
             match (
                 u
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
-                if un.stringview == mainName then {
+                if (isEmittableFileUnit name: un.stringview) then {
+                    sm9: ctx.mainName.copy
+                    ctx.mainName = un.copy
                     fillConstValsIn symtab: symtab ctx: ctx mainOp: u.operation
+                    ctx.mainName = sm9
                 }
             } else {}
         }
