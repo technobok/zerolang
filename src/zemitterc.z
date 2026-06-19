@@ -642,6 +642,19 @@ pathIsPointer: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is
 
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
 aliasResolve: function {ctx: Ctx name: StringView} out String is {
+    # A match-arm narrowing (narrowBox) shadows a stale for-loop/borrow/take alias
+    # for the same name: inside the arm the name must resolve to the narrowed union
+    # payload cast, not the un-narrowed borrow pointer. Triggers ONLY when BOTH a
+    # narrowing box AND an alias are live for the name (an aliased subject narrowed
+    # in a match arm) -- mirrors takeSourceResolve, which already prefers narrowBox.
+    if (ctx.aliases.has key: name.string) when (ctx.narrowBox.has key: name.string) then {
+        nbo: ctx.narrowBox.get key: name.string
+        match (
+            nbo
+        ) case some then {
+            return nbo.string
+        } case none then {}
+    }
     ao: ctx.aliases.get key: name.string
     match (
         ao
