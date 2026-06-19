@@ -321,6 +321,23 @@ def strip_first_generic_name(unit, srcdir, apply):
     return stripped, skipped
 
 
+def strip_unneeded_parens(unit, srcdir, apply):
+    """Delete re-parse-verified extraneous parens (single terms, no-named-arg
+    type specs in type positions, redundant double parens). Returns
+    (stripped, skipped); skipped is always 0 (the lint already verifies)."""
+    pairs = L.removable_paren_pairs(unit, srcdir)
+    if not pairs:
+        return 0, 0
+    path = os.path.join(srcdir, f"{unit}.z")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    new = L.strip_paren_offsets(text, pairs)
+    if apply and new != text:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new)
+    return len(pairs), 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.path.join(os.getcwd(), "src"))
@@ -329,6 +346,7 @@ def main():
     ap.add_argument("--empty-then", action="store_true", help="negate+swap empty then")
     ap.add_argument("--empty-else", action="store_true", help="delete empty else {}")
     ap.add_argument("--elide-name", action="store_true", help="elide first generic arg name")
+    ap.add_argument("--strip-parens", action="store_true", help="strip verified unneeded parens")
     ap.add_argument("--apply", action="store_true", help="write changes")
     args = ap.parse_args()
 
@@ -364,6 +382,12 @@ def main():
             n, sk = strip_first_generic_name(unit, args.src, args.apply)
             if n or sk:
                 print(f"{unit:14s} elide-name={n:4d}  skip={sk:3d}")
+            tot_fix += n
+            tot_skip += sk
+        if args.strip_parens:
+            n, sk = strip_unneeded_parens(unit, args.src, args.apply)
+            if n or sk:
+                print(f"{unit:14s} strip-parens={n:4d}  skip={sk:3d}")
             tot_fix += n
             tot_skip += sk
     verb = "fixed" if args.apply else "would fix"

@@ -26,13 +26,14 @@ check:
 
 # Style ratchets over src/*.z (tools/lint_style.py), pinned at 0.
 # style-lint-fast is the parse-only empty-clause + first-arg-elision check (fast; runs in `check`).
-# style-lint adds the typecheck-based redundant-suffix check (~minutes; run
-# pre-push). See doc/styleguide.pdoc "Literal Type Inference" / "Empty Clauses".
+# style-lint adds the typecheck-based redundant-suffix check and the re-parse
+# -verified unneeded-paren check (~minutes; run pre-push). See doc/styleguide.pdoc
+# "Literal Type Inference" / "Empty Clauses" / "Parentheses".
 style-lint-fast:
 	uv run python tools/lint_style.py --empty-only --check --check-elide
 
 style-lint:
-	uv run python tools/lint_style.py --check --check-elide
+	uv run python tools/lint_style.py --check --check-elide --check-parens
 
 # Baseline counts of existing violations (update when migrating away)
 # isinstance:0  comprehension:8  lambda:0  try/except:8  hasattr:6
