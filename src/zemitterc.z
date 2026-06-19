@@ -1453,6 +1453,37 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
 # {methodCname}(&recv, posArgs) with the receiver mapped to the :this param and
 # the explicit args reordered by the method's param labels. "" when the receiver
 # is not a user class or the method is unresolved.
+# methodOwnerId -- the type id that actually owns method `mn`. A cross-unit
+# receiver may be stamped a same-named SHELL id whose childOf lacks the method;
+# scan for the same-named type that has it (emitter twin of canonicalChildBase).
+methodOwnerId: function {symtab: zenv.ZSymbolTable ctx: Ctx rtid: u64 mn: StringView} out u64 is {
+    direct: symtab.typing.childOf parentTypeId: rtid name: mn
+    match (
+        direct
+    ) case some then {
+        return rtid
+    } case none then {}
+    rn: typeNameOfReg9 symtab: symtab tid: rtid
+    if rn.length == 0 then {
+        return rtid
+    }
+    last: symtab.reg.nextTypeId
+    t: 0.u64
+    for while t < last loop {
+        tn: typeNameOfReg9 symtab: symtab tid: t
+        if tn.stringview == rn.stringview then {
+            co: symtab.typing.childOf parentTypeId: t name: mn
+            match (
+                co
+            ) case some then {
+                return t.u64
+            } case none then {}
+        }
+        t = t + 1
+    }
+    return rtid
+}
+
 emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     mn: dottedChildText n: call.callable
     if mn.length == 0 then {
@@ -1463,7 +1494,8 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
         return "".string
     }
     rtid0: dottedReceiverStampId symtab: symtab callable: call.callable
-    rtid: chaseColMono symtab: symtab tid: rtid0
+    rtidc: chaseColMono symtab: symtab tid: rtid0
+    rtid: methodOwnerId symtab: symtab ctx: ctx rtid: rtidc mn: mn.stringview
     if rtid == 0 then {
         return "".string
     }
@@ -3473,15 +3505,17 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if nrtt9 == ztypes.ztypetype.CLASS then { nDisp9 = true }
             if nrtt9 == ztypes.ztypetype.RECORD then { nDisp9 = true }
             if nDisp9 then {
-                nmco9: symtab.typing.childOf parentTypeId: nlid9 name: mn2.stringview
+                nlidM9: methodOwnerId symtab: symtab ctx: ctx rtid: nlid9 mn: mn2.stringview
+                nmco9: symtab.typing.childOf parentTypeId: nlidM9 name: mn2.stringview
                 match (
                     nmco9
                 ) case some then {
                     if (symtab.reg.typetypeOf typeId: nmco9) == ztypes.ztypetype.FUNCTION then {
                         nmtn9: typeNameOfReg9 symtab: symtab tid: nmco9
                         nmc9: cnameOf tid: nmco9 name: nmtn9.stringview
+                        nrttM9: symtab.reg.typetypeOf typeId: nlidM9
                         nmrecv9: "\{base9}"
-                        if nrtt9 == ztypes.ztypetype.CLASS then {
+                        if nrttM9 == ztypes.ztypetype.CLASS then {
                             if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) == false then {
                                 nmrecv9 = "&\{base9}"
                             }
