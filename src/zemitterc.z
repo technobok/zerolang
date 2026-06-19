@@ -2941,6 +2941,24 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         e8: "\{fc}(\{args})"
         return e8
     } else {
+        if cn0.stringview == "stringJoin" then {
+            needsAdd ctx: ctx name: "coll_join"
+            sjargs9: "".string
+            sji9: 0.u64
+            with sjiter9: call.arguments.iterate do for sja9: sjiter9 loop {
+                match (
+                    sja9
+                ) case namedoperation then {
+                    if sji9 > 0 then {
+                        sjargs9.append ", "
+                    }
+                    sjv9: emitExpr symtab: symtab ctx: ctx n: sja9.operation
+                    sjargs9.append sjv9.stringview
+                    sji9 = sji9 + 1
+                } else {}
+            }
+            return "z_stringJoin(\{sjargs9})"
+        }
         m8: "/* zemitterc: unhandled callee \{cn0} */0"
         return m8
     }
@@ -4627,9 +4645,37 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
     } case reassignment then {
         nm2: emitReassignLvalue symtab: symtab ctx: ctx n: n.topath
-        rv2: emitExpr symtab: symtab ctx: ctx n: n.value
+        rvi9: emitInterpArgExpr symtab: symtab ctx: ctx n: n.value
+        rv2: "".string
+        if rvi9.length > 0 then {
+            rv2 = rvi9
+        } else {
+            rv2 = emitExpr symtab: symtab ctx: ctx n: n.value
+        }
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
+        # a reassignment from a bare owned local is a MOVE: zero the source so its
+        # scope-exit free no-ops (the lvalue -- a local or a struct field appended
+        # into a container -- now owns the heap). Scalars/valtypes have no
+        # destructor and are left untouched.
+        zsrc9: implicitTakeSource symtab: symtab ctx: ctx n: n.value
+        if zsrc9.length > 0 then {
+            znid9: nodeIdOf9 n: n.value
+            zid9: stampIdOf symtab: symtab nid: znid9
+            znm9: stampNameOf symtab: symtab nid: znid9
+            zct9: "".string
+            if znm9.stringview == "String" then {
+                zct9 = "\{ctx.strC}_t"
+            } else {
+                if (symtab.reg.hasDestructorName typeId: zid9) then {
+                    zct9 = typeRefC symtab: symtab ctx: ctx tid: zid9 thisTid: 0
+                }
+            }
+            if zct9.length > 0 then {
+                zinv9: "\{ind}\{zsrc9} = (\{zct9}){0};\n"
+                buf.append zinv9.stringview
+            }
+        }
     } case swapstmt then {
         lx: emitExpr symtab: symtab ctx: ctx n: n.lhs
         rx: emitExpr symtab: symtab ctx: ctx n: n.rhs
@@ -6646,6 +6692,10 @@ scanNeeds: function {ctx: Ctx n: Node} is {
         if (isSvParseNative name: mn0.stringview) then {
             needsAdd ctx: ctx name: mn0.stringview
         }
+        cjn0: atomTextOf n: n.callable
+        if cjn0.stringview == "stringJoin" then {
+            needsAdd ctx: ctx name: "coll_join"
+        }
         aiter2: n.arguments.iterate
         for a: aiter2 loop {
             scanNeeds ctx: ctx n: a
@@ -8404,20 +8454,29 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
 # Option_StringView (the .call yield) is already defined.
 emitRuntimeSvIter: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView buf: String.borrow} is {
     anyNeed: false
+    svNeed9: false
     if (needsHas ctx: ctx name: "sv_split") then {
         anyNeed = true
+        svNeed9 = true
     }
     if (needsHas ctx: ctx name: "sv_lines") then {
+        anyNeed = true
+        svNeed9 = true
+    }
+    if (needsHas ctx: ctx name: "coll_join") then {
         anyNeed = true
     }
     if (anyNeed) == false then {
         return
     }
-    ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_SPLITTER_STRUCT" buf: buf
+    if svNeed9 then {
+        ioFrag symtab: symtab ctx: ctx runtimeDir: runtimeDir frag: "_Z_SV_SPLITTER_STRUCT" buf: buf
+    }
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_split" frag: "_Z_SV_SPLIT" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_split" frag: "_Z_SV_SPLITTER_CALL" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_lines" frag: "_Z_SV_LINES" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "sv_lines" frag: "_Z_SV_LINES_CALL" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "coll_join" frag: "_Z_COLL_STRING_JOIN" buf: buf
 }
 
 # emitRuntimeIo -- the io runtime bodies (need-gated, dependency-ordered). The
