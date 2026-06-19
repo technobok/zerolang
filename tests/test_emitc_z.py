@@ -163,6 +163,7 @@ EMITC_CORPUS: "list[str]" = [
     "sv_method_projected",
     "cross_unit_method_param_byref",
     "list_out_param",
+    "collection_method_binding",
 ]
 
 

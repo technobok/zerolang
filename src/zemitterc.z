@@ -1653,20 +1653,24 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
     return "".string
 }
 
-# listValueCallRhs -- the binding RHS is a CALL to a user function (a value-
-# producing call returning a List), as opposed to a collection construction
+# collectionValueCallRhs -- the binding RHS is a value-producing expression
+# returning a collection (a call to a user function/method, or a bare dotted-path
+# no-arg method auto-call / field access), as opposed to a collection construction
 # (`(List of: T)` / `(Set ...)` / `(Map ...)` calls, or a bare typedef-collection
-# atom like `Bytes` / `ByteView`). Only such a call must be emitted as the call;
-# constructions emit the binding's mono create. Excludes the collection-
-# constructor names; a non-simple-atom callable (e.g. a method) is conservatively
-# not treated as a value call here.
-listValueCallRhs: function {n: Node} out bool is {
+# atom like `Bytes` / `ByteView`). A value call must be emitted as the call;
+# constructions emit the binding's mono create. Used by the List/Set/Map binding
+# branches to choose between emitting the RHS expression and an empty create.
+collectionValueCallRhs: function {n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (listValueCallRhs n: n.expression)
+        return (collectionValueCallRhs n: n.expression)
     } case statementline then {
-        return (listValueCallRhs n: n.statementline)
+        return (collectionValueCallRhs n: n.statementline)
+    } case dottedpath then {
+        # a bare dotted path returning a collection (e.g. `st.allNames`) is a
+        # no-arg method auto-call or field access -- a value, never a construction.
+        return (atomTextOf n: n.child).length > 0
     } case call then {
         cn: atomTextOf n: n.callable
         if cn.length == 0 then {
@@ -4518,7 +4522,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                     buf.append lc0.stringview
                     emitListComprehension symtab: symtab ctx: ctx forNode: n.value listCb: lcb.stringview listVar: nm ind: ind tmp: tmp buf: buf
                 } else {
-                    if (listValueCallRhs n: n.value) then {
+                    if (collectionValueCallRhs n: n.value) then {
                         lvr0: emitExpr symtab: symtab ctx: ctx n: n.value
                         lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
                         buf.append lb0.stringview
@@ -4538,9 +4542,15 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if ltmn.stringview == "Set" then {
             stn: typeNameOfReg9 symtab: symtab tid: ltid
             scb: cnameOf tid: ltid name: stn.stringview
-            scap: listCapArg symtab: symtab ctx: ctx n: n.value
-            sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
-            buf.append sb0.stringview
+            if (collectionValueCallRhs n: n.value) then {
+                svr: emitExpr symtab: symtab ctx: ctx n: n.value
+                sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
+                buf.append sbc.stringview
+            } else {
+                scap: listCapArg symtab: symtab ctx: ctx n: n.value
+                sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
+                buf.append sb0.stringview
+            }
             sfree: "    \{scb}_destroy(\{nm});\n"
             sfsv: sfree.stringview
             sfv: sfsv.string
@@ -4550,9 +4560,15 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if ltmn.stringview == "Map" then {
             mtn: typeNameOfReg9 symtab: symtab tid: ltid
             mcb: cnameOf tid: ltid name: mtn.stringview
-            mcap: listCapArg symtab: symtab ctx: ctx n: n.value
-            mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
-            buf.append mb0.stringview
+            if (collectionValueCallRhs n: n.value) then {
+                mvr: emitExpr symtab: symtab ctx: ctx n: n.value
+                mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
+                buf.append mbc.stringview
+            } else {
+                mcap: listCapArg symtab: symtab ctx: ctx n: n.value
+                mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
+                buf.append mb0.stringview
+            }
             mfree: "    \{mcb}_destroy(\{nm});\n"
             mfsv: mfree.stringview
             mfv: mfsv.string

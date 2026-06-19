@@ -201,6 +201,25 @@ def test_zenv_smoke_matches_golden(zenv_binary):
         )
 
 
+@pytest.mark.emitter
+@pytest.mark.timeout(240)
+def test_zenv_selfhost_matches_golden(zenv_selfhost_binary):
+    """zenv built by the PORTED zc (stage1) must produce the same golden smoke
+    dump as the reference -- the self-host gate for the symbol-table unit."""
+    proc = subprocess.run([zenv_selfhost_binary], capture_output=True, text=True)
+    if proc.returncode != 0:
+        pytest.fail(
+            f"self-host zenv exited {proc.returncode}.\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    expected = _read_golden()
+    if proc.stdout != expected:
+        pytest.fail(
+            "self-host zenv smoke output diverged from golden.\n"
+            f"--- expected ---\n{expected}--- actual ---\n{proc.stdout}"
+        )
+
+
 def test_battery_matches_python():
     """The Python reference must reproduce the golden exactly -- the slice's
     Python-vs-port differential. Guards both the golden (against accidental

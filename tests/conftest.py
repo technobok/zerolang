@@ -257,6 +257,15 @@ def zenv_binary(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def zenv_selfhost_binary(zc_binary, tmp_path_factory):
+    """Build src/zenv.z with the PORTED zc (the self-host loop), not zc.py.
+
+    Self-host gate for the symbol-table unit: stage1 (zc_binary) compiles zenv,
+    whose smoke dump must then match the reference golden."""
+    return _build_unit_with_ported_zc("zenv", zc_binary, tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
 def zc_binary(tmp_path_factory):
     """Build the self-hosted compiler driver (src/zc.z) once per session.
 
