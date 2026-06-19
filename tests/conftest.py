@@ -242,6 +242,15 @@ def ztyping_binary(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def ztyping_selfhost_binary(zc_binary, tmp_path_factory):
+    """Build src/ztyping.z with the PORTED zc (the self-host loop), not zc.py.
+
+    Self-host gate for the typecheck-output unit: stage1 (zc_binary) compiles
+    ztyping, whose smoke dump must then match the reference golden."""
+    return _build_unit_with_ported_zc("ztyping", zc_binary, tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
 def zenv_binary(tmp_path_factory):
     """Build the self-hosted symbol table (src/zenv.z) once per session."""
     return _build_zerolang_unit("zenv", tmp_path_factory)
