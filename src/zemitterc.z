@@ -3028,6 +3028,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 se1: "\{ctx.strC}_from_view(\{sbv0})"
                 return se1
             }
+            # `.string` on a String value -- or on an interpolated literal, which
+            # already evaluates to a built String -- is identity: emit the base.
+            if sbtn0.stringview == "String" then {
+                return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+            }
         }
         xpb9: dottedBaseAtom n: n.parent
         xpt9: dottedChildText n: n.parent
@@ -11579,6 +11584,35 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
                     ret = rr3
                 }
             }
+        }
+    }
+    # a Set/Map return is a heap pointer (like a Set/Map param), so the
+    # value-typed ret gets a `*`. Mirrors isSetMapPtrParam at the param sites.
+    if ret.stringview != "void" then {
+        retColId9: 0.u64
+        {
+            tR9: symtab.reg.typeById.get key: mid
+            match (
+                tR9
+            ) case some then {
+                rtoR9: tR9.returnTypeId
+                match (
+                    rtoR9
+                ) case some then {
+                    retColId9 = rtoR9
+                } case none then {}
+            } case none then {}
+        }
+        if retColId9 == 0 then {
+            mroR9: ztypecheck.methodReturnOf st: symtab mid: mid
+            match (
+                mroR9
+            ) case some then {
+                retColId9 = mroR9
+            } case none then {}
+        }
+        if retColId9 > 0 when (isHeapPtrCollection symtab: symtab ctx: ctx tid: retColId9) then {
+            ret = "\{ret}*"
         }
     }
     params: "".string
