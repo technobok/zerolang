@@ -820,6 +820,30 @@ demandTyperefNames: function {reg: ztypes.ZTypeRegistry unitName: StringView typ
     }
 }
 
+# typeArgSuffixName -- the suffix component a collection type-arg contributes to a
+# shell mono name. A bare atom gives its name; a cross-unit dotted ref gives its
+# MEMBER name (ztypes.zparamownership -> zparamownership) so the shell's mono name
+# matches the construction path's typeNameOf-based name. Without this the dotted
+# arg's atomName is "" and the shell mints `Map_u64_` (empty value), a distinct id
+# from the constructed `Map_u64_zparamownership` -- the emitter's fieldMonoId
+# canonicalizes by name, so divergent names leave a field/create type mismatch.
+typeArgSuffixName: function {reg: ztypes.ZTypeRegistry op: Node} out String is {
+    match (
+        op
+    ) case expression then {
+        return (typeArgSuffixName reg: reg op: op.expression)
+    } case dottedpath then {
+        pNm: atomName n: op.parent
+        if (reg.isUnitName name: pNm.stringview) then {
+            return (atomName n: op.child)
+        } else {
+            return "".string
+        }
+    } else {
+        return (atomName n: op)
+    }
+}
+
 resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
@@ -840,7 +864,7 @@ resolveTyperefShell: function {reg: ztypes.ZTypeRegistry unitName: StringView ty
             match (
                 arg
             ) case namedoperation then {
-                an: atomName n: arg.operation
+                an: typeArgSuffixName reg: reg op: arg.operation
                 suffix.append "_"
                 suffix.append an.stringview
                 demandTyperefNames reg: reg unitName: unitName typeExpr: arg.operation

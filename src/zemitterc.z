@@ -2996,7 +2996,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             return "\{fbcn9}()"
         }
         ac2: aliasResolve ctx: ctx name: av
-        return ac2
+        return (ztypes.mangleVarName name: ac2.stringview)
     } case labelvalue then {
         lvn9: n.name.stringview
         return (aliasResolve ctx: ctx name: lvn9)
@@ -3216,6 +3216,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 }
             }
             bstamp = chaseColMono symtab: symtab tid: bstamp
+            bstamp = canonicalColId symtab: symtab ctx: ctx tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
             if rtt == ztypes.ztypetype.PROTOCOL then {
                 isPMn9: true
@@ -3500,6 +3501,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         # path). Resolve the List mono from the base node and emit the call.
         nlid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
         nlid9 = chaseColMono symtab: symtab tid: nlid9
+        nlid9 = canonicalColId symtab: symtab ctx: ctx tid: nlid9
         nlomn9: monoOriginName symtab: symtab tid: nlid9
         if nlomn9.stringview == "List" then {
             nltn9: typeNameOfReg9 symtab: symtab tid: nlid9
@@ -3516,6 +3518,27 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             if mn2.stringview == "iterate" then {
                 return "\{nlcb9}_iterate(\{recvB9})"
+            }
+        }
+        # Set/Map are heap-pointer collections; their methods are emitted by the
+        # collection template (not registry children), so a CLASS-dispatch
+        # methodOwnerId scan would mis-resolve to a duplicate same-named mono. The
+        # receiver field is already a pointer, so it is passed directly (no `&`).
+        if nlomn9.stringview == "Set" then {
+            nstn9: typeNameOfReg9 symtab: symtab tid: nlid9
+            nscb9: cnameOf tid: nlid9 name: nstn9.stringview
+            if mn2.stringview == "iterate" then {
+                return "\{nscb9}_iterate(\{base9})"
+            }
+        }
+        if nlomn9.stringview == "Map" then {
+            nmptn9: typeNameOfReg9 symtab: symtab tid: nlid9
+            nmpcb9: cnameOf tid: nlid9 name: nmptn9.stringview
+            if mn2.stringview == "iterate" then {
+                return "\{nmpcb9}_iterate(\{base9})"
+            }
+            if mn2.stringview == "iterateItems" then {
+                return "\{nmpcb9}_iterateItems(\{base9})"
             }
         }
         if nlid9 > 0 then {
@@ -6056,7 +6079,8 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
             params.append "int64_t"
         }
         params.append " "
-        params.append pname.stringview
+        pmnDecl9: ztypes.mangleVarName name: pname.stringview
+        params.append pmnDecl9.stringview
         pi = pi + 1
     }
     if pn == 0 then {
@@ -6115,6 +6139,27 @@ isCollectionOrigin: function {name: StringView} out bool is {
     if name == "MapKeyIter" then { return true }
     if name == "MapItemIter" then { return true }
     return false
+}
+
+# canonicalColId -- a collection mono is global and uniquely named, so a field
+# shell or duplicate stamp (de.field) resolves to the emitted mono id by name.
+# Bypasses the definedInUnit guard fieldMonoId/typeRefC use for cross-unit USER
+# types (io.Reader vs Reader) -- collections have no such ambiguity, so a
+# field-access receiver builds the same _iterate/_pop cname as a local variable.
+canonicalColId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
+    tn: typeNameOfReg9 symtab: symtab tid: tid
+    rid: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
+    duo: symtab.typing.definedInUnit.get key: tid
+    hasU9: false
+    match (
+        duo
+    ) case some then {
+        hasU9 = true
+    } case none then {}
+    if hasU9 == false when rid > 0 then {
+        return rid
+    }
+    return tid
 }
 
 # cTypeForName -- the C type for a type NAME: scalar via cTypeOf, else
@@ -11608,7 +11653,8 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
         }
         params.append pt.stringview
         params.append " "
-        params.append pname.stringview
+        pmnDecl9: ztypes.mangleVarName name: pname.stringview
+        params.append pmnDecl9.stringview
         pi = pi + 1
     }
     if pn == 0 then {
