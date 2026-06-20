@@ -13,6 +13,7 @@ TmpCtr: class {
     n: u64
     frees: (List String)
     listFrees: (List String)
+    listFreeVars: (List String)
 } as {
     next: function {:this} out u64 is {
         v: this.n
@@ -911,6 +912,7 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
     if mmn9.stringview == "append" then { collMove9 = true }
     if mmn9.stringview == "insert" then { collMove9 = true }
     if mmn9.stringview == "push" then { collMove9 = true }
+    posI9: 0.u64
     aiter9: call.arguments.iterate
     for a9: aiter9 loop {
         match (
@@ -936,6 +938,25 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                     if own9.stringview == "LOCK" then {
                         isTake9 = false
                     }
+                } else {
+                    pnames9: (List String)
+                    pids9: (List u64)
+                    recFieldLists symtab: symtab tid: ftid9 names: pnames9 ids: pids9
+                    off9: 0.u64
+                    if pnames9.length > 0 then {
+                        p09: pnames9.get i: 0
+                        if p09.stringview == "this" then {
+                            off9 = 1
+                        }
+                    }
+                    pidx9: posI9 + off9
+                    if pidx9 < pnames9.length then {
+                        pn9: pnames9.get i: pidx9
+                        pown9: symtab.typing.childOwnershipText parentTypeId: ftid9 name: pn9.stringview
+                        if pown9.stringview == "TAKE" then {
+                            isTake9 = true
+                        }
+                    }
                 }
                 if isTake9 then {
                     isrc9: implicitTakeSource symtab: symtab ctx: ctx n: a9.operation
@@ -955,6 +976,7 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                 }
             }
             emitValueTakeInvalidations symtab: symtab ctx: ctx n: a9.operation ind: ind buf: buf
+            posI9 = posI9 + 1
         } else {}
     }
 }
@@ -1458,6 +1480,7 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
         if dto.length > 0 then {
             dtc: dto.copy
             tmp.listFrees.append dtc
+            tmp.listFreeVars.append nmo.string
         }
         i = i + 1
     }
@@ -1974,7 +1997,7 @@ emitInterpArgExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         return (emitInterpArgExpr symtab: symtab ctx: ctx n: n.expression)
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
-            ltmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String))
+            ltmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String) listFreeVars: (List String))
             lbuf: "".string
             sM: emitInterpBuild symtab: symtab ctx: ctx parts: n.stringparts ind: " " tmp: ltmp buf: lbuf
             r: "({ \{lbuf}_s\{sM}; })".string
@@ -4678,6 +4701,13 @@ emitOptionBoxHoist: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: St
         buf.append b3.stringview
         b4: "\{ind}*_Box\{bN} = _t\{bN};\n"
         buf.append b4.stringview
+        if (isBareCName s: av.stringview) when (isRegisteredOwned tmp: tmp name: av.stringview) then {
+            invB: "\{ind}\{av} = (\{payC}){0};\n"
+            if (strHasSub hay: payC.stringview needle: "*") then {
+                invB = "\{ind}\{av} = NULL;\n"
+            }
+            buf.append invB.stringview
+        }
         b5: "\{ind}_c\{bN}.data = _Box\{bN};\n"
         buf.append b5.stringview
         return "_c\{bN}".string
@@ -4747,6 +4777,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                     hasArg = true
                     bx: emitOptionBoxHoist symtab: symtab ctx: ctx n: a.operation ind: ind tmp: tmp buf: buf
                     if bx.length > 0 then {
+                        emitReturnCleanup ctx: ctx tmp: tmp retExpr: bx.stringview ind: ind buf: buf
                         lrb: "\{ind}return \{bx};\n"
                         buf.append lrb.stringview
                     } else {
@@ -4754,11 +4785,36 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                         if (sret) == false then {
                             rv: emitExpr symtab: symtab ctx: ctx n: a.operation
                             flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
-                            if (isBareCName s: rv.stringview) then {
-                                emitReturnCleanup ctx: ctx tmp: tmp excludeVar: rv.stringview ind: ind buf: buf
+                            # A non-trivial value-type return expression may read an owned
+                            # local the scope cleanup is about to free (e.g. a StringView
+                            # into a local String): materialize it into a temp FIRST, then
+                            # run the cleanup. The cleanup (clProbe9) excludes locals named
+                            # in rv, so a local moved into the returned aggregate is kept.
+                            # Pointer returns (union/protocol/class) arrive as temps already
+                            # and a shallow pointer copy would be unsafe, so they skip this.
+                            clProbe9: "".string
+                            emitReturnCleanup ctx: ctx tmp: tmp retExpr: rv.stringview ind: ind buf: clProbe9
+                            rtid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
+                            retCt9: typeRefC symtab: symtab ctx: ctx tid: rtid9 thisTid: 0
+                            isPtr9: ctEndsWithStar ct: retCt9.stringview
+                            trivial9: isBareCName s: rv.stringview
+                            hoist9: false
+                            if (clProbe9.length > 0) when (trivial9 == false) when (isPtr9 == false) when (retCt9.size > 0) then {
+                                hoist9 = true
                             }
-                            lr: "\{ind}return \{rv};\n"
-                            buf.append lr.stringview
+                            if hoist9 then {
+                                rtmpN9: tmp.next
+                                retNm9: "_ret\{rtmpN9}"
+                                hdecl9: "\{ind}\{retCt9} \{retNm9} = \{rv};\n"
+                                buf.append hdecl9.stringview
+                                buf.append clProbe9.stringview
+                                hret9: "\{ind}return \{retNm9};\n"
+                                buf.append hret9.stringview
+                            } else {
+                                buf.append clProbe9.stringview
+                                lr: "\{ind}return \{rv};\n"
+                                buf.append lr.stringview
+                            }
                         }
                     }
                 }
@@ -4769,7 +4825,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd.stringview
             } else {
-                emitReturnCleanup ctx: ctx tmp: tmp excludeVar: "" ind: ind buf: buf
+                emitReturnCleanup ctx: ctx tmp: tmp retExpr: "" ind: ind buf: buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2.stringview
             }
@@ -4869,6 +4925,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                         lvr0: emitExpr symtab: symtab ctx: ctx n: n.value
                         lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
                         buf.append lb0.stringview
+                        emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
                     } else {
                         lcap: listCapArg symtab: symtab ctx: ctx n: n.value
                         lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
@@ -4880,6 +4937,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             lfsv: lfree.stringview
             lfv: lfsv.string
             tmp.listFrees.append lfv
+            tmp.listFreeVars.append nm.string
             return
         }
         if ltmn.stringview == "Set" then {
@@ -4889,6 +4947,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 svr: emitExpr symtab: symtab ctx: ctx n: n.value
                 sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
                 buf.append sbc.stringview
+                emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
             } else {
                 scap: listCapArg symtab: symtab ctx: ctx n: n.value
                 sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
@@ -4898,6 +4957,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             sfsv: sfree.stringview
             sfv: sfsv.string
             tmp.listFrees.append sfv
+            tmp.listFreeVars.append nm.string
             return
         }
         if ltmn.stringview == "Map" then {
@@ -4907,6 +4967,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 mvr: emitExpr symtab: symtab ctx: ctx n: n.value
                 mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
                 buf.append mbc.stringview
+                emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
             } else {
                 mcap: listCapArg symtab: symtab ctx: ctx n: n.value
                 mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
@@ -4916,6 +4977,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             mfsv: mfree.stringview
             mfv: mfsv.string
             tmp.listFrees.append mfv
+            tmp.listFreeVars.append nm.string
             return
         }
         if tn.stringview == "StringView" then {
@@ -5000,6 +5062,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                     ldf: "    \{ldcb}_destroy(&\{nm});\n"
                     ldfs: ldf.string
                     tmp.listFrees.append ldfs
+                    tmp.listFreeVars.append nm.string
                 }
             }
         } else {
@@ -5427,6 +5490,7 @@ scalarArmLabel: function {ctx: Ctx arm: StringView} out String is {
 flushBlockFrees: function {ctx: Ctx tmp: TmpCtr fL: u64 lL: u64 buf: String.borrow} is {
     for while tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
+        lvfo: tmp.listFreeVars.pop
         buf.append lvo.stringview
     }
     for while tmp.frees.length > fL loop {
@@ -7431,30 +7495,107 @@ isBareCName: function {s: StringView} out bool is {
     return true
 }
 
-# emitReturnCleanup -- emit the owned-local destructors registered in tmp (frees +
-# listFrees) BEFORE a return, reclaiming locals on the diverging path the
-# function-end flush never reaches. Does NOT pop the registrations (other returns
-# and the end flush still need them). Skips the returned value (excludeVar) and
-# any narrowed / aliased subject, whose function-scope destructor is wrong-typed
-# where a match arm shadows it. Mirrors the reference _emit_scope_cleanup(exclude).
-emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr excludeVar: StringView ind: StringView buf: String.borrow} is {
-    needles: (List String)
-    if excludeVar.length > 0 then {
-        needles.append "(&\{excludeVar})"
-        needles.append "(\{excludeVar})"
+# optU8Or -- an (optionval u8) to a plain u8 with a default.
+optU8Or: function {o: optionval u8 d: u8} out u8 is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return d
     }
-    with nbI: ctx.narrowBox.iterateItems do for nbe: nbI loop {
-        needles.append "(&\{nbe.key})"
-        needles.append "(\{nbe.key})"
+}
+
+# ctEndsWithStar -- true if the C type string ends in '*' (a pointer return:
+# union, protocol, Map/Set, or a user reftype passed by reference). Takes a `ct`
+# param so `.length`/`.byteAt` emit as field/method ops (a chained `.stringview`
+# receiver mis-emits a free function call).
+ctEndsWithStar: function {ct: StringView} out bool is {
+    if ct.length == 0 then {
+        return false
     }
-    with alI: ctx.aliases.iterateItems do for ale: alI loop {
-        needles.append "(&\{ale.key})"
-        needles.append "(\{ale.key})"
+    lb: optU8Or o: (ct.byteAt (ct.length - 1)) d: 0
+    if lb == 42 then {
+        return true
     }
+    return false
+}
+
+# isIdChar -- a C-identifier byte [A-Za-z0-9_].
+isIdChar: function {b: u8} out bool is {
+    if b >= 48 when b <= 57 then { return true }
+    if b >= 65 when b <= 90 then { return true }
+    if b >= 97 when b <= 122 then { return true }
+    if b == 95 then { return true }
+    return false
+}
+
+# refsLocal -- true if `name` occurs in `expr` as a maximal C identifier (bounded
+# by non-identifier bytes). A local referenced in the return expression is part of
+# (or borrowed by) the return value, so it must NOT be freed before the return.
+refsLocal: function {expr: StringView name: StringView} out bool is {
+    nl: name.length
+    el: expr.length
+    if nl == 0 then { return false }
+    if nl > el then { return false }
+    i: 0.u64
+    for while i + nl <= el loop {
+        eq: true
+        k: 0.u64
+        for while k < nl loop {
+            ebv: optU8Or o: (expr.byteAt (i + k)) d: 0
+            nbv: optU8Or o: (name.byteAt k) d: 1
+            if ebv != nbv then { eq = false }
+            k = k + 1
+        }
+        if eq then {
+            beforeOk: true
+            if i > 0 then {
+                if (isIdChar b: (optU8Or o: (expr.byteAt (i - 1)) d: 0)) then { beforeOk = false }
+            }
+            afterOk: true
+            ep: i + nl
+            if ep < el then {
+                if (isIdChar b: (optU8Or o: (expr.byteAt ep) d: 0)) then { afterOk = false }
+            }
+            if beforeOk when afterOk then { return true }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+# isRegisteredOwned -- true if `name` is a registered owned local (a String in
+# tmp.frees or a collection/class in tmp.listFreeVars). Decides whether a value
+# moved into an inline construction must be zeroed so its scope-cleanup destructor
+# becomes a no-op.
+isRegisteredOwned: function {tmp: TmpCtr name: StringView} out bool is {
+    fit: tmp.frees.iterate
+    for fv: fit loop {
+        if fv.stringview == name then {
+            return true
+        }
+    }
+    vit: tmp.listFreeVars.iterate
+    for vv: vit loop {
+        if vv.stringview == name then {
+            return true
+        }
+    }
+    return false
+}
+
+# emitReturnCleanup -- free the registered owned locals (tmp.frees + tmp.listFrees)
+# BEFORE a return, reclaiming them on the diverging path the function-end flush
+# never reaches. Does NOT pop (other returns + the end flush still need them).
+# Skips any local REFERENCED in the return expression `retExpr` (it is part of, or
+# borrowed by, the return value) and any narrowed/aliased subject (whose
+# function-scope destructor is wrong-typed where a match arm shadows it).
+emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView ind: StringView buf: String.borrow} is {
     fiterR: tmp.frees.iterate
     for fvR: fiterR loop {
         keepF: true
-        if fvR.stringview == excludeVar then {
+        if (refsLocal expr: retExpr name: fvR.stringview) then {
             keepF = false
         }
         if (ctx.narrowBox.has key: fvR.string) then {
@@ -7468,18 +7609,25 @@ emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr excludeVar: StringView ind: St
             buf.append lfR.stringview
         }
     }
-    lfiterR: tmp.listFrees.iterate
-    for lfsR: lfiterR loop {
+    li9: 0.u64
+    nL9: tmp.listFrees.length
+    for while li9 < nL9 loop {
+        stmt9: tmp.listFrees.get i: li9
+        var9: tmp.listFreeVars.get i: li9
         keepL: true
-        nIt: needles.iterate
-        for nd: nIt loop {
-            if (strHasSub hay: lfsR.stringview needle: nd.stringview) then {
-                keepL = false
-            }
+        if (refsLocal expr: retExpr name: var9.stringview) then {
+            keepL = false
+        }
+        if (ctx.narrowBox.has key: var9.string) then {
+            keepL = false
+        }
+        if (ctx.aliases.has key: var9.string) then {
+            keepL = false
         }
         if keepL then {
-            buf.append lfsR.stringview
+            buf.append stmt9.stringview
         }
+        li9 = li9 + 1
     }
 }
 
@@ -7487,7 +7635,7 @@ emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node buf: String.bo
     match (
         op
     ) case functiondef then {
-        tmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String))
+        tmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String) listFreeVars: (List String))
         emitBodyOpt symtab: symtab ctx: ctx o: op.body ind: "    " tmp: tmp buf: buf
         fiter9: tmp.frees.iterate
         for fv: fiter9 loop {
