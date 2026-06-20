@@ -101,3 +101,69 @@ def test_stage2_compiles_unit_to_golden(zc_stage2_binary, tmp_path, unit):
     assert run.stdout == golden, (
         f"stage2-compiled {unit} smoke output diverged from golden"
     )
+
+
+@pytest.fixture(scope="session")
+def zc_stage2_asan_binary(zc_binary, tmp_path_factory):
+    """stage2 (zc emitted by stage1) built with AddressSanitizer.
+
+    Used by the self-host memory-safety gate: a per-return cleanup that frees
+    a value the return still reads is a use-after-free which the byte-identity
+    fixpoint can miss by luck (freed memory not yet reused), but ASan catches.
+    """
+    d = tmp_path_factory.mktemp("zc_stage2_asan")
+    c_path = str(d / "zc_stage2.c")
+    _emit_c(zc_binary, "zc", c_path)
+    bin_path = str(d / "zc_stage2_asan")
+    cc = subprocess.run(
+        [
+            _CC,
+            "-fsanitize=address",
+            "-g",
+            "-O0",
+            "-std=c17",
+            "-w",
+            "-o",
+            bin_path,
+            c_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert cc.returncode == 0, f"ASan build of stage2 failed:\n{cc.stderr}"
+    return bin_path
+
+
+@pytest.mark.emitter
+@pytest.mark.runtime
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("unit", ["ztypes", "ztyping", "zenv"])
+def test_stage2_selfhost_asan_clean(zc_stage2_asan_binary, tmp_path, unit):
+    """stage2 self-emits each unit with no use-after-free / double-free.
+
+    Leak detection is disabled (``detect_leaks=0``): this gates memory SAFETY,
+    not the residual exit-leak the sweep is still reducing. ASan aborts with a
+    non-zero exit on any heap-use-after-free / double-free / overflow.
+    """
+    out_c = str(tmp_path / f"{unit}.c")
+    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
+    proc = subprocess.run(
+        [
+            zc_stage2_asan_binary,
+            unit,
+            "--src",
+            _SRC_DIR,
+            "--system",
+            _SYSTEM_DIR,
+            "--emit-c",
+            out_c,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
+        env=env,
+    )
+    assert proc.returncode == 0, (
+        f"stage2 self-emitting {unit} under ASan is not memory-safe "
+        f"(rc={proc.returncode}):\n{proc.stderr[-3000:]}"
+    )
