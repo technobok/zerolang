@@ -1803,7 +1803,7 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     cb: cnameOf tid: bt name: btn.stringview
     recvR9: colRecvRef ctx: ctx bn: bn.stringview
     if mn.stringview == "append" then {
-        v: listArg symtab: symtab ctx: ctx call: call label: "from"
+        v: colArg symtab: symtab ctx: ctx call: call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR9}, \{v})"
         return e0
     }
@@ -2706,6 +2706,48 @@ dottedParentChild: function {n: Node} out String is {
     }
 }
 
+# emitCrossUnitBareCreate -- a bare (no-arg) cross-unit construction
+# `unit.Type.create` written as a dotted path (not a call): emit `<Type>_create()`
+# (the user create, no receiver). "" when not such a 3-segment bare create.
+emitCrossUnitBareCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx parent: Node child: StringView} out String is {
+    if child != "create" then {
+        return "".string
+    }
+    pbase9: dottedBaseAtom n: parent
+    ptype9: dottedChildText n: parent
+    if pbase9.length == 0 then {
+        return "".string
+    }
+    if ptype9.length == 0 then {
+        return "".string
+    }
+    if (symtab.reg.isUnitName name: pbase9.stringview) == false then {
+        return "".string
+    }
+    k9: "\{pbase9}.\{ptype9}".string
+    go9: symtab.typing.resolved.get key: k9
+    tid9: 0.u64
+    match (
+        go9
+    ) case some then {
+        tid9 = go9
+    } case none then {}
+    if tid9 == 0 then {
+        return "".string
+    }
+    cco9: symtab.typing.childOf parentTypeId: tid9 name: "create"
+    match (
+        cco9
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.FUNCTION then {
+            ccbn9: typeNameOfReg9 symtab: symtab tid: cco9
+            ccb9: cnameOf tid: cco9 name: ccbn9.stringview
+            return "\{ccb9}()"
+        }
+    } case none then {}
+    return "".string
+}
+
 # emitCrossUnitExplicitCreate -- an explicit cross-unit construction
 # `unit.Type.create args`: resolve `unit.Type` and emit the user `create` call
 # `<Type>_create(args)` (no receiver). "" when not such a 3-segment create.
@@ -3142,7 +3184,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if fastid9 > 0 when (symtab.reg.typetypeOf typeId: fastid9) == ztypes.ztypetype.FUNCTION then {
                 return fbcn9
             }
-            return "\{fbcn9}()"
+            # only a NO-PARAM fn coerces to `name()`; a fn with params reached here
+            # means a local binding shadows the fn name -> emit the local instead.
+            fpn9: (List String)
+            fpi9: (List u64)
+            recFieldLists symtab: symtab tid: brid names: fpn9 ids: fpi9
+            if fpn9.length == 0 then {
+                return "\{fbcn9}()"
+            }
         }
         ac2: aliasResolve ctx: ctx name: av
         return (ztypes.mangleVarName name: ac2.stringview)
@@ -3165,6 +3214,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             } case none then {}
         }
         mnc0: atomTextOf n: n.child
+        ccbc9: emitCrossUnitBareCreate symtab: symtab ctx: ctx parent: n.parent child: mnc0.stringview
+        if ccbc9.length > 0 then {
+            return ccbc9
+        }
         if mnc0.stringview == "string" then {
             scl: bindLitIndex symtab: symtab ctx: ctx n: n.parent
             if scl > 0 then {
@@ -4436,6 +4489,38 @@ stringCopyLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u6
     }
 }
 
+# copyRvalueHoist -- `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`):
+# the receiver is a non-lvalue, so hoist it to a borrowed temp (`list.get` returns
+# a shallow view -- never freed) and return `String_copy(&temp)`. "" otherwise.
+copyRvalueHoist: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView buf: String.borrow} out String is {
+    match (
+        n
+    ) case expression then {
+        return (copyRvalueHoist symtab: symtab ctx: ctx n: n.expression ind: ind buf: buf)
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview != "copy" then {
+            return "".string
+        }
+        pnm9: stampNameDeep symtab: symtab n: n.parent
+        if pnm9.stringview != "String" then {
+            return "".string
+        }
+        pv9: emitExpr symtab: symtab ctx: ctx n: n.parent
+        if (isNonLvalueArg s: pv9.stringview) == false then {
+            return "".string
+        }
+        hn9: ctx.argHoistCtr
+        ctx.argHoistCtr = ctx.argHoistCtr + 1
+        tnm9: "_cpv\{hn9}".string
+        th9: "\{ind}\{ctx.strC}_t \{tnm9} = \{pv9};\n"
+        buf.append th9.stringview
+        return "\{ctx.strC}_copy(&\{tnm9})"
+    } else {
+        return "".string
+    }
+}
+
 # emitStringBindValue -- bind an interpolated-literal value to a String
 # local (build chain + binding + scope-end free); false when the value
 # is not an interpolated literal.
@@ -4675,7 +4760,14 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 tgo
             ) case some then {
                 ct = typeRefC symtab: symtab ctx: ctx tid: tgo thisTid: 0
-            } case none then {}
+            } case none then {
+                vgo9: symtab.typing.nodeType.get key: (nodeIdOf9 n: n.value)
+                match (
+                    vgo9
+                ) case some then {
+                    ct = typeRefC symtab: symtab ctx: ctx tid: vgo9 thisTid: 0
+                } case none then {}
+            }
         }
         nm: n.name.stringview
         if ctx.genActive when (isYieldNode n: n.value) then {
@@ -4692,6 +4784,9 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             return
         }
         ltid: stampIdOf symtab: symtab nid: n.nodeid.u64
+        if ltid == 0 then {
+            ltid = stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.value)
+        }
         ltid = chaseColMono symtab: symtab tid: ltid
         ltnm: typeNameOfReg9 symtab: symtab tid: ltid
         ltmn: monoOriginName symtab: symtab tid: ltid
@@ -4775,7 +4870,8 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 if (isPtrVar ctx: ctx name: svb.stringview) then {
                     svacc4 = "->".string
                 }
-                lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{svb}\{svacc4}data, \{svb}\{svacc4}size };\n"
+                svbR4: aliasResolve ctx: ctx name: svb.stringview
+                lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{svbR4}\{svacc4}data, \{svbR4}\{svacc4}size };\n"
                 buf.append lsv4.stringview
                 return
             }
@@ -4851,12 +4947,17 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
     } case reassignment then {
         nm2: emitReassignLvalue symtab: symtab ctx: ctx n: n.topath
-        rvi9: emitInterpArgExpr symtab: symtab ctx: ctx n: n.value
+        rcph9: copyRvalueHoist symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
         rv2: "".string
-        if rvi9.length > 0 then {
-            rv2 = rvi9
+        if rcph9.length > 0 then {
+            rv2 = rcph9
         } else {
-            rv2 = emitExpr symtab: symtab ctx: ctx n: n.value
+            rvi9: emitInterpArgExpr symtab: symtab ctx: ctx n: n.value
+            if rvi9.length > 0 then {
+                rv2 = rvi9
+            } else {
+                rv2 = emitExpr symtab: symtab ctx: ctx n: n.value
+            }
         }
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
