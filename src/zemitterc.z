@@ -806,6 +806,26 @@ implicitTakeFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
     cn0: atomTextOf n: call.callable
     ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
     if ct == 0 then {
+        # A dotted method call resolves the method through the receiver's type,
+        # not a bare-name lookup: a free function sharing the method's name
+        # (zast.mkNamedOp vs the Parser.mkNamedOp method) otherwise wins below,
+        # and its mismatched param names leave a moved-in owned arg un-zeroed.
+        mdch0: dottedChildText n: call.callable
+        if mdch0.length > 0 then {
+            mrcv0: dottedReceiverStampId symtab: symtab callable: call.callable
+            if mrcv0 > 0 then {
+                mmco0: symtab.typing.childOf parentTypeId: mrcv0 name: mdch0.stringview
+                match (
+                    mmco0
+                ) case some then {
+                    if (symtab.reg.typetypeOf typeId: mmco0) == ztypes.ztypetype.FUNCTION then {
+                        ct = mmco0
+                    }
+                } case none then {}
+            }
+        }
+    }
+    if ct == 0 then {
         # a cross-unit construction's callable is a dotted path (e.g.
         # `zast.UnitData`); atomTextOf is empty, so resolve the type by its
         # child name to reach its consuming `create` below (the same-unit path
