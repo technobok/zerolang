@@ -274,6 +274,16 @@ def zc_binary(tmp_path_factory):
     return _build_zerolang_unit("zc", tmp_path_factory)
 
 
+@pytest.fixture(scope="session")
+def zc_stage2_binary(zc_binary, tmp_path_factory):
+    """Build src/zc.z with the PORTED stage1 zc -- the bootstrap fixpoint.
+
+    stage1 (``zc_binary``) is src/zc.z compiled by the reference (zc.py);
+    stage2 is src/zc.z compiled by stage1. Both are the same ported compiler
+    over the same inputs, so a correct self-host emits byte-identical zc.c."""
+    return _build_unit_with_ported_zc("zc", zc_binary, tmp_path_factory)
+
+
 def make_tokenizer(source: str) -> Tokenizer:
     """Create a Tokenizer from a source String."""
     fh = io.StringIO(source)
