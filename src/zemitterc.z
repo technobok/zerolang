@@ -941,10 +941,15 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                     isrc9: implicitTakeSource symtab: symtab ctx: ctx n: a9.operation
                     if isrc9.length > 0 then {
                         istid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a9.operation)
-                        if (symtab.reg.hasDestructorName typeId: istid9) then {
-                            itc9: typeRefC symtab: symtab ctx: ctx tid: istid9 thisTid: 0
-                            iinv9: "\{ind}\{isrc9} = (\{itc9}){0};\n"
-                            buf.append iinv9.stringview
+                        if (isHeapPtrCollection symtab: symtab ctx: ctx tid: istid9) then {
+                            iinvh9: "\{ind}\{isrc9} = NULL;\n"
+                            buf.append iinvh9.stringview
+                        } else {
+                            if (symtab.reg.hasDestructorName typeId: istid9) then {
+                                itc9: typeRefC symtab: symtab ctx: ctx tid: istid9 thisTid: 0
+                                iinv9: "\{ind}\{isrc9} = (\{itc9}){0};\n"
+                                buf.append iinv9.stringview
+                            }
                         }
                     }
                 }
@@ -1733,18 +1738,21 @@ collectionValueCallRhs: function {n: Node} out bool is {
     }
 }
 
-# listGetBorrowRhs -- the binding RHS is a `<list>.get i:` over a List/ListView,
-# whose result is a non-owning shallow copy of the list's element. The binding
-# therefore must NOT be freed at scope exit (the list owns the element); freeing
-# it prematurely frees the element -> use-after-free on the next get. (Map.get
-# returns an owned Option, handled elsewhere -- only List/ListView here.)
-listGetBorrowRhs: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+# bindingRhsIsBorrow -- the binding RHS yields a non-owning borrow, so the bound
+# String local must NOT be freed at scope exit (its owner -- the list or the
+# struct -- frees it; a premature free is a use-after-free / double-free). Two
+# shapes: a `<list>.get i:` over a List/ListView (a shallow element view), and a
+# plain field access `<base>.<field>` (the field's String is owned by `<base>`).
+# A no-arg method call (the child resolves to a FUNCTION) returns an owned value
+# and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
+# `.copy` / `.string` / `.take` are owned and handled before this check.)
+bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (listGetBorrowRhs symtab: symtab n: n.expression)
+        return (bindingRhsIsBorrow symtab: symtab n: n.expression)
     } case statementline then {
-        return (listGetBorrowRhs symtab: symtab n: n.statementline)
+        return (bindingRhsIsBorrow symtab: symtab n: n.statementline)
     } case call then {
         ch: dottedChildText n: n.callable
         if ch.stringview != "get" then {
@@ -1760,6 +1768,20 @@ listGetBorrowRhs: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
             return true
         }
         return false
+    } case dottedpath then {
+        ch9: atomTextOf n: n.child
+        ptid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+        cco9: symtab.typing.childOf parentTypeId: ptid9 name: ch9.stringview
+        match (
+            cco9
+        ) case some then {
+            if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.FUNCTION then {
+                return false
+            }
+            return true
+        } case none then {
+            return false
+        }
     } else {
         return false
     }
@@ -3128,6 +3150,12 @@ emitStringMethod: function {ctx: Ctx recv: StringView recvIsPtr: bool mn: String
         }
         return "\{ctx.strC}_copy(&\{recv})"
     }
+    if mn == "string" then {
+        if recvIsPtr then {
+            return "\{ctx.strC}_copy(\{recv})"
+        }
+        return "\{ctx.strC}_copy(&\{recv})"
+    }
     if mn == "length" then {
         if recvIsPtr then {
             return "\{recv}->size"
@@ -3250,10 +3278,19 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 se1: "\{ctx.strC}_from_view(\{sbv0})"
                 return se1
             }
-            # `.string` on a String value -- or on an interpolated literal, which
-            # already evaluates to a built String -- is identity: emit the base.
+            # `.string` on a String yields an owned deep copy (the reference's
+            # `out String` semantics): a String lvalue (local/field/payload) must
+            # copy, else the owned result aliases the receiver's storage and
+            # use-after-frees when the receiver is a borrowed narrowed payload.
+            # An interpolated literal already evaluates to an owned built String
+            # (a non-lvalue rvalue) -- keep it as identity.
             if sbtn0.stringview == "String" then {
-                return (emitExpr symtab: symtab ctx: ctx n: n.parent)
+                sbv2: emitExpr symtab: symtab ctx: ctx n: n.parent
+                if (isNonLvalueArg s: sbv2.stringview) then {
+                    return sbv2
+                }
+                sptr2: pathIsPointer symtab: symtab ctx: ctx n: n.parent
+                return (emitStringMethod ctx: ctx recv: sbv2.stringview recvIsPtr: sptr2 mn: "string")
             }
         }
         if mnc0.stringview == "stringview" then {
@@ -4928,7 +4965,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } else {
                 lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
                 buf.append lst3.stringview
-                if (listGetBorrowRhs symtab: symtab n: n.value) == false then {
+                if (bindingRhsIsBorrow symtab: symtab n: n.value) == false then {
                     nmc3: nm.string
                     tmp.frees.append nmc3
                 }
@@ -4954,7 +4991,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
             if (symtab.reg.hasDestructorName typeId: ltid) then {
-                if (listGetBorrowRhs symtab: symtab n: n.value) == false then {
+                if (bindingRhsIsBorrow symtab: symtab n: n.value) == false then {
                     ldcb: cnameOf tid: ltid name: tn.stringview
                     ldf: "    \{ldcb}_destroy(&\{nm});\n"
                     ldfs: ldf.string
@@ -4981,6 +5018,11 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
+        # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
+        # are consumed by it -- invalidate each moved source so its scope-exit
+        # free no-ops (mirrors the binding case; disjoint from the bare-local
+        # move below, which a construction RHS never matches).
+        emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
         # a reassignment from a bare owned local is a MOVE: zero the source so its
         # scope-exit free no-ops (the lvalue -- a local or a struct field appended
         # into a container -- now owns the heap). Scalars/valtypes have no
@@ -7321,6 +7363,7 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
                     buf.append lo.stringview
                     ctx.ptrVars = (List String)
                     ctx.aliases = (Map String value: String)
+                    ctx.narrowBox = (Map String value: String)
                     registerReftypeParams symtab: symtab ctx: ctx fid: fid2
                     emitFnBody symtab: symtab ctx: ctx op: bm2.operation buf: buf
                     buf.append "}\n\n"
@@ -12077,6 +12120,7 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     # `c->field`. Reset for this method (names must not leak into other bodies).
     ctx.ptrVars = (List String)
     ctx.aliases = (Map String value: String)
+    ctx.narrowBox = (Map String value: String)
     encIsClass: false
     if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.CLASS then {
         encIsClass = true
@@ -12166,6 +12210,7 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     }
     ctx.ptrVars = (List String)
     ctx.aliases = (Map String value: String)
+    ctx.narrowBox = (Map String value: String)
 }
 
 # emitMonoNative -- a native fragment substituting z_StringView and (when
