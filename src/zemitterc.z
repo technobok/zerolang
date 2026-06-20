@@ -4754,6 +4754,9 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                         if (sret) == false then {
                             rv: emitExpr symtab: symtab ctx: ctx n: a.operation
                             flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
+                            if (isBareCName s: rv.stringview) then {
+                                emitReturnCleanup ctx: ctx tmp: tmp excludeVar: rv.stringview ind: ind buf: buf
+                            }
                             lr: "\{ind}return \{rv};\n"
                             buf.append lr.stringview
                         }
@@ -4766,6 +4769,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd.stringview
             } else {
+                emitReturnCleanup ctx: ctx tmp: tmp excludeVar: "" ind: ind buf: buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2.stringview
             }
@@ -7387,6 +7391,95 @@ isFunctionDefWithBody9: function {n: Node} out bool is {
         }
     } else {
         return false
+    }
+}
+
+# strHasSub -- substring containment with a dynamic needle, routed through a
+# StringView receiver: the emitter resolves .contains on a param, not on a
+# for-loop iterate element used directly as a method-call receiver.
+strHasSub: function {hay: StringView needle: StringView} out bool is {
+    return (hay.contains needle: needle)
+}
+
+# isBareCName -- true if s is a plain C identifier (only [A-Za-z0-9_]); such a
+# return value is a bare local whose scope cleanup can safely run before the
+# return. A compound expression (call / deref / field / cast) must be hoisted
+# into a temp first, handled separately.
+isBareCName: function {s: StringView} out bool is {
+    if s.length == 0 then {
+        return false
+    }
+    i: 0.u64
+    for while i < s.length loop {
+        bo: s.byteAt i
+        match (
+            bo
+        ) case some then {
+            ok: false
+            if bo >= 48 when bo <= 57 then { ok = true }
+            if bo >= 65 when bo <= 90 then { ok = true }
+            if bo >= 97 when bo <= 122 then { ok = true }
+            if bo == 95 then { ok = true }
+            if (ok) == false then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+# emitReturnCleanup -- emit the owned-local destructors registered in tmp (frees +
+# listFrees) BEFORE a return, reclaiming locals on the diverging path the
+# function-end flush never reaches. Does NOT pop the registrations (other returns
+# and the end flush still need them). Skips the returned value (excludeVar) and
+# any narrowed / aliased subject, whose function-scope destructor is wrong-typed
+# where a match arm shadows it. Mirrors the reference _emit_scope_cleanup(exclude).
+emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr excludeVar: StringView ind: StringView buf: String.borrow} is {
+    needles: (List String)
+    if excludeVar.length > 0 then {
+        needles.append "(&\{excludeVar})"
+        needles.append "(\{excludeVar})"
+    }
+    with nbI: ctx.narrowBox.iterateItems do for nbe: nbI loop {
+        needles.append "(&\{nbe.key})"
+        needles.append "(\{nbe.key})"
+    }
+    with alI: ctx.aliases.iterateItems do for ale: alI loop {
+        needles.append "(&\{ale.key})"
+        needles.append "(\{ale.key})"
+    }
+    fiterR: tmp.frees.iterate
+    for fvR: fiterR loop {
+        keepF: true
+        if fvR.stringview == excludeVar then {
+            keepF = false
+        }
+        if (ctx.narrowBox.has key: fvR.string) then {
+            keepF = false
+        }
+        if (ctx.aliases.has key: fvR.string) then {
+            keepF = false
+        }
+        if keepF then {
+            lfR: "\{ind}\{ctx.strC}_free(&\{fvR});\n"
+            buf.append lfR.stringview
+        }
+    }
+    lfiterR: tmp.listFrees.iterate
+    for lfsR: lfiterR loop {
+        keepL: true
+        nIt: needles.iterate
+        for nd: nIt loop {
+            if (strHasSub hay: lfsR.stringview needle: nd.stringview) then {
+                keepL = false
+            }
+        }
+        if keepL then {
+            buf.append lfsR.stringview
+        }
     }
 }
 
