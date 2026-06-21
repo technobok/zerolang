@@ -567,6 +567,7 @@ Ctx: class {
     ptrVars: (List String)
     aliases: (Map String value: String)
     narrowBox: (Map String value: String)
+    narrowTid: (Map String value: u64)
     genActive: bool
     genYieldCount: u64
     genYieldNext: u64
@@ -643,19 +644,15 @@ pathIsPointer: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is
 
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
 aliasResolve: function {ctx: Ctx name: StringView} out String is {
-    # A match-arm narrowing (narrowBox) shadows a stale for-loop/borrow/take alias
-    # for the same name: inside the arm the name must resolve to the narrowed union
-    # payload cast, not the un-narrowed borrow pointer. Triggers ONLY when BOTH a
-    # narrowing box AND an alias are live for the name (an aliased subject narrowed
-    # in a match arm) -- mirrors takeSourceResolve, which already prefers narrowBox.
-    if (ctx.aliases.has key: name.string) when (ctx.narrowBox.has key: name.string) then {
-        nbo: ctx.narrowBox.get key: name.string
-        match (
-            nbo
-        ) case some then {
-            return nbo.string
-        } case none then {}
-    }
+    # A match-arm narrowing (narrowBox) takes priority: inside the arm the name
+    # resolves to the narrowed union payload cast, not the un-narrowed binding or a
+    # stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
+    nbo: ctx.narrowBox.get key: name.string
+    match (
+        nbo
+    ) case some then {
+        return nbo.string
+    } case none then {}
     ao: ctx.aliases.get key: name.string
     match (
         ao
@@ -778,6 +775,48 @@ takeMoveCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String 
     } else {
         return "".string
     }
+}
+
+# emitNarrowedTakeZero -- before a return's scope cleanup, zero the payload box of
+# every narrowed-subject `.take` reachable in the return value (a bare take, or a take
+# passed as a construction/call arg). The un-shadowed narrowed subject is freed by the
+# return cleanup; its `.take` moved the payload out as a shallow struct copy sharing the
+# heap buffer, so the box must read {0} when the destructor walks it, else that buffer is
+# double-freed. Non-narrowed takes are kept live by refsLocal and are not touched here.
+# Mirrors the reference's implicit-take invalidation, flushed before scope cleanup.
+emitNarrowedTakeZero: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView buf: String.borrow} is {
+    match (
+        n
+    ) case expression then {
+        emitNarrowedTakeZero symtab: symtab ctx: ctx n: n.expression ind: ind buf: buf
+    } case statementline then {
+        emitNarrowedTakeZero symtab: symtab ctx: ctx n: n.statementline ind: ind buf: buf
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview == "take" then {
+            bn9: atomTextOf n: n.parent
+            if (ctx.narrowBox.has key: bn9.string) then {
+                box9: takeSourceResolve ctx: ctx name: bn9.stringview
+                tido9: ctx.narrowTid.get key: bn9.string
+                match (
+                    tido9
+                ) case some then {
+                    ct9: typeRefC symtab: symtab ctx: ctx tid: tido9 thisTid: 0
+                    inv9: "\{ind}\{box9} = (\{ct9}){0};\n"
+                    buf.append inv9.stringview
+                } case none then {}
+            }
+        }
+    } case call then {
+        aiter9: n.arguments.iterate
+        for a9: aiter9 loop {
+            match (
+                a9
+            ) case namedoperation then {
+                emitNarrowedTakeZero symtab: symtab ctx: ctx n: a9.operation ind: ind buf: buf
+            } else {}
+        }
+    } else {}
 }
 
 # implicitTakeSource -- the C source local of a bare reftype/String atom arg
@@ -1769,13 +1808,13 @@ collectionValueCallRhs: function {n: Node} out bool is {
 # A no-arg method call (the child resolves to a FUNCTION) returns an owned value
 # and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
 # `.copy` / `.string` / `.take` are owned and handled before this check.)
-bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (bindingRhsIsBorrow symtab: symtab n: n.expression)
+        return (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.expression)
     } case statementline then {
-        return (bindingRhsIsBorrow symtab: symtab n: n.statementline)
+        return (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.statementline)
     } case call then {
         ch: dottedChildText n: n.callable
         if ch.stringview != "get" then {
@@ -1793,6 +1832,15 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
         return false
     } case dottedpath then {
         ch9: atomTextOf n: n.child
+        bnm9: atomTextOf n: n.parent
+        if (ctx.narrowBox.has key: bnm9.string) then {
+            # a field read off a narrowed subject is a shallow-copy borrow (it aliases
+            # the subject's heap); an ownership builtin yields an owned value.
+            if ch9.stringview == "take" then { return false }
+            if ch9.stringview == "copy" then { return false }
+            if ch9.stringview == "string" then { return false }
+            return true
+        }
         ptid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
         cco9: symtab.typing.childOf parentTypeId: ptid9 name: ch9.stringview
         match (
@@ -4393,7 +4441,7 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
     } case atomid then {
         tn9: stampNameOf symtab: symtab nid: n.nodeid.u64
         an9: n.name.stringview
-        anm: an9.string
+        anm: aliasResolve ctx: ctx name: an9
         if tn9.stringview == "String" then {
             lps: "\{ind}\{ctx.strC}_print(&\{anm});\n"
             buf.append lps.stringview
@@ -4807,6 +4855,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                                 retNm9: "_ret\{rtmpN9}"
                                 hdecl9: "\{ind}\{retCt9} \{retNm9} = \{rv};\n"
                                 buf.append hdecl9.stringview
+                                emitNarrowedTakeZero symtab: symtab ctx: ctx n: a.operation ind: ind buf: buf
                                 buf.append clProbe9.stringview
                                 hret9: "\{ind}return \{retNm9};\n"
                                 buf.append hret9.stringview
@@ -5031,7 +5080,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             } else {
                 lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
                 buf.append lst3.stringview
-                if (bindingRhsIsBorrow symtab: symtab n: n.value) == false then {
+                if (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.value) == false then {
                     nmc3: nm.string
                     tmp.frees.append nmc3
                 }
@@ -5057,7 +5106,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
             if (symtab.reg.hasDestructorName typeId: ltid) then {
-                if (bindingRhsIsBorrow symtab: symtab n: n.value) == false then {
+                if (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.value) == false then {
                     ldcb: cnameOf tid: ltid name: tn.stringview
                     ldf: "    \{ldcb}_destroy(&\{nm});\n"
                     ldfs: ldf.string
@@ -5539,26 +5588,23 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
         didSeed: false
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
-                l3u: "\{ind}    \{pc} \{sname} = *(\{pc}*)_m\{mN}.data;\n"
-                buf.append l3u.stringview
+                cmt9: "\{ind}    /* alias: \{sname} => (*(\{pc}*)_m\{mN}.data) */\n"
+                buf.append cmt9.stringview
+                nbv: "(*(\{pc}*)_m\{mN}.data)".string
+                ctx.narrowBox.set key: sname.string value: nbv
                 co: symtab.typing.childOf parentTypeId: vtid name: arm
                 match (
                     co
                 ) case some then {
-                    pn: typeNameOfReg9 symtab: symtab tid: co
-                    sc: cTypeOf name: pn.stringview
-                    if sc.length == 0 then {
-                        nbv: "(*(\{pc}*)_m\{mN}.data)".string
-                        ctx.narrowBox.set key: sname.string value: nbv
-                        didSeed = true
-                    }
+                    ctx.narrowTid.set key: sname.string value: co
                 } case none then {}
+                didSeed = true
             } else {
                 l3: "\{ind}    \{pc} \{sname} = _m\{mN}.data.\{arm};\n"
                 buf.append l3.stringview
+                l4: "\{ind}    (void)\{sname};\n"
+                buf.append l4.stringview
             }
-            l4: "\{ind}    (void)\{sname};\n"
-            buf.append l4.stringview
         }
         if assignTo.length > 0 then {
             vx9: emitExpr symtab: symtab ctx: ctx n: c.statement
@@ -5572,6 +5618,7 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
         }
         if didSeed then {
             ctx.narrowBox.delete key: sname.string
+            ctx.narrowTid.delete key: sname.string
         }
         l5: "\{ind}    break;\n"
         buf.append l5.stringview
@@ -7589,16 +7636,14 @@ isRegisteredOwned: function {tmp: TmpCtr name: StringView} out bool is {
 # BEFORE a return, reclaiming them on the diverging path the function-end flush
 # never reaches. Does NOT pop (other returns + the end flush still need them).
 # Skips any local REFERENCED in the return expression `retExpr` (it is part of, or
-# borrowed by, the return value) and any narrowed/aliased subject (whose
-# function-scope destructor is wrong-typed where a match arm shadows it).
+# borrowed by, the return value) and any non-owning alias (`ctx.aliases`). A
+# match-arm-narrowed subject is NOT skipped -- the arm aliases it via narrowBox (no
+# shadow), so it stays a normal owned local whose destructor is correctly typed here.
 emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView ind: StringView buf: String.borrow} is {
     fiterR: tmp.frees.iterate
     for fvR: fiterR loop {
         keepF: true
         if (refsLocal expr: retExpr name: fvR.stringview) then {
-            keepF = false
-        }
-        if (ctx.narrowBox.has key: fvR.string) then {
             keepF = false
         }
         if (ctx.aliases.has key: fvR.string) then {
@@ -7616,9 +7661,6 @@ emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView ind: Strin
         var9: tmp.listFreeVars.get i: li9
         keepL: true
         if (refsLocal expr: retExpr name: var9.stringview) then {
-            keepL = false
-        }
-        if (ctx.narrowBox.has key: var9.string) then {
             keepL = false
         }
         if (ctx.aliases.has key: var9.string) then {
@@ -7799,7 +7841,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1
     }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool))
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
