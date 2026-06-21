@@ -831,7 +831,14 @@ implicitTakeSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
         nm: n.name.stringview
         rid: resolveTypeIdByName symtab: symtab ctx: ctx name: nm
         if rid > 0 then {
-            return "".string
+            rtt9: symtab.reg.typetypeOf typeId: rid
+            if rtt9 != ztypes.ztypetype.FUNCTION then {
+                return "".string
+            }
+            mfn9: userFnId symtab: symtab ctx: ctx name: nm
+            if mfn9 > 0 then {
+                return "".string
+            }
         }
         return (takeSourceResolve ctx: ctx name: nm)
     } else {
@@ -910,6 +917,23 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     }
     if soO.stringview == "Result" when bnO.stringview == "Result" then {
         return true
+    }
+    # user-defined union arm construction `MyUnion.arm <payload>`: the base atom
+    # is the union TYPE (the child is the arm selector, not a type), so the
+    # child-name resolution below misses it. A non-lock arm MOVES its payload
+    # into the heap box, so the source must be zeroed (a lock arm BORROWS it).
+    if bnO.length > 0 then {
+        uctO: resolveTypeIdByName symtab: symtab ctx: ctx name: bnO.stringview
+        if uctO > 0 then {
+            if (symtab.reg.typetypeOf typeId: uctO) == ztypes.ztypetype.UNION then {
+                if (monoOriginName symtab: symtab tid: uctO).length == 0 then {
+                    uarmO: dottedChildText n: call.callable
+                    if (symtab.typing.isChildLockArm parentTypeId: uctO name: uarmO.stringview) == false then {
+                        return true
+                    }
+                }
+            }
+        }
     }
     cn0: atomTextOf n: call.callable
     ct: userFnId symtab: symtab ctx: ctx name: cn0.stringview
@@ -4825,7 +4849,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                     hasArg = true
                     bx: emitOptionBoxHoist symtab: symtab ctx: ctx n: a.operation ind: ind tmp: tmp buf: buf
                     if bx.length > 0 then {
-                        emitReturnCleanup ctx: ctx tmp: tmp retExpr: bx.stringview ind: ind buf: buf
+                        emitReturnCleanup ctx: ctx tmp: tmp retExpr: bx.stringview keepRefd: true ind: ind buf: buf
                         lrb: "\{ind}return \{bx};\n"
                         buf.append lrb.stringview
                     } else {
@@ -4833,30 +4857,52 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                         if (sret) == false then {
                             rv: emitExpr symtab: symtab ctx: ctx n: a.operation
                             flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
-                            # A non-trivial value-type return expression may read an owned
-                            # local the scope cleanup is about to free (e.g. a StringView
-                            # into a local String): materialize it into a temp FIRST, then
-                            # run the cleanup. The cleanup (clProbe9) excludes locals named
-                            # in rv, so a local moved into the returned aggregate is kept.
-                            # Pointer returns (union/protocol/class) arrive as temps already
-                            # and a shallow pointer copy would be unsafe, so they skip this.
+                            # A non-trivial value-type return may read an owned local the
+                            # cleanup would free -- a borrowed element or view (e.g.
+                            # `container.get idx`, or a StringView into a local String).
+                            # Materialize rv into a temp FIRST, then free. When an owned
+                            # local is named in rv (leakFix9), free ALL owned locals
+                            # (clFull9) after zeroing the moved-in call-arg sources
+                            # (emitValueTakeInvalidations): a read-from local is reclaimed
+                            # and a moved-in local's free is a no-op. Pointer returns
+                            # (protocol / Map / Set / by-ref class -- isPtr9) arrive as bare
+                            # temps; hoisting a shallow pointer copy then freeing it would
+                            # dangle, so they keep the refsLocal (clProbe9) cleanup inline.
                             clProbe9: "".string
-                            emitReturnCleanup ctx: ctx tmp: tmp retExpr: rv.stringview ind: ind buf: clProbe9
+                            emitReturnCleanup ctx: ctx tmp: tmp retExpr: rv.stringview keepRefd: true ind: ind buf: clProbe9
+                            clFull9: "".string
+                            emitReturnCleanup ctx: ctx tmp: tmp retExpr: rv.stringview keepRefd: false ind: ind buf: clFull9
+                            leakFix9: false
+                            if clFull9.length > clProbe9.length then {
+                                leakFix9 = true
+                            }
                             rtid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
                             retCt9: typeRefC symtab: symtab ctx: ctx tid: rtid9 thisTid: 0
                             isPtr9: ctEndsWithStar ct: retCt9.stringview
                             trivial9: isBareCName s: rv.stringview
                             hoist9: false
-                            if (clProbe9.length > 0) when (trivial9 == false) when (isPtr9 == false) when (retCt9.size > 0) then {
-                                hoist9 = true
+                            if (trivial9 == false) when (isPtr9 == false) when (retCt9.size > 0) then {
+                                if clProbe9.length > 0 then {
+                                    hoist9 = true
+                                }
+                                if leakFix9 then {
+                                    hoist9 = true
+                                }
                             }
                             if hoist9 then {
                                 rtmpN9: tmp.next
                                 retNm9: "_ret\{rtmpN9}"
                                 hdecl9: "\{ind}\{retCt9} \{retNm9} = \{rv};\n"
                                 buf.append hdecl9.stringview
+                                if leakFix9 then {
+                                    emitValueTakeInvalidations symtab: symtab ctx: ctx n: a.operation ind: ind buf: buf
+                                }
                                 emitNarrowedTakeZero symtab: symtab ctx: ctx n: a.operation ind: ind buf: buf
-                                buf.append clProbe9.stringview
+                                if leakFix9 then {
+                                    buf.append clFull9.stringview
+                                } else {
+                                    buf.append clProbe9.stringview
+                                }
                                 hret9: "\{ind}return \{retNm9};\n"
                                 buf.append hret9.stringview
                             } else {
@@ -4874,7 +4920,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd.stringview
             } else {
-                emitReturnCleanup ctx: ctx tmp: tmp retExpr: "" ind: ind buf: buf
+                emitReturnCleanup ctx: ctx tmp: tmp retExpr: "" keepRefd: true ind: ind buf: buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2.stringview
             }
@@ -7639,12 +7685,14 @@ isRegisteredOwned: function {tmp: TmpCtr name: StringView} out bool is {
 # borrowed by, the return value) and any non-owning alias (`ctx.aliases`). A
 # match-arm-narrowed subject is NOT skipped -- the arm aliases it via narrowBox (no
 # shadow), so it stays a normal owned local whose destructor is correctly typed here.
-emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView ind: StringView buf: String.borrow} is {
+emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView keepRefd: bool ind: StringView buf: String.borrow} is {
     fiterR: tmp.frees.iterate
     for fvR: fiterR loop {
         keepF: true
-        if (refsLocal expr: retExpr name: fvR.stringview) then {
-            keepF = false
+        if keepRefd then {
+            if (refsLocal expr: retExpr name: fvR.stringview) then {
+                keepF = false
+            }
         }
         if (ctx.aliases.has key: fvR.string) then {
             keepF = false
@@ -7660,8 +7708,10 @@ emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView ind: Strin
         stmt9: tmp.listFrees.get i: li9
         var9: tmp.listFreeVars.get i: li9
         keepL: true
-        if (refsLocal expr: retExpr name: var9.stringview) then {
-            keepL = false
+        if keepRefd then {
+            if (refsLocal expr: retExpr name: var9.stringview) then {
+                keepL = false
+            }
         }
         if (ctx.aliases.has key: var9.string) then {
             keepL = false

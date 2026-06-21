@@ -1,0 +1,40 @@
+# Inc 3(b) forcing case: per-return cleanup must distinguish a value MOVED into
+# the return value (keep/zero) from an owned local merely READ FROM (free it).
+
+Box: union {
+    held: String
+    empty: null
+}
+
+# union-arm MOVE at return: the owned String `s` is moved into the heap box.
+# The free-all return cleanup must zero `s` (via the union-arm take-invalidation)
+# so its destructor is a no-op -- else a double free.
+wrap: function {tag: u64} out Box is {
+    s: "boxed".string
+    return (Box.held s)
+}
+
+# READ-FROM at return: `buf` is an owned local; `.copy` deep-copies an independent
+# String out of it. `buf` must be FREED (it is not part of the return value) --
+# the old refsLocal keep-alive leaked it.
+dup: function {seed: u64} out String is {
+    buf: "data".string
+    return buf.copy
+}
+
+describe: function {bx: Box} out String is {
+    match (
+        bx
+    ) case held then {
+        return bx.copy
+    } case empty then {
+        return "empty".string
+    }
+}
+
+main: function is {
+    bx: wrap tag: 1.u64
+    d: describe bx: bx
+    r: dup seed: 2.u64
+    print "\{d} \{r}"
+}
