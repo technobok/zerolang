@@ -10,7 +10,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -202,6 +202,16 @@ test-parser:
 
 test-infra:
 	uv run python -m pytest tests/ -m infra -n auto
+
+# Memory-leak gate: every buildable example + corpus program emitted by the
+# ported zc, built with ASan, run under detect_leaks=1; 0 bytes leaked
+# (KNOWN_LEAKY ratchets). Slow (one ASan binary per program) -- deliberately
+# NOT in `make test`. `leakcheck` runs the Python-free shell runner directly.
+test-leak:
+	uv run python -m pytest tests/test_emitc_leak_z.py -n auto
+
+leakcheck:
+	bash tests/leakcheck.sh
 
 # Re-run only tests that failed in the previous run.
 test-lf:
