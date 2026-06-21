@@ -5351,6 +5351,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 lgd9: "\{ind}goto L_done;\n"
                 buf.append lgd9.stringview
             } else {
+                emitReturnCleanup ctx: ctx tmp: tmp retExpr: "" keepRefd: true ind: ind buf: buf
                 lrt9: "\{ind}return;\n"
                 buf.append lrt9.stringview
             }
@@ -7526,7 +7527,7 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
                     ctx.aliases = (Map String value: String)
                     ctx.narrowBox = (Map String value: String)
                     registerReftypeParams symtab: symtab ctx: ctx fid: fid2
-                    emitFnBody symtab: symtab ctx: ctx op: bm2.operation buf: buf
+                    emitFnBody symtab: symtab ctx: ctx op: bm2.operation fid: fid2 buf: buf
                     buf.append "}\n\n"
                 } else {}
                 wj = wj + 1
@@ -7723,11 +7724,51 @@ emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView keepRefd: 
     }
 }
 
-emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node buf: String.borrow} is {
+emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node fid: u64 buf: String.borrow} is {
     match (
         op
     ) case functiondef then {
         tmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String) listFreeVars: (List String))
+        pnames9: (List String)
+        pids9: (List u64)
+        recFieldLists symtab: symtab tid: fid names: pnames9 ids: pids9
+        pj9: 0.u64
+        pn9: pnames9.length
+        for while pj9 < pn9 loop {
+            ppn9: pnames9.get i: pj9
+            ppid9: pids9.get i: pj9
+            pown9: symtab.typing.childOwnershipText parentTypeId: fid name: ppn9.stringview
+            if pown9.stringview == "TAKE" then {
+                ptnm9: typeNameOfReg9 symtab: symtab tid: ppid9
+                pmn9: ztypes.mangleVarName name: ppn9.stringview
+                if ptnm9.stringview == "String" then {
+                    pms9: pmn9.string
+                    tmp.frees.append pms9
+                } else {
+                    # owned .take Set/Map params are skipped: declared by value, but a
+                    # Set/Map _destroy frees the container as a heap pointer (would need
+                    # &name); none exist in the self-host.
+                    if (isHeapPtrCollection symtab: symtab ctx: ctx tid: ppid9) == false then {
+                        pcm9: fieldMonoId symtab: symtab ctx: ctx tid: ppid9
+                        puse9: pcm9
+                        if (symtab.reg.hasDestructorName typeId: pcm9) == false then {
+                            prbn9: resolveTypeIdByName symtab: symtab ctx: ctx name: ptnm9.stringview
+                            if prbn9 > 0 then {
+                                puse9 = prbn9
+                            }
+                        }
+                        if (symtab.reg.hasDestructorName typeId: puse9) then {
+                            pcb9: cnameOf tid: puse9 name: ptnm9.stringview
+                            pdf9: "    \{pcb9}_destroy(&\{pmn9});\n"
+                            pdfs9: pdf9.string
+                            tmp.listFrees.append pdfs9
+                            tmp.listFreeVars.append pmn9.string
+                        }
+                    }
+                }
+            }
+            pj9 = pj9 + 1
+        }
         emitBodyOpt symtab: symtab ctx: ctx o: op.body ind: "    " tmp: tmp buf: buf
         fiter9: tmp.frees.iterate
         for fv: fiter9 loop {
@@ -8471,20 +8512,27 @@ payloadDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 arm: St
         co
     ) case some then {
         pn: typeNameOfReg9 symtab: symtab tid: co
-        rid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: pn.stringview)
-        if rid > 0 then {
-            # Build the destructor cname the way the emitter NAMES its definitions
-            # (cnameOf + suffix), not from the stored destructorName String -- the
-            # latter is a plain name (`String_destroy`) the port never substitutes
-            # to the id-based form, and binding it off the borrowed registry value
-            # would move out of the borrow (scope-exit free -> UAF). String, the
-            # only native `_free` type, always owns its heap and is freed here.
-            if pn.stringview == "String" then {
-                return "\{ctx.strC}_free".string
-            } else if (symtab.reg.hasDestructorName typeId: rid) then {
-                cb: cnameOf tid: rid name: pn.stringview
-                return "\{cb}_destroy".string
+        if pn.stringview == "null" then {
+            return "".string
+        }
+        if pn.stringview == "String" then {
+            return "\{ctx.strC}_free".string
+        }
+        # childOf already resolves the arm to its concrete (possibly cross-unit)
+        # payload id; canonicalize a destructor-less shell via resolveTypeIdByName,
+        # the same way the List-element destructor does. Build the cname with
+        # cnameOf (a fresh String) -- never bind the borrowed destructorName, which
+        # would move out of the registry borrow (scope-exit free -> UAF).
+        rid: co
+        if (symtab.reg.hasDestructorName typeId: co) == false then {
+            rbn: resolveTypeIdByName symtab: symtab ctx: ctx name: pn.stringview
+            if rbn > 0 then {
+                rid = rbn
             }
+        }
+        if (symtab.reg.hasDestructorName typeId: rid) then {
+            cb: cnameOf tid: rid name: pn.stringview
+            return "\{cb}_destroy".string
         }
     } case none then {}
     return "".string
@@ -12534,7 +12582,7 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
         if isGen9 then {
             emitGenPrologue ctx: ctx buf: buf
         }
-        emitFnBody symtab: symtab ctx: ctx op: op buf: buf
+        emitFnBody symtab: symtab ctx: ctx op: op fid: mid buf: buf
         if isGen9 then {
             emitGenEpilogue ctx: ctx buf: buf
             ctx.genActive = false
