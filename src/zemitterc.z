@@ -8675,6 +8675,20 @@ setDestroyItems: function {isStr: bool strC: StringView} out String is {
     return "".string
 }
 
+setFreeItemDup: function {isStr: bool strC: StringView} out String is {
+    if isStr then {
+        return "        \{strC}_free(&_item);\n".string
+    }
+    return "".string
+}
+
+setFreeItemDel: function {isStr: bool strC: StringView} out String is {
+    if isStr then {
+        return "    \{strC}_free(&_this->entries[idx].item);\n".string
+    }
+    return "".string
+}
+
 # emitOptionViewMono -- the borrowed-view option a collection iterator yields:
 # a {tag; void* data} struct with a no-op destroy (the view owns nothing).
 emitOptionViewMono: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 buf: String.borrow} is {
@@ -8724,6 +8738,8 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     hashBody: setHashBody isStr: isStr
     eqBody: setEqBody isStr: isStr
     destroyItems: setDestroyItems isStr: isStr strC: ctx.strC.stringview
+    freeItemDup: setFreeItemDup isStr: isStr strC: ctx.strC.stringview
+    freeItemDel: setFreeItemDel isStr: isStr strC: ctx.strC.stringview
     p: "\{runtimeDir}/z_Set.c.tmpl"
     raw: io.readText path: p.stringview
     match (
@@ -8735,7 +8751,9 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         t4: applyTmpl text: t3 key: "HASH_BODY" val: hashBody.stringview
         t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringview
         t6: applyTmpl text: t5 key: "DESTROY_ITEMS" val: destroyItems.stringview
-        t7: applyTmpl text: t6 key: "OPTIONVIEW" val: ov.stringview
+        t6b: applyTmpl text: t6 key: "FREE_ITEM_DUP" val: freeItemDup.stringview
+        t6c: applyTmpl text: t6b key: "FREE_ITEM_DEL" val: freeItemDel.stringview
+        t7: applyTmpl text: t6c key: "OPTIONVIEW" val: ov.stringview
         t8: applyTmpl text: t7 key: "OPTIONVIEW_TAG" val: ovu.stringview
         t9: applyTmpl text: t8 key: "SETITER" val: si.stringview
         buf.append t9.stringview
@@ -9674,7 +9692,17 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     ctx.fwdDeclaredTypes.set key: t.u64 value: true
                     lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
                     buf.append lx0.stringview
+                    fwdDtor9: false
                     if (symtab.reg.hasDestructorName typeId: t) then {
+                        fwdDtor9 = true
+                    }
+                    if mo.stringview == "Map" then {
+                        fwdDtor9 = true
+                    }
+                    if mo.stringview == "Set" then {
+                        fwdDtor9 = true
+                    }
+                    if fwdDtor9 then {
                         lx1: "static void \{cnX}_destroy(\{cnX}_t* p);\n"
                         buf.append lx1.stringview
                     }
@@ -11916,14 +11944,23 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
                 ds: "    \{ctx.strC}_free(&p->\{fname});\n"
                 buf.append ds.stringview
             } else {
-                frid: optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: ctx.mainName.stringview base: ftn.stringview)
-                if frid > 0 then {
-                    frid = chaseColMono symtab: symtab tid: frid
-                    frn2: typeNameOfReg9 symtab: symtab tid: frid
-                    if (symtab.reg.hasDestructorName typeId: frid) then {
-                        fcb: cnameOf tid: frid name: frn2.stringview
-                        df: "    \{fcb}_destroy(&p->\{fname});\n"
+                fmid9: fieldMonoId symtab: symtab ctx: ctx tid: fid
+                fneeds9: false
+                if (symtab.reg.hasDestructorName typeId: fmid9) then {
+                    fneeds9 = true
+                }
+                if (isHeapPtrCollection symtab: symtab ctx: ctx tid: fid) then {
+                    fneeds9 = true
+                }
+                if fneeds9 then {
+                    fmn9: typeNameOfReg9 symtab: symtab tid: fmid9
+                    fcb: cnameOf tid: fmid9 name: fmn9.stringview
+                    if (isHeapPtrCollection symtab: symtab ctx: ctx tid: fid) then {
+                        df: "    \{fcb}_destroy(p->\{fname});\n"
                         buf.append df.stringview
+                    } else {
+                        df2: "    \{fcb}_destroy(&p->\{fname});\n"
+                        buf.append df2.stringview
                     }
                 }
             }
@@ -12191,7 +12228,14 @@ emitCliCompositeClass: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 nam
             buf.append ds.stringview
         } else {
             dcm: fieldMonoId symtab: symtab ctx: ctx tid: dfi
+            dneeds9: false
             if (symtab.reg.hasDestructorName typeId: dcm) then {
+                dneeds9 = true
+            }
+            if (isHeapPtrCollection symtab: symtab ctx: ctx tid: dfi) then {
+                dneeds9 = true
+            }
+            if dneeds9 then {
                 dcn: typeNameOfReg9 symtab: symtab tid: dcm
                 dcb: cnameOf tid: dcm name: dcn.stringview
                 if (isHeapPtrCollection symtab: symtab ctx: ctx tid: dfi) then {

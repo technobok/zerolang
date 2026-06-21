@@ -35,10 +35,7 @@ _ASAN_CFLAGS = ["-fsanitize=address", "-g", "-O0", "-std=c17", "-w"]
 
 # Shrinking work queue -- keep in sync with KNOWN_LEAKY in tests/leakcheck.sh.
 KNOWN_LEAKY = {
-    "cli_basic",
     "maps",
-    "set_uniq",
-    "class_map_field",
     "class_map_field_methods",
 }
 
