@@ -130,6 +130,21 @@ atomName: function {n: Node} out String is {
     }
 }
 
+# addError -- append a typecheck diagnostic to the typing's error list,
+# deduped by node position so a spec resolved more than once reports once.
+addError: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String} is {
+    dup: false
+    with it: st.typing.errors.iterate do for prev: it loop {
+        if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno then {
+            dup = true
+        }
+    }
+    if (dup) == false then {
+        st.typing.errors.append (zast.ErrorData nodeid: nodeid lineno: lineno colno: colno err: e msg: msg.copy)
+        st.typing.isError = true
+    }
+}
+
 # resolveAtomType -- map a type-atom name to a SHALLOW shell type id. `this`
 # resolves to the enclosing record (passed as thisName); a leading-digit name is
 # a numeric-literal field/param default and resolves to f64 (has a dot) or i64;
@@ -7238,6 +7253,11 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
     vt: checkValue st: st unitName: unitName unitBody: unitBody node: asgn.value
     mvt: materialiseLiteral st: st unitName: unitName t: vt
     vt = mvt
+    if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.NULL then {
+        m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
+        addError st: st nodeid: asgn.nodeid lineno: asgn.lineno colno: asgn.colno e: zast.err.TYPEERROR msg: m1
+        return
+    }
     if vt > 0 then {
         bsrc: (List String)
         takePendingBorrow st: st dst: bsrc
