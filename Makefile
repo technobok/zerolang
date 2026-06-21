@@ -10,7 +10,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -212,6 +212,13 @@ test-leak:
 
 leakcheck:
 	bash tests/leakcheck.sh
+
+# Unified Python-free corpus gate: behavioral (.out stdout/exit goldens) + leak
+# (detect_leaks=1) + negative (.err error goldens) for every case, comparing the
+# ported zc to committed goldens (no Python at gate time). `--update` regenerates
+# goldens from the reference. Slow; NOT in `make test`.
+test-corpus:
+	bash tests/run_corpus.sh
 
 # Re-run only tests that failed in the previous run.
 test-lf:
