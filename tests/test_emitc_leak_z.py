@@ -34,10 +34,7 @@ _CORPUS = os.path.join(_REPO, "tests", "fixtures", "emitc_corpus")
 _ASAN_CFLAGS = ["-fsanitize=address", "-g", "-O0", "-std=c17", "-w"]
 
 # Shrinking work queue -- keep in sync with KNOWN_LEAKY in tests/leakcheck.sh.
-KNOWN_LEAKY = {
-    "maps",
-    "class_map_field_methods",
-}
+KNOWN_LEAKY: "set[str]" = set()
 
 
 def _units(d):
