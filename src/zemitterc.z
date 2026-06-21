@@ -912,6 +912,10 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     smidO: stampIdOf symtab: symtab nid: call.nodeid.u64
     soO: monoOriginName symtab: symtab tid: smidO
     bnO: dottedBaseAtom n: call.callable
+    mcO9: dottedChildText n: call.callable
+    if bnO.stringview == "meta" when mcO9.stringview == "create" then {
+        return true
+    }
     if soO.stringview == "Option" when bnO.stringview == "Option" then {
         return true
     }
@@ -2083,6 +2087,38 @@ emitInterpArgExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         }
         if cm.stringview == "stringview" then {
             return (emitInterpArgExpr symtab: symtab ctx: ctx n: n.parent)
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# emitInterpStmtValue -- like emitInterpArgExpr, but emits the interp build chain
+# as PRIOR statements into buf (so a referenced local is read at THIS point) and
+# returns the owned-String temp name "_sN"; "" otherwise. Used where the build
+# must precede the statement -- a reassignment drop-old, so `s = "\{s}x"` reads
+# old s before the old value is freed (mirrors emitStringBindValue / the
+# reference's _temp.decls). emitInterpBuild does NOT register _sN for free, so the
+# assignment `nm2 = _sN` moves the storage into the lvalue with no double-free.
+emitInterpStmtValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView tmp: TmpCtr buf: String.borrow} out String is {
+    match (
+        n
+    ) case expression then {
+        return (emitInterpStmtValue symtab: symtab ctx: ctx n: n.expression ind: ind tmp: tmp buf: buf)
+    } case atomstring then {
+        if (isInterp parts: n.stringparts) then {
+            sB: emitInterpBuild symtab: symtab ctx: ctx parts: n.stringparts ind: ind tmp: tmp buf: buf
+            return "_s\{sB}".string
+        }
+        return "".string
+    } case dottedpath then {
+        cm: atomTextOf n: n.child
+        if cm.stringview == "string" then {
+            return (emitInterpStmtValue symtab: symtab ctx: ctx n: n.parent ind: ind tmp: tmp buf: buf)
+        }
+        if cm.stringview == "stringview" then {
+            return (emitInterpStmtValue symtab: symtab ctx: ctx n: n.parent ind: ind tmp: tmp buf: buf)
         }
         return "".string
     } else {
@@ -5171,11 +5207,49 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if rcph9.length > 0 then {
             rv2 = rcph9
         } else {
-            rvi9: emitInterpArgExpr symtab: symtab ctx: ctx n: n.value
+            rvi9: emitInterpStmtValue symtab: symtab ctx: ctx n: n.value ind: ind tmp: tmp buf: buf
             if rvi9.length > 0 then {
                 rv2 = rvi9
             } else {
                 rv2 = emitExpr symtab: symtab ctx: ctx n: n.value
+            }
+        }
+        rtnid9: nodeIdOf9 n: n.topath
+        rtsid9: stampIdOf symtab: symtab nid: rtnid9
+        rttn9: stampNameOf symtab: symtab nid: rtnid9
+        rdrop9: false
+        if rttn9.stringview == "String" then {
+            rdrop9 = true
+        } else {
+            if (symtab.reg.hasDestructorName typeId: rtsid9) then {
+                rdrop9 = true
+            }
+        }
+        if rdrop9 then {
+            if (isNonLvalueArg s: rv2.stringview) then {
+                rrt9: "\{ctx.strC}_t"
+                if rttn9.stringview != "String" then {
+                    rrt9 = typeRefC symtab: symtab ctx: ctx tid: rtsid9 thisTid: 0
+                }
+                rrn9: tmp.next
+                rrh9: "\{ind}\{rrt9} _rr\{rrn9} = \{rv2};\n"
+                buf.append rrh9.stringview
+                rv2 = "_rr\{rrn9}".string
+            }
+        }
+        if rttn9.stringview == "String" then {
+            rdo9: "\{ind}\{ctx.strC}_free(&\{nm2});\n"
+            buf.append rdo9.stringview
+        } else {
+            if (symtab.reg.hasDestructorName typeId: rtsid9) then {
+                rdcb9: cnameOf tid: rtsid9 name: rttn9.stringview
+                if (isHeapPtrCollection symtab: symtab ctx: ctx tid: rtsid9) then {
+                    rdoh9: "\{ind}\{rdcb9}_destroy(\{nm2});\n"
+                    buf.append rdoh9.stringview
+                } else {
+                    rdov9: "\{ind}\{rdcb9}_destroy(&\{nm2});\n"
+                    buf.append rdov9.stringview
+                }
             }
         }
         lc2: "\{ind}\{nm2} = \{rv2};\n"

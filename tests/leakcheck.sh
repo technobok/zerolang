@@ -31,7 +31,7 @@ cd "$ROOT" || exit 9
 # Remove a name when its leak is fixed -- the gate enforces this (a clean
 # KNOWN_LEAKY program fails with "remove from KNOWN_LEAKY"). Keep in sync with
 # KNOWN_LEAKY in tests/test_emitc_leak_z.py.
-KNOWN_LEAKY="cli_basic field_reassign maps set_uniq class_map_field class_map_field_methods"
+KNOWN_LEAKY="cli_basic maps set_uniq class_map_field class_map_field_methods"
 
 ZC="${ZC:-}"
 if [ -z "$ZC" ]; then
