@@ -132,7 +132,7 @@ atomName: function {n: Node} out String is {
 
 # addError -- append a typecheck diagnostic to the typing's error list,
 # deduped by node position so a spec resolved more than once reports once.
-addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String note: String hint: String} is {
+addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String note: String hint: String width: u32} is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
         if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno then {
@@ -140,7 +140,7 @@ addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e:
         }
     }
     if (dup) == false then {
-        st.typing.errors.append (zast.ErrorData nodeid: nodeid lineno: lineno colno: colno err: e msg: msg.copy fsno: 0 note: note.copy hint: hint.copy)
+        st.typing.errors.append (zast.ErrorData nodeid: nodeid lineno: lineno colno: colno width: width err: e msg: msg.copy fsno: 0 note: note.copy hint: hint.copy)
         st.typing.isError = true
     }
 }
@@ -148,7 +148,7 @@ addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e:
 addError: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String} is {
     en9: "".string
     eh9: "".string
-    addErrorH st: st nodeid: nodeid lineno: lineno colno: colno e: e msg: msg note: en9 hint: eh9
+    addErrorH st: st nodeid: nodeid lineno: lineno colno: colno e: e msg: msg note: en9 hint: eh9 width: 1.u32
 }
 
 # isNumericTypeName -- a concrete integer/float type name (literal-coercion target).
@@ -7069,7 +7069,10 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                 h3 = hh3
             }
             en3: "".string
-            addErrorH st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.TYPEERROR msg: m3 note: en3 hint: h3
+            cnid3: nodeId n: dp.child
+            cnln3: nodeLine n: dp.child
+            cncl3: nodeCol n: dp.child
+            addErrorH st: st nodeid: cnid3 lineno: cnln3 colno: cncl3 e: zast.err.TYPEERROR msg: m3 note: en3 hint: h3 width: cn.length.u32
             return 0
         }
     }
@@ -7257,7 +7260,7 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
             eh5: "".string
             m5: "cannot use '\{nmc9}' after ownership transfer".string
             nt5: "this name no longer owns a value; it was moved earlier".string
-            addErrorH st: st nodeid: node.nodeid lineno: node.lineno colno: node.colno e: zast.err.OWNERERROR msg: m5 note: nt5 hint: eh5
+            addErrorH st: st nodeid: node.nodeid lineno: node.lineno colno: node.colno e: zast.err.OWNERERROR msg: m5 note: nt5 hint: eh5 width: node.name.length.u32
             return 0
         }
         if (isNumericLiteralName name: node.name.stringview) then {
@@ -7417,7 +7420,12 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
     vt = mvt
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.NULL then {
         m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        addError st: st nodeid: asgn.nodeid lineno: asgn.lineno colno: asgn.colno e: zast.err.TYPEERROR msg: m1
+        vln1: nodeLine n: asgn.value
+        vcl1: nodeCol n: asgn.value
+        vid1: nodeId n: asgn.value
+        en1: "".string
+        eh1: "".string
+        addErrorH st: st nodeid: vid1 lineno: vln1 colno: vcl1 e: zast.err.TYPEERROR msg: m1 note: en1 hint: eh1 width: 4.u32
         return
     }
     if vt > 0 then {
@@ -8506,9 +8514,9 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                         if (optU64Or o: pco9 d: 0) == 0 then {
                             pnc9: pn.copy
                             m2: "unknown argument '\{pnc9}'".string
-                            anid9: nodeId n: arg.operation
-                            anln9: nodeLine n: arg.operation
-                            ancl9: nodeCol n: arg.operation
+                            anid9: arg.nodeid
+                            anln9: arg.lineno
+                            ancl9: arg.colno
                             sug2: suggestSimilar st: st parentTypeId: funcId name: pn.stringview
                             h2: "".string
                             if sug2.length > 0 then {
@@ -8517,7 +8525,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                                 h2 = hh2
                             }
                             en2: "".string
-                            addErrorH st: st nodeid: anid9 lineno: anln9 colno: ancl9 e: zast.err.CALLERROR msg: m2 note: en2 hint: h2
+                            addErrorH st: st nodeid: anid9 lineno: anln9 colno: ancl9 e: zast.err.CALLERROR msg: m2 note: en2 hint: h2 width: pn.length.u32
                         }
                     }
                 }
@@ -8802,7 +8810,10 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         enc9: en9.copy
                         anc9: an9.copy
                         m4: "return type mismatch: function expects \{enc9}, got \{anc9}".string
-                        addError st: st nodeid: call.nodeid lineno: call.lineno colno: call.colno e: zast.err.TYPEERROR msg: m4
+                        rvid9: nodeId n: arg.operation
+                        rvln9: nodeLine n: arg.operation
+                        rvcl9: nodeCol n: arg.operation
+                        addError st: st nodeid: rvid9 lineno: rvln9 colno: rvcl9 e: zast.err.TYPEERROR msg: m4
                     }
                 }
             } else {
