@@ -151,12 +151,10 @@ addError: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: 
     addErrorH st: st nodeid: nodeid lineno: lineno colno: colno e: e msg: msg note: en9 hint: eh9 width: 1.u32
 }
 
-# isBorrowedParam -- true when the variable id is a BORROWED parameter: bound
-# BORROWED with no borrow-origin path. Borrowed locals carry an origin (set in
-# checkAssignment) and reach BORROWED via the pendingBorrowPath side-channel,
-# which is not yet reliable for owned interpolated/String bindings, so they are
-# excluded from the move/reassign-rejection checks.
-isBorrowedParam: function {st: zenv.ZSymbolTable vid: u64} out bool is {
+# isBorrowedVar -- true when the variable id is bound BORROWED (a borrowed
+# parameter or a genuine borrowed local). Reliable now that pendingBorrowPath
+# no longer leaks a sub-expression's borrow into an owned binding.
+isBorrowedVar: function {st: zenv.ZSymbolTable vid: u64} out bool is {
     ow: st.typing.variableOwnership.get key: vid
     isB9: false
     match (
@@ -165,16 +163,7 @@ isBorrowedParam: function {st: zenv.ZSymbolTable vid: u64} out bool is {
         if ow == ztypes.zownership.BORROWED then { isB9 = true }
     } case none then {
     }
-    if (isB9) == false then { return false }
-    bo9: st.typing.variableBorrowOrigin.get key: vid
-    match (
-        bo9
-    ) case some then {
-        if bo9.length == 0 then { return true }
-    } case none then {
-        return true
-    }
-    return false
+    return isB9
 }
 
 # isNumericTypeName -- a concrete integer/float type name (literal-coercion target).
@@ -5094,6 +5083,7 @@ checkString: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
         st.typing.nodeType.set key: node.nodeid.u64 value: setk
     } case none then {
     }
+    drainPendingBorrow st: st
     return result
 }
 
@@ -7474,6 +7464,7 @@ materialiseLiteral: function {st: zenv.ZSymbolTable unitName: StringView t: u64}
 # for-loop binding which keeps the pseudo id), define the local (owned for a plain
 # value), and stamp the assignment node + def-variable.
 checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node asgn: zast.AssignmentData} is {
+    drainPendingBorrow st: st
     vt: checkValue st: st unitName: unitName unitBody: unitBody node: asgn.value
     mvt: materialiseLiteral st: st unitName: unitName t: vt
     vt = mvt
@@ -7512,7 +7503,7 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
             match (
                 vo5
             ) case some then {
-                if (isBorrowedParam st: st vid: vo5) then {
+                if (isBorrowedVar st: st vid: vo5) then {
                     rnc5: rn5.copy
                     mb5: "Cannot move borrowed variable '\{rnc5}' into an owned binding — borrowed names stay bound to their source for the full scope".string
                     addError st: st nodeid: asgn.nodeid lineno: asgn.lineno colno: asgn.colno e: zast.err.OWNERERROR msg: mb5
@@ -7591,7 +7582,7 @@ checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody
         match (
             nvo9
         ) case some then {
-            if (isBorrowedParam st: st vid: nvo9) then {
+            if (isBorrowedVar st: st vid: nvo9) then {
                 nmc9: nm.copy
                 ma9: "Cannot reassign borrowed variable '\{nmc9}'".string
                 ha9: "borrowed names are bound for their full scope; shadow in an inner scope instead".string
@@ -7624,7 +7615,7 @@ checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody
         match (
             vo
         ) case some then {
-            if (isBorrowedParam st: st vid: vo) then {
+            if (isBorrowedVar st: st vid: vo) then {
                 rnc9: rn.copy
                 mc9: "Cannot move borrowed variable '\{rnc9}' into reftype field — borrowed names stay bound to their source for the full scope".string
                 addError st: st nodeid: rasgn.nodeid lineno: rasgn.lineno colno: rasgn.colno e: zast.err.OWNERERROR msg: mc9
