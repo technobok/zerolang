@@ -6957,6 +6957,10 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     }
     if isXferMarker then {
         mkRoot: bareAtomName n: dp.parent
+        if cn.stringview == "release" when mkRoot.length == 0 then {
+            mrv9: "'.release' can only be applied to a variable name".string
+            addError st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.OWNERERROR msg: mrv9
+        }
         if mkRoot.length > 0 then {
             mvo: st.lookupVarId name: mkRoot.stringview
             match (
@@ -6966,6 +6970,17 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                 st.releaseHeldLocks holder: mh
                 st.invalidate name: mkRoot.stringview loc: takenHere
             } case none then {
+                if cn.stringview == "release" then {
+                    dfo9: lookupTyperef resolved: st.typing.resolved mainName: unitName base: mkRoot.stringview
+                    match (
+                        dfo9
+                    ) case some then {
+                        mrc9: mkRoot.copy
+                        mtl9: "Cannot release top-level definition '\{mrc9}'".string
+                        addError st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.OWNERERROR msg: mtl9
+                    } case none then {
+                    }
+                }
             }
         }
         setmk: bt
@@ -8304,6 +8319,27 @@ typeIsReftype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
             vt
         ) case some then {
             return vt == false
+        } case none then {
+            return false
+        }
+    } case none then {
+        return false
+    }
+}
+
+# typeIsValtype -- a registered type whose isValtype flag is explicitly true
+# (records, variants, facets, primitives). Unset or unregistered ids are not
+# valtypes.
+typeIsValtype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
+    zo: st.reg.typeById.get key: tid
+    match (
+        zo
+    ) case some then {
+        vt: zo.isValtype
+        match (
+            vt
+        ) case some then {
+            return vt == true
         } case none then {
             return false
         }
@@ -10570,6 +10606,25 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                             ptid = thOpt
                         } case none then {
                         }
+                    }
+                    pown9: pathOwnership n: pm.operation
+                    isLockP9: false
+                    match (
+                        pown9
+                    ) case some then {
+                        if pown9 == ztypes.zparamownership.LOCK then { isLockP9 = true }
+                    } case none then {
+                    }
+                    isGenP9: false
+                    if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.GENERIC_PARAM then { isGenP9 = true }
+                    if isLockP9 when (paramIsThisReceiver op: pm.operation) == false when (typeIsValtype st: st tid: ptid) when (isGenP9) == false then {
+                        ptn9: typeNameOf st: st tid: ptid
+                        ptnc9: ptn9.copy
+                        pnc9: pname.copy
+                        plln9: nodeLine n: pm.operation
+                        plcl9: nodeCol n: pm.operation
+                        ml9: "Cannot use '.lock' on valtype parameter '\{pnc9}' (type '\{ptnc9}') — locking requires identity (use a class)".string
+                        addError st: st nodeid: pnid lineno: plln9 colno: plcl9 e: zast.err.OWNERERROR msg: ml9
                     }
                     own: ownershipOfParam o: (pathOwnership n: pm.operation)
                     v: st.reg.newVariable ztypeId: ptid ownership: own
