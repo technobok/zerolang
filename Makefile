@@ -203,6 +203,17 @@ test-parser:
 test-infra:
 	uv run python -m pytest tests/ -m infra -n auto
 
+# Native (self-hosted src/*.z) compiler tests only -- the port's gates (corpus,
+# fixpoint, differentials, leak) without the Python-reference suite. Run when
+# changing src/*.z.
+test-native:
+	uv run python -m pytest tests/ -m native -n auto
+
+# Python-reference (src/*.py) tests only -- retires with the reference compiler.
+# Run when changing src/*.py.
+test-py:
+	uv run python -m pytest tests/ -m "not native" -n auto
+
 # Memory-leak gate: every buildable example + corpus program emitted by the
 # ported zc, built with ASan, run under detect_leaks=1; 0 bytes leaked
 # (KNOWN_LEAKY ratchets). Slow (one ASan binary per program) -- deliberately

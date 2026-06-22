@@ -18,6 +18,23 @@ from ztokentype import TT
 from zparser import Parser
 
 
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark tests that exercise the self-hosted native (`src/*.z`) compiler
+    as ``native`` (by module filename), so the native and Python-reference test
+    sets run independently: ``make test-native`` (-m native) is the port's gate;
+    ``make test-py`` (-m "not native") is the reference suite, which retires with
+    ``src/*.py``."""
+    for item in items:
+        fname = os.path.basename(item.nodeid.split("::", 1)[0])
+        if (
+            fname.endswith("_z.py")
+            or "differential" in fname
+            or "fixedpoint" in fname
+            or "_diff" in fname
+        ):
+            item.add_marker(pytest.mark.native)
+
+
 def normalize_cnames(text: str) -> str:
     """Strip the id-naming segment from generated C / cname fields so
     assertions can match canonical names: ``z_t<N>_`` -> ``z_`` (types/
