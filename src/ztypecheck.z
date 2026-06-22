@@ -8296,7 +8296,7 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
-walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData funcId: u64 isCtor: bool} out String is {
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData funcId: u64 isCtor: bool reportUnknown: bool} out String is {
     lockRoot: "".string
     st.typing.lastLockParamRoot = "".string
     argIdx: 0.u64
@@ -8328,6 +8328,19 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
             }
             if vt > 0 then {
                 pn: unitLabel o: arg.name
+                if reportUnknown when (isCtor) == false when pn.length > 0 when funcId > 0 then {
+                    if (st.typing.childCount parentTypeId: funcId) > 0 then {
+                        pco9: st.typing.childOf parentTypeId: funcId name: pn.stringview
+                        if (optU64Or o: pco9 d: 0) == 0 then {
+                            pnc9: pn.copy
+                            m2: "unknown argument '\{pnc9}'".string
+                            anid9: nodeId n: arg.operation
+                            anln9: nodeLine n: arg.operation
+                            ancl9: nodeCol n: arg.operation
+                            addError st: st nodeid: anid9 lineno: anln9 colno: ancl9 e: zast.err.CALLERROR msg: m2
+                        }
+                    }
+                }
                 if pn.length == 0 then {
                     pp: positionalParamName st: st funcId: funcId idx: argIdx
                     pn = pp
@@ -8659,7 +8672,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                 }
                 if isWType when call.arguments.length > 0 then {
                     wcm: st.pushCall
-                    walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: wcv isCtor: true
+                    walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: wcv isCtor: true reportUnknown: false
                     st.popTo marker: wcm
                     wck: wcv
                     wcvv: true
@@ -8698,7 +8711,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                 setmb: mtid
                 st.typing.nodeType.set key: mcid.u64 value: setmb
                 mcm: st.pushCall
-                mclr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: mtid isCtor: true
+                mclr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: mtid isCtor: true reportUnknown: false
                 st.popTo marker: mcm
                 setmc: mtid
                 st.typing.nodeType.set key: call.nodeid.u64 value: setmc
@@ -8828,7 +8841,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         }
                     }
                     mcm: st.pushCall
-                    mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false
+                    mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false reportUnknown: false
                     # The receiver locks for the call's duration too (after
                     # the args, matching the oracle's entry order).
                     rro: methodReceiverRoot n: call.callable
@@ -9091,7 +9104,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         if isCtorT9 then {
                             if call.arguments.length > 0 then {
                                 dcm9: st.pushCall
-                                walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: true
+                                walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: true reportUnknown: false
                                 st.popTo marker: dcm9
                                 dck9: dro
                                 dcvv9: true
@@ -9176,7 +9189,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            lockRoot: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: funcId isCtor: isCtor
+            lockRoot: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: funcId isCtor: isCtor reportUnknown: true
             st.popTo marker: cm
             if isCtor then {
                 # a type in callable position constructs: the call's value is
@@ -9255,7 +9268,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                             st.typing.nodeType.set key: calid9.u64 value: setc9
                         }
                         cm9: st.pushCall
-                        walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: gmid isCtor: true
+                        walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: gmid isCtor: true reportUnknown: false
                         st.popTo marker: cm9
                         ctk9: gmid
                         ctv9: true
