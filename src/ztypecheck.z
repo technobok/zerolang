@@ -151,6 +151,32 @@ addError: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: 
     addErrorH st: st nodeid: nodeid lineno: lineno colno: colno e: e msg: msg note: en9 hint: eh9 width: 1.u32
 }
 
+# isBorrowedParam -- true when the variable id is a BORROWED parameter: bound
+# BORROWED with no borrow-origin path. Borrowed locals carry an origin (set in
+# checkAssignment) and reach BORROWED via the pendingBorrowPath side-channel,
+# which is not yet reliable for owned interpolated/String bindings, so they are
+# excluded from the move/reassign-rejection checks.
+isBorrowedParam: function {st: zenv.ZSymbolTable vid: u64} out bool is {
+    ow: st.typing.variableOwnership.get key: vid
+    isB9: false
+    match (
+        ow
+    ) case some then {
+        if ow == ztypes.zownership.BORROWED then { isB9 = true }
+    } case none then {
+    }
+    if (isB9) == false then { return false }
+    bo9: st.typing.variableBorrowOrigin.get key: vid
+    match (
+        bo9
+    ) case some then {
+        if bo9.length == 0 then { return true }
+    } case none then {
+        return true
+    }
+    return false
+}
+
 # isNumericTypeName -- a concrete integer/float type name (literal-coercion target).
 isNumericTypeName: function {name: StringView} out bool is {
     if name == "i8" then { return true }
@@ -7471,7 +7497,13 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
             match (
                 vo5
             ) case some then {
-                st.invalidate name: rn5.stringview loc: (optionval.none ztypes.zsrcpos)
+                if (isBorrowedParam st: st vid: vo5) then {
+                    rnc5: rn5.copy
+                    mb5: "Cannot move borrowed variable '\{rnc5}' into an owned binding — borrowed names stay bound to their source for the full scope".string
+                    addError st: st nodeid: asgn.nodeid lineno: asgn.lineno colno: asgn.colno e: zast.err.OWNERERROR msg: mb5
+                } else {
+                    st.invalidate name: rn5.stringview loc: (optionval.none ztypes.zsrcpos)
+                }
             } case none then {
             }
         }
@@ -7540,6 +7572,34 @@ checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody
     nm: atomName n: rasgn.topath
     if nm.length > 0 then {
         st.resetNarrowing name: nm.stringview
+        nvo9: st.lookupVarId name: nm.stringview
+        match (
+            nvo9
+        ) case some then {
+            if (isBorrowedParam st: st vid: nvo9) then {
+                nmc9: nm.copy
+                ma9: "Cannot reassign borrowed variable '\{nmc9}'".string
+                ha9: "borrowed names are bound for their full scope; shadow in an inner scope instead".string
+                ena9: "".string
+                addErrorH st: st nodeid: rasgn.nodeid lineno: rasgn.lineno colno: rasgn.colno e: zast.err.OWNERERROR msg: ma9 note: ena9 hint: ha9 width: nm.length.u32
+            }
+        } case none then {
+        }
+    }
+    troot9: methodReceiverRoot n: rasgn.topath
+    tfn9: dottedChildName n: rasgn.topath
+    if troot9.length > 0 when tfn9.length > 0 then {
+        tto9: st.lookup name: troot9.stringview
+        match (
+            tto9
+        ) case some then {
+            if (st.typing.isChildLockField parentTypeId: tto9 name: tfn9.stringview) then {
+                tfnc9: tfn9.copy
+                md9: "Cannot reassign '.lock' field '\{tfnc9}' — lock fields are set at construction time and immutable".string
+                addError st: st nodeid: rasgn.nodeid lineno: rasgn.lineno colno: rasgn.colno e: zast.err.OWNERERROR msg: md9
+            }
+        } case none then {
+        }
     }
     # A bare-name reftype RHS is a move: the source invalidates (the symtab
     # appends its taken overlay entry).
@@ -7549,7 +7609,13 @@ checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody
         match (
             vo
         ) case some then {
-            st.invalidate name: rn.stringview loc: (optionval.none ztypes.zsrcpos)
+            if (isBorrowedParam st: st vid: vo) then {
+                rnc9: rn.copy
+                mc9: "Cannot move borrowed variable '\{rnc9}' into reftype field — borrowed names stay bound to their source for the full scope".string
+                addError st: st nodeid: rasgn.nodeid lineno: rasgn.lineno colno: rasgn.colno e: zast.err.OWNERERROR msg: mc9
+            } else {
+                st.invalidate name: rn.stringview loc: (optionval.none ztypes.zsrcpos)
+            }
         } case none then {
         }
     }
