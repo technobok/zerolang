@@ -145,6 +145,65 @@ addError: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: 
     }
 }
 
+# isNumericTypeName -- a concrete integer/float type name (literal-coercion target).
+isNumericTypeName: function {name: StringView} out bool is {
+    if name == "i8" then { return true }
+    if name == "i16" then { return true }
+    if name == "i32" then { return true }
+    if name == "i64" then { return true }
+    if name == "i128" then { return true }
+    if name == "u8" then { return true }
+    if name == "u16" then { return true }
+    if name == "u32" then { return true }
+    if name == "u64" then { return true }
+    if name == "u128" then { return true }
+    if name == "c8" then { return true }
+    if name == "c32" then { return true }
+    if name == "f32" then { return true }
+    if name == "f64" then { return true }
+    if name == "f128" then { return true }
+    return false
+}
+
+# typesCompatible -- mirror ztypecheck.py _types_compatible over type ids: identity,
+# never (divergent) actual, generic-param-by-name, literal/numeric coercion, primitive
+# singletons by name, and an asymmetric typedef-base walk on `a`.
+typesCompatible: function {st: zenv.ZSymbolTable unitName: StringView a: u64 b: u64} out bool is {
+    if a == b then { return true }
+    if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.NEVER then { return true }
+    if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.GENERIC_PARAM when (st.reg.typetypeOf typeId: b) == ztypes.ztypetype.GENERIC_PARAM then {
+        ga9: typeNameOf st: st tid: a
+        gb9: typeNameOf st: st tid: b
+        if ga9.stringview == gb9.stringview then { return true }
+    }
+    aLit9: isLiteralTypeId st: st tid: a
+    bLit9: isLiteralTypeId st: st tid: b
+    if aLit9 when bLit9 then { return true }
+    if aLit9 then {
+        bn9: typeNameOf st: st tid: b
+        if (isNumericTypeName name: bn9.stringview) then { return true }
+    }
+    if bLit9 then {
+        an9: typeNameOf st: st tid: a
+        if (isNumericTypeName name: an9.stringview) then { return true }
+    }
+    apn9: typeNameOf st: st tid: a
+    bpn9: typeNameOf st: st tid: b
+    if apn9.stringview == bpn9.stringview then {
+        if (isNumericTypeName name: apn9.stringview) then { return true }
+        if apn9.stringview == "bool" then { return true }
+        if apn9.stringview == "null" then { return true }
+    }
+    cur9: a
+    for while cur9 > 0 loop {
+        nb9: typedefBaseOf st: st unitName: unitName tid: cur9
+        if nb9 == 0 then { return false }
+        if nb9 == b then { return true }
+        cur9 = nb9
+    }
+    return false
+}
+
 # resolveAtomType -- map a type-atom name to a SHALLOW shell type id. `this`
 # resolves to the enclosing record (passed as thisName); a leading-digit name is
 # a numeric-literal field/param default and resolves to f64 (has a dot) or i64;
@@ -8617,7 +8676,18 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             match (
                 arg
             ) case namedoperation then {
-                checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                argT9: checkValue st: st unitName: unitName unitBody: unitBody node: arg.operation
+                expR9: st.typing.currentReturnTypeId
+                if expR9 > 0 when argT9 > 0 then {
+                    if (typesCompatible st: st unitName: unitName a: argT9 b: expR9) == false then {
+                        en9: typeNameOf st: st tid: expR9
+                        an9: typeNameOf st: st tid: argT9
+                        enc9: en9.copy
+                        anc9: an9.copy
+                        m4: "return type mismatch: function expects \{enc9}, got \{anc9}".string
+                        addError st: st nodeid: call.nodeid lineno: call.lineno colno: call.colno e: zast.err.TYPEERROR msg: m4
+                    }
+                }
             } else {
             }
         }
@@ -10275,7 +10345,15 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             if depUnits.length > 0 then {
                 runDepUnitWalks st: st mainName: unitName depUnits: depUnits
             }
+            prevRet9: st.typing.currentReturnTypeId
+            fitid9: optU64Or o: (st.typing.resolved.get key: rkey) d: 0
+            crt9: 0.u64
+            if fitid9 > 0 then {
+                crt9 = optU64Or o: (methodReturnOf st: st mid: fitid9) d: 0
+            }
+            st.typing.currentReturnTypeId = crt9
             walkBody st: st unitName: unitName unitBody: unitBody bodyOpt: defn.body
+            st.typing.currentReturnTypeId = prevRet9
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
             # line (the node the reference coerces by id).
