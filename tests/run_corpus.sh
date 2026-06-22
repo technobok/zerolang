@@ -42,7 +42,7 @@ KNOWN_LEAKY="cli_basic"
 # Negative cases the PORT cannot yet catch (it has no error collection/reporting; that is the
 # Python reference only). They are xfail until the compiler's error reporting is ported. As each
 # is fixed, remove it here -- the gate forces this (a now-passing entry fails with "remove ...").
-KNOWN_NOERR="bad_return_type unknown_member use_after_move"
+KNOWN_NOERR="bad_return_type use_after_move"
 
 is_in() { case " $2 " in *" $1 "*) return 0;; *) return 1;; esac; }
 
