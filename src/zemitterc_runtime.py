@@ -43,6 +43,7 @@ def emit_runtime_includes(
     needs_string: bool,
     needs_io: bool = False,
     needs_pwd: bool = False,
+    needs_sys_wait: bool = False,
     needs_hash: bool = False,
 ) -> str:
     """Emit #include directives for required C standard headers.
@@ -99,6 +100,8 @@ def emit_runtime_includes(
         parts.append("#include <sys/stat.h>\n")
         parts.append("#include <sys/types.h>\n")
         parts.append("#include <dirent.h>\n")
+    if needs_sys_wait:
+        parts.append("#include <sys/wait.h>\n")
     if needs_hash and not needs_io:
         parts.append("#include <unistd.h>\n")
         parts.append("#include <errno.h>\n")
@@ -1312,6 +1315,66 @@ _Z_OS_SET_ENV = (
     "    out.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
     "    out.data = NULL;\n"
     "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_SPAWN = (
+    "/* os.spawn -- fork/exec argv as a child. argv[0] is resolved via\n"
+    "   PATH (execvp). stdin is /dev/null; stdout->outPath, stderr->\n"
+    "   errPath (each O_WRONLY|O_CREAT|O_TRUNC). A non-empty cwd chdirs\n"
+    "   the child. The redirection files are opened in the parent before\n"
+    "   fork so the child's chdir cannot change their resolution. argv\n"
+    "   element buffers are NUL-terminated (z_String), borrowed directly;\n"
+    "   only the three view paths need z_sv_to_cstr. Returns the child's\n"
+    "   exit status, or 127 on exec/setup failure. No timeout. */\n"
+    "static int32_t z_os_spawn(\n"
+    "    z_List_String_t* argv, z_StringView_t cwd,\n"
+    "    z_StringView_t outPath, z_StringView_t errPath\n"
+    ");\n"
+    "static int32_t z_os_spawn(\n"
+    "    z_List_String_t* argv, z_StringView_t cwd,\n"
+    "    z_StringView_t outPath, z_StringView_t errPath\n"
+    ") {\n"
+    "    if (argv->length == 0) return 127;\n"
+    "    char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));\n"
+    "    for (uint64_t i = 0; i < argv->length; i++) {\n"
+    "        c_argv[i] = argv->data[i].data;\n"
+    "    }\n"
+    "    c_argv[argv->length] = NULL;\n"
+    "    char* cwd_c = z_sv_to_cstr(cwd);\n"
+    "    char* out_c = z_sv_to_cstr(outPath);\n"
+    "    char* err_c = z_sv_to_cstr(errPath);\n"
+    "    int out_fd = open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n"
+    "    int err_fd = open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n"
+    '    int null_fd = open("/dev/null", O_RDONLY);\n'
+    "    int32_t status = 127;\n"
+    "    if (out_fd >= 0 && err_fd >= 0 && null_fd >= 0) {\n"
+    "        pid_t pid = fork();\n"
+    "        if (pid == 0) {\n"
+    "            if (cwd.length > 0 && chdir(cwd_c) != 0) _exit(127);\n"
+    "            dup2(null_fd, 0);\n"
+    "            dup2(out_fd, 1);\n"
+    "            dup2(err_fd, 2);\n"
+    "            close(null_fd);\n"
+    "            close(out_fd);\n"
+    "            close(err_fd);\n"
+    "            execvp(c_argv[0], c_argv);\n"
+    "            _exit(127);\n"
+    "        } else if (pid > 0) {\n"
+    "            int wst = 0;\n"
+    "            if (waitpid(pid, &wst, 0) == pid && WIFEXITED(wst)) {\n"
+    "                status = (int32_t)WEXITSTATUS(wst);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    if (out_fd >= 0) close(out_fd);\n"
+    "    if (err_fd >= 0) close(err_fd);\n"
+    "    if (null_fd >= 0) close(null_fd);\n"
+    "    free(cwd_c);\n"
+    "    free(out_c);\n"
+    "    free(err_c);\n"
+    "    free(c_argv);\n"
+    "    return status;\n"
     "}\n\n"
 )
 
@@ -2950,6 +3013,8 @@ def emit_runtime_os(*, needs_os: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_OS_HOSTNAME)
     if "exit" in natives:
         parts.append(_Z_OS_EXIT)
+    if "spawn" in natives:
+        parts.append(_Z_OS_SPAWN)
     return "".join(parts)
 
 
@@ -2987,7 +3052,9 @@ def emit_runtime_io(
     # os natives whose stringview args need the shared `z_sv_to_cstr`
     # helper. Independent of errno_map so a get_env-only program still
     # gets the helper without pulling in the errno table.
-    os_needs_sv_cstr = bool(os_natives & {"env", "setEnv", "unsetEnv", "setCwd"})
+    os_needs_sv_cstr = bool(
+        os_natives & {"env", "setEnv", "unsetEnv", "setCwd", "spawn"}
+    )
     if not needs_io:
         return ""
     if not natives and not os_needs_errno and not os_needs_sv_cstr:
@@ -3065,8 +3132,9 @@ def emit_runtime_io(
         "listDir",
         "open",
     }
-    # os.set_env / unset_env / set_cwd / get_env also use it, signalled via os_natives.
-    if not sv_cstr_users and (os_natives & {"env", "setEnv", "unsetEnv", "setCwd"}):
+    # os.get_env / set_env / unset_env / set_cwd / spawn also use it,
+    # signalled via os_natives (os_needs_sv_cstr, computed above).
+    if not sv_cstr_users and os_needs_sv_cstr:
         sv_cstr_users = {"_os_sv_cstr"}  # non-empty sentinel
     if sv_cstr_users:
         parts.append(_Z_SV_TO_CSTR)
@@ -3163,6 +3231,7 @@ def emit_runtime(
     needs_stringview: bool = False,
     needs_io: bool = False,
     needs_pwd: bool = False,
+    needs_sys_wait: bool = False,
     needs_hash: bool = False,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
@@ -3182,6 +3251,7 @@ def emit_runtime(
             needs_string=needs_string or has_z_string or needs_stringview,
             needs_io=needs_io,
             needs_pwd=needs_pwd,
+            needs_sys_wait=needs_sys_wait,
             needs_hash=needs_hash,
         )
         + emit_runtime_z_string(needs_string=needs_string, needs_stdio=needs_stdio)

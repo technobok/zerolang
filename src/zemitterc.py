@@ -1066,7 +1066,9 @@ class CEmitter:
             # pid/ppid need unistd.h which needs_io also provides.
             # get_env, set_env, unset_env, set_cwd take stringview path/
             # key/value and need the shared `z_sv_to_cstr` helper that
-            # emit_runtime_io owns.
+            # emit_runtime_io owns. spawn needs unistd.h (fork/execvp/
+            # dup2/chdir/close/_exit) + fcntl.h (open) + sys/types.h
+            # (pid_t); sys/wait.h is gated separately via needs_sys_wait.
             if name in (
                 "env",
                 "setEnv",
@@ -1078,6 +1080,7 @@ class CEmitter:
                 "userName",
                 "homeDir",
                 "hostname",
+                "spawn",
             ):
                 self.needs_io = True
             if ftype is not None and ftype.builtin_func == ZBuiltinFunc.ENV_NAMES:
@@ -2674,6 +2677,7 @@ class CEmitter:
                 needs_stringview=self.needs_stringview,
                 needs_io=self.needs_io,
                 needs_pwd="userName" in self.needs_os_natives,
+                needs_sys_wait="spawn" in self.needs_os_natives,
                 needs_hash=self.needs_hash,
             )
         )

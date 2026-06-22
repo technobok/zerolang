@@ -94,6 +94,7 @@ EMITC_SMOKE: "list[str]" = [
     "os_env",
     "os_platform",
     "os_process",
+    "os_spawn",
 ]
 
 # Corpus of targeted programs (tests/fixtures/emitc_corpus/), each exercising one

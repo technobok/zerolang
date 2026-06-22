@@ -7941,6 +7941,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "#include <sys/types.h>\n"
     buf.append "#include <dirent.h>\n"
     buf.append "#include <pwd.h>\n"
+    buf.append "#include <sys/wait.h>\n"
     if needsHash then {
         buf.append "#include <sys/random.h>\n"
         buf.append "#include <sys/syscall.h>\n"
@@ -9518,6 +9519,7 @@ emitRuntimeOs: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_arch" frag: "_Z_OS_ARCH" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_hostname" frag: "_Z_OS_HOSTNAME" buf: buf
     ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_exit" frag: "_Z_OS_EXIT" buf: buf
+    ioFragIf symtab: symtab ctx: ctx runtimeDir: runtimeDir need: "os_spawn" frag: "_Z_OS_SPAWN" buf: buf
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -11092,6 +11094,7 @@ osNeedsSvCstr: function {ctx: Ctx} out bool is {
     if (needsHas ctx: ctx name: "os_setEnv") then { return true }
     if (needsHas ctx: ctx name: "os_unsetEnv") then { return true }
     if (needsHas ctx: ctx name: "os_setCwd") then { return true }
+    if (needsHas ctx: ctx name: "os_spawn") then { return true }
     return false
 }
 
@@ -11122,6 +11125,7 @@ emitOsCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
     if mn.stringview == "unsetEnv" then { isOsC = true }
     if mn.stringview == "setCwd" then { isOsC = true }
     if mn.stringview == "exit" then { isOsC = true }
+    if mn.stringview == "spawn" then { isOsC = true }
     if (isOsC) == false then {
         return "".string
     }
@@ -11139,6 +11143,12 @@ emitOsCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
                 first = false
             } else {
                 args.append ", "
+            }
+            # spawn's argv is a (List of: String); collection params are
+            # pointer-passed (matches the z_os_spawn signature).
+            al9: unitLabel9 o: a.name
+            if al9.stringview == "argv" then {
+                args.append "&"
             }
             args.append av.stringview
         } else {}
