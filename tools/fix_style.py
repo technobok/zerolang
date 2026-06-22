@@ -4,6 +4,7 @@ can be run in sequence.
 
 Transforms:
   --suffix      strip redundant numeric type suffixes (`0.u64` -> `0`)
+  --for-while   elide a for-header's redundant leading `while` (`for while X` -> `for X`)
 
 Dry-run by default (reports what would change). Pass --apply to write.
 
@@ -338,6 +339,47 @@ def strip_unneeded_parens(unit, srcdir, apply):
     return len(pairs), 0
 
 
+def for_while_elide(unit, srcdir, apply):
+    """Elide the redundant leading `while` of a `for while COND ...` header,
+    leaving `for COND ...`. The first condition's `while` is the elidable
+    first-argument label (grammar: `while` is the default arg, omittable when
+    first). Token-based and parse-free: each `for` whose next non-whitespace
+    token is `while` has that `while` plus its trailing inline whitespace
+    removed. Immune to strings/comments (a `for while` inside a literal is a
+    single string token). Returns (elided, skipped)."""
+    path = os.path.join(srcdir, f"{unit}.z")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    line_starts = _line_starts(text)
+    tokens = _tokenize(text)
+    spans = []
+    skipped = 0
+    for i, t in enumerate(tokens):
+        if t.toktype != TT.FOR:
+            continue
+        j = i + 1
+        while j < len(tokens) and tokens[j].toktype == TT.WS:
+            j += 1
+        if j >= len(tokens) or tokens[j].toktype != TT.WHILE:
+            continue
+        w = tokens[j]
+        w_off = _off(w, line_starts)
+        if text[w_off : w_off + 5] != "while":
+            print(f"  SKIP src/{unit}.z:{w.lineno}:{w.colno} expected 'while'")
+            skipped += 1
+            continue
+        end = w_off + 5
+        while end < len(text) and text[end] in " \t":  # drop trailing inline ws
+            end += 1
+        spans.append((w_off, end))
+    for s, e in sorted(spans, reverse=True):  # right-to-left keeps offsets valid
+        text = text[:s] + text[e:]
+    if apply and spans:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    return len(spans), skipped
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.path.join(os.getcwd(), "src"))
@@ -347,6 +389,7 @@ def main():
     ap.add_argument("--empty-else", action="store_true", help="delete empty else {}")
     ap.add_argument("--elide-name", action="store_true", help="elide first generic arg name")
     ap.add_argument("--strip-parens", action="store_true", help="strip verified unneeded parens")
+    ap.add_argument("--for-while", dest="for_while", action="store_true", help="elide leading 'while' in for-headers")
     ap.add_argument("--apply", action="store_true", help="write changes")
     args = ap.parse_args()
 
@@ -388,6 +431,12 @@ def main():
             n, sk = strip_unneeded_parens(unit, args.src, args.apply)
             if n or sk:
                 print(f"{unit:14s} strip-parens={n:4d}  skip={sk:3d}")
+            tot_fix += n
+            tot_skip += sk
+        if args.for_while:
+            n, sk = for_while_elide(unit, args.src, args.apply)
+            if n or sk:
+                print(f"{unit:14s} for-while={n:4d}  skip={sk:3d}")
             tot_fix += n
             tot_skip += sk
     verb = "fixed" if args.apply else "would fix"

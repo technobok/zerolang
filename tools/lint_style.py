@@ -498,6 +498,36 @@ def removable_paren_pairs(unit, srcdir):
 # ---- driver ------------------------------------------------------------------
 
 
+def for_while_firsts(unit, srcdir):
+    """Token-based: each `for` header written with an explicit leading `while`
+    (a `for` immediately followed by `while`). The leading `while` is the
+    elidable first-argument label (grammar: `while` is the default argument,
+    omittable when first), so `for while COND` should be `for COND`. Returns
+    (line, col) of each redundant `while`. Parse-free and immune to
+    strings/comments (a `for while` inside a literal is one string token)."""
+    path = os.path.join(srcdir, f"{unit}.z")
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    of = ZVfsOpenFile(entryid=DEntryID(0), filehandle=io.StringIO(text))
+    tok = Tokenizer(of)
+    toks = []
+    while True:
+        t = tok.token()
+        toks.append(t)
+        if t.toktype == TT.EOF:
+            break
+    out = []
+    for i, t in enumerate(toks):
+        if t.toktype != TT.FOR:
+            continue
+        j = i + 1
+        while j < len(toks) and toks[j].toktype == TT.WS:
+            j += 1
+        if j < len(toks) and toks[j].toktype == TT.WHILE:
+            out.append((toks[j].lineno, toks[j].colno))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=os.path.join(REPO_ROOT, "src"))
@@ -511,13 +541,18 @@ def main():
         action="store_true",
         help="also gate re-parse-verified unneeded parens in --check (slow)",
     )
+    ap.add_argument(
+        "--check-for-while",
+        action="store_true",
+        help="also gate redundant leading for-`while` in --check",
+    )
     ap.add_argument("--empty-only", action="store_true", help="skip the suffix check")
     args = ap.parse_args()
 
     units = sorted(
         os.path.splitext(os.path.basename(p))[0] for p in glob.glob(f"{args.src}/*.z")
     )
-    tot_else = tot_then = tot_suf = tot_elide = tot_parens = 0
+    tot_else = tot_then = tot_suf = tot_elide = tot_parens = tot_fw = 0
     for unit in units:
         program = parse_unit(unit, args.src)
         if program is None:
@@ -527,6 +562,7 @@ def main():
         e_else, e_then = empty_clauses(target)
         elides = elidable_type_arg_names(target)
         parens = removable_paren_pairs(unit, args.src) if args.check_parens else []
+        fws = for_while_firsts(unit, args.src)
         sufs = []
         if not args.empty_only:
             try:
@@ -538,11 +574,12 @@ def main():
         tot_suf += len(sufs)
         tot_elide += len(elides)
         tot_parens += len(parens)
-        if e_else or e_then or sufs or elides or parens:
+        tot_fw += len(fws)
+        if e_else or e_then or sufs or elides or parens or fws:
             print(
                 f"{unit:14s} empty-else={len(e_else):4d}  empty-then={len(e_then):4d}"
                 f"  suffix={len(sufs):4d}  elide-name={len(elides):4d}"
-                f"  paren={len(parens):4d}"
+                f"  paren={len(parens):4d}  for-while={len(fws):4d}"
             )
         if args.list:
             for ln, col in sorted(e_else):
@@ -553,6 +590,8 @@ def main():
                 print(f"  src/{unit}.z:{ln}:{col}  suffix .{tn}")
             for ln, col, name, *_ in sorted(elides):
                 print(f"  src/{unit}.z:{ln}:{col}  elide-name {name}:")
+            for ln, col in sorted(fws):
+                print(f"  src/{unit}.z:{ln}:{col}  for-while")
             if parens:
                 pls = _paren_line_starts(
                     open(os.path.join(args.src, f"{unit}.z"), encoding="utf-8").read()
@@ -560,11 +599,11 @@ def main():
                 for oo, _co in sorted(parens):
                     ln, col = paren_lc(oo, pls)
                     print(f"  src/{unit}.z:{ln}:{col}  paren")
-    total = tot_else + tot_then + tot_suf + tot_elide + tot_parens
+    total = tot_else + tot_then + tot_suf + tot_elide + tot_parens + tot_fw
     print(
         f"{'TOTAL':14s} empty-else={tot_else:4d}  empty-then={tot_then:4d}"
         f"  suffix={tot_suf:4d}  elide-name={tot_elide:4d}  paren={tot_parens:4d}"
-        f"  ({total} total)"
+        f"  for-while={tot_fw:4d}  ({total} total)"
     )
     # `--check` gates the checks that the corpus already satisfies. `elide-name`
     # is reported but not gated until the sweep that drives it to zero; passing
@@ -574,6 +613,8 @@ def main():
         gated += tot_elide
     if args.check_parens:
         gated += tot_parens
+    if args.check_for_while:
+        gated += tot_fw
     if args.check and gated:
         sys.exit(1)
 

@@ -30,10 +30,10 @@ check:
 # -verified unneeded-paren check (~minutes; run pre-push). See doc/styleguide.pdoc
 # "Literal Type Inference" / "Empty Clauses" / "Parentheses".
 style-lint-fast:
-	uv run python tools/lint_style.py --empty-only --check --check-elide
+	uv run python tools/lint_style.py --empty-only --check --check-elide --check-for-while
 
 style-lint:
-	uv run python tools/lint_style.py --check --check-elide --check-parens
+	uv run python tools/lint_style.py --check --check-elide --check-parens --check-for-while
 
 # Baseline counts of existing violations (update when migrating away)
 # isinstance:0  comprehension:8  lambda:0  try/except:8  hasattr:6
