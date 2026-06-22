@@ -10,7 +10,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -230,6 +230,18 @@ leakcheck:
 # goldens from the reference. Slow; NOT in `make test`.
 test-corpus:
 	bash tests/run_corpus.sh
+
+# Self-hosted analogue of test-corpus: the ported zc builds the corpus
+# runner (src/ztestrunner.z), which then drives the same 3-kind gate via
+# os.spawn (no shell, no Python at gate time) and reproduces run_corpus.sh's
+# tally. Slow; NOT in `make test`. run_corpus.sh stays the CI gate.
+test-corpus-z:
+	@mkdir -p $(BUILDDIR)
+	$(ZC) zc --src src -o $(BUILDDIR)/zc.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc $(BUILDDIR)/zc.c
+	$(BUILDDIR)/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
+	$(BUILDDIR)/ztestrunner --zc $(BUILDDIR)/zc --cc $(CC) --root .
 
 # Re-run only tests that failed in the previous run.
 test-lf:

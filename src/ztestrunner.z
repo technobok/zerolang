@@ -1,0 +1,349 @@
+# ztestrunner.z -- self-hosted golden-corpus test gate, replacing the
+# shell tests/run_corpus.sh. Three case kinds, each compared to a
+# committed golden, driven entirely by os.spawn (no shell, no Python):
+#   run    programs in run_cases.txt -> port emit -> gcc -> run; stdout
+#          must match run_golden/<n>.out and exit match <n>.exit (0 default).
+#   leak   every buildable example + emitc_corpus program -> ASan build,
+#          run under detect_leaks=1; no use-after-free/double-free and 0
+#          bytes leaked. KNOWN_LEAKY (cli_basic) allowlists the one xleak.
+#   error  tests/fixtures/errors/<n>.z -> the compiler must exit non-zero
+#          and print error[Exxxx] lines matching errors/<n>.err (the
+#          volatile location/snippet lines are normalized away).
+#
+# Usage: ztestrunner --zc <port-zc> --cc gcc --root <repo> [--report]
+
+# slurp -- file content as an owned String, or "" when unreadable.
+slurp: function {path: StringView} out String is {
+    r: io.readText path: path
+    match (
+        r
+    ) case ok then {
+        return r.copy
+    } case err then {
+        return "".string
+    }
+    return "".string
+}
+
+# normErr -- keep only the stable error contract: the error code+message
+# lines and the "N error(s) found" summary, each newline-terminated.
+# Mirrors run_corpus.sh's grep -aE '^error\[E..\]:|[0-9]+ error(s)? found'.
+normErr: function {content: StringView} out String is {
+    buf: "".string
+    with it: content.lines do for ln: it loop {
+        keep: false
+        if (ln.startsWith prefix: "error[E") then { keep = true }
+        if (ln.endsWith suffix: "error found") then { keep = true }
+        if (ln.endsWith suffix: "errors found") then { keep = true }
+        if keep then {
+            buf.append ln
+            buf.append "\n".stringview
+        }
+    }
+    return buf
+}
+
+# isUnsafe -- ASan reported a memory-safety violation (not a mere leak).
+isUnsafe: function {s: StringView} out bool is {
+    if (s.contains needle: "ERROR: AddressSanitizer: heap-use-after-free") then { return true }
+    if (s.contains needle: "ERROR: AddressSanitizer: attempting double-free") then { return true }
+    if (s.contains needle: "ERROR: AddressSanitizer: heap-buffer-overflow") then { return true }
+    if (s.contains needle: "ERROR: AddressSanitizer: stack-") then { return true }
+    return false
+}
+
+# isLeak -- ASan reported leaked bytes.
+isLeak: function {s: StringView} out bool is {
+    if (s.contains needle: "SUMMARY: AddressSanitizer:") == false then {
+        return false
+    }
+    return (s.contains needle: " byte")
+}
+
+# zcArgv -- the port-zc emit command argv.
+zcArgv: function {zc: StringView name: StringView srcdir: StringView sys: StringView outc: StringView} out (List String) is {
+    a: (List String)
+    a.append from: zc.string
+    a.append from: name.string
+    a.append from: "--src".string
+    a.append from: srcdir.string
+    a.append from: "--system".string
+    a.append from: sys.string
+    a.append from: "--emit-c".string
+    a.append from: outc.string
+    return a
+}
+
+# gccArgv -- the C build command argv; `asan` selects the ASan flags
+# (-fsanitize=address -g -O0 -std=c17 -w) over the strict CF set.
+gccArgv: function {cc: StringView bin: StringView csrc: StringView asan: bool} out (List String) is {
+    a: (List String)
+    a.append from: cc.string
+    if asan then {
+        a.append from: "-fsanitize=address".string
+        a.append from: "-g".string
+        a.append from: "-O0".string
+        a.append from: "-std=c17".string
+        a.append from: "-w".string
+    } else {
+        a.append from: "-std=c17".string
+        a.append from: "-Wall".string
+        a.append from: "-Wextra".string
+        a.append from: "-Wno-unused-function".string
+        a.append from: "-Wno-unused-parameter".string
+        a.append from: "-Werror=implicit-function-declaration".string
+        a.append from: "-Werror=implicit-int".string
+        a.append from: "-Werror=int-conversion".string
+        a.append from: "-Werror=incompatible-pointer-types".string
+    }
+    a.append from: "-o".string
+    a.append from: bin.string
+    a.append from: csrc.string
+    return a
+}
+
+# binArgv -- the test-binary argv: the binary plus one element per
+# non-empty line of run_golden/<name>.args (absent file -> just the bin).
+binArgv: function {bin: StringView argsFile: StringView} out (List String) is {
+    a: (List String)
+    a.append from: bin.string
+    ac: slurp path: argsFile
+    acv: ac.stringview
+    with it: acv.lines do for ln: it loop {
+        if ln.length > 0 then {
+            a.append from: ln.string
+        }
+    }
+    return a
+}
+
+main: function is {
+    argv: os.args
+    n: argv.length
+    zc: "out/zc".string
+    cc: "gcc".string
+    root: ".".string
+    report: false
+    i: 1.u64
+    for while i < n loop {
+        a: argv.get i: i
+        av: a.stringview
+        if av == "--zc" then {
+            i = i + 1
+            zc = (argv.get i: i).copy
+        } else if av == "--cc" then {
+            i = i + 1
+            cc = (argv.get i: i).copy
+        } else if av == "--root" then {
+            i = i + 1
+            root = (argv.get i: i).copy
+        } else if av == "--report" then {
+            report = true
+        }
+        i = i + 1
+    }
+
+    sys: "\{root.stringview}/lib/system"
+    errors: "\{root.stringview}/tests/fixtures/errors"
+    rungold: "\{root.stringview}/tests/fixtures/run_golden"
+    runcases: "\{root.stringview}/tests/fixtures/run_cases.txt"
+    examplesDir: "\{root.stringview}/examples"
+    corpusDir: "\{root.stringview}/tests/fixtures/emitc_corpus"
+    mypid: os.pid
+    d: "/tmp/ztr_\{mypid}"
+    io.mkdirp path: d.stringview
+
+    passN: 0.u64
+    leakclean: 0.u64
+    xleak: 0.u64
+    xfail: 0.u64
+    skip: 0.u64
+    fails: 0.u64
+
+    # ---------------- RUN cases ----------------
+    rcC: slurp path: runcases.stringview
+    rcv: rcC.stringview
+    with rit: rcv.lines do for ln: rit loop {
+        if ln.length > 0 then {
+            nameStr: "".string
+            dirStr: "".string
+            idx: 0.u64
+            with sit: (ln.split sep: " ") do for pc: sit loop {
+                if pc.length > 0 then {
+                    if idx == 0.u64 then {
+                        nameStr = pc.string
+                    } else if idx == 1.u64 then {
+                        dirStr = pc.string
+                    }
+                    idx = idx + 1
+                }
+            }
+            if idx >= 2.u64 then {
+                srcAbs: "\{root.stringview}/\{dirStr.stringview}"
+                cpath: "\{d.stringview}/\{nameStr.stringview}.c"
+                bpath: "\{d.stringview}/\{nameStr.stringview}.bin"
+                opath: "\{d.stringview}/\{nameStr.stringview}.out"
+                za: zcArgv zc: zc.stringview name: nameStr.stringview srcdir: srcAbs.stringview sys: sys.stringview outc: cpath.stringview
+                ec: os.spawn argv: za cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                if ec != 0.i32 then {
+                    skip = skip + 1
+                } else {
+                    ga: gccArgv cc: cc.stringview bin: bpath.stringview csrc: cpath.stringview asan: false
+                    bc: os.spawn argv: ga cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                    if bc != 0.i32 then {
+                        skip = skip + 1
+                    } else {
+                        rdir: "\{d.stringview}/run_\{nameStr.stringview}"
+                        io.mkdirp path: rdir.stringview
+                        argsFile: "\{rungold.stringview}/\{nameStr.stringview}.args"
+                        ba: binArgv bin: bpath.stringview argsFile: argsFile.stringview
+                        rcode: os.spawn argv: ba cwd: rdir.stringview outPath: opath.stringview errPath: "/dev/null"
+                        gold: "\{rungold.stringview}/\{nameStr.stringview}.out"
+                        exitFile: "\{rungold.stringview}/\{nameStr.stringview}.exit"
+                        if (io.exists path: gold.stringview) == false then {
+                            skip = skip + 1
+                        } else {
+                            goldC: slurp path: gold.stringview
+                            outC: slurp path: opath.stringview
+                            expStr: "0".string
+                            if (io.exists path: exitFile.stringview) then {
+                                rawx: slurp path: exitFile.stringview
+                                rxv: rawx.stringview
+                                tvw: rxv.trim
+                                expStr = tvw.string
+                            }
+                            codeStr: "\{rcode}"
+                            sameOut: outC.stringview == goldC.stringview
+                            sameExit: codeStr.stringview == expStr.stringview
+                            if sameOut when sameExit then {
+                                passN = passN + 1
+                            } else {
+                                print "FAIL(run) \{nameStr.stringview}"
+                                fails = fails + 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    # ---------------- LEAK cases ----------------
+    leakDirs: (List String)
+    leakDirs.append from: examplesDir.copy
+    leakDirs.append from: corpusDir.copy
+    di: 0.u64
+    for while di < leakDirs.length loop {
+        ld: (leakDirs.get i: di).copy
+        lr: io.listDir path: ld.stringview
+        match (
+            lr
+        ) case ok then {
+            li: 0.u64
+            for while li < lr.length loop {
+                ent: (lr.get i: li).copy
+                sfx: ent.stringview.stripSuffix s: ".z"
+                match (
+                    sfx
+                ) case some then {
+                    nm: sfx.string
+                    lc: "\{d.stringview}/L_\{nm.stringview}.c"
+                    lb: "\{d.stringview}/L_\{nm.stringview}.bin"
+                    lerr: "\{d.stringview}/L_\{nm.stringview}.err"
+                    za2: zcArgv zc: zc.stringview name: nm.stringview srcdir: ld.stringview sys: sys.stringview outc: lc.stringview
+                    ec2: os.spawn argv: za2 cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                    if ec2 == 0.i32 then {
+                        ga2: gccArgv cc: cc.stringview bin: lb.stringview csrc: lc.stringview asan: true
+                        bc2: os.spawn argv: ga2 cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                        if bc2 == 0.i32 then {
+                            rdir2: "\{d.stringview}/leak_\{nm.stringview}"
+                            io.mkdirp path: rdir2.stringview
+                            argsFile2: "\{rungold.stringview}/\{nm.stringview}.args"
+                            ba2: binArgv bin: lb.stringview argsFile: argsFile2.stringview
+                            os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
+                            os.spawn argv: ba2 cwd: rdir2.stringview outPath: "/dev/null" errPath: lerr.stringview
+                            os.unsetEnv key: "ASAN_OPTIONS"
+                            errC: slurp path: lerr.stringview
+                            isKnown: nm.stringview == "cli_basic"
+                            if (isUnsafe s: errC.stringview) then {
+                                print "FAIL(unsafe) \{nm.stringview}"
+                                fails = fails + 1
+                            } else if (isLeak s: errC.stringview) then {
+                                if isKnown then {
+                                    xleak = xleak + 1
+                                } else {
+                                    print "FAIL(leak) \{nm.stringview}"
+                                    fails = fails + 1
+                                }
+                            } else {
+                                if isKnown then {
+                                    print "FAIL(ratchet) \{nm.stringview} now leak-CLEAN"
+                                    fails = fails + 1
+                                } else {
+                                    leakclean = leakclean + 1
+                                }
+                            }
+                        }
+                    }
+                } case none then {
+                }
+                li = li + 1
+            }
+        } case err then {
+        }
+        di = di + 1
+    }
+
+    # ---------------- ERROR (negative) cases ----------------
+    er: io.listDir path: errors.stringview
+    match (
+        er
+    ) case ok then {
+        ei: 0.u64
+        for while ei < er.length loop {
+            ent2: (er.get i: ei).copy
+            esfx: ent2.stringview.stripSuffix s: ".z"
+            match (
+                esfx
+            ) case some then {
+                enm: esfx.string
+                epe: "\{d.stringview}/\{enm.stringview}.pe"
+                eza: zcArgv zc: zc.stringview name: enm.stringview srcdir: errors.stringview sys: sys.stringview outc: "/dev/null"
+                ecode: os.spawn argv: eza cwd: "" outPath: "/dev/null" errPath: epe.stringview
+                egold: "\{errors.stringview}/\{enm.stringview}.err"
+                ematch: false
+                if ecode != 0.i32 then {
+                    peC: slurp path: epe.stringview
+                    goldC2: slurp path: egold.stringview
+                    ne: normErr content: peC.stringview
+                    if ne.stringview == goldC2.stringview then {
+                        ematch = true
+                    }
+                }
+                if ematch then {
+                    passN = passN + 1
+                } else {
+                    print "FAIL(error) \{enm.stringview}"
+                    fails = fails + 1
+                }
+            } case none then {
+            }
+            ei = ei + 1
+        }
+    } case err then {
+    }
+
+    # ---------------- summary ----------------
+    print "----"
+    print "pass=\{passN} leak-clean=\{leakclean} xfail=\{xfail} xleak=\{xleak} skip=\{skip} fails=\{fails}"
+    if report then {
+        os.exit code: 0.i32
+    }
+    if fails == 0.u64 then {
+        print "CORPUS GATE GREEN"
+        os.exit code: 0.i32
+    } else {
+        print "CORPUS GATE FAILED (\{fails})"
+        os.exit code: 1.i32
+    }
+}
