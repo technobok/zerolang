@@ -50,3 +50,28 @@ def test_error_format_full(zc_binary):
     ):
         assert needle in r.stderr, f"missing {needle!r} in:\n{r.stderr}"
     assert r.stderr == golden, f"--- got ---\n{r.stderr}\n--- want ---\n{golden}"
+
+
+def test_error_format_did_you_mean(zc_binary):
+    """An unknown call argument renders a `= hint: did you mean '<x>'?` line
+    (Levenshtein suggestion over the callee's parameter names)."""
+    r = subprocess.run(
+        [
+            zc_binary,
+            "call_bad_arg",
+            "--src",
+            _ERRORS,
+            "--system",
+            _SYSTEM,
+            "--emit-c",
+            os.devnull,
+        ],
+        cwd=_REPO,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 1, r.stderr
+    with open(os.path.join(_ERRORS, "call_bad_arg.full"), encoding="utf-8") as f:
+        golden = f.read()
+    assert "= hint: did you mean 'a'?" in r.stderr
+    assert r.stderr == golden, f"--- got ---\n{r.stderr}\n--- want ---\n{golden}"

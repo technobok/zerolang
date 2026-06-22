@@ -210,6 +210,83 @@ typesCompatible: function {st: zenv.ZSymbolTable unitName: StringView a: u64 b: 
     return false
 }
 
+# byteOf -- the byte at index i (0 when out of range).
+byteOf: function {s: StringView i: u64} out u8 is {
+    bo: s.byteAt i
+    match (
+        bo
+    ) case some then {
+        return bo
+    } case none then {
+    }
+    return 0
+}
+
+# levenshtein -- byte-level edit distance (two-row DP), for did-you-mean.
+levenshtein: function {a: StringView b: StringView} out u64 is {
+    na: a.length
+    nb: b.length
+    if na == 0 then { return nb }
+    if nb == 0 then { return na }
+    prev: (List u64)
+    j0: 0.u64
+    for while j0 <= nb loop {
+        jv: j0
+        prev.append jv
+        j0 = j0 + 1
+    }
+    i: 0.u64
+    for while i < na loop {
+        cur: (List u64)
+        cur.append (i + 1)
+        ab: byteOf s: a i: i
+        j: 0.u64
+        for while j < nb loop {
+            bb: byteOf s: b i: j
+            cost: 1.u64
+            if ab == bb then { cost = 0 }
+            delc: (prev.get i: (j + 1)) + 1
+            insc: (cur.get i: j) + 1
+            subc: (prev.get i: j) + cost
+            best: delc
+            if insc < best then { best = insc }
+            if subc < best then { best = subc }
+            cur.append best
+            j = j + 1
+        }
+        prev = cur
+        i = i + 1
+    }
+    return (prev.get i: nb)
+}
+
+# suggestSimilar -- the closest child name of parentTypeId to `name` (edit
+# distance <= 2 and unique); "" if none. Powers the did-you-mean hint.
+suggestSimilar: function {st: zenv.ZSymbolTable parentTypeId: u64 name: StringView} out String is {
+    best: "".string
+    bestDist: 3.u64
+    tied: false
+    with citer: st.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == parentTypeId then {
+            cn: tc.childName.stringview
+            if (cn == name) == false then {
+                d: levenshtein a: name b: cn
+                if d < bestDist then {
+                    best = tc.childName.copy
+                    bestDist = d
+                    tied = false
+                } else {
+                    if d == bestDist then { tied = true }
+                }
+            }
+        }
+    }
+    if bestDist <= 2 when (tied) == false when best.length > 0 then {
+        return best
+    }
+    return "".string
+}
+
 # resolveAtomType -- map a type-atom name to a SHALLOW shell type id. `this`
 # resolves to the enclosing record (passed as thisName); a leading-digit name is
 # a numeric-literal field/param default and resolves to f64 (has a dot) or i64;
@@ -6984,7 +7061,15 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
             unc9: un9.copy
             cnc9: cn.copy
             m3: "unit '\{unc9}' has no member '\{cnc9}'".string
-            addError st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.TYPEERROR msg: m3
+            sug3: suggestSimilar st: st parentTypeId: bt name: cn.stringview
+            h3: "".string
+            if sug3.length > 0 then {
+                sgc3: sug3.copy
+                hh3: "did you mean '\{sgc3}'?"
+                h3 = hh3
+            }
+            en3: "".string
+            addErrorH st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.TYPEERROR msg: m3 note: en3 hint: h3
             return 0
         }
     }
@@ -8424,7 +8509,15 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                             anid9: nodeId n: arg.operation
                             anln9: nodeLine n: arg.operation
                             ancl9: nodeCol n: arg.operation
-                            addError st: st nodeid: anid9 lineno: anln9 colno: ancl9 e: zast.err.CALLERROR msg: m2
+                            sug2: suggestSimilar st: st parentTypeId: funcId name: pn.stringview
+                            h2: "".string
+                            if sug2.length > 0 then {
+                                sgc2: sug2.copy
+                                hh2: "did you mean '\{sgc2}'?"
+                                h2 = hh2
+                            }
+                            en2: "".string
+                            addErrorH st: st nodeid: anid9 lineno: anln9 colno: ancl9 e: zast.err.CALLERROR msg: m2 note: en2 hint: h2
                         }
                     }
                 }
