@@ -196,6 +196,7 @@ typesCompatible: function {st: zenv.ZSymbolTable unitName: StringView a: u64 b: 
     apn9: typeNameOf st: st tid: a
     bpn9: typeNameOf st: st tid: b
     if apn9.stringview == bpn9.stringview then {
+        if apn9.length > 0 then { return true }
         if (isNumericTypeName name: apn9.stringview) then { return true }
         if apn9.stringview == "bool" then { return true }
         if apn9.stringview == "null" then { return true }
@@ -8528,7 +8529,8 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                 if reportUnknown when (isCtor) == false when pn.length > 0 when funcId > 0 then {
                     if (st.typing.childCount parentTypeId: funcId) > 0 then {
                         pco9: st.typing.childOf parentTypeId: funcId name: pn.stringview
-                        if (optU64Or o: pco9 d: 0) == 0 then {
+                        pcidX9: optU64Or o: pco9 d: 0
+                        if pcidX9 == 0 then {
                             pnc9: pn.copy
                             m2: "unknown argument '\{pnc9}'".string
                             anid9: arg.nodeid
@@ -8543,6 +8545,32 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                             }
                             en2: "".string
                             addErrorH st: st nodeid: anid9 lineno: anln9 colno: ancl9 e: zast.err.CALLERROR msg: m2 note: en2 hint: h2 width: pn.length.u32
+                        } else {
+                            ptid9: resolveChildPayload st: st unitName: unitName cid: pcidX9
+                            if ptid9 > 0 when vt > 0 then {
+                                if (typesCompatible st: st unitName: unitName a: vt b: ptid9) == false then {
+                                    skipMM9: false
+                                    avn9: typeNameOf st: st tid: vt
+                                    bvn9: typeNameOf st: st tid: ptid9
+                                    if (isNumericTypeName name: avn9.stringview) when (isNumericTypeName name: bvn9.stringview) then { skipMM9 = true }
+                                    ptt9: st.reg.typetypeOf typeId: ptid9
+                                    if ptt9 == ztypes.ztypetype.PROTOCOL then { skipMM9 = true }
+                                    if ptt9 == ztypes.ztypetype.FACET then { skipMM9 = true }
+                                    if ptt9 == ztypes.ztypetype.GENERIC_PARAM then { skipMM9 = true }
+                                    if ptt9 == ztypes.ztypetype.FUNCTION then { skipMM9 = true }
+                                    if (skipMM9) == false then {
+                                        en7: typeNameOf st: st tid: ptid9
+                                        an7: typeNameOf st: st tid: vt
+                                        enc7: en7.copy
+                                        anc7: an7.copy
+                                        pnc7: pn.copy
+                                        mm7: "argument '\{pnc7}' type mismatch: expected \{enc7}, got \{anc7}".string
+                                        en7b: "".string
+                                        eh7: "".string
+                                        addErrorH st: st nodeid: arg.nodeid lineno: arg.lineno colno: arg.colno e: zast.err.CALLERROR msg: mm7 note: en7b hint: eh7 width: pn.length.u32
+                                    }
+                                }
+                            }
                         }
                     }
                 }
