@@ -2962,6 +2962,102 @@ emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u
     return r
 }
 
+# emitGenericFnCall -- a generic free-function call (identity 42): the callable
+# atom is stamped to the mono FUNCTION id by checkGenericCall. Emit that mono's
+# cname applied to the args. "" when the callable does not resolve to a mono fn.
+emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    gmf9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
+    if gmf9 == 0 then {
+        return "".string
+    }
+    if (symtab.reg.typetypeOf typeId: gmf9) != ztypes.ztypetype.FUNCTION then {
+        return "".string
+    }
+    gmo9: monoOriginName symtab: symtab tid: gmf9
+    if gmo9.length == 0 then {
+        return "".string
+    }
+    fnm9: typeNameOfReg9 symtab: symtab tid: gmf9
+    fc9: cnameOf tid: gmf9 name: fnm9.stringview
+    fpNames9: (List String)
+    fpIds9: (List u64)
+    recFieldLists symtab: symtab tid: gmf9 names: fpNames9 ids: fpIds9
+    args9: "".string
+    ai9: 0.u64
+    aiter9: call.arguments.iterate
+    for a9: aiter9 loop {
+        match (
+            a9
+        ) case namedoperation then {
+            argNm9: unitLabel9 o: a9.name
+            isTypeArg9: false
+            if argNm9.length > 0 then {
+                tfound9: false
+                tfj9: 0.u64
+                for tfj9 < fpNames9.length loop {
+                    tpnm9: fpNames9.get i: tfj9
+                    if tpnm9.stringview == argNm9.stringview then {
+                        tfound9 = true
+                    }
+                    tfj9 = tfj9 + 1
+                }
+                if tfound9 == false then {
+                    isTypeArg9 = true
+                }
+            }
+            if isTypeArg9 == false then {
+            av9: emitExpr symtab: symtab ctx: ctx n: a9.operation
+            byref9: false
+            argRef9: "".string
+            if ai9 < fpIds9.length then {
+                fpid9: fpIds9.get i: ai9
+                ptra9: false
+                ownC9: "".string
+                if ai9 < fpNames9.length then {
+                    fpnO9: fpNames9.get i: ai9
+                    ownC9 = symtab.typing.childOwnershipText parentTypeId: gmf9 name: fpnO9.stringview
+                }
+                if ownC9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
+                    ptra9 = true
+                } else {
+                    if ai9 < fpNames9.length then {
+                        fpn9: fpNames9.get i: ai9
+                        if (isBorrowStringParam symtab: symtab fid: gmf9 pname: fpn9.stringview pid: fpid9) then {
+                            ptra9 = true
+                        }
+                    }
+                }
+                if (ptra9) == false then {
+                    if ai9 < fpNames9.length then {
+                        fpnL9: fpNames9.get i: ai9
+                        if (isListPtrParam symtab: symtab fid: gmf9 pname: fpnL9.stringview tid: fpid9) then {
+                            ptra9 = true
+                        }
+                    }
+                }
+                if ptra9 then {
+                    if (isPtrVar ctx: ctx name: av9.stringview) == false then {
+                        byref9 = true
+                        argRef9 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid9
+                    }
+                }
+            }
+            if ai9 > 0 then {
+                args9.append ", "
+            }
+            if byref9 then {
+                args9.append argRef9.stringview
+            } else {
+                args9.append av9.stringview
+            }
+            ai9 = ai9 + 1
+            }
+        } else {}
+    }
+    e9: "\{fc9}(\{args9})"
+    return e9
+}
+
 # emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
 # b: 5): the receiver is stamped to a monomorphized UNIT type; the method is a
 # concrete FUNCTION child of it. Emit that mono fn's cname applied to the args.
@@ -3404,6 +3500,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     umc9: emitUnitMethodCall symtab: symtab ctx: ctx call: call
     if umc9.length > 0 then {
         return umc9
+    }
+    gfc9: emitGenericFnCall symtab: symtab ctx: ctx call: call
+    if gfc9.length > 0 then {
+        return gfc9
     }
     sam9: emitStringArgMethod symtab: symtab ctx: ctx call: call
     if sam9.length > 0 then {
@@ -8166,6 +8266,56 @@ emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
     } else {}
 }
 
+# emitFnMonoInstances -- emit the monomorphized instances of a generic free
+# function (identity_i64, identity_f64, first_i64_f64, ...). Each instance was
+# minted by the typechecker (mintMono, params already substituted); emit one C
+# function per registry FUNCTION whose generic origin is this template, keyed by
+# the mono FUNCTION id (concrete signature) with the template body AST (lock-safe:
+# the body AST root is the program, not symtab).
+emitFnMonoInstances: function {symtab: zenv.ZSymbolTable ctx: Ctx templateFnId: u64 templateFnOp: Node declOnly: bool buf: String.borrow} is {
+    last9: symtab.reg.nextTypeId
+    t9: 0.u64
+    for t9 < last9 loop {
+        isMono9: false
+        if (symtab.reg.typetypeOf typeId: t9) == ztypes.ztypetype.FUNCTION then {
+            go9opt: (optionval.none u64)
+            {
+                to9: symtab.reg.typeById.get key: t9
+                match (
+                    to9
+                ) case some then {
+                    go9opt = to9.genericOriginId
+                } case none then {}
+            }
+            match (
+                go9opt
+            ) case some then {
+                if go9opt == templateFnId then {
+                    isMono9 = true
+                }
+            } case none then {}
+        }
+        if isMono9 then {
+            fnm9: typeNameOfReg9 symtab: symtab tid: t9
+            sig9: fnSignature symtab: symtab ctx: ctx name: fnm9.stringview fid: t9 op: templateFnOp
+            if declOnly then {
+                ld9: "\{sig9};\n"
+                buf.append ld9.stringview
+            } else {
+                lo9: "\{sig9} {\n"
+                buf.append lo9.stringview
+                ctx.ptrVars = (List String)
+                ctx.aliases = (Map String value: String)
+                ctx.narrowBox = (Map String value: String)
+                registerReftypeParams symtab: symtab ctx: ctx fid: t9
+                emitFnBody symtab: symtab ctx: ctx op: templateFnOp fid: t9 buf: buf
+                buf.append "}\n\n"
+            }
+        }
+        t9 = t9 + 1
+    }
+}
+
 emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: bool buf: String.borrow} is {
     match (
         mainOp
@@ -8215,9 +8365,21 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
                     dm2
                 ) case namedoperation then {
                     fid: userFnId symtab: symtab ctx: ctx name: nm2.stringview
-                    sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
-                    ld: "\{sig};\n"
-                    buf.append ld.stringview
+                    isGenFn9: false
+                    if fid > 0 then {
+                        if (isGenericType symtab: symtab tid: fid) then {
+                            if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.FUNCTION then {
+                                isGenFn9 = true
+                            }
+                        }
+                    }
+                    if isGenFn9 then {
+                        emitFnMonoInstances symtab: symtab ctx: ctx templateFnId: fid templateFnOp: dm2.operation declOnly: true buf: buf
+                    } else {
+                        sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
+                        ld: "\{sig};\n"
+                        buf.append ld.stringview
+                    }
                 } else {}
                 wi = wi + 1
             }
@@ -8232,15 +8394,27 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
                     bm2
                 ) case namedoperation then {
                     fid2: userFnId symtab: symtab ctx: ctx name: nm3.stringview
-                    sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
-                    lo: "\{sig2} {\n"
-                    buf.append lo.stringview
-                    ctx.ptrVars = (List String)
-                    ctx.aliases = (Map String value: String)
-                    ctx.narrowBox = (Map String value: String)
-                    registerReftypeParams symtab: symtab ctx: ctx fid: fid2
-                    emitFnBody symtab: symtab ctx: ctx op: bm2.operation fid: fid2 buf: buf
-                    buf.append "}\n\n"
+                    isGenFn8: false
+                    if fid2 > 0 then {
+                        if (isGenericType symtab: symtab tid: fid2) then {
+                            if (symtab.reg.typetypeOf typeId: fid2) == ztypes.ztypetype.FUNCTION then {
+                                isGenFn8 = true
+                            }
+                        }
+                    }
+                    if isGenFn8 then {
+                        emitFnMonoInstances symtab: symtab ctx: ctx templateFnId: fid2 templateFnOp: bm2.operation declOnly: false buf: buf
+                    } else {
+                        sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
+                        lo: "\{sig2} {\n"
+                        buf.append lo.stringview
+                        ctx.ptrVars = (List String)
+                        ctx.aliases = (Map String value: String)
+                        ctx.narrowBox = (Map String value: String)
+                        registerReftypeParams symtab: symtab ctx: ctx fid: fid2
+                        emitFnBody symtab: symtab ctx: ctx op: bm2.operation fid: fid2 buf: buf
+                        buf.append "}\n\n"
+                    }
                 } else {}
                 wj = wj + 1
             }
@@ -12610,9 +12784,19 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node phas
                 if (isFunctionDefWithBody9 n: bfd.operation) then {
                     fdn: unitLabel9 o: bfd.name
                     fdid: userFnId symtab: symtab ctx: ctx name: fdn.stringview
-                    fdsig: fnSignature symtab: symtab ctx: ctx name: fdn.stringview fid: fdid op: bfd.operation
-                    fdl: "\{fdsig};\n"
-                    buf.append fdl.stringview
+                    isGenFnFD9: false
+                    if fdid > 0 then {
+                        if (isGenericType symtab: symtab tid: fdid) then {
+                            if (symtab.reg.typetypeOf typeId: fdid) == ztypes.ztypetype.FUNCTION then {
+                                isGenFnFD9 = true
+                            }
+                        }
+                    }
+                    if isGenFnFD9 == false then {
+                        fdsig: fnSignature symtab: symtab ctx: ctx name: fdn.stringview fid: fdid op: bfd.operation
+                        fdl: "\{fdsig};\n"
+                        buf.append fdl.stringview
+                    }
                 }
             } else {}
         }

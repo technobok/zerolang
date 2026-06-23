@@ -60,6 +60,7 @@ EMITC_SMOKE: "list[str]" = [
     "numeric_generics",
     "genericfileunit",
     "genericunit",
+    "genericfunctions",
     "lists",
     "listview",
     "string_codepoints",
