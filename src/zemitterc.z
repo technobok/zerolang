@@ -1895,6 +1895,35 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
     }
 }
 
+# emitStrConvCall -- the `.str` sized-conversion method on a String / StringView
+# / str parent: `<parent>.str to: N` -> z_String_to_<name>(data, len). "" when
+# not a .str-to-str conversion. The capacity rides the result mono type.
+emitStrConvCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    mn: dottedChildText n: call.callable
+    if mn.stringview != "str" then {
+        return "".string
+    }
+    rid0: stampIdOf symtab: symtab nid: call.nodeid.u64
+    rid: chaseColMono symtab: symtab tid: rid0
+    rori: monoOriginName symtab: symtab tid: rid
+    if rori.stringview != "str" then {
+        return "".string
+    }
+    rmn: typeNameOfReg9 symtab: symtab tid: rid
+    rnm: cbaseNoPrefix tid: rid name: rmn.stringview
+    pv: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
+    ptid: dottedReceiverStampId symtab: symtab callable: call.callable
+    ptn: typeNameOfReg9 symtab: symtab tid: ptid
+    lenAcc: "len".string
+    if ptn.stringview == "String" then {
+        lenAcc = "size".string
+    }
+    if ptn.stringview == "StringView" then {
+        lenAcc = "length".string
+    }
+    return "\{ctx.strC}_to_\{rnm}(\{pv}.data, \{pv}.\{lenAcc})"
+}
+
 # allDigits -- true when s is non-empty and every byte is an ASCII digit 0-9.
 # Distinguishes a numeric array index member (`a.0`) from a named member.
 allDigits: function {s: StringView} out bool is {
@@ -1934,6 +1963,16 @@ emitEmptyColCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
             amn9: typeNameOfReg9 symtab: symtab tid: amid9
             acb9: cnameOf tid: amid9 name: amn9.stringview
             return "\{acb9}_create()"
+        }
+    }
+    if cn0 == "str" then {
+        smid0: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
+        smid9: chaseColMono symtab: symtab tid: smid0
+        smo9: monoOriginName symtab: symtab tid: smid9
+        if smo9.stringview == "str" then {
+            smn9: typeNameOfReg9 symtab: symtab tid: smid9
+            scb9: cnameOf tid: smid9 name: smn9.stringview
+            return "\{scb9}_create()"
         }
     }
     isCol9: false
@@ -3196,6 +3235,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if osc.length > 0 then {
         return osc
     }
+    scv9: emitStrConvCall symtab: symtab ctx: ctx call: call
+    if scv9.length > 0 then {
+        return scv9
+    }
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0 then {
         return dc
@@ -3534,7 +3577,8 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             return xtag9
         }
         bn2r: atomTextOf n: n.parent
-        bn2: aliasResolve ctx: ctx name: bn2r.stringview
+        bn2a9: aliasResolve ctx: ctx name: bn2r.stringview
+        bn2: ztypes.mangleVarName name: bn2a9.stringview
         mn2: atomTextOf n: n.child
         if bn2r.stringview == "io" then {
             isStdS9: false
@@ -3746,10 +3790,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             isRecOrCls: false
             if rtt == ztypes.ztypetype.RECORD then {
-                # array monos are RECORD typetype but keep their own index/length
-                # leg below (a.0 -> a.data[0], a.length -> the #define).
+                # array/str monos are RECORD typetype but keep their own legs
+                # below (a.0 -> a.data[0]; str .length -> .len etc.).
                 bsoNmR9: monoOriginName symtab: symtab tid: bstamp
-                if bsoNmR9.stringview != "array" then {
+                if bsoNmR9.stringview != "array" when bsoNmR9.stringview != "str" then {
                     isRecOrCls = true
                 }
             }
@@ -3872,6 +3916,22 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 if (allDigits s: mn2.stringview) then {
                     eai9: "\{bn2}\{accB2}data[\{mn2}]"
                     return eai9
+                }
+            }
+            if bsmn.stringview == "str" then {
+                bstns9: typeNameOfReg9 symtab: symtab tid: bstamp
+                scba9: cnameOf tid: bstamp name: bstns9.stringview
+                if mn2.stringview == "length" then {
+                    esl9: "\{bn2}\{accB2}len"
+                    return esl9
+                }
+                if mn2.stringview == "size" then {
+                    ess9: "\{scba9}_size"
+                    return ess9
+                }
+                if mn2.stringview == "string" then {
+                    estr9: "\{scba9}_string(\{bn2})"
+                    return estr9
                 }
             }
             if bsmn.stringview == "List" then {
@@ -4043,6 +4103,19 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         nlid9 = chaseColMono symtab: symtab tid: nlid9
         nlid9 = canonicalColId symtab: symtab ctx: ctx tid: nlid9
         nlomn9: monoOriginName symtab: symtab tid: nlid9
+        if nlomn9.stringview == "str" then {
+            nstrtn9: typeNameOfReg9 symtab: symtab tid: nlid9
+            nstrcb9: cnameOf tid: nlid9 name: nstrtn9.stringview
+            if mn2.stringview == "length" then {
+                return "\{base9}.len"
+            }
+            if mn2.stringview == "size" then {
+                return "\{nstrcb9}_size"
+            }
+            if mn2.stringview == "string" then {
+                return "\{nstrcb9}_string(\{base9})"
+            }
+        }
         if nlomn9.stringview == "List" then {
             nltn9: typeNameOfReg9 symtab: symtab tid: nlid9
             nlcb9: cnameOf tid: nlid9 name: nltn9.stringview
@@ -4421,8 +4494,15 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
                 buf.append lh2.stringview
             }
         } else {
-            l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
-            buf.append l8.stringview
+            pStrId9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n)
+            pStrOr9: monoOriginName symtab: symtab tid: pStrId9
+            if pStrOr9.stringview == "str" then {
+                lstri9: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
+                buf.append lstri9.stringview
+            } else {
+                l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
+                buf.append l8.stringview
+            }
         }
     }
 }
@@ -4640,6 +4720,12 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
             buf.append lpv.stringview
         } else {
             argTid: stampIdOf symtab: symtab nid: n.nodeid.u64
+            pOrig9: monoOriginName symtab: symtab tid: argTid
+            if pOrig9.stringview == "str" then {
+                lpstr9: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){\{anm}.data, \{anm}.len});\n"
+                buf.append lpstr9.stringview
+                return
+            }
             svco: symtab.typing.childOf parentTypeId: argTid name: "stringview"
             match (
                 svco
@@ -5147,7 +5233,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 } case none then {}
             }
         }
-        nm: n.name.stringview
+        nm: ztypes.mangleVarName name: n.name.stringview
         if ctx.genActive when (isYieldNode n: n.value) then {
             emitExprFormYield symtab: symtab ctx: ctx value: n.value aid: n.nodeid.u64 nm: nm.stringview ind: ind tmp: tmp buf: buf
             return
@@ -5180,7 +5266,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                     # list comprehension: `xs: for ... loop { expr }` create + populate
                     lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
                     buf.append lc0.stringview
-                    emitListComprehension symtab: symtab ctx: ctx forNode: n.value listCb: lcb.stringview listVar: nm ind: ind tmp: tmp buf: buf
+                    emitListComprehension symtab: symtab ctx: ctx forNode: n.value listCb: lcb.stringview listVar: nm.stringview ind: ind tmp: tmp buf: buf
                 } else {
                     if (collectionValueCallRhs n: n.value) then {
                         lvr0: emitExpr symtab: symtab ctx: ctx n: n.value
@@ -5259,7 +5345,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 buf.append lsv4.stringview
                 return
             }
-            if (emitSvSliceBinding symtab: symtab ctx: ctx n: n.value nm: nm ind: ind buf: buf) then {
+            if (emitSvSliceBinding symtab: symtab ctx: ctx n: n.value nm: nm.stringview ind: ind buf: buf) then {
                 return
             }
             vx: emitExpr symtab: symtab ctx: ctx n: n.value
@@ -5281,7 +5367,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 tmp.frees.append nmc2
                 return
             }
-            did9: emitStringBindValue symtab: symtab ctx: ctx n: n.value nm: nm ind: ind tmp: tmp buf: buf
+            did9: emitStringBindValue symtab: symtab ctx: ctx n: n.value nm: nm.stringview ind: ind tmp: tmp buf: buf
             if did9 then {
                 return
             }
@@ -5300,11 +5386,11 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             return
         }
         if ct.length > 0 then {
-            dm9: emitMatchBindValue symtab: symtab ctx: ctx n: n.value nm: nm ct: ct.stringview ind: ind tmp: tmp buf: buf
+            dm9: emitMatchBindValue symtab: symtab ctx: ctx n: n.value nm: nm.stringview ct: ct.stringview ind: ind tmp: tmp buf: buf
             if dm9 then {
                 return
             }
-            di9: emitIfBindValue symtab: symtab ctx: ctx n: n.value nm: nm ct: ct.stringview ind: ind tmp: tmp buf: buf
+            di9: emitIfBindValue symtab: symtab ctx: ctx n: n.value nm: nm.stringview ct: ct.stringview ind: ind tmp: tmp buf: buf
             if di9 then {
                 return
             }
@@ -8444,6 +8530,59 @@ emitArrayMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
     }
 }
 
+# capLenT -- the C length-field type for a str mono of the given capacity:
+# uint8/16/32 by capacity, keeping small str monos compact (mirrors the
+# reference's len-type selection).
+capLenT: function {cap: StringView} out String is {
+    v: 0.u64
+    i: 0.u64
+    n: cap.length
+    for i < n loop {
+        bo: cap.byteAt i: i
+        match (
+            bo
+        ) case some then {
+            v = (v * 10) + (bo - 48).u64
+        } case none then {}
+        i = i + 1
+    }
+    if v <= 255 then {
+        return "uint8_t".string
+    }
+    if v <= 65535 then {
+        return "uint16_t".string
+    }
+    return "uint32_t".string
+}
+
+# emitStrMono -- a str valtype mono (fixed-capacity inline string). Substitutes
+# z_str.c.tmpl (struct + create + .string + String_to_<name>). Read via
+# loadFragment so the template's hardcoded z_String becomes the port's strC.
+# Capacity is the trailing segment of the mono name (str_<cap>), prefix "str_"=4.
+emitStrMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    capStr: monoElemName full: mn prefixLen: 4
+    lenT: capLenT cap: capStr.stringview
+    eqBody: "".string
+    eqo: symtab.typing.childOf parentTypeId: monoId name: "=="
+    match (
+        eqo
+    ) case some then {
+        eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n}\n".string
+    } case none then {}
+    p: "\{runtimeDir}/z_str.c.tmpl"
+    svL9: ctx.svC.string
+    strL9: ctx.strC.string
+    raw: loadFragment path: p.stringview svC: svL9.stringview strC: strL9.stringview
+    t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+    t2: applyTmpl text: t1 key: "CAP" val: capStr.stringview
+    t3: applyTmpl text: t2 key: "LEN_T" val: lenT.stringview
+    t4: applyTmpl text: t3 key: "EQ_BODY" val: eqBody.stringview
+    buf.append t4.stringview
+    buf.append "\n"
+}
+
 emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
     mn: typeNameOfReg9 symtab: symtab tid: monoId
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
@@ -10404,6 +10543,16 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     buildUserTypeList symtab: symtab ctx: ctx acc: userListM
     emitCliFwdDecls symtab: symtab ctx: ctx buf: buf
     emitMainFwdDecls symtab: symtab ctx: ctx buf: buf
+    # str valtype monos are leaf PODs that user records embed by value, so emit
+    # them first (before any user struct / collection mono that references them).
+    tstr9: 0.u64
+    for tstr9 < last loop {
+        snm9: monoOriginName symtab: symtab tid: tstr9
+        if snm9.stringview == "str" then {
+            emitStrMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tstr9 buf: buf
+        }
+        tstr9 = tstr9 + 1
+    }
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
     # Result monos; emit before them so the mono destructors can call IoError's.
     tsu: 0.u64

@@ -50,6 +50,8 @@ EMITC_SMOKE: "list[str]" = [
     "data",
     "typed_data",
     "arrays",
+    "str",
+    "with_alias",
     "lists",
     "listview",
     "string_codepoints",
