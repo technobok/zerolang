@@ -119,6 +119,8 @@ Table of Contents</div>
 </li>
 <li><a href="#exit">exit</a>
 </li>
+<li><a href="#spawn">spawn</a>
+</li>
 </ul>
 </li>
 </ul>
@@ -127,8 +129,9 @@ Table of Contents</div>
 <main id="content">
 <h2 id="overview"><a href="#overview">1. Overview</a></h2>
 <p>The <code>os</code> unit exposes process-level primitives: argv,
-environment variables, working directory, process identity, and
-platform / architecture descriptors. Paired with <code>io</code> -- where
+environment variables, working directory, process identity,
+platform / architecture descriptors, and subprocess spawning.
+Paired with <code>io</code> -- where
 <code>io</code> surfaces failures as <code>Result t: T e: IoError</code>, <code>os</code>
 primitives are either infallible or use <code>Option</code> when absence
 is expected.</p>
@@ -187,6 +190,7 @@ Windows stubs are a v2 concern</li>
 <p><strong>Process control</strong></p>
 <ul>
 <li><a href="#exit"><strong>os.exit</strong> -- <code>function {code: i32}</code></a></li>
+<li><a href="#spawn"><strong>os.spawn</strong> -- <code>function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32</code></a></li>
 </ul>
 <h2 id="args"><a href="#args">3. args</a></h2>
 <pre><code class="language-zerolang">  args: function out (List of: String) is native</code></pre>
@@ -305,6 +309,24 @@ values <strong>do not</strong> run.</p>
 <p>Reserve for fatal-error exits and CLI tools that want an
 explicit status. Prefer a normal return path for everyday
 success / failure so RAII cleanup fires.</p>
+<h2 id="spawn"><a href="#spawn">20. spawn</a></h2>
+<pre><code class="language-zerolang">  spawn: function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32 is native</code></pre>
+<p>Fork and <code>execvp</code> <code>argv</code> as a child process; <code>argv[0]</code> is
+resolved via <code>PATH</code>. The child's stdin is <code>/dev/null</code>; its
+stdout is redirected to <code>outPath</code> and stderr to <code>errPath</code>
+(each opened <code>O_WRONLY|O_CREAT|O_TRUNC</code> -- pass <code>/dev/null</code>
+to discard a stream). A non-empty <code>cwd</code> <code>chdir</code>s the child.
+The redirection files are opened in the parent <strong>before</strong> the
+fork, so the child's <code>chdir</code> cannot change their resolution.</p>
+<p>The return value is the child's exit status; <code>127</code> if exec or
+any setup step failed; <code>124</code> if it timed out. <code>timeoutSecs</code>
+greater than zero kills the child (<code>SIGKILL</code>) after that many
+seconds; <code>0</code> (the default) waits indefinitely. The model
+mirrors <code>subprocess.run(argv, timeout=...)</code> -- a single
+run-to-completion call, not a separate spawn / wait split.</p>
+<p>Captured output is read back with <code>io.readText</code>; the child
+inherits the environment, so set variables with <code>os.setEnv</code>
+beforehand. There is no streaming / pipe interface in v1.</p>
 </main>
 </body>
 </html>

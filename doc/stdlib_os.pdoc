@@ -34,8 +34,9 @@
 #--: Overview
 
 The #~"os" unit exposes process-level primitives: argv,
-environment variables, working directory, process identity, and
-platform / architecture descriptors. Paired with #~"io" -- where
+environment variables, working directory, process identity,
+platform / architecture descriptors, and subprocess spawning.
+Paired with #~"io" -- where
 #~"io" surfaces failures as #~"Result t: T e: IoError", #~"os"
 primitives are either infallible or use #~"Option" when absence
 is expected.
@@ -105,6 +106,7 @@ Accessed via qualified names only -- #~"os.args", #~"os.env
 
 #ul:
   [#*: #> to=exit: #b:"os.exit" -- #~"function {code: i32}"]
+  [#*: #> to=spawn: #b:"os.spawn" -- #~"function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32"]
 
 
 #--: args
@@ -341,3 +343,29 @@ values #b:"do not" run.
 Reserve for fatal-error exits and CLI tools that want an
 explicit status. Prefer a normal return path for everyday
 success / failure so RAII cleanup fires.
+
+
+#--: spawn
+
+#code language=zerolang: """
+  spawn: function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32 is native
+"""
+
+Fork and #~"execvp" #~"argv" as a child process; #~"argv[0]" is
+resolved via #~"PATH". The child's stdin is #~"/dev/null"; its
+stdout is redirected to #~"outPath" and stderr to #~"errPath"
+(each opened #~"O_WRONLY|O_CREAT|O_TRUNC" -- pass #~"/dev/null"
+to discard a stream). A non-empty #~"cwd" #~"chdir"s the child.
+The redirection files are opened in the parent #b:"before" the
+fork, so the child's #~"chdir" cannot change their resolution.
+
+The return value is the child's exit status; #~"127" if exec or
+any setup step failed; #~"124" if it timed out. #~"timeoutSecs"
+greater than zero kills the child (#~"SIGKILL") after that many
+seconds; #~"0" (the default) waits indefinitely. The model
+mirrors #~"subprocess.run(argv, timeout=...)" -- a single
+run-to-completion call, not a separate spawn / wait split.
+
+Captured output is read back with #~"io.readText"; the child
+inherits the environment, so set variables with #~"os.setEnv"
+beforehand. There is no streaming / pipe interface in v1.

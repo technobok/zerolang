@@ -124,6 +124,7 @@ main: function is {
     cc: "gcc".string
     root: ".".string
     report: false
+    timeoutSecs: 60.i32
     i: 1.u64
     for i < n loop {
         a: argv.get i: i
@@ -139,6 +140,17 @@ main: function is {
             root = (argv.get i: i).copy
         } else if av == "--report" then {
             report = true
+        } else if av == "--timeout" then {
+            i = i + 1
+            tval: (argv.get i: i).copy
+            tsv: tval.stringview
+            tv: tsv.parseI64
+            match (
+                tv
+            ) case ok then {
+                timeoutSecs = tv.i32
+            } case err then {
+            }
         }
         i = i + 1
     }
@@ -184,12 +196,12 @@ main: function is {
                 bpath: "\{d.stringview}/\{nameStr.stringview}.bin"
                 opath: "\{d.stringview}/\{nameStr.stringview}.out"
                 za: zcArgv zc: zc.stringview name: nameStr.stringview srcdir: srcAbs.stringview sys: sys.stringview outc: cpath.stringview
-                ec: os.spawn argv: za cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                ec: os.spawn argv: za cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0.i32
                 if ec != 0.i32 then {
                     skip = skip + 1
                 } else {
                     ga: gccArgv cc: cc.stringview bin: bpath.stringview csrc: cpath.stringview asan: false
-                    bc: os.spawn argv: ga cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                    bc: os.spawn argv: ga cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0.i32
                     if bc != 0.i32 then {
                         skip = skip + 1
                     } else {
@@ -197,7 +209,7 @@ main: function is {
                         io.mkdirp path: rdir.stringview
                         argsFile: "\{rungold.stringview}/\{nameStr.stringview}.args"
                         ba: binArgv bin: bpath.stringview argsFile: argsFile.stringview
-                        rcode: os.spawn argv: ba cwd: rdir.stringview outPath: opath.stringview errPath: "/dev/null"
+                        rcode: os.spawn argv: ba cwd: rdir.stringview outPath: opath.stringview errPath: "/dev/null" timeoutSecs: timeoutSecs
                         gold: "\{rungold.stringview}/\{nameStr.stringview}.out"
                         exitFile: "\{rungold.stringview}/\{nameStr.stringview}.exit"
                         if (io.exists path: gold.stringview) == false then {
@@ -251,17 +263,17 @@ main: function is {
                     lb: "\{d.stringview}/L_\{nm.stringview}.bin"
                     lerr: "\{d.stringview}/L_\{nm.stringview}.err"
                     za2: zcArgv zc: zc.stringview name: nm.stringview srcdir: ld.stringview sys: sys.stringview outc: lc.stringview
-                    ec2: os.spawn argv: za2 cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                    ec2: os.spawn argv: za2 cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0.i32
                     if ec2 == 0.i32 then {
                         ga2: gccArgv cc: cc.stringview bin: lb.stringview csrc: lc.stringview asan: true
-                        bc2: os.spawn argv: ga2 cwd: "" outPath: "/dev/null" errPath: "/dev/null"
+                        bc2: os.spawn argv: ga2 cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0.i32
                         if bc2 == 0.i32 then {
                             rdir2: "\{d.stringview}/leak_\{nm.stringview}"
                             io.mkdirp path: rdir2.stringview
                             argsFile2: "\{rungold.stringview}/\{nm.stringview}.args"
                             ba2: binArgv bin: lb.stringview argsFile: argsFile2.stringview
                             os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
-                            os.spawn argv: ba2 cwd: rdir2.stringview outPath: "/dev/null" errPath: lerr.stringview
+                            os.spawn argv: ba2 cwd: rdir2.stringview outPath: "/dev/null" errPath: lerr.stringview timeoutSecs: timeoutSecs
                             os.unsetEnv key: "ASAN_OPTIONS"
                             errC: slurp path: lerr.stringview
                             isKnown: nm.stringview == "cli_basic"
@@ -309,7 +321,7 @@ main: function is {
                 enm: esfx.string
                 epe: "\{d.stringview}/\{enm.stringview}.pe"
                 eza: zcArgv zc: zc.stringview name: enm.stringview srcdir: errors.stringview sys: sys.stringview outc: "/dev/null"
-                ecode: os.spawn argv: eza cwd: "" outPath: "/dev/null" errPath: epe.stringview
+                ecode: os.spawn argv: eza cwd: "" outPath: "/dev/null" errPath: epe.stringview timeoutSecs: 0.i32
                 egold: "\{errors.stringview}/\{enm.stringview}.err"
                 ematch: false
                 if ecode != 0.i32 then {

@@ -5,14 +5,16 @@
    fork so the child's chdir cannot change their resolution. argv
    element buffers are NUL-terminated (z_String), borrowed directly;
    only the three view paths need z_sv_to_cstr. Returns the child's
-   exit status, or 127 on exec/setup failure. No timeout. */
+   exit status; 127 on exec/setup failure; 124 if timeoutSecs > 0 and
+   the child outlived it (SIGKILLed). timeoutSecs <= 0 waits forever. */
+static void z_os_spawn_on_alarm(int sig) { (void)sig; }
 static int32_t z_os_spawn(
-    z_List_String_t* argv, z_StringView_t cwd,
-    z_StringView_t outPath, z_StringView_t errPath
+    z_List_String_t* argv, z_StringView_t cwd, z_StringView_t outPath,
+    z_StringView_t errPath, int32_t timeoutSecs
 );
 static int32_t z_os_spawn(
-    z_List_String_t* argv, z_StringView_t cwd,
-    z_StringView_t outPath, z_StringView_t errPath
+    z_List_String_t* argv, z_StringView_t cwd, z_StringView_t outPath,
+    z_StringView_t errPath, int32_t timeoutSecs
 ) {
     if (argv->length == 0) return 127;
     char** c_argv = (char**)z_xmalloc((argv->length + 1) * sizeof(char*));
@@ -41,8 +43,28 @@ static int32_t z_os_spawn(
             _exit(127);
         } else if (pid > 0) {
             int wst = 0;
-            if (waitpid(pid, &wst, 0) == pid && WIFEXITED(wst)) {
-                status = (int32_t)WEXITSTATUS(wst);
+            if (timeoutSecs > 0) {
+                struct sigaction sa, old_sa;
+                memset(&sa, 0, sizeof(sa));
+                sa.sa_handler = z_os_spawn_on_alarm;
+                sigemptyset(&sa.sa_mask);
+                sigaction(SIGALRM, &sa, &old_sa);
+                alarm((unsigned int)timeoutSecs);
+                pid_t r = waitpid(pid, &wst, 0);
+                int e = errno;
+                alarm(0);
+                sigaction(SIGALRM, &old_sa, NULL);
+                if (r == pid) {
+                    if (WIFEXITED(wst)) status = (int32_t)WEXITSTATUS(wst);
+                } else if (r < 0 && e == EINTR) {
+                    kill(pid, SIGKILL);
+                    waitpid(pid, &wst, 0);
+                    status = 124;
+                }
+            } else {
+                if (waitpid(pid, &wst, 0) == pid && WIFEXITED(wst)) {
+                    status = (int32_t)WEXITSTATUS(wst);
+                }
             }
         }
     }
