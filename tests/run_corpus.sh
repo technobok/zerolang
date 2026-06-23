@@ -42,6 +42,10 @@ KNOWN_LEAKY=""
 # Python reference only). They are xfail until the compiler's error reporting is ported. As each
 # is fixed, remove it here -- the gate forces this (a now-passing entry fails with "remove ...").
 KNOWN_NOERR=""
+# Examples the PORT emitter cannot yet compile to valid C (the Python reference can, except
+# genmath). Each is removed as its codegen gap is fixed; the gate fails on any UNEXPECTED
+# non-build and on any entry here that now builds (forcing removal -- the ratchet).
+KNOWN_NOBUILD="arrays autoproject box compileerror defaults dobreak genericfileunit genericfunctions generics genmath linkedlist numeric_generics ownership specs str strview with_alias xunit_io_method"
 
 is_in() { case " $2 " in *" $1 "*) return 0;; *) return 1;; esac; }
 
@@ -55,7 +59,7 @@ if [ -z "$ZC" ]; then
 fi
 
 D=$(mktemp -d); trap 'rm -rf "$D" "${TZC:-}"' EXIT
-fails=0; pass=0; leakclean=0; xleak=0; xfail=0 skip=0
+fails=0; pass=0; leakclean=0; xleak=0; xfail=0 xnobuild=0 skip=0
 
 norm_err() {  # keep the stable contract: error code+message lines + the count summary
   grep -aE '^error\[E[0-9]+\]:|[0-9]+ error(s)? found' "$1" 2>/dev/null
@@ -102,8 +106,15 @@ do_leak() {
   for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do
     [ -e "$f" ] || continue
     name=$(basename "$f" .z); dir=$(dirname "$f")
-    "$ZC" "$name" --src "$dir" --system "$SYS" --emit-c "$D/L_$name.c" 2>/dev/null || continue
-    gcc "${ACF[@]}" -o "$D/L_$name.bin" "$D/L_$name.c" 2>/dev/null || continue
+    if ! "$ZC" "$name" --src "$dir" --system "$SYS" --emit-c "$D/L_$name.c" 2>"$D/L_$name.ce"; then
+      if is_in "$name" "$KNOWN_NOBUILD"; then [ "$MODE" = report ] && echo "xnobuild(emit) $name"; xnobuild=$((xnobuild+1)); continue
+      else echo "FAIL(build) $name emit: $(grep -am1 . "$D/L_$name.ce")"; fails=$((fails+1)); continue; fi
+    fi
+    if ! gcc "${ACF[@]}" -o "$D/L_$name.bin" "$D/L_$name.c" 2>"$D/L_$name.cg"; then
+      if is_in "$name" "$KNOWN_NOBUILD"; then [ "$MODE" = report ] && echo "xnobuild(gcc) $name"; xnobuild=$((xnobuild+1)); continue
+      else echo "FAIL(build) $name gcc: $(grep -am1 'error:' "$D/L_$name.cg")"; fails=$((fails+1)); continue; fi
+    fi
+    if is_in "$name" "$KNOWN_NOBUILD"; then echo "FAIL(ratchet) $name now builds -- remove from KNOWN_NOBUILD"; fails=$((fails+1)); continue; fi
     local rd; rd=$(mktemp -d "$D/lr.XXXX")
     local A=(); [ -f "$RUNGOLD/$name.args" ] && mapfile -t A < "$RUNGOLD/$name.args"
     ( cd "$rd" && ASAN_OPTIONS=detect_leaks=1 timeout 60 "$D/L_$name.bin" "${A[@]}" >/dev/null 2>"$D/L_$name.err" </dev/null )
@@ -149,7 +160,7 @@ do_leak
 do_error
 
 echo "----"
-echo "pass=$pass leak-clean=$leakclean xfail=$xfail xleak=$xleak skip=$skip fails=$fails"
+echo "pass=$pass leak-clean=$leakclean xfail=$xfail xleak=$xleak xnobuild=$xnobuild skip=$skip fails=$fails"
 [ "$MODE" = update ] && { echo "UPDATE DONE"; exit 0; }
 [ "$MODE" = report ] && exit 0
 [ $fails -eq 0 ] && { echo "CORPUS GATE GREEN"; exit 0; } || { echo "CORPUS GATE FAILED ($fails)"; exit 1; }
