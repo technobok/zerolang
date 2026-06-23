@@ -71,6 +71,7 @@ cTypeOf: function {name: StringView} out String is {
     if name == "f32" then { return "float".string }
     if name == "f64" then { return "double".string }
     if name == "bool" then { return "bool".string }
+    if name == "literal_int" then { return "int64_t".string }
     return "".string
 }
 
@@ -5534,7 +5535,16 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             emitStmt symtab: symtab ctx: ctx n: s9 ind: ind tmp: tmp buf: buf
         }
     } case doexpr then {
-        emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind tmp: tmp buf: buf
+        if (ztypecheck.blockHasBreak n: n.statement) then {
+            ldo9: "\{ind}do {\n"
+            buf.append ldo9.stringview
+            indd9: "\{ind}    "
+            emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: indd9.stringview tmp: tmp buf: buf
+            lwh9: "\{ind}} while (0);\n"
+            buf.append lwh9.stringview
+        } else {
+            emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind tmp: tmp buf: buf
+        }
     } case call then {
         emitCallStmt symtab: symtab ctx: ctx call: n ind: ind tmp: tmp buf: buf
     } case assignment then {
@@ -5714,6 +5724,10 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             }
             di9: emitIfBindValue symtab: symtab ctx: ctx n: n.value nm: nm.stringview ct: ct.stringview ind: ind tmp: tmp buf: buf
             if di9 then {
+                return
+            }
+            dd9: emitDoBindValue symtab: symtab ctx: ctx n: n.value nm: nm.stringview ct: ct.stringview tid: ltid ind: ind tmp: tmp buf: buf
+            if dd9 then {
                 return
             }
         }
@@ -6334,6 +6348,70 @@ emitMatchElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assig
     } case none then {
         ld0: "\{ind}default: break;\n"
         buf.append ld0.stringview
+    }
+}
+
+# emitBranchAssignOptional -- emit a do-block-with-break body, wrapping the final
+# value in the optional's `some` arm (tag + data.some); a `break` reached first
+# leaves the result at its pre-set `none` tag.
+emitBranchAssignOptional: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node target: StringView someTag: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+    match (
+        n
+    ) case statement then {
+        cnt: n.statements.length
+        si: 0.u64
+        for si < cnt loop {
+            sx: n.statements.get i: si
+            if si + 1 == cnt then {
+                vx: emitExpr symtab: symtab ctx: ctx n: sx
+                la: "\{ind}\{target}.tag = \{someTag};\n\{ind}\{target}.data.some = \{vx};\n"
+                buf.append la.stringview
+            } else {
+                emitStmt symtab: symtab ctx: ctx n: sx ind: ind tmp: tmp buf: buf
+            }
+            si = si + 1
+        }
+    } else {
+        vx2: emitExpr symtab: symtab ctx: ctx n: n
+        la2: "\{ind}\{target}.tag = \{someTag};\n\{ind}\{target}.data.some = \{vx2};\n"
+        buf.append la2.stringview
+    }
+}
+
+# emitDoBindValue -- `x: { ... }` (a do block): declare the local and emit the
+# block. A do block whose own body breaks yields an optionval (default `none`,
+# `some(last)` on normal completion, in a do/while(0) so a break exits to none);
+# a breakless do block is a plain scoped block assigning the last value.
+emitDoBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: StringView ct: StringView tid: u64 ind: StringView tmp: TmpCtr buf: String.borrow} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (emitDoBindValue symtab: symtab ctx: ctx n: n.expression nm: nm ct: ct tid: tid ind: ind tmp: tmp buf: buf)
+    } case doexpr then {
+        ld: "\{ind}\{ct} \{nm};\n"
+        buf.append ld.stringview
+        if (ztypecheck.blockHasBreak n: n.statement) then {
+            noneTag: variantTag symtab: symtab tid: tid arm: "none"
+            someTag: variantTag symtab: symtab tid: tid arm: "some"
+            l0: "\{ind}\{nm}.tag = \{noneTag};\n"
+            buf.append l0.stringview
+            l1: "\{ind}do {\n"
+            buf.append l1.stringview
+            ind2: "\{ind}    "
+            emitBranchAssignOptional symtab: symtab ctx: ctx n: n.statement target: nm someTag: someTag.stringview ind: ind2.stringview tmp: tmp buf: buf
+            l2: "\{ind}} while (0);\n"
+            buf.append l2.stringview
+        } else {
+            l3: "\{ind}{\n"
+            buf.append l3.stringview
+            ind3: "\{ind}    "
+            emitBranchAssign symtab: symtab ctx: ctx n: n.statement target: nm ind: ind3.stringview tmp: tmp buf: buf
+            l4: "\{ind}}\n"
+            buf.append l4.stringview
+        }
+        return true
+    } else {
+        return false
     }
 }
 
