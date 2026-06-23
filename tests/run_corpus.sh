@@ -45,7 +45,11 @@ KNOWN_NOERR=""
 # Examples the PORT emitter cannot yet compile to valid C (the Python reference can, except
 # genmath). Each is removed as its codegen gap is fixed; the gate fails on any UNEXPECTED
 # non-build and on any entry here that now builds (forcing removal -- the ratchet).
-KNOWN_NOBUILD="arrays autoproject box compileerror defaults dobreak genericfileunit genericfunctions generics genmath linkedlist numeric_generics ownership specs str strview with_alias xunit_io_method"
+KNOWN_NOBUILD="arrays autoproject box compileerror defaults dobreak genericfileunit genericfunctions generics linkedlist numeric_generics ownership specs str strview with_alias xunit_io_method"
+# Generic library units (no `main`, parameterized by a generic type) are
+# instantiated by other units and cannot be compiled standalone -- not even by
+# the Python reference. Excluded from the standalone-build gate entirely.
+SKIP_BUILD="genmath"
 
 is_in() { case " $2 " in *" $1 "*) return 0;; *) return 1;; esac; }
 
@@ -106,6 +110,7 @@ do_leak() {
   for f in examples/*.z tests/fixtures/emitc_corpus/*.z; do
     [ -e "$f" ] || continue
     name=$(basename "$f" .z); dir=$(dirname "$f")
+    is_in "$name" "$SKIP_BUILD" && continue
     if ! "$ZC" "$name" --src "$dir" --system "$SYS" --emit-c "$D/L_$name.c" 2>"$D/L_$name.ce"; then
       if is_in "$name" "$KNOWN_NOBUILD"; then [ "$MODE" = report ] && echo "xnobuild(emit) $name"; xnobuild=$((xnobuild+1)); continue
       else echo "FAIL(build) $name emit: $(grep -am1 . "$D/L_$name.ce")"; fails=$((fails+1)); continue; fi
