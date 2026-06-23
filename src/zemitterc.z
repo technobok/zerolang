@@ -2479,8 +2479,26 @@ emitUnionCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         return "".string
     }
     smid0: stampIdOf symtab: symtab nid: call.nodeid.u64
-    if (monoOriginName symtab: symtab tid: smid0).length > 0 then {
-        return "".string
+    smOrig9: monoOriginName symtab: symtab tid: smid0
+    # system union monos (optionval/resultval/Option/Result) are built by
+    # emitVariantCtorCall; only USER generic union monos are built here.
+    if smOrig9.length > 0 then {
+        sysU9: false
+        if smOrig9.stringview == "optionval" then {
+            sysU9 = true
+        }
+        if smOrig9.stringview == "resultval" then {
+            sysU9 = true
+        }
+        if smOrig9.stringview == "Option" then {
+            sysU9 = true
+        }
+        if smOrig9.stringview == "Result" then {
+            sysU9 = true
+        }
+        if sysU9 then {
+            return "".string
+        }
     }
     utid: resolveTypeIdByName symtab: symtab ctx: ctx name: bn.stringview
     if utid == 0 then {
@@ -2489,12 +2507,15 @@ emitUnionCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.UNION then {
         return "".string
     }
-    if (monoOriginName symtab: symtab tid: utid).length != 0 then {
-        return "".string
+    # build from the mono (smid0) for a user generic union; else the named template
+    ctid9: utid
+    if smOrig9.length > 0 when (symtab.reg.typetypeOf typeId: smid0) == ztypes.ztypetype.UNION then {
+        ctid9 = smid0
     }
-    vc: cnameOf tid: utid name: bn.stringview
-    tg: variantTag symtab: symtab tid: utid arm: mn.stringview
-    payC: armPayloadC symtab: symtab ctx: ctx tid: utid arm: mn.stringview
+    ctn9: typeNameOfReg9 symtab: symtab tid: ctid9
+    vc: cnameOf tid: ctid9 name: ctn9.stringview
+    tg: variantTag symtab: symtab tid: ctid9 arm: mn.stringview
+    payC: armPayloadC symtab: symtab ctx: ctx tid: ctid9 arm: mn.stringview
     if payC.length > 0 then {
         av: "".string
         got: false
@@ -5471,7 +5492,15 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
+            ltHasDtor9: false
             if (symtab.reg.hasDestructorName typeId: ltid) then {
+                ltHasDtor9 = true
+            }
+            ltUmn9: monoOriginName symtab: symtab tid: ltid
+            if ltUmn9.length > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.UNION then {
+                ltHasDtor9 = true
+            }
+            if ltHasDtor9 then {
                 if (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.value) == false then {
                     ldcb: cnameOf tid: ltid name: tn.stringview
                     ldRef9: "&\{nm}".string
@@ -10853,6 +10882,40 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitUnionMono symtab: symtab ctx: ctx tid: tiu name: uvn.stringview buf: buf
         }
         tiu = tiu + 1
+    }
+    # user generic UNION monos (e.g. MyOption<i64>): struct + tags via
+    # emitUnionMono. The tug9 sweep handles only RECORD/CLASS; system
+    # option/result monos are handled above.
+    tugu9: 0.u64
+    for tugu9 < last loop {
+        uguo9: monoOriginName symtab: symtab tid: tugu9
+        isUGU9: false
+        if uguo9.length > 0 when (symtab.reg.typetypeOf typeId: tugu9) == ztypes.ztypetype.UNION then {
+            isUGU9 = true
+        }
+        if isUGU9 when uguo9.stringview == "Option" then {
+            isUGU9 = false
+        }
+        if isUGU9 when uguo9.stringview == "Result" then {
+            isUGU9 = false
+        }
+        if isUGU9 when uguo9.stringview == "optionval" then {
+            isUGU9 = false
+        }
+        if isUGU9 when uguo9.stringview == "resultval" then {
+            isUGU9 = false
+        }
+        if isUGU9 when uguo9.stringview == "OptionView" then {
+            isUGU9 = false
+        }
+        if isUGU9 when (isCollectionOrigin name: uguo9.stringview) then {
+            isUGU9 = false
+        }
+        if isUGU9 then {
+            uguvn9: typeNameOfReg9 symtab: symtab tid: tugu9
+            emitUnionMono symtab: symtab ctx: ctx tid: tugu9 name: uguvn9.stringview buf: buf
+        }
+        tugu9 = tugu9 + 1
     }
     # OptionView structs -- the borrowed-view option every collection
     # iterator yields; emitted before the collections that reference it.
