@@ -55,6 +55,7 @@ EMITC_SMOKE: "list[str]" = [
     "strview",
     "linkedlist",
     "compileerror",
+    "box",
     "lists",
     "listview",
     "string_codepoints",

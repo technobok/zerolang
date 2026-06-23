@@ -1951,6 +1951,36 @@ allDigits: function {s: StringView} out bool is {
     return true
 }
 
+# emitBoxCreate -- `Box from: x`: heap-alloc a cell for the element and store x.
+# Gated on the BOX_CREATE callKind stamp; hoists the alloc+store and returns the
+# pointer temp. Mirrors the reference _emit_box_create (valtype/String inner).
+emitBoxCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    cko9: symtab.typing.callKind.get key: call.nodeid.u64
+    isBoxC9: false
+    match (
+        cko9
+    ) case some then {
+        if cko9 == zast.callkind.BOX_CREATE then {
+            isBoxC9 = true
+        }
+    } case none then {}
+    if (isBoxC9) == false then {
+        return "".string
+    }
+    bmid9: stampIdOf symtab: symtab nid: call.nodeid.u64
+    bmn9: typeNameOfReg9 symtab: symtab tid: bmid9
+    ben9: monoElemName full: bmn9 prefixLen: 4
+    beid9: resolveTypeIdByName symtab: symtab ctx: ctx name: ben9.stringview
+    binner9: typeRefC symtab: symtab ctx: ctx tid: beid9 thisTid: 0
+    bval9: ctorArgByLabel symtab: symtab ctx: ctx call: call label: "from"
+    bN9: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    bnm9: "_Box\{bN9}".string
+    braw9: "    \{binner9}* \{bnm9} = (\{binner9}*)z_xmalloc(sizeof(\{binner9}));\n    *\{bnm9} = \{bval9};\n"
+    ctx.argHoistRaw.append braw9
+    return bnm9
+}
+
 # emitEmptyColCreate -- an empty collection construction `(List of: T)` /
 # `(Set of: T)` / `(Map ...)` as a value: emit the collection mono's create with
 # capacity 0, resolved from the call-node stamp. "" when not such a construction.
@@ -3283,6 +3313,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if cuct.length > 0 then {
         return cuct
     }
+    bxc9: emitBoxCreate symtab: symtab ctx: ctx call: call
+    if bxc9.length > 0 then {
+        return bxc9
+    }
     cn0: atomTextOf n: call.callable
     ecc9: emitEmptyColCreate symtab: symtab ctx: ctx call: call cn0: cn0.stringview
     if ecc9.length > 0 then {
@@ -4232,6 +4266,12 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         l: emitExpr symtab: symtab ctx: ctx n: n.lhs
         op: atomTextOf n: n.operator
         r: emitExpr symtab: symtab ctx: ctx n: n.rhs
+        if (nodeIsAtomBox symtab: symtab ctx: ctx n: n.lhs) then {
+            l = "(*\{l})".string
+        }
+        if (nodeIsAtomBox symtab: symtab ctx: ctx n: n.rhs) then {
+            r = "(*\{r})".string
+        }
         if (isCompareOp name: op.stringview) then {
             lt: stampNameDeep symtab: symtab n: n.lhs
             lti: userFnId symtab: symtab ctx: ctx name: lt.stringview
@@ -5434,7 +5474,11 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             if (symtab.reg.hasDestructorName typeId: ltid) then {
                 if (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.value) == false then {
                     ldcb: cnameOf tid: ltid name: tn.stringview
-                    ldf: "    \{ldcb}_destroy(&\{nm});\n"
+                    ldRef9: "&\{nm}".string
+                    if (isBoxTid symtab: symtab tid: ltid) then {
+                        ldRef9 = "\{nm}".string
+                    }
+                    ldf: "    \{ldcb}_destroy(\{ldRef9});\n"
                     ldfs: ldf.string
                     tmp.listFrees.append ldfs
                     tmp.listFreeVars.append nm.string
@@ -7101,6 +7145,21 @@ isBoxTid: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     }
 }
 
+# nodeIsAtomBox -- n is a bare atom whose type is a builtin Box (a heap pointer),
+# so an arithmetic/compare operand must auto-deref (`b` -> `(*b)`).
+nodeIsAtomBox: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (nodeIsAtomBox symtab: symtab ctx: ctx n: n.expression)
+    } case atomid then {
+        bxt9: stampIdOf symtab: symtab nid: n.nodeid.u64
+        return (isBoxTid symtab: symtab tid: bxt9)
+    } else {
+        return false
+    }
+}
+
 # isCollectionOrigin -- a generic-origin template name that mints a C
 # struct type (List/ListView/Set/Map/MapEntry and the iterators).
 isCollectionOrigin: function {name: StringView} out bool is {
@@ -7231,6 +7290,13 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
     if tn.stringview == "StringView" then {
         ts1: "\{ctx.svC}_t"
         return ts1
+    }
+    if (isBoxTid symtab: symtab tid: cid) then {
+        bxmn9: typeNameOfReg9 symtab: symtab tid: cid
+        bxen9: monoElemName full: bxmn9 prefixLen: 4
+        bxeid9: resolveTypeIdByName symtab: symtab ctx: ctx name: bxen9.stringview
+        bxinner9: typeRefC symtab: symtab ctx: ctx tid: bxeid9 thisTid: 0
+        return "\{bxinner9}*"
     }
     omn9: monoOriginName symtab: symtab tid: cid
     if (isCollectionOrigin name: omn9.stringview) then {
@@ -8635,6 +8701,34 @@ emitStrMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     t4: applyTmpl text: t3 key: "EQ_BODY" val: eqBody.stringview
     buf.append t4.stringview
     buf.append "\n"
+}
+
+# emitBoxMono -- a builtin Box mono (heap pointer). No struct (the type is
+# <inner>*); emit only the destructor: free the inner (String/destructor) then
+# the cell. Mirrors the reference _emit_mono_box.
+emitBoxMono: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    beName9: monoElemName full: mn prefixLen: 4
+    beid9: resolveTypeIdByName symtab: symtab ctx: ctx name: beName9.stringview
+    binner9: typeRefC symtab: symtab ctx: ctx tid: beid9 thisTid: 0
+    bdecl9: "static void z_\{nm}_destroy(\{binner9}* v);\n"
+    buf.append bdecl9.stringview
+    bsig9: "static void z_\{nm}_destroy(\{binner9}* v) {\n"
+    buf.append bsig9.stringview
+    buf.append "    if (!v) return;\n"
+    if beName9.stringview == "String" then {
+        bfree9: "    \{ctx.strC}_free(v);\n"
+        buf.append bfree9.stringview
+    } else {
+        if (symtab.reg.hasDestructorName typeId: beid9) then {
+            bicb9: cnameOf tid: beid9 name: beName9.stringview
+            bidf9: "    \{bicb9}_destroy(v);\n"
+            buf.append bidf9.stringview
+        }
+    }
+    buf.append "    free(v);\n"
+    buf.append "}\n\n"
 }
 
 emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
@@ -10065,7 +10159,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     duo
                 ) case some then {
                     if (isEmittableFileUnit name: duo.stringview) then {
-                        if (isTypedefType symtab: symtab tid: t) == false then {
+                        if (isTypedefType symtab: symtab tid: t) == false when (isBoxTid symtab: symtab tid: t) == false then {
                             tn: typeNameOfReg9 symtab: symtab tid: t
                             cn: cnameOf tid: t name: tn.stringview
                             ctx.fwdDeclaredTypes.set key: t.u64 value: true
@@ -10100,6 +10194,9 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     if mo.stringview == "Map" then {
                         fwdM9 = true
                     }
+                }
+                if (isBoxTid symtab: symtab tid: t) then {
+                    fwdM9 = false
                 }
                 if fwdM9 then {
                     tnX: typeNameOfReg9 symtab: symtab tid: t
@@ -10606,6 +10703,14 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             emitStrMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tstr9 buf: buf
         }
         tstr9 = tstr9 + 1
+    }
+    # builtin Box monos (heap pointers): destructor-only, leaf -- emit early.
+    tbox9: 0.u64
+    for tbox9 < last loop {
+        if (isBoxTid symtab: symtab tid: tbox9) then {
+            emitBoxMono symtab: symtab ctx: ctx monoId: tbox9 buf: buf
+        }
+        tbox9 = tbox9 + 1
     }
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
     # Result monos; emit before them so the mono destructors can call IoError's.
