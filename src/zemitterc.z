@@ -2745,6 +2745,11 @@ emitRecordCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                 for ci < ccn loop {
                     cpname: cpn.get i: ci
                     cav: ctorArgByLabel symtab: symtab ctx: ctx call: call label: cpname.stringview
+                    if (ctorHasLabel call: call label: cpname.stringview) == false then {
+                        if (symtab.typing.hasChildDefault parentTypeId: tid name: cpname.stringview) then {
+                            cav = symtab.typing.childDefaultText parentTypeId: tid name: cpname.stringview
+                        }
+                    }
                     if ci > 0 then {
                         cargs.append ", "
                     }
@@ -2767,6 +2772,13 @@ emitRecordCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     for fi < fn0 loop {
         fname: fnames.get i: fi
         av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: fname.stringview
+        # an absent field with a registered default (e.g. a numeric generic param
+        # `size`) uses the default, not the "0" ctorArgByLabel fallback.
+        if (ctorHasLabel call: call label: fname.stringview) == false then {
+            if (symtab.typing.hasChildDefault parentTypeId: tid name: fname.stringview) then {
+                av = symtab.typing.childDefaultText parentTypeId: tid name: fname.stringview
+            }
+        }
         if fi > 0 then {
             args.append ", "
         }
@@ -3352,6 +3364,28 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
             ctorTid9 = gmid9
             gmn9: typeNameOfReg9 symtab: symtab tid: gmid9
             ctorNm9 = gmn9.string
+        }
+    }
+    # parenthesized generic-type-application construction `(sized t: i64 size: 10)
+    # val: 42`: the callable is a stamped Call/Expression (cn0 empty, fid 0), so
+    # resolve the mono from the callable-node stamp and construct it.
+    if fid == 0 then {
+        cstid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
+        cstmn9: monoOriginName symtab: symtab tid: cstid9
+        if cstid9 > 0 when cstmn9.length > 0 then {
+            cstt9: symtab.reg.typetypeOf typeId: cstid9
+            cstOk9: false
+            if cstt9 == ztypes.ztypetype.RECORD then {
+                cstOk9 = true
+            }
+            if cstt9 == ztypes.ztypetype.CLASS then {
+                cstOk9 = true
+            }
+            if cstOk9 then {
+                ctorTid9 = cstid9
+                cstn9: typeNameOfReg9 symtab: symtab tid: cstid9
+                ctorNm9 = cstn9.string
+            }
         }
     }
     if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.RECORD then {

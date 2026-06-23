@@ -57,6 +57,7 @@ EMITC_SMOKE: "list[str]" = [
     "compileerror",
     "box",
     "generics",
+    "numeric_generics",
     "lists",
     "listview",
     "string_codepoints",
