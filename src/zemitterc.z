@@ -8789,11 +8789,19 @@ mapKeyName: function {full: String vlen: u64} out String is {
 # mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- String-key cleanup
 # fragments: per-entry key free on destroy, incoming-key free when a set hits
 # an existing key, stored-key free on delete. Empty for non-heap keys.
-mapDestroyEntries: function {isStr: bool strC: StringView} out String is {
+mapDestroyEntries: function {isStr: bool strC: StringView valFree: StringView} out String is {
+    keyLine: "".string
     if isStr then {
-        return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n            \{strC}_free(&p->entries[i].key);\n        }\n    }\n".string
+        keyLine = "            \{strC}_free(&p->entries[i].key);\n".string
     }
-    return "".string
+    valLine: "".string
+    if valFree.length > 0 then {
+        valLine = "            \{valFree}\n".string
+    }
+    if (keyLine.length + valLine.length) == 0 then {
+        return "".string
+    }
+    return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n\{keyLine}\{valLine}        }\n    }\n".string
 }
 
 mapFreeKeyDup: function {isStr: bool strC: StringView} out String is {
@@ -8803,9 +8811,41 @@ mapFreeKeyDup: function {isStr: bool strC: StringView} out String is {
     return "".string
 }
 
-mapFreeKeyDel: function {isStr: bool strC: StringView} out String is {
+mapFreeKeyDel: function {isStr: bool strC: StringView valFree: StringView} out String is {
+    res: "".string
     if isStr then {
-        return "    \{strC}_free(&_this->entries[idx].key);\n".string
+        res = "    \{strC}_free(&_this->entries[idx].key);\n".string
+    }
+    if valFree.length > 0 then {
+        res = "\{res}    \{valFree}\n".string
+    }
+    return res
+}
+
+# mapValFreeStmt -- the value-free statement for a Map value slot: String value
+# via the String free, reftype / heap-collection value via its destructor, empty
+# for scalars. Mirrors emitStructDestructor's per-field cleanup.
+mapValFreeStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx valName: StringView valTid: u64 slot: StringView} out String is {
+    if valName == "String" then {
+        return "\{ctx.strC}_free(&\{slot});".string
+    }
+    if valTid > 0 then {
+        vmid: fieldMonoId symtab: symtab ctx: ctx tid: valTid
+        needs: false
+        if (symtab.reg.hasDestructorName typeId: vmid) then {
+            needs = true
+        }
+        if (isHeapPtrCollection symtab: symtab ctx: ctx tid: valTid) then {
+            needs = true
+        }
+        if needs then {
+            vmn: typeNameOfReg9 symtab: symtab tid: vmid
+            vcb: cnameOf tid: vmid name: vmn.stringview
+            if (isHeapPtrCollection symtab: symtab ctx: ctx tid: valTid) then {
+                return "\{vcb}_destroy(\{slot});".string
+            }
+            return "\{vcb}_destroy(&\{slot});".string
+        }
     }
     return "".string
 }
@@ -8906,9 +8946,17 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     keyIsStr: keyName.stringview == "String"
     hashKeyBody: setHashBody isStr: keyIsStr
     keysEqBody: setEqBody isStr: keyIsStr
-    destroyEntries: mapDestroyEntries isStr: keyIsStr strC: ctx.strC.stringview
+    valTid: resolveTypeIdByName symtab: symtab ctx: ctx name: valName.stringview
+    vfDestroy: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "p->entries[i].value"
+    vfDel: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[idx].value"
+    vfDup: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[existing].value"
+    freeValDup: "".string
+    if vfDup.length > 0 then {
+        freeValDup = "        \{vfDup}\n".string
+    }
+    destroyEntries: mapDestroyEntries isStr: keyIsStr strC: ctx.strC.stringview valFree: vfDestroy.stringview
     freeKeyDup: mapFreeKeyDup isStr: keyIsStr strC: ctx.strC.stringview
-    freeKeyDel: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview
+    freeKeyDel: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview valFree: vfDel.stringview
     getBody: "".string
     if ovOrigin.stringview == "optionval" then {
         gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
@@ -8939,7 +8987,8 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         t10: applyTmpl text: t9 key: "OPTIONVAL" val: ov.stringview
         t11: applyTmpl text: t10 key: "OPTIONVAL_TAG" val: ovu.stringview
         t12: applyTmpl text: t11 key: "GET_BODY" val: getBody.stringview
-        buf.append t12.stringview
+        t13: applyTmpl text: t12 key: "FREE_VAL_DUP" val: freeValDup.stringview
+        buf.append t13.stringview
         buf.append "\n"
     } case err then {
         return

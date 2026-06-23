@@ -35,10 +35,9 @@ CF=(-std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter
 ACF=(-fsanitize=address -g -O0 -std=c17 -w)
 cd "$ROOT" || exit 9
 
-# Ratchets. cli_basic leaks 15 B only on its arg-parsing path (run with argv here,
-# via run_golden/cli_basic.args); the leak gate ran it arg-less and missed it --
-# a real finding to fix, then remove from here.
-KNOWN_LEAKY="cli_basic"
+# Ratchets. The corpus is fully leak-clean; KNOWN_LEAKY allowlists any known
+# leaker and the gate forces removal once an entry is clean -- keep it empty.
+KNOWN_LEAKY=""
 # Negative cases the PORT cannot yet catch (it has no error collection/reporting; that is the
 # Python reference only). They are xfail until the compiler's error reporting is ported. As each
 # is fixed, remove it here -- the gate forces this (a now-passing entry fails with "remove ...").

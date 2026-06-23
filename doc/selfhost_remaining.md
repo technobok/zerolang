@@ -110,9 +110,16 @@ Verify each against HEAD before scheduling (sources are point-in-time):
   native `timeoutSecs: i32` (alarm + SIGKILL → 124, like `subprocess.run(timeout=)`);
   `ztestrunner --timeout 60` applies it to the run/leak-binary spawns. (The trusted
   `zc`/`gcc` spawns are still un-timed — add later if a compiler hang surfaces.)
-- **`cli_basic` 15 B arg-path leak** — the single `xleak` in the corpus
-  (`KNOWN_LEAKY`); a real leak on the argument-parsing path, to fix then remove
-  from the ratchet.
+- **`cli_basic` arg-path leak** — DONE: was two bugs (41 B under args, not 15).
+  (a) the native cli runtime (`_Z_CLI_PARSE.inc` required-checks +
+  `_Z_PARSED_GET_{OPTION,POSITIONAL}.inc`) did `free(v.data)` on a `Map.get`
+  result, but `get` returns an *owned* deep copy — leaking the inner bytes in
+  both emitters (26 B); fixed by freeing/moving the owned result. (b) the port
+  emitter's Map codegen (`mapDestroyEntries`/`mapFreeKeyDel` + `z_Map.c.tmpl`)
+  freed only the key, never the value, at destroy/delete/overwrite — leaking
+  owned values (15 B, port-only); fixed by adding a value-free (`mapValFreeStmt`,
+  mirroring `emitStructDestructor`). Corpus gate green (`leak-clean=172 xleak=0`);
+  `KNOWN_LEAKY` emptied in `run_corpus.sh` + `ztestrunner.z`.
 - **`ztestrunner` has no `--dump-sql` "dump" case-kind** — the SQL-dump
   differential (`test_dumpsql_z`) is still pytest-only; a fourth case-kind (with
   id-normalized SQL goldens) would fold it into the self-hosted runner.
@@ -128,8 +135,8 @@ Verify each against HEAD before scheduling (sources are point-in-time):
    regen to the `.z` dump binaries (and add a `.z` AST dump or fold into SQL);
    decide the `.inc`/`.tmpl` canonical-source question; define the committed-stage0
    bootstrap.
-2. **Then:** stand up dual-compiler CI (Phase D); fix `cli_basic` leak; add
-   `ztestrunner` timeout; align `zc.z` CLI flags.
+2. **Then:** stand up dual-compiler CI (Phase D); align `zc.z` CLI flags.
+   (`cli_basic` leak + `ztestrunner` timeout — DONE.)
 3. **Medium:** schedule deferred language features as port/usage needs surface
    (range-for, `int.each`, owned-pair Map iter).
 4. **Ongoing:** Phase E freeze (`python-stage0-final`), delete `src/*.py`, adopt

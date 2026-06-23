@@ -157,14 +157,14 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
        incoming list now so every exit path (ok or err) is
        leak-free. */
     z_List_String_destroy(&args);
-    /* required checks (v.data is a shallow-copied box; free
-       the outer pointer without touching the aliased string). */
+    /* required checks: map.get returns an OWNED deep copy (box +
+       bytes); free both halves so each lookup is leak-free. */
     for (uint64_t k = 0; k < spec->options.length; k++) {
         if (!spec->options.data[k].required) continue;
         z_Option_String_t v = z_Map_String_String_get(
             parsed->optionValues, spec->options.data[k].name);
         bool missing = (v.tag == Z_OPTION_STRING_TAG_NONE);
-        if (v.data) free(v.data);
+        if (v.data) { z_String_free((z_String_t*)v.data); free(v.data); }
         if (missing) {
             z_Parsed_destroy(parsed); free(parsed);
             return z_cli_wrap_err(
@@ -178,7 +178,7 @@ static z_Result_Parsed_CliError_t z_cli_parse(z_Spec_t* spec, z_List_String_t ar
         z_Option_String_t v = z_Map_String_String_get(
             parsed->positionalValues, spec->positionals.data[k].name);
         bool missing = (v.tag == Z_OPTION_STRING_TAG_NONE);
-        if (v.data) free(v.data);
+        if (v.data) { z_String_free((z_String_t*)v.data); free(v.data); }
         if (missing) {
             z_Parsed_destroy(parsed); free(parsed);
             return z_cli_wrap_err(

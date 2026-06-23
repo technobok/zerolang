@@ -11,11 +11,6 @@ static z_Option_String_t z_Parsed_positional(z_Parsed_t* self, const z_StringVie
         out.tag = Z_OPTION_STRING_TAG_NONE;
         return out;
     }
-    z_String_t* boxed = (z_String_t*)z_xmalloc(sizeof(z_String_t));
-    *boxed = z_String_new(((z_String_t*)v.data)->data);
-    free(v.data);
-    out.tag = Z_OPTION_STRING_TAG_SOME;
-    out.data = boxed;
-    return out;
+    return v;
 }
 
