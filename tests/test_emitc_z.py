@@ -52,6 +52,7 @@ EMITC_SMOKE: "list[str]" = [
     "arrays",
     "str",
     "with_alias",
+    "strview",
     "lists",
     "listview",
     "string_codepoints",
