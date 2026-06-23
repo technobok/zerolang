@@ -3289,11 +3289,21 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         return ecc9
     }
     fid: userFnId symtab: symtab ctx: ctx name: cn0.stringview
-    if fid > 0 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.RECORD then {
-        return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
+    ctorTid9: fid
+    ctorNm9: cn0.string
+    if fid > 0 when (isGenericType symtab: symtab tid: fid) then {
+        gmid9: stampIdOf symtab: symtab nid: call.nodeid.u64
+        if gmid9 > 0 then {
+            ctorTid9 = gmid9
+            gmn9: typeNameOfReg9 symtab: symtab tid: gmid9
+            ctorNm9 = gmn9.string
+        }
     }
-    if fid > 0 when (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.CLASS then {
-        return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: fid name: cn0.stringview)
+    if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.RECORD then {
+        return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: ctorTid9 name: ctorNm9.stringview)
+    }
+    if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.CLASS then {
+        return (emitRecordCtor symtab: symtab ctx: ctx call: call tid: ctorTid9 name: ctorNm9.stringview)
     }
     iwc: emitIoWrapperCreate symtab: symtab ctx: ctx call: call
     if iwc.length > 0 then {
@@ -5651,6 +5661,18 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             }
             return
         }
+        # a bare no-arg function call as a statement (`check_mode`): typecheck
+        # coerced the atom to a call; emit the call expression as a statement.
+        fcs9: atomTextOf n: n
+        ffid9: userFnId symtab: symtab ctx: ctx name: fcs9.stringview
+        if ffid9 > 0 when (symtab.reg.typetypeOf typeId: ffid9) == ztypes.ztypetype.FUNCTION then {
+            fce9: emitExpr symtab: symtab ctx: ctx n: n
+            if (fce9.stringview.startsWith prefix: "/*") == false then {
+                fcss9: "\{ind}\{fce9};\n"
+                buf.append fcss9.stringview
+                return
+            }
+        }
         # bare control keywords parse as an AtomId reference (no value): a
         # no-value `return` (goto L_done inside a generator), `break`, `continue`.
         bkw9: atomTextOf n: n
@@ -7060,6 +7082,20 @@ isTypedefType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
         bo
     ) case some then {
         return true
+    } case none then {
+        return false
+    }
+}
+
+# isBoxTid -- the type is a builtin Box mono (heap pointer), as flagged by the
+# typechecker (isBox). Distinguishes the builtin Box from a user class also
+# named Box (e.g. linkedlist's generic Box).
+isBoxTid: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
+    t: symtab.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.isBox
     } case none then {
         return false
     }
@@ -10861,6 +10897,40 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         }
         tsc = tsc + 1
     }
+    # user generic class/record monos (e.g. Box<i64>): RECORD/CLASS monos whose
+    # origin is a user generic type. The collection / array / str / option / box
+    # monos are handled by their own sweeps; emit the rest via emitOneRecord.
+    tug9: 0.u64
+    for tug9 < last loop {
+        ugo9: monoOriginName symtab: symtab tid: tug9
+        ugUser9: false
+        if ugo9.length > 0 then {
+            ugtt9: symtab.reg.typetypeOf typeId: tug9
+            if ugtt9 == ztypes.ztypetype.RECORD then {
+                ugUser9 = true
+            }
+            if ugtt9 == ztypes.ztypetype.CLASS then {
+                ugUser9 = true
+            }
+        }
+        if ugUser9 when (isCollectionOrigin name: ugo9.stringview) then {
+            ugUser9 = false
+        }
+        if ugUser9 when ugo9.stringview == "array" then {
+            ugUser9 = false
+        }
+        if ugUser9 when ugo9.stringview == "str" then {
+            ugUser9 = false
+        }
+        if ugUser9 when (isBoxTid symtab: symtab tid: tug9) then {
+            ugUser9 = false
+        }
+        if ugUser9 then {
+            ugnm9: typeNameOfReg9 symtab: symtab tid: tug9
+            emitOneRecord symtab: symtab ctx: ctx tid: tug9 name: ugnm9.stringview buf: buf
+        }
+        tug9 = tug9 + 1
+    }
 }
 
 # emitRecordDefs -- main-unit record structs + meta_create constructors
@@ -12048,14 +12118,14 @@ emitRecordDefsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node phas
                 if (isRecordDef9 n: bm.operation) then {
                     nm: unitLabel9 o: bm.name
                     rid: userFnId symtab: symtab ctx: ctx name: nm.stringview
-                    if rid > 0 then {
+                    if rid > 0 when (isGenericType symtab: symtab tid: rid) == false then {
                         emitOneRecord symtab: symtab ctx: ctx tid: rid name: nm.stringview buf: buf
                     }
                 }
                 if (isClassDef9 n: bm.operation) then {
                     nmc: unitLabel9 o: bm.name
                     cid9: userFnId symtab: symtab ctx: ctx name: nmc.stringview
-                    if cid9 > 0 then {
+                    if cid9 > 0 when (isGenericType symtab: symtab tid: cid9) == false then {
                         emitOneRecord symtab: symtab ctx: ctx tid: cid9 name: nmc.stringview buf: buf
                     }
                 }
