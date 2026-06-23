@@ -106,10 +106,10 @@ Verify each against HEAD before scheduling (sources are point-in-time):
 
 ## 5. Tooling / harness gaps
 
-- **`ztestrunner` has no per-test timeout** — `run_corpus.sh` wraps each run in
-  `timeout 60`; a hung test binary would block `ztestrunner`. Add an alarm/timeout
-  (needs an `os` primitive or a spawn-with-timeout) before it replaces the shell
-  runner in CI.
+- **`ztestrunner` per-test timeout** — DONE (`66ad669`): `os.spawn` gained a
+  native `timeoutSecs: i32` (alarm + SIGKILL → 124, like `subprocess.run(timeout=)`);
+  `ztestrunner --timeout 60` applies it to the run/leak-binary spawns. (The trusted
+  `zc`/`gcc` spawns are still un-timed — add later if a compiler hang surfaces.)
 - **`cli_basic` 15 B arg-path leak** — the single `xleak` in the corpus
   (`KNOWN_LEAKY`); a real leak on the argument-parsing path, to fix then remove
   from the ratchet.
