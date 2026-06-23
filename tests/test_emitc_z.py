@@ -49,6 +49,7 @@ EMITC_SMOKE: "list[str]" = [
     "swap",
     "data",
     "typed_data",
+    "arrays",
     "lists",
     "listview",
     "string_codepoints",

@@ -581,6 +581,7 @@ Ctx: class {
     argHoistVals: (List String)
     argHoistTypes: (List String)
     argHoistDtors: (List String)
+    argHoistRaw: (List String)
     argHoistCtr: u64
     breakLabels: (List u64)
     breakLabelCtr: u64
@@ -1551,10 +1552,18 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
         }
         i = i + 1
     }
+    ri9: 0.u64
+    rn9: ctx.argHoistRaw.length
+    for ri9 < rn9 loop {
+        rdo9: ctx.argHoistRaw.get i: ri9
+        buf.append rdo9.stringview
+        ri9 = ri9 + 1
+    }
     ctx.argHoistNames = (List String)
     ctx.argHoistVals = (List String)
     ctx.argHoistTypes = (List String)
     ctx.argHoistDtors = (List String)
+    ctx.argHoistRaw = (List String)
 }
 
 # pushLoopLabel -- allocate a unique break-target label for a loop and push it.
@@ -1886,10 +1895,47 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
     }
 }
 
+# allDigits -- true when s is non-empty and every byte is an ASCII digit 0-9.
+# Distinguishes a numeric array index member (`a.0`) from a named member.
+allDigits: function {s: StringView} out bool is {
+    if s.length == 0 then {
+        return false
+    }
+    i9: 0.u64
+    n9: s.length
+    for i9 < n9 loop {
+        bo9: s.byteAt i: i9
+        match (
+            bo9
+        ) case some then {
+            if bo9 < 48 then {
+                return false
+            }
+            if bo9 > 57 then {
+                return false
+            }
+        } case none then {
+            return false
+        }
+        i9 = i9 + 1
+    }
+    return true
+}
+
 # emitEmptyColCreate -- an empty collection construction `(List of: T)` /
 # `(Set of: T)` / `(Map ...)` as a value: emit the collection mono's create with
 # capacity 0, resolved from the call-node stamp. "" when not such a construction.
 emitEmptyColCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData cn0: StringView} out String is {
+    if cn0 == "array" then {
+        amid0: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
+        amid9: chaseColMono symtab: symtab tid: amid0
+        amo9: monoOriginName symtab: symtab tid: amid9
+        if amo9.stringview == "array" then {
+            amn9: typeNameOfReg9 symtab: symtab tid: amid9
+            acb9: cnameOf tid: amid9 name: amn9.stringview
+            return "\{acb9}_create()"
+        }
+    }
     isCol9: false
     if cn0 == "List" then {
         isCol9 = true
@@ -1982,6 +2028,36 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     if mn.stringview == "sort" then {
         e7: "\{cb}_sort(\{recvR9})"
         return e7
+    }
+    return "".string
+}
+
+# emitArrayMethodCall -- `.get i:` / `.set i: val:` on a fixed-size array mono
+# receiver (a value type). get takes the receiver by value; set by address (it
+# returns the previous element). "" when the receiver isn't an array mono.
+emitArrayMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    mn: dottedChildText n: call.callable
+    bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
+    if bn.length == 0 then {
+        return "".string
+    }
+    brid9: dottedReceiverStampId symtab: symtab callable: call.callable
+    bt: chaseColMono symtab: symtab tid: brid9
+    ao9: monoOriginName symtab: symtab tid: bt
+    if ao9.stringview != "array" then {
+        return "".string
+    }
+    btn: typeNameOfReg9 symtab: symtab tid: bt
+    cb: cnameOf tid: bt name: btn.stringview
+    if mn.stringview == "get" then {
+        vi: listArg symtab: symtab ctx: ctx call: call label: "i"
+        return "\{cb}_get(\{bn}, \{vi})"
+    }
+    if mn.stringview == "set" then {
+        vi: listArg symtab: symtab ctx: ctx call: call label: "i"
+        vv: listArg symtab: symtab ctx: ctx call: call label: "val"
+        recvR9: colRecvRef ctx: ctx bn: bn.stringview
+        return "\{cb}_set(\{recvR9}, \{vi}, \{vv})"
     }
     return "".string
 }
@@ -3128,6 +3204,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if sam9.length > 0 then {
         return sam9
     }
+    amc9: emitArrayMethodCall symtab: symtab ctx: ctx call: call
+    if amc9.length > 0 then {
+        return amc9
+    }
     lmc: emitListMethodCall symtab: symtab ctx: ctx call: call
     if lmc.length > 0 then {
         return lmc
@@ -3666,7 +3746,12 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             isRecOrCls: false
             if rtt == ztypes.ztypetype.RECORD then {
-                isRecOrCls = true
+                # array monos are RECORD typetype but keep their own index/length
+                # leg below (a.0 -> a.data[0], a.length -> the #define).
+                bsoNmR9: monoOriginName symtab: symtab tid: bstamp
+                if bsoNmR9.stringview != "array" then {
+                    isRecOrCls = true
+                }
             }
             if rtt == ztypes.ztypetype.CLASS then {
                 # user classes only -- collection monos (List/Set/Map, with a
@@ -3777,6 +3862,18 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             recvB2: colRecvRef ctx: ctx bn: bn2.stringview
             bsmn: monoOriginName symtab: symtab tid: bstamp
+            if bsmn.stringview == "array" then {
+                bstna9: typeNameOfReg9 symtab: symtab tid: bstamp
+                acba9: cnameOf tid: bstamp name: bstna9.stringview
+                if mn2.stringview == "length" then {
+                    eal9: "\{acba9}_length"
+                    return eal9
+                }
+                if (allDigits s: mn2.stringview) then {
+                    eai9: "\{bn2}\{accB2}data[\{mn2}]"
+                    return eai9
+                }
+            }
             if bsmn.stringview == "List" then {
                 if mn2.stringview == "length" then {
                     el0: "\{bn2}\{accB2}length"
@@ -3874,6 +3971,22 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 }
             }
             if baseIsData9 then {
+                if mn2.stringview == "array" then {
+                    daid0: stampIdOf symtab: symtab nid: n.nodeid.u64
+                    daid9: chaseColMono symtab: symtab tid: daid0
+                    daCt9: typeRefC symtab: symtab ctx: ctx tid: daid9 thisTid: 0
+                    daMn9: typeNameOfReg9 symtab: symtab tid: daid9
+                    daEid9: listElemType symtab: symtab monoId: daid9
+                    daEln9: typeNameOfReg9 symtab: symtab tid: daEid9
+                    daPfx9: 7 + daEln9.length
+                    daLen9: monoElemName full: daMn9 prefixLen: daPfx9
+                    daN9: ctx.argHoistCtr
+                    ctx.argHoistCtr = ctx.argHoistCtr + 1
+                    daNm9: "_da\{daN9}".string
+                    daRaw9: "    \{daCt9} \{daNm9};\n    for (int64_t _i = 0; _i < \{daLen9.stringview}; _i++) { \{daNm9}.data[_i] = z_\{bn2}[_i]; }\n".string
+                    ctx.argHoistRaw.append daRaw9
+                    return daNm9
+                }
                 if mn2.stringview == "length" then {
                     ed0: "z_\{bn2}_len"
                     return ed0
@@ -6985,6 +7098,11 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         ct9: "\{cc9}_t"
         return ct9
     }
+    if omn9.stringview == "array" then {
+        aca9: cnameOf tid: cid name: tn.stringview
+        act9: "\{aca9}_t"
+        return act9
+    }
     ctt: symtab.reg.typetypeOf typeId: cid
     if ctt == ztypes.ztypetype.RECORD then {
         rc: cnameOf tid: cid name: tn.stringview
@@ -8026,7 +8144,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1
     }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool))
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
