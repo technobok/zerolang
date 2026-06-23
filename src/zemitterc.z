@@ -8292,6 +8292,40 @@ ctypeOrI64: function {s: StringView} out String is {
 
 # emitListMono -- substitute z_List.c.tmpl for a List instance + the
 # linear-scan contains companion (scalar element equality).
+emitArrayMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
+    mn: typeNameOfReg9 symtab: symtab tid: monoId
+    nm: cbaseNoPrefix tid: monoId name: mn.stringview
+    eid: listElemType symtab: symtab monoId: monoId
+    eln9: typeNameOfReg9 symtab: symtab tid: eid
+    ect0: typeRefC symtab: symtab ctx: ctx tid: eid thisTid: 0
+    ect: ctypeOrI64 s: ect0.stringview
+    lenPfx: 7 + eln9.length
+    lenStr: monoElemName full: mn prefixLen: lenPfx
+    createBody: "    z_\{nm}_t _this = {0};".string
+    eqBody: "".string
+    eqo: symtab.typing.childOf parentTypeId: monoId name: "=="
+    match (
+        eqo
+    ) case some then {
+        eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    for (int _i = 0; _i < \{lenStr.stringview}; _i++) { if (a.data[_i] != b.data[_i]) return false; }\n    return true;\n}\n".string
+    } case none then {}
+    p: "\{runtimeDir}/z_array.c.tmpl"
+    raw: io.readText path: p.stringview
+    match (
+        raw
+    ) case ok then {
+        t1: applyTmpl text: raw key: "NAME" val: nm.stringview
+        t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
+        t3: applyTmpl text: t2 key: "LEN" val: lenStr.stringview
+        t4: applyTmpl text: t3 key: "CREATE_BODY" val: createBody.stringview
+        t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringview
+        buf.append t5.stringview
+        buf.append "\n"
+    } case err then {
+        return
+    }
+}
+
 emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
     mn: typeNameOfReg9 symtab: symtab tid: monoId
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
@@ -10083,6 +10117,10 @@ emitMonoById: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
         emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
     }
+    if origin.stringview == "array" then {
+        emitArrayMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
+        return
+    }
     if origin.stringview == "List" then {
         emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
@@ -10402,6 +10440,16 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     }
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
+    tarr9: 0.u64
+    for tarr9 < last loop {
+        anm9: monoOriginName symtab: symtab tid: tarr9
+        if anm9.stringview == "array" then {
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tarr9 userList: userListM) == false then {
+                emitArrayMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tarr9 buf: buf
+            }
+        }
+        tarr9 = tarr9 + 1
+    }
     tid: 0.u64
     for tid < last loop {
         onm: monoOriginName symtab: symtab tid: tid
