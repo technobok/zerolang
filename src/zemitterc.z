@@ -2962,6 +2962,101 @@ emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u
     return r
 }
 
+# emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
+# b: 5): the receiver is stamped to a monomorphized UNIT type; the method is a
+# concrete FUNCTION child of it. Emit that mono fn's cname applied to the args.
+emitUnitMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    rsid9: dottedReceiverStampId symtab: symtab callable: call.callable
+    if rsid9 == 0 then {
+        return "".string
+    }
+    if (symtab.reg.typetypeOf typeId: rsid9) != ztypes.ztypetype.UNIT then {
+        return "".string
+    }
+    rmo9: monoOriginName symtab: symtab tid: rsid9
+    if rmo9.length == 0 then {
+        return "".string
+    }
+    child9: dottedChildText n: call.callable
+    if child9.length == 0 then {
+        return "".string
+    }
+    co9: symtab.typing.childOf parentTypeId: rsid9 name: child9.stringview
+    fid9: 0.u64
+    match (
+        co9
+    ) case some then {
+        fid9 = co9
+    } case none then {}
+    if fid9 == 0 then {
+        return "".string
+    }
+    if (symtab.reg.typetypeOf typeId: fid9) != ztypes.ztypetype.FUNCTION then {
+        return "".string
+    }
+    fnm9: typeNameOfReg9 symtab: symtab tid: fid9
+    fc9: cnameOf tid: fid9 name: fnm9.stringview
+    fpNames9: (List String)
+    fpIds9: (List u64)
+    recFieldLists symtab: symtab tid: fid9 names: fpNames9 ids: fpIds9
+    args9: "".string
+    ai9: 0.u64
+    aiter9: call.arguments.iterate
+    for a9: aiter9 loop {
+        match (
+            a9
+        ) case namedoperation then {
+            av9: emitExpr symtab: symtab ctx: ctx n: a9.operation
+            byref9: false
+            argRef9: "".string
+            if ai9 < fpIds9.length then {
+                fpid9: fpIds9.get i: ai9
+                ptra9: false
+                ownC9: "".string
+                if ai9 < fpNames9.length then {
+                    fpnO9: fpNames9.get i: ai9
+                    ownC9 = symtab.typing.childOwnershipText parentTypeId: fid9 name: fpnO9.stringview
+                }
+                if ownC9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
+                    ptra9 = true
+                } else {
+                    if ai9 < fpNames9.length then {
+                        fpn9: fpNames9.get i: ai9
+                        if (isBorrowStringParam symtab: symtab fid: fid9 pname: fpn9.stringview pid: fpid9) then {
+                            ptra9 = true
+                        }
+                    }
+                }
+                if (ptra9) == false then {
+                    if ai9 < fpNames9.length then {
+                        fpnL9: fpNames9.get i: ai9
+                        if (isListPtrParam symtab: symtab fid: fid9 pname: fpnL9.stringview tid: fpid9) then {
+                            ptra9 = true
+                        }
+                    }
+                }
+                if ptra9 then {
+                    if (isPtrVar ctx: ctx name: av9.stringview) == false then {
+                        byref9 = true
+                        argRef9 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid9
+                    }
+                }
+            }
+            if ai9 > 0 then {
+                args9.append ", "
+            }
+            if byref9 then {
+                args9.append argRef9.stringview
+            } else {
+                args9.append av9.stringview
+            }
+            ai9 = ai9 + 1
+        } else {}
+    }
+    e9: "\{fc9}(\{args9})"
+    return e9
+}
+
 emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     base: dottedBaseAtom n: call.callable
     child: dottedChildText n: call.callable
@@ -3305,6 +3400,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     dc: emitDottedCall symtab: symtab ctx: ctx call: call
     if dc.length > 0 then {
         return dc
+    }
+    umc9: emitUnitMethodCall symtab: symtab ctx: ctx call: call
+    if umc9.length > 0 then {
+        return umc9
     }
     sam9: emitStringArgMethod symtab: symtab ctx: ctx call: call
     if sam9.length > 0 then {
@@ -7907,6 +8006,122 @@ isEmittableFileUnit: function {name: StringView} out bool is {
     return true
 }
 
+# isGenericTemplateUnitOp -- a file unit that is a generic template (declares a
+# bare `t: Any.generic` member). Its raw functions reference the unbound type
+# param, so they are not emitted directly; emitUnitMonoInstances emits one
+# concrete C function per (instantiation, method) instead.
+isGenericTemplateUnitOp: function {op: Node} out bool is {
+    match (
+        op
+    ) case unitdef then {
+        mit9: op.body.iterate
+        for m9: mit9 loop {
+            match (
+                m9
+            ) case namedoperation then {
+                if (ztypecheck.isGenericParam op: m9.operation) then {
+                    return true
+                }
+            } else {}
+        }
+    } else {}
+    return false
+}
+
+# emitUnitMonoInstances -- emit the monomorphized methods of a generic file unit
+# (genmath instantiated as intmath: i64, i32math: i32). For each registry UNIT
+# type whose generic origin is this template, emit one C function per template
+# method keyed by the mono's concrete FUNCTION child id (so the signature carries
+# the substituted types); the body AST is the template method itself (lock-safe:
+# its root is the program AST, not symtab, so emitFnBody can borrow symtab).
+emitUnitMonoInstances: function {symtab: zenv.ZSymbolTable ctx: Ctx templateName: StringView templateUnitOp: Node declOnly: bool buf: String.borrow} is {
+    tplId9: 0.u64
+    tk9: templateName.string
+    tgo9: symtab.typing.unitTypes.get key: tk9
+    match (
+        tgo9
+    ) case some then {
+        tplId9 = tgo9
+    } case none then {}
+    if tplId9 == 0 then {
+        sgo9: 0.u64
+        match (
+            templateUnitOp
+        ) case unitdef then {
+            sgo9 = stampIdOf symtab: symtab nid: templateUnitOp.nodeid.u64
+        } else {}
+        if sgo9 > 0 then {
+            tplId9 = sgo9
+        }
+    }
+    if tplId9 == 0 then {
+        return
+    }
+    last9: symtab.reg.nextTypeId
+    t9: 0.u64
+    for t9 < last9 loop {
+        isMono9: false
+        if (symtab.reg.typetypeOf typeId: t9) == ztypes.ztypetype.UNIT then {
+            go9opt: (optionval.none u64)
+            {
+                to9: symtab.reg.typeById.get key: t9
+                match (
+                    to9
+                ) case some then {
+                    go9opt = to9.genericOriginId
+                } case none then {}
+            }
+            match (
+                go9opt
+            ) case some then {
+                if go9opt == tplId9 then {
+                    isMono9 = true
+                }
+            } case none then {}
+        }
+        if isMono9 then {
+            match (
+                templateUnitOp
+            ) case unitdef then {
+                fit9: templateUnitOp.body.iterate
+                for fm9: fit9 loop {
+                    match (
+                        fm9
+                    ) case namedoperation then {
+                        if (isFunctionDefWithBody9 n: fm9.operation) then {
+                            mname9: unitLabel9 o: fm9.name
+                            cfo9: symtab.typing.childOf parentTypeId: t9 name: mname9.stringview
+                            match (
+                                cfo9
+                            ) case some then {
+                                cfid9: cfo9
+                                if (symtab.reg.typetypeOf typeId: cfid9) == ztypes.ztypetype.FUNCTION then {
+                                    fnm9: typeNameOfReg9 symtab: symtab tid: cfid9
+                                    sig9: fnSignature symtab: symtab ctx: ctx name: fnm9.stringview fid: cfid9 op: fm9.operation
+                                    if declOnly then {
+                                        ld9: "\{sig9};\n"
+                                        buf.append ld9.stringview
+                                    } else {
+                                        lo9: "\{sig9} {\n"
+                                        buf.append lo9.stringview
+                                        ctx.ptrVars = (List String)
+                                        ctx.aliases = (Map String value: String)
+                                        ctx.narrowBox = (Map String value: String)
+                                        registerReftypeParams symtab: symtab ctx: ctx fid: cfid9
+                                        emitFnBody symtab: symtab ctx: ctx op: fm9.operation fid: cfid9 buf: buf
+                                        buf.append "}\n\n"
+                                    }
+                                }
+                            } case none then {}
+                        }
+                    } else {}
+                }
+            } else {}
+        }
+        t9 = t9 + 1
+    }
+}
+
 emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
     match (
         program
@@ -7922,7 +8137,11 @@ emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
                 if (isEmittableFileUnit name: un.stringview) then {
                     sm: ctx.mainName.copy
                     ctx.mainName = un.copy
-                    emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation declOnly: true buf: buf
+                    if (isGenericTemplateUnitOp op: u.operation) then {
+                        emitUnitMonoInstances symtab: symtab ctx: ctx templateName: un.stringview templateUnitOp: u.operation declOnly: true buf: buf
+                    } else {
+                        emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation declOnly: true buf: buf
+                    }
                     ctx.mainName = sm
                 }
             } else {}
@@ -7935,7 +8154,11 @@ emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
                 if (isEmittableFileUnit name: un2.stringview) then {
                     sm2: ctx.mainName.copy
                     ctx.mainName = un2.copy
-                    emitFnsIn symtab: symtab ctx: ctx mainOp: u2.operation declOnly: false buf: buf
+                    if (isGenericTemplateUnitOp op: u2.operation) then {
+                        emitUnitMonoInstances symtab: symtab ctx: ctx templateName: un2.stringview templateUnitOp: u2.operation declOnly: false buf: buf
+                    } else {
+                        emitFnsIn symtab: symtab ctx: ctx mainOp: u2.operation declOnly: false buf: buf
+                    }
                     ctx.mainName = sm2
                 }
             } else {}
@@ -7947,6 +8170,16 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
     match (
         mainOp
     ) case unitdef then {
+        with iuit9: mainOp.body.iterate do for ium9: iuit9 loop {
+            match (
+                ium9
+            ) case namedoperation then {
+                if (isGenericTemplateUnitOp op: ium9.operation) then {
+                    iunm9: unitLabel9 o: ium9.name
+                    emitUnitMonoInstances symtab: symtab ctx: ctx templateName: iunm9.stringview templateUnitOp: ium9.operation declOnly: declOnly buf: buf
+                }
+            } else {}
+        }
         idxs: (List u64)
         names: (List String)
         di: 0.u64

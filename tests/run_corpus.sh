@@ -45,7 +45,7 @@ KNOWN_NOERR=""
 # Examples the PORT emitter cannot yet compile to valid C (the Python reference can, except
 # genmath). Each is removed as its codegen gap is fixed; the gate fails on any UNEXPECTED
 # non-build and on any entry here that now builds (forcing removal -- the ratchet).
-KNOWN_NOBUILD="autoproject defaults dobreak genericfileunit genericfunctions ownership specs xunit_io_method"
+KNOWN_NOBUILD="autoproject defaults dobreak genericfunctions ownership specs xunit_io_method"
 # Generic library units (no `main`, parameterized by a generic type) are
 # instantiated by other units and cannot be compiled standalone -- not even by
 # the Python reference. Excluded from the standalone-build gate entirely.

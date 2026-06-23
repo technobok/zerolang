@@ -58,6 +58,8 @@ EMITC_SMOKE: "list[str]" = [
     "box",
     "generics",
     "numeric_generics",
+    "genericfileunit",
+    "genericunit",
     "lists",
     "listview",
     "string_codepoints",

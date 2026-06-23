@@ -4440,6 +4440,34 @@ cloneUnitMethod: function {ids: zgenerator.GenIds op: Node} out Option Node is {
 # children ({mono}.{fn} FUNCTION types whose generic-param-named child types
 # and return are replaced by the instantiation arg) plus a cloned body per
 # method, stashed for the lazy first-use walk. One build per mono.
+# registerMonoFnParams -- register a mono unit fn's generic-param-typed params
+# (a: t -> a: argId) on the mono FUNCTION type, sourced from the template fn's
+# AST. The template fn stays childless -- only the instance carries substituted
+# param children, matching the reference (which carries them via the clone).
+registerMonoFnParams: function {ty: ztyping.ZTyping op: Node fnId: u64 gpNames: (Map String value: bool) argId: u64} is {
+    match (
+        op
+    ) case functiondef then {
+        ppiter: op.parameters.iterate
+        for ppm: ppiter loop {
+            match (
+                ppm
+            ) case namedoperation then {
+                pptn: atomName n: ppm.operation
+                ppgo: gpNames.get key: pptn
+                match (
+                    ppgo
+                ) case some then {
+                    if argId > 0 then {
+                        ppnm: unitLabel o: ppm.name
+                        ty.setChild parentTypeId: fnId childName: ppnm.stringview childTypeId: argId
+                    }
+                } case none then {}
+            } else {}
+        }
+    } else {}
+}
+
 buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tmplUnitName: StringView tmplName: StringView monoId: u64 monoName: StringView tplId: u64 argId: u64 templateOp: Node} is {
     bgot9: ty.collectionChildrenBuilt.get key: monoId
     if (optBoolOr o: bgot9 d: false) then {
@@ -4576,6 +4604,7 @@ buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tmplU
                             }
                         }
                     }
+                    registerMonoFnParams ty: ty op: fm.operation fnId: newFnId gpNames: gpNames argId: argId
                     ty.setChild parentTypeId: monoId childName: fn.stringview childTypeId: newFnId
                     rfk: "\{monoName}.\{fn}".string
                     rfv: newFnId
