@@ -9039,8 +9039,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitRuntimeSvIter symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
     emitNeededNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    fidF9: ioFileId symtab: symtab ctx: ctx
-    if fidF9 > 0 then {
+    if (ioFileLive symtab: symtab ctx: ctx) then {
         needsAdd ctx: ctx name: "io"
         needsAdd ctx: ctx name: "io_file_close"
         needsAdd ctx: ctx name: "io_file_read"
@@ -10239,6 +10238,36 @@ ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx} out u64 is {
     return 0
 }
 
+# ioFileLive -- the File class is present AND its read/write param monos
+# (List_u8 / ListView_u8) exist, i.e. a File is actually live (constructed /
+# io.open / a file method called). This is the order-independent gate for
+# emitting File's natives + Reader/Writer conformance: it is true exactly when
+# that emitted code's referenced monos have been demanded, so it always compiles.
+ioFileLive: function {symtab: zenv.ZSymbolTable ctx: Ctx} out bool is {
+    fid9: ioFileId symtab: symtab ctx: ctx
+    if fid9 == 0 then {
+        return false
+    }
+    lo9: symtab.typing.monoByName.get key: "List_u8".string
+    hasL9: false
+    match (
+        lo9
+    ) case some then {
+        hasL9 = true
+    } case none then {}
+    lvo9: symtab.typing.monoByName.get key: "ListView_u8".string
+    hasLV9: false
+    match (
+        lvo9
+    ) case some then {
+        hasLV9 = true
+    } case none then {}
+    if hasL9 when hasLV9 then {
+        return true
+    }
+    return false
+}
+
 # ioClassReferenced -- a reachable io/os/cli class named `name`.
 ioClassReferenced: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out bool is {
     last: symtab.reg.nextTypeId
@@ -10404,7 +10433,7 @@ emitIoFileConformance: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
                     cn9: typeNameOfReg9 symtab: symtab tid: ti
                     okEmit9: false
                     if cn9.stringview == "File" then {
-                        okEmit9 = true
+                        okEmit9 = ioFileLive symtab: symtab ctx: ctx
                     } else {
                         unc9: "io_uses_\{cn9}".string
                         if (needsHas ctx: ctx name: unc9.stringview) then {
