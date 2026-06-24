@@ -79,6 +79,8 @@ EMITC_SMOKE: "list[str]" = [
     "text_protocol",
     "protocols",
     "owned_protocol",
+    "ownership",
+    "autoproject",
     "iterator",
     "io_read_text",
     "io_write_text",

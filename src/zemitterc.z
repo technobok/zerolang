@@ -587,6 +587,7 @@ Ctx: class {
     breakLabels: (List u64)
     breakLabelCtr: u64
     breakLabelUsed: (Map u64 value: bool)
+    borrowedVars: (Map String value: bool)
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -1846,6 +1847,35 @@ collectionValueCallRhs: function {n: Node} out bool is {
 # A no-arg method call (the child resolves to a FUNCTION) returns an owned value
 # and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
 # `.copy` / `.string` / `.take` are owned and handled before this check.)
+resolveShellTid: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
+    duo: symtab.typing.definedInUnit.get key: tid
+    match (
+        duo
+    ) case some then {
+        return tid
+    } case none then {}
+    nm: typeNameOfReg9 symtab: symtab tid: tid
+    rr: resolveTypeIdByName symtab: symtab ctx: ctx name: nm.stringview
+    if rr > 0 then {
+        return rr
+    }
+    return tid
+}
+
+funcBorrowFlag: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
+    if tid == 0 then {
+        return false
+    }
+    g9: symtab.typing.funcReturnsBorrow.get key: tid
+    match (
+        g9
+    ) case some then {
+        return g9
+    } case none then {
+        return false
+    }
+}
+
 bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
     match (
         n
@@ -1854,6 +1884,17 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
     } case statementline then {
         return (bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.statementline)
     } case call then {
+        cstid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.callable)
+        if (funcBorrowFlag symtab: symtab tid: cstid9) then {
+            return true
+        }
+        cnm9: atomTextOf n: n.callable
+        if cnm9.length > 0 then {
+            ufid9: userFnId symtab: symtab ctx: ctx name: cnm9.stringview
+            if (funcBorrowFlag symtab: symtab tid: ufid9) then {
+                return true
+            }
+        }
         ch: dottedChildText n: n.callable
         if ch.stringview != "get" then {
             return false
@@ -3631,9 +3672,47 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                 a
             ) case namedoperation then {
                 av9: emitExpr symtab: symtab ctx: ctx n: a.operation
+                projd9: false
+                if ai8 < fpIds.length then {
+                    pRaw9: fpIds.get i: ai8
+                    ppid9: resolveShellTid symtab: symtab ctx: ctx tid: pRaw9
+                    pptt9: symtab.reg.typetypeOf typeId: ppid9
+                    isProtoP9: false
+                    if pptt9 == ztypes.ztypetype.PROTOCOL then {
+                        isProtoP9 = true
+                    }
+                    if pptt9 == ztypes.ztypetype.FACET then {
+                        isProtoP9 = true
+                    }
+                    if isProtoP9 then {
+                        aRaw9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
+                        aTid9: resolveShellTid symtab: symtab ctx: ctx tid: aRaw9
+                        aTT9: symtab.reg.typetypeOf typeId: aTid9
+                        aConc9: false
+                        if aTT9 == ztypes.ztypetype.CLASS then {
+                            aConc9 = true
+                        }
+                        if aTT9 == ztypes.ztypetype.RECORD then {
+                            aConc9 = true
+                        }
+                        if aConc9 then {
+                            pLbl9: conformanceLabelFor symtab: symtab implTid: aTid9 protoTid: ppid9
+                            if pLbl9.length > 0 then {
+                                aNm9: typeNameOfReg9 symtab: symtab tid: aTid9
+                                aIb9: cnameOf tid: aTid9 name: aNm9.stringview
+                                aRcv9: "&\{av9}".string
+                                if (isPtrVar ctx: ctx name: av9.stringview) then {
+                                    aRcv9 = "\{av9}".string
+                                }
+                                av9 = "\{aIb9}_\{pLbl9}_create(\{aRcv9})".string
+                                projd9 = true
+                            }
+                        }
+                    }
+                }
                 byref8: false
                 argRef8: "".string
-                if ai8 < fpIds.length then {
+                if (projd9) == false when ai8 < fpIds.length then {
                     fpid8: fpIds.get i: ai8
                     ptra8: false
                     ownC8: "".string
@@ -5566,6 +5645,8 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             }
         }
         nm: ztypes.mangleVarName name: n.name.stringview
+        nbrw9: bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.value
+        ctx.borrowedVars.set key: "\{nm.stringview}" value: nbrw9
         if ctx.genActive when (isYieldNode n: n.value) then {
             emitExprFormYield symtab: symtab ctx: ctx value: n.value aid: n.nodeid.u64 nm: nm.stringview ind: ind tmp: tmp buf: buf
             return
@@ -5961,14 +6042,55 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             # `.release` on a protocol is a transfer marker (scope-exit destroy
             # covers it) -- emit nothing, like emitCallStmt.
             dct9: dottedChildText n: n
-            isRel9: false
             if dct9.stringview == "release" then {
                 rrid9: dottedReceiverStampId symtab: symtab callable: n
-                if (symtab.reg.typetypeOf typeId: rrid9) == ztypes.ztypetype.PROTOCOL then {
-                    isRel9 = true
+                rtt9: symtab.reg.typetypeOf typeId: rrid9
+                if rtt9 == ztypes.ztypetype.PROTOCOL then {
+                    return
                 }
-            }
-            if isRel9 then {
+                rcvNm9: dottedBaseAtom n: n
+                rcvKey9: ztypes.mangleVarName name: rcvNm9.stringview
+                rbrw9: false
+                bvg9: ctx.borrowedVars.get key: "\{rcvKey9.stringview}"
+                match (
+                    bvg9
+                ) case some then {
+                    rbrw9 = bvg9
+                } case none then {}
+                if rbrw9 then {
+                    return
+                }
+                rcvV9: emitDottedReceiver symtab: symtab ctx: ctx callable: n
+                rtn9: typeNameOfReg9 symtab: symtab tid: rrid9
+                if rtn9.stringview == "String" then {
+                    rdf9: "\{ind}\{ctx.strC}_free(&\{rcvV9});\n"
+                    buf.append rdf9.stringview
+                } else {
+                    if (symtab.reg.hasDestructorName typeId: rrid9) then {
+                        rdcb9: cnameOf tid: rrid9 name: rtn9.stringview
+                        rdref9: "&\{rcvV9}".string
+                        if (isBoxTid symtab: symtab tid: rrid9) then {
+                            rdref9 = "\{rcvV9}".string
+                        }
+                        rdc9: "\{ind}\{rdcb9}_destroy(\{rdref9});\n"
+                        buf.append rdc9.stringview
+                    }
+                }
+                rinv9: false
+                if rtn9.stringview == "String" then {
+                    rinv9 = true
+                }
+                if rtt9 == ztypes.ztypetype.CLASS then {
+                    rinv9 = true
+                }
+                if rtt9 == ztypes.ztypetype.UNION then {
+                    rinv9 = true
+                }
+                if rinv9 then {
+                    rci9: typeRefC symtab: symtab ctx: ctx tid: rrid9 thisTid: 0
+                    riv9: "\{ind}\{rcvV9} = (\{rci9}){0};\n"
+                    buf.append riv9.stringview
+                }
                 return
             }
             de9: emitExpr symtab: symtab ctx: ctx n: n
@@ -8898,7 +9020,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1
     }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool))
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) borrowedVars: (Map String value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
