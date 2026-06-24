@@ -2915,12 +2915,24 @@ emitRecordCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                 cargs: "".string
                 ci: 0.u64
                 ccn: cpn.length
+                cposIdx: 0.u64
                 for ci < ccn loop {
                     cpname: cpn.get i: ci
                     cav: ctorArgByLabel symtab: symtab ctx: ctx call: call label: cpname.stringview
                     if (ctorHasLabel call: call label: cpname.stringview) == false then {
-                        if (symtab.typing.hasChildDefault parentTypeId: tid name: cpname.stringview) then {
-                            cav = symtab.typing.childDefaultText parentTypeId: tid name: cpname.stringview
+                        cposUsed: false
+                        cpv: ctorArgByPosition symtab: symtab ctx: ctx call: call idx: cposIdx
+                        if cpv.length > 0 then {
+                            cav = cpv
+                            cposUsed = true
+                        }
+                        cposIdx = cposIdx + 1
+                        if (cposUsed) == false then {
+                            if (symtab.typing.hasChildDefault parentTypeId: tid name: cpname.stringview) then {
+                                cdt0: symtab.typing.childDefaultText parentTypeId: tid name: cpname.stringview
+                                cpid0: cpi.get i: ci
+                                cav = renderDefault symtab: symtab ctx: ctx default: cdt0.stringview targetTid: cpid0
+                            }
                         }
                     }
                     if ci > 0 then {
@@ -2942,19 +2954,30 @@ emitRecordCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
     args: "".string
     fi: 0.u64
     fn0: fnames.length
+    fposIdx: 0.u64
     for fi < fn0 loop {
         fname: fnames.get i: fi
         ffid0: fids.get i: fi
         av: ctorArgByLabel symtab: symtab ctx: ctx call: call label: fname.stringview
-        # an absent field with a registered default uses it; an absent fnptr slot
-        # defaults to its method's address; otherwise the "0" fallback.
+        # an absent label binds the next positional (unlabeled) arg by cursor; then a
+        # registered default; then an fnptr slot's method address; else the "0" fallback.
         if (ctorHasLabel call: call label: fname.stringview) == false then {
-            if (symtab.typing.hasChildDefault parentTypeId: tid name: fname.stringview) then {
-                av = symtab.typing.childDefaultText parentTypeId: tid name: fname.stringview
-            } else {
-                if (symtab.typing.isChildFnptrField parentTypeId: tid name: fname.stringview) then {
-                    fmtn0: typeNameOfReg9 symtab: symtab tid: ffid0
-                    av = cnameOf tid: ffid0 name: fmtn0.stringview
+            fposUsed: false
+            fpv: ctorArgByPosition symtab: symtab ctx: ctx call: call idx: fposIdx
+            if fpv.length > 0 then {
+                av = fpv
+                fposUsed = true
+            }
+            fposIdx = fposIdx + 1
+            if (fposUsed) == false then {
+                if (symtab.typing.hasChildDefault parentTypeId: tid name: fname.stringview) then {
+                    cdt1: symtab.typing.childDefaultText parentTypeId: tid name: fname.stringview
+                    av = renderDefault symtab: symtab ctx: ctx default: cdt1.stringview targetTid: ffid0
+                } else {
+                    if (symtab.typing.isChildFnptrField parentTypeId: tid name: fname.stringview) then {
+                        fmtn0: typeNameOfReg9 symtab: symtab tid: ffid0
+                        av = cnameOf tid: ffid0 name: fmtn0.stringview
+                    }
                 }
             }
         }

@@ -8499,14 +8499,22 @@ class CEmitter:
         arg_vids: Dict[str, Optional[int]] = {}
         take_vars: Dict[str, Optional[str]] = {}
         indent = self._indent()
+        pos = 0
         for arg in arguments[skip_first:]:
-            if arg.name:
+            # An unnamed argument binds the create param at its positional
+            # index; a named argument binds by param name.
+            target = arg.name
+            if target is None:
+                if pos < len(param_names):
+                    target = param_names[pos]
+                pos += 1
+            if target is not None:
                 val = self._emit_operation_value(arg.valtype)
-                arg_map[arg.name] = val
-                arg_types[arg.name] = self._get_operation_type(arg.valtype)
-                arg_vids[arg.name] = self._operand_vid(arg.valtype)
-                take_vars[arg.name] = self._get_take_var(arg.valtype)
-                param_own = self.typing.child_ownership(create_fn, arg.name)
+                arg_map[target] = val
+                arg_types[target] = self._get_operation_type(arg.valtype)
+                arg_vids[target] = self._operand_vid(arg.valtype)
+                take_vars[target] = self._get_take_var(arg.valtype)
+                param_own = self.typing.child_ownership(create_fn, target)
                 if (
                     param_own != ZParamOwnership.LOCK
                     and param_own != ZParamOwnership.BORROW
@@ -8571,15 +8579,23 @@ class CEmitter:
         arg_vids: Dict[str, Optional[int]] = {}
         take_vars: Dict[str, Optional[str]] = {}
         indent = self._indent()
+        pos = 0
         for arg in arguments[skip_first:]:
-            if arg.name:
+            # An unnamed argument binds the field at its positional index;
+            # a named argument binds by field name.
+            target = arg.name
+            if target is None:
+                if pos < len(field_names):
+                    target = field_names[pos]
+                pos += 1
+            if target is not None:
                 val = self._emit_operation_value(arg.valtype)
-                arg_map[arg.name] = val
-                arg_types[arg.name] = self._get_operation_type(arg.valtype)
-                arg_vids[arg.name] = self._operand_vid(arg.valtype)
-                take_vars[arg.name] = self._get_take_var(arg.valtype)
+                arg_map[target] = val
+                arg_types[target] = self._get_operation_type(arg.valtype)
+                arg_vids[target] = self._operand_vid(arg.valtype)
+                take_vars[target] = self._get_take_var(arg.valtype)
                 param_own = (
-                    self.typing.child_ownership(meta_fn, arg.name)
+                    self.typing.child_ownership(meta_fn, target)
                     if meta_fn is not None
                     else None
                 )

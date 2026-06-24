@@ -122,6 +122,9 @@ EMITC_SMOKE: "list[str]" = [
 CORPUS_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "emitc_corpus")
 EMITC_CORPUS: "list[str]" = [
     "reftype_param",
+    "ctor_positional",
+    "ctor_default_fill",
+    "record_method_ref_default",
     "string_mut",
     "empty_list",
     "nested_list_method",

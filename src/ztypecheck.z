@@ -135,7 +135,7 @@ atomName: function {n: Node} out String is {
 addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String note: String hint: String width: u32} is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
-        if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno then {
+        if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno when prev.msg.stringview == msg.stringview then {
             dup = true
         }
     }
@@ -1316,6 +1316,7 @@ demandReturnType: function {reg: ztypes.ZTypeRegistry unitName: StringView o: Op
 # so copies are threaded for `definedInUnit.set` and the returned id.
 resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView skipThisType: bool} out u64 is {
     fid: reg.newType name: defName typetype: ztypes.ztypetype.FUNCTION
+    reg.setNative typeId: fid value: fnode.isNative
     dfid: fid
     rfid: fid
     isgen: hasGenericParam items: fnode.asItems
@@ -1959,21 +1960,50 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                         ty.setChildFnptrField parentTypeId: rid name: fname.stringview
                     }
                 } case none then {
-                    cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
-                    ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
-                    if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.FUNCTION then {
-                        ty.setChildFnptrField parentTypeId: rid name: fname.stringview
-                    }
-                    recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
-                    dcn1: dottedChildName n: fm.operation
-                    if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) then {} else {
-                        if dcn1.length > 0 then {
-                            rdk3: nodeId n: fm.operation
-                            rdo3: rid
-                            ty.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
-                            rdk4: nodeId n: fm.operation
-                            rdn4: rootNameOf n: fm.operation
-                            ty.pendingDefaultName.set key: rdk4.u64 value: rdn4
+                    ftnR9: fieldHeadName n: fm.operation
+                    mkeyR9: "\{unitName}.\{defName}.\{ftnR9}".string
+                    mrefR9: ty.resolved.get key: mkeyR9
+                    handledR9: false
+                    match (
+                        mrefR9
+                    ) case some then {
+                        ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: mrefR9
+                        if (reg.typetypeOf typeId: mrefR9) == ztypes.ztypetype.FUNCTION then {
+                            ty.setChildFnptrField parentTypeId: rid name: fname.stringview
+                        }
+                        pdkR9: nodeId n: fm.operation
+                        pdoR9: rid
+                        ty.pendingDefaultOwner.set key: pdkR9.u64 value: pdoR9
+                        pdk2R9: nodeId n: fm.operation
+                        pdiR9: mrefR9
+                        ty.pendingDefaultId.set key: pdk2R9.u64 value: pdiR9
+                        handledR9 = true
+                    } case none then {}
+                    if (handledR9) == false then {
+                        cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
+                        ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+                        if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.FUNCTION then {
+                            ty.setChildFnptrField parentTypeId: rid name: fname.stringview
+                        }
+                        recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+                        dcn1: dottedChildName n: fm.operation
+                        rdnr: rootNameOf n: fm.operation
+                        if (isNumericLiteralName name: rdnr.stringview) then {
+                            ty.setChildDefault parentTypeId: rid name: fname.stringview default: rdnr.stringview
+                        } else {
+                            if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) == false when (reg.isUnitName name: rdnr.stringview) == false then {
+                                ty.setDefaultVariantArm parentTypeId: rid name: fname.stringview armName: dcn1.stringview
+                            }
+                        }
+                        if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) then {} else {
+                            if dcn1.length > 0 then {
+                                rdk3: nodeId n: fm.operation
+                                rdo3: rid
+                                ty.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
+                                rdk4: nodeId n: fm.operation
+                                rdn4: rootNameOf n: fm.operation
+                                ty.pendingDefaultName.set key: rdk4.u64 value: rdn4
+                            }
                         }
                     }
                 }
@@ -2379,6 +2409,14 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         }
                         recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                         dcn0: dottedChildName n: fm.operation
+                        rdnc: rootNameOf n: fm.operation
+                        if (isNumericLiteralName name: rdnc.stringview) then {
+                            ty.setChildDefault parentTypeId: cid name: fname.stringview default: rdnc.stringview
+                        } else {
+                            if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) == false when (reg.isUnitName name: rdnc.stringview) == false then {
+                                ty.setDefaultVariantArm parentTypeId: cid name: fname.stringview armName: dcn0.stringview
+                            }
+                        }
                         if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) then {} else {
                             if dcn0.length > 0 then {
                                 rdk: nodeId n: fm.operation
@@ -5196,6 +5234,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     }
     tt: ztypes.ztypetype.RECORD
     vto: (optionval.none bool)
+    tplNative: false
     {
         tpl: st.reg.typeById.get key: templateId
         match (
@@ -5203,6 +5242,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         ) case some then {
             tt = tpl.typetype
             vto = tpl.isValtype
+            tplNative = tpl.isNative
         } case none then {
         }
     }
@@ -5214,6 +5254,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     } case none then {
     }
     st.reg.setGenericOrigin typeId: mid value: templateId
+    st.reg.setNative typeId: mid value: tplNative
     setk: name.string
     setv: mid
     st.typing.monoByName.set key: setk value: setv
@@ -5438,6 +5479,7 @@ isSortEligible: function {name: StringView} out bool is {
 mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoId: u64 m: StringView} out u64 is {
     fname: "\{monoName}.\{m}"
     fid: st.reg.newType name: fname.stringview typetype: ztypes.ztypetype.FUNCTION
+    st.reg.setNative typeId: fid value: true
     st.typing.setChild parentTypeId: monoId childName: m childTypeId: fid
     return fid
 }
@@ -8726,10 +8768,180 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
 # hoist non-trivial ones into synth temps (mirrors _check_call_arguments).
+# isConfMarkerId -- the (tid, name) child is an as-block conformance/satisfaction
+# marker (not a data field) when a conformance row records it.
+isConfMarkerId: function {conf: List ztypes.ZConformance tid: u64 name: StringView} out bool is {
+    found: false
+    with citer: conf.iterate do for row: citer loop {
+        if row.implTypeId == tid when row.label.stringview == name then {
+            found = true
+        }
+    }
+    return found
+}
+
+# dataFieldNames -- a type's user-supplied data fields/params in order (the
+# ztypecheck-side mirror of the emitter's recFieldLists): for a FUNCTION, all
+# params; for a record/class, fnptr fields plus non-FUNCTION fields, excluding
+# as-block constants (asConstClone) and conformance markers.
+dataFieldNames: function {st: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
+    isFn: false
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.FUNCTION then {
+        isFn = true
+    }
+    with citer: st.typing.typeChild.iterate do for tc: citer loop {
+        if tc.parentTypeId == tid then {
+            cto: optU64Or o: (st.typing.childTypeById.get key: tc.childNameId) d: 0
+            inc: false
+            if isFn then {
+                inc = true
+            } else {
+                fptr: false
+                fpo: st.typing.childIsFnptrField.get key: tc.childNameId
+                match (
+                    fpo
+                ) case some then {
+                    fptr = fpo
+                } case none then {}
+                if fptr then {
+                    inc = true
+                } else {
+                    if cto > 0 when (st.reg.typetypeOf typeId: cto) != ztypes.ztypetype.FUNCTION then {
+                        isC: false
+                        aco: st.typing.asConstClone.get key: cto
+                        match (
+                            aco
+                        ) case some then {
+                            isC = aco
+                        } case none then {}
+                        if isC == false when (isConfMarkerId conf: st.typing.conformance tid: tid name: tc.childName.stringview) == false then {
+                            inc = true
+                        }
+                    }
+                }
+            }
+            if inc then {
+                cnx: tc.childName.copy
+                names.append cnx
+                idx0: cto
+                ids.append idx0
+            }
+        }
+    }
+}
+
+# checkMissingCallArgs -- report each required field/param (no default) a call or
+# construction did not provide. The method receiver is implicitly bound; a
+# construction's FUNCTION-typed (fnptr) fields are auto-bound.
+checkMissingCallArgs: function {st: zenv.ZSymbolTable call: zast.CallData funcId: u64 isCtor: bool} is {
+    mcb0: metaCreateBaseId n: call.callable
+    match (
+        mcb0
+    ) case some then {
+        return
+    } case none then {}
+    fzo9: st.reg.typeById.get key: funcId
+    match (
+        fzo9
+    ) case some then {
+        if fzo9.isNative then {
+            return
+        }
+    } case none then {}
+    effId: funcId
+    if isCtor then {
+        crId: optU64Or o: (st.typing.childOf parentTypeId: funcId name: "create") d: 0
+        if crId > 0 when (st.reg.typetypeOf typeId: crId) == ztypes.ztypetype.FUNCTION then {
+            crBody9: false
+            crn9: st.typing.funcReturnNode.get key: crId
+            match (
+                crn9
+            ) case some then {
+                crBody9 = true
+            } case none then {}
+            if crBody9 then {
+                effId = crId
+            }
+        }
+    }
+    names: (List String)
+    ids: (List u64)
+    dataFieldNames st: st tid: effId names: names ids: ids
+    pcnt: names.length
+    if pcnt == 0 then {
+        return
+    }
+    posCount: 0.u64
+    with aiter: call.arguments.iterate do for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            an: unitLabel o: arg.name
+            if an.length == 0 then {
+                posCount = posCount + 1
+            }
+        } else {}
+    }
+    vpos: 0.u64
+    i: 0.u64
+    for i < pcnt loop {
+        pname: names.get i: i
+        pcid: ids.get i: i
+        i = i + 1
+        isRecv9: false
+        if pname.stringview == "this" then {
+            isRecv9 = true
+        }
+        zoR: st.reg.typeById.get key: effId
+        match (
+            zoR
+        ) case some then {
+            if (optStrEquals o: zoR.thisParamName s: pname.stringview) then {
+                isRecv9 = true
+            }
+        } case none then {}
+        if (isRecv9) == false then {
+            posI: vpos
+            vpos = vpos + 1
+            need: true
+            if isCtor when (st.reg.typetypeOf typeId: pcid) == ztypes.ztypetype.FUNCTION then {
+                need = false
+            }
+            if (st.typing.hasChildDefault parentTypeId: effId name: pname.stringview) then {
+                need = false
+            }
+            if need then {
+            prov: false
+            if posI < posCount then {
+                prov = true
+            }
+            with niter: call.arguments.iterate do for narg: niter loop {
+                match (
+                    narg
+                ) case namedoperation then {
+                    nn: unitLabel o: narg.name
+                    if nn.length > 0 when nn.stringview == pname.stringview then {
+                        prov = true
+                    }
+                } else {}
+            }
+            if (prov) == false then {
+                tnm: typeNameOf st: st tid: pcid
+                tnc: tnm.copy
+                pnc: pname.copy
+                mm: "missing required argument '\{pnc}' (type: \{tnc})".string
+                addError st: st nodeid: call.nodeid lineno: call.lineno colno: call.colno e: zast.err.CALLERROR msg: mm
+                }
+            }
+        }
+    }
+}
+
 walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData funcId: u64 isCtor: bool reportUnknown: bool} out String is {
     lockRoot: "".string
     st.typing.lastLockParamRoot = "".string
     argIdx: 0.u64
+    boundArgIds: (List u64)
     aiter: call.arguments.iterate
     for arg: aiter loop {
         match (
@@ -8814,9 +9026,56 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                         }
                     }
                 }
+                wasPos9: false
                 if pn.length == 0 then {
+                    wasPos9 = true
                     pp: positionalParamName st: st funcId: funcId idx: argIdx
                     pn = pp
+                }
+                if reportUnknown when funcId > 0 when pn.length > 0 then {
+                    dcnid9: st.typing.childIdFor parentTypeId: funcId name: pn.stringview
+                    dupSeen9: false
+                    with bIt9: boundArgIds.iterate do for bId9: bIt9 loop {
+                        if bId9 == dcnid9 then {
+                            dupSeen9 = true
+                        }
+                    }
+                    if dupSeen9 then {
+                        pncD9: pn.copy
+                        dmm9: "argument '\{pncD9}' specified more than once".string
+                        addError st: st nodeid: arg.nodeid lineno: arg.lineno colno: arg.colno e: zast.err.CALLERROR msg: dmm9
+                    } else {
+                        boundArgIds.append dcnid9
+                    }
+                    if wasPos9 when (isCtor) == false then {
+                        cpidP9: optU64Or o: (st.typing.childOf parentTypeId: funcId name: pn.stringview) d: 0
+                        if cpidP9 > 0 then {
+                            ptidP9: resolveChildPayload st: st unitName: unitName cid: cpidP9
+                            if ptidP9 > 0 when vt > 0 then {
+                                if (typesCompatible st: st unitName: unitName a: vt b: ptidP9) == false then {
+                                    skipP9: false
+                                    avnP9: typeNameOf st: st tid: vt
+                                    bvnP9: typeNameOf st: st tid: ptidP9
+                                    if (isNumericTypeName name: avnP9.stringview) when (isNumericTypeName name: bvnP9.stringview) then { skipP9 = true }
+                                    pttP9: st.reg.typetypeOf typeId: ptidP9
+                                    if pttP9 == ztypes.ztypetype.PROTOCOL then { skipP9 = true }
+                                    if pttP9 == ztypes.ztypetype.FACET then { skipP9 = true }
+                                    if pttP9 == ztypes.ztypetype.GENERIC_PARAM then { skipP9 = true }
+                                    if pttP9 == ztypes.ztypetype.FUNCTION then { skipP9 = true }
+                                    if (skipP9) == false then {
+                                        enP9: typeNameOf st: st tid: ptidP9
+                                        anP9: typeNameOf st: st tid: vt
+                                        encP9: enP9.copy
+                                        ancP9: anP9.copy
+                                        tmmP9: "argument type mismatch: expected \{encP9}, got \{ancP9}".string
+                                        enP9b: "".string
+                                        ehP9: "".string
+                                        addErrorH st: st nodeid: arg.nodeid lineno: arg.lineno colno: arg.colno e: zast.err.CALLERROR msg: tmmP9 note: enP9b hint: ehP9 width: pn.length.u32
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 isTake: false
                 isLockish: false
@@ -9164,6 +9423,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                 if isWType when call.arguments.length > 0 then {
                     wcm: st.pushCall
                     walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: wcv isCtor: true reportUnknown: false
+                    checkMissingCallArgs st: st call: call funcId: wcv isCtor: true
                     st.popTo marker: wcm
                     wck: wcv
                     wcvv: true
@@ -9203,6 +9463,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                 st.typing.nodeType.set key: mcid.u64 value: setmb
                 mcm: st.pushCall
                 mclr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: mtid isCtor: true reportUnknown: false
+                checkMissingCallArgs st: st call: call funcId: mtid isCtor: true
                 st.popTo marker: mcm
                 setmc: mtid
                 st.typing.nodeType.set key: call.nodeid.u64 value: setmc
@@ -9333,6 +9594,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                     }
                     mcm: st.pushCall
                     mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false reportUnknown: false
+                    checkMissingCallArgs st: st call: call funcId: dro isCtor: false
                     # The receiver locks for the call's duration too (after
                     # the args, matching the oracle's entry order).
                     rro: methodReceiverRoot n: call.callable
@@ -9505,6 +9767,12 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                 match (
                                     arg2
                                 ) case namedoperation then {
+                                    uan9: unitLabel o: arg2.name
+                                    if uan9.length > 0 when uan9.stringview != "from" then {
+                                        uanc9: uan9.copy
+                                        uum9: "unknown argument '\{uanc9}'".string
+                                        addError st: st nodeid: arg2.nodeid lineno: arg2.lineno colno: arg2.colno e: zast.err.CALLERROR msg: uum9
+                                    }
                                     uvt: checkValue st: st unitName: unitName unitBody: unitBody node: arg2.operation
                                     # a literal payload coerces at the arm's
                                     # payload type (restamp the bare node).
@@ -9596,6 +9864,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                             if call.arguments.length > 0 then {
                                 dcm9: st.pushCall
                                 walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: true reportUnknown: false
+                                checkMissingCallArgs st: st call: call funcId: dro isCtor: true
                                 st.popTo marker: dcm9
                                 dck9: dro
                                 dcvv9: true
@@ -9681,6 +9950,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
             lockRoot: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: funcId isCtor: isCtor reportUnknown: true
+            checkMissingCallArgs st: st call: call funcId: funcId isCtor: isCtor
             st.popTo marker: cm
             if isCtor then {
                 # a type in callable position constructs: the call's value is
@@ -9760,6 +10030,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         }
                         cm9: st.pushCall
                         walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: gmid isCtor: true reportUnknown: false
+                        checkMissingCallArgs st: st call: call funcId: gmid isCtor: true
                         st.popTo marker: cm9
                         ctk9: gmid
                         ctv9: true

@@ -6575,13 +6575,12 @@ class TestDefaults:
         t = tc._resolve_unit_name("test", "myrec")
         assert t is not None
         assert tc.typing.child_defaults_of(t) == {"y": "0"}
-        # Field defaults propagate to the meta.create signature. Every
-        # field-param gets a default (the emitter zero-inits missing
-        # fields); fields with an explicit default carry that value,
-        # the rest carry a sentinel empty string.
+        # Field defaults propagate to the meta.create signature: a field
+        # with an explicit default carries that value; a field without one
+        # is required at construction (no default recorded).
         create_t = t.meta_create
         assert create_t is not None
-        assert tc.typing.child_defaults_of(create_t) == {"x": "", "y": "0"}
+        assert tc.typing.child_defaults_of(create_t) == {"y": "0"}
 
     def test_type_name_no_default(self):
         """A type name like 'i64' does NOT produce a default."""
@@ -6785,7 +6784,7 @@ class TestDefaults:
             "result: variant {\n    ok: i64\n    fail: null\n} as { tag: u8.tag }\n"
             "okalias: result.ok\n"
             "myrec: record {\n    r: okalias\n}\n"
-            "main: function is { v: myrec }"
+            "main: function is { v: myrec r: 5 }"
         )
         tc = TypeChecker(program)
         tc.check()

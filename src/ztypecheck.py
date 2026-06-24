@@ -3976,18 +3976,13 @@ class TypeChecker:
                         self.typing.set_child_default(ftype, fname, parent_default)
                 continue
             self._set_child(ftype, fname, ft)
-            # propagate field defaults to constructor; meta.create is
-            # the raw allocator and the emitter zero-inits any missing
-            # field, so synthesise a sentinel default for every field
-            # without an explicit one. The string value is irrelevant
-            # — the emitter has its own field-default table; only the
-            # presence of a default is read at typecheck time, to
-            # gate the missing-required-arg check.
+            # Propagate a field's explicit default onto the meta.create
+            # param so the missing-required-arg check treats that field
+            # as optional. A field without an explicit default is required
+            # at construction.
             parent_default = self.typing.child_default(parent_type, fname)
             if parent_default is not None:
                 self.typing.set_child_default(ftype, fname, parent_default)
-            else:
-                self.typing.set_child_default(ftype, fname, "")
             # Field ownership flows to the meta.create param:
             # `.lock` field => LOCK param (caller's lock transfers in);
             # any other reftype field => TAKE param (caller transfers
@@ -8243,13 +8238,22 @@ class TypeChecker:
                             err=ERR.CALLERROR,
                         )
                         break
-            # bare record/class name as value: all data fields must have defaults
+            # bare record/class name as value: all data fields must have
+            # defaults. The atom must name the *type* itself (a definition
+            # that is not a function) — a no-arg factory function whose
+            # return type is a record/class (`x: newTyping`) is an auto-call,
+            # not a bare construction, and is left to the function's body.
+            bare_construct_def = (
+                self._lookup_definition(cast(zast.AtomId, inner).name)
+                if inner.nodetype == NodeType.ATOMID
+                else None
+            )
             if (
                 t is not None
                 and t.typetype in (ZTypeType.RECORD, ZTypeType.CLASS)
                 and not t.is_native
-                and inner.nodetype == NodeType.ATOMID
-                and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
+                and bare_construct_def is not None
+                and bare_construct_def.nodetype != NodeType.FUNCTION
             ):
                 create_type = t.meta_create
                 if create_type:
@@ -9787,12 +9791,26 @@ class TypeChecker:
         # `value_idx` tracks the positional index against `params`,
         # advancing only on non-skipped (value) args. Generic-arg
         # specifiers don't consume a positional slot.
+        # Track which parameter slots have been bound so an argument that
+        # binds the same parameter twice (named twice, or positional then
+        # named) is rejected. `seen_named` enforces that no unnamed
+        # argument follows a named one.
+        bound_slots: dict[str, Token] = {}
+        seen_named = False
         value_idx = -1
         for arg in call.arguments:
             if arg.name and arg.name in generic_arg_names:
                 continue
             value_idx += 1
             i = value_idx
+            if arg.name:
+                seen_named = True
+            elif seen_named:
+                self._error(
+                    "positional argument cannot follow a named argument",
+                    loc=arg.start,
+                    err=ERR.CALLERROR,
+                )
             # Look up the expected parameter type (by name for named
             # args, by position for positional) before checking the
             # arg. If the slot expects a FUNCTION (method-reference
@@ -9869,6 +9887,16 @@ class TypeChecker:
                         matched = ptype
                         break
                 if matched:
+                    # A named arg that binds an already-bound slot is a
+                    # double-binding.
+                    if arg.name in bound_slots:
+                        self._error(
+                            f"argument '{arg.name}' specified more than once",
+                            loc=arg.start,
+                            err=ERR.CALLERROR,
+                        )
+                    else:
+                        bound_slots[arg.name] = arg.start
                     # Literal-typed args go through `_coerce_literal`
                     # FIRST — `_types_compatible` unifies literal-vs-
                     # any-numeric structurally and would not
@@ -9907,6 +9935,14 @@ class TypeChecker:
             elif arg_type and not arg.name and i < len(params):
                 # positional argument
                 pname, ptype = params[i]
+                if pname in bound_slots:
+                    self._error(
+                        f"argument '{pname}' specified more than once",
+                        loc=arg.start,
+                        err=ERR.CALLERROR,
+                    )
+                else:
+                    bound_slots[pname] = arg.start
                 if arg_type.is_literal and _is_numeric_type(ptype):
                     if self._coerce_literal(arg.valtype, ptype, loc=arg.start):
                         arg_type = ptype
@@ -9984,9 +10020,14 @@ class TypeChecker:
         Construction calls (`call_kind` is one of the `*_CREATE`
         flavours) skip FUNCTION-typed params: bodied-method fields
         on a record/class are auto-bound by the compiler at
-        construction, not user-supplied. Mirrors the data-params
-        filter in `_check_missing_create_args` (the legacy
-        construction-specific check this path replaces)."""
+        construction, not user-supplied."""
+        # Compiler-synthesised generator construction (`meta.create
+        # state: 0 :p ...`) intentionally zero-inits the state-machine
+        # fields it omits; the missing-argument rule is for user code.
+        if call.synth_origin == "generator":  # ztc-string-compare-ok: synth marker
+            return
+        if callee_type.is_native:
+            return
         if not params:
             return
         kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
@@ -10099,59 +10140,19 @@ class TypeChecker:
             self.typing.call_kind[call.nodeid] = zast.CallKind.REGULAR
         return self.typing.node_type.get(call.nodeid)
 
-    def _check_missing_create_args(self, type_def: ZType, call: zast.Call) -> None:
-        """Check for missing required arguments in bare-name construction.
-
-        Validates against the type's public `create` child (which is either
-        user-defined or the compiler's default meta-create wrapper). This
-        means a custom `create` with an alternate signature is correctly
-        checked against that signature, not the full field list.
-        """
-        # skip native/collection types — construction is compiler-managed
-        if (
-            type_def.is_native
-            or _is_str_type(type_def)
-            or _is_array_type(type_def)
-            or _is_list_type(type_def)
-            or _is_map_type(type_def)
-            or _is_set_type(type_def)
-        ):
-            return
-        create_type = self.typing.child_of(type_def, "create")
-        if not create_type or create_type.typetype != ZTypeType.FUNCTION:
-            return
-        # collect non-function params (user-visible data fields only)
-        data_params = [
-            (pname, ptype)
-            for pname, ptype in self.typing.children_of(create_type)
-            if ptype.typetype != ZTypeType.FUNCTION
-        ]
-        if not data_params:
-            return
-        provided: set = set()
-        for arg in call.arguments:
-            if arg.name:
-                provided.add(arg.name)
-        for pname, ptype in data_params:
-            if pname not in provided and not self.typing.has_child_default(
-                create_type, pname
-            ):
-                self._error(
-                    f"missing required argument '{pname}' (type: {ptype.name})",
-                    loc=call.start,
-                    err=ERR.CALLERROR,
-                )
-
     def _check_union_subtype_payload_type(
         self,
         call: zast.Call,
         parent_tagged: ZType,
         callable_dp: zast.DottedPath,
     ) -> None:
-        """Validate that the value argument to a union/variant subtype
-        constructor (`myunion.subtype <value>`) matches the subtype's
-        declared payload type. Null-payload subtypes (e.g. `option.none`)
-        accept no value and are skipped here.
+        """Validate the argument to a union/variant subtype constructor
+        (`myunion.subtype <value>`): exactly one payload value is required
+        (the sole unnamed arg or `from:`), its type must match the
+        subtype's declared payload, any other label is unknown, and a
+        non-null payload may not be omitted or supplied more than once.
+        Null-payload subtypes (e.g. `option.none`) accept no value and are
+        skipped here.
         """
         subtype_name = callable_dp.child.name
         payload_type = self.typing.child_of(parent_tagged, subtype_name)
@@ -10159,18 +10160,50 @@ class TypeChecker:
             return
         if payload_type.typetype == ZTypeType.FUNCTION:
             return
-        value_arg: Optional[zast.NamedOperation] = None
-        for arg in call.arguments:
-            if arg.name == "from":  # ztc-string-compare-ok: payload arg label
-                value_arg = arg
-                break
-        if value_arg is None:
-            for arg in call.arguments:
-                if not arg.name:
-                    value_arg = arg
-                    break
-        if value_arg is None:
+        # The payload is supplied either as the sole unnamed argument or
+        # via the `from:` label; exactly one is required. Any other label
+        # is unknown, and supplying the payload more than once is an error.
+        from_arg: Optional[zast.NamedOperation] = None
+        first_positional: Optional[zast.NamedOperation] = None
+        value_count = 0
+        had_unknown = False
+        for a in call.arguments:
+            if a.name is None:
+                value_count += 1
+                if first_positional is None:
+                    first_positional = a
+            elif a.name == "from":  # ztc-string-compare-ok: payload arg label
+                value_count += 1
+                if from_arg is None:
+                    from_arg = a
+            else:
+                had_unknown = True
+                suggestion = _suggest_similar(a.name, ["from"])
+                self._error(
+                    f"unknown argument '{a.name}'",
+                    loc=a.start,
+                    err=ERR.CALLERROR,
+                    hint=f"did you mean '{suggestion}'?" if suggestion else None,
+                )
+        value_arg = from_arg if from_arg is not None else first_positional
+        if value_count == 0:
+            if not had_unknown:
+                self._error(
+                    f"missing required argument for subtype "
+                    f"'{parent_tagged.name}.{subtype_name}' "
+                    f"(type: {payload_type.name})",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
             return
+        assert value_arg is not None
+        if value_count > 1:
+            self._error(
+                f"too many arguments for subtype "
+                f"'{parent_tagged.name}.{subtype_name}': expected 1, got {value_count}",
+                loc=value_arg.start,
+                err=ERR.CALLERROR,
+            )
         arg_type = self.typing.node_type.get(value_arg.valtype.nodeid)
         if arg_type is None:
             return
