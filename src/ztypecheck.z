@@ -1381,6 +1381,30 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 pname: unitLabel o: pm.name
                 cid: resolveTyperefShell reg: reg unitName: unitName typeExpr: pm.operation thisName: thisName
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
+                if (isNumericLiteralName name: ptn.stringview) then {
+                    ty.setChildDefault parentTypeId: fid name: pname.stringview default: ptn.stringview
+                } else {
+                    fnRefIsFn9: false
+                    fnRefOpt9: lookupTyperef resolved: ty.resolved mainName: unitName base: ptn.stringview
+                    match (
+                        fnRefOpt9
+                    ) case some then {
+                        if (reg.typetypeOf typeId: fnRefOpt9) == ztypes.ztypetype.FUNCTION then {
+                            fnRefIsFn9 = true
+                        }
+                    } case none then {}
+                    if fnRefIsFn9 then {
+                        ty.setDefaultFunction parentTypeId: fid name: pname.stringview funcname: ptn.stringview
+                    } else {
+                        pdcn9: dottedChildName n: pm.operation
+                        if pdcn9.length > 0 when (isStripMarker name: pdcn9.stringview) == false then {
+                            prn9: rootNameOf n: pm.operation
+                            if (reg.isUnitName name: prn9.stringview) == false then {
+                                ty.setDefaultVariantArm parentTypeId: fid name: pname.stringview armName: pdcn9.stringview
+                            }
+                        }
+                    }
+                }
                 if (paramIsThisReceiver op: pm.operation) then {
                     reg.setThisParamName typeId: fid name: pname.stringview
                 }
@@ -1876,6 +1900,17 @@ objectTypedefMangled: function {onode: zast.ObjectDefData} out String is {
 # method, then synthesized `create`/`==`/`!=`. A typedef record (single
 # `X.typedef` field): no field child, the methods, then `create`+`borrow`. Synth
 # children are shallow FUNCTION shells (JOIN-only). Generics arrive later.
+# fnFieldFlaggableName -- an is-block FUNCTION member that should become a struct
+# fnptr slot (a spec field / method / method-ref), excluding the constructor and
+# comparison synthetics so they stay free functions / ctors.
+fnFieldFlaggableName: function {name: StringView} out bool is {
+    if name == "create" then { return false }
+    if name == "==" then { return false }
+    if name == "!=" then { return false }
+    if name == "borrow" then { return false }
+    return true
+}
+
 resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
     rid: reg.newType name: defName typetype: ztypes.ztypetype.RECORD
     rrid: rid
@@ -1920,9 +1955,15 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                         hasEqIs = true
                     }
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: mido
+                    if (fnFieldFlaggableName name: fname.stringview) then {
+                        ty.setChildFnptrField parentTypeId: rid name: fname.stringview
+                    }
                 } case none then {
                     cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
                     ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
+                    if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.FUNCTION then {
+                        ty.setChildFnptrField parentTypeId: rid name: fname.stringview
+                    }
                     recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     dcn1: dottedChildName n: fm.operation
                     if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) then {} else {
@@ -2285,6 +2326,9 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                         mido
                     ) case some then {
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mido
+                        if (fnFieldFlaggableName name: fname.stringview) then {
+                            ty.setChildFnptrField parentTypeId: cid name: fname.stringview
+                        }
                     } case none then {}
                 }
             } else {
@@ -2303,6 +2347,9 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                     mref
                 ) case some then {
                     ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mref
+                    if (reg.typetypeOf typeId: mref) == ztypes.ztypetype.FUNCTION then {
+                        ty.setChildFnptrField parentTypeId: cid name: fname.stringview
+                    }
                     if lockField then {
                         ty.setChildLockField parentTypeId: cid name: fname.stringview
                     }

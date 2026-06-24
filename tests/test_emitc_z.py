@@ -62,6 +62,8 @@ EMITC_SMOKE: "list[str]" = [
     "genericunit",
     "genericfunctions",
     "dobreak",
+    "defaults",
+    "specs",
     "lists",
     "listview",
     "string_codepoints",
