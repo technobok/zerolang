@@ -127,10 +127,10 @@ Verify each against HEAD before scheduling (sources are point-in-time):
   `run_corpus.sh do_dump` compare the port's output to committed
   `tests/fixtures/dump_golden/*.canon` goldens (port-sourced via `--update`;
   correctness vouched for by the `test_dumpsql_z` pytest differential). Covers
-  `unit` / `types` / `type_children` / `conformance`. **Follow-on:** extend
-  `dumpCanon` to the symbol-table tables (scope / entry / variable /
-  narrowed_subtype) and typed_nodes / mono; the pytest differential covers those
-  meanwhile.
+  `unit` / `types` / `type_children` / `conformance` and the body-walk symbol
+  table (`scope` / `entry` / `variable` / `narrowed_subtype`). **Follow-on:**
+  extend `dumpCanon` to `typed_nodes` / mono; the pytest differential covers
+  those meanwhile.
 - **CLI parity (`zc.z` vs `zc.py`)** — `zc.z` lacks `-v/--verbose` and
   `--no-color`; uses `--full` where `zc.py` uses `--full-typecheck`; defaults to
   SQL-dump where `zc.py` defaults to C-emit (`-o`, default `unitname.c`). Diagnostic

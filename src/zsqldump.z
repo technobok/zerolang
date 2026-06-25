@@ -760,6 +760,98 @@ ZDumper: class {
         this.emitSection title: "conformance".stringview rows: rows
     }
 
+    # appendSymbolTableCanon -- the body-walk symbol table (scope / entry /
+    # variable / narrowed_subtype), id-normalized: scope/entry/variable PK ids and
+    # the scope open/close seqs are dropped, foreign keys resolved to names (scope
+    # parent and entry owning-scope by scope name, entry/variable ztype via
+    # canonTypeName). No unit filter -- the table holds only the main unit's bodies.
+    appendSymbolTableCanon: function {:this st: zenv.ZSymbolTable} is {
+        scopeName: (Map u64 value: String)
+        scopeRows: (List String)
+        depth: 0.u64
+        for row: st.scopeLog.iterate loop {
+            scopeName.set key: row.scopeId value: row.name.copy
+            parentNameSql: "NULL".string
+            pidOpt: row.parentId
+            match (
+                pidOpt
+            ) case some then {
+                po: scopeName.get key: pidOpt
+                match (
+                    po
+                ) case some then {
+                    parentNameSql = sqlStr s: po.stringview
+                } case none then {}
+            } case none then {}
+            rk: (ztypes.zscopekindName row.kind)
+            kindSql: sqlStr s: rk.stringview
+            nameSql: sqlStr s: row.name.stringview
+            unreachNum: boolNum b: (st.unreachableDump.has item: row.scopeId)
+            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
+            scopeRows.append line
+            depth = depth + 1
+        }
+        this.emitSection title: "scope".stringview rows: scopeRows
+
+        entryRows: (List String)
+        narrowedRows: (List String)
+        seen: (Set u64)
+        for e: st.entryDump.iterate loop {
+            so: scopeName.get key: e.scopeId
+            match (
+                so
+            ) case some then {
+                scNameSql: sqlStr s: so.stringview
+                enmSql: sqlStr s: e.name.stringview
+                ztName: canonTypeName reg: st.reg tid: e.ztypeId
+                ztSql: sqlStr s: ztName.stringview
+                defNum: boolNum b: e.isDefinition
+                hasVar: false
+                vh: e.varId
+                match (
+                    vh
+                ) case some then {
+                    hasVar = true
+                } case none then {}
+                hasVarNum: boolNum b: hasVar
+                takNum: boolNum b: e.isTaken
+                eline: "\{scNameSql} | \{e.position} | \{enmSql} | \{ztSql} | \{defNum} | \{hasVarNum} | \{takNum}"
+                entryRows.append eline
+            } case none then {}
+            if e.narrowedSubtype.length > 0 then {
+                nnmSql: sqlStr s: e.narrowedSubtype.stringview
+                narrowedRows.append "\{nnmSql} | 0"
+            }
+            with xit: e.excludedSubtypes.iterate do for xn: xit loop {
+                xnmSql: sqlStr s: xn.stringview
+                narrowedRows.append "\{xnmSql} | 1"
+            }
+            vd: e.varId
+            match (
+                vd
+            ) case some then {
+                seen.add item: vd
+            } case none then {}
+        }
+        this.emitSection title: "entry".stringview rows: entryRows
+
+        varRows: (List String)
+        for vid: seen.iterate loop {
+            ztId: optU64Or0 o: (st.typing.variableZtype.get key: vid)
+            ztName: canonTypeName reg: st.reg tid: ztId
+            ztSql: sqlStr s: ztName.stringview
+            ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
+            privNum: optBoolNumOr0 o: (st.typing.variableIsPrivate.get key: vid)
+            boSql: originSql o: (st.typing.variableBorrowOrigin.get key: vid)
+            soSql: originSql o: (st.typing.variableSynthOrigin.get key: vid)
+            vline: "\{ztSql} | \{ownSql} | \{privNum} | \{boSql} | \{soSql}"
+            varRows.append vline
+        }
+        this.emitSection title: "variable".stringview rows: varRows
+
+        this.emitSection title: "narrowed_subtype".stringview rows: narrowedRows
+    }
+
 }
 
 # walkExprStamps -- mirror the reference dump's node-type read (_node_ztype):
@@ -1004,7 +1096,8 @@ canonTypeName: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
 }
 
 # dumpCanon -- a canonical, id-normalized rendering of the typecheck state
-# (unit, types, type_children, conformance) for the Python-free dump-canon
+# (unit, types, type_children, conformance, and the body-walk symbol table:
+# scope / entry / variable / narrowed_subtype) for the Python-free dump-canon
 # regression gate. PK ids are omitted, FK ids resolved to names, id-embedding
 # cnames dropped, rows sorted. Parse-level tables (files / ast_nodes) are
 # covered by the lexer / parser goldens and omitted here.
@@ -1026,5 +1119,6 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     d.appendTypesCanon unm: mu.stringview st: symtab
     d.appendTypeChildrenCanon unm: mu.stringview st: symtab
     d.appendConformanceCanon unm: mu.stringview st: symtab
+    d.appendSymbolTableCanon st: symtab
     return d.acc.copy
 }
