@@ -5,12 +5,16 @@ CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=int-conversion -Werror=incompatible-pointer-types
 BUILDDIR := out
 
+# install tree (GOROOT-style). Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
+ROOT     ?= $(HOME)/.local/lib/zerolang
+BINDIR   ?= $(HOME)/.local/bin
+
 # all .z files in examples/ (exclude library-only modules without main)
 SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -268,5 +272,31 @@ build:
 	echo ""; \
 	echo "$$ok passed, $$fail failed ($(BUILDDIR)/)"
 
+# bin/zc -- the self-hosted compiler, bootstrapped by the reference (zc.py).
+# Persistent + git-ignored; rebuilt when the compiler sources change. The dev
+# bin/zc self-locates to this repo (lib/system here; runtime falls back to
+# src/runtime, as the dev tree has no lib/runtime).
+bin/zc: $(wildcard src/*.z) $(wildcard src/*.py) $(wildcard lib/system/*.z)
+	@mkdir -p bin
+	$(ZC) zc --src src -o bin/zc.c
+	$(CC) $(CFLAGS) -o bin/zc bin/zc.c
+
+# zc -- convenience alias for bin/zc.
+zc: bin/zc
+
+# install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink. The
+# runtime ships as lib/runtime (copied from src/runtime). os.exePath resolves
+# the symlink to $(ROOT)/bin/zc, so the installed zc self-locates the tree.
+install: bin/zc
+	mkdir -p $(ROOT)/bin $(ROOT)/lib $(BINDIR)
+	cp bin/zc $(ROOT)/bin/zc
+	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/doc $(ROOT)/src
+	cp -r lib/system $(ROOT)/lib/system
+	cp -r src/runtime $(ROOT)/lib/runtime
+	cp -r doc $(ROOT)/doc
+	cp -r src $(ROOT)/src
+	ln -sf $(ROOT)/bin/zc $(BINDIR)/zc
+	@echo "installed zc -> $(BINDIR)/zc (tree: $(ROOT))"
+
 clean:
-	rm -rf $(BUILDDIR)
+	rm -rf $(BUILDDIR) bin
