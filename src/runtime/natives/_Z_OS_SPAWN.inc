@@ -1,6 +1,8 @@
 /* os.spawn -- fork/exec argv as a child. argv[0] is resolved via
-   PATH (execvp). stdin is /dev/null; stdout->outPath, stderr->
-   errPath (each O_WRONLY|O_CREAT|O_TRUNC). A non-empty cwd chdirs
+   PATH (execvp). stdout->outPath, stderr->errPath (each
+   O_WRONLY|O_CREAT|O_TRUNC); an empty out/err path inherits the
+   parent's fd, and empty out+err inherits stdin too (else stdin is
+   /dev/null). A non-empty cwd chdirs
    the child. The redirection files are opened in the parent before
    fork so the child's chdir cannot change their resolution. argv
    element buffers are NUL-terminated (z_String), borrowed directly;
@@ -23,22 +25,30 @@ static int32_t z_os_spawn(
     }
     c_argv[argv->length] = NULL;
     char* cwd_c = z_sv_to_cstr(cwd);
-    char* out_c = z_sv_to_cstr(outPath);
-    char* err_c = z_sv_to_cstr(errPath);
-    int out_fd = open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int err_fd = open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    int null_fd = open("/dev/null", O_RDONLY);
+    /* An empty outPath/errPath inherits the parent's fd 1/2 (skip the
+       open+dup2). When both are empty (the `zc run` case) inherit stdin
+       too; otherwise stdin is /dev/null. Non-empty callers unaffected. */
+    int inherit_out = (outPath.length == 0);
+    int inherit_err = (errPath.length == 0);
+    int inherit_in = (inherit_out && inherit_err);
+    char* out_c = inherit_out ? NULL : z_sv_to_cstr(outPath);
+    char* err_c = inherit_err ? NULL : z_sv_to_cstr(errPath);
+    int out_fd = inherit_out ? -1 : open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int err_fd = inherit_err ? -1 : open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int null_fd = inherit_in ? -1 : open("/dev/null", O_RDONLY);
     int32_t status = 127;
-    if (out_fd >= 0 && err_fd >= 0 && null_fd >= 0) {
+    int setup_ok = (inherit_out || out_fd >= 0) && (inherit_err || err_fd >= 0)
+                   && (inherit_in || null_fd >= 0);
+    if (setup_ok) {
         pid_t pid = fork();
         if (pid == 0) {
             if (cwd.length > 0 && chdir(cwd_c) != 0) _exit(127);
-            dup2(null_fd, 0);
-            dup2(out_fd, 1);
-            dup2(err_fd, 2);
-            close(null_fd);
-            close(out_fd);
-            close(err_fd);
+            if (!inherit_in) dup2(null_fd, 0);
+            if (!inherit_out) dup2(out_fd, 1);
+            if (!inherit_err) dup2(err_fd, 2);
+            if (null_fd >= 0) close(null_fd);
+            if (out_fd >= 0) close(out_fd);
+            if (err_fd >= 0) close(err_fd);
             execvp(c_argv[0], c_argv);
             _exit(127);
         } else if (pid > 0) {

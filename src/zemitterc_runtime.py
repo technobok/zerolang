@@ -1321,8 +1321,10 @@ _Z_OS_SET_ENV = (
 
 _Z_OS_SPAWN = (
     "/* os.spawn -- fork/exec argv as a child. argv[0] is resolved via\n"
-    "   PATH (execvp). stdin is /dev/null; stdout->outPath, stderr->\n"
-    "   errPath (each O_WRONLY|O_CREAT|O_TRUNC). A non-empty cwd chdirs\n"
+    "   PATH (execvp). stdout->outPath, stderr->errPath (each\n"
+    "   O_WRONLY|O_CREAT|O_TRUNC); an empty out/err path inherits the\n"
+    "   parent's fd, and empty out+err inherits stdin too (else stdin is\n"
+    "   /dev/null). A non-empty cwd chdirs\n"
     "   the child. The redirection files are opened in the parent before\n"
     "   fork so the child's chdir cannot change their resolution. argv\n"
     "   element buffers are NUL-terminated (z_String), borrowed directly;\n"
@@ -1345,22 +1347,33 @@ _Z_OS_SPAWN = (
     "    }\n"
     "    c_argv[argv->length] = NULL;\n"
     "    char* cwd_c = z_sv_to_cstr(cwd);\n"
-    "    char* out_c = z_sv_to_cstr(outPath);\n"
-    "    char* err_c = z_sv_to_cstr(errPath);\n"
-    "    int out_fd = open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n"
-    "    int err_fd = open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n"
-    '    int null_fd = open("/dev/null", O_RDONLY);\n'
+    "    /* An empty outPath/errPath inherits the parent's fd 1/2 (skip the\n"
+    "       open+dup2). When both are empty (the `zc run` case) inherit stdin\n"
+    "       too; otherwise stdin is /dev/null. Non-empty callers unaffected. */\n"
+    "    int inherit_out = (outPath.length == 0);\n"
+    "    int inherit_err = (errPath.length == 0);\n"
+    "    int inherit_in = (inherit_out && inherit_err);\n"
+    "    char* out_c = inherit_out ? NULL : z_sv_to_cstr(outPath);\n"
+    "    char* err_c = inherit_err ? NULL : z_sv_to_cstr(errPath);\n"
+    "    int out_fd = inherit_out ? -1 "
+    ": open(out_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n"
+    "    int err_fd = inherit_err ? -1 "
+    ": open(err_c, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n"
+    '    int null_fd = inherit_in ? -1 : open("/dev/null", O_RDONLY);\n'
     "    int32_t status = 127;\n"
-    "    if (out_fd >= 0 && err_fd >= 0 && null_fd >= 0) {\n"
+    "    int setup_ok = (inherit_out || out_fd >= 0) "
+    "&& (inherit_err || err_fd >= 0)\n"
+    "                   && (inherit_in || null_fd >= 0);\n"
+    "    if (setup_ok) {\n"
     "        pid_t pid = fork();\n"
     "        if (pid == 0) {\n"
     "            if (cwd.length > 0 && chdir(cwd_c) != 0) _exit(127);\n"
-    "            dup2(null_fd, 0);\n"
-    "            dup2(out_fd, 1);\n"
-    "            dup2(err_fd, 2);\n"
-    "            close(null_fd);\n"
-    "            close(out_fd);\n"
-    "            close(err_fd);\n"
+    "            if (!inherit_in) dup2(null_fd, 0);\n"
+    "            if (!inherit_out) dup2(out_fd, 1);\n"
+    "            if (!inherit_err) dup2(err_fd, 2);\n"
+    "            if (null_fd >= 0) close(null_fd);\n"
+    "            if (out_fd >= 0) close(out_fd);\n"
+    "            if (err_fd >= 0) close(err_fd);\n"
     "            execvp(c_argv[0], c_argv);\n"
     "            _exit(127);\n"
     "        } else if (pid > 0) {\n"
@@ -1465,6 +1478,49 @@ _Z_OS_CWD = (
     "    z_String_t* boxed = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
     "    *boxed = z_String_new(buf);\n"
     "    free(buf);\n"
+    "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_EXE_PATH = (
+    "/* os.exePath -- absolute path of the running executable. Linux\n"
+    "   reads /proc/self/exe; macOS uses _NSGetExecutablePath. Copied\n"
+    "   into a z_String_t so ownership stays uniform with the other os\n"
+    "   string natives. */\n"
+    "#if defined(__APPLE__)\n"
+    "#include <mach-o/dyld.h>\n"
+    "#endif\n"
+    "static z_Result_String_IoError_t z_os_exePath(void);\n"
+    "static z_Result_String_IoError_t z_os_exePath(void) {\n"
+    "    z_Result_String_IoError_t out = {0};\n"
+    "    char buf[4096];\n"
+    "#if defined(__APPLE__)\n"
+    "    uint32_t bufsize = (uint32_t)sizeof(buf);\n"
+    "    if (_NSGetExecutablePath(buf, &bufsize) != 0) {\n"
+    "        z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));\n"
+    "        z_IoError_t e = {0};\n"
+    "        e.tag = Z_IOERROR_TAG_OTHER;\n"
+    "        *boxed = e;\n"
+    "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "#else\n"
+    '    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);\n'
+    "    if (len < 0) {\n"
+    "        int e = errno;\n"
+    "        z_IoError_t* boxed = (z_IoError_t*)z_xmalloc(sizeof(z_IoError_t));\n"
+    "        *boxed = z_io_errno_to_IoError(e);\n"
+    "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    buf[len] = '\\0';\n"
+    "#endif\n"
+    "    z_String_t* boxed = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
+    "    *boxed = z_String_new(buf);\n"
     "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "    out.data = boxed;\n"
     "    return out;\n"
@@ -3008,6 +3064,8 @@ def emit_runtime_os(*, needs_os: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_OS_ENV_NAMES)
     if "cwd" in natives:
         parts.append(_Z_OS_CWD)
+    if "exePath" in natives:
+        parts.append(_Z_OS_EXE_PATH)
     if "setCwd" in natives:
         parts.append(_Z_OS_SET_CWD)
     if "pid" in natives:
@@ -3060,6 +3118,7 @@ def emit_runtime_io(
             "userName",
             "homeDir",
             "hostname",
+            "exePath",
         }
     )
     # os natives whose stringview args need the shared `z_sv_to_cstr`

@@ -188,6 +188,7 @@ EMITC_CORPUS: "list[str]" = [
     "list_out_param",
     "collection_method_binding",
     "return_move_vs_copy",
+    "os_exe_path",
 ]
 
 

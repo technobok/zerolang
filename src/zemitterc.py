@@ -1080,6 +1080,7 @@ class CEmitter:
                 "userName",
                 "homeDir",
                 "hostname",
+                "exePath",
                 "spawn",
             ):
                 self.needs_io = True
