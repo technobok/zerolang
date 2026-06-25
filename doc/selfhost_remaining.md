@@ -128,9 +128,15 @@ Verify each against HEAD before scheduling (sources are point-in-time):
   `tests/fixtures/dump_golden/*.canon` goldens (port-sourced via `--update`;
   correctness vouched for by the `test_dumpsql_z` pytest differential). Covers
   `unit` / `types` / `type_children` / `conformance` and the body-walk symbol
-  table (`scope` / `entry` / `variable` / `narrowed_subtype`). **Follow-on:**
-  extend `dumpCanon` to `typed_nodes` / mono; the pytest differential covers
-  those meanwhile.
+  table (`scope` / `entry` / `variable` / `narrowed_subtype`). **`typed_nodes` and
+  mono are deliberately left to the `test_dumpsql_z` pytest differential, NOT the
+  canon goldens:** the `typed_nodes` projection widens to `defined_in_unit IN (unit,
+  'system', 'collections')`, so it is ~1300 rows/example dominated by library
+  internals -- a bloated, noisy committed golden -- and its `name` column needs the
+  contextual AST-walk label (no node-id -> node map exists). The pytest differential
+  compares these in-memory and is the right tool. (A main-unit-only filtered canon
+  would be small but diverges from the oracle's widened filter; revisit only if a
+  Python-free `typed_nodes` gate is specifically needed.)
 - **CLI parity (`zc.z` vs `zc.py`)** — `zc.z` lacks `-v/--verbose` and
   `--no-color`; uses `--full` where `zc.py` uses `--full-typecheck`; defaults to
   SQL-dump where `zc.py` defaults to C-emit (`-o`, default `unitname.c`). Diagnostic
