@@ -8718,6 +8718,72 @@ class TestGenerics:
         errors = check_errors('main: function is { print msg: "x" extra: 1 }')
         assert any("unknown argument 'extra'" in e.msg for e in errors)
 
+    def test_generic_unknown_type_argument(self):
+        """An extra/unknown type argument to a generic type is flagged (E0400)."""
+        errors = check_errors("main: function is { x: (List of: i64 bogus: f64) }")
+        assert any(
+            "unknown type argument 'bogus' for generic type 'List'" in e.msg
+            for e in errors
+        )
+
+    def test_generic_unknown_type_argument_note(self):
+        """The unknown-type-argument error lists the valid type parameters."""
+        errors = check_errors("main: function is { x: (List item: i64) }")
+        match = next(e for e in errors if "unknown type argument 'item'" in e.msg)
+        assert match.note is not None and "valid type parameters: of" in match.note
+
+    def test_generic_duplicate_type_argument(self):
+        """The same type argument supplied twice (elided + explicit) is flagged."""
+        errors = check_errors("main: function is { x: (List i64 of: f64) }")
+        assert any("duplicate type argument 'of'" in e.msg for e in errors)
+
+    def test_generic_missing_type_argument(self):
+        """A declared generic param that cannot be inferred is flagged."""
+        errors = check_errors(
+            "pair: record { a: t } as { t: Any.generic u: Any.generic }\n"
+            "main: function is { p: pair a: 5 }"
+        )
+        assert any(
+            "cannot infer generic parameter 'u' for 'pair'" in e.msg for e in errors
+        )
+
+    def test_generic_noinfer_type_argument(self):
+        """A value arg binding no type param -> cannot infer type arguments."""
+        errors = check_errors(
+            "holder: record { n: i64 } as { t: Any.generic }\n"
+            "main: function is { h: holder n: 5 }"
+        )
+        assert any(
+            "cannot infer type arguments for generic type 'holder'" in e.msg
+            for e in errors
+        )
+
+    def test_generic_union_unknown_type_argument(self):
+        """An unknown type argument on a generic union subtype is flagged."""
+        errors = check_errors(
+            "MyOption: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOption.some bogus: 1 }"
+        )
+        assert any("unknown type argument 'bogus'" in e.msg for e in errors)
+
+    def test_generic_union_from_label_ok(self):
+        """The union value label 'from' is not flagged as an unknown type arg."""
+        check_ok(
+            "MyOption: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOption.some from: 42 }"
+        )
+
+    def test_generic_value_field_not_unknown_type_arg(self):
+        """A real value field is not mistaken for an unknown type argument."""
+        check_ok(
+            "MyBox: class { val: t } as { t: Any.generic }\n"
+            "main: function is { b: MyBox val: 99 }"
+        )
+
+    def test_generic_elided_positional_type_arg_ok(self):
+        """The first-arg elision form binds the primary type param cleanly."""
+        check_ok("main: function is { x: (List i64) }")
+
     def test_generic_function_multiple_params_inferred(self):
         """Multiple generic params, both inferred from args."""
         program, typing = check_ok(

@@ -6670,6 +6670,7 @@ class TypeChecker:
         # separate named args: explicit generic type args vs from: value vs positional
         from_arg = None
         positional_args = []
+        union_child_names = {name for name, _ in self.typing.children_of(template)}
         for arg in call.arguments:
             if arg.name == "from":
                 from_arg = arg
@@ -6685,6 +6686,15 @@ class TypeChecker:
                     arg_type = self._resolve_typeref_from_operation(arg.valtype)
                 if arg_type:
                     generic_args[arg.name] = arg_type
+            elif arg.name is not None and arg.name not in union_child_names:
+                self._error(
+                    f"unknown type argument '{arg.name}' for generic type "
+                    f"'{template.name}'",
+                    loc=arg.start,
+                    err=ERR.GENERICERROR,
+                    note="valid type parameters: " + ", ".join(template.generic_params),
+                )
+                return None
             else:
                 positional_args.append(arg)
 
@@ -6848,13 +6858,23 @@ class TypeChecker:
 
         elided = self._elided_first_generic_arg(template, call)
         positional_idx = 0
+        seen_type_args: set[str] = set()
         for i, arg in enumerate(call.arguments):
             # the first generic argument's name may be elided (`(List String)`)
             if i == 0 and elided is not None:
                 generic_args[elided[0]] = elided[1]
+                seen_type_args.add(elided[0])
                 continue
             # explicit generic arg: named arg matching a generic param
             if arg.name and arg.name in template.generic_params:
+                if arg.name in seen_type_args:
+                    self._error(
+                        f"duplicate type argument '{arg.name}'",
+                        loc=arg.start,
+                        err=ERR.GENERICERROR,
+                    )
+                    return None
+                seen_type_args.add(arg.name)
                 if arg.name in template.numeric_generic_params:
                     # numeric generic param: resolve as numeric value
                     arg_type = self._resolve_numeric_generic_arg(
@@ -6867,6 +6887,18 @@ class TypeChecker:
                 if arg_type:
                     generic_args[arg.name] = arg_type
                 continue
+
+            # A named arg that is neither a type-param (handled above) nor a
+            # declared field is an unknown type-argument specifier.
+            if arg.name is not None and arg.name not in field_names:
+                self._error(
+                    f"unknown type argument '{arg.name}' for generic type "
+                    f"'{template.name}'",
+                    loc=arg.start,
+                    err=ERR.GENERICERROR,
+                    note="valid type parameters: " + ", ".join(template.generic_params),
+                )
+                return None
 
             # value arg — determine which field it maps to
             if arg.name:
@@ -9493,10 +9525,13 @@ class TypeChecker:
                     # without value-arg processing.
                     return True, mono_type, callee_type
                 mono_create = self.typing.child_of(mono_type, "create")
-                assert (
-                    mono_create is not None
-                    and mono_create.typetype == ZTypeType.FUNCTION
-                ), f"record mono {mono_type.name} missing 'create' constructor"
+                if mono_create is None or mono_create.typetype != ZTypeType.FUNCTION:
+                    self._error(
+                        f"cannot construct '{callee_type.name}'",
+                        loc=call.start,
+                        err=ERR.GENERICERROR,
+                    )
+                    return True, None, callee_type
                 self.typing.call_generic_param_names[call.nodeid] = set(
                     callee_type.generic_params.keys()
                 )
@@ -9586,10 +9621,13 @@ class TypeChecker:
                 if not has_value_args:
                     return True, mono_type, callee_type
                 mono_create = self.typing.child_of(mono_type, "create")
-                assert (
-                    mono_create is not None
-                    and mono_create.typetype == ZTypeType.FUNCTION
-                ), f"class mono {mono_type.name} missing 'create' constructor"
+                if mono_create is None or mono_create.typetype != ZTypeType.FUNCTION:
+                    self._error(
+                        f"cannot construct '{callee_type.name}'",
+                        loc=call.start,
+                        err=ERR.GENERICERROR,
+                    )
+                    return True, None, callee_type
                 # Stash generic-arg names so `_check_call_arguments`
                 # and `_check_missing_call_args` skip the type-arg
                 # specifiers when matching against the create

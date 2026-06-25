@@ -6054,7 +6054,7 @@ firstGenericParamName: function {st: zenv.ZSymbolTable templateId: u64} out Stri
 # param (literals materialise + restamp the bare node). The deduped
 # instance mints with substituted fields plus a synthesized create.
 # 0 when nothing infers.
-inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData tplId: u64} out u64 is {
+inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData tplId: u64 reportMissing: bool} out u64 is {
     tname: typeNameOf st: st tid: tplId
     if tname.length == 0 then {
         return 0
@@ -6098,6 +6098,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
     }
     sfx: "".string
     subs: (Map String value: u64)
+    boundParams: (Set String)
     firstA: 0.u64
     primaryName: firstGenericParamName st: st templateId: tplId
     argIdx: 0.u64
@@ -6132,6 +6133,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
                 if (isNumericLiteralName name: an.stringview) then {
                     sfx.append s: "_"
                     sfx.append s: an.stringview
+                    boundParams.add item: pk.copy
                 } else {
                     ao: lookupTyperef resolved: st.typing.resolved mainName: unitName base: an.stringview
                     match (
@@ -6143,6 +6145,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
                         pk2: pk.copy
                         pv2: ao
                         subs.set key: pk2 value: pv2
+                        boundParams.add item: pk.copy
                         if firstA == 0 then {
                             firstA = ao
                         }
@@ -6184,6 +6187,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
                         gpc: gpv0.string
                         gpv: mv0
                         subs.set key: gpc value: gpv
+                        boundParams.add item: gp0.copy
                         if firstA == 0 then {
                             firstA = mv0
                         }
@@ -6193,6 +6197,34 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
         } else {
         }
         argIdx = argIdx + 1
+    }
+    paramsM: st.reg.genericParamNamesOf typeKey: tk.stringview
+    firstMissing: "".string
+    pmi: 0.u64
+    pmn: paramsM.length
+    for pmi < pmn loop {
+        pmName: paramsM.get i: pmi
+        if (boundParams.has item: pmName.copy) == false then {
+            if firstMissing.length == 0 then {
+                firstMissing = pmName.copy
+            }
+        }
+        pmi = pmi + 1
+    }
+    if firstMissing.length > 0 then {
+        if reportMissing then {
+            emn: "".string
+            ehn: "".string
+            if sfx.length == 0 then {
+                mmsg: "cannot infer type arguments for generic type '\{tname}'".string
+                addErrorH st: st nodeid: call.nodeid lineno: call.lineno colno: call.colno e: zast.err.GENERICERROR msg: mmsg note: emn hint: ehn width: 0.u32
+            } else {
+                fmc: firstMissing.copy
+                mmsg2: "cannot infer generic parameter '\{fmc}' for '\{tname}'".string
+                addErrorH st: st nodeid: call.nodeid lineno: call.lineno colno: call.colno e: zast.err.GENERICERROR msg: mmsg2 note: emn hint: ehn width: 0.u32
+            }
+        }
+        return 0
     }
     if sfx.length == 0 then {
         return 0
@@ -6338,6 +6370,107 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
     st.typing.nodeType.set key: call.nodeid.u64 value: setgt
     st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.CLASS_CREATE
     return mid
+}
+
+# validateGenericTypeArgs -- reject unknown / duplicate generic TYPE arguments
+# at a settled construction site. A named arg matching neither a declared
+# generic param nor a declared field (child) is an unknown type argument; a
+# generic param supplied twice (e.g. an elided leading arg plus an explicit
+# label) is a duplicate. Returns false when an error was emitted.
+validateGenericTypeArgs: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData tplId: u64 allowFrom: bool} out bool is {
+    tname: typeNameOf st: st tid: tplId
+    if tname.length == 0 then {
+        return true
+    }
+    tk: genericTypeKey st: st tid: tplId
+    childNames: (List String)
+    with fiter: st.typing.typeChild.iterate do for tc: fiter loop {
+        if tc.parentTypeId == tplId then {
+            cn0: tc.childName.stringview
+            cn1: cn0.string
+            childNames.append cn1
+        }
+    }
+    primaryName: firstGenericParamName st: st templateId: tplId
+    seen: (Set String)
+    ok: true
+    argIdx: 0.u64
+    aiter: call.arguments.iterate
+    for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            pk: unitLabel o: arg.name
+            if pk.length == 0 when argIdx == 0 then {
+                if primaryName.length > 0 then {
+                    anP: paramTypeBaseName op: arg.operation
+                    pid0: 0.u64
+                    if (isNumericLiteralName name: anP.stringview) == false then {
+                        pao0: lookupTyperef resolved: st.typing.resolved mainName: unitName base: anP.stringview
+                        pid0 = optU64Or o: pao0 d: 0
+                        if pid0 == 0 then {
+                            pid0 = dottedTyperefId st: st op: arg.operation
+                        }
+                    }
+                    if pid0 > 0 then {
+                        pk = primaryName.copy
+                    }
+                }
+            }
+            skipFrom: false
+            if allowFrom when pk.stringview == "from" then {
+                skipFrom = true
+            }
+            if pk.length > 0 when (skipFrom) == false then {
+                isP: st.reg.isGenericParamOf typeKey: tk.stringview name: pk.stringview
+                if isP then {
+                    if (seen.has item: pk.copy) when (allowFrom) == false then {
+                        pkc: pk.copy
+                        m1: "duplicate type argument '\{pkc}'".string
+                        en1: "".string
+                        eh1: "".string
+                        addErrorH st: st nodeid: arg.nodeid lineno: arg.lineno colno: arg.colno e: zast.err.GENERICERROR msg: m1 note: en1 hint: eh1 width: pk.length.u32
+                        ok = false
+                    } else {
+                        seen.add item: pk.copy
+                    }
+                } else {
+                    isField: false
+                    ci: 0.u64
+                    cn: childNames.length
+                    for ci < cn loop {
+                        cnm: childNames.get i: ci
+                        if cnm.stringview == pk.stringview then {
+                            isField = true
+                        }
+                        ci = ci + 1
+                    }
+                    if (isField) == false then {
+                        pkc2: pk.copy
+                        m2: "unknown type argument '\{pkc2}' for generic type '\{tname}'".string
+                        plist: st.reg.genericParamNamesOf typeKey: tk.stringview
+                        note2: "valid type parameters: ".string
+                        pi: 0.u64
+                        pn2: plist.length
+                        for pi < pn2 loop {
+                            if pi > 0 then {
+                                note2.append s: ", "
+                            }
+                            pnm: plist.get i: pi
+                            note2.append s: pnm.stringview
+                            pi = pi + 1
+                        }
+                        eh2: "".string
+                        addErrorH st: st nodeid: arg.nodeid lineno: arg.lineno colno: arg.colno e: zast.err.GENERICERROR msg: m2 note: note2 hint: eh2 width: pk.length.u32
+                        ok = false
+                    }
+                }
+            }
+        } else {
+        }
+        argIdx = argIdx + 1
+    }
+    return ok
 }
 
 # methodReturnOf -- a method FUNCTION type's return type id: the synthesized
@@ -9702,6 +9835,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                             } case none then {}
                         }
                         if isGenT then {
+                            validateGenericTypeArgs st: st unitName: unitName call: call tplId: dtp allowFrom: true
                             # Generic template: infer the mono (mirrors
                             # _infer_generic_union_construction). A NULL-payload
                             # arm with an argument names the type EXPLICITLY
@@ -9842,6 +9976,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                             }
                         }
                         if isGenD then {
+                            validateGenericTypeArgs st: st unitName: unitName call: call tplId: dro allowFrom: false
                             gres2: genericTypeConstruction st: st unitName: unitName call: call tplId: dro
                             if gres2 > 0 then {
                                 return gres2
@@ -10014,6 +10149,8 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             if isGen then {
                 gtt: st.reg.typetypeOf typeId: funcId
                 if gtt != ztypes.ztypetype.FUNCTION then {
+                    errB9: st.typing.errors.length
+                    vok9: validateGenericTypeArgs st: st unitName: unitName call: call tplId: funcId allowFrom: false
                     gres: genericTypeConstruction st: st unitName: unitName call: call tplId: funcId
                     if gres > 0 then {
                         return gres
@@ -10021,7 +10158,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                     # field-bound value args: infer the instance and construct
                     # through the standard ctor flow (mirrors the reference's
                     # generic record/class construction).
-                    gmid: inferGenericConstruction st: st unitName: unitName unitBody: unitBody call: call tplId: funcId
+                    gmid: inferGenericConstruction st: st unitName: unitName unitBody: unitBody call: call tplId: funcId reportMissing: vok9
                     if gmid > 0 then {
                         calid9: nodeId n: call.callable
                         if calid9 > 0 then {
@@ -10038,6 +10175,15 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         setr9: gmid
                         st.typing.nodeType.set key: call.nodeid.u64 value: setr9
                         return gmid
+                    }
+                    # Construction failed AND a type-argument diagnostic was
+                    # emitted (unknown/duplicate by validation, or cannot-infer
+                    # by inferGenericConstruction): resolve to the template so a
+                    # single diagnostic stands without a downstream cascade.
+                    if st.typing.errors.length > errB9 then {
+                        sttE9: funcId
+                        st.typing.nodeType.set key: call.nodeid.u64 value: sttE9
+                        return funcId
                     }
                 }
                 gr: checkGenericCall st: st unitName: unitName unitBody: unitBody call: call funcId: funcId
