@@ -93,55 +93,384 @@ errorMessage: function {e: zast.ErrorData vfs: zvfs.ZVfs fallbackFsno: u32} out 
     return buf9
 }
 
+# isSubcommand -- the first arg is a go-style subcommand (else a uname name).
+isSubcommand: function {name: StringView} out bool is {
+    if name == "build" then { return true }
+    if name == "run" then { return true }
+    if name == "emit" then { return true }
+    if name == "dump" then { return true }
+    if name == "dump-canon" then { return true }
+    if name == "version" then { return true }
+    if name == "help" then { return true }
+    return false
+}
+
+# printUsage -- the multi-line help text (stderr).
+printUsage: function is {
+    io.eprintln "usage: zc [command] <uname> [flags] -- ported zerolang compiler"
+    io.eprintln "commands:"
+    io.eprintln "  build <uname>        compile to a native executable (the default)"
+    io.eprintln "  run <uname> [args]   build, then run forwarding the trailing args"
+    io.eprintln "  emit <uname>         emit C source (-o FILE or stdout)"
+    io.eprintln "  dump <uname>         dump the SQL model"
+    io.eprintln "  dump-canon <uname>   dump the canonical model"
+    io.eprintln "  version             print the version"
+    io.eprintln "flags:"
+    io.eprintln "  --src DIR --system DIR --runtime DIR --full"
+    io.eprintln "  -o OUT --release --cc CC --target TRIPLE --cflags STR --ldflags STR"
+    io.eprintln "  --emit-c FILE --dump-sql FILE --dump-canon FILE   (legacy actions)"
+}
+
+# printVersion -- a version line (stdout).
+printVersion: function is {
+    print "zc (zerolang) 0.1.0\n"
+}
+
+# dirname -- everything before the last '/', or "." when there is none.
+dirname: function {p: StringView} out String is {
+    idxOpt: p.lastIndexOf needle: "/"
+    match (
+        idxOpt
+    ) case some then {
+        r: "".string
+        i: 0.u64
+        for i < idxOpt loop {
+            b: p.byteAt i: i
+            match (
+                b
+            ) case some then {
+                r.appendByte b: b
+            } case none then {}
+            i = i + 1
+        }
+        return r
+    } case none then {
+        return ".".string
+    }
+}
+
+# joinPath -- a/b, or just b when a is empty.
+joinPath: function {a: StringView b: StringView} out String is {
+    r: "".string
+    if a.length > 0 then {
+        r.append a
+        r.append "/".stringview
+    }
+    r.append b
+    return r
+}
+
+# exeRoot -- the install root inferred from the executable: the parent of
+# its bin/ dir (dirname(dirname(exePath))). "" if exePath is unavailable.
+exeRoot: function out String is {
+    er: os.exePath
+    match (
+        er
+    ) case ok then {
+        d1: dirname p: er.stringview
+        d2: dirname p: d1.stringview
+        return d2
+    } case err then {
+        return "".string
+    }
+}
+
+# pickRuntimeUnder -- <root>/lib/runtime if it exists (installed tree),
+# else <root>/src/runtime (dev tree).
+pickRuntimeUnder: function {root: StringView} out String is {
+    libR: joinPath a: root b: "lib/runtime"
+    if (io.exists path: libR.stringview) then {
+        return libR
+    }
+    return (joinPath a: root b: "src/runtime")
+}
+
+# resolveSystemDir -- the stdlib dir by precedence: explicit flag >
+# $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
+resolveSystemDir: function {flagVal: StringView} out String is {
+    if flagVal.length > 0 then {
+        return flagVal.string
+    }
+    ev: os.env key: "ZEROLANG_SYSTEM"
+    match (
+        ev
+    ) case some then {
+        return ev.copy
+    } case none then {}
+    rv: os.env key: "ZEROLANG_ROOT"
+    match (
+        rv
+    ) case some then {
+        return (joinPath a: rv.stringview b: "lib/system")
+    } case none then {}
+    root: exeRoot
+    if root.length > 0 then {
+        cand: joinPath a: root.stringview b: "lib/system"
+        if (io.exists path: cand.stringview) then {
+            return cand
+        }
+    }
+    return "lib/system".string
+}
+
+# resolveRuntimeDir -- the runtime dir by the same precedence; the install
+# and dev trees differ (lib/runtime vs src/runtime), handled by pickRuntimeUnder.
+resolveRuntimeDir: function {flagVal: StringView} out String is {
+    if flagVal.length > 0 then {
+        return flagVal.string
+    }
+    ev: os.env key: "ZEROLANG_RUNTIME"
+    match (
+        ev
+    ) case some then {
+        return ev.copy
+    } case none then {}
+    rv: os.env key: "ZEROLANG_ROOT"
+    match (
+        rv
+    ) case some then {
+        return (pickRuntimeUnder root: rv.stringview)
+    } case none then {}
+    root: exeRoot
+    if root.length > 0 then {
+        rd: pickRuntimeUnder root: root.stringview
+        if (io.exists path: rd.stringview) then {
+            return rd
+        }
+    }
+    return "src/runtime".string
+}
+
+# pickCc -- the C compiler: --cc > $CC > <target>-gcc > cc.
+pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
+    if ccFlag.length > 0 then {
+        return ccFlag.string
+    }
+    if targetTriple.length > 0 then {
+        r: "".string
+        r.append targetTriple
+        r.append "-gcc".stringview
+        return r
+    }
+    ce: os.env key: "CC"
+    match (
+        ce
+    ) case some then {
+        if ce.length > 0 then {
+            return ce.copy
+        }
+    } case none then {}
+    return "cc".string
+}
+
+# tempPath -- $TMPDIR (or /tmp) / zc-<pid>-<uname><ext>.
+tempPath: function {uname: StringView ext: StringView} out String is {
+    base: "/tmp".string
+    te: os.env key: "TMPDIR"
+    match (
+        te
+    ) case some then {
+        if te.length > 0 then {
+            base = te.copy
+        }
+    } case none then {}
+    pid: os.pid
+    ps: "\{pid}"
+    r: "".string
+    r.append base.stringview
+    r.append "/zc-".stringview
+    r.append ps.stringview
+    r.append "-".stringview
+    r.append uname
+    r.append ext
+    return r
+}
+
+# buildExe -- spawn the C compiler to turn the emitted C into an executable.
+# Debug is -O0 -g; --release is -O2. cflags/ldflags split on spaces. Empty
+# out/err paths inherit the terminal so cc diagnostics print live.
+buildExe: function {cc: StringView tempC: StringView exe: StringView release: bool cflags: StringView ldflags: StringView} out i32 is {
+    a: (List String)
+    a.append from: cc.string
+    if release then {
+        a.append from: "-O2".string
+    } else {
+        a.append from: "-O0".string
+        a.append from: "-g".string
+    }
+    a.append from: "-std=c17".string
+    with cf: (cflags.split sep: " ") do for piece: cf loop {
+        if piece.length > 0 then {
+            a.append from: piece.string
+        }
+    }
+    a.append from: "-o".string
+    a.append from: exe.string
+    a.append from: tempC.string
+    with lf: (ldflags.split sep: " ") do for piece2: lf loop {
+        if piece2.length > 0 then {
+            a.append from: piece2.string
+        }
+    }
+    rc: os.spawn argv: a cwd: "" outPath: "" errPath: "" timeoutSecs: 0.i32
+    return rc
+}
+
+# writeOut -- write content to a file path, or stdout when the path is "-".
+writeOut: function {target: StringView content: StringView what: StringView} is {
+    if target == "-" then {
+        print content
+    } else {
+        wr: io.writeText path: target content: content
+        match (
+            wr
+        ) case ok then {} case err then {
+            em: "zc: could not write \{what}"
+            io.eprintln em.stringview
+            os.exit code: 1
+        }
+    }
+}
+
 main: function is {
     argv: os.args
     n: argv.length
     if n < 2 then {
-        io.eprintln "usage: zc <unitname> [--src DIR] [--system DIR] [--dump-sql FILE] [--dump-canon FILE] [--emit-c FILE]"
+        printUsage
         os.exit code: 2
     }
-    unitname: (argv.get i: 1).copy
-    srcdir: ".".string
-    systemdir: "lib/system".string
-    dumpTarget: "-".string
-    canonTarget: "".string
-    emitTarget: "".string
-    runtimeDir: "src/runtime".string
-    full: false
 
-    # parse flags after the unit name; flag values are copied out of the
-    # (non-owning) argv element views.
+    arg1: (argv.get i: 1).copy
+    sub: "".string
+    unitname: "".string
+    if (isSubcommand name: arg1.stringview) then {
+        if (arg1.stringview == "version") then {
+            printVersion
+            os.exit code: 0
+        }
+        if (arg1.stringview == "help") then {
+            printUsage
+            os.exit code: 0
+        }
+        sub = arg1.copy
+    } else if (arg1.stringview == "-h") then {
+        printUsage
+        os.exit code: 0
+    } else if (arg1.stringview == "--help") then {
+        printUsage
+        os.exit code: 0
+    } else {
+        unitname = arg1.copy
+    }
+
+    srcdir: ".".string
+    systemFlag: "".string
+    runtimeFlag: "".string
+    emitTarget: "".string
+    canonTarget: "".string
+    dumpSqlTarget: "".string
+    outPath: "".string
+    full: false
+    release: false
+    ccFlag: "".string
+    targetTriple: "".string
+    cflags: "".string
+    ldflags: "".string
+    progArgs: (List String)
+    inProgArgs: false
+    isRun: sub.stringview == "run"
+
     i: 2.u64
     for i < n loop {
         a: argv.get i: i
-        av: a.stringview
-        if av == "--src" then {
+        if inProgArgs then {
+            progArgs.append from: a.copy
+        } else if (a.stringview == "--") then {
+            inProgArgs = true
+        } else if (a.stringview == "--src") then {
             i = i + 1
             srcdir = (argv.get i: i).copy
-        } else if av == "--system" then {
+        } else if (a.stringview == "--system") then {
             i = i + 1
-            systemdir = (argv.get i: i).copy
-        } else if av == "--dump-sql" then {
+            systemFlag = (argv.get i: i).copy
+        } else if (a.stringview == "--runtime") then {
             i = i + 1
-            dumpTarget = (argv.get i: i).copy
-        } else if av == "--dump-canon" then {
-            i = i + 1
-            canonTarget = (argv.get i: i).copy
-        } else if av == "--emit-c" then {
+            runtimeFlag = (argv.get i: i).copy
+        } else if (a.stringview == "--emit-c") then {
             i = i + 1
             emitTarget = (argv.get i: i).copy
-        } else if av == "--runtime" then {
+        } else if (a.stringview == "--dump-sql") then {
             i = i + 1
-            runtimeDir = (argv.get i: i).copy
-        } else if av == "--full" then {
+            dumpSqlTarget = (argv.get i: i).copy
+        } else if (a.stringview == "--dump-canon") then {
+            i = i + 1
+            canonTarget = (argv.get i: i).copy
+        } else if (a.stringview == "-o") then {
+            i = i + 1
+            outPath = (argv.get i: i).copy
+        } else if (a.stringview == "--cc") then {
+            i = i + 1
+            ccFlag = (argv.get i: i).copy
+        } else if (a.stringview == "--target") then {
+            i = i + 1
+            targetTriple = (argv.get i: i).copy
+        } else if (a.stringview == "--cflags") then {
+            i = i + 1
+            cflags = (argv.get i: i).copy
+        } else if (a.stringview == "--ldflags") then {
+            i = i + 1
+            ldflags = (argv.get i: i).copy
+        } else if (a.stringview == "--full") then {
             full = true
+        } else if (a.stringview == "--release") then {
+            release = true
+        } else if unitname.length == 0 then {
+            unitname = a.copy
+        } else if isRun then {
+            progArgs.append from: a.copy
+            inProgArgs = true
         }
         i = i + 1
     }
 
-    # stdlib + source VFS: source is searched before the system library
-    # (mirrors zc.py's register/bind sequence). registerNull seeds the
-    # bare root the binds replace.
+    if unitname.length == 0 then {
+        io.eprintln "zc: no unit specified"
+        os.exit code: 2
+    }
+
+    systemdir: resolveSystemDir flagVal: systemFlag.stringview
+    runtimeDir: resolveRuntimeDir flagVal: runtimeFlag.stringview
+
+    isEmit: false
+    isDumpSql: false
+    isDumpCanon: false
+    if sub.stringview == "emit" then {
+        isEmit = true
+    } else if sub.stringview == "dump" then {
+        isDumpSql = true
+    } else if sub.stringview == "dump-canon" then {
+        isDumpCanon = true
+    } else if sub.length == 0 then {
+        if emitTarget.length > 0 then {
+            isEmit = true
+        } else if canonTarget.length > 0 then {
+            isDumpCanon = true
+        } else if dumpSqlTarget.length > 0 then {
+            isDumpSql = true
+        }
+    }
+    isDump: isDumpSql
+    if isDumpCanon then {
+        isDump = true
+    }
+    effFull: full
+    if isEmit then {
+        effFull = true
+    }
+    if (isEmit == false) when (isDump == false) then {
+        effFull = true
+    }
+
     vfs: zvfs.ZVfs providers: (List zvfs.ProviderBox) entrytable: (zvfs.DentryTable entries: (List zvfs.dentry)) file_names: (List String) walk_cache: (Map String value: u32) rootid: 0
     nullRoot: vfs.registerNull
     systemid: vfs.registerFS rootpath: systemdir.copy parentpath: "".string
@@ -163,15 +492,6 @@ main: function is {
         os.exit code: 1
     } else {
         reg: ztypes.newRegistry
-        # C emission consumes body-walk stamps, so --emit-c implies the
-        # full typecheck.
-        effFull: full
-        if emitTarget.length > 0 then {
-            effFull = true
-        }
-        if canonTarget.length > 0 then {
-            effFull = true
-        }
         st: ztypecheck.typecheck program: prog reg: reg full: effFull
         nerr: st.typing.errors.length
         if nerr > 0 then {
@@ -187,44 +507,68 @@ main: function is {
             }
             os.exit code: 1
         }
-        if emitTarget.length > 0 then {
+        if isEmit then {
             csrc: zemitterc.emitC program: prog symtab: st runtimeDir: runtimeDir.stringview
-            if emitTarget.stringview == "-" then {
-                print csrc.stringview
-            } else {
-                wr2: io.writeText path: emitTarget.stringview content: csrc.stringview
-                match (
-                    wr2
-                ) case ok then {} case err then {
-                    io.eprintln "zc: could not write C output"
-                    os.exit code: 1
-                }
+            tgt: emitTarget.copy
+            if tgt.length == 0 then {
+                tgt = outPath.copy
             }
-        } else if canonTarget.length > 0 then {
+            if tgt.length == 0 then {
+                tgt = "-".string
+            }
+            writeOut target: tgt.stringview content: csrc.stringview what: "C output"
+        } else if isDumpCanon then {
             canon: zsqldump.dumpCanon program: prog symtab: st
-            if canonTarget.stringview == "-" then {
-                print canon.stringview
+            tgt2: canonTarget.copy
+            if tgt2.length == 0 then {
+                tgt2 = "-".string
+            }
+            writeOut target: tgt2.stringview content: canon.stringview what: "canonical dump"
+        } else if isDumpSql then {
+            sql: zsqldump.dumpSql program: prog vfs: vfs symtab: st
+            tgt3: dumpSqlTarget.copy
+            if tgt3.length == 0 then {
+                tgt3 = "-".string
+            }
+            writeOut target: tgt3.stringview content: sql.stringview what: "SQL dump"
+        } else {
+            csrc2: zemitterc.emitC program: prog symtab: st runtimeDir: runtimeDir.stringview
+            tmpc: tempPath uname: unitname.stringview ext: ".c"
+            wrc: io.writeText path: tmpc.stringview content: csrc2.stringview
+            match (
+                wrc
+            ) case ok then {} case err then {
+                io.eprintln "zc: could not write temporary C"
+                os.exit code: 1
+            }
+            cc: pickCc ccFlag: ccFlag.stringview targetTriple: targetTriple.stringview
+            exe: "".string
+            if isRun then {
+                exe = tempPath uname: unitname.stringview ext: ".bin"
             } else {
-                wrc: io.writeText path: canonTarget.stringview content: canon.stringview
-                match (
-                    wrc
-                ) case ok then {} case err then {
-                    io.eprintln "zc: could not write canonical dump"
-                    os.exit code: 1
+                if outPath.length > 0 then {
+                    exe = outPath.copy
+                } else {
+                    e2: "./".string
+                    e2.append unitname.stringview
+                    if (targetTriple.stringview.contains needle: "windows") then {
+                        e2.append ".exe".stringview
+                    }
+                    exe = e2
                 }
             }
-        } else {
-            sql: zsqldump.dumpSql program: prog vfs: vfs symtab: st
-            if dumpTarget.stringview == "-" then {
-                print sql.stringview
-            } else {
-                wr: io.writeText path: dumpTarget.stringview content: sql.stringview
-                match (
-                    wr
-                ) case ok then {} case err then {
-                    io.eprintln "zc: could not write SQL dump"
-                    os.exit code: 1
+            rc: buildExe cc: cc.stringview tempC: tmpc.stringview exe: exe.stringview release: release cflags: cflags.stringview ldflags: ldflags.stringview
+            if rc != 0.i32 then {
+                os.exit code: rc
+            }
+            if isRun then {
+                sargs: (List String)
+                sargs.append from: exe.copy
+                with pit: progArgs.iterate do for pe: pit loop {
+                    sargs.append from: pe.copy
                 }
+                prc: os.spawn argv: sargs cwd: "" outPath: "" errPath: "" timeoutSecs: 0.i32
+                os.exit code: prc
             }
         }
     }
