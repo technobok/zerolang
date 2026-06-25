@@ -83,6 +83,7 @@ Accessed via qualified names only -- #~"os.args", #~"os.env
 
 #ul:
   [#*: #> to=cwd: #b:"os.cwd" -- #~"function out (Result t: String e: IoError)"]
+  [#*: #> to=exe-path: #b:"os.exePath" -- #~"function out (Result t: String e: IoError)"]
   [#*: #> to=set-cwd: #b:"os.setCwd" -- #~"function {Path: StringView} out (Result t: null e: IoError)"]
 
 #p: #b:"Process identity"
@@ -209,6 +210,19 @@ each value.
 Current working directory as an absolute path. Typically
 succeeds; errors only when the cwd inode has been unlinked or
 permission to resolve it has been revoked.
+
+
+#--: exe_path
+
+#code language=zerolang: """
+  exePath: function out (Result t: String e: IoError) is native
+"""
+
+Absolute path of the running executable. On Linux this reads
+#~"/proc/self/exe"; on macOS, #~"_NSGetExecutablePath". Lets a
+program locate its own install tree -- the compiler uses it to find
+its bundled stdlib and runtime when run from an arbitrary directory.
+Errors only if the platform link read fails.
 
 
 #--: set_cwd
@@ -352,10 +366,13 @@ success / failure so RAII cleanup fires.
 """
 
 Fork and #~"execvp" #~"argv" as a child process; #~"argv[0]" is
-resolved via #~"PATH". The child's stdin is #~"/dev/null"; its
-stdout is redirected to #~"outPath" and stderr to #~"errPath"
-(each opened #~"O_WRONLY|O_CREAT|O_TRUNC" -- pass #~"/dev/null"
-to discard a stream). A non-empty #~"cwd" #~"chdir"s the child.
+resolved via #~"PATH". stdout is redirected to #~"outPath" and
+stderr to #~"errPath" (each opened #~"O_WRONLY|O_CREAT|O_TRUNC" --
+pass #~"/dev/null" to discard a stream). An #b:"empty" #~"outPath"
+or #~"errPath" inherits the parent's stdout / stderr instead; when
+#b:"both" are empty the child also inherits stdin -- a live terminal,
+as used by #~"zc run" -- otherwise stdin is #~"/dev/null". A
+non-empty #~"cwd" #~"chdir"s the child.
 The redirection files are opened in the parent #b:"before" the
 fork, so the child's #~"chdir" cannot change their resolution.
 

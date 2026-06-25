@@ -137,11 +137,12 @@ Verify each against HEAD before scheduling (sources are point-in-time):
   compares these in-memory and is the right tool. (A main-unit-only filtered canon
   would be small but diverges from the oracle's widened filter; revisit only if a
   Python-free `typed_nodes` gate is specifically needed.)
-- **CLI parity (`zc.z` vs `zc.py`)** — `zc.z` lacks `-v/--verbose` and
-  `--no-color`; uses `--full` where `zc.py` uses `--full-typecheck`; defaults to
-  SQL-dump where `zc.py` defaults to C-emit (`-o`, default `unitname.c`). Diagnostic
-  conveniences, not correctness; align the names/defaults if `zc.z` becomes the
-  primary CLI.
+- **CLI parity (`zc.z` vs `zc.py`)** — RESOLVED. `zc.z` is now the primary CLI: a
+  self-locating, go-style tool (`build`/`run`/`emit`/`dump`/`dump-canon` subcommands;
+  bare `zc <unit>` builds a native executable; build/run via the system C compiler;
+  `--target` cross-compile plumbing) with the legacy `--emit-c`/`--dump-sql`/
+  `--dump-canon`/`--src`/`--system`/`--runtime`/`--full` flags preserved so the
+  harness is unchanged. See `doc/zc.pdoc`. (`zc.py` keeps its minimal CLI as compiler0.)
 
 ## 6. Suggested sequencing
 

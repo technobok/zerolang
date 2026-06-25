@@ -100,38 +100,51 @@ v1 numeric types: `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f32` `f64`
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
 - gcc or clang
 
+### Build the compiler
+
+Build the self-hosted compiler once (it bootstraps via the Python
+reference and is cached in `bin/`, git-ignored):
+
+```bash
+make zc        # -> ./bin/zc
+```
+
 ### Compile and Run
 
-From the `examples/` directory:
+`zc` builds a native executable by default and self-locates its standard
+library, so from the repo:
 
 ```bash
-# Compile a zerolang program to C
-uv run python ../src/zc.py hello
+# Build and run in one step (trailing args are forwarded to the program)
+./bin/zc run hello --src examples
 
-# Compile the generated C to a binary
-gcc -Wall -Wno-unused-function -o hello hello.c
+# Build an executable, then run it
+./bin/zc build hello --src examples -o hello && ./hello
 
-# Run
-./hello
+# Emit C only
+./bin/zc emit hello --src examples -o hello.c
 ```
 
-From anywhere, specify source and system directories:
+The Python reference compiler is still available for bootstrapping and
+diagnostics:
 
 ```bash
-uv run python src/zc.py hello --src examples/ --system lib/system/
-gcc -Wall -Wno-unused-function -o hello hello.c
+uv run python src/zc.py hello --src examples/ -o hello.c
 ```
 
-### Compiler Options
+### Install
 
-```
-usage: zc.py [-h] [--system SYSTEM] [--src SRC] [--full-typecheck] unitname
+Install a self-contained tree plus a `zc` on your `PATH`:
 
-  unitname          Name of the unit to compile
-  --system SYSTEM   Path to the system directory (default: <project_root>/lib/system)
-  --src SRC         Path to the user source directory (default: current directory)
-  --full-typecheck  Type-check all definitions, not just those reachable from main
+```bash
+make install                                  # ~/.local/lib/zerolang + ~/.local/bin/zc
+make install ROOT=/opt/zerolang BINDIR=/usr/local/bin
 ```
+
+The installed `zc` finds its stdlib and runtime from any directory (it
+resolves its own executable path). See [`doc/zc.pdoc`](doc/zc.pdoc) for the
+full CLI: subcommands (`build`/`run`/`emit`/`dump`), flags, the
+tree-resolution precedence, environment variables, and cross-compilation.
 
 ## Example Programs
 

@@ -32,120 +32,151 @@
 #--: Synopsis
 
 #code: """
-  zc [options] unitname
+  zc [command] <unit> [flags]
   """
 
 
 #--: Description
 
-#~"zc" is the zerolang compiler. It compiles zerolang source files
-(#~".z") into C source code (#~".c"), which can then be compiled with
-a standard C compiler (gcc or clang) to produce a native executable.
+#~"zc" is the self-hosted zerolang compiler. By default it compiles a
+zerolang unit (#~".z") and links it into a native executable with the
+system C compiler. It can also build-and-run a program, emit C, dump the
+compiler's internal model, or cross-compile.
 
-The compiler operates on #_*"units" — each source file defines a unit,
-and the compiler follows dependencies between units automatically.
-Compilation starts from the named unit and discovers all referenced
-units through the Virtual File System (VFS).
+The compiler operates on #_*"units" — each source file defines a unit, and
+dependencies are discovered automatically through the Virtual File System
+(VFS), which mounts the user source directory over the system library so
+user units shadow system units of the same name.
 
-The VFS presents a unified source tree to the compiler by mounting the
-user source directory over the system library directory. User units are
-found first, shadowing any system units with the same name.
+#~"zc" is #b:"self-locating": run from any directory, it finds its bundled
+standard library and runtime relative to its own executable (see
+#> to=tree-resolution: Tree resolution), so ordinary use needs no flags.
 
 
-#--: Arguments
+#--: Commands
 
-#---: unitname (required)
+The first argument is a command when it is one of the names below;
+otherwise it is treated as a unit name and #~"zc" builds it (the default).
 
-The name of the unit to compile. This must be a valid zerolang unit name:
-lowercase ASCII letters and digits only. The compiler will look for a file
-named #~"unitname.z" in the source directory.
+#ul:
+  [#*: #b:"build" #~"<unit>" — compile to a native executable; output is
+    #~"-o OUT" or #~"./<unit>".]
+  [#*: #b:"run" #~"<unit> [args...]" — build to a temporary file, then run
+    it with an inherited terminal, forwarding the trailing #~"args" and
+    propagating the program's exit code.]
+  [#*: #b:"emit" #~"<unit>" — emit C source to #~"-o OUT" (or stdout).]
+  [#*: #b:"dump" #~"<unit>" — write the SQL model (#~"-o" or stdout).]
+  [#*: #b:"dump-canon" #~"<unit>" — write the canonical (id-normalized) model.]
+  [#*: #b:"version" — print the version.]
+  [#*: #b:"help" — print usage.]
 
-#code: """
-  zc hello --src examples
-  """
-
-#---: -o FILE, --output FILE
-
-Specify the output C filename. By default the output file is named
-#~"unitname.c" in the current directory.
-
-#code: """
-  zc hello --src examples -o build/hello.c
-  """
-
-#---: --src DIR
-
-Path to the user source directory. Defaults to the current working
-directory. The compiler searches this directory for #~".z" source files.
+For #~"run", flags before the unit configure the build; everything after
+the unit (or after a #~"--" separator) is passed to the program.
 
 #code: """
-  zc myprogram --src /path/to/project
+  zc hello                      # build ./hello
+  zc run hello arg1 arg2        # build + run, forwarding arg1 arg2
+  zc build hello --release -o hello
+  zc emit hello -o hello.c
   """
 
-#---: --system DIR
 
-Path to the system library directory. By default this is auto-detected
-relative to the compiler installation. The system library provides built-in
-types (#~"i64", #~"f64", #~"String", etc.), operators, and standard types
-(#~"Option", #~"array", #~"List", #~"Map").
+#--: Flags
 
-This flag is rarely needed — use it only when developing the compiler
-itself or testing against an alternate standard library.
+#---: Shared flags
 
-#---: -v, --verbose
+#ul:
+  [#*: #~"--src DIR" — user source directory (default: the current directory).]
+  [#*: #~"--system DIR" — system library directory (default: self-located).]
+  [#*: #~"--runtime DIR" — C runtime fragment directory (default: self-located).]
+  [#*: #~"--full" — type-check every definition, not just those reachable
+    from #~"main".]
+  [#*: #~"-o OUT" — output path (the executable for #~"build", the C file
+    for #~"emit").]
+  [#*: #~"--release" — optimize (#~"-O2"); the default is a debug build
+    (#~"-O0 -g").]
+  [#*: #~"--cc CC" — the C compiler to invoke.]
+  [#*: #~"--target TRIPLE" — cross-compile (see
+    #> to=cross-compilation: Cross-compilation).]
+  [#*: #~"--cflags STR" / #~"--ldflags STR" — extra compiler / linker flags,
+    split on spaces.]
 
-Enable verbose output. When active, the compiler prints compilation
-progress, settings, and timing information to stderr. This is useful
-for debugging compilation issues or understanding which files are being
-processed.
+#---: Legacy action flags
+
+These predate the subcommands and still work, so existing tooling keeps
+running unchanged. Each selects its action directly — a bare #~"zc <unit>"
+with one of these does that action instead of building:
+
+#ul:
+  [#*: #~"--emit-c FILE" — emit C to #~"FILE" (or #~"-" for stdout).]
+  [#*: #~"--dump-sql FILE" — write the SQL model.]
+  [#*: #~"--dump-canon FILE" — write the canonical model.]
+
+
+#--: Tree resolution
+
+#~"zc" locates its system library and runtime by this precedence, first
+match wins:
+
+#ul:
+  [#*: an explicit #~"--system" / #~"--runtime" flag;]
+  [#*: #~"$ZEROLANG_SYSTEM" / #~"$ZEROLANG_RUNTIME";]
+  [#*: #~"$ZEROLANG_ROOT" (a whole tree: #~"$ZEROLANG_ROOT/lib/system" and
+    #~"lib/runtime");]
+  [#*: the executable's own location — #~"os.exePath" gives the real binary
+    path (resolving a #~"bin/zc" symlink) and the root is its grandparent;
+    #~"<root>/lib/system" plus #~"<root>/lib/runtime", falling back to
+    #~"<root>/src/runtime" so a dev checkout works too;]
+  [#*: the current directory (#~"lib/system", #~"src/runtime") — the final
+    fallback.]
+
+#~"--src" (user code) always defaults to the current directory, never the
+install tree. The C compiler is chosen as #~"--cc" > #~"--target"-derived
+(#~"<triple>-gcc") > #~"$CC" > #~"cc".
+
+
+#--: Building and running
+
+#b:"build" type-checks the unit, emits self-contained C to a temporary
+file, and invokes the C compiler to produce an executable. Because the
+runtime is inlined at emit time, the single #~".c" needs no extra include
+paths. The debug default is #~"-O0 -g"; #~"--release" is #~"-O2".
+
+#b:"run" builds the same way to a temporary location, then spawns the
+executable with the parent's stdin / stdout / stderr (a live terminal),
+forwards the trailing program arguments, and exits with the program's own
+exit code.
+
+
+#--: Cross-compilation
+
+#~"--target TRIPLE" selects a cross compiler: when #~"--cc" is not given,
+the compiler name is #~"<triple>-gcc" (for example
+#~"x86_64-w64-mingw32-gcc"). The executable name gains a #~".exe" suffix
+for #~"*windows*" triples.
+
+#b:"Caveat:" cross-compilation is wiring only. Programs that use POSIX-only
+runtime natives (#~"os.spawn", #~"io" file operations, directory walks)
+will not link for Windows until those natives gain a Win32 backend — a
+follow-on. Core, POSIX-free programs cross-build where the cross #~"cc" is
+installed.
+
+
+#--: Installation
+
+#~"make install" builds #~"bin/zc" and copies a self-contained,
+GOROOT-style tree to #~"ROOT" (default #~"~/.local/lib/zerolang"),
+symlinking #~"BINDIR/zc" (default #~"~/.local/bin/zc") to it:
 
 #code: """
-  zc hello --src examples -v
+  make install
+  make install ROOT=/opt/zerolang BINDIR=/usr/local/bin
   """
 
-Example verbose output:
-
-#code: """
-  source directory: examples
-  system directory: /path/to/lib/system
-  output file: hello.c
-  parsing hello...
-    compiling: core.z
-    resolving dependency: system
-    compiling: system.z
-    compiling: hello.z
-  type checking...
-  type check passed
-  emitting C...
-  written hello.c
-  completed in 0.042s
-  """
-
-#---: --full-typecheck
-
-Type-check all definitions in all units, not just those reachable from
-#~"main". By default the compiler is demand-driven: it only type-checks
-definitions that are actually used. This flag forces a complete check,
-which is useful for library development or finding unused dead code.
-
-#---: --dump-sql FILE
-
-Write a SQL dump of the compiler's internal state to the specified file.
-The SQL is SQLite-compatible and includes tables for files, tokens, AST
-nodes, types, and emitted C lines. Use #~"-" to write to stdout.
-
-This is a diagnostic tool for compiler development and debugging.
-
-#code: """
-  zc hello --src examples --dump-sql hello.sql
-  sqlite3 hello.sql "SELECT name, cname FROM types WHERE cname IS NOT NULL"
-  """
-
-#---: --no-color
-
-Disable ANSI color codes in error messages. By default, color is enabled
-when stderr is a terminal (TTY) and disabled when piped or redirected.
-Use this flag to force plain text output in all cases.
+The tree contains #~"bin/zc", #~"lib/system", #~"lib/runtime" (copied from
+#~"src/runtime"), #~"doc", and #~"src". Because #~"os.exePath" resolves the
+symlink to the real binary, the installed #~"zc" finds its stdlib and
+runtime from any working directory.
 
 
 #--: Exit Codes
@@ -156,6 +187,8 @@ Use this flag to force plain text output in all cases.
     parsing or type checking. Error messages are written to stderr.]
   [#*: #~"2" — Usage error. Invalid command-line arguments, invalid unit
     name, or invalid directory paths.]
+  [#*: other — for #~"build" / #~"run", a non-zero exit from the C compiler
+    or from the program itself is propagated unchanged.]
 
 
 #--: Error Format
@@ -226,54 +259,55 @@ An error count summary is printed at the end:
   """
 
 
-#--: Compiling the Output
+#--: Compiling Emitted C
 
-The compiler produces a standalone C source file. To compile it into an
-executable, use a C compiler:
+#~"zc build" and #~"zc run" invoke the C compiler for you. If you instead
+#~"emit" C, the result is a standalone file that compiles with any C17
+compiler — the runtime is inlined, so no extra include paths are needed:
 
 #code: """
-  zc hello --src examples
-  gcc -Wall -Wno-unused-function -o hello hello.c
+  zc emit hello --src examples -o hello.c
+  gcc -std=c17 -Wno-unused-function -o hello hello.c
   ./hello
   """
 
-For development and testing, compile with address sanitizer to detect
-memory errors:
+For development, compile emitted C with the sanitizers to catch memory
+errors:
 
 #code: """
-  gcc -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wno-unused-function -o hello hello.c
+  gcc -std=c17 -fsanitize=address,undefined -Wno-unused-function -o hello hello.c
   ./hello
   """
 
 
 #--: Examples
 
-Compile a simple program:
+Build and run a program:
 
 #code: """
-  zc hello --src examples
+  zc run hello --src examples
   """
 
-Compile with verbose output and custom output path:
+Build a release executable at a chosen path:
 
 #code: """
-  zc myapp --src src -o build/myapp.c -v
+  zc build myapp --src src --release -o build/myapp
   """
 
-Compile and run:
+Emit C and compile it yourself:
 
 #code: """
-  zc hello --src examples && gcc -o hello hello.c && ./hello
+  zc emit hello --src examples -o hello.c && gcc -std=c17 -o hello hello.c && ./hello
   """
 
 Generate SQL diagnostics:
 
 #code: """
-  zc hello --src examples --dump-sql - | sqlite3 :memory:
+  zc dump hello --src examples | sqlite3 :memory:
   """
 
-Full type-check of a library (not just reachable from main):
+Full type-check of a library (not just what is reachable from main):
 
 #code: """
-  zc mylib --src lib --full-typecheck
+  zc dump mylib --src lib --full
   """
