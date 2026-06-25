@@ -29,6 +29,8 @@ SYS="$ROOT/lib/system"
 ERRORS="$ROOT/tests/fixtures/errors"
 RUNGOLD="$ROOT/tests/fixtures/run_golden"
 RUNCASES="$ROOT/tests/fixtures/run_cases.txt"
+DUMPCASES="$ROOT/tests/fixtures/dump_cases.txt"
+DUMPGOLD="$ROOT/tests/fixtures/dump_golden"
 CF=(-std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter
     -Werror=implicit-function-declaration -Werror=implicit-int
     -Werror=int-conversion -Werror=incompatible-pointer-types)
@@ -160,9 +162,32 @@ do_error() {
   done
 }
 
+######################### DUMP (canonical state) cases #########################
+# Python-free compiler-state regression gate: the PORT emits a canonical
+# (id-normalized) dump (--full --dump-canon) compared to a committed golden.
+# Goldens are PORT-sourced (the reference has no --dump-canon flag); the port's
+# dump correctness is vouched for by the pytest test_dumpsql_z differential.
+do_dump() {
+  [ -f "$DUMPCASES" ] || return
+  mkdir -p "$DUMPGOLD"
+  local name dir gold ec matches
+  while read -r name dir; do
+    [ -z "$name" ] && continue
+    if [ "$MODE" = update ]; then
+      "$ZC" "$name" --src "$ROOT/$dir" --system "$SYS" --full --dump-canon - > "$DUMPGOLD/$name.canon" 2>/dev/null
+      echo "updated dump $name ($(wc -l < "$DUMPGOLD/$name.canon") lines)"; continue
+    fi
+    "$ZC" "$name" --src "$ROOT/$dir" --system "$SYS" --full --dump-canon - > "$D/$name.canon" 2>/dev/null; ec=$?
+    gold="$DUMPGOLD/$name.canon"; matches=0
+    [ "$ec" = 0 ] && [ -f "$gold" ] && [ "$(cat "$D/$name.canon")" = "$(cat "$gold")" ] && matches=1
+    if [ "$matches" = 1 ]; then pass=$((pass+1)); else echo "FAIL(dump) $name (exit=$ec)"; fails=$((fails+1)); fi
+  done < "$DUMPCASES"
+}
+
 do_run
 do_leak
 do_error
+do_dump
 
 echo "----"
 echo "pass=$pass leak-clean=$leakclean xfail=$xfail xleak=$xleak xnobuild=$xnobuild skip=$skip fails=$fails"

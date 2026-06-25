@@ -628,6 +628,138 @@ ZDumper: class {
         }
     }
 
+    # --- canonical (id-normalized) renderers for the dump-canon gate ---
+    # Each emits a table's id-independent projection (PK ids omitted, FK ids
+    # resolved to names, id-embedding cnames dropped), rows sorted, under a
+    # "## <table>" header; mirrors the column choices in test_dumpsql_z.py.
+    emitSection: function {:this title: StringView rows: List String} is {
+        rows.sort
+        this.acc.append s: "## ".stringview
+        this.acc.append s: title
+        this.acc.append s: "\n".stringview
+        ri: 0.u64
+        rn: rows.length
+        for ri < rn loop {
+            rc: (rows.get i: ri).copy
+            this.acc.append s: rc.stringview
+            this.acc.append s: "\n".stringview
+            ri = ri + 1
+        }
+    }
+
+    appendUnitsCanon: function {:this program: Node} is {
+        rows: (List String)
+        match (
+            program
+        ) case program then {
+            mn: program.mainUnitName.stringview
+            uiter: program.units.iterate
+            for u: uiter loop {
+                match (
+                    u
+                ) case namedoperation then {
+                    uname: optLabel o: u.name
+                    isMain: uname.stringview == mn
+                    unameSql: sqlStr s: uname.stringview
+                    isMainStr: boolNum b: isMain
+                    line: "\{unameSql} | \{isMainStr}"
+                    rows.append line
+                } else {}
+            }
+        } else {}
+        this.emitSection title: "unit".stringview rows: rows
+    }
+
+    appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        n: st.reg.nextTypeId
+        tid: 0.u64
+        for tid < n loop {
+            zt: st.reg.typeById.get key: tid
+            match (
+                zt
+            ) case some then {
+                du: st.typing.definedInUnit.get key: tid
+                inUnit: false
+                match (
+                    du
+                ) case some then {
+                    if du.stringview == unm then {
+                        inUnit = true
+                    }
+                } case none then {}
+                if inUnit then {
+                    nameSql: sqlStr s: zt.name.stringview
+                    ttName: ztypes.ztypetypeName t: zt.typetype
+                    ttSql: sqlStr s: ttName.stringview
+                    valSql: optBoolSql o: zt.isValtype
+                    genSql: boolNum b: zt.isgeneric
+                    ndSql: optStrSome o: zt.destructorName
+                    heapSql: boolNum b: zt.isHeapAllocated
+                    line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql}"
+                    rows.append line
+                }
+            } case none then {}
+            tid = tid + 1
+        }
+        this.emitSection title: "types".stringview rows: rows
+    }
+
+    appendTypeChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        citer: st.typing.typeChild.iterate
+        for crow: citer loop {
+            pdu: st.typing.definedInUnit.get key: crow.parentTypeId
+            inUnit: false
+            match (
+                pdu
+            ) case some then {
+                if pdu.stringview == unm then {
+                    inUnit = true
+                }
+            } case none then {}
+            if inUnit then {
+                pName: canonTypeName reg: st.reg tid: crow.parentTypeId
+                cTid: optU64Or0 o: (st.typing.childTypeById.get key: crow.childNameId)
+                cName: canonTypeName reg: st.reg tid: cTid
+                pSql: sqlStr s: pName.stringview
+                cnSql: sqlStr s: crow.childName.stringview
+                ctSql: sqlStr s: cName.stringview
+                poSql: paramOwnSql o: (st.typing.childOwnership.get key: crow.childNameId)
+                line: "\{pSql} | \{cnSql} | \{ctSql} | \{crow.position} | \{poSql}"
+                rows.append line
+            }
+        }
+        this.emitSection title: "type_children".stringview rows: rows
+    }
+
+    appendConformanceCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        citer: st.typing.conformance.iterate
+        for cf: citer loop {
+            idu: st.typing.definedInUnit.get key: cf.implTypeId
+            inUnit: false
+            match (
+                idu
+            ) case some then {
+                if idu.stringview == unm then {
+                    inUnit = true
+                }
+            } case none then {}
+            if inUnit then {
+                iName: canonTypeName reg: st.reg tid: cf.implTypeId
+                sName: canonTypeName reg: st.reg tid: cf.specTypeId
+                iSql: sqlStr s: iName.stringview
+                sSql: sqlStr s: sName.stringview
+                lblSql: sqlStr s: cf.label.stringview
+                facetSql: boolNum b: cf.isFacet
+                line: "\{iSql} | \{sSql} | \{lblSql} | \{facetSql}"
+                rows.append line
+            }
+        }
+        this.emitSection title: "conformance".stringview rows: rows
+    }
+
 }
 
 # walkExprStamps -- mirror the reference dump's node-type read (_node_ztype):
@@ -844,5 +976,55 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     d.appendTypedNodes typing: symtab.typing
     d.appendConformance typing: symtab.typing
     d.appendSymbolTable st: symtab
+    return d.acc.copy
+}
+
+# optU64Or0 -- an optionval u64's value, or 0 when absent.
+optU64Or0: function {o: optionval u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        return o
+    } case none then {
+        return 0
+    }
+}
+
+# canonTypeName -- a type id's registered name, or "?" when unregistered.
+# Renders foreign-key ids as stable names in the canonical dump.
+canonTypeName: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
+    zt: reg.typeById.get key: tid
+    match (
+        zt
+    ) case some then {
+        return zt.name.copy
+    } case none then {
+        return "?".string
+    }
+}
+
+# dumpCanon -- a canonical, id-normalized rendering of the typecheck state
+# (unit, types, type_children, conformance) for the Python-free dump-canon
+# regression gate. PK ids are omitted, FK ids resolved to names, id-embedding
+# cnames dropped, rows sorted. Parse-level tables (files / ast_nodes) are
+# covered by the lexer / parser goldens and omitted here.
+# mainUnitNameOf -- the program's main unit name as an owned String.
+mainUnitNameOf: function {program: Node} out String is {
+    match (
+        program
+    ) case program then {
+        return program.mainUnitName.copy
+    } else {
+        return "".string
+    }
+}
+
+dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
+    mu: mainUnitNameOf program: program
+    d: ZDumper acc: "".string
+    d.appendUnitsCanon program: program
+    d.appendTypesCanon unm: mu.stringview st: symtab
+    d.appendTypeChildrenCanon unm: mu.stringview st: symtab
+    d.appendConformanceCanon unm: mu.stringview st: symtab
     return d.acc.copy
 }

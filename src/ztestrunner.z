@@ -74,6 +74,21 @@ zcArgv: function {zc: StringView name: StringView srcdir: StringView sys: String
     return a
 }
 
+# dumpArgv -- the canonical-state dump command argv (--full --dump-canon -).
+dumpArgv: function {zc: StringView name: StringView srcdir: StringView sys: StringView} out (List String) is {
+    a: (List String)
+    a.append from: zc.string
+    a.append from: name.string
+    a.append from: "--src".string
+    a.append from: srcdir.string
+    a.append from: "--system".string
+    a.append from: sys.string
+    a.append from: "--full".string
+    a.append from: "--dump-canon".string
+    a.append from: "-".string
+    return a
+}
+
 # gccArgv -- the C build command argv; `asan` selects the ASan flags
 # (-fsanitize=address -g -O0 -std=c17 -w) over the strict CF set.
 gccArgv: function {cc: StringView bin: StringView csrc: StringView asan: bool} out (List String) is {
@@ -161,6 +176,8 @@ main: function is {
     runcases: "\{root.stringview}/tests/fixtures/run_cases.txt"
     examplesDir: "\{root.stringview}/examples"
     corpusDir: "\{root.stringview}/tests/fixtures/emitc_corpus"
+    dumpcases: "\{root.stringview}/tests/fixtures/dump_cases.txt"
+    dumpgold: "\{root.stringview}/tests/fixtures/dump_golden"
     mypid: os.pid
     d: "/tmp/ztr_\{mypid}"
     io.mkdirp path: d.stringview
@@ -343,6 +360,52 @@ main: function is {
             ei = ei + 1
         }
     } case err then {
+    }
+
+    # ---------------- DUMP (canonical state) cases ----------------
+    ddC: slurp path: dumpcases.stringview
+    ddv: ddC.stringview
+    with ddit: ddv.lines do for ln: ddit loop {
+        if ln.length > 0 then {
+            nameStr: "".string
+            dirStr: "".string
+            idx: 0.u64
+            with sit: (ln.split sep: " ") do for pc: sit loop {
+                if pc.length > 0 then {
+                    if idx == 0.u64 then {
+                        nameStr = pc.string
+                    } else if idx == 1.u64 then {
+                        dirStr = pc.string
+                    }
+                    idx = idx + 1
+                }
+            }
+            if idx >= 2.u64 then {
+                srcAbs: "\{root.stringview}/\{dirStr.stringview}"
+                dpath: "\{d.stringview}/\{nameStr.stringview}.canon"
+                da: dumpArgv zc: zc.stringview name: nameStr.stringview srcdir: srcAbs.stringview sys: sys.stringview
+                dco: os.spawn argv: da cwd: "" outPath: dpath.stringview errPath: "/dev/null" timeoutSecs: timeoutSecs
+                dgold: "\{dumpgold.stringview}/\{nameStr.stringview}.canon"
+                if (io.exists path: dgold.stringview) == false then {
+                    skip = skip + 1
+                } else {
+                    gC: slurp path: dgold.stringview
+                    oC: slurp path: dpath.stringview
+                    okd: false
+                    if dco == 0.i32 then {
+                        if oC.stringview == gC.stringview then {
+                            okd = true
+                        }
+                    }
+                    if okd then {
+                        passN = passN + 1
+                    } else {
+                        print "FAIL(dump) \{nameStr.stringview}"
+                        fails = fails + 1
+                    }
+                }
+            }
+        }
     }
 
     # ---------------- summary ----------------

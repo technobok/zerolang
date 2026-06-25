@@ -97,13 +97,14 @@ main: function is {
     argv: os.args
     n: argv.length
     if n < 2 then {
-        io.eprintln "usage: zc <unitname> [--src DIR] [--system DIR] [--dump-sql FILE] [--emit-c FILE]"
+        io.eprintln "usage: zc <unitname> [--src DIR] [--system DIR] [--dump-sql FILE] [--dump-canon FILE] [--emit-c FILE]"
         os.exit code: 2
     }
     unitname: (argv.get i: 1).copy
     srcdir: ".".string
     systemdir: "lib/system".string
     dumpTarget: "-".string
+    canonTarget: "".string
     emitTarget: "".string
     runtimeDir: "src/runtime".string
     full: false
@@ -123,6 +124,9 @@ main: function is {
         } else if av == "--dump-sql" then {
             i = i + 1
             dumpTarget = (argv.get i: i).copy
+        } else if av == "--dump-canon" then {
+            i = i + 1
+            canonTarget = (argv.get i: i).copy
         } else if av == "--emit-c" then {
             i = i + 1
             emitTarget = (argv.get i: i).copy
@@ -165,6 +169,9 @@ main: function is {
         if emitTarget.length > 0 then {
             effFull = true
         }
+        if canonTarget.length > 0 then {
+            effFull = true
+        }
         st: ztypecheck.typecheck program: prog reg: reg full: effFull
         nerr: st.typing.errors.length
         if nerr > 0 then {
@@ -190,6 +197,19 @@ main: function is {
                     wr2
                 ) case ok then {} case err then {
                     io.eprintln "zc: could not write C output"
+                    os.exit code: 1
+                }
+            }
+        } else if canonTarget.length > 0 then {
+            canon: zsqldump.dumpCanon program: prog symtab: st
+            if canonTarget.stringview == "-" then {
+                print canon.stringview
+            } else {
+                wrc: io.writeText path: canonTarget.stringview content: canon.stringview
+                match (
+                    wrc
+                ) case ok then {} case err then {
+                    io.eprintln "zc: could not write canonical dump"
                     os.exit code: 1
                 }
             }

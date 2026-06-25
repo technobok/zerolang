@@ -120,9 +120,17 @@ Verify each against HEAD before scheduling (sources are point-in-time):
   owned values (15 B, port-only); fixed by adding a value-free (`mapValFreeStmt`,
   mirroring `emitStructDestructor`). Corpus gate green (`leak-clean=172 xleak=0`);
   `KNOWN_LEAKY` emptied in `run_corpus.sh` + `ztestrunner.z`.
-- **`ztestrunner` has no `--dump-sql` "dump" case-kind** — the SQL-dump
-  differential (`test_dumpsql_z`) is still pytest-only; a fourth case-kind (with
-  id-normalized SQL goldens) would fold it into the self-hosted runner.
+- **`ztestrunner` "dump" case-kind** — DONE (first increment): the PORT dumper
+  (`zsqldump.z` `dumpCanon`, behind `zc --dump-canon`) emits a canonical,
+  id-normalized rendering (PK ids omitted, FK ids resolved to names, cnames
+  dropped, rows sorted, filtered to the example's own unit); `ztestrunner.z` +
+  `run_corpus.sh do_dump` compare the port's output to committed
+  `tests/fixtures/dump_golden/*.canon` goldens (port-sourced via `--update`;
+  correctness vouched for by the `test_dumpsql_z` pytest differential). Covers
+  `unit` / `types` / `type_children` / `conformance`. **Follow-on:** extend
+  `dumpCanon` to the symbol-table tables (scope / entry / variable /
+  narrowed_subtype) and typed_nodes / mono; the pytest differential covers those
+  meanwhile.
 - **CLI parity (`zc.z` vs `zc.py`)** — `zc.z` lacks `-v/--verbose` and
   `--no-color`; uses `--full` where `zc.py` uses `--full-typecheck`; defaults to
   SQL-dump where `zc.py` defaults to C-emit (`-o`, default `unitname.c`). Diagnostic
