@@ -1,0 +1,44 @@
+# keyword_receiver.z -- C-reserved-word names used as method-call receivers, take
+# sources, and projection bases. The port emitter must C-keyword-mangle every
+# emitted identifier (`int` -> `v_int`, ...), else it emits a bare C keyword and
+# the build fails. Each keyword local hits a distinct emit path:
+#   `int`     StringView receiver of a native (.byteAt)        -> emitDottedCall   (A1)
+#   `default` String base of a `.stringview` binding           -> stringviewOfBase (B2)
+#   `char`    String base of a `.stringview from:/to:` slice   -> svSliceBaseAtom  (B3)
+#   `const`   String `.take` source moved into List.append     -> takeStringSource (B1)
+#   `long`    List `.take` source of a List.extend             -> listTakeArgBase  (B4)
+# (`void`, the extend receiver, already mangles via emitDottedReceiver.)
+
+main: function is {
+    # B2 (binding base `default`) + A1 (native receiver `int`)
+    default: "Hello World".string
+    int: default.stringview
+    int0: int.byteAt i: 0.u64
+    match (
+        int0
+    ) case some then {
+        print "byte0=\{int0}"
+    } case none then {
+        print "oob"
+    }
+    print "len=\{int.length}"
+
+    # B3 (slice base `char`)
+    char: "abcdefgh".string
+    struct: char.stringview from: 0 to: 5
+    print "slice=\{struct.length}"
+
+    # B1 (String `.take` source `const` invalidated after an owning append)
+    const: "abcdef".string
+    words: (List String)
+    words.append from: const.take
+    print "words=\{words.length}"
+
+    # B4 (List `.take` source `long` of an extend)
+    void: (List i64)
+    void.append from: 1
+    long: (List i64)
+    long.append from: 2
+    void.extend from: long.take
+    print "extlen=\{void.length}"
+}

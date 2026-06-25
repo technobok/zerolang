@@ -126,6 +126,7 @@ EMITC_CORPUS: "list[str]" = [
     "ctor_default_fill",
     "record_method_ref_default",
     "named_arg_order",
+    "keyword_receiver",
     "string_mut",
     "empty_list",
     "nested_list_method",
