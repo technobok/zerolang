@@ -3029,6 +3029,67 @@ ctorArgByPosition: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     return "".string
 }
 
+# argSlotList -- per call-argument (in call order), the index of the parameter
+# slot it binds in `fpNames` (declaration order): a named arg binds by name, an
+# unlabelled arg binds the next free slot via a positional cursor (first-arg
+# elision). Returns `fpNames.length` (an out-of-range sentinel) for an argument
+# that binds no value slot (e.g. a generic type-arg, whose name is not a value
+# param). Lets a call's named args be emitted to C in PARAMETER order.
+argSlotList: function {call: zast.CallData fpNames: List String} out (List u64) is {
+    out9: (List u64)
+    cn9: fpNames.length
+    consumed9: (List bool)
+    ci9: 0.u64
+    for ci9 < cn9 loop {
+        consumed9.append false
+        ci9 = ci9 + 1
+    }
+    cursor9: 0.u64
+    aiter9: call.arguments.iterate
+    for a9: aiter9 loop {
+        match (
+            a9
+        ) case namedoperation then {
+            lbl9: unitLabel9 o: a9.name
+            slot9: fpNames.length
+            if lbl9.length > 0 then {
+                fi9: 0.u64
+                for fi9 < cn9 loop {
+                    fpn9: fpNames.get i: fi9
+                    if fpn9.stringview == lbl9.stringview then {
+                        slot9 = fi9
+                    }
+                    fi9 = fi9 + 1
+                }
+            } else {
+                adv9: true
+                for adv9 loop {
+                    if cursor9 >= cn9 then {
+                        adv9 = false
+                    } else {
+                        if (consumed9.get i: cursor9) then {
+                            cursor9 = cursor9 + 1
+                        } else {
+                            adv9 = false
+                        }
+                    }
+                }
+                if cursor9 < cn9 then {
+                    slot9 = cursor9
+                    cursor9 = cursor9 + 1
+                }
+            }
+            if slot9 < cn9 then {
+                consumed9.set i: slot9 val: true
+            }
+            out9.append slot9
+        } else {
+            out9.append fpNames.length
+        }
+    }
+    return out9
+}
+
 # nodeConstText -- the C literal for a node carrying a compile-time
 # const stamp (folded .LABEL data access, unit constants); "" otherwise.
 nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
@@ -3184,57 +3245,33 @@ emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     fpNames9: (List String)
     fpIds9: (List u64)
     recFieldLists symtab: symtab tid: gmf9 names: fpNames9 ids: fpIds9
-    args9: "".string
+    slots9g: argSlotList call: call fpNames: fpNames9
+    valBySlot9g: (Map u64 value: String)
     ai9: 0.u64
     aiter9: call.arguments.iterate
     for a9: aiter9 loop {
         match (
             a9
         ) case namedoperation then {
-            argNm9: unitLabel9 o: a9.name
-            isTypeArg9: false
-            if argNm9.length > 0 then {
-                tfound9: false
-                tfj9: 0.u64
-                for tfj9 < fpNames9.length loop {
-                    tpnm9: fpNames9.get i: tfj9
-                    if tpnm9.stringview == argNm9.stringview then {
-                        tfound9 = true
-                    }
-                    tfj9 = tfj9 + 1
-                }
-                if tfound9 == false then {
-                    isTypeArg9 = true
-                }
-            }
-            if isTypeArg9 == false then {
-            av9: emitExpr symtab: symtab ctx: ctx n: a9.operation
-            byref9: false
-            argRef9: "".string
-            if ai9 < fpIds9.length then {
-                fpid9: fpIds9.get i: ai9
+            slot9g: slots9g.get i: ai9
+            if slot9g < fpNames9.length then {
+                av9: emitExpr symtab: symtab ctx: ctx n: a9.operation
+                byref9: false
+                argRef9: "".string
+                fpid9: fpIds9.get i: slot9g
+                fpnO9: fpNames9.get i: slot9g
                 ptra9: false
-                ownC9: "".string
-                if ai9 < fpNames9.length then {
-                    fpnO9: fpNames9.get i: ai9
-                    ownC9 = symtab.typing.childOwnershipText parentTypeId: gmf9 name: fpnO9.stringview
-                }
+                ownC9: symtab.typing.childOwnershipText parentTypeId: gmf9 name: fpnO9.stringview
                 if ownC9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
                     ptra9 = true
                 } else {
-                    if ai9 < fpNames9.length then {
-                        fpn9: fpNames9.get i: ai9
-                        if (isBorrowStringParam symtab: symtab fid: gmf9 pname: fpn9.stringview pid: fpid9) then {
-                            ptra9 = true
-                        }
+                    if (isBorrowStringParam symtab: symtab fid: gmf9 pname: fpnO9.stringview pid: fpid9) then {
+                        ptra9 = true
                     }
                 }
                 if (ptra9) == false then {
-                    if ai9 < fpNames9.length then {
-                        fpnL9: fpNames9.get i: ai9
-                        if (isListPtrParam symtab: symtab fid: gmf9 pname: fpnL9.stringview tid: fpid9) then {
-                            ptra9 = true
-                        }
+                    if (isListPtrParam symtab: symtab fid: gmf9 pname: fpnO9.stringview tid: fpid9) then {
+                        ptra9 = true
                     }
                 }
                 if ptra9 then {
@@ -3243,18 +3280,32 @@ emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
                         argRef9 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid9
                     }
                 }
-            }
-            if ai9 > 0 then {
-                args9.append ", "
-            }
-            if byref9 then {
-                args9.append argRef9.stringview
-            } else {
-                args9.append av9.stringview
+                finalS9g: av9.copy
+                if byref9 then {
+                    finalS9g = argRef9.copy
+                }
+                valBySlot9g.set key: slot9g value: finalS9g
             }
             ai9 = ai9 + 1
-            }
         } else {}
+    }
+    args9: "".string
+    emitted9g: 0.u64
+    pp9g: 0.u64
+    ppn9g: fpNames9.length
+    for pp9g < ppn9g loop {
+        vo9g: valBySlot9g.get key: pp9g
+        match (
+            vo9g
+        ) case some then {
+            if emitted9g > 0 then {
+                args9.append ", "
+            }
+            args9.append vo9g.stringview
+            emitted9g = emitted9g + 1
+        } case none then {
+        }
+        pp9g = pp9g + 1
     }
     e9: "\{fc9}(\{args9})"
     return e9
@@ -3297,40 +3348,33 @@ emitUnitMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     fpNames9: (List String)
     fpIds9: (List u64)
     recFieldLists symtab: symtab tid: fid9 names: fpNames9 ids: fpIds9
-    args9: "".string
+    slots9g: argSlotList call: call fpNames: fpNames9
+    valBySlot9g: (Map u64 value: String)
     ai9: 0.u64
     aiter9: call.arguments.iterate
     for a9: aiter9 loop {
         match (
             a9
         ) case namedoperation then {
-            av9: emitExpr symtab: symtab ctx: ctx n: a9.operation
-            byref9: false
-            argRef9: "".string
-            if ai9 < fpIds9.length then {
-                fpid9: fpIds9.get i: ai9
+            slot9g: slots9g.get i: ai9
+            if slot9g < fpNames9.length then {
+                av9: emitExpr symtab: symtab ctx: ctx n: a9.operation
+                byref9: false
+                argRef9: "".string
+                fpid9: fpIds9.get i: slot9g
+                fpnO9: fpNames9.get i: slot9g
                 ptra9: false
-                ownC9: "".string
-                if ai9 < fpNames9.length then {
-                    fpnO9: fpNames9.get i: ai9
-                    ownC9 = symtab.typing.childOwnershipText parentTypeId: fid9 name: fpnO9.stringview
-                }
+                ownC9: symtab.typing.childOwnershipText parentTypeId: fid9 name: fpnO9.stringview
                 if ownC9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
                     ptra9 = true
                 } else {
-                    if ai9 < fpNames9.length then {
-                        fpn9: fpNames9.get i: ai9
-                        if (isBorrowStringParam symtab: symtab fid: fid9 pname: fpn9.stringview pid: fpid9) then {
-                            ptra9 = true
-                        }
+                    if (isBorrowStringParam symtab: symtab fid: fid9 pname: fpnO9.stringview pid: fpid9) then {
+                        ptra9 = true
                     }
                 }
                 if (ptra9) == false then {
-                    if ai9 < fpNames9.length then {
-                        fpnL9: fpNames9.get i: ai9
-                        if (isListPtrParam symtab: symtab fid: fid9 pname: fpnL9.stringview tid: fpid9) then {
-                            ptra9 = true
-                        }
+                    if (isListPtrParam symtab: symtab fid: fid9 pname: fpnO9.stringview tid: fpid9) then {
+                        ptra9 = true
                     }
                 }
                 if ptra9 then {
@@ -3339,17 +3383,32 @@ emitUnitMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
                         argRef9 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid9
                     }
                 }
-            }
-            if ai9 > 0 then {
-                args9.append ", "
-            }
-            if byref9 then {
-                args9.append argRef9.stringview
-            } else {
-                args9.append av9.stringview
+                finalS9g: av9.copy
+                if byref9 then {
+                    finalS9g = argRef9.copy
+                }
+                valBySlot9g.set key: slot9g value: finalS9g
             }
             ai9 = ai9 + 1
         } else {}
+    }
+    args9: "".string
+    emitted9g: 0.u64
+    pp9g: 0.u64
+    ppn9g: fpNames9.length
+    for pp9g < ppn9g loop {
+        vo9g: valBySlot9g.get key: pp9g
+        match (
+            vo9g
+        ) case some then {
+            if emitted9g > 0 then {
+                args9.append ", "
+            }
+            args9.append vo9g.stringview
+            emitted9g = emitted9g + 1
+        } case none then {
+        }
+        pp9g = pp9g + 1
     }
     e9: "\{fc9}(\{args9})"
     return e9
@@ -3385,40 +3444,33 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     fpNames: (List String)
     fpIds: (List u64)
     recFieldLists symtab: symtab tid: fid names: fpNames ids: fpIds
-    args: "".string
+    slots9c: argSlotList call: call fpNames: fpNames
+    valBySlot9c: (Map u64 value: String)
     ai8: 0.u64
     aiter: call.arguments.iterate
     for a: aiter loop {
         match (
             a
         ) case namedoperation then {
-            av9: emitExpr symtab: symtab ctx: ctx n: a.operation
-            byref8: false
-            argRef8: "".string
-            if ai8 < fpIds.length then {
-                fpid8: fpIds.get i: ai8
+            slot9c: slots9c.get i: ai8
+            if slot9c < fpNames.length then {
+                av9: emitExpr symtab: symtab ctx: ctx n: a.operation
+                byref8: false
+                argRef8: "".string
+                fpid8: fpIds.get i: slot9c
+                fpnO8: fpNames.get i: slot9c
                 ptra8: false
-                ownC8: "".string
-                if ai8 < fpNames.length then {
-                    fpnO8: fpNames.get i: ai8
-                    ownC8 = symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
-                }
+                ownC8: symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
                 if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
                     ptra8 = true
                 } else {
-                    if ai8 < fpNames.length then {
-                        fpn8: fpNames.get i: ai8
-                        if (isBorrowStringParam symtab: symtab fid: fid pname: fpn8.stringview pid: fpid8) then {
-                            ptra8 = true
-                        }
+                    if (isBorrowStringParam symtab: symtab fid: fid pname: fpnO8.stringview pid: fpid8) then {
+                        ptra8 = true
                     }
                 }
                 if (ptra8) == false then {
-                    if ai8 < fpNames.length then {
-                        fpnL8: fpNames.get i: ai8
-                        if (isListPtrParam symtab: symtab fid: fid pname: fpnL8.stringview tid: fpid8) then {
-                            ptra8 = true
-                        }
+                    if (isListPtrParam symtab: symtab fid: fid pname: fpnO8.stringview tid: fpid8) then {
+                        ptra8 = true
                     }
                 }
                 if ptra8 then {
@@ -3427,17 +3479,32 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
                         argRef8 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8
                     }
                 }
-            }
-            if ai8 > 0 then {
-                args.append ", "
-            }
-            if byref8 then {
-                args.append argRef8.stringview
-            } else {
-                args.append av9.stringview
+                finalS9c: av9.copy
+                if byref8 then {
+                    finalS9c = argRef8.copy
+                }
+                valBySlot9c.set key: slot9c value: finalS9c
             }
             ai8 = ai8 + 1
         } else {}
+    }
+    args: "".string
+    emitted9c: 0.u64
+    pp9c: 0.u64
+    ppn9c: fpNames.length
+    for pp9c < ppn9c loop {
+        vo9c: valBySlot9c.get key: pp9c
+        match (
+            vo9c
+        ) case some then {
+            if emitted9c > 0 then {
+                args.append ", "
+            }
+            args.append vo9c.stringview
+            emitted9c = emitted9c + 1
+        } case none then {
+        }
+        pp9c = pp9c + 1
     }
     e8: "\{fc}(\{args})"
     return e8
@@ -3915,17 +3982,19 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         fpNames: (List String)
         fpIds: (List u64)
         recFieldLists symtab: symtab tid: fid names: fpNames ids: fpIds
-        args: "".string
+        slots9: argSlotList call: call fpNames: fpNames
+        valBySlot9: (Map u64 value: String)
         ai8: 0.u64
         aiter: call.arguments.iterate
         for a: aiter loop {
             match (
                 a
             ) case namedoperation then {
-                av9: emitExpr symtab: symtab ctx: ctx n: a.operation
-                projd9: false
-                if ai8 < fpIds.length then {
-                    pRaw9: fpIds.get i: ai8
+                slot9b: slots9.get i: ai8
+                if slot9b < fpNames.length then {
+                    av9: emitExpr symtab: symtab ctx: ctx n: a.operation
+                    projd9: false
+                    pRaw9: fpIds.get i: slot9b
                     ppid9: resolveShellTid symtab: symtab ctx: ctx tid: pRaw9
                     pptt9: symtab.reg.typetypeOf typeId: ppid9
                     isProtoP9: false
@@ -3960,68 +4029,69 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                             }
                         }
                     }
-                }
-                byref8: false
-                argRef8: "".string
-                if (projd9) == false when ai8 < fpIds.length then {
-                    fpid8: fpIds.get i: ai8
-                    ptra8: false
-                    ownC8: "".string
-                    if ai8 < fpNames.length then {
-                        fpnO8: fpNames.get i: ai8
-                        ownC8 = symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
-                    }
-                    if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
-                        ptra8 = true
-                    } else {
-                        if ai8 < fpNames.length then {
-                            fpn8: fpNames.get i: ai8
-                            if (isBorrowStringParam symtab: symtab fid: fid pname: fpn8.stringview pid: fpid8) then {
+                    byref8: false
+                    argRef8: "".string
+                    if (projd9) == false then {
+                        fpid8: fpIds.get i: slot9b
+                        fpnO8: fpNames.get i: slot9b
+                        ptra8: false
+                        ownC8: symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
+                        if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                            ptra8 = true
+                        } else {
+                            if (isBorrowStringParam symtab: symtab fid: fid pname: fpnO8.stringview pid: fpid8) then {
                                 ptra8 = true
                             }
                         }
-                    }
-                    if (ptra8) == false then {
-                        if ai8 < fpNames.length then {
-                            fpnL8: fpNames.get i: ai8
-                            if (isListPtrParam symtab: symtab fid: fid pname: fpnL8.stringview tid: fpid8) then {
+                        if (ptra8) == false then {
+                            if (isListPtrParam symtab: symtab fid: fid pname: fpnO8.stringview tid: fpid8) then {
                                 ptra8 = true
                             }
                         }
-                    }
-                    if ptra8 then {
-                        if (isPtrVar ctx: ctx name: av9.stringview) == false then {
-                            byref8 = true
-                            argRef8 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8
+                        if ptra8 then {
+                            if (isPtrVar ctx: ctx name: av9.stringview) == false then {
+                                byref8 = true
+                                argRef8 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8
+                            }
                         }
                     }
-                }
-                if ai8 > 0 then {
-                    args.append ", "
-                }
-                if byref8 then {
-                    args.append argRef8.stringview
-                } else {
-                    args.append av9.stringview
+                    finalS9: av9.copy
+                    if byref8 then {
+                        finalS9 = argRef8.copy
+                    }
+                    valBySlot9.set key: slot9b value: finalS9
                 }
                 ai8 = ai8 + 1
             } else {}
         }
-        pdi9: ai8
-        pdn9: fpNames.length
-        for pdi9 < pdn9 loop {
-            pdpn9: fpNames.get i: pdi9
-            if (symtab.typing.hasChildDefault parentTypeId: fid name: pdpn9.stringview) then {
-                pddt9: symtab.typing.childDefaultText parentTypeId: fid name: pdpn9.stringview
-                pdpid9: fpIds.get i: pdi9
-                pdrv9: renderDefault symtab: symtab ctx: ctx default: pddt9.stringview targetTid: pdpid9
-                if ai8 > 0 then {
+        args: "".string
+        emitted9: 0.u64
+        pp9: 0.u64
+        ppn9: fpNames.length
+        for pp9 < ppn9 loop {
+            vo9: valBySlot9.get key: pp9
+            match (
+                vo9
+            ) case some then {
+                if emitted9 > 0 then {
                     args.append ", "
                 }
-                args.append pdrv9.stringview
-                ai8 = ai8 + 1
+                args.append vo9.stringview
+                emitted9 = emitted9 + 1
+            } case none then {
+                pdpn9: fpNames.get i: pp9
+                if (symtab.typing.hasChildDefault parentTypeId: fid name: pdpn9.stringview) then {
+                    pddt9: symtab.typing.childDefaultText parentTypeId: fid name: pdpn9.stringview
+                    pdpid9: fpIds.get i: pp9
+                    pdrv9: renderDefault symtab: symtab ctx: ctx default: pddt9.stringview targetTid: pdpid9
+                    if emitted9 > 0 then {
+                        args.append ", "
+                    }
+                    args.append pdrv9.stringview
+                    emitted9 = emitted9 + 1
+                }
             }
-            pdi9 = pdi9 + 1
+            pp9 = pp9 + 1
         }
         e8: "\{fc}(\{args})"
         return e8
@@ -13446,24 +13516,80 @@ emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Ca
         acc = "->".string
     }
     dargs: "\{recv}\{acc}data".string
-    with aiter: call.arguments.iterate do for a: aiter loop {
-        match (
-            a
-        ) case namedoperation then {
-            av: emitExpr symtab: symtab ctx: ctx n: a.operation
-            atid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
-            apfx9: "".string
-            if (chaseColMono symtab: symtab tid: atid9) != atid9 then {
-                apfx9 = "&".string
+    mtid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: rtid name: mn.stringview)
+    mpNames9: (List String)
+    mpIds9: (List u64)
+    if mtid9 > 0 then {
+        recFieldLists symtab: symtab tid: mtid9 names: mpNames9 ids: mpIds9
+    }
+    vpn9: (List String)
+    vi9: 0.u64
+    for vi9 < mpNames9.length loop {
+        nm9: mpNames9.get i: vi9
+        if nm9.stringview != "this" then {
+            vpn9.append nm9.copy
+        }
+        vi9 = vi9 + 1
+    }
+    if vpn9.length > 0 then {
+        slots9p: argSlotList call: call fpNames: vpn9
+        valBySlot9p: (Map u64 value: String)
+        ai9p: 0.u64
+        with aiter: call.arguments.iterate do for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                slot9p: slots9p.get i: ai9p
+                if slot9p < vpn9.length then {
+                    av: emitExpr symtab: symtab ctx: ctx n: a.operation
+                    atid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
+                    apfx9: "".string
+                    if (chaseColMono symtab: symtab tid: atid9) != atid9 then {
+                        apfx9 = "&".string
+                    }
+                    aco9: monoOriginName symtab: symtab tid: atid9
+                    if (isCollectionOrigin name: aco9.stringview) then {
+                        apfx9 = "&".string
+                    }
+                    fs9p: "\{apfx9}\{av}".string
+                    valBySlot9p.set key: slot9p value: fs9p
+                }
+                ai9p = ai9p + 1
+            } else {}
+        }
+        pp9p: 0.u64
+        ppn9p: vpn9.length
+        for pp9p < ppn9p loop {
+            vo9p: valBySlot9p.get key: pp9p
+            match (
+                vo9p
+            ) case some then {
+                dargs.append ", "
+                dargs.append vo9p.stringview
+            } case none then {
             }
-            aco9: monoOriginName symtab: symtab tid: atid9
-            if (isCollectionOrigin name: aco9.stringview) then {
-                apfx9 = "&".string
-            }
-            dargs.append ", "
-            dargs.append apfx9.stringview
-            dargs.append av.stringview
-        } else {}
+            pp9p = pp9p + 1
+        }
+    } else {
+        with aiter: call.arguments.iterate do for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                av: emitExpr symtab: symtab ctx: ctx n: a.operation
+                atid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
+                apfx9: "".string
+                if (chaseColMono symtab: symtab tid: atid9) != atid9 then {
+                    apfx9 = "&".string
+                }
+                aco9: monoOriginName symtab: symtab tid: atid9
+                if (isCollectionOrigin name: aco9.stringview) then {
+                    apfx9 = "&".string
+                }
+                dargs.append ", "
+                dargs.append apfx9.stringview
+                dargs.append av.stringview
+            } else {}
+        }
     }
     de: "\{recv}\{acc}vtable->\{mn}(\{dargs})"
     return de

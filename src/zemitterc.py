@@ -7612,17 +7612,34 @@ class CEmitter:
             else []
         )
         args = [f"{parent_val}{acc}data"]
-        # Populate _last_emitted_arg_vals so `_apply_call_implicit_takes`
-        # can find the per-arg emitted C exprs after the dispatch.
+        # Emit in CALL order (keep _last_emitted_arg_vals call-indexed for
+        # `_apply_call_implicit_takes`), with the collection-pointer fixup keyed
+        # to each arg's TRUE spec param; then assemble the vtable args in
+        # spec-param order so out-of-order named args bind correctly.
+        spec_param_names = []
+        for _spn, _spt in spec_params:
+            spec_param_names.append(_spn)
+        slot_for_callidx = self._arg_to_slot(call, spec_param_names, set())
         self._last_emitted_arg_vals = []
+        val_for_callidx: dict = {}
         for i, arg in enumerate(call.arguments):
             val = self._emit_operation_value(arg.valtype)
-            if i < len(spec_params):
-                _, spec_ptype = spec_params[i]
+            si = slot_for_callidx.get(i)
+            if si is not None:
+                _, spec_ptype = spec_params[si]
                 if _is_collection_param_type(spec_ptype) and not val.startswith("&"):
                     val = f"&{val}"
-            args.append(val)
             self._last_emitted_arg_vals.append(val)
+            val_for_callidx[i] = val
+        if spec_params:
+            callidx_for_slot = {si: i for i, si in slot_for_callidx.items()}
+            for si in range(len(spec_params)):
+                if si in callidx_for_slot:
+                    args.append(val_for_callidx[callidx_for_slot[si]])
+        else:
+            for i in range(len(call.arguments)):
+                if i in val_for_callidx:
+                    args.append(val_for_callidx[i])
         return f"{parent_val}{acc}vtable->{method}({', '.join(args)})"
 
     def _emit_callable_dispatch(self, call: zast.Call) -> str:
@@ -7917,10 +7934,19 @@ class CEmitter:
                 == "this"  # ztc-string-compare-ok: receiver-prepend predicate
                 else 0
             )
+            gpn: set = set()
+            if ftype.generic_origin is not None and ftype.generic_origin.generic_params:
+                gpn = set(ftype.generic_origin.generic_params.keys())
+            value_param_names = []
+            for _vpi in range(offset, len(params)):
+                _vpn = params[_vpi][0]
+                if _vpn not in gpn:
+                    value_param_names.append(_vpn)
+            slot = self._arg_to_slot(call, value_param_names, gpn)
             for i, arg in enumerate(call.arguments):
-                pi = i + offset
-                if pi < len(params):
-                    pname, _ = params[pi]
+                si = slot.get(i)
+                if si is not None:
+                    pname = value_param_names[si]
                     if (
                         self.typing.child_ownership(ftype, pname)
                         == ZParamOwnership.TAKE
@@ -8254,6 +8280,36 @@ class CEmitter:
             receiver = f"&{receiver}"
         return f"{receiver}, {args}" if args else receiver
 
+    def _arg_to_slot(
+        self, call: zast.Call, param_names: List[str], generic_param_names: set
+    ) -> dict:
+        """Map each non-generic value argument's call index to its parameter
+        slot in `param_names` (declaration order): a named arg binds by name; an
+        unlabelled arg binds the next free slot via a positional cursor (which
+        also realises first-arg elision). Shared by the call/protocol emitters
+        and implicit-take invalidation so they agree on which param an
+        out-of-order named arg targets."""
+        name_to_slot = {pn: si for si, pn in enumerate(param_names)}
+        slot_for_callidx: dict = {}
+        consumed = [False] * len(param_names)
+        cursor = 0
+        for i, arg in enumerate(call.arguments):
+            if arg.name and arg.name in generic_param_names:
+                continue
+            si = None
+            if arg.name and arg.name in name_to_slot:
+                si = name_to_slot[arg.name]
+            else:
+                while cursor < len(param_names) and consumed[cursor]:
+                    cursor += 1
+                if cursor < len(param_names):
+                    si = cursor
+                    cursor += 1
+            if si is not None:
+                consumed[si] = True
+                slot_for_callidx[i] = si
+        return slot_for_callidx
+
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
 
@@ -8265,55 +8321,57 @@ class CEmitter:
             if gp:
                 generic_param_names = set(gp.keys())
 
-        # track emitted C values per argument index for implicit-take
-        self._last_emitted_arg_vals: List[str] = []
-        ctype_idx = 0
-        # Method calls: `this` is prepended by `_prepend_method_receiver`
-        # at the call site, so call.arguments starts at the first
-        # non-this param. Align the ctype lookup by skipping the
-        # `this` slot in the callable's param list.
+        # Method calls: `this` is prepended by `_prepend_method_receiver` at the
+        # call site, so call.arguments starts at the first non-this param; skip
+        # the `this` slot in the callable's param list.
         method_offset = 0
         if ftype and ftype.typetype == ZTypeType.FUNCTION:
             children_keys = self.typing.child_names_of(ftype)
-            # Mirror _prepend_method_receiver's early-return predicate
-            # (`not self.typing.has_child(ftype, "this")`): only canonical `:this`
-            # form is prepended, so only that form needs an offset here.
             if (
                 children_keys
                 and children_keys[0]
                 == "this"  # ztc-string-compare-ok: receiver-prepend predicate
             ):
                 method_offset = 1
+
+        # Value params in declaration order, after `this` and excluding generic
+        # type-params: (absolute_param_index, param_name). Args are emitted in
+        # PARAMETER order over these slots, regardless of the call's named-arg
+        # order (C does not see labels — position is meaning).
+        value_params: List[tuple] = []
+        if ftype is not None:
+            children = self.typing.children_of(ftype)
+            for pidx in range(method_offset, len(children)):
+                pname, _pt = children[pidx]
+                if pname in generic_param_names:
+                    continue
+                value_params.append((pidx, pname))
+        # Map each value argument (call order) to its value-param slot (named by
+        # name; unlabelled by positional cursor / first-arg elision).
+        vp_names = []
+        for _vp in value_params:
+            vp_names.append(_vp[1])
+        slot_for_callidx = self._arg_to_slot(call, vp_names, generic_param_names)
+
+        # First pass, in CALL order: emit each argument's C value, applying the
+        # stack-class `&` fixup against the argument's TRUE parameter. Record
+        # values in call order -- `_last_emitted_arg_vals` is consumed downstream
+        # (implicit-take) indexed by call position, so it must NOT be reordered.
+        self._last_emitted_arg_vals = []
+        val_for_callidx: dict = {}
         for i, arg in enumerate(call.arguments):
-            # skip generic type args (they are compile-time only)
             if arg.name and arg.name in generic_param_names:
                 self._last_emitted_arg_vals.append("")
                 continue
-            # Implicit protocol projection stamped by typecheck: emit
-            # `z_<impl>_<label>_create` over the concrete argument value
-            # so the callee sees a protocol handle.
             _proj = self.typing.projected_args.get(arg.nodeid)
-            arg_proj_proto = _proj[0] if _proj else None
-            arg_proj_label = _proj[1] if _proj else None
-            if arg_proj_proto is not None and arg_proj_label is not None:
+            if _proj and _proj[0] is not None and _proj[1] is not None:
                 val = self._emit_projected_arg(arg)
-                parts.append(val)
                 self._last_emitted_arg_vals.append(val)
-                ctype_idx += 1
+                val_for_callidx[i] = val
                 continue
             val = self._emit_operation_value(arg.valtype)
-            param_idx = ctype_idx + method_offset
-            # Pre-Phase-C: nested-call args were hoisted here via
-            # _alloc_arg_temp to give them a stable C name. Now the
-            # typechecker hoists every non-trivial arg into a synth
-            # `_tN: <expr>` Assignment in the parent Statement before
-            # this point arrives, so arg.valtype is already a bare
-            # AtomId at emit time and no per-emit hoisting is needed.
-            # stack-allocated class passed as 'this': add &.
-            # The C function expects a pointer for 'this' parameters, but the
-            # argument is a stack-allocated struct. Detect 'this' by checking
-            # if the function is a method and the parameter type matches the
-            # enclosing class type.
+            si = slot_for_callidx.get(i)
+            param_idx = value_params[si][0] if si is not None else -1
             arg_type = self._get_operation_type(arg.valtype)
             if (
                 arg_type
@@ -8321,31 +8379,15 @@ class CEmitter:
                 and arg_type.typetype == ZTypeType.CLASS
                 and not val.startswith("&")
                 and ftype
-                and param_idx < len(self.typing.children_of(ftype))
+                and 0 <= param_idx < len(self.typing.children_of(ftype))
             ):
                 param_name = self.typing.child_names_of(ftype)[param_idx]
                 param_type = self.typing.child_of(ftype, param_name)
-                # Native instance methods (StringView.replace,
-                # BufWriter.write, TextWriter.write, ...) hard-code
-                # pointer-typed signatures for non-self class args of
-                # the same type as the receiver, so we need to take
-                # the address of those args at the call site to
-                # match. The C ABI of user-defined methods follows
-                # the typecheck-declared ownership (TAKE → value,
-                # BORROW/LOCK → pointer), so this fixup only fires
-                # for natives. Free natives without a :this receiver
-                # — io.readText, os.env, ... — take StringView by
-                # value in the runtime and are skipped by the
-                # this_param_name guard.
                 is_this_param = ftype.this_param_name == param_name or (
                     ftype.is_native
                     and ftype.this_param_name is not None
                     and param_type is arg_type
                 )
-                # borrow/lock class params also need &. .take on a
-                # string param means the callee owns by value — no
-                # `&` should be added (that would pass a pointer to
-                # a by-value parameter).
                 own = self.typing.child_ownership(ftype, param_name)
                 is_borrow_lock = own in (
                     ZParamOwnership.BORROW,
@@ -8354,32 +8396,34 @@ class CEmitter:
                 is_take_string = (
                     own == ZParamOwnership.TAKE and arg_type.subtype == ZSubType.STRING
                 )
-                # Suppress a redundant `&` when the argument is already a
-                # pointer-typed param of the enclosing function (e.g. a class
-                # borrow forwarded into a nested call): taking its address
-                # would make `z_DentryTable_t**` and the callee would read
-                # garbage. Membership is by identity (variable_id), not by the
-                # emitted string. Mirrors the sibling guards in
-                # _build_create_args / _build_meta_create_args.
                 if (
                     (is_this_param or is_borrow_lock)
                     and not is_take_string
                     and self._operand_vid(arg.valtype) not in self._scope.class_params
                 ):
                     val = f"&{val}"
-            parts.append(val)
             self._last_emitted_arg_vals.append(val)
-            ctype_idx += 1
+            val_for_callidx[i] = val
 
-        # fill defaults for missing trailing params
-        ftype = self._node_ztype(call.callable)
-        if ftype and self.typing.has_any_default(ftype):
-            params = self.typing.children_of(ftype)
-            for i in range(len(call.arguments), len(params)):
-                pname, ptype = params[i]
-                default = self.typing.child_default(ftype, pname)
-                if default is not None:
-                    parts.append(self._render_default(default, ptype))
+        # Second pass: assemble the C argument list. When the callee's params
+        # are known, emit in PARAMETER (declaration) order and default-fill any
+        # slot that received no argument; otherwise (unresolved callee) emit in
+        # call order so nothing is dropped.
+        if value_params and ftype is not None:
+            callidx_for_slot = {si: i for i, si in slot_for_callidx.items()}
+            has_defaults = self.typing.has_any_default(ftype)
+            for si, (pidx, pname) in enumerate(value_params):
+                if si in callidx_for_slot:
+                    parts.append(val_for_callidx[callidx_for_slot[si]])
+                elif has_defaults:
+                    default = self.typing.child_default(ftype, pname)
+                    if default is not None:
+                        _pn, ptype = self.typing.children_of(ftype)[pidx]
+                        parts.append(self._render_default(default, ptype))
+        else:
+            for i in range(len(call.arguments)):
+                if i in val_for_callidx:
+                    parts.append(val_for_callidx[i])
 
         return ", ".join(parts)
 
