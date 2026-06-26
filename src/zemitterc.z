@@ -587,6 +587,8 @@ Ctx: class {
     breakLabels: (List u64)
     breakLabelCtr: u64
     breakLabelUsed: (Map u64 value: bool)
+    breakFreesMarks: (List u64)
+    breakListMarks: (List u64)
     borrowedVars: (Map String value: bool)
 }
 
@@ -1579,16 +1581,22 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
 # A zerolang `break` inside the loop emits `goto __zbrk_<id>`: a bare C `break`
 # would only leave an enclosing match->switch, not the loop. The label is
 # emitted after the loop by popLoopLabel, but only if a break referenced it.
-pushLoopLabel: function {ctx: Ctx} out u64 is {
+pushLoopLabel: function {ctx: Ctx tmp: TmpCtr} out u64 is {
     id: ctx.breakLabelCtr
     ctx.breakLabelCtr = id + 1
     ctx.breakLabels.append id
+    ctx.breakFreesMarks.append tmp.frees.length
+    ctx.breakListMarks.append tmp.listFrees.length
     return ctx.breakLabelCtr - 1
 }
 
 popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
     if ctx.breakLabels.length > 0 then {
         dropped: ctx.breakLabels.pop
+    }
+    if ctx.breakFreesMarks.length > 0 then {
+        droppedF: ctx.breakFreesMarks.pop
+        droppedL: ctx.breakListMarks.pop
     }
     uo: ctx.breakLabelUsed.get key: id
     match (
@@ -1817,14 +1825,16 @@ collectionValueCallRhs: function {n: Node} out bool is {
     } case dottedpath then {
         # a bare dotted path returning a collection (e.g. `st.allNames`) is a
         # no-arg method auto-call or field access -- a value, never a construction.
-        return (atomTextOf n: n.child).length > 0
+        atc9: atomTextOf n: n.child
+        return atc9.length > 0
     } case call then {
         cn: atomTextOf n: n.callable
         if cn.length == 0 then {
             # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
             # returning a List is a value-producing call, not a construction --
             # emit the call rather than falling to the empty-collection default.
-            return (dottedChildText n: n.callable).length > 0
+            dct9: dottedChildText n: n.callable
+            return dct9.length > 0
         }
         if cn.stringview == "List" then {
             return false
@@ -6390,7 +6400,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
         # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
         if n.conditions.length == 0 when n.postconditions.length > 0 then {
-            lidDW: pushLoopLabel ctx: ctx
+            lidDW: pushLoopLabel ctx: ctx tmp: tmp
             ldw: "\{ind}do {\n"
             buf.append ldw.stringview
             ind2d: "\{ind}    "
@@ -6425,7 +6435,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             # loop (honest RUN-DIFF) rather than while(1).
             cond.append "0 /* zemitterc: unhandled loop header */"
         }
-        lidW: pushLoopLabel ctx: ctx
+        lidW: pushLoopLabel ctx: ctx tmp: tmp
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
         ind2: "\{ind}    "
@@ -6532,6 +6542,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             }
         } else {
             if bkw9.stringview == "break" then {
+                emitBreakFrees ctx: ctx tmp: tmp ind: ind buf: buf
                 if ctx.breakLabels.length > 0 then {
                     bid9: ctx.breakLabels.get i: (ctx.breakLabels.length - 1)
                     lbkg9: "\{ind}goto __zbrk_\{bid9};\n"
@@ -6544,6 +6555,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 }
             } else {
                 if bkw9.stringview == "continue" then {
+                    emitBreakFrees ctx: ctx tmp: tmp ind: ind buf: buf
                     lct9: "\{ind}continue;\n"
                     buf.append lct9.stringview
                 } else {
@@ -6787,6 +6799,32 @@ flushBlockFrees: function {ctx: Ctx tmp: TmpCtr fL: u64 lL: u64 buf: String.borr
         fvo: tmp.frees.pop
         ff9: "    \{ctx.strC}_free(&\{fvo});\n"
         buf.append ff9.stringview
+    }
+}
+
+# emitBreakFrees -- free the loop-body owned locals (everything bound since the
+# innermost loop entry) before a `break`/`continue`, which skips the loop body's
+# end-of-block flushBlockFrees. Non-destructive (reads by index, no pop): the
+# normal fall-through still flushes them at block close. Mirrors flushBlockFrees
+# order (listFrees newest-first, then frees).
+emitBreakFrees: function {ctx: Ctx tmp: TmpCtr ind: StringView buf: String.borrow} is {
+    if ctx.breakFreesMarks.length == 0 then {
+        return
+    }
+    fMark: ctx.breakFreesMarks.get i: (ctx.breakFreesMarks.length - 1)
+    lMark: ctx.breakListMarks.get i: (ctx.breakListMarks.length - 1)
+    i9: tmp.listFrees.length
+    for i9 > lMark loop {
+        i9 = i9 - 1
+        st9: tmp.listFrees.get i: i9
+        buf.append st9.stringview
+    }
+    j9: tmp.frees.length
+    for j9 > fMark loop {
+        j9 = j9 - 1
+        nm9: tmp.frees.get i: j9
+        ff0: "\{ind}\{ctx.strC}_free(&\{nm9});\n"
+        buf.append ff0.stringview
     }
 }
 
@@ -7262,7 +7300,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                     iterRecv9 = ivex9
                 }
             }
-            lidO: pushLoopLabel ctx: ctx
+            lidO: pushLoopLabel ctx: ctx tmp: tmp
             l0: "\{ind}while (1) {\n"
             buf.append l0.stringview
             l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv9});\n"
@@ -7348,7 +7386,7 @@ emitIntRangeFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData in
             return false
         }
         fromx: rangeFromExpr symtab: symtab ctx: ctx n: c0.operation
-        lidR: pushLoopLabel ctx: ctx
+        lidR: pushLoopLabel ctx: ctx tmp: tmp
         lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
@@ -9478,7 +9516,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         i = i + 1
     }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) borrowedVars: (Map String value: bool))
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx

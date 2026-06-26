@@ -139,14 +139,15 @@ def zc_stage2_asan_binary(zc_binary, tmp_path_factory):
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("unit", ["ztypes", "ztyping", "zenv"])
 def test_stage2_selfhost_asan_clean(zc_stage2_asan_binary, tmp_path, unit):
-    """stage2 self-emits each unit with no use-after-free / double-free.
+    """stage2 self-emits each unit with no leaks and no use-after-free /
+    double-free.
 
-    Leak detection is disabled (``detect_leaks=0``): this gates memory SAFETY,
-    not the residual exit-leak the sweep is still reducing. ASan aborts with a
-    non-zero exit on any heap-use-after-free / double-free / overflow.
+    Leak detection is enabled (``detect_leaks=1``): the self-emit is leak-free,
+    so this gates both leak-freedom and memory SAFETY. ASan aborts with a
+    non-zero exit on any leak / heap-use-after-free / double-free / overflow.
     """
     out_c = str(tmp_path / f"{unit}.c")
-    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0")
+    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1")
     proc = subprocess.run(
         [
             zc_stage2_asan_binary,
