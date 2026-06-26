@@ -36,7 +36,7 @@ gaps. None block self-hosting; they block *sunset* and *polish*.
 | `zchar`, `zcharclass` | lexer char tables | logic lives in `zlexer.z`; retire with `.py` |
 | `zsynth`, `ztypeutil` | typecheck helpers | logic lives in `ztypecheck.z`/`ztypes.z`; retire with `.py` |
 | `ztokentype` | `TT` enum for the Python modules | `.z` side has its own token kinds; retire with `.py` |
-| `zsymtab_proto` | pre-port symbol-table prototype | **dead** — superseded by `zenv.z`; deletable now |
+| `zsymtab_proto` | live typing-time `Protocol` (`ZSymbolTableProto`) imported by `ztyping.py` to type `symbol_table` without importing `zenv` — breaks the `zast`↔`zenv` cycle | retires with `.py` (not separately deletable: `ztyping.py:130` uses it) |
 
 **`.z`-only (1):** `ztestrunner` (no Python counterpart by design).
 
@@ -153,9 +153,10 @@ Verify each against HEAD before scheduling (sources are point-in-time):
 ## 6. Suggested sequencing
 
 1. **Near-term (unblock sunset):** switch golden regen to the `.z` dump binaries
-   (`make regen-goldens` — DONE); delete dead `zsymtab_proto.py`; decide the
-   `.inc`/`.tmpl` canonical-source question; define the committed-stage0
-   bootstrap.
+   (`make regen-goldens` — DONE); decide the `.inc`/`.tmpl` canonical-source
+   question; define the committed-stage0 bootstrap. (`zsymtab_proto.py` is *not*
+   separately deletable — it is a live `ztyping.py` typing Protocol that retires
+   with `src/*.py`; see §1.)
 2. **Then:** stand up dual-compiler CI (Phase D); align `zc.z` CLI flags.
    (`cli_basic` leak + `ztestrunner` timeout — DONE.)
 3. **Medium:** schedule deferred language features as port/usage needs surface
