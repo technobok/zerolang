@@ -114,6 +114,7 @@ def zc_stage2_asan_binary(zc_binary, tmp_path_factory):
     a value the return still reads is a use-after-free which the byte-identity
     fixpoint can miss by luck (freed memory not yet reused), but ASan catches.
     """
+
     def _do(d):
         c_path = str(d / "zc_stage2.c")
         _emit_c(zc_binary, "zc", c_path)
