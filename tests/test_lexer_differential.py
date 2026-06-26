@@ -10,10 +10,12 @@ Two parametrizations over examples/*.z:
   output. Closes the lexer-parity loop. Marked `emitter` so it
   skips cleanly without a C compiler.
 
-To regenerate a golden (after verifying the change is intentional):
+To regenerate the goldens (after verifying the change is intentional),
+use the self-hosted dump binary (no Python):
 
-    python tools/lexdump.py examples/<name>.z \
-        > tests/fixtures/lexer_golden/<name>.tokens
+    make regen-goldens            # all lexer + parser goldens
+    # or for a single file:
+    out/zlexer examples/<name>.z > tests/fixtures/lexer_golden/<name>.tokens
 """
 
 import os
@@ -51,7 +53,7 @@ def test_python_lexer_matches_golden(example_name):
     if not os.path.exists(golden_path):
         pytest.fail(
             f"Missing golden file: {golden_path}\n"
-            f"Regenerate: python tools/lexdump.py {example_path} > {golden_path}"
+            f"Regenerate: out/zlexer {example_path} > {golden_path} (or make regen-goldens)"
         )
     with open(golden_path, "r", encoding="utf-8") as f:
         expected = f.read()
@@ -60,7 +62,7 @@ def test_python_lexer_matches_golden(example_name):
         pytest.fail(
             f"Token dump diverged from golden for {example_name}.\n"
             f"If intentional, regenerate: "
-            f"python tools/lexdump.py {example_path} > {golden_path}"
+            f"out/zlexer {example_path} > {golden_path} (or make regen-goldens)"
         )
 
 

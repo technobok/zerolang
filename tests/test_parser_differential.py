@@ -16,11 +16,13 @@ exercise whole-program loading (parser.parse): extern resolution of sibling
 units and same-named-subdirectory subunits. The example corpus has no
 filesystem subunits, so those fixtures are synthetic.
 
-To regenerate a golden (after verifying the change is intentional):
+To regenerate the goldens (after verifying the change is intentional),
+use the self-hosted dump binary (no Python):
 
-    python tools/astdump.py examples/<name>.z \
-        > tests/fixtures/parser_golden/<name>.ast
-    python tools/astdump.py --program <abs-tree-dir> main \
+    make regen-goldens            # all parser + program (+ lexer) goldens
+    # or for a single file / program:
+    out/zparser examples/<name>.z > tests/fixtures/parser_golden/<name>.ast
+    out/zparser --program tests/fixtures/parser_program/<name>.tree main \
         > tests/fixtures/parser_program/<name>.expected
 
 # SKIP set -- examples that exercise a deliberately-deferred parser feature,
@@ -81,7 +83,7 @@ def test_python_parser_matches_golden(example_name):
     if not os.path.exists(golden_path):
         pytest.fail(
             f"Missing golden file: {golden_path}\n"
-            f"Regenerate: python tools/astdump.py {example_path} > {golden_path}"
+            f"Regenerate: out/zparser {example_path} > {golden_path} (or make regen-goldens)"
         )
     with open(golden_path, "r", encoding="utf-8") as f:
         expected = f.read()
@@ -90,7 +92,7 @@ def test_python_parser_matches_golden(example_name):
         pytest.fail(
             f"AST dump diverged from golden for {example_name}.\n"
             f"If intentional, regenerate: "
-            f"python tools/astdump.py {example_path} > {golden_path}"
+            f"out/zparser {example_path} > {golden_path} (or make regen-goldens)"
         )
 
 

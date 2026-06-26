@@ -14,7 +14,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -283,6 +283,39 @@ bin/zc: $(wildcard src/*.z) $(wildcard src/*.py) $(wildcard lib/system/*.z)
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
+
+# Standalone dump binaries, built by the ported compiler (bin/zc). out/zlexer
+# emits the canonical token dump; out/zparser emits the canonical AST dump in
+# both single-file (out/zparser <file>) and whole-program (out/zparser --program
+# <dir> main) modes. These are the Python-free regeneration path for the
+# lexer/parser/program goldens -- the dumper logic lives in src/zlexer.z and
+# src/zparser.z, not in any src/*.py oracle.
+out/zlexer: bin/zc $(wildcard src/zlexer.z) $(wildcard lib/system/*.z)
+	@mkdir -p $(BUILDDIR)
+	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c
+
+out/zparser: bin/zc $(wildcard src/zparser.z) $(wildcard src/zlexer.z) $(wildcard src/zast.z) $(wildcard src/zvfs.z) $(wildcard lib/system/*.z)
+	@mkdir -p $(BUILDDIR)
+	bin/zc zparser --src src --system lib/system --emit-c $(BUILDDIR)/zparser.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c
+
+# Regenerate the lexer / parser / whole-program goldens from the .z dump
+# binaries (no Python). Iterates every examples/*.z (matching the differential
+# tests), so it includes the main-less modules the build target's SKIP omits.
+# Always review the resulting diff before committing -- a non-empty diff means
+# the dump output changed.
+regen-goldens: out/zlexer out/zparser
+	@for f in examples/*.z; do \
+		name=$$(basename $$f .z); \
+		$(BUILDDIR)/zlexer $$f > tests/fixtures/lexer_golden/$$name.tokens; \
+		$(BUILDDIR)/zparser $$f > tests/fixtures/parser_golden/$$name.ast; \
+	done
+	@for d in tests/fixtures/parser_program/*.tree; do \
+		name=$$(basename $$d .tree); \
+		$(BUILDDIR)/zparser --program $$d main > tests/fixtures/parser_program/$$name.expected; \
+	done
+	@echo "regenerated lexer/parser/program goldens via $(BUILDDIR)/zlexer + $(BUILDDIR)/zparser"
 
 # install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink. The
 # runtime ships as lib/runtime (copied from src/runtime). os.exePath resolves
