@@ -14,7 +14,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -316,6 +316,42 @@ regen-goldens: out/zlexer out/zparser
 		$(BUILDDIR)/zparser --program $$d main > tests/fixtures/parser_program/$$name.expected; \
 	done
 	@echo "regenerated lexer/parser/program goldens via $(BUILDDIR)/zlexer + $(BUILDDIR)/zparser"
+
+# bootstrap/zc.c -- the committed, Python-free bootstrap seed: a self-emitted,
+# self-reproducing C dump of the compiler. `cc bootstrap/zc.c` IS the
+# self-hosted compiler. See bootstrap/README.md and doc/bootstrap.pdoc.
+#
+# bump-seed regenerates it from a fresh bin/zc (uses compiler0 to build bin/zc
+# while the reference is live; post-freeze a seed-built bin/zc does the same).
+# Run only when test-bootstrap reports the seed can no longer build main, or for
+# periodic hygiene -- NOT every commit.
+bump-seed: bin/zc
+	bin/zc zc --src src --system lib/system --emit-c bootstrap/zc.c
+	@echo "regenerated bootstrap/zc.c -- review the diff and commit"
+
+# test-bootstrap -- prove the committed seed bootstraps a correct compiler with
+# NO Python: cc the seed, then double-bootstrap and assert the self-host fixpoint
+# (b2 == b3, lag-tolerant) plus a correctness check (a seed-built compiler builds
+# ztypes to its smoke golden). Slow (3 zc.c compiles); NOT in `make test`.
+test-bootstrap:
+	@mkdir -p $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c
+	$(BUILDDIR)/zc-seed zc --src src --system lib/system --emit-c $(BUILDDIR)/b1.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c
+	$(BUILDDIR)/zc-b1 zc --src src --system lib/system --emit-c $(BUILDDIR)/b2.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c
+	$(BUILDDIR)/zc-b2 zc --src src --system lib/system --emit-c $(BUILDDIR)/b3.c
+	@diff $(BUILDDIR)/b2.c $(BUILDDIR)/b3.c \
+		&& echo "fixpoint OK (b2 == b3)" \
+		|| { echo "FAIL: seed-built compiler does not converge"; exit 1; }
+	@cmp -s $(BUILDDIR)/b1.c bootstrap/zc.c \
+		&& echo "seed is current (b1 == committed seed)" \
+		|| echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"
+	$(BUILDDIR)/zc-b1 ztypes --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c
+	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_z/smoke.expected \
+		&& echo "correctness OK (seed-built zc compiles ztypes to golden)"
+	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
 # install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink. The
 # runtime ships as lib/runtime (copied from src/runtime). os.exePath resolves

@@ -109,6 +109,15 @@ reference and is cached in `bin/`, git-ignored):
 make zc        # -> ./bin/zc
 ```
 
+Or build it from the committed C seed with **no Python** — just a C
+compiler (`cc bootstrap/zc.c` *is* the self-hosted compiler; see
+`bootstrap/README.md`):
+
+```bash
+cc -std=c17 -o zc bootstrap/zc.c
+./zc hello --src examples --system lib/system -o hello
+```
+
 ### Compile and Run
 
 `zc` builds a native executable by default and self-locates its standard

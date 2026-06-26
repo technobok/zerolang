@@ -72,15 +72,16 @@ Concrete work before `compiler0/*.py` can be deleted:
   are deleted; the `*_differential` `.z`-binary tests already pin
   goldens == `.z` output, and `test_python_{lexer,parser}_matches_golden` stays
   as the reference cross-check (retires with `.py`).
-- **Bootstrap stage0.** `tests/conftest.py` (`_ZC = [python, compiler0/zc.py]`)
-  builds the port from `compiler0/zc.py` as stage0 for the *entire* `.z` suite
-  (`test_emitc_z`, `test_dumpsql_z`, `test_*_differential`, `test_cli`,
-  `test_error_format_z`, `test_fixedpoint`, …). **Decided mechanism (deferred to
-  freeze):** a **committed recent `bootstrap/zc.c` seed** — a portable C dump of a
-  recent compiler that builds the *current* `src`, bumped only on a feature-bump
-  (two-step) or periodic hygiene, gated by a "seed still builds main" check
-  (Zig/OCaml-style; *not* a binary, *not* regenerated per commit). Until freeze,
-  the live `compiler0/zc.py` is the bootstrap. See `doc/bootstrap.pdoc`.
+- **Bootstrap stage0.** **Python-free seed INTRODUCED** (`bootstrap/zc.c`): a
+  committed, self-reproducing C dump of the compiler — `cc bootstrap/zc.c` builds
+  a working `zc` with no Python; `make test-bootstrap` gates it (double-bootstrap
+  fixpoint + a unit-to-golden correctness check), `make bump-seed` refreshes it
+  (Zig/OCaml-style recent seed, bumped occasionally, *not* per commit; *not* a
+  binary). See `bootstrap/README.md`. **Remaining (deferred to freeze):**
+  `tests/conftest.py` (`_ZC = [python, compiler0/zc.py]`) and the default
+  `make bin/zc` still bootstrap the *entire* `.z` suite via `compiler0/zc.py`
+  (the live oracle); switching that default onto the seed is the freeze-time
+  follow-up.
 - **Reference-only oracles.** The `*_differential` tests still compare port
   output to the committed goldens, and `test_python_{lexer,parser}_matches_golden`
   still re-derives them from the Python reference as a cross-check. Golden regen
