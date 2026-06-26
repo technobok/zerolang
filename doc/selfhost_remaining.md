@@ -96,6 +96,17 @@ Concrete work before `compiler0/*.py` can be deleted:
   months dual-implementation in CI, then tag `python-stage0-final` and delete
   `compiler0/*.py`. **Task:** stand up the dual-CI (run the suite under both compilers;
   any divergence blocks) and set the freeze trigger.
+  - **BLOCKED — self-host hardening required first.** A freeze attempt (switch
+    build/stage0 to the seed; dormant compiler0) exposed **latent UAF/double-free
+    bugs in the `.z`-built compiler** on paths it had never run before (compiler0
+    always built the test/corpus `zc`): generators, facets, protocols, iterator,
+    autoproject. These are `.z`-*emitter* port gaps (correct in GC'd compiler0).
+    The self-hosted `zc` must be ASan-clean + corpus-green **when built by its own
+    emit** before the freeze. Bug 1 (field-take source-invalidation) is root-caused
+    with a verified fix; Bug 2 (List-UAF in generator lowering) located; expect
+    more. See **`doc/selfhost_hardening.md`** for the full inventory, the fix, and
+    the sweep plan. Keep the differential oracle until the sweep is done — it is
+    what catches these.
 
 ## 3. Deferred language features
 
