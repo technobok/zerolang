@@ -276,20 +276,21 @@ def test_list_template_compiles_with_listview_methods():
     assert rc == 0, err
 
 
-def test_native_fragments_in_sync():
-    """src/runtime/natives/*.inc mirror the _Z_* template constants (the
-    self-hosted emitter reads the exported files; regenerate with
-    tools/export_native_fragments.py)."""
+def test_native_fragments_present_and_unique():
+    """src/runtime/natives/*.inc are the canonical native fragments: each maps
+    1:1 to a _Z_* module global that loads it (zemitterc_runtime._load_native).
+    Guards against a stray .inc with no global, or a global naming a missing
+    file (the latter also raises at import). A missing file would already fail
+    loudly when the module binds its globals; this pins the set relationship."""
     import os
     import zemitterc_runtime as rt
 
     base = os.path.join(os.path.dirname(__file__), "..", "src", "runtime", "natives")
-    names = [
+    globals_ = {
         n for n in dir(rt) if n.startswith("_Z_") and isinstance(getattr(rt, n), str)
-    ]
-    assert names, "no native template constants found"
-    for n in names:
-        p = os.path.join(base, f"{n}.inc")
-        assert os.path.exists(p), f"missing export {n}"
-        with open(p, encoding="utf-8") as fh:
-            assert fh.read() == getattr(rt, n), f"stale export {n}"
+    }
+    files = {f[:-4] for f in os.listdir(base) if f.endswith(".inc")}
+    assert globals_, "no native fragment globals found"
+    assert globals_ == files, f"native fragment set drift: {globals_ ^ files}"
+    for n in globals_:
+        assert getattr(rt, n), f"empty native fragment {n}"

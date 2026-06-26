@@ -29,8 +29,8 @@ gaps. None block self-hosting; they block *sunset* and *polish*.
 
 | Module | Role | Disposition |
 | --- | --- | --- |
-| `zemitterc_runtime` | source-of-truth for `src/runtime/natives/*.inc` (via `tools/export_native_fragments.py`, pinned by `test_native_fragments_in_sync`) | **Blocker** — `.inc` texts need a `.py`-free canonical home (see §2) |
-| `zemitterc_templates` | source-of-truth for `src/runtime/*.c.tmpl` substitution | **Blocker** — same as above |
+| `zemitterc_runtime` | emits the runtime preamble; *loads* the 104 `src/runtime/natives/*.inc` (canonical) via `_load_native` at import, like the 3 top-level `.inc` | retires with `.py` (no longer the fragment source-of-truth; `export_native_fragments.py` + the sync test are gone) |
+| `zemitterc_templates` | pure loader/substituter for the hand-authored `src/runtime/*.c.tmpl` (already canonical) | retires with `.py` |
 | `zastdump`, `ztokendump` | dump oracles, now demoted to reference cross-checks (`test_python_{parser,lexer}_matches_golden`) — golden *regen* is `.z` (`make regen-goldens`, §2) | retire with `.py`; the `tools/{lexdump,astdump}.py` regen wrappers are already deleted |
 | `zasthash` | AST content-hash for mono dedup | **superseded** — the port dedups monos *by name/key* (`ztypecheck.z:5104`), not content-hash; retires with `.py` |
 | `zchar`, `zcharclass` | lexer char tables | logic lives in `zlexer.z`; retire with `.py` |
@@ -44,13 +44,19 @@ gaps. None block self-hosting; they block *sunset* and *polish*.
 
 Concrete work before `src/*.py` can be deleted:
 
-- **Runtime artifact source-of-truth.** `src/runtime/natives/*.inc` and
-  `src/runtime/*.c.tmpl` are generated from `zemitterc_runtime.py` /
-  `zemitterc_templates.py`. The `.inc`/`.tmpl` files are committed and read by the
-  port emitter, but their *canonical generator* is Python. Decide: promote the
-  committed `.inc`/`.tmpl` to canonical (delete the generator, keep a `.z` or
-  checked-in-only invariant) **or** port the generators. Until then, editing a
-  runtime fragment requires Python.
+- **Runtime artifact source-of-truth.** **RESOLVED** (promoted to canonical).
+  All runtime artifacts are now committed-canonical files read from disk by both
+  emitters: the 104 `src/runtime/natives/*.inc`, the 10 `src/runtime/*.c.tmpl`,
+  and the 3 top-level `src/runtime/{z_String,z_StringView,z_hash}.inc`. The `.inc`
+  natives used to live as `_Z_*` string constants in `zemitterc_runtime.py`
+  (exported by `tools/export_native_fragments.py`, pinned by
+  `test_native_fragments_in_sync`); the Python emitter now binds each `_Z_*`
+  global by loading its `.inc` at import (`_load_native`), so the file is the
+  single source — editing a fragment is a plain `.inc` edit, no Python. The
+  export tool is deleted and the sync test replaced by a 1:1 present/unique guard
+  (`test_native_fragments_present_and_unique`). The `.c.tmpl` and top-level `.inc`
+  were already hand-authored canonical files (only loaded by Python, never
+  generated).
 - **Golden regeneration.** **DONE.** Lexer/parser/program goldens regenerate via
   `make regen-goldens`, which builds the standalone `.z` dump binaries with the
   ported `zc` (`out/zlexer`, `out/zparser`) and writes the `tests/fixtures/`
@@ -153,8 +159,8 @@ Verify each against HEAD before scheduling (sources are point-in-time):
 ## 6. Suggested sequencing
 
 1. **Near-term (unblock sunset):** switch golden regen to the `.z` dump binaries
-   (`make regen-goldens` — DONE); decide the `.inc`/`.tmpl` canonical-source
-   question; define the committed-stage0 bootstrap. (`zsymtab_proto.py` is *not*
+   (`make regen-goldens` — DONE); promote the runtime `.inc`/`.tmpl` to canonical
+   (DONE — §2); define the committed-stage0 bootstrap. (`zsymtab_proto.py` is *not*
    separately deletable — it is a live `ztyping.py` typing Protocol that retires
    with `src/*.py`; see §1.)
 2. **Then:** stand up dual-compiler CI (Phase D); align `zc.z` CLI flags.
