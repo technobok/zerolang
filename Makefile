@@ -14,7 +14,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck selfhost-asan test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -227,6 +227,13 @@ test-leak:
 
 leakcheck:
 	bash tests/leakcheck.sh
+
+# Self-host memory-safety + leak gate: the .z-emitted zc, built with ASan, must
+# compile every example + corpus unit (both --emit-c and --full --dump-sql modes)
+# with no use-after-free / double-free and 0 bytes leaked. Checks the COMPILER
+# while it emits, not the emitted program. Slow -- deliberately NOT in `make test`.
+selfhost-asan:
+	bash tests/selfhost_asan.sh
 
 # Unified Python-free corpus gate: behavioral (.out stdout/exit goldens) + leak
 # (detect_leaks=1) + negative (.err error goldens) for every case, comparing the

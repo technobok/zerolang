@@ -24,6 +24,7 @@ import pytest
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 _SRC_DIR = os.path.join(_REPO_ROOT, "src")
 _SYSTEM_DIR = os.path.join(_REPO_ROOT, "lib", "system")
+_EXAMPLES_DIR = os.path.join(_REPO_ROOT, "examples")
 _CC = os.environ.get("Z_TEST_CC", "gcc")
 _CFLAGS = [
     "-std=c17",
@@ -134,30 +135,53 @@ def zc_stage2_asan_binary(zc_binary, tmp_path_factory):
     return bin_path
 
 
+# The locked-in src units plus the example constructs that exposed the self-host
+# emitter ownership UAFs / leaks (generators, facets, protocols, iterator,
+# autoproject, atomic_call_temps). The whole-corpus guarantee lives in the
+# ``make selfhost-asan`` shell gate (tests/selfhost_asan.sh); this is the fast
+# in-suite regression net for those specific bug classes.
+_SELFHOST_ASAN_UNITS = [
+    pytest.param("ztypes", _SRC_DIR, id="ztypes"),
+    pytest.param("ztyping", _SRC_DIR, id="ztyping"),
+    pytest.param("zenv", _SRC_DIR, id="zenv"),
+    pytest.param("generator_chain", _EXAMPLES_DIR, id="generator_chain"),
+    pytest.param("facets", _EXAMPLES_DIR, id="facets"),
+    pytest.param("protocols", _EXAMPLES_DIR, id="protocols"),
+    pytest.param("iterator", _EXAMPLES_DIR, id="iterator"),
+    pytest.param("autoproject", _EXAMPLES_DIR, id="autoproject"),
+    pytest.param("atomic_call_temps", _EXAMPLES_DIR, id="atomic_call_temps"),
+]
+
+
 @pytest.mark.emitter
 @pytest.mark.runtime
 @pytest.mark.timeout(300)
-@pytest.mark.parametrize("unit", ["ztypes", "ztyping", "zenv"])
-def test_stage2_selfhost_asan_clean(zc_stage2_asan_binary, tmp_path, unit):
-    """stage2 self-emits each unit with no leaks and no use-after-free /
-    double-free.
+@pytest.mark.parametrize("mode", ["emit-c", "dump-sql"])
+@pytest.mark.parametrize("unit,srcdir", _SELFHOST_ASAN_UNITS)
+def test_stage2_selfhost_asan_clean(
+    zc_stage2_asan_binary, tmp_path, unit, srcdir, mode
+):
+    """stage2 self-emits each unit, in both emit modes, with no leaks and no
+    use-after-free / double-free.
 
     Leak detection is enabled (``detect_leaks=1``): the self-emit is leak-free,
     so this gates both leak-freedom and memory SAFETY. ASan aborts with a
     non-zero exit on any leak / heap-use-after-free / double-free / overflow.
     """
-    out_c = str(tmp_path / f"{unit}.c")
+    if mode == "emit-c":
+        mode_args = ["--emit-c", str(tmp_path / f"{unit}.c")]
+    else:
+        mode_args = ["--full", "--dump-sql", "-"]
     env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1")
     proc = subprocess.run(
         [
             zc_stage2_asan_binary,
             unit,
             "--src",
-            _SRC_DIR,
+            srcdir,
             "--system",
             _SYSTEM_DIR,
-            "--emit-c",
-            out_c,
+            *mode_args,
         ],
         capture_output=True,
         text=True,
@@ -165,6 +189,6 @@ def test_stage2_selfhost_asan_clean(zc_stage2_asan_binary, tmp_path, unit):
         env=env,
     )
     assert proc.returncode == 0, (
-        f"stage2 self-emitting {unit} under ASan is not memory-safe "
+        f"stage2 self-emitting {unit} ({mode}) under ASan is not memory-safe "
         f"(rc={proc.returncode}):\n{proc.stderr[-3000:]}"
     )
