@@ -42,7 +42,7 @@ The end-to-end flow used to land the rename:
 # 1. Generate fresh SQL dumps from a clean tree.
 for ex in examples/*.z; do
     name=$(basename "$ex" .z)
-    uv run python src/zc.py --src examples "$name" --dump-sql /tmp/dump_$name.sql
+    uv run python compiler0/zc.py --src examples "$name" --dump-sql /tmp/dump_$name.sql
 done
 
 # 2. Apply SQL-driven rename to lib/system + cross-referenced examples.

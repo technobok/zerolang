@@ -1,9 +1,9 @@
 # Self-host: remaining work & compiler0 sunset
 
 Planning inventory of what's left to *complete* the self-hosted zerolang compiler
-(`src/*.z`) and *retire* compiler0 (the Python reference `src/*.py`). Status as of
-the `for`-`while` sweep (post `6e44463`). See `doc/bootstrap.pdoc` for the phase
-strategy; this doc is the concrete task list.
+(`src/*.z`) and *retire* compiler0 (the Python reference, now isolated in
+`compiler0/*.py`). See `doc/bootstrap.pdoc` for the phase strategy; this doc is
+the concrete task list.
 
 ## Status
 
@@ -16,11 +16,16 @@ The port is **functionally complete and self-hosting**:
   runnable with no shell/Python at gate time (`make test-corpus-z` reproduces
   `run_corpus.sh`).
 
-What remains is **(1)** the mechanical/oracle work to delete `src/*.py`, **(2)**
-deferred language features, **(3)** deferred port internals, **(4)** tooling/harness
-gaps. None block self-hosting; they block *sunset* and *polish*.
+The Python reference compiler is isolated in `compiler0/` (moved from `src/`); it
+stays live as the build bootstrap and the differential oracle. See
+`compiler0/README.md`.
 
-## 1. Module parity (`src/*.py` ↔ `src/*.z`)
+What remains is **(1)** the mechanical/oracle work to eventually delete
+`compiler0/*.py`, **(2)** deferred language features, **(3)** deferred port
+internals, **(4)** tooling/harness gaps. None block self-hosting; they block
+*sunset* and *polish*.
+
+## 1. Module parity (`compiler0/*.py` ↔ `src/*.z`)
 
 **Ported (12, dual today):** `zast`, `zc`, `zemitterc`, `zenv`, `zgenerator`,
 `zlexer`, `zparser`, `zsqldump`, `ztypecheck`, `ztypes`, `ztyping`, `zvfs`.
@@ -42,7 +47,7 @@ gaps. None block self-hosting; they block *sunset* and *polish*.
 
 ## 2. Compiler0 sunset blockers
 
-Concrete work before `src/*.py` can be deleted:
+Concrete work before `compiler0/*.py` can be deleted:
 
 - **Runtime artifact source-of-truth.** **RESOLVED** (promoted to canonical).
   All runtime artifacts are now committed-canonical files read from disk by both
@@ -67,25 +72,28 @@ Concrete work before `src/*.py` can be deleted:
   are deleted; the `*_differential` `.z`-binary tests already pin
   goldens == `.z` output, and `test_python_{lexer,parser}_matches_golden` stays
   as the reference cross-check (retires with `.py`).
-- **Bootstrap stage0.** `tests/conftest.py` (`_ZC = [python, zc.py]`) builds the
-  port from `zc.py` as stage0 for the *entire* `.z` suite (`test_emitc_z`,
-  `test_dumpsql_z`, `test_*_differential`, `test_cli`, `test_error_format_z`,
-  `test_fixedpoint`, …). Post-sunset, bootstrap from a **committed stage0 binary**
-  (or the `python-stage0` tag) per the N-built-by-N−1 plan (`doc/bootstrap.pdoc`
-  Phase E). **Task:** define how stage0 is obtained without `zc.py`.
+- **Bootstrap stage0.** `tests/conftest.py` (`_ZC = [python, compiler0/zc.py]`)
+  builds the port from `compiler0/zc.py` as stage0 for the *entire* `.z` suite
+  (`test_emitc_z`, `test_dumpsql_z`, `test_*_differential`, `test_cli`,
+  `test_error_format_z`, `test_fixedpoint`, …). **Decided mechanism (deferred to
+  freeze):** a **committed recent `bootstrap/zc.c` seed** — a portable C dump of a
+  recent compiler that builds the *current* `src`, bumped only on a feature-bump
+  (two-step) or periodic hygiene, gated by a "seed still builds main" check
+  (Zig/OCaml-style; *not* a binary, *not* regenerated per commit). Until freeze,
+  the live `compiler0/zc.py` is the bootstrap. See `doc/bootstrap.pdoc`.
 - **Reference-only oracles.** The `*_differential` tests still compare port
   output to the committed goldens, and `test_python_{lexer,parser}_matches_golden`
   still re-derives them from the Python reference as a cross-check. Golden regen
   is now `.z` (above); once stage0 is committed, dropping the Python cross-checks
-  with `src/*.py` makes the differentials fully `.z`-only.
+  with `compiler0/*.py` makes the differentials fully `.z`-only.
 - **Python-internal test suite.** `test_typecheck.py`, `test_emitter.py`,
   `test_parser.py`, `test_lexer.py`, `test_vfs.py`, `test_cli.py`, `test_asthash.py`,
   `test_runtime_templates.py` exercise the Python data structures directly. They
-  retire with `src/*.py`; the `.z`-side coverage (`test_*_z.py`, differentials,
+  retire with `compiler0/*.py`; the `.z`-side coverage (`test_*_z.py`, differentials,
   `ztestrunner`) is the replacement. Confirm no unique coverage is lost first.
 - **Parallel-maintenance window + freeze.** `doc/bootstrap.pdoc` Phases D/E: ~6
   months dual-implementation in CI, then tag `python-stage0-final` and delete
-  `src/*.py`. **Task:** stand up the dual-CI (run the suite under both compilers;
+  `compiler0/*.py`. **Task:** stand up the dual-CI (run the suite under both compilers;
   any divergence blocks) and set the freeze trigger.
 
 ## 3. Deferred language features
@@ -162,10 +170,10 @@ Verify each against HEAD before scheduling (sources are point-in-time):
    (`make regen-goldens` — DONE); promote the runtime `.inc`/`.tmpl` to canonical
    (DONE — §2); define the committed-stage0 bootstrap. (`zsymtab_proto.py` is *not*
    separately deletable — it is a live `ztyping.py` typing Protocol that retires
-   with `src/*.py`; see §1.)
+   with `compiler0/*.py`; see §1.)
 2. **Then:** stand up dual-compiler CI (Phase D); align `zc.z` CLI flags.
    (`cli_basic` leak + `ztestrunner` timeout — DONE.)
 3. **Medium:** schedule deferred language features as port/usage needs surface
    (range-for, `int.each`, owned-pair Map iter).
-4. **Ongoing:** Phase E freeze (`python-stage0-final`), delete `src/*.py`, adopt
+4. **Ongoing:** Phase E freeze (`python-stage0-final`), delete `compiler0/*.py`, adopt
    N-built-by-N−1; revisit port-internal deferrals only on concrete blockers.

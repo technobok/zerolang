@@ -2,7 +2,7 @@
 
 Runs each fixture op-script in `tests/fixtures/zvfs_ops/*.script`
 against the pure-Python dispatcher in `tests/zvfs_script.py`
-(which calls into the Python reference at `src/zvfs.py`) and
+(which calls into the Python reference at `compiler0/zvfs.py`) and
 asserts that the captured output matches the same `.expected`
 golden the zerolang binary matches via `tests/test_zvfs_z.py`.
 

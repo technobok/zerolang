@@ -59,7 +59,7 @@ def _run(args, timeout, mem, **kw):
 
 def emit_ref(unit, out_c, src_dir=EXAMPLES_DIR):
     proc = _run(
-        [sys.executable, "src/zc.py", unit, "--src", src_dir, "-o", out_c],
+        [sys.executable, "compiler0/zc.py", unit, "--src", src_dir, "-o", out_c],
         240,
         ZC_MEM_LIMIT,
     )

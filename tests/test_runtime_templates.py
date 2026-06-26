@@ -23,9 +23,11 @@ import pytest
 
 pytestmark = [pytest.mark.runtime, pytest.mark.infra]
 
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
+COMPILER0_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "compiler0")
+)
+if COMPILER0_DIR not in sys.path:
+    sys.path.insert(0, COMPILER0_DIR)
 
 from zemitterc_templates import apply, load  # noqa: E402
 

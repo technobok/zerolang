@@ -31,6 +31,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(REPO, "src")
+COMPILER0 = os.path.join(REPO, "compiler0")
 SYSDIR = os.path.join(REPO, "lib", "system")
 CFLAGS = [
     "-std=c17", "-Wall", "-Wextra", "-Wno-unused-function", "-Wno-unused-parameter",
@@ -53,13 +54,15 @@ def build_port():
     if os.path.exists(CACHED_PORT):
         return CACHED_PORT
     cpath = CACHED_PORT + ".c"
-    _run([sys.executable, os.path.join(SRC, "zc.py"), "zc", "--src", SRC, "-o", cpath])
+    _run(
+        [sys.executable, os.path.join(COMPILER0, "zc.py"), "zc", "--src", SRC, "-o", cpath]
+    )
     _run(["gcc", *CFLAGS, "-o", CACHED_PORT, cpath])
     return CACHED_PORT
 
 
 def emit_ref(unit, out):
-    _run([sys.executable, os.path.join(SRC, "zc.py"), unit,
+    _run([sys.executable, os.path.join(COMPILER0, "zc.py"), unit,
           "--src", SRC, "--system", SYSDIR, "-o", out])
 
 

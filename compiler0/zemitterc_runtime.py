@@ -118,7 +118,10 @@ def emit_runtime_includes(
     return "".join(parts)
 
 
-_RUNTIME_DIR = os.path.join(os.path.dirname(__file__), "runtime")
+# The runtime fragments are the language runtime, owned by the .z compiler and
+# canonical under src/runtime/. compiler0 lives in its own dir and reads them
+# from the shared location (one source of truth keeps both emitters in sync).
+_RUNTIME_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "runtime")
 _FRAGMENT_CACHE: "dict[str, str]" = {}
 
 

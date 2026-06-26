@@ -63,7 +63,10 @@ import os
 import re
 from typing import Dict
 
-_TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "runtime")
+# The runtime fragments are the language runtime, owned by the .z compiler and
+# canonical under src/runtime/. compiler0 lives in its own dir and reads them
+# from the shared location (one source of truth keeps both emitters in sync).
+_TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "runtime")
 _TEMPLATE_CACHE: "dict[str, str]" = {}
 
 # match any @@WORD@@ sequence so we can point at unresolved placeholders

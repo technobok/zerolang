@@ -60,7 +60,7 @@ ZC="${ZC:-}"
 if [ -z "$ZC" ]; then
   TZC="$(mktemp -d)"; ZC="$TZC/zc"
   echo "[bootstrap: reference builds the port zc (~2.5min)]"
-  uv run python src/zc.py zc --src src -o "$ZC.c" || { echo "FAIL: reference emit of zc"; exit 2; }
+  uv run python compiler0/zc.py zc --src src -o "$ZC.c" || { echo "FAIL: reference emit of zc"; exit 2; }
   gcc "${CF[@]}" -o "$ZC" "$ZC.c" || { echo "FAIL: gcc build of port zc"; exit 2; }
 fi
 
@@ -81,7 +81,7 @@ do_run() {
     local cc="$ZC" src="$dir"
     if [ "$MODE" = update ]; then cc="ref"; fi
     if [ "$cc" = ref ]; then
-      uv run python src/zc.py "$name" --src "$dir" -o "$D/$name.c" 2>"$D/$name.e" || { echo "REFEMIT-FAIL $name"; continue; }
+      uv run python compiler0/zc.py "$name" --src "$dir" -o "$D/$name.c" 2>"$D/$name.e" || { echo "REFEMIT-FAIL $name"; continue; }
     else
       "$ZC" "$name" --src "$dir" --system "$SYS" --emit-c "$D/$name.c" 2>"$D/$name.e" || { [ "$MODE" = report ] && echo "skip(emit) $name"; skip=$((skip+1)); continue; }
     fi
@@ -146,7 +146,7 @@ do_error() {
     [ -e "$f" ] || continue
     name=$(basename "$f" .z)
     if [ "$MODE" = update ]; then
-      uv run python src/zc.py "$name" --src "$ERRORS" -o /dev/null 2>"$D/$name.re" >/dev/null
+      uv run python compiler0/zc.py "$name" --src "$ERRORS" -o /dev/null 2>"$D/$name.re" >/dev/null
       norm_err "$D/$name.re" > "$ERRORS/$name.err"
       echo "updated error $name ($(wc -l < "$ERRORS/$name.err") lines)"; continue
     fi

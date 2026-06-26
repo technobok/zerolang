@@ -9,7 +9,7 @@ Two checks:
 - ``test_ztypes_smoke_matches_golden`` pins the whole binary output against
   the checked-in golden (byte-for-byte), like tests/test_zast_z.py.
 - ``test_pure_fn_battery_matches_python`` is the genuine differential: it
-  drives the same inputs through the Python reference (src/ztypes.py) and
+  drives the same inputs through the Python reference (compiler0/ztypes.py) and
   asserts the produced lines equal the golden's pure-function sections. The
   enum/carrier dumps have no Python analogue and are pinned by the golden
   alone; the full ``zc --dump-sql`` typing differential arrives once the

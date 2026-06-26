@@ -1,4 +1,4 @@
-ZC       := uv run python src/zc.py
+ZC       := uv run python compiler0/zc.py
 CC       := gcc
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
@@ -22,9 +22,9 @@ BOOTSTRAP_MSG := "  [bootstrap-lint] These Python-specific patterns complicate f
 BOOTSTRAP_MSG2 := "  Do not introduce new uses. Run 'make bootstrap-lint' to check."
 
 check:
-	uv run ruff format src/ tests/
-	uv run ruff check src/ tests/ --fix
-	uv run ty check src/
+	uv run ruff format compiler0/ tests/
+	uv run ruff check compiler0/ tests/ --fix
+	uv run ty check compiler0/
 	@$(MAKE) --no-print-directory bootstrap-lint
 	@$(MAKE) --no-print-directory style-lint-fast
 
@@ -42,7 +42,7 @@ style-lint:
 # Baseline counts of existing violations (update when migrating away)
 # isinstance:0  comprehension:8  lambda:0  try/except:8  hasattr:6
 # getattr:4 (F2 — defensive duck-typing on heterogeneous unions)
-# name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
+# name-compare:14 (Phase 7e — cross-structure .name ==/!= in compiler0/*.py)
 # startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
 # name-literal-compare:270 (F3/F4 — buckets A/B/C done, D deferred)
 # emitter-name-resolution:0 (typed-AST-authoritative — emitter reads stamps, not names; achieved)
@@ -50,118 +50,118 @@ style-lint:
 # emitter-name-mangler:0 (no local _mangle_func/_mangle_var; shared mangle_*_name only; achieved)
 bootstrap-lint:
 	@fail=0; \
-	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
+	count=$$(grep -rn 'isinstance(' compiler0/*.py | wc -l); \
 	if [ $$count -gt 0 ]; then \
 		echo "ERROR: isinstance() usage increased ($$count > 0 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'isinstance(' src/*.py | tail -5; fail=1; \
+		grep -rn 'isinstance(' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn '\[.*\bfor\b.*\bin\b' src/*.py | wc -l); \
+	count=$$(grep -rn '\[.*\bfor\b.*\bin\b' compiler0/*.py | wc -l); \
 	if [ $$count -gt 8 ]; then \
 		echo "ERROR: list comprehension usage increased ($$count > 8 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn '\[.*\bfor\b.*\bin\b' src/*.py | tail -5; fail=1; \
+		grep -rn '\[.*\bfor\b.*\bin\b' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn 'lambda ' src/*.py | wc -l); \
+	count=$$(grep -rn 'lambda ' compiler0/*.py | wc -l); \
 	if [ $$count -gt 0 ]; then \
 		echo "ERROR: lambda usage increased ($$count > 0 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'lambda ' src/*.py | tail -5; fail=1; \
+		grep -rn 'lambda ' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn -E '^\s*(try:|except\b)' src/*.py | wc -l); \
+	count=$$(grep -rn -E '^\s*(try:|except\b)' compiler0/*.py | wc -l); \
 	if [ $$count -gt 8 ]; then \
 		echo "ERROR: try/except usage increased ($$count > 8 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn -E '^\s*(try:|except\b)' src/*.py | tail -5; fail=1; \
+		grep -rn -E '^\s*(try:|except\b)' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn '\byield\b' src/*.py | wc -l); \
+	count=$$(grep -rn '\byield\b' compiler0/*.py | wc -l); \
 	if [ $$count -gt 80 ]; then \
 		echo "ERROR: yield usage found ($$count > 80 baseline)"; \
 		echo "  Note: the baseline accounts for the 'yield' keyword in"; \
 		echo "  the Zerolang lexer/parser/AST/error messages, not Python yield."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn '\byield\b' src/*.py | tail -5; fail=1; \
+		grep -rn '\byield\b' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn 'hasattr(' src/*.py | wc -l); \
+	count=$$(grep -rn 'hasattr(' compiler0/*.py | wc -l); \
 	if [ $$count -gt 6 ]; then \
 		echo "ERROR: hasattr() usage increased ($$count > 6 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'hasattr(' src/*.py | tail -5; fail=1; \
+		grep -rn 'hasattr(' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn 'getattr(' src/*.py | wc -l); \
+	count=$$(grep -rn 'getattr(' compiler0/*.py | wc -l); \
 	if [ $$count -gt 4 ]; then \
 		echo "ERROR: getattr() usage increased ($$count > 4 baseline)"; \
 		echo "  F2: prefer direct attribute access; for genuinely"; \
 		echo "  heterogeneous unions, narrow with nodetype/type() and cast()."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'getattr(' src/*.py | tail -5; fail=1; \
+		grep -rn 'getattr(' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' src/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
+	count=$$(grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' compiler0/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
 	if [ $$count -gt 14 ]; then \
 		echo "ERROR: cross-structure .name comparisons increased ($$count > 14 baseline)"; \
 		echo "  Phase 7e: compare by id (nodeid/entry_id/variableid) instead."; \
 		echo "  Intentional string compare? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' src/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
+		grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' compiler0/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn 'startswith(' src/*.py | wc -l); \
+	count=$$(grep -rn 'startswith(' compiler0/*.py | wc -l); \
 	if [ $$count -gt 42 ]; then \
 		echo "ERROR: startswith() usage increased ($$count > 42 baseline)"; \
 		echo "  F3: string-prefix tests are bootstrap-hostile; prefer"; \
 		echo "  id-based dispatch (BuiltinName / nodeid / name_id)."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'startswith(' src/*.py | tail -5; fail=1; \
+		grep -rn 'startswith(' compiler0/*.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' src/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
+	count=$$(grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' compiler0/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
 	if [ $$count -gt 270 ]; then \
 		echo "ERROR: literal name compares increased ($$count > 270 baseline)"; \
 		echo "  F3/F4: compare by id (BuiltinName / nodeid / name_id) instead."; \
 		echo "  Intentional? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' src/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
+		grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' compiler0/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -nE 'Optional.*ZType.*= field' src/ztypes.py | wc -l); \
+	count=$$(grep -nE 'Optional.*ZType.*= field' compiler0/ztypes.py | wc -l); \
 	if [ $$count -gt 5 ]; then \
 		echo "ERROR: Optional[ZType] field declarations on ZType increased ($$count > 5 baseline)"; \
 		echo "  Use id-form cross-refs (parent_id / type_id) and resolve via _type_by_id()."; \
 		echo "  This mirrors the Phase 7 ZScope/Entry/Unit pattern and keeps the type graph SQL-friendly."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE 'Optional.*ZType.*= field' src/ztypes.py | tail -5; fail=1; \
+		grep -nE 'Optional.*ZType.*= field' compiler0/ztypes.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -cE '_(resolved_type|typetype_of)\(' src/zemitterc.py); \
+	count=$$(grep -cE '_(resolved_type|typetype_of)\(' compiler0/zemitterc.py); \
 	if [ $$count -gt 0 ]; then \
 		echo "ERROR: emitter name-resolution calls increased ($$count > 0 baseline)"; \
 		echo "  The typed AST is authoritative: read the typecheck stamp"; \
 		echo "  (node_type / *_type_id) instead of re-resolving by name with"; \
 		echo "  _resolved_type / _typetype_of. Drive this baseline to 0."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE '_(resolved_type|typetype_of)\(' src/zemitterc.py | tail -5; fail=1; \
+		grep -nE '_(resolved_type|typetype_of)\(' compiler0/zemitterc.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -cE 'z_\{' src/zemitterc.py); \
+	count=$$(grep -cE 'z_\{' compiler0/zemitterc.py); \
 	if [ $$count -gt 0 ]; then \
 		echo "ERROR: inline z_{ identifier derivations increased ($$count > 0 baseline)"; \
 		echo "  The emitter generates NO C names: read ztype.cname / cname_base /"; \
 		echo "  variable_cname / the ZConformance entity (or compose from cname_base)."; \
 		echo "  Shared mangle_func_name / mangle_var_name cover the name-string residual."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE 'z_\{' src/zemitterc.py | tail -5; fail=1; \
+		grep -nE 'z_\{' compiler0/zemitterc.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -cE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' src/zemitterc.py); \
+	count=$$(grep -cE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' compiler0/zemitterc.py); \
 	if [ $$count -gt 0 ]; then \
 		echo "ERROR: emitter-local name manglers increased ($$count > 0 baseline)"; \
 		echo "  The emitter has no local _mangle_func/_mangle_var/_mangle_callable."; \
 		echo "  Read the stored cname; shared ztypes.mangle_func_name / mangle_var_name"; \
 		echo "  (no leading underscore, so allowed) cover the name-string residual."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' src/zemitterc.py | tail -5; fail=1; \
+		grep -nE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' compiler0/zemitterc.py | tail -5; fail=1; \
 	fi; \
-	count=$$(grep -rn 'object\.__setattr__' src/*.py | wc -l); \
+	count=$$(grep -rn 'object\.__setattr__' compiler0/*.py | wc -l); \
 	if [ $$count -gt 0 ]; then \
 		echo "ERROR: object.__setattr__ usage increased ($$count > 0 baseline)"; \
 		echo "  Frozen AST nodes are immutable: mint a fresh node and rebind a"; \
 		echo "  parent dict/list entry instead of mutating a frozen field."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'object\.__setattr__' src/*.py | tail -5; fail=1; \
+		grep -rn 'object\.__setattr__' compiler0/*.py | tail -5; fail=1; \
 	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail
@@ -213,8 +213,8 @@ test-infra:
 test-native:
 	uv run python -m pytest tests/ -m native -n auto
 
-# Python-reference (src/*.py) tests only -- retires with the reference compiler.
-# Run when changing src/*.py.
+# Python-reference (compiler0/*.py) tests only -- retires with the reference compiler.
+# Run when changing compiler0/*.py.
 test-py:
 	uv run python -m pytest tests/ -m "not native" -n auto
 
@@ -252,7 +252,7 @@ test-lf:
 	uv run python -m pytest tests/ --lf -n auto
 
 fmt:
-	uv run ruff format src/ tests/
+	uv run ruff format compiler0/ tests/
 
 # compile all examples: .z -> .c -> binary
 build:
@@ -276,7 +276,7 @@ build:
 # Persistent + git-ignored; rebuilt when the compiler sources change. The dev
 # bin/zc self-locates to this repo (lib/system here; runtime falls back to
 # src/runtime, as the dev tree has no lib/runtime).
-bin/zc: $(wildcard src/*.z) $(wildcard src/*.py) $(wildcard lib/system/*.z)
+bin/zc: $(wildcard src/*.z) $(wildcard compiler0/*.py) $(wildcard lib/system/*.z)
 	@mkdir -p bin
 	$(ZC) zc --src src -o bin/zc.c
 	$(CC) $(CFLAGS) -o bin/zc bin/zc.c
@@ -289,7 +289,7 @@ zc: bin/zc
 # both single-file (out/zparser <file>) and whole-program (out/zparser --program
 # <dir> main) modes. These are the Python-free regeneration path for the
 # lexer/parser/program goldens -- the dumper logic lives in src/zlexer.z and
-# src/zparser.z, not in any src/*.py oracle.
+# src/zparser.z, not in any compiler0/*.py oracle.
 out/zlexer: bin/zc $(wildcard src/zlexer.z) $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c

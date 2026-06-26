@@ -8,7 +8,7 @@ import glob
 import os
 import sys
 
-sys.path.insert(0, "src")
+sys.path.insert(0, "compiler0")
 sys.path.insert(0, "tools")
 from probe_dumpsql import (
     python_sql,

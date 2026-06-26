@@ -1007,7 +1007,7 @@ class TestNativeKeyword:
 
 
 class TestKeywordIdentifierRejection:
-    """Keywords (`TTKWMAP` in src/ztokentype.py) and reserved words
+    """Keywords (`TTKWMAP` in compiler0/ztokentype.py) and reserved words
     (`TTRESERVED` ibid.) cannot be used as identifiers -- binding
     names, parameter names, type names. The rule keeps the grammar
     context-free. The established rename pattern in the codebase is

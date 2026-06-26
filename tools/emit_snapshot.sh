@@ -12,14 +12,14 @@ mkdir -p "$outdir"
 
 # Self-hosted compiler units (multi-unit; exercise cross-unit emission).
 for u in zlexer zvfs zast; do
-  uv run python src/zc.py "$u" --src src -o "$outdir/$u.c" 2>"$outdir/$u.err" \
+  uv run python compiler0/zc.py "$u" --src src -o "$outdir/$u.c" 2>"$outdir/$u.err" \
     || echo "FAIL zc $u (see $u.err)"
 done
 
 # All example programs (single-unit + file-unit deps).
 for f in examples/*.z; do
   name="$(basename "$f" .z)"
-  uv run python src/zc.py "$name" --src examples -o "$outdir/ex_$name.c" \
+  uv run python compiler0/zc.py "$name" --src examples -o "$outdir/ex_$name.c" \
     2>"$outdir/ex_$name.err" || echo "FAIL zc example $name"
 done
 

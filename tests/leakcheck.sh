@@ -38,7 +38,7 @@ if [ -z "$ZC" ]; then
   TZC="$(mktemp -d)"
   ZC="$TZC/zc"
   echo "[bootstrap: reference emits the port zc (~2.5min)]"
-  uv run python src/zc.py zc --src src -o "$ZC.c" || { echo "FAIL: reference emit of zc"; exit 2; }
+  uv run python compiler0/zc.py zc --src src -o "$ZC.c" || { echo "FAIL: reference emit of zc"; exit 2; }
   gcc -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
       -Werror=implicit-function-declaration -Werror=implicit-int \
       -Werror=int-conversion -Werror=incompatible-pointer-types \

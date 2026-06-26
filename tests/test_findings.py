@@ -1066,11 +1066,11 @@ class TestSqlDump:
             # create a stray clitest.c in the repo root (zc defaults its C
             # output path to `<unit>.c` in the current working directory).
             c_path = os.path.join(tmpdir, "out.c")
-            src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
+            compiler0_dir = os.path.join(os.path.dirname(__file__), "..", "compiler0")
             result = subprocess.run(
                 [
                     sys.executable,
-                    os.path.join(src_dir, "zc.py"),
+                    os.path.join(compiler0_dir, "zc.py"),
                     "--src",
                     tmpdir,
                     "clitest",

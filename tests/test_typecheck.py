@@ -29,7 +29,7 @@ pytestmark = pytest.mark.typecheck
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 SRC_TYPECHECK_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "src", "ztypecheck.py"
+    os.path.dirname(__file__), "..", "compiler0", "ztypecheck.py"
 )
 
 
@@ -2446,7 +2446,7 @@ class TestSyntacticHooksDeletion:
         for name in ("ByteView", "ListView", "StringView"):
             assert f'child_name == "{name}"' not in src, (
                 f'syntactic branch on child_name == "{name}" found in '
-                f"src/ztypecheck.py — this projection must route through "
+                f"compiler0/ztypecheck.py — this projection must route through "
                 f"the native declaration's metadata path"
             )
 
@@ -14238,7 +14238,7 @@ class TestStrayGenericArgOwnership:
 class TestLiteralCoercion:
     """Lossless coercion of numeric literals (and constant expressions
     built from them) at typed-location boundaries. See
-    `_coerce_literal` in `src/ztypecheck.py` and the design plan in
+    `_coerce_literal` in `compiler0/ztypecheck.py` and the design plan in
     `for-zerolang-i-m-considering-harmonic-newell.md`.
 
     Locked-in rules:

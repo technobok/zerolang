@@ -35,9 +35,9 @@ from typing import List, cast
 import os
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SRC_DIR = os.path.join(_REPO_ROOT, "src")
-if _SRC_DIR not in sys.path:
-    sys.path.insert(0, _SRC_DIR)
+_COMPILER0_DIR = os.path.join(_REPO_ROOT, "compiler0")
+if _COMPILER0_DIR not in sys.path:
+    sys.path.insert(0, _COMPILER0_DIR)
 
 from zvfs import (  # noqa: E402
     BindType,

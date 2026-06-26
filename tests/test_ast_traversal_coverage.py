@@ -1,4 +1,4 @@
-"""Exhaustiveness lint for the two NodeType cascades in src/zast.py.
+"""Exhaustiveness lint for the two NodeType cascades in compiler0/zast.py.
 
 `_clone_node` and `node_children` each switch over `node.nodetype`. Forgetting
 an arm is detectable only via the AssertionError fallback at runtime — these

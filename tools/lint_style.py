@@ -26,7 +26,7 @@ import io
 import os
 import sys
 
-sys.path.insert(0, "src")
+sys.path.insert(0, "compiler0")
 
 from zvfs import ZVfs, FSProvider, BindType
 from zparser import Parser

@@ -23,7 +23,7 @@ def pytest_collection_modifyitems(config, items):
     as ``native`` (by module filename), so the native and Python-reference test
     sets run independently: ``make test-native`` (-m native) is the port's gate;
     ``make test-py`` (-m "not native") is the reference suite, which retires with
-    ``src/*.py``."""
+    ``compiler0/*.py``."""
     for item in items:
         fname = os.path.basename(item.nodeid.split("::", 1)[0])
         if (
@@ -77,8 +77,11 @@ class EmittedC(str):
 
 
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+# _SRC_DIR holds the .z compiler sources (passed as --src); the Python reference
+# compiler (compiler0) is the stage0 bootstrap that builds them.
 _SRC_DIR = os.path.join(_REPO_ROOT, "src")
-_ZC = [sys.executable, os.path.join(_SRC_DIR, "zc.py")]
+_COMPILER0_DIR = os.path.join(_REPO_ROOT, "compiler0")
+_ZC = [sys.executable, os.path.join(_COMPILER0_DIR, "zc.py")]
 _CC = os.environ.get("Z_TEST_CC", "gcc")
 _CFLAGS = [
     "-std=c17",

@@ -20,7 +20,7 @@ import os
 import io
 import sys
 
-sys.path.insert(0, "src")
+sys.path.insert(0, "compiler0")
 sys.path.insert(0, "tools")
 
 from zlexer import Tokenizer

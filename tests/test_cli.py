@@ -14,7 +14,8 @@ pytestmark = pytest.mark.cli
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
-ZC = os.path.join(SRC_DIR, "zc.py")
+COMPILER0_DIR = os.path.join(os.path.dirname(__file__), "..", "compiler0")
+ZC = os.path.join(COMPILER0_DIR, "zc.py")
 
 
 def run_zc(*args, stdin_text=None):

@@ -129,7 +129,7 @@ The Python reference compiler is still available for bootstrapping and
 diagnostics:
 
 ```bash
-uv run python src/zc.py hello --src examples/ -o hello.c
+uv run python compiler0/zc.py hello --src examples/ -o hello.c
 ```
 
 ### Install
@@ -172,13 +172,16 @@ uv run python -m pytest tests/ -v
 ## Project Structure
 
 ```
-src/
-  zc.py           # Compiler entry point
-  zlexer.py       # Lexer
-  zparser.py      # Parser
-  zast.py         # AST node definitions
-  ztypecheck.py   # Type checker
-  zemitterc.py    # C code emitter
+src/               # the self-hosted compiler, written in Zero
+  zc.z            # Compiler entry point / CLI
+  zlexer.z        # Lexer
+  zparser.z       # Parser
+  zast.z          # AST node definitions
+  ztypecheck.z    # Type checker
+  zemitterc.z     # C code emitter
+  runtime/        # C runtime fragments (.inc / .c.tmpl) spliced into output
+compiler0/         # original Python reference compiler (bootstrap + oracle)
+  zc.py           # see compiler0/README.md — not the way to build the compiler
 lib/
   system/         # System library (system.z, core.z, io.z)
 doc/
