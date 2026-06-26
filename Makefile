@@ -14,7 +14,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck selfhost-asan test-corpus test-corpus-z test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -253,6 +253,21 @@ test-corpus-z:
 	$(BUILDDIR)/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
 	$(BUILDDIR)/ztestrunner --zc $(BUILDDIR)/zc --cc $(CC) --root .
+
+# ci -- the consolidated gate, runnable in one command. Runs the style/lint
+# check, the full suite (test, which builds + runs the port-vs-reference
+# differentials and the fixpoint -- exercising BOTH compilers), the Python-free
+# seed bootstrap (test-bootstrap), the self-host ASan gate (selfhost-asan), and
+# the behavioral + leak + negative corpus goldens (test-corpus, which already
+# includes the detect_leaks=1 leak kind). Sequential sub-makes so a parallel
+# `make -j` can't run the heavy suites concurrently and OOM a small box.
+ci:
+	$(MAKE) --no-print-directory check
+	$(MAKE) --no-print-directory test
+	$(MAKE) --no-print-directory test-bootstrap
+	$(MAKE) --no-print-directory selfhost-asan
+	$(MAKE) --no-print-directory test-corpus
+	@echo "CI GATE GREEN: check + test (both compilers) + bootstrap + selfhost-asan + corpus"
 
 # Re-run only tests that failed in the previous run.
 test-lf:
