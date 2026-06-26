@@ -785,6 +785,28 @@ takeMoveCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String 
     }
 }
 
+# isFieldTake -- true iff `n` reduces to a `<obj>.field.take` whose parent is
+# itself a dotted path (a field, not a bare atom). The field lvalue is zeroed
+# after the move so the owner's destructor does not double-free the payload the
+# take aliased out (a bare `<x>.take` is handled by takeStringSource).
+isFieldTake: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isFieldTake n: n.expression)
+    } case statementline then {
+        return (isFieldTake n: n.statementline)
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview != "take" then {
+            return false
+        }
+        return (nodeIsDotted9 n: n.parent)
+    } else {
+        return false
+    }
+}
+
 # emitNarrowedTakeZero -- before a return's scope cleanup, zero the payload box of
 # every narrowed-subject `.take` reachable in the return value (a bare take, or a take
 # passed as a construction/call arg). The un-shadowed narrowed subject is freed by the
@@ -1643,6 +1665,47 @@ methodOwnerId: function {symtab: zenv.ZSymbolTable ctx: Ctx rtid: u64 mn: String
     return rtid
 }
 
+# hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
+# non-lvalue temporary (e.g. a `Map.get` Option result) handed to a borrow param
+# (ownText != "TAKE") is freed by neither side. Hoist it into a temp registered
+# for scope-exit destroy (mirrors the by-ref `&`-hoist) and return the temp name;
+# "" when no hoist is needed. `av` is borrowed -- the caller keeps ownership.
+hoistBorrowValArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u64 ownText: StringView} out String is {
+    if (isNonLvalueArg s: av) == false then {
+        return "".string
+    }
+    if ownText == "TAKE" then {
+        return "".string
+    }
+    vrid: pid
+    vduo: symtab.typing.definedInUnit.get key: pid
+    match (
+        vduo
+    ) case none then {
+        vtn: typeNameOfReg9 symtab: symtab tid: pid
+        vrr: resolveTypeIdByName symtab: symtab ctx: ctx name: vtn.stringview
+        if vrr > 0 then {
+            vrid = vrr
+        }
+    } case some then {}
+    if (symtab.reg.hasDestructorName typeId: vrid) == false then {
+        return "".string
+    }
+    vhn: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    vnmh: "_ah\{vhn}".string
+    vcty: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0
+    vnmt: typeNameOfReg9 symtab: symtab tid: vrid
+    vcb: cnameOf tid: vrid name: vnmt.stringview
+    vdt: "    \{vcb}_destroy(&\{vnmh});\n"
+    avc: av.string
+    ctx.argHoistVals.append avc
+    ctx.argHoistTypes.append vcty.string
+    ctx.argHoistDtors.append vdt
+    ctx.argHoistNames.append vnmh.copy
+    return vnmh
+}
+
 emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     mn: dottedChildText n: call.callable
     if mn.length == 0 then {
@@ -1796,7 +1859,15 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                             args.append ab9.stringview
                         }
                     } else {
-                        args.append av9.stringview
+                        vbhm9: "".string
+                        if (ptra9) == false then {
+                            vbhm9 = hoistBorrowValArg symtab: symtab ctx: ctx av: av9.stringview pid: pid9 ownText: pown9.stringview
+                        }
+                        if vbhm9.length > 0 then {
+                            args.append vbhm9.stringview
+                        } else {
+                            args.append av9.stringview
+                        }
                     }
                 }
                 pi9 = pi9 + 1
@@ -4051,6 +4122,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                     }
                     byref8: false
                     argRef8: "".string
+                    vbh8: "".string
                     if (projd9) == false then {
                         fpid8: fpIds.get i: slot9b
                         fpnO8: fpNames.get i: slot9b
@@ -4074,10 +4146,19 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                                 argRef8 = emitByrefArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8
                             }
                         }
+                        if (ptra8) == false then {
+                            vbh8 = hoistBorrowValArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8 ownText: ownC8.stringview
+                        }
                     }
-                    finalS9: av9.copy
+                    finalS9: "".string
                     if byref8 then {
                         finalS9 = argRef8.copy
+                    } else {
+                        if vbh8.length > 0 then {
+                            finalS9 = vbh8.copy
+                        } else {
+                            finalS9 = av9.copy
+                        }
                     }
                     valBySlot9.set key: slot9b value: finalS9
                 }
@@ -5912,6 +5993,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
                     hasArg = true
                     bx: emitOptionBoxHoist symtab: symtab ctx: ctx n: a.operation ind: ind tmp: tmp buf: buf
                     if bx.length > 0 then {
+                        emitValueTakeInvalidations symtab: symtab ctx: ctx n: a.operation ind: ind buf: buf
                         emitReturnCleanup ctx: ctx tmp: tmp retExpr: bx.stringview keepRefd: true ind: ind buf: buf
                         lrb: "\{ind}return \{bx};\n"
                         buf.append lrb.stringview
@@ -5992,8 +6074,44 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
     }
     ce: emitCallValue symtab: symtab ctx: ctx call: call
     flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
-    lc: "\{ind}\{ce};\n"
-    buf.append lc.stringview
+    dcrtid9: stampIdOf symtab: symtab nid: call.nodeid.u64
+    dcsh9: resolveShellTid symtab: symtab ctx: ctx tid: dcrtid9
+    dcftid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
+    dcnm9: typeNameOfReg9 symtab: symtab tid: dcsh9
+    dctt9: symtab.reg.typetypeOf typeId: dcsh9
+    dcdrop9: false
+    if (symtab.reg.hasDestructorName typeId: dcsh9) when (funcBorrowFlag symtab: symtab tid: dcftid9) == false then {
+        if dcnm9.stringview == "String" then {
+            dcdrop9 = true
+        }
+        if dctt9 == ztypes.ztypetype.CLASS then {
+            dcdrop9 = true
+        }
+        if dctt9 == ztypes.ztypetype.UNION then {
+            dcdrop9 = true
+        }
+    }
+    if (dcdrop9) when (isNonLvalueArg s: ce.stringview) then {
+        dctn9: tmp.next
+        dctnm9: "_c\{dctn9}"
+        dcct9: "\{ctx.strC}_t"
+        dcfree9: "\{ind}\{ctx.strC}_free(&\{dctnm9});\n"
+        if dcnm9.stringview != "String" then {
+            dcct9 = typeRefC symtab: symtab ctx: ctx tid: dcrtid9 thisTid: 0
+            dccb9: cnameOf tid: dcsh9 name: dcnm9.stringview
+            dcref9: "&\{dctnm9}"
+            if (ctEndsWithStar ct: dcct9.stringview) then {
+                dcref9 = "\{dctnm9}"
+            }
+            dcfree9 = "\{ind}\{dccb9}_destroy(\{dcref9});\n"
+        }
+        dcdecl9: "\{ind}\{dcct9} \{dctnm9} = \{ce};\n"
+        buf.append dcdecl9.stringview
+        buf.append dcfree9.stringview
+    } else {
+        lc: "\{ind}\{ce};\n"
+        buf.append lc.stringview
+    }
     emitCallTakeInvalidations symtab: symtab ctx: ctx call: call ind: ind buf: buf
 }
 
@@ -6172,6 +6290,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 return
             }
             vx: emitExpr symtab: symtab ctx: ctx n: n.value
+            flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
             if (vx.stringview.startsWith prefix: "/*") then {
                 lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
                 buf.append lsv3.stringview
@@ -6195,6 +6314,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 return
             }
             sx: emitExpr symtab: symtab ctx: ctx n: n.value
+            flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
             if (sx.stringview.startsWith prefix: "/*") then {
                 lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
                 buf.append lst2.stringview
@@ -6228,6 +6348,16 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             la: "\{ind}\{ct} \{nm} = \{rv};\n"
             buf.append la.stringview
             emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
+            if (isFieldTake n: n.value) then {
+                ftz9: "\{ind}\{rv} = (\{ct}){0};\n"
+                buf.append ftz9.stringview
+            } else {
+                bts9: takeStringSource symtab: symtab ctx: ctx n: n.value
+                if bts9.length > 0 then {
+                    bzz9: "\{ind}\{rv} = (\{ct}){0};\n"
+                    buf.append bzz9.stringview
+                }
+            }
             # an owned class/record local with heap fields is destroyed at scope
             # exit (String/collection locals returned earlier; take-aliases too).
             ltHasDtor9: false
@@ -6317,6 +6447,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         # free no-ops (mirrors the binding case; disjoint from the bare-local
         # move below, which a construction RHS never matches).
         emitValueTakeInvalidations symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
+        emitNarrowedTakeZero symtab: symtab ctx: ctx n: n.value ind: ind buf: buf
         # a reassignment from a bare owned local is a MOVE: zero the source so its
         # scope-exit free no-ops (the lvalue -- a local or a struct field appended
         # into a container -- now owns the heap). Scalars/valtypes have no

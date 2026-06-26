@@ -1,19 +1,22 @@
-# Self-host hardening: the freeze is blocked on latent `.z`-built UAFs
+# Self-host hardening: latent `.z`-built UAFs and leaks (RESOLVED)
 
-## Status: BLOCKER for the compiler0 freeze
+## Status: SWEEP COMPLETE — freeze unblocked (2026-06-26)
 
-The plan to **freeze compiler0 and switch the build to the committed seed**
-(`bootstrap/zc.c`) is blocked. Switching the build/test compiler from
-compiler0-built to seed-built (i.e. running the **self-emitted** `.z` compiler)
-exposed a **class of latent ownership bugs** in the self-hosted compiler — code
-paths the `.z`-built `zc` had **never executed before**, because compiler0 always
-built the test/corpus/`bin/zc` binary. These are emitter *port* gaps: harmless in
-compiler0 (Python is GC'd, no `free`), but use-after-free / double-free in the
-self-hosted compiler.
+The `.z`-emitted `zc`, built with AddressSanitizer, now compiles the **whole
+corpus** — 113 `examples/*.z` + 85 `tests/fixtures/emitc_corpus/*.z` = 198 units,
+in both `--emit-c /dev/null` and `--full --dump-sql -` modes, under
+`detect_leaks=1` — with **zero** use-after-free / double-free and **0 bytes
+leaked** (`clean=396 fails=0`). The compiler0 freeze is no longer blocked on
+memory-safety.
 
-The self-hosted compiler must be ASan-clean + corpus-green when **built by its own
-emit** before compiler0 can be retired. That is a multi-bug hardening sweep; this
-doc records what's found so a future session can resume.
+The bugs were a class of **latent ownership gaps** in the self-hosted compiler —
+code paths the `.z`-built `zc` had **never executed before**, because compiler0
+always built the test/corpus/`bin/zc` binary. They are emitter *port* gaps
+(`src/zemitterc.z`): harmless in compiler0 (Python is GC'd, no `free`), but
+UAF/double-free/leak in the self-hosted compiler. Six root causes were found and
+fixed (see the inventory below). Gate: `make selfhost-asan` (whole corpus) +
+`tests/test_fixedpoint.py::test_stage2_selfhost_asan_clean` (in-suite subset over
+the bug-trigger units × both modes).
 
 ## Reproduce
 
@@ -117,3 +120,48 @@ ownership/return handling, not `src/zgenerator.z`).
   the missing `… = (T){0};` / `… = NULL;` invalidation (or a wrong free) is the
   bug. Map the C function back to the `.z` source by name.
 - compiler0 rebuilds are slow (~2 min Python emit + ~1 min cc). Budget for it.
+
+## Sweep inventory (2026-06-26)
+
+Full ASan sweep of the `.z`-emitted `zc` over all 198 units (113 examples + 85
+`emitc_corpus`) × 2 modes (`--emit-c /dev/null`, `--full --dump-sql -`),
+`detect_leaks=1`. Baseline: **clean=179, fails=217**, grouped by root C function:
+
+| Root | Kind | × | Units | Status |
+| --- | --- | --- | --- | --- |
+| `Node_destroy` (field-take, `lowerOne`) | UAF | 14 | 7 generators | **fixed** (Bug 1) |
+| `Node_destroy` (`GenLowered` List move) | UAF | masked | generators | **fixed** (Bug 2) |
+| `Node_destroy` (`buildCallMethod` `vp9: valueParam.take`) | UAF | — | accepts_borrow, bidirectional | **fixed** (Bug 3) |
+| `String_append` (`resolveProtocol` `specThisStr = cto.take`) | UAF | 20 | facets, protocols, iterator, autoproject, atomic_call_temps, named_arg_order, protocol_* | **fixed** (Group B) |
+| `Map_u64_String_get` (`ZDumper.appendTypes`/`appendSymbolTable`) | leak | 181 | ~all, `--dump-sql` | **fixed** (Group C) |
+| `String_create` (`hoistArg`), `Lexer_accept` (`accept`) | leak | 2 | box, genericunit | **fixed** (Group D/E) |
+
+**Bug 3** — `vp9: valueParam.take` (bare-atom take of a whole `Option Node` *param*)
+emitted a shallow copy with no source-zeroing; param + binding both freed the box.
+Fix: extend the binding-site take guard with the bare-atom case (`takeStringSource`
+gate → `rv = (ct){0}`). The reference *aliases* here; the port copies, so it must
+zero — behaviorally identical (`test_emitc_z` is a runtime differential).
+
+**Group B** — `specThisStr = cto.take` (take of a *narrowed* match-subject payload)
+at a reassignment didn't zero the payload box; the trailing `Option_destroy(&cto)`
+freed the buffer `specThisStr` aliased. Fix: call `emitNarrowedTakeZero` in the
+reassignment path (the return path already did). Zero the payload box, NOT the whole
+Option (that would leak the box).
+
+**Group C** — an owned, destructible, non-lvalue temporary (`Map u64 String` .get →
+`Option String`) passed BY VALUE to a borrow param is never freed. The reference
+hoists it into a temp freed at scope cleanup; the port inlined it. Fix: extend the
+by-value arg branch to hoist+register-destroy when `ptra9==false`,
+`isNonLvalueArg`, `pown9!="TAKE"`, and the type is destructible (mirrors the
+existing by-ref `&`-hoist). Factored into a shared `hoistBorrowValArg` helper used
+by both the method-call and same-unit free-fn arg loops. **Follow-on:** the String
+and StringView binding paths emitted a call RHS without calling `flushArgHoists`,
+so a hoisted `_ahN` was used before its decl was emitted — they now flush, like the
+general binding path.
+
+**Group D/E** — a discarded statement-call (`hoistArg ...` / `lex.accept ...` whose
+result is ignored) returning an owned destructible value (String / class / union,
+not a `.borrow`) is never freed. Fix: in `emitCallStmt`'s plain-call path, capture
+the return into a `_cN` temp and free it when `hasDestructorName` holds,
+`funcBorrowFlag` is false, and the type is String/CLASS/UNION (mirrors compiler0
+`_emit_call_stmt`).
