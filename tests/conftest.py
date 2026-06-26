@@ -17,6 +17,8 @@ from zlexer import Tokenizer, Lexer
 from ztokentype import TT
 from zparser import Parser
 
+from _xdist_build import build_once_shared
+
 
 def pytest_collection_modifyitems(config, items):
     """Auto-mark tests that exercise the self-hosted native (`src/*.z`) compiler
@@ -97,35 +99,41 @@ _CFLAGS = [
 
 
 def _build_zerolang_unit(unitname: str, tmp_path_factory) -> str:
-    """Build a self-hosted compiler unit (src/<unitname>.z -> C -> binary)
-    into a per-session tmp dir so xdist workers don't race on shared
-    output paths. Returns the binary path. Skips the whole test module
-    when the C compiler is missing."""
+    """Build a self-hosted compiler unit (src/<unitname>.z -> C -> binary).
+
+    Built once and shared across xdist workers (build_once_shared) so N workers
+    don't each rebuild every heavy binary -- redundant concurrent builds OOM a
+    small box, and an OOM-killed build fails this session fixture, cascading to
+    every dependent test. Skips the whole test module when the C compiler is
+    missing."""
     if shutil.which(_CC) is None:
         pytest.skip(f"{_CC} not on PATH; cannot build {unitname} binary")
-    builddir = tmp_path_factory.mktemp(unitname)
-    c_path = str(builddir / f"{unitname}.c")
-    bin_path = str(builddir / unitname)
-    zc_proc = subprocess.run(
-        _ZC + [unitname, "--src", _SRC_DIR, "-o", c_path],
-        capture_output=True,
-        text=True,
-        cwd=_REPO_ROOT,
-    )
-    assert zc_proc.returncode == 0, (
-        f"zc.py {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
-        f"stderr:\n{zc_proc.stderr}"
-    )
-    cc_proc = subprocess.run(
-        [_CC, *_CFLAGS, "-o", bin_path, c_path],
-        capture_output=True,
-        text=True,
-    )
-    assert cc_proc.returncode == 0, (
-        f"{_CC} {unitname} failed:\nstdout:\n{cc_proc.stdout}\n"
-        f"stderr:\n{cc_proc.stderr}"
-    )
-    return bin_path
+
+    def _do(builddir):
+        c_path = str(builddir / f"{unitname}.c")
+        bin_path = str(builddir / unitname)
+        zc_proc = subprocess.run(
+            _ZC + [unitname, "--src", _SRC_DIR, "-o", c_path],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+        )
+        assert zc_proc.returncode == 0, (
+            f"zc.py {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
+            f"stderr:\n{zc_proc.stderr}"
+        )
+        cc_proc = subprocess.run(
+            [_CC, *_CFLAGS, "-o", bin_path, c_path],
+            capture_output=True,
+            text=True,
+        )
+        assert cc_proc.returncode == 0, (
+            f"{_CC} {unitname} failed:\nstdout:\n{cc_proc.stdout}\n"
+            f"stderr:\n{cc_proc.stderr}"
+        )
+        return bin_path
+
+    return build_once_shared(f"unit-{unitname}", tmp_path_factory, _do)
 
 
 _SYSTEM_DIR = os.path.join(_REPO_ROOT, "lib", "system")
@@ -138,38 +146,41 @@ def _build_unit_with_ported_zc(unitname: str, zc_bin: str, tmp_path_factory) -> 
     is then checked against the reference goldens."""
     if shutil.which(_CC) is None:
         pytest.skip(f"{_CC} not on PATH; cannot build {unitname} binary")
-    builddir = tmp_path_factory.mktemp(unitname + "_selfhost")
-    c_path = str(builddir / f"{unitname}.c")
-    bin_path = str(builddir / unitname)
-    zc_proc = subprocess.run(
-        [
-            zc_bin,
-            unitname,
-            "--src",
-            _SRC_DIR,
-            "--system",
-            _SYSTEM_DIR,
-            "--emit-c",
-            c_path,
-        ],
-        capture_output=True,
-        text=True,
-        cwd=_REPO_ROOT,
-    )
-    assert zc_proc.returncode == 0, (
-        f"ported zc {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
-        f"stderr:\n{zc_proc.stderr}"
-    )
-    cc_proc = subprocess.run(
-        [_CC, *_CFLAGS, "-o", bin_path, c_path],
-        capture_output=True,
-        text=True,
-    )
-    assert cc_proc.returncode == 0, (
-        f"{_CC} {unitname} (self-host) failed:\nstdout:\n{cc_proc.stdout}\n"
-        f"stderr:\n{cc_proc.stderr}"
-    )
-    return bin_path
+
+    def _do(builddir):
+        c_path = str(builddir / f"{unitname}.c")
+        bin_path = str(builddir / unitname)
+        zc_proc = subprocess.run(
+            [
+                zc_bin,
+                unitname,
+                "--src",
+                _SRC_DIR,
+                "--system",
+                _SYSTEM_DIR,
+                "--emit-c",
+                c_path,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+        )
+        assert zc_proc.returncode == 0, (
+            f"ported zc {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
+            f"stderr:\n{zc_proc.stderr}"
+        )
+        cc_proc = subprocess.run(
+            [_CC, *_CFLAGS, "-o", bin_path, c_path],
+            capture_output=True,
+            text=True,
+        )
+        assert cc_proc.returncode == 0, (
+            f"{_CC} {unitname} (self-host) failed:\nstdout:\n{cc_proc.stdout}\n"
+            f"stderr:\n{cc_proc.stderr}"
+        )
+        return bin_path
+
+    return build_once_shared(f"selfhost-{unitname}", tmp_path_factory, _do)
 
 
 @pytest.fixture(scope="session")

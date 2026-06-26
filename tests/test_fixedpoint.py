@@ -21,6 +21,8 @@ import subprocess
 
 import pytest
 
+from _xdist_build import build_once_shared
+
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 _SRC_DIR = os.path.join(_REPO_ROOT, "src")
 _SYSTEM_DIR = os.path.join(_REPO_ROOT, "lib", "system")
@@ -112,27 +114,29 @@ def zc_stage2_asan_binary(zc_binary, tmp_path_factory):
     a value the return still reads is a use-after-free which the byte-identity
     fixpoint can miss by luck (freed memory not yet reused), but ASan catches.
     """
-    d = tmp_path_factory.mktemp("zc_stage2_asan")
-    c_path = str(d / "zc_stage2.c")
-    _emit_c(zc_binary, "zc", c_path)
-    bin_path = str(d / "zc_stage2_asan")
-    cc = subprocess.run(
-        [
-            _CC,
-            "-fsanitize=address",
-            "-g",
-            "-O0",
-            "-std=c17",
-            "-w",
-            "-o",
-            bin_path,
-            c_path,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert cc.returncode == 0, f"ASan build of stage2 failed:\n{cc.stderr}"
-    return bin_path
+    def _do(d):
+        c_path = str(d / "zc_stage2.c")
+        _emit_c(zc_binary, "zc", c_path)
+        bin_path = str(d / "zc_stage2_asan")
+        cc = subprocess.run(
+            [
+                _CC,
+                "-fsanitize=address",
+                "-g",
+                "-O0",
+                "-std=c17",
+                "-w",
+                "-o",
+                bin_path,
+                c_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert cc.returncode == 0, f"ASan build of stage2 failed:\n{cc.stderr}"
+        return bin_path
+
+    return build_once_shared("zc-stage2-asan", tmp_path_factory, _do)
 
 
 # The locked-in src units plus the example constructs that exposed the self-host
