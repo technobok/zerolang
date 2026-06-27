@@ -1,7 +1,9 @@
-# Zero Language
+# Zerolang
 
-Zero is a systems programming language that compiles to C. The compiler is
-written in Python and emits C code which is compiled with gcc or clang.
+Zerolang is a systems programming language that compiles to C. The compiler is
+self-hosted — written in Zerolang — and bootstraps from a small committed C
+seed, so a C toolchain is all you need to build it. It emits C, which is
+compiled with gcc or clang.
 
 ## Documentation
 
@@ -12,12 +14,9 @@ The full documentation is rendered to HTML and published with GitHub Pages:
 - **[`zc` command reference](https://technobok.github.io/zerolang/zc.html)** —
   the compiler CLI: commands, flags, tree resolution, and cross-compilation.
 
-The sources live in [`docs/`](docs/) as `.pdoc` files; run `make docs` to
-re-render the HTML after editing them.
-
 ## Language Basics
 
-Zero uses a clean, keyword-driven syntax with no operator precedence (all
+Zerolang uses a clean, keyword-driven syntax with no operator precedence (all
 binary operations evaluate left-to-right).
 
 ### Hello World
@@ -96,7 +95,7 @@ point: record {
 Strings are immutable. Interpolation uses `\{expr}`:
 
 ```
-name: "Zero"
+name: "Zerolang"
 print "Hello, \{name}!"
 ```
 
@@ -104,68 +103,85 @@ print "Hello, \{name}!"
 
 v1 numeric types: `u8` `u16` `u32` `u64` `i8` `i16` `i32` `i64` `f32` `f64`
 
-## Compiling
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.10+
-- [uv](https://docs.astral.sh/uv/) (Python package manager)
-- gcc or clang
+- a C compiler — `gcc` or `clang`
+- `make`
+- `git`
+
+Nothing else: the compiler is self-hosted and bootstraps from a committed C
+seed, so no other tooling is required.
 
 ### Build the compiler
 
-Build the self-hosted compiler once (it bootstraps via the Python
-reference and is cached in `bin/`, git-ignored):
-
 ```bash
-make zc        # -> ./bin/zc
+git clone https://github.com/technobok/zerolang.git
+cd zerolang
+make zc            # -> ./bin/zc
 ```
 
-Or build it from the committed C seed with **no Python** — just a C
-compiler (`cc bootstrap/zc.c` *is* the self-hosted compiler; see
-`bootstrap/README.md`):
+`make zc` compiles the committed seed (`bootstrap/zc.c`) with your C compiler,
+then uses it to build the current compiler from `src/` into `./bin/zc`. Use a
+different compiler with `make zc CC=clang`.
+
+You can also build straight from the seed with nothing but a C compiler — the
+seed *is* the compiler:
 
 ```bash
 cc -std=c17 -o zc bootstrap/zc.c
-./zc hello --src examples --system lib/system -o hello
 ```
 
-### Compile and Run
+### Run the tests
 
-`zc` self-locates its standard library, so from the repo a command is all
-you need:
+Both gates are self-contained — they need only the compiler and a C toolchain:
 
 ```bash
-# Build and run in one step (trailing args are forwarded to the program)
-./bin/zc run hello --src examples
-
-# Build an executable, then run it
-./bin/zc build hello --src examples -o hello && ./hello
-
-# Emit C only
-./bin/zc emit hello --src examples -o hello.c
+make test-corpus       # compile + run the example/corpus programs, check output
+make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint
 ```
 
-The Python reference compiler is still available for bootstrapping and
-diagnostics:
+### Write and run a program
+
+Create `hello.z`:
+
+```
+main: function is {
+    print "Hello, World!"
+}
+```
+
+Then build and run it — `zc` self-locates its standard library, so no flags are
+needed:
 
 ```bash
-uv run python compiler0/zc.py hello --src examples/ -o hello.c
+./bin/zc run hello                  # build and run in one step
+./bin/zc build hello -o hello       # build an executable...
+./hello                             # ...then run it
 ```
+
+The bundled programs live in `examples/`, so point `--src` at them:
+
+```bash
+./bin/zc run fibonacci --src examples
+```
+
+See the [`zc` command reference](https://technobok.github.io/zerolang/zc.html)
+for every command and flag (`emit`, `dump`, `explain`, `env`, `--release`,
+`--target`, …).
 
 ### Install
 
 Install a self-contained tree plus a `zc` on your `PATH`:
 
 ```bash
-make install                                  # ~/.local/lib/zerolang + ~/.local/bin/zc
+make install                                  # ~/.local/bin/zc + ~/.local/lib/zerolang
 make install ROOT=/opt/zerolang BINDIR=/usr/local/bin
 ```
 
-The installed `zc` finds its stdlib and runtime from any directory (it
-resolves its own executable path). See [`docs/zc.pdoc`](docs/zc.pdoc) for the
-full CLI: subcommands (`build`/`run`/`emit`/`dump`/`explain`/`env`), flags, the
-tree-resolution precedence, environment variables, and cross-compilation.
+The installed `zc` finds its standard library from any directory (it resolves
+its own executable path).
 
 ## Example Programs
 
@@ -183,33 +199,3 @@ The `examples/` directory contains v1 target programs:
 | `swap.z` | Swap keyword, reassignment |
 | `data.z` | Constant data arrays |
 | `multimod.z` | Multi-module imports |
-
-## Running Tests
-
-```bash
-uv run python -m pytest tests/ -v
-```
-
-## Project Structure
-
-```
-src/               # the self-hosted compiler, written in Zero
-  zc.z            # Compiler entry point / CLI
-  zlexer.z        # Lexer
-  zparser.z       # Parser
-  zast.z          # AST node definitions
-  ztypecheck.z    # Type checker
-  zemitterc.z     # C code emitter
-  runtime/        # C runtime fragments (.inc / .c.tmpl) spliced into output
-compiler0/         # original Python reference compiler (bootstrap + oracle)
-  zc.py           # see compiler0/README.md — not the way to build the compiler
-lib/
-  system/         # System library (system.z, core.z, io.z)
-docs/
-  spec.pdoc       # Language specification
-  grammar.pdoc    # Formal grammar
-  roadmap.pdoc    # Implementation roadmap
-  faq.pdoc        # Design FAQ
-examples/         # v1 example programs
-tests/            # Test suite
-```
