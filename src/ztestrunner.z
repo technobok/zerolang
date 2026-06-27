@@ -549,6 +549,67 @@ main: function is {
         }
     }
 
+    # ---------------- VFS (zvfs script dispatch) cases ----------------
+    # Build zvfs once; run each zvfs_ops/*.script (substituting {ROOT} with the
+    # sibling .tree fixture path, read-only) and diff stdout vs <name>.expected.
+    vfsdir: "\{root.stringview}/tests/fixtures/zvfs_ops"
+    zvfC: "\{d.stringview}/D_zvfs.c"
+    zvfB: "\{d.stringview}/D_zvfs.bin"
+    vfsOk: false
+    zvfE: zcArgv zc: zc.stringview name: "zvfs" srcdir: srcDir.stringview sys: sys.stringview outc: zvfC.stringview
+    if (os.spawn argv: zvfE cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+        zvfG: gccArgv cc: cc.stringview bin: zvfB.stringview csrc: zvfC.stringview asan: false
+        if (os.spawn argv: zvfG cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+            vfsOk = true
+        }
+    }
+    if vfsOk == false then {
+        print "FAIL(vfs-build) zvfs"
+        fails = fails + 1
+    }
+    if vfsOk then {
+        vr: io.listDir path: vfsdir.stringview
+        match (
+            vr
+        ) case ok then {
+            vi: 0.u64
+            for vi < vr.length loop {
+                vent: (vr.get i: vi).copy
+                vsfx: vent.stringview.stripSuffix s: ".script"
+                match (
+                    vsfx
+                ) case some then {
+                    vnm: vsfx.string
+                    scriptPath: "\{vfsdir.stringview}/\{vnm.stringview}.script"
+                    treePath: "\{vfsdir.stringview}/\{vnm.stringview}.tree"
+                    rawScript: slurp path: scriptPath.stringview
+                    subst: rawScript.stringview.replace needle: "{ROOT}" replacement: treePath.stringview
+                    tmpScript: "\{d.stringview}/V_\{vnm.stringview}.script"
+                    io.writeText path: tmpScript.stringview content: subst.stringview
+                    vout: "\{d.stringview}/V_\{vnm.stringview}.out"
+                    va: (List String)
+                    va.append from: zvfB.copy
+                    va.append from: tmpScript.copy
+                    os.spawn argv: va cwd: "" outPath: vout.stringview errPath: "/dev/null" timeoutSecs: timeoutSecs
+                    vgold: "\{vfsdir.stringview}/\{vnm.stringview}.expected"
+                    if (io.exists path: vgold.stringview) then {
+                        gV: slurp path: vgold.stringview
+                        oV: slurp path: vout.stringview
+                        if oV.stringview == gV.stringview then {
+                            passN = passN + 1
+                        } else {
+                            print "FAIL(vfs) \{vnm.stringview}"
+                            fails = fails + 1
+                        }
+                    }
+                } case none then {
+                }
+                vi = vi + 1
+            }
+        } case err then {
+        }
+    }
+
     # ---------------- SMOKE (per-unit no-arg golden) cases ----------------
     smokecases: "\{root.stringview}/tests/fixtures/smoke_cases.txt"
     scC: slurp path: smokecases.stringview
