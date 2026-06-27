@@ -408,6 +408,136 @@ main: function is {
         }
     }
 
+    # ---------------- DIFFERENTIAL (lexer / parser / program goldens) ----------------
+    # Build the dump binaries once with the zc under test, then diff their
+    # output over every example (and program fixture) against committed goldens.
+    srcDir: "\{root.stringview}/src"
+    lexgold: "\{root.stringview}/tests/fixtures/lexer_golden"
+    parsegold: "\{root.stringview}/tests/fixtures/parser_golden"
+    proggold: "\{root.stringview}/tests/fixtures/parser_program"
+    zlxC: "\{d.stringview}/D_zlexer.c"
+    zlxB: "\{d.stringview}/D_zlexer.bin"
+    zpsC: "\{d.stringview}/D_zparser.c"
+    zpsB: "\{d.stringview}/D_zparser.bin"
+    lexOk: false
+    parseOk: false
+    zlxE: zcArgv zc: zc.stringview name: "zlexer" srcdir: srcDir.stringview sys: sys.stringview outc: zlxC.stringview
+    if (os.spawn argv: zlxE cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+        zlxG: gccArgv cc: cc.stringview bin: zlxB.stringview csrc: zlxC.stringview asan: false
+        if (os.spawn argv: zlxG cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+            lexOk = true
+        }
+    }
+    zpsE: zcArgv zc: zc.stringview name: "zparser" srcdir: srcDir.stringview sys: sys.stringview outc: zpsC.stringview
+    if (os.spawn argv: zpsE cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+        zpsG: gccArgv cc: cc.stringview bin: zpsB.stringview csrc: zpsC.stringview asan: false
+        if (os.spawn argv: zpsG cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+            parseOk = true
+        }
+    }
+    if lexOk == false then {
+        print "FAIL(diff-build) zlexer"
+        fails = fails + 1
+    }
+    if parseOk == false then {
+        print "FAIL(diff-build) zparser"
+        fails = fails + 1
+    }
+    dr: io.listDir path: examplesDir.stringview
+    match (
+        dr
+    ) case ok then {
+        ddi: 0.u64
+        for ddi < dr.length loop {
+            dent: (dr.get i: ddi).copy
+            dsfx: dent.stringview.stripSuffix s: ".z"
+            match (
+                dsfx
+            ) case some then {
+                dnm: dsfx.string
+                exPath: "\{examplesDir.stringview}/\{dnm.stringview}.z"
+                if lexOk then {
+                    ltoks: "\{d.stringview}/D_\{dnm.stringview}.tokens"
+                    la: (List String)
+                    la.append from: zlxB.copy
+                    la.append from: exPath.copy
+                    os.spawn argv: la cwd: "" outPath: ltoks.stringview errPath: "/dev/null" timeoutSecs: timeoutSecs
+                    lgold: "\{lexgold.stringview}/\{dnm.stringview}.tokens"
+                    if (io.exists path: lgold.stringview) then {
+                        gL: slurp path: lgold.stringview
+                        oL: slurp path: ltoks.stringview
+                        if oL.stringview == gL.stringview then {
+                            passN = passN + 1
+                        } else {
+                            print "FAIL(lexer) \{dnm.stringview}"
+                            fails = fails + 1
+                        }
+                    }
+                }
+                if parseOk then {
+                    past: "\{d.stringview}/D_\{dnm.stringview}.ast"
+                    pa: (List String)
+                    pa.append from: zpsB.copy
+                    pa.append from: exPath.copy
+                    os.spawn argv: pa cwd: "" outPath: past.stringview errPath: "/dev/null" timeoutSecs: timeoutSecs
+                    pgold: "\{parsegold.stringview}/\{dnm.stringview}.ast"
+                    if (io.exists path: pgold.stringview) then {
+                        gP: slurp path: pgold.stringview
+                        oP: slurp path: past.stringview
+                        if oP.stringview == gP.stringview then {
+                            passN = passN + 1
+                        } else {
+                            print "FAIL(parser) \{dnm.stringview}"
+                            fails = fails + 1
+                        }
+                    }
+                }
+            } case none then {
+            }
+            ddi = ddi + 1
+        }
+    } case err then {
+    }
+    if parseOk then {
+        pr: io.listDir path: proggold.stringview
+        match (
+            pr
+        ) case ok then {
+            pri: 0.u64
+            for pri < pr.length loop {
+                pent: (pr.get i: pri).copy
+                ptsfx: pent.stringview.stripSuffix s: ".tree"
+                match (
+                    ptsfx
+                ) case some then {
+                    ptnm: ptsfx.string
+                    treeDir: "\{proggold.stringview}/\{ptnm.stringview}.tree"
+                    pout: "\{d.stringview}/P_\{ptnm.stringview}.out"
+                    ppa: (List String)
+                    ppa.append from: zpsB.copy
+                    ppa.append from: "--program".string
+                    ppa.append from: treeDir.copy
+                    ppa.append from: "main".string
+                    os.spawn argv: ppa cwd: "" outPath: pout.stringview errPath: "/dev/null" timeoutSecs: timeoutSecs
+                    pgold2: "\{proggold.stringview}/\{ptnm.stringview}.expected"
+                    if (io.exists path: pgold2.stringview) then {
+                        gPr: slurp path: pgold2.stringview
+                        oPr: slurp path: pout.stringview
+                        if oPr.stringview == gPr.stringview then {
+                            passN = passN + 1
+                        } else {
+                            print "FAIL(program) \{ptnm.stringview}"
+                            fails = fails + 1
+                        }
+                    }
+                } case none then {
+                }
+                pri = pri + 1
+            }
+        } case err then {
+        }
+    }
+
     # ---------------- SMOKE (per-unit no-arg golden) cases ----------------
     smokecases: "\{root.stringview}/tests/fixtures/smoke_cases.txt"
     scC: slurp path: smokecases.stringview
