@@ -37,12 +37,11 @@ ZC="${ZC:-}"
 if [ -z "$ZC" ]; then
   TZC="$(mktemp -d)"
   ZC="$TZC/zc"
-  echo "[bootstrap: reference emits the port zc (~2.5min)]"
-  uv run python compiler0/zc.py zc --src src -o "$ZC.c" || { echo "FAIL: reference emit of zc"; exit 2; }
+  echo "[bootstrap: cc bootstrap/zc.c -> port zc]"
   gcc -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
       -Werror=implicit-function-declaration -Werror=implicit-int \
       -Werror=int-conversion -Werror=incompatible-pointer-types \
-      -o "$ZC" "$ZC.c" || { echo "FAIL: gcc build of port zc"; exit 2; }
+      -o "$ZC" bootstrap/zc.c || { echo "FAIL: cc of bootstrap seed"; exit 2; }
 fi
 
 D=$(mktemp -d)

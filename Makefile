@@ -1,9 +1,24 @@
-ZC       := uv run python compiler0/zc.py
 CC       := gcc
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types
 BUILDDIR := out
+
+# Bootstrap compiler for building the .z sources. Default: the committed
+# Python-free seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md).
+# BOOTSTRAP=python falls back to the frozen reference (compiler0/zc.py). The two
+# diverge on the C-emit flag -- the port's `-o` builds a native binary while
+# compiler0's `-o` emits C -- so the flag is selected here, not in the recipes.
+BOOTSTRAP ?= seed
+ifeq ($(BOOTSTRAP),python)
+  ZC      := uv run python compiler0/zc.py
+  ZC_EMIT := -o
+  ZC_DEP  :=
+else
+  ZC      := $(BUILDDIR)/zc-seed
+  ZC_EMIT := --emit-c
+  ZC_DEP  := $(BUILDDIR)/zc-seed
+endif
 
 # install tree (GOROOT-style). Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
 ROOT     ?= $(HOME)/.local/lib/zerolang
@@ -246,9 +261,9 @@ test-corpus:
 # runner (src/ztestrunner.z), which then drives the same 3-kind gate via
 # os.spawn (no shell, no Python at gate time) and reproduces run_corpus.sh's
 # tally. Slow; NOT in `make test`. run_corpus.sh stays the CI gate.
-test-corpus-z:
+test-corpus-z: $(ZC_DEP)
 	@mkdir -p $(BUILDDIR)
-	$(ZC) zc --src src -o $(BUILDDIR)/zc.c
+	$(ZC) zc --src src --system lib/system $(ZC_EMIT) $(BUILDDIR)/zc.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc $(BUILDDIR)/zc.c
 	$(BUILDDIR)/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
@@ -277,11 +292,11 @@ fmt:
 	uv run ruff format compiler0/ tests/
 
 # compile all examples: .z -> .c -> binary
-build:
+build: $(ZC_DEP)
 	@mkdir -p $(BUILDDIR)
 	@ok=0; fail=0; \
 	for name in $(NAMES); do \
-		$(ZC) $$name --src examples -o $(BUILDDIR)/$$name.c 2>/dev/null; \
+		$(ZC) $$name --src examples --system lib/system $(ZC_EMIT) $(BUILDDIR)/$$name.c 2>/dev/null; \
 		if [ $$? -ne 0 ]; then \
 			echo "FAIL zc   $$name"; fail=$$((fail+1)); continue; \
 		fi; \
@@ -294,13 +309,20 @@ build:
 	echo ""; \
 	echo "$$ok passed, $$fail failed ($(BUILDDIR)/)"
 
-# bin/zc -- the self-hosted compiler, bootstrapped by the reference (zc.py).
-# Persistent + git-ignored; rebuilt when the compiler sources change. The dev
-# bin/zc self-locates to this repo (lib/system here; runtime falls back to
-# src/runtime, as the dev tree has no lib/runtime).
-bin/zc: $(wildcard src/*.z) $(wildcard compiler0/*.py) $(wildcard lib/system/*.z)
+# out/zc-seed -- the bootstrap compiler built from the committed, Python-free
+# seed (bootstrap/zc.c). This is the default stage0 (no Python). See
+# bootstrap/README.md and `make test-bootstrap`.
+$(BUILDDIR)/zc-seed: bootstrap/zc.c
+	@mkdir -p $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c
+
+# bin/zc -- the self-hosted compiler, bootstrapped by the seed ($(BUILDDIR)/zc-seed;
+# BOOTSTRAP=python uses compiler0 instead). Persistent + git-ignored; rebuilt when
+# the compiler sources change. The dev bin/zc self-locates to this repo (lib/system
+# here; runtime falls back to src/runtime, as the dev tree has no lib/runtime).
+bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
 	@mkdir -p bin
-	$(ZC) zc --src src -o bin/zc.c
+	$(ZC) zc --src src --system lib/system $(ZC_EMIT) bin/zc.c
 	$(CC) $(CFLAGS) -o bin/zc bin/zc.c
 
 # zc -- convenience alias for bin/zc.
@@ -343,8 +365,8 @@ regen-goldens: out/zlexer out/zparser
 # self-reproducing C dump of the compiler. `cc bootstrap/zc.c` IS the
 # self-hosted compiler. See bootstrap/README.md and doc/bootstrap.pdoc.
 #
-# bump-seed regenerates it from a fresh bin/zc (uses compiler0 to build bin/zc
-# while the reference is live; post-freeze a seed-built bin/zc does the same).
+# bump-seed regenerates it from a fresh bin/zc (built by the default bootstrap --
+# the current seed; BOOTSTRAP=python to rebuild from the frozen reference instead).
 # Run only when test-bootstrap reports the seed can no longer build main, or for
 # periodic hygiene -- NOT every commit.
 bump-seed: bin/zc

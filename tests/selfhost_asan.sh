@@ -46,11 +46,9 @@ ZC_ASAN="${ZC_ASAN:-}"
 if [ -z "$ZC_ASAN" ]; then
   STAGE1="${STAGE1:-}"
   if [ -z "$STAGE1" ]; then
-    echo "[bootstrap: compiler0 emits stage1 (~3min)]"
-    uv run python compiler0/zc.py zc --src src -o "$T/stage1.c" \
-      || { echo "FAIL: compiler0 emit of stage1"; exit 2; }
-    gcc "${CFLAGS[@]}" -o "$T/stage1" "$T/stage1.c" \
-      || { echo "FAIL: gcc build of stage1"; exit 2; }
+    echo "[bootstrap: cc bootstrap/zc.c -> stage1 (the seed)]"
+    gcc "${CFLAGS[@]}" -o "$T/stage1" bootstrap/zc.c \
+      || { echo "FAIL: cc of bootstrap seed"; exit 2; }
     STAGE1="$T/stage1"
   fi
   echo "[bootstrap: stage1 emits stage2; gcc -fsanitize=address]"

@@ -79,11 +79,14 @@ class EmittedC(str):
 
 
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
-# _SRC_DIR holds the .z compiler sources (passed as --src); the Python reference
-# compiler (compiler0) is the stage0 bootstrap that builds them.
+# _SRC_DIR holds the .z compiler sources (passed as --src). The default stage0
+# that builds them is the committed Python-free seed (bootstrap/zc.c); set
+# Z_BOOTSTRAP=python to fall back to the frozen reference (compiler0/zc.py).
 _SRC_DIR = os.path.join(_REPO_ROOT, "src")
 _COMPILER0_DIR = os.path.join(_REPO_ROOT, "compiler0")
 _ZC = [sys.executable, os.path.join(_COMPILER0_DIR, "zc.py")]
+_BOOTSTRAP = os.environ.get("Z_BOOTSTRAP", "seed")
+_SEED_C = os.path.join(_REPO_ROOT, "bootstrap", "zc.c")
 _CC = os.environ.get("Z_TEST_CC", "gcc")
 _CFLAGS = [
     "-std=c17",
@@ -98,8 +101,30 @@ _CFLAGS = [
 ]
 
 
+def _seed_zc(tmp_path_factory) -> str:
+    """Build the committed Python-free bootstrap seed (bootstrap/zc.c) once,
+    shared across xdist workers. This is the default stage0 -- `cc bootstrap/zc.c`
+    is the self-hosted compiler, no Python (see bootstrap/README.md)."""
+
+    def _do(builddir):
+        bin_path = str(builddir / "zc-seed")
+        cc = subprocess.run(
+            [_CC, *_CFLAGS, "-o", bin_path, _SEED_C],
+            capture_output=True,
+            text=True,
+        )
+        assert cc.returncode == 0, f"cc bootstrap/zc.c failed:\n{cc.stderr}"
+        return bin_path
+
+    return build_once_shared("seed-zc", tmp_path_factory, _do)
+
+
 def _build_zerolang_unit(unitname: str, tmp_path_factory) -> str:
     """Build a self-hosted compiler unit (src/<unitname>.z -> C -> binary).
+
+    The stage0 that emits the C is the committed seed by default (no Python);
+    Z_BOOTSTRAP=python falls back to compiler0/zc.py (the two diverge on the
+    C-emit flag -- the port's `-o` builds a binary, so the seed uses `--emit-c`).
 
     Built once and shared across xdist workers (build_once_shared) so N workers
     don't each rebuild every heavy binary -- redundant concurrent builds OOM a
@@ -109,17 +134,29 @@ def _build_zerolang_unit(unitname: str, tmp_path_factory) -> str:
     if shutil.which(_CC) is None:
         pytest.skip(f"{_CC} not on PATH; cannot build {unitname} binary")
 
+    # Build the seed FIRST, outside this unit's build_once_shared: that helper
+    # uses one global lock and runs the build while holding it, so calling it
+    # again from inside _do (a nested build_once_shared) self-deadlocks.
+    seed = None if _BOOTSTRAP == "python" else _seed_zc(tmp_path_factory)
+
     def _do(builddir):
         c_path = str(builddir / f"{unitname}.c")
         bin_path = str(builddir / unitname)
+        if _BOOTSTRAP == "python":
+            zc_cmd = _ZC + [unitname, "--src", _SRC_DIR, "-o", c_path]
+        else:
+            zc_cmd = [
+                seed, unitname, "--src", _SRC_DIR,
+                "--system", _SYSTEM_DIR, "--emit-c", c_path,
+            ]
         zc_proc = subprocess.run(
-            _ZC + [unitname, "--src", _SRC_DIR, "-o", c_path],
+            zc_cmd,
             capture_output=True,
             text=True,
             cwd=_REPO_ROOT,
         )
         assert zc_proc.returncode == 0, (
-            f"zc.py {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
+            f"stage0 ({_BOOTSTRAP}) {unitname} failed:\nstdout:\n{zc_proc.stdout}\n"
             f"stderr:\n{zc_proc.stderr}"
         )
         cc_proc = subprocess.run(

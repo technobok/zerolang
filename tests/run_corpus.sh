@@ -55,13 +55,13 @@ SKIP_BUILD="genmath"
 
 is_in() { case " $2 " in *" $1 "*) return 0;; *) return 1;; esac; }
 
-# Build the port zc once (the only Python touch -- builds the port, does not gate).
+# Build the port zc once from the committed Python-free seed (does not gate;
+# `cc bootstrap/zc.c` IS the self-hosted compiler -- see bootstrap/README.md).
 ZC="${ZC:-}"
 if [ -z "$ZC" ]; then
   TZC="$(mktemp -d)"; ZC="$TZC/zc"
-  echo "[bootstrap: reference builds the port zc (~2.5min)]"
-  uv run python compiler0/zc.py zc --src src -o "$ZC.c" || { echo "FAIL: reference emit of zc"; exit 2; }
-  gcc "${CF[@]}" -o "$ZC" "$ZC.c" || { echo "FAIL: gcc build of port zc"; exit 2; }
+  echo "[bootstrap: cc bootstrap/zc.c -> port zc]"
+  gcc "${CF[@]}" -o "$ZC" bootstrap/zc.c || { echo "FAIL: cc of bootstrap seed"; exit 2; }
 fi
 
 D=$(mktemp -d); trap 'rm -rf "$D" "${TZC:-}"' EXIT
