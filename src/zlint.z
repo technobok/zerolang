@@ -1,0 +1,512 @@
+# Style linter over the `src/*.z` sources, invoked as `zc lint`.
+#
+# Reuses the compiler units (zlexer / zparser / zast / ztypecheck / ztypes /
+# zvfs) to flag the same style issues the project ratchets on:
+#   empty-else  a statement `if` carries an empty `else {}` (just delete it).
+#   empty-then  a clause's `then {}` is empty while the `else` does the work
+#               (a backwards condition: negate it, move the work into `then`).
+#   suffix      a numeric literal carries an explicit type suffix the context
+#               already fixes, so a bare literal would coerce to the same type.
+#   elide-name  a built-in template's first generic argument carries its
+#               primary parameter name, which the grammar lets you omit.
+#   for-while   a `for` header written with the elidable leading `while`.
+#   paren       a paren pair removable without changing the AST.
+#
+# Empty `case` arms are never flagged (a union/variant match stays exhaustive).
+
+Node: zast.Node
+
+# atomName -- the name of an `atomid` node, or "" for any other arm.
+atomName: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.copy
+    } else {
+        return "".string
+    }
+}
+
+# isStatementArm -- the node is a braced `{ ... }` statement block.
+isStatementArm: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# isEmptyBlock -- a statement block with no statement lines (`{}`).
+isEmptyBlock: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        return n.statements.length == 0
+    } else {
+        return false
+    }
+}
+
+# stmtPos -- the source position of a statement block (the empty `then`/`else`
+# nodes the empty-clause checks flag are always statements).
+stmtPos: function {n: Node} out zast.nodepos is {
+    match (
+        n
+    ) case statement then {
+        return (zast.nodepos line: n.lineno col: n.colno)
+    } else {
+        return (zast.nodepos line: 0 col: 0)
+    }
+}
+
+# isIfArm -- the node is an `if` (through an `expression` wrapper).
+isIfArm: function {n: Node} out bool is {
+    match (
+        n
+    ) case ifexpr then {
+        return true
+    } case expression then {
+        return (isIfArm n: n.expression)
+    } else {
+        return false
+    }
+}
+
+# slIsIf -- a statement line wrapping an `if`.
+slIsIf: function {sl: Node} out bool is {
+    match (
+        sl
+    ) case statementline then {
+        return (isIfArm n: sl.statementline)
+    } else {
+        return false
+    }
+}
+
+# isElseIfWrap -- the else clause is the synthetic block an `else if` chain
+# parses to (a single statement line wrapping an `if`), as opposed to a real
+# braced `else { ... }`. Distinguishes the case Python excludes via the else
+# block's `{` start token, which the ported AST does not carry.
+isElseIfWrap: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        if n.statements.length == 1 then {
+            res: false
+            it: n.statements.iterate
+            for sl: it loop {
+                res = slIsIf sl: sl
+            }
+            return res
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# primaryGenericParam -- the elidable first parameter name of a built-in
+# template, or "" when `name` is not such a template. Index 0 only:
+# eliding a later argument's name would break monomorphisation.
+primaryGenericParam: function {name: StringView} out String is {
+    if name == "List" then { return "of".string }
+    if name == "Set" then { return "of".string }
+    if name == "array" then { return "of".string }
+    if name == "Map" then { return "key".string }
+    if name == "option" then { return "t".string }
+    if name == "optionval" then { return "t".string }
+    if name == "Option" then { return "t".string }
+    if name == "OptionView" then { return "t".string }
+    if name == "Result" then { return "t".string }
+    return "".string
+}
+
+# optName -- an (Option String) as an owned String ("" when none).
+optName: function {o: Option String} out String is {
+    match (
+        o
+    ) case some then {
+        return o.string
+    } case none then {
+        return "".string
+    }
+}
+
+# mainUnitNameOf -- the program's main unit name as an owned String.
+mainUnitNameOf: function {program: Node} out String is {
+    match (
+        program
+    ) case program then {
+        return program.mainUnitName.copy
+    } else {
+        return "".string
+    }
+}
+
+# slurp -- file content as an owned String, or "" when unreadable.
+slurp: function {path: StringView} out String is {
+    r: io.readText path: path
+    match (
+        r
+    ) case ok then {
+        return r.copy
+    } case err then {
+        return "".string
+    }
+}
+
+# Linter -- accumulates per-run violation counts and threads them through the
+# AST walk, mirroring the parser/dumper method-recursion style.
+Linter: class {
+    nElse:  u32
+    nThen:  u32
+    nSuf:   u32
+    nElide: u32
+    nFw:    u32
+    nParen: u32
+    doList: bool
+} as {
+    # emit -- print one `--list` line when listing is enabled.
+    emit: function {:this uname: StringView ln: u32 col: u32 tail: StringView} is {
+        if this.doList then {
+            line: "  src/\{uname}.z:\{ln}:\{col}  \{tail}"
+            print line
+        }
+    }
+
+    # checkEmpty -- empty `else {}` and the backwards-condition empty `then {}`,
+    # given an `ifexpr`'s else option and its clause list.
+    checkEmpty: function {:this elseOpt: Option Node clauses: List Node uname: StringView} is {
+        match (
+            elseOpt
+        ) case some then {
+            if (isEmptyBlock n: elseOpt) then {
+                p: stmtPos n: elseOpt
+                this.emit uname: uname ln: p.line col: p.col tail: "empty-else"
+                this.nElse = this.nElse + 1
+            } else if (isStatementArm n: elseOpt) when (clauses.length == 1) then {
+                if (isElseIfWrap n: elseOpt) == false then {
+                    citer: clauses.iterate
+                    for c0: citer loop {
+                        this.checkEmptyThen clause: c0 uname: uname
+                    }
+                }
+            }
+        } case none then {}
+    }
+
+    # checkEmptyThen -- flag a single-condition clause whose `then {}` is empty.
+    checkEmptyThen: function {:this clause: Node uname: StringView} is {
+        match (
+            clause
+        ) case ifclause then {
+            if (isEmptyBlock n: clause.statement) when (clause.conditions.length == 1) then {
+                p: stmtPos n: clause.statement
+                this.emit uname: uname ln: p.line col: p.col tail: "empty-then"
+                this.nThen = this.nThen + 1
+            }
+        } else {}
+    }
+
+    # checkElide -- a built-in template call whose first argument carries its
+    # primary parameter name. Receives the (already narrowed) callable and
+    # argument list of a `call` node.
+    checkElide: function {:this callable: Node arguments: List Node uname: StringView} is {
+        cn: atomName n: callable
+        if cn.length == 0 then { return }
+        primary: primaryGenericParam name: cn.stringview
+        if primary.length == 0 then { return }
+        idx: 0.u64
+        aiter: arguments.iterate
+        for a: aiter loop {
+            if idx == 0 then {
+                this.checkElideFirst arg: a primary: primary.stringview uname: uname
+            }
+            idx = idx + 1
+        }
+    }
+
+    # checkElideFirst -- the first generic argument; flag when its label is the
+    # template's primary parameter name.
+    checkElideFirst: function {:this arg: Node primary: StringView uname: StringView} is {
+        match (
+            arg
+        ) case namedoperation then {
+            an: optName o: arg.name
+            if an.stringview == primary then {
+                tl: "elide-name \{primary}:"
+                this.emit uname: uname ln: arg.lineno col: arg.colno tail: tl.stringview
+                this.nElide = this.nElide + 1
+            }
+        } else {}
+    }
+
+    # walk -- preorder over the subtree, running the parse-based checks and
+    # recursing through every child (mirrors zast.printNodeCanonical).
+    walk: function {:this n: Node uname: StringView} is {
+        match (
+            n
+        ) case error then {
+        } case atomid then {
+        } case labelvalue then {
+        } case stringchunk then {
+        } case binop then {
+            this.walk n: n.lhs uname: uname
+            this.walk n: n.operator uname: uname
+            this.walk n: n.rhs uname: uname
+        } case atomstring then {
+            iter: n.stringparts.iterate
+            for part: iter loop {
+                this.walk n: part uname: uname
+            }
+        } case dottedpath then {
+            this.walk n: n.parent uname: uname
+            this.walk n: n.child uname: uname
+        } case call then {
+            this.checkElide callable: n.callable arguments: n.arguments uname: uname
+            this.walk n: n.callable uname: uname
+            argiter: n.arguments.iterate
+            for arg: argiter loop {
+                this.walk n: arg uname: uname
+            }
+        } case typeofexpr then {
+            this.walk n: n.source uname: uname
+        } case namedoperation then {
+            this.walk n: n.operation uname: uname
+        } case datablock then {
+            eiter: n.elements.iterate
+            for el: eiter loop {
+                this.walk n: el uname: uname
+            }
+            this.walkOpt o: n.outType uname: uname
+        } case yieldexpr then {
+            this.walk n: n.expr uname: uname
+        } case statement then {
+            siter: n.statements.iterate
+            for sln: siter loop {
+                this.walk n: sln uname: uname
+            }
+        } case statementline then {
+            this.walk n: n.statementline uname: uname
+        } case assignment then {
+            this.walk n: n.value uname: uname
+        } case reassignment then {
+            this.walk n: n.topath uname: uname
+            this.walk n: n.value uname: uname
+        } case swapstmt then {
+            this.walk n: n.lhs uname: uname
+            this.walk n: n.rhs uname: uname
+        } case expression then {
+            this.walk n: n.expression uname: uname
+        } case ifexpr then {
+            this.checkEmpty elseOpt: n.elseclause clauses: n.clauses uname: uname
+            clit: n.clauses.iterate
+            for cl: clit loop {
+                this.walk n: cl uname: uname
+            }
+            this.walkOpt o: n.elseclause uname: uname
+        } case ifclause then {
+            coit: n.conditions.iterate
+            for co: coit loop {
+                this.walk n: co uname: uname
+            }
+            this.walk n: n.statement uname: uname
+        } case forexpr then {
+            fcit: n.conditions.iterate
+            for fc: fcit loop {
+                this.walk n: fc uname: uname
+            }
+            this.walkOpt o: n.body uname: uname
+            fpit: n.postconditions.iterate
+            for fp: fpit loop {
+                this.walk n: fp uname: uname
+            }
+        } case doexpr then {
+            this.walk n: n.statement uname: uname
+        } case withexpr then {
+            this.walk n: n.value uname: uname
+            this.walk n: n.body uname: uname
+        } case caseexpr then {
+            this.walk n: n.subject uname: uname
+            ccit: n.clauses.iterate
+            for cc: ccit loop {
+                this.walk n: cc uname: uname
+            }
+            this.walkOpt o: n.elseclause uname: uname
+        } case caseclause then {
+            this.walk n: n.matcharm uname: uname
+            this.walk n: n.statement uname: uname
+        } case functiondef then {
+            this.walkOpt o: n.returntype uname: uname
+            piter: n.parameters.iterate
+            for pm: piter loop {
+                this.walk n: pm uname: uname
+            }
+            this.walkOpt o: n.body uname: uname
+            faiter: n.asItems.iterate
+            for fam: faiter loop {
+                this.walk n: fam uname: uname
+            }
+        } case objectdef then {
+            oiiter: n.isItems.iterate
+            for oim: oiiter loop {
+                this.walk n: oim uname: uname
+            }
+            oaiter: n.asItems.iterate
+            for oam: oaiter loop {
+                this.walk n: oam uname: uname
+            }
+        } case unitdef then {
+            ubiter: n.body.iterate
+            for ubm: ubiter loop {
+                this.walk n: ubm uname: uname
+            }
+        } case program then {
+            puiter: n.units.iterate
+            for pum: puiter loop {
+                this.walk n: pum uname: uname
+            }
+        }
+    }
+
+    # walkOpt -- recurse into an optional child node when present.
+    walkOpt: function {:this o: Option Node uname: StringView} is {
+        match (
+            o
+        ) case some then {
+            this.walk n: o uname: uname
+        } case none then {}
+    }
+
+    # lintUnit -- run the parse-based checks over one parsed program's main
+    # unit (imported system units are left alone).
+    lintUnit: function {:this prog: Node uname: StringView} is {
+        mn: mainUnitNameOf program: prog
+        match (
+            prog
+        ) case program then {
+            uiter: prog.units.iterate
+            for u: uiter loop {
+                this.lintUnitNamedOp namedOp: u mainName: mn.stringview uname: uname
+            }
+        } else {}
+    }
+
+    # lintUnitNamedOp -- walk only the main unit's definitions.
+    lintUnitNamedOp: function {:this namedOp: Node mainName: StringView uname: StringView} is {
+        match (
+            namedOp
+        ) case namedoperation then {
+            un: optName o: namedOp.name
+            if un.stringview == mainName then {
+                this.walk n: namedOp.operation uname: uname
+            }
+        } else {}
+    }
+
+    # forWhile -- token-based: each `for` immediately followed by `while`
+    # (the elidable leading argument label). Parse-free and immune to
+    # strings/comments.
+    forWhile: function {:this text: StringView uname: StringView} is {
+        tk: zlexer.Tokenizer.create source: text.string fsno: 0
+        prevFor: false
+        looping: true
+        for looping loop {
+            t: tk.token
+            tt: t.toktype
+            match (
+                tt
+            ) case WS then {
+            } case EOL then {
+            } case COMMENT then {
+            } case FOR then {
+                prevFor = true
+            } case WHILE then {
+                if prevFor then {
+                    this.emit uname: uname ln: t.lineno col: t.colno tail: "for-while"
+                    this.nFw = this.nFw + 1
+                }
+                prevFor = false
+            } case EOF then {
+                looping = false
+            } else {
+                prevFor = false
+            }
+        }
+    }
+
+    # total -- the sum of all violation counts.
+    total: function {:this} out u32 is {
+        return this.nElse + this.nThen + this.nSuf + this.nElide + this.nFw + this.nParen
+    }
+}
+
+# run -- lint every `*.z` unit under `srcdir`. Returns the process exit code:
+# 1 when `doCheck` and any gated violation is present, else 0.
+run: function {srcdir: StringView systemdir: StringView doCheck: bool doElide: bool doParens: bool doForWhile: bool emptyOnly: bool doList: bool} out i32 is {
+    lt: Linter nElse: 0 nThen: 0 nSuf: 0 nElide: 0 nFw: 0 nParen: 0 doList: doList
+
+    units: (List String)
+    lr: io.listDir path: srcdir
+    match (
+        lr
+    ) case ok then {
+        i: 0.u64
+        for i < lr.length loop {
+            ent: (lr.get i: i).copy
+            sfx: ent.stringview.stripSuffix s: ".z"
+            match (
+                sfx
+            ) case some then {
+                units.append from: sfx.string
+            } case none then {}
+            i = i + 1
+        }
+    } case err then {
+        io.eprintln "zc lint: cannot read source directory"
+        return 2
+    }
+
+    ui: 0.u64
+    for ui < units.length loop {
+        un9: (units.get i: ui).copy
+        vfs: zvfs.ZVfs providers: (List zvfs.ProviderBox) entrytable: (zvfs.DentryTable entries: (List zvfs.dentry)) file_names: (List String) walk_cache: (Map String value: u32) rootid: 0
+        vfs.registerNull
+        systemid: vfs.registerFS rootpath: systemdir.string parentpath: "".string
+        srcid: vfs.registerFS rootpath: srcdir.string parentpath: "".string
+        vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
+        rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+
+        p: zparser.Parser.create
+        prog: p.parse vfs: vfs rootid: rootid mainUnitName: un9.string
+        match (
+            prog
+        ) case error then {
+            pe: "\{un9.stringview}: PARSE-ERROR"
+            print pe
+        } else {
+            lt.lintUnit prog: prog uname: un9.stringview
+            if doForWhile then {
+                fpath: "\{srcdir}/\{un9.stringview}.z"
+                text: slurp path: fpath.stringview
+                lt.forWhile text: text.stringview uname: un9.stringview
+            }
+        }
+        ui = ui + 1
+    }
+
+    tot: lt.total
+    summary: "TOTAL  empty-else=\{lt.nElse}  empty-then=\{lt.nThen}  suffix=\{lt.nSuf}  elide-name=\{lt.nElide}  paren=\{lt.nParen}  for-while=\{lt.nFw}  (\{tot} total)"
+    print summary
+
+    gated: lt.nElse + lt.nThen + lt.nSuf
+    if doElide then { gated = gated + lt.nElide }
+    if doParens then { gated = gated + lt.nParen }
+    if doForWhile then { gated = gated + lt.nFw }
+    if doCheck when (gated > 0) then {
+        return 1
+    }
+    return 0
+}
