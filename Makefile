@@ -29,7 +29,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-parser test-infra test-native test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -37,10 +37,8 @@ BOOTSTRAP_MSG := "  [bootstrap-lint] These Python-specific patterns complicate f
 BOOTSTRAP_MSG2 := "  Do not introduce new uses. Run 'make bootstrap-lint' to check."
 
 check:
-	uv run ruff format compiler0/ tests/
-	uv run ruff check compiler0/ tests/ --fix
-	uv run ty check compiler0/
-	@$(MAKE) --no-print-directory bootstrap-lint
+	uv run ruff format tests/
+	uv run ruff check tests/ --fix
 	@$(MAKE) --no-print-directory style-lint-fast
 
 # Style ratchets over src/*.z (tools/lint_style.py), pinned at 0.
@@ -213,25 +211,16 @@ test-verbose:
 test-emitter:
 	uv run python -m pytest tests/ -m emitter -n auto
 
-test-typecheck:
-	uv run python -m pytest tests/ -m typecheck -n auto
-
 test-parser:
 	uv run python -m pytest tests/ -m parser -n auto
 
 test-infra:
 	uv run python -m pytest tests/ -m infra -n auto
 
-# Native (self-hosted src/*.z) compiler tests only -- the port's gates (corpus,
-# fixpoint, differentials, leak) without the Python-reference suite. Run when
-# changing src/*.z.
+# Self-hosted (src/*.z) compiler tests -- the corpus / fixpoint / differential /
+# leak gates. With compiler0 frozen this is the whole suite (== `make test`).
 test-native:
 	uv run python -m pytest tests/ -m native -n auto
-
-# Python-reference (compiler0/*.py) tests only -- retires with the reference compiler.
-# Run when changing compiler0/*.py.
-test-py:
-	uv run python -m pytest tests/ -m "not native" -n auto
 
 # Memory-leak gate: every buildable example + corpus program emitted by the
 # ported zc, built with ASan, run under detect_leaks=1; 0 bytes leaked
