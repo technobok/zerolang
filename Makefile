@@ -4,21 +4,11 @@ CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=int-conversion -Werror=incompatible-pointer-types
 BUILDDIR := out
 
-# Bootstrap compiler for building the .z sources. Default: the committed
-# Python-free seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md).
-# BOOTSTRAP=python falls back to the frozen reference (compiler0/zc.py). The two
-# diverge on the C-emit flag -- the port's `-o` builds a native binary while
-# compiler0's `-o` emits C -- so the flag is selected here, not in the recipes.
-BOOTSTRAP ?= seed
-ifeq ($(BOOTSTRAP),python)
-  ZC      := uv run python compiler0/zc.py
-  ZC_EMIT := -o
-  ZC_DEP  :=
-else
-  ZC      := $(BUILDDIR)/zc-seed
-  ZC_EMIT := --emit-c
-  ZC_DEP  := $(BUILDDIR)/zc-seed
-endif
+# Bootstrap compiler for building the .z sources: the committed, Python-free
+# seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md). A C
+# toolchain is the only requirement to build and test zerolang.
+ZC      := $(BUILDDIR)/zc-seed
+ZC_DEP  := $(BUILDDIR)/zc-seed
 
 # install tree (GOROOT-style). Override e.g. ROOT=/opt/zerolang BINDIR=/usr/local/bin.
 ROOT     ?= $(HOME)/.local/lib/zerolang
@@ -29,263 +19,50 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-parser test-infra test-native test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check
+.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check
 
-# Patterns that complicate bootstrapping the compiler in zerolang.
-# Each new violation must be reviewed — do not increase the baseline counts.
-BOOTSTRAP_MSG := "  [bootstrap-lint] These Python-specific patterns complicate future self-hosting."
-BOOTSTRAP_MSG2 := "  Do not introduce new uses. Run 'make bootstrap-lint' to check."
+# check -- the fast pre-commit gate: the parse/token style checks over src/*.z.
+check: style-lint-fast
 
-check:
-	uv run ruff format tests/
-	uv run ruff check tests/ --fix
-	@$(MAKE) --no-print-directory style-lint-fast
+# Style ratchets over src/*.z, enforced by the self-hosted linter `zc lint`
+# (src/zlint.z). style-lint-fast is the parse/token-only set (empty-clause,
+# first-arg-elision, for-while); fast, runs in `check`. style-lint adds the
+# typecheck-based redundant-suffix check (slower; run pre-push). See
+# docs/styleguide.pdoc.
+style-lint-fast: bin/zc
+	bin/zc lint --src src --system lib/system --empty-only --check --check-elide --check-for-while
 
-# Style ratchets over src/*.z (tools/lint_style.py), pinned at 0.
-# style-lint-fast is the parse-only empty-clause + first-arg-elision check (fast; runs in `check`).
-# style-lint adds the typecheck-based redundant-suffix check and the re-parse
-# -verified unneeded-paren check (~minutes; run pre-push). See docs/styleguide.pdoc
-# "Literal Type Inference" / "Empty Clauses" / "Parentheses".
-style-lint-fast:
-	uv run python tools/lint_style.py --empty-only --check --check-elide --check-for-while
+style-lint: bin/zc
+	bin/zc lint --src src --system lib/system --check --check-elide --check-for-while
 
-style-lint:
-	uv run python tools/lint_style.py --check --check-elide --check-parens --check-for-while
-
-# Baseline counts of existing violations (update when migrating away)
-# isinstance:0  comprehension:8  lambda:0  try/except:8  hasattr:6
-# getattr:4 (F2 — defensive duck-typing on heterogeneous unions)
-# name-compare:14 (Phase 7e — cross-structure .name ==/!= in compiler0/*.py)
-# startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
-# name-literal-compare:270 (F3/F4 — buckets A/B/C done, D deferred)
-# emitter-name-resolution:0 (typed-AST-authoritative — emitter reads stamps, not names; achieved)
-# emitter-z-literal:0 (emitter generates no inline z_{ identifiers; reads stored cnames; achieved)
-# emitter-name-mangler:0 (no local _mangle_func/_mangle_var; shared mangle_*_name only; achieved)
-bootstrap-lint:
-	@fail=0; \
-	count=$$(grep -rn 'isinstance(' compiler0/*.py | wc -l); \
-	if [ $$count -gt 0 ]; then \
-		echo "ERROR: isinstance() usage increased ($$count > 0 baseline)"; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'isinstance(' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn '\[.*\bfor\b.*\bin\b' compiler0/*.py | wc -l); \
-	if [ $$count -gt 8 ]; then \
-		echo "ERROR: list comprehension usage increased ($$count > 8 baseline)"; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn '\[.*\bfor\b.*\bin\b' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn 'lambda ' compiler0/*.py | wc -l); \
-	if [ $$count -gt 0 ]; then \
-		echo "ERROR: lambda usage increased ($$count > 0 baseline)"; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'lambda ' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn -E '^\s*(try:|except\b)' compiler0/*.py | wc -l); \
-	if [ $$count -gt 8 ]; then \
-		echo "ERROR: try/except usage increased ($$count > 8 baseline)"; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn -E '^\s*(try:|except\b)' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn '\byield\b' compiler0/*.py | wc -l); \
-	if [ $$count -gt 80 ]; then \
-		echo "ERROR: yield usage found ($$count > 80 baseline)"; \
-		echo "  Note: the baseline accounts for the 'yield' keyword in"; \
-		echo "  the Zerolang lexer/parser/AST/error messages, not Python yield."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn '\byield\b' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn 'hasattr(' compiler0/*.py | wc -l); \
-	if [ $$count -gt 6 ]; then \
-		echo "ERROR: hasattr() usage increased ($$count > 6 baseline)"; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'hasattr(' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn 'getattr(' compiler0/*.py | wc -l); \
-	if [ $$count -gt 4 ]; then \
-		echo "ERROR: getattr() usage increased ($$count > 4 baseline)"; \
-		echo "  F2: prefer direct attribute access; for genuinely"; \
-		echo "  heterogeneous unions, narrow with nodetype/type() and cast()."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'getattr(' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' compiler0/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
-	if [ $$count -gt 14 ]; then \
-		echo "ERROR: cross-structure .name comparisons increased ($$count > 14 baseline)"; \
-		echo "  Phase 7e: compare by id (nodeid/entry_id/variableid) instead."; \
-		echo "  Intentional string compare? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' compiler0/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn 'startswith(' compiler0/*.py | wc -l); \
-	if [ $$count -gt 42 ]; then \
-		echo "ERROR: startswith() usage increased ($$count > 42 baseline)"; \
-		echo "  F3: string-prefix tests are bootstrap-hostile; prefer"; \
-		echo "  id-based dispatch (BuiltinName / nodeid / name_id)."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'startswith(' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' compiler0/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
-	if [ $$count -gt 270 ]; then \
-		echo "ERROR: literal name compares increased ($$count > 270 baseline)"; \
-		echo "  F3/F4: compare by id (BuiltinName / nodeid / name_id) instead."; \
-		echo "  Intentional? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' compiler0/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -nE 'Optional.*ZType.*= field' compiler0/ztypes.py | wc -l); \
-	if [ $$count -gt 5 ]; then \
-		echo "ERROR: Optional[ZType] field declarations on ZType increased ($$count > 5 baseline)"; \
-		echo "  Use id-form cross-refs (parent_id / type_id) and resolve via _type_by_id()."; \
-		echo "  This mirrors the Phase 7 ZScope/Entry/Unit pattern and keeps the type graph SQL-friendly."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE 'Optional.*ZType.*= field' compiler0/ztypes.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -cE '_(resolved_type|typetype_of)\(' compiler0/zemitterc.py); \
-	if [ $$count -gt 0 ]; then \
-		echo "ERROR: emitter name-resolution calls increased ($$count > 0 baseline)"; \
-		echo "  The typed AST is authoritative: read the typecheck stamp"; \
-		echo "  (node_type / *_type_id) instead of re-resolving by name with"; \
-		echo "  _resolved_type / _typetype_of. Drive this baseline to 0."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE '_(resolved_type|typetype_of)\(' compiler0/zemitterc.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -cE 'z_\{' compiler0/zemitterc.py); \
-	if [ $$count -gt 0 ]; then \
-		echo "ERROR: inline z_{ identifier derivations increased ($$count > 0 baseline)"; \
-		echo "  The emitter generates NO C names: read ztype.cname / cname_base /"; \
-		echo "  variable_cname / the ZConformance entity (or compose from cname_base)."; \
-		echo "  Shared mangle_func_name / mangle_var_name cover the name-string residual."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE 'z_\{' compiler0/zemitterc.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -cE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' compiler0/zemitterc.py); \
-	if [ $$count -gt 0 ]; then \
-		echo "ERROR: emitter-local name manglers increased ($$count > 0 baseline)"; \
-		echo "  The emitter has no local _mangle_func/_mangle_var/_mangle_callable."; \
-		echo "  Read the stored cname; shared ztypes.mangle_func_name / mangle_var_name"; \
-		echo "  (no leading underscore, so allowed) cover the name-string residual."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -nE '_mangle_func\(|_mangle_var\(|_mangle_callable\(' compiler0/zemitterc.py | tail -5; fail=1; \
-	fi; \
-	count=$$(grep -rn 'object\.__setattr__' compiler0/*.py | wc -l); \
-	if [ $$count -gt 0 ]; then \
-		echo "ERROR: object.__setattr__ usage increased ($$count > 0 baseline)"; \
-		echo "  Frozen AST nodes are immutable: mint a fresh node and rebind a"; \
-		echo "  parent dict/list entry instead of mutating a frozen field."; \
-		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
-		grep -rn 'object\.__setattr__' compiler0/*.py | tail -5; fail=1; \
-	fi; \
-	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
-	exit $$fail
-
-# Full suite, parallelized via pytest-xdist (uses all cores).
-# Run before every commit.
-test:
-	uv run python -m pytest tests/ -n auto
-
-# Same suite, but the emitter tests compile generated C with clang
-# instead of gcc. Catches warnings/errors that gcc tolerates but clang
-# doesn't (real bugs surface from this in practice — e.g. const-discard
-# on pointer args, sign-compare differences). Run before pushing when
-# changing emitter or runtime code; CI should run this in parallel
-# with `make test`.
-test-clang:
-	Z_TEST_CC=clang $(MAKE) --no-print-directory test
-
-# Convenience: run both gcc and clang test passes sequentially.
-test-all: test test-clang
-
-# Inner-loop dev: skip emitter tests (gcc per-test is the bulk of the time).
-# Use during development; `make test` covers the full suite before commit.
-test-fast:
-	uv run python -m pytest tests/ --ignore=tests/test_emitter.py -n auto
-
-# Sequential full suite, with verbose output. For debugging test failures
-# where xdist makes output hard to read.
-test-verbose:
-	uv run python -m pytest tests/ -v
-
-# Marker-based subsets — see pyproject.toml [tool.pytest.ini_options].markers.
-# Useful when you've changed only one compiler stage and want a tighter loop.
-test-emitter:
-	uv run python -m pytest tests/ -m emitter -n auto
-
-test-parser:
-	uv run python -m pytest tests/ -m parser -n auto
-
-test-infra:
-	uv run python -m pytest tests/ -m infra -n auto
-
-# Self-hosted (src/*.z) compiler tests -- the corpus / fixpoint / differential /
-# leak gates. With compiler0 frozen this is the whole suite (== `make test`).
-test-native:
-	uv run python -m pytest tests/ -m native -n auto
-
-# Memory-leak gate: every buildable example + corpus program emitted by the
-# ported zc, built with ASan, run under detect_leaks=1; 0 bytes leaked
-# (KNOWN_LEAKY ratchets). Slow (one ASan binary per program) -- deliberately
-# NOT in `make test`. `leakcheck` runs the Python-free shell runner directly.
-test-leak:
-	uv run python -m pytest tests/test_emitc_leak_z.py -n auto
-
-leakcheck:
-	bash tests/leakcheck.sh
-
-# Self-host memory-safety + leak gate: the .z-emitted zc, built with ASan, must
-# compile every example + corpus unit (both --emit-c and --full --dump-sql modes)
-# with no use-after-free / double-free and 0 bytes leaked. Checks the COMPILER
-# while it emits, not the emitted program. Slow -- deliberately NOT in `make test`.
-selfhost-asan:
-	bash tests/selfhost_asan.sh
-
-# Unified Python-free corpus gate: behavioral (.out stdout/exit goldens) + leak
-# (detect_leaks=1) + negative (.err error goldens) for every case, comparing the
-# ported zc to committed goldens (no Python at gate time). `--update` regenerates
-# goldens from the reference. Slow; NOT in `make test`.
-test-corpus:
-	bash tests/run_corpus.sh
-
-# Self-hosted analogue of test-corpus: the ported zc builds the corpus
-# runner (src/ztestrunner.z), which then drives the same 3-kind gate via
-# os.spawn (no shell, no Python at gate time) and reproduces run_corpus.sh's
-# tally. Slow; NOT in `make test`. run_corpus.sh stays the CI gate.
-test-corpus-z: $(ZC_DEP)
+# test -- build the compiler + the self-hosted test runner (src/ztestrunner.z),
+# then run the fast corpus gate (run/leak/error/dump/smoke/differential kinds,
+# all driven via os.spawn; no Python, no shell). Run before every commit.
+test: bin/zc
 	@mkdir -p $(BUILDDIR)
-	$(ZC) zc --src src --system lib/system $(ZC_EMIT) $(BUILDDIR)/zc.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc $(BUILDDIR)/zc.c
-	$(BUILDDIR)/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
+	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
-	$(BUILDDIR)/ztestrunner --zc $(BUILDDIR)/zc --cc $(CC) --root .
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root .
 
-# ci -- the consolidated gate, runnable in one command. Runs the style/lint
-# check, the full suite (test, which builds + runs the port-vs-reference
-# differentials and the fixpoint -- exercising BOTH compilers), the Python-free
-# seed bootstrap (test-bootstrap), the self-host ASan gate (selfhost-asan), and
-# the behavioral + leak + negative corpus goldens (test-corpus, which already
-# includes the detect_leaks=1 leak kind). Sequential sub-makes so a parallel
-# `make -j` can't run the heavy suites concurrently and OOM a small box.
-ci:
-	$(MAKE) --no-print-directory check
-	$(MAKE) --no-print-directory test
+# ci -- the consolidated gate, runnable in one command with only a C toolchain:
+# the full style-lint, the heavy corpus gate (--heavy adds the self-host ASan +
+# byte-identity fixpoint kinds to run/leak/error/dump/smoke/differential), and
+# the Python-free seed bootstrap.
+ci: bin/zc
+	$(MAKE) --no-print-directory style-lint
+	@mkdir -p $(BUILDDIR)
+	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy
 	$(MAKE) --no-print-directory test-bootstrap
-	$(MAKE) --no-print-directory selfhost-asan
-	$(MAKE) --no-print-directory test-corpus
-	@echo "CI GATE GREEN: check + test (both compilers) + bootstrap + selfhost-asan + corpus"
-
-# Re-run only tests that failed in the previous run.
-test-lf:
-	uv run python -m pytest tests/ --lf -n auto
-
-fmt:
-	uv run ruff format compiler0/ tests/
+	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 # compile all examples: .z -> .c -> binary
-build: $(ZC_DEP)
+build: bin/zc
 	@mkdir -p $(BUILDDIR)
 	@ok=0; fail=0; \
 	for name in $(NAMES); do \
-		$(ZC) $$name --src examples --system lib/system $(ZC_EMIT) $(BUILDDIR)/$$name.c 2>/dev/null; \
+		bin/zc $$name --src examples --system lib/system --emit-c $(BUILDDIR)/$$name.c 2>/dev/null; \
 		if [ $$? -ne 0 ]; then \
 			echo "FAIL zc   $$name"; fail=$$((fail+1)); continue; \
 		fi; \
@@ -299,30 +76,24 @@ build: $(ZC_DEP)
 	echo "$$ok passed, $$fail failed ($(BUILDDIR)/)"
 
 # out/zc-seed -- the bootstrap compiler built from the committed, Python-free
-# seed (bootstrap/zc.c). This is the default stage0 (no Python). See
-# bootstrap/README.md and `make test-bootstrap`.
+# seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c
 
-# bin/zc -- the self-hosted compiler, bootstrapped by the seed ($(BUILDDIR)/zc-seed;
-# BOOTSTRAP=python uses compiler0 instead). Persistent + git-ignored; rebuilt when
-# the compiler sources change. The dev bin/zc self-locates to this repo (lib/system
-# here; runtime falls back to src/runtime, as the dev tree has no lib/runtime).
+# bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
+# git-ignored; rebuilt when the compiler sources change. The dev bin/zc
+# self-locates to this repo (lib/system here; runtime falls back to src/runtime).
 bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
 	@mkdir -p bin
-	$(ZC) zc --src src --system lib/system $(ZC_EMIT) bin/zc.c
+	$(ZC) zc --src src --system lib/system --emit-c bin/zc.c
 	$(CC) $(CFLAGS) -o bin/zc bin/zc.c
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
 
-# Standalone dump binaries, built by the ported compiler (bin/zc). out/zlexer
-# emits the canonical token dump; out/zparser emits the canonical AST dump in
-# both single-file (out/zparser <file>) and whole-program (out/zparser --program
-# <dir> main) modes. These are the Python-free regeneration path for the
-# lexer/parser/program goldens -- the dumper logic lives in src/zlexer.z and
-# src/zparser.z, not in any compiler0/*.py oracle.
+# Standalone dump binaries (the Python-free golden regeneration path; the
+# dumper logic lives in src/zlexer.z and src/zparser.z).
 out/zlexer: bin/zc $(wildcard src/zlexer.z) $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
@@ -334,10 +105,7 @@ out/zparser: bin/zc $(wildcard src/zparser.z) $(wildcard src/zlexer.z) $(wildcar
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c
 
 # Regenerate the lexer / parser / whole-program goldens from the .z dump
-# binaries (no Python). Iterates every examples/*.z (matching the differential
-# tests), so it includes the main-less modules the build target's SKIP omits.
-# Always review the resulting diff before committing -- a non-empty diff means
-# the dump output changed.
+# binaries (no Python). Always review the resulting diff before committing.
 regen-goldens: out/zlexer out/zparser
 	@for f in examples/*.z; do \
 		name=$$(basename $$f .z); \
@@ -350,22 +118,16 @@ regen-goldens: out/zlexer out/zparser
 	done
 	@echo "regenerated lexer/parser/program goldens via $(BUILDDIR)/zlexer + $(BUILDDIR)/zparser"
 
-# bootstrap/zc.c -- the committed, Python-free bootstrap seed: a self-emitted,
-# self-reproducing C dump of the compiler. `cc bootstrap/zc.c` IS the
-# self-hosted compiler. See bootstrap/README.md.
-#
-# bump-seed regenerates it from a fresh bin/zc (built by the default bootstrap --
-# the current seed; BOOTSTRAP=python to rebuild from the frozen reference instead).
-# Run only when test-bootstrap reports the seed can no longer build main, or for
-# periodic hygiene -- NOT every commit.
+# bump-seed -- regenerate the committed seed from a fresh bin/zc. Run only when
+# test-bootstrap reports the seed can no longer build main, or for hygiene.
 bump-seed: bin/zc
 	bin/zc zc --src src --system lib/system --emit-c bootstrap/zc.c
 	@echo "regenerated bootstrap/zc.c -- review the diff and commit"
 
 # test-bootstrap -- prove the committed seed bootstraps a correct compiler with
-# NO Python: cc the seed, then double-bootstrap and assert the self-host fixpoint
-# (b2 == b3, lag-tolerant) plus a correctness check (a seed-built compiler builds
-# ztypes to its smoke golden). Slow (3 zc.c compiles); NOT in `make test`.
+# NO Python: cc the seed, double-bootstrap and assert the fixpoint (b2 == b3),
+# plus a correctness check (a seed-built compiler builds ztypes to its golden).
+# Slow (3 zc.c compiles).
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c
@@ -386,9 +148,7 @@ test-bootstrap:
 		&& echo "correctness OK (seed-built zc compiles ztypes to golden)"
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
-# install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink. The
-# runtime ships as lib/runtime (copied from src/runtime). os.exePath resolves
-# the symlink to $(ROOT)/bin/zc, so the installed zc self-locates the tree.
+# install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink.
 install: bin/zc
 	mkdir -p $(ROOT)/bin $(ROOT)/lib $(BINDIR)
 	cp bin/zc $(ROOT)/bin/zc
@@ -400,16 +160,13 @@ install: bin/zc
 	ln -sf $(ROOT)/bin/zc $(BINDIR)/zc
 	@echo "installed zc -> $(BINDIR)/zc (tree: $(ROOT))"
 
-# docs -- render the .pdoc documentation to HTML. Commit the regenerated .html;
-# the docs/ folder is served via GitHub Pages. Needs the picodoc renderer at
-# ../picodoc-c/picodoc (see docs/Makefile).
+# docs -- render the .pdoc documentation to HTML. Commit the regenerated .html.
+# Needs the picodoc renderer at ../picodoc-c/picodoc (see docs/Makefile).
 docs:
 	$(MAKE) -C docs
 	@echo "rendered docs/ -- commit the regenerated .html"
 
 # warn-check -- compile the emitted compiler C with every warning as an error.
-# Run before committing: warnings must be 0. The normal build keeps warnings
-# non-fatal so rapid iteration isn't blocked; this gate enforces "drive to 0".
 warn-check: bin/zc
 	$(CC) $(CFLAGS) -Werror -c bin/zc.c -o /dev/null
 	@echo "warn-check OK: zero compiler warnings"
