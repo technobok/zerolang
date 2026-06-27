@@ -658,3 +658,44 @@ alias of the first. The emitter reads these aliases and emits C preprocessor
 #~"#define" directives instead of duplicate function bodies. This is
 particularly useful for numeric generics where method bodies may be identical
 across different numeric parameter values.
+
+#--: Bootstrapping & self-hosting
+
+The compiler is self-hosted: it is written in zerolang (#~"src/*.z") and
+compiles itself. Building and testing it require only a C toolchain -- no
+Python, and no shell scripts.
+
+#---: The bootstrap chain
+
+The sources are compiled by a #b:"seed": #~"bootstrap/zc.c", a committed,
+self-emitted C dump of the compiler. #~"cc bootstrap/zc.c" alone yields a
+working #~"zc".
+
+#ul:
+  [#*: #~"make bin/zc" builds the seed (#~"out/zc-seed"), then uses it to emit and compile the current #~"src/*.z" into #~"bin/zc", the live self-hosted compiler.]
+  [#*: #~"make test-bootstrap" proves the loop converges: the seed builds a compiler, which rebuilds itself to a byte-identical fixpoint (#~"b2 == b3").]
+  [#*: #~"make bump-seed" regenerates #~"bootstrap/zc.c" from a fresh #~"bin/zc" when the sources have drifted far enough that the seed lags.]
+
+#---: History: the Python reference
+
+The compiler was first written in Python (#~"compiler0/"), then ported
+unit-by-unit to #~"src/*.z" with the Python implementation as a differential
+oracle. Once the port self-hosted, the self-emitted C seed was committed and
+the Python reference was retired. It is preserved at the
+#~"python-stage0-final" git tag:
+
+#code: """
+  git checkout python-stage0-final -- compiler0
+"""
+
+#---: Building and testing
+
+The test runner and the style linter are themselves zerolang programs
+(#~"src/ztestrunner.z" and #~"src/zlint.z"), so the whole build-and-test
+pipeline is portable to any platform with a C compiler.
+
+#ul:
+  [#*: #~"make check" -- the fast style gate (#~"zc lint": the parse/token checks -- empty clauses, first-argument elision, and a redundant leading #~"for while").]
+  [#*: #~"make style-lint" -- adds the typecheck-based redundant numeric-suffix check.]
+  [#*: #~"make test" -- the self-hosted corpus runner (#~"src/ztestrunner.z"): behavioural, leak, negative, dump and differential kinds, all driven via #~"os.spawn".]
+  [#*: #~"make ci" -- the full gate: #~"style-lint", the corpus runner under #~"--heavy" (adds the self-host ASan and byte-identity fixpoint kinds), and the seed bootstrap.]

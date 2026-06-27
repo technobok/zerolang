@@ -141,6 +141,16 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
+<li><a href="#bootstrapping-self-hosting">Bootstrapping &amp; self-hosting</a>
+<ul>
+<li><a href="#the-bootstrap-chain">The bootstrap chain</a>
+</li>
+<li><a href="#history-the-python-reference">History: the Python reference</a>
+</li>
+<li><a href="#building-and-testing">Building and testing</a>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -654,6 +664,36 @@ alias of the first. The emitter reads these aliases and emits C preprocessor
 <code>#define</code> directives instead of duplicate function bodies. This is
 particularly useful for numeric generics where method bodies may be identical
 across different numeric parameter values.</p>
+<h2 id="bootstrapping-self-hosting"><a href="#bootstrapping-self-hosting">10. Bootstrapping &amp; self-hosting</a></h2>
+<p>The compiler is self-hosted: it is written in zerolang (<code>src/*.z</code>) and
+compiles itself. Building and testing it require only a C toolchain -- no
+Python, and no shell scripts.</p>
+<h3 id="the-bootstrap-chain"><a href="#the-bootstrap-chain">10.1. The bootstrap chain</a></h3>
+<p>The sources are compiled by a <strong>seed</strong>: <code>bootstrap/zc.c</code>, a committed,
+self-emitted C dump of the compiler. <code>cc bootstrap/zc.c</code> alone yields a
+working <code>zc</code>.</p>
+<ul>
+<li><code>make bin/zc</code> builds the seed (<code>out/zc-seed</code>), then uses it to emit and compile the current <code>src/*.z</code> into <code>bin/zc</code>, the live self-hosted compiler.</li>
+<li><code>make test-bootstrap</code> proves the loop converges: the seed builds a compiler, which rebuilds itself to a byte-identical fixpoint (<code>b2 == b3</code>).</li>
+<li><code>make bump-seed</code> regenerates <code>bootstrap/zc.c</code> from a fresh <code>bin/zc</code> when the sources have drifted far enough that the seed lags.</li>
+</ul>
+<h3 id="history-the-python-reference"><a href="#history-the-python-reference">10.2. History: the Python reference</a></h3>
+<p>The compiler was first written in Python (<code>compiler0/</code>), then ported
+unit-by-unit to <code>src/*.z</code> with the Python implementation as a differential
+oracle. Once the port self-hosted, the self-emitted C seed was committed and
+the Python reference was retired. It is preserved at the
+<code>python-stage0-final</code> git tag:</p>
+<pre><code>  git checkout python-stage0-final -- compiler0</code></pre>
+<h3 id="building-and-testing"><a href="#building-and-testing">10.3. Building and testing</a></h3>
+<p>The test runner and the style linter are themselves zerolang programs
+(<code>src/ztestrunner.z</code> and <code>src/zlint.z</code>), so the whole build-and-test
+pipeline is portable to any platform with a C compiler.</p>
+<ul>
+<li><code>make check</code> -- the fast style gate (<code>zc lint</code>: the parse/token checks -- empty clauses, first-argument elision, and a redundant leading <code>for while</code>).</li>
+<li><code>make style-lint</code> -- adds the typecheck-based redundant numeric-suffix check.</li>
+<li><code>make test</code> -- the self-hosted corpus runner (<code>src/ztestrunner.z</code>): behavioural, leak, negative, dump and differential kinds, all driven via <code>os.spawn</code>.</li>
+<li><code>make ci</code> -- the full gate: <code>style-lint</code>, the corpus runner under <code>--heavy</code> (adds the self-host ASan and byte-identity fixpoint kinds), and the seed bootstrap.</li>
+</ul>
 </main>
 </body>
 </html>
