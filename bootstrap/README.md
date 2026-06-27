@@ -13,8 +13,7 @@ cc -std=c17 -o zc bootstrap/zc.c      # 'zc' is now the self-hosted compiler
 self-emitted C, which is byte-stable: building the project with it reproduces the
 same `zc.c` (the self-hosting fixpoint — see `tests/test_fixedpoint.py`). This is
 the Zig/OCaml model (a committed, periodically-refreshed compiler artifact),
-chosen over a tag-chain replay or a platform-specific binary. See
-`doc/bootstrap.pdoc`.
+chosen over a tag-chain replay or a platform-specific binary.
 
 ## It is a *recent* seed, not necessarily the current compiler
 
@@ -25,8 +24,7 @@ current one regardless of the seed's age.
 
 Regenerate it (`make bump-seed`) only when:
 - the seed can no longer build `main` — i.e. the compiler's own source started
-  using a language feature the seed's compiler doesn't understand (the two-step
-  feature pattern in `doc/bootstrap.pdoc`); or
+  using a language feature the seed's compiler doesn't understand; or
 - periodic hygiene.
 
 ## Validation

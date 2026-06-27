@@ -32,9 +32,7 @@
 
 
 This document specifies the memory representation and allocation strategy for
-all types in Zerolang. It supersedes the heap-allocation model for user-defined
-reftypes described in earlier versions and serves as the implementation plan for
-the refactoring.
+all types in Zerolang.
 
 
 #-: Overview
@@ -198,11 +196,10 @@ Variants are freely copied (struct copy captures tag + active data). No
 destructor is needed. When a variant falls out of scope, it is forgotten.
 
 
-#--: Classes (Reftypes) -- Changed
+#--: Classes (Reftypes)
 
-Classes are product reference types. They are now #+ stack-allocated (changed
-from heap-allocated). They have single-owner semantics: they cannot be copied,
-only borrowed or taken.
+Classes are product reference types. They are #+ stack-allocated. They have
+single-owner semantics: they cannot be copied, only borrowed or taken.
 
 #---: Memory Layout
 
@@ -313,7 +310,7 @@ Swapping two class variables swaps the entire struct:
   }
   """
 
-#---: .lock Fields on Classes (New)
+#---: .lock Fields on Classes
 
 Classes may have #~".lock" fields. A class with #~".lock" fields:
 
@@ -336,10 +333,10 @@ there is no risk of multiple copies holding the same lock.
 #~".lock" fields are immutable after construction.
 
 
-#--: Unions (Reftypes) -- Changed
+#--: Unions (Reftypes)
 
-Unions are sum reference types. They are now #+ stack-allocated (the struct
-itself). The subtype data remains heap-allocated via a #~"void*" pointer.
+Unions are sum reference types. The struct itself is #+ stack-allocated; the
+subtype data is heap-allocated via a #~"void*" pointer.
 
 #---: Memory Layout
 
@@ -432,10 +429,10 @@ Match arms cast #~"data" to the subtype:
   """
 
 
-#--: Protocol Instances -- Changed
+#--: Protocol Instances
 
-Protocol instances are existential type wrappers. They are now
-#+ stack-allocated (the wrapper struct). The wrapped data may be a borrowed
+Protocol instances are existential type wrappers. The wrapper struct is
+#+ stack-allocated. The wrapped data may be a borrowed
 pointer or an owned heap copy.
 
 #---: Memory Layout
@@ -694,7 +691,7 @@ pattern (construct element on stack, append copies it into data buffer) is
 correct and the copy cost is negligible for element-sized data.
 
 
-#--: listview(T) (New)
+#--: listview(T)
 
 #~"ListView" is a generic read-only view into a list. It is a class (single
 ownership) with a #~".lock" field that holds a lock on the parent list.
@@ -756,12 +753,10 @@ The listview holds a compile-time lock on the source list:
   """
 
 
-#--: string -- Changed
+#--: string
 
 #~"String" is a growable UTF-8 byte buffer. The struct lives on the stack; only
-the data buffer is heap-allocated. This is changed from the current
-flexible-array-member design where the entire string (struct + data) was a
-single heap allocation.
+the data buffer is heap-allocated.
 
 #---: Memory Layout
 
@@ -814,30 +809,29 @@ Frees the data buffer only:
 
 Unchanged: #~"new_cap = cap + (cap >> 1) + 16" (approximately 1.5x + 16).
 
-#---: Runtime Functions (Changed Signatures)
+#---: Runtime Functions
 
-All runtime functions are updated for the new layout:
+The string runtime functions and their signatures:
 
 #table cols="4 6":
-  Function                |Signature change
-  #~"z_string_new"        |Returns #~"z_string_t" (was #~"z_string_t*")
-  #~"z_string_cat"        |Returns #~"z_string_t" (was #~"z_string_t*"); args are #~"z_string_t*"
-  #~"z_string_from_i64"   |Returns #~"z_string_t" (was #~"z_string_t*")
-  #~"z_string_from_f64"   |Returns #~"z_string_t" (was #~"z_string_t*")
+  Function                |Signature
+  #~"z_string_new"        |Returns #~"z_string_t"
+  #~"z_string_cat"        |Returns #~"z_string_t"; args are #~"z_string_t*"
+  #~"z_string_from_i64"   |Returns #~"z_string_t"
+  #~"z_string_from_f64"   |Returns #~"z_string_t"
   #~"z_string_free"       |Takes #~"z_string_t*"; frees #~"data" only (not struct)
   #~"z_string_eq"         |Takes two #~"z_string_t*" args
-  #~"z_string_reserve"    |Takes #~"z_string_t*" (unchanged -- already pointer)
-  #~"z_string_append"     |Takes #~"z_string_t*" (unchanged -- already pointer)
-  #~"z_string_shrink"     |Takes #~"z_string_t*" (unchanged -- already pointer)
-  #~"z_string_create"     |Returns #~"z_string_t" (was #~"z_string_t*")
+  #~"z_string_reserve"    |Takes #~"z_string_t*"
+  #~"z_string_append"     |Takes #~"z_string_t*"
+  #~"z_string_shrink"     |Takes #~"z_string_t*"
+  #~"z_string_create"     |Returns #~"z_string_t"
   #~"z_string_print"      |Takes #~"z_string_t*"
 
 
-#--: stringview -- Changed
+#--: stringview
 
-#~"StringView" is now a #+ class (changed from born-borrowed record). It is a
-read-only view into a #~"String", with single-owner semantics and a #~".lock"
-on the source string.
+#~"StringView" is a #+ class: a read-only view into a #~"String", with
+single-owner semantics and a #~".lock" on the source string.
 
 #---: Memory Layout
 
@@ -949,411 +943,6 @@ Removing born-borrowed from valtypes is a simplification but has trade-offs:
   stringviews need no lock.]
 
 
-#-: Implementation History
-
-The refactor was landed in ten phases, all of which are now #+ complete. Each
-phase was independently testable and landed behind passing #~"make check &&
-make test && make build". This section records the phase list for historical
-reference; the type specifications earlier in this document describe the
-current state.
-
-#ul:
-  [#*: #+ Phase 1 -- Destructor metadata. Split "struct needs free" from
-  "struct has fields needing cleanup" in #~"ZType".]
-  [#*: #+ Phase 2 -- Stack-allocate classes. Removed class heap allocation;
-  class field access uses #~"." (only method #~"this" and boxed items use
-  #~"->"); destructors emit only when a class has owned fields that need
-  cleanup.]
-  [#*: #+ Phase 3 -- Stack-allocate list structs. #~"List" struct on the
-  stack; the data buffer remains on the heap.]
-  [#*: #+ Phase 4 -- Rewrite string runtime. #~"z_string_t" becomes
-  #~"{ size, data*, capacity }" on the stack with a heap data buffer.]
-  [#*: #+ Phase 5 -- Stack-allocate unions. Union struct stays
-  #~"{ tag, void* }" but lives on the stack; subtype data is heap-allocated.]
-  [#*: #+ Phase 6 -- Stack-allocate protocol instances. Protocol wrapper is
-  now a 24-byte stack struct; owned wrappers heap-allocate only a copy of
-  the implementation.]
-  [#*: #+ Phase 7 -- Extend #~".lock" fields to classes.]
-  [#*: #+ Phase 8 -- Remove born-borrowed from valtypes. Records may no
-  longer hold #~".lock" fields or heap-backed types; types that needed
-  them became classes (#~"StringView", iterators, views).]
-  [#*: #+ Phase 9 -- Implement #~"ListView" as a read-only class view into
-  a #~"List".]
-  [#*: #+ Phase 10 -- Box refinements. #~"Box(T)" adapted to work with
-  stack-allocated classes and born-boxed construction.]
-
-The compile-time restrictions that the refactor introduced are:
-
-#ul:
-  [#*: Record fields cannot be #~"String", #~"List", #~"Box", #~"Map" or any
-  other heap-backed type. They also cannot be another user class or union.
-  Records are pure valtypes.]
-  [#*: #~".lock" fields are permitted on classes only. A record with a
-  #~".lock" field is rejected.]
-  [#*: A class (or any user-defined type) that has a #~".lock" field cannot
-  appear as a field of another type.]
-
-#--: Historical Phase Notes -- Scaffolding
-
-The rest of this section is an internal record of the phase-by-phase
-work items. It is retained for archaeology; none of the plans below are
-outstanding.
-
-
-#--: Phase 1: Foundation -- Destructor Metadata \[COMPLETE\]
-
-Goal: separate "struct needs free" from "struct has fields needing cleanup" in
-the type metadata.
-
-#---: Changes
-
-#~"ztypes.py" -- #~"ZType" dataclass (line 223):
-
-#ul:
-  [#*: Add #~"needs_field_cleanup: bool = field(default=False, init=False)".
-  True when the type has owned fields requiring cleanup.]
-
-#~"ztypecheck.py" -- #~"_set_destructor_metadata()" (line 170):
-
-#ul:
-  [#*: After existing metadata, scan children for fields whose types have
-  #~"needs_destructor=True". If found, set #~"needs_field_cleanup=True".]
-
-Testing: #~"make check && make test". All tests pass -- no behaviour change.
-
-
-#--: Phase 2: Stack-Allocate Classes \[COMPLETE\]
-
-Goal: move class structs from heap to stack. Core change with largest blast
-radius.
-
-#---: 2a: Type Metadata
-
-#~"ztypecheck.py" -- #~"_set_destructor_metadata()" (line 180):
-
-#ul:
-  [#*: For #~"ZTypeType.CLASS": set #~"is_heap_allocated = False".]
-  [#*: #~"needs_destructor = True" only if #~"needs_field_cleanup" is True.]
-
-#---: 2b: C Type Mapping
-
-#~"zemitterc.py" -- #~"_ctype()" (line 122):
-
-#ul:
-  [#*: Remove #~"ZTypeType.CLASS" from the pointer-returning set.]
-  [#*: Keep #~"UNION" and #~"PROTOCOL" in pointer set for now.]
-
-#---: 2c: Destructor Emission
-
-#~"zemitterc.py" -- #~"_emit_class()" (line 1686):
-
-#ul:
-  [#*: Remove #~"free(p)" at line 1693.]
-  [#*: Emit destructor only when #~"needs_field_cleanup" is True.]
-
-#---: 2d: Field Access Operator
-
-#~"zemitterc.py" -- #~"_is_class_pointer_path()" (line 5169):
-
-#ul:
-  [#*: Remove the early return at lines 5173-5178 for #~"ZTypeType.CLASS".]
-  [#*: Keep #~"class_params" check for method #~"this".]
-
-#---: 2e: Method Receiver
-
-#~"zemitterc.py" -- #~"_emit_function()" (line 3096):
-
-#ul:
-  [#*: When emitting a class method, explicitly add #~"*" to the #~"this"
-  parameter type and add to #~"class_params".]
-
-#---: 2f: Call Sites
-
-#~"zemitterc.py" -- method dispatch and borrow parameters:
-
-#ul:
-  [#*: Generate #~"&var" when passing stack class to borrow param or method.]
-
-#---: 2g: Ownership Transfer
-
-#~"zemitterc.py" -- #~".take" and #~".release":
-
-#ul:
-  [#*: Change from #~"var = NULL" to #~"var = (z_X_t){0}".]
-
-#---: 2h: Function Returns
-
-#ul:
-  [#*: Class returns become by-value (remove pointer return paths).]
-
-#---: 2i: Field Restrictions
-
-#~"ztypecheck.py":
-
-#ul:
-  [#*: Add check: record fields cannot be string, list, box, map, class, union,
-  or any type with #~"needs_destructor=True". Emit compile error.]
-
-#---: 2j: Monomorphised Classes
-
-#ul:
-  [#*: Apply same changes to #~"_emit_mono_class()" (line 2807).]
-
-Testing: ~40 test updates expected. Compile #~"classes.z". ASan verification.
-
-
-#--: Phase 3: Stack-Allocate List Structs \[COMPLETE\]
-
-Goal: list struct on stack, data buffer on heap.
-
-#---: Changes
-
-#~"ztypecheck.py":
-
-#ul:
-  [#*: List types: set #~"is_heap_allocated = False", keep #~"needs_destructor = True".]
-
-#~"zemitterc.py" -- #~"_emit_mono_list()" (line 2288):
-
-#ul:
-  [#*: Reorder struct fields to #~"{ length, data*, capacity }".]
-  [#*: Destructor: remove #~"free(p)". Only free #~"p->data" + element
-  destructors.]
-  [#*: Constructor: return struct by value, not pointer.]
-
-#~"zemitterc.py" -- #~"_emit_heap_container_create()" (line 389):
-
-#ul:
-  [#*: Rename and change: return struct by value, allocate only data buffer.]
-
-Testing: compile #~"lists.z". ASan verification.
-
-
-#--: Phase 4: Rewrite String Runtime \[COMPLETE\]
-
-Goal: change string from flexible-array-member to stack struct + heap data
-buffer.
-
-Dependency: Phase 2 (classes on stack).
-
-This is the highest-risk phase due to pervasive string usage.
-
-#---: 4a: Struct Definition
-
-#~"zemitterc_runtime.py" -- #~"_Z_STRING_RUNTIME" (line 38):
-
-#ul:
-  [#*: Change struct to #~"{ uint64_t size; char* data; uint64_t capacity; }".]
-
-#---: 4b: Runtime Functions
-
-Rewrite all string runtime functions:
-
-#ul:
-  [#*: Constructors (#~"z_string_new", #~"z_string_cat", #~"z_string_from_*",
-  #~"z_string_create"): return #~"z_string_t" by value.]
-  [#*: #~"z_string_free": free #~"s->data" only.]
-  [#*: Mutation methods (#~"z_string_reserve", #~"z_string_append",
-  #~"z_string_shrink"): take #~"z_string_t*" (unchanged).]
-
-#---: 4c: Emitter Updates
-
-#~"zemitterc.py":
-
-#ul:
-  [#*: #~"_ctype()": change string from #~"z_string_t*" to #~"z_string_t".]
-  [#*: Update all string temporary handling, interpolation chains, and call
-  sites.]
-
-#~"ztypecheck.py":
-
-#ul:
-  [#*: For #~"ZSubType.STRING": set #~"is_heap_allocated = False".]
-
-#---: 4d: Stringview Runtime
-
-#~"zemitterc_runtime.py":
-
-#ul:
-  [#*: #~"z_string_stringview": takes #~"z_string_t*", returns #~"z_stringview_t"
-  pointing into #~"s->data".]
-  [#*: #~"z_string_from_view": returns #~"z_string_t" by value.]
-
-Testing: run ALL tests. Sub-phase changes. ASan on all examples.
-
-
-#--: Phase 5: Stack-Allocate Unions \[COMPLETE\]
-
-Goal: union struct on stack, subtype data stays heap-allocated via void*.
-
-Dependency: Phase 2 (classes on stack).
-
-#---: Changes
-
-#~"ztypecheck.py":
-
-#ul:
-  [#*: For #~"ZTypeType.UNION": set #~"is_heap_allocated = False".]
-
-#~"zemitterc.py" -- #~"_ctype()":
-
-#ul:
-  [#*: Remove #~"ZTypeType.UNION" from pointer-returning set.]
-
-#~"zemitterc.py" -- #~"_emit_union()" (line 1772):
-
-#ul:
-  [#*: Keep #~"{ tag, void* }" struct layout (unchanged).]
-  [#*: Destructor: remove #~"free(u)" at line 1820. Keep subtype cleanup.]
-  [#*: Construction: remove struct malloc. Stack-init the struct, malloc only
-  subtype data.]
-
-#~"zemitterc.py" -- #~"_is_class_pointer_path()":
-
-#ul:
-  [#*: Remove #~"ZTypeType.UNION" from set returning True.]
-
-#~"zemitterc.py" -- union field access, match/case:
-
-#ul:
-  [#*: Change #~"u->" to #~"u." for local union variables.]
-  [#*: #~"u.data" casting patterns stay the same (still void*).]
-
-Testing: union tests. Compile union examples.
-
-
-#--: Phase 6: Stack-Allocate Protocol Instances \[COMPLETE\]
-
-Goal: protocol wrapper struct on stack.
-
-Dependency: Phase 2 (classes on stack).
-
-#---: Changes
-
-#~"zemitterc.py" -- #~"_emit_protocol()" (line 987):
-
-#ul:
-  [#*: Protocol struct remains #~"{ void* data, vtable*, destroy }" -- 24
-  bytes on stack.]
-  [#*: Destructor: remove #~"free(p)" from protocol destroy. Keep
-  #~"p->destroy(p->data)" call for owned instances.]
-  [#*: Borrow create: #~"data = &var" (pointer to stack variable).]
-  [#*: Owned create: #~"data = malloc + copy" (heap copy of implementation).
-  The destroy callback frees this copy.]
-
-#~"ztypecheck.py":
-
-#ul:
-  [#*: For #~"ZTypeType.PROTOCOL": set #~"is_heap_allocated = False".]
-
-#~"zemitterc.py" -- #~"_ctype()":
-
-#ul:
-  [#*: Remove #~"ZTypeType.PROTOCOL" from pointer-returning set.]
-
-Testing: protocol tests. Compile protocol examples.
-
-
-#--: Phase 7: Extend .lock Fields to Classes \[COMPLETE\]
-
-Goal: allow classes to have #~".lock" fields.
-
-Dependency: Phase 2 (classes on stack).
-
-Summary of completed work:
-
-#ul:
-  [#*: Removed the restriction that prevented #~".lock" fields on classes.]
-  [#*: Added the restriction: a type with a #~".lock" field cannot appear
-  as a field of another type.]
-  [#*: Classes with #~".lock" fields use the same lock-transfer mechanism
-  in constructors that born-borrowed records previously used.]
-  [#*: #~".lock" fields emit as normal pointer fields with no special
-  destructor handling.]
-
-
-#--: Phase 8: Remove Born-Borrowed from Valtypes \[COMPLETE\]
-
-Goal: remove the born-borrowed mechanism from records entirely. Migrate
-the remaining born-borrowed records to classes.
-
-Dependency: Phase 7 (.lock on classes).
-
-Summary of completed work:
-
-#ul:
-  [#*: Removed #~"_check_born_borrowed_record()" validation and all
-  #~"is_born_borrowed" checks from the type checker.]
-  [#*: Removed #~"this.borrow" return handling for record constructors.]
-  [#*: #~".lock" fields on records now emit a compile error pointing the
-  user at classes.]
-  [#*: Removed all born-borrowed record pointer-receiver handling and
-  method-dispatch wrapping from the emitter.]
-  [#*: #~"StringView" in #~"lib/system/system.z" became a class.]
-  [#*: Migrated #~"borrowed_record.z", #~"ListIter.z", and #~"strview.z"
-  examples to the class-based form.]
-
-
-#--: Phase 9: Implement listview \[COMPLETE\]
-
-Goal: add the #~"ListView" generic type.
-
-Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
-
-#---: Changes
-
-#~"lib/system/collections.z":
-
-#ul:
-  [#*: Add #~"ListView" type definition.]
-  [#*: Add #~"ListView" method to #~"List".]
-
-#~"ztypes.py":
-
-#ul:
-  [#*: Add #~"ZSubType.LISTVIEW".]
-
-#~"ztypeutil.py":
-
-#ul:
-  [#*: Add #~"_is_listview_type()" predicate.]
-
-#~"ztypecheck.py":
-
-#ul:
-  [#*: Resolve #~"ListView" monomorphisation.]
-  [#*: Set #~"is_valtype = False" (class), #~"is_heap_allocated = False",
-  #~"needs_destructor = False".]
-
-#~"zemitterc.py":
-
-#ul:
-  [#*: Add #~"_emit_mono_listview()" -- struct, get, length, list methods.]
-  [#*: Add #~"List.listview" method emission.]
-
-Testing: new test cases. New #~"examples/ListView.z".
-
-
-#--: Phase 10: Box Refinements \[COMPLETE\]
-
-Goal: ensure box works with stack-allocated classes and born-boxed
-optimisation.
-
-Dependency: Phase 2 (classes on stack).
-
-#---: Changes
-
-#~"zemitterc.py" -- #~"_emit_mono_box()" (line 2063):
-
-#ul:
-  [#*: For #~"Box(class_with_destructor)": destructor calls inner destructor +
-  #~"free(v)".]
-  [#*: For born-boxed construction: emit heap-allocating #~"meta.create" that
-  constructs in-place.]
-
-Testing: update #~"Box.z" example. Add tests for #~"Box(class)".
-
-
 #-: Pros, Cons, and Risks
 
 
@@ -1388,10 +977,6 @@ Testing: update #~"Box.z" example. Add tests for #~"Box(class)".
   subtype. For variants with subtypes of very different sizes, this wastes
   stack space. Rarely an issue in practice since variant subtypes must be
   valtypes (typically small).]
-  [#*: #+ String rewrite risk. The string runtime rewrite (Phase 4) touches
-  nearly every test.]
-  [#*: #+ Born-borrowed migration cost. All born-borrowed records had to be
-  rewritten as classes. One-time cost, now absorbed.]
   [#*: #+ Recursive types. Self-referential types (linked list nodes, tree
   nodes) must use #~"Box(self)" for the recursive field. Error message should
   be clear.]
@@ -1400,16 +985,13 @@ Testing: update #~"Box.z" example. Add tests for #~"Box(class)".
 #--: Risks
 
 #ul:
-  [#*: #+ Test blast radius. ~1200 tests. Phases 2, 4, and 5 will each cause
-  significant test breakage. Mitigation: phase incrementally.]
-  [#*: #+ Protocol interaction. Protocol wrappers that own their data must
-  heap-allocate a copy of the implementation. Verify this path works correctly
-  after Phase 2.]
+  [#*: #+ Protocol interaction. Protocol wrappers that own their data
+  heap-allocate a copy of the implementation.]
   [#*: #+ C ABI for large structs. Some platforms pass large structs via hidden
   pointer at the ABI level. Handled transparently by the C compiler.]
-  [#*: #+ String literal stringviews. If stringview becomes a class, string
-  literals produce owned class instances. Need to handle .rodata-backed
-  stringviews specially (no lock needed).]
+  [#*: #+ String literal stringviews. Since stringview is a class, string
+  literals produce owned class instances. The .rodata-backed
+  stringviews are handled specially (no lock needed).]
 
 
 #-: Future Directions
@@ -1435,13 +1017,13 @@ Testing: update #~"Box.z" example. Add tests for #~"Box(class)".
 
 #-: Verification Plan
 
-After each phase, run:
+After a change to the type representation, run:
 
 #ol:
   [#*: #~"make check" -- formatting, linting, type checking.]
-  [#*: #~"make test" -- all pytest tests.]
+  [#*: #~"make test" -- the full test suite.]
   [#*: #~"make build" -- compile all examples to C and then to binaries.]
   [#*: Run compiled examples under ASan (#~"CFLAGS=-fsanitize=address make build")
   to detect memory errors, leaks, and undefined behaviour.]
-  [#*: Manual inspection of generated C for one representative example per
-  phase to verify the emitted code matches the specification.]
+  [#*: Manual inspection of generated C for a representative example
+  to verify the emitted code matches the specification.]

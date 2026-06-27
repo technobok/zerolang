@@ -352,7 +352,7 @@ regen-goldens: out/zlexer out/zparser
 
 # bootstrap/zc.c -- the committed, Python-free bootstrap seed: a self-emitted,
 # self-reproducing C dump of the compiler. `cc bootstrap/zc.c` IS the
-# self-hosted compiler. See bootstrap/README.md and docs/bootstrap.pdoc.
+# self-hosted compiler. See bootstrap/README.md.
 #
 # bump-seed regenerates it from a fresh bin/zc (built by the default bootstrap --
 # the current seed; BOOTSTRAP=python to rebuild from the frozen reference instead).

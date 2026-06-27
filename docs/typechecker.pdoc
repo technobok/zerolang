@@ -35,7 +35,7 @@
 
 This document is the architectural map of the zerolang typechecker.
 It is intended to be read #_*"before" opening
-#~"src/ztypecheck.py" (currently ~10,000 lines) -- after reading it,
+#~"src/ztypecheck.z" -- after reading it,
 a contributor should know which structures the typechecker
 maintains, how its code is partitioned, and where a particular
 feature lives.
@@ -59,19 +59,19 @@ section of #~"compiler.pdoc".
 The typechecker sits between the parser and the C emitter:
 
 #code language=text: """
-  zast.Program  (frozen post-parse)
-      ↓   TypeChecker(program).check()
+  zast.ProgramData  (frozen post-parse)
+      ↓   typecheck(program)
   ztyping.ZTyping  (mutable, holds all typecheck output)
       ↓
-  CEmitter / zsqldump / zasthash
+  zemitterc / zsqldump
 """
 
-The parser hands the typechecker a #~"zast.Program" -- an immutable
-tree of #~"Node" subclasses, each with a monotonic #~"nodeid". The
+The parser hands the typechecker a #~"zast.ProgramData" -- an immutable
+tree of #~"Node" values, each with a monotonic #~"nodeid". The
 typechecker does not mutate AST nodes; instead it writes its results
 into a single mutable container, #~"ztyping.ZTyping", keyed by
-#~"nodeid". After #~"check()" returns, the emitter and SQL dumper
-read from both the #~"Program" (shape) and the #~"ZTyping" (types,
+#~"nodeid". After #~"typecheck()" returns, the emitter and SQL dumper
+read from both the #~"ProgramData" (shape) and the #~"ZTyping" (types,
 ownership, locks, monomorphisations) without further analysis.
 
 #b:"Demand-driven, single pass." Resolution starts at #~"main" and
@@ -87,82 +87,82 @@ rationale.
 
 The typechecker is built around five core record types and one
 mutable container. Reading this section first makes
-#~"ztypecheck.py" considerably easier to follow, because nearly
+#~"ztypecheck.z" considerably easier to follow, because nearly
 every function in it produces, mutates, or consults one of these.
 
 
 #---: ZType -- the unified type descriptor
 
-#~"ZType" (in #~"src/ztypes.py") is the #_*"only" type
+#~"ZType" (in #~"src/ztypes.z") is the #_*"only" type
 representation in the compiler. There is no separate "kind",
 "shape", or "schema" object: every type -- record, class, variant,
 union, protocol, facet, function, unit, numeric, native -- is a
-#~"ZType" with a #~"typetype" discriminator (the #~"ZTypeType"
+#~"ZType" with a #~"typetype" discriminator (the #~"ztypetype"
 enum) and a set of optional fields.
 
 Key fields:
 
 #ul:
   [#*: #~"name": the simple name (e.g. #~"Point")]
-  [#*: #~"typetype": the #~"ZTypeType" enum
+  [#*: #~"typetype": the #~"ztypetype" enum
     (#~"RECORD", #~"CLASS", #~"VARIANT", #~"UNION", #~"PROTOCOL",
     #~"FACET", #~"FUNCTION", #~"UNIT", numerics, ...)]
-  [#*: #~"parent": the enclosing unit type, or #~"None"
+  [#*: #~"enclosingTypeId": the enclosing unit type, or none
     for top-level units]
-  [#*: #~"children_id_map": per-name monotonic child id,
-    minted lazily by #~"child_id_for(name)". The id is the
-    authoritative key for children in #~"ZTyping.type_child" rows
+  [#*: #~"childrenIdMap": per-name monotonic child id,
+    minted lazily by #~"allocChild". The id is the
+    authoritative key for children in #~"ZTyping.typeChild" rows
     and for narrowing entries that need a numeric subject]
-  [#*: #~"return_type", #~"return_ownership", #~"this_param_name":
+  [#*: #~"returnTypeId", #~"returnOwnership", #~"thisParamName":
     populated for function types]
-  [#*: generic-state fields: #~"generic_params",
-    #~"generic_defaults", #~"generic_origin",
-    #~"numeric_generic_params", #~"is_tag_generic_origin"]
-  [#*: #~"const_value": a literal value carried on a
+  [#*: generic-state fields: #~"genericParams",
+    #~"genericDefaults", #~"genericOriginId",
+    #~"numericGenericParams", #~"isTagGenericOrigin"]
+  [#*: #~"constValue": a literal value carried on a
     #~"ZType" used as either an as-block constant or a numeric
     generic-arg carrier (the #~"8" in #~"array<i64, 8>")]
-  [#*: layout / memory metadata: #~"destructor_name",
-    #~"is_heap_allocated", #~"needs_field_cleanup",
-    #~"is_nullable_ptr", #~"is_box" (see
+  [#*: layout / memory metadata: #~"destructorName",
+    #~"isHeapAllocated", #~"needsFieldCleanup",
+    #~"isNullablePtr", #~"isBox" (see
     #~"representation_of_types.pdoc")]
-  [#*: #~"create_disabled", #~"meta_create":
+  [#*: #~"createDisabled", #~"metaCreateId":
     unified-call-dispatch metadata: bare-name calls route through
-    #~"children[create]" unless disabled, with #~"meta_create"
+    #~"children[create]" unless disabled, with #~"metaCreateId"
     holding the raw allocator]
   [#*: #~"cname": the C identifier the emitter uses]
-  [#*: #~"nodeid": monotonic id for SQL dumps]
+  [#*: #~"typeId": monotonic id for SQL dumps]
 
 A #~"ZType" carries identity-data only. #_*"Per-edge" metadata --
 parameter ownership annotations, field defaults, lock/private
-modifiers -- lives on #~"ZTyping.type_child" rows (the flat
+modifiers -- lives on #~"ZTyping.typeChild" rows (the flat
 children table), not on the parent #~"ZType".
 
 
 #---: ZVariable -- per-binding ownership carrier
 
-#~"ZVariable" (#~"src/ztypes.py") wraps a #~"ZType" with the
+#~"ZVariable" (#~"src/ztypes.z") wraps a #~"ZType" with the
 state that is per-variable rather than per-type. A #~"ZVariable"
 is created only for #_*"named runtime bindings" -- function
 parameters, locals introduced by assignment, #~"with"-bindings,
-for-loop iterators, and synth temps -- and attached to
-#~"ZEntry.var". Expression-level results live on #~"ZExprResult",
-not here; type and function definitions also leave
-#~"ZEntry.var = None".
+for-loop iterators, and synth temps -- and referenced from
+#~"ZEntry.varId". Expression-level results live on #~"ZExprResult",
+not here; type and function definitions leave #~"ZEntry.varId"
+unset.
 
 #ul:
-  [#*: #~"variableid": monotonic id]
-  [#*: #~"ztype": the variable's resolved type]
+  [#*: #~"variableId": monotonic id]
+  [#*: #~"ztypeId": the variable's resolved type]
   [#*: #~"ownership": #~"OWNED" or #~"BORROWED" (the
     2-state model described in #~"compiler.pdoc:Ownership and
     Lifetime")]
-  [#*: #~"is_private_access": carried through #~".private"
+  [#*: #~"isPrivateAccess": carried through #~".private"
     typedef projections]
-  [#*: #~"borrow_origin": escape-analysis sentinel naming
-    the function-local source this variable borrows from; #~"None"
+  [#*: #~"borrowOrigin": escape-analysis sentinel naming
+    the function-local source this variable borrows from; none
     for parameters]
-  [#*: #~"synth_origin": pass-name string for variables
+  [#*: #~"synthOrigin": pass-name string for variables
     synthesised by a compiler pass (e.g. #~"\"anf\"" for hoisted
-    call temps); #~"None" for user-source variables]
+    call temps); none for user-source variables]
 
 Keeping ownership off #~"ZType" lets the same type be bound in two
 scopes with different ownership, which is the common case.
@@ -170,24 +170,25 @@ scopes with different ownership, which is the common case.
 
 #---: ZEntry -- a scope binding
 
-#~"ZEntry" (#~"src/ztypes.py") is the unit of scope state. Every
+#~"ZEntry" (#~"src/ztypes.z") is the unit of scope state. Every
 piece of information the scope chain needs to track about a name
 lives on an #~"ZEntry":
 
 #ul:
-  [#*: #~"entry_id": monotonic id]
-  [#*: #~"name", #~"ztype", #~"is_definition"]
-  [#*: #~"var": optional #~"ZVariable" (absent for
+  [#*: #~"entryId": monotonic id]
+  [#*: #~"name", #~"ztypeId", #~"isDefinition"]
+  [#*: #~"varId": optional #~"ZVariable" id (absent for
     type/function definitions and lock-only overlays)]
-  [#*: #~"lock": optional #~"ZLockInfo" carrying lock type,
-    Holder, and the addressable path tuple #~"(root, f1, f2, ...)"]
-  [#*: #~"narrowed_subtype", #~"narrowed_subtype_id",
-    #~"excluded_subtypes", #~"excluded_subtype_ids": type
+  [#*: #~"hasLock", #~"lockType", #~"lockHolder",
+    #~"lockPath": lock state -- the lock kind, its holder, and the
+    addressable path tuple #~"(root, f1, f2, ...)"]
+  [#*: #~"narrowedSubtype", #~"narrowedSubtypeId",
+    #~"excludedSubtypes", #~"excludedSubtypeIds": type
     narrowing for union / variant subjects in match arms, with
     id parallels for the future hot path]
-  [#*: #~"original_ztype": the un-narrowed type, so the
+  [#*: #~"originalZtypeId": the un-narrowed type, so the
     emitter can generate the C-level unwrap]
-  [#*: #~"is_taken", #~"taken_at": consumed-binding state]
+  [#*: #~"isTaken", #~"takenAt": consumed-binding state]
 
 An entry is either a #_*"definition" (it introduces a name) or a
 #_*"shadow / overlay" (it adjusts state for a name defined in an
@@ -200,19 +201,19 @@ the three scope kinds.
 #---: ZExprResult -- the result of checking an expression
 
 Most expression-level helpers return #~"ZExprResult"
-(#~"src/ztypes.py"), not a bare #~"ZType":
+(#~"src/ztypes.z"), not a bare #~"ZType":
 
 #ul:
-  [#*: #~"ztype": the inferred type]
-  [#*: #~"borrow_target": the addressable path tuple
+  [#*: #~"ztypeId": the inferred type]
+  [#*: #~"borrowTarget": the addressable path tuple
     #~"(root, f1, ...)" that this expression borrows from; the
-    enclosing #~"_check_assignment" / #~"_check_call_arguments"
+    enclosing #~"checkAssignment" / call-argument check
     consumes it to install a borrow-scoped lock at the binding
     site]
-  [#*: #~"private_access": propagated through
+  [#*: #~"privateAccess": propagated through
     #~".private" projections]
 
-The #~"borrow_target" mechanism keeps borrow-lock installation
+The #~"borrowTarget" mechanism keeps borrow-lock installation
 out of deep expression code: the leaf method that knows the source
 path stamps it onto the #~"ZExprResult", and the eventual binding
 site installs the lock. The flow is described under
@@ -221,75 +222,69 @@ site installs the lock. The flow is described under
 
 #---: ZTyping -- the typecheck-output container
 
-#~"ZTyping" (#~"src/ztyping.py") is the single mutable container
+#~"ZTyping" (#~"src/ztyping.z") is the single mutable container
 holding everything the typechecker computes. It is intentionally
-ECS-shaped: instead of decorating parsed AST nodes with
-#~"init=False" columns, the typechecker writes into a set of
-#~"Dict[nodeid, value]" component tables.
+ECS-shaped: instead of decorating parsed AST nodes with extra
+columns, the typechecker writes into a set of per-#~"nodeid"
+component maps.
 
 Aggregate state:
 
 #ul:
-  [#*: #~"parsed": back-reference to the immutable
-    #~"zast.Program"]
-  [#*: #~"errors", #~"is_error": error accumulator]
-  [#*: #~"mono_types", #~"mono_functions": monomorphised
+  [#*: #~"errors", #~"isError": error accumulator]
+  [#*: #~"monoTypes", #~"monoFunctions": monomorphised
     generic instantiations, each paired with its origin AST
     definition]
-  [#*: #~"func_aliases", #~"cloned_methods", #~"resolved":
+  [#*: #~"funcAliases", #~"clonedMethods", #~"resolved":
     monomorphisation deduplication caches]
-  [#*: #~"unit_types_by_id": Unit-AST nodeid → resolved unit
+  [#*: #~"unitTypesById": Unit-AST nodeid → resolved unit
     ZType]
-  [#*: #~"symbol_table": the live #~"ZSymbolTable" (typed via
-    #~"ZSymbolTableProto" to keep #~"ztyping" decoupled from
-    #~"zenv")]
 
 Component tables (each keyed by parsed-node #~"nodeid"):
 
 #ul:
-  [#*: #~"node_type", #~"node_const_value": per-Node type
+  [#*: #~"nodeType", #~"nodeConst": per-Node type
     and compile-time constant]
-  [#*: #~"call_kind", #~"call_callable_type_name",
-    #~"expr_call_kind": call classification and control-kind
+  [#*: #~"callKind", #~"callCallableTypeId",
+    #~"exprCallKind": call classification and control-kind
     routing]
-  [#*: #~"do_has_break", #~"case_subject_taken",
-    #~"for_iter_bindings": per-construct flags]
-  [#*: #~"if_taken_vars", #~"case_taken_vars": post-branch
+  [#*: #~"doHasBreak", #~"caseSubjectTaken",
+    #~"forIterBindings": per-construct flags]
+  [#*: #~"ifTakenVars", #~"caseTakenVars": post-branch
     ownership-cleanup lists]
-  [#*: #~"atom_narrowed_subtype", #~"atom_original_ztype",
-    #~"atom_child_id": per-AtomId narrowing stamps]
-  [#*: #~"dp_parent_tagged_type", #~"dp_child_id": per-
+  [#*: #~"atomNarrowedSubtype", #~"atomOriginalZtype",
+    #~"atomChildId": per-AtomId narrowing stamps]
+  [#*: #~"dpParentTaggedType", #~"dpChildId": per-
     DottedPath parent-type and child-id stamps]
-  [#*: #~"with_ownership", #~"with_alias_of",
-    #~"assign_alias_of": per-binding alias/ownership stamps]
-  [#*: #~"projected_args": per-NamedOperation protocol-projection
+  [#*: #~"withOwnership", #~"withAliasOf",
+    #~"assignAliasOf": per-binding alias/ownership stamps]
+  [#*: #~"projectedArgs": per-NamedOperation protocol-projection
     stamps]
-  [#*: #~"type_child", #~"type_generic_arg": flat
-    children / generic-args tables, replacing the prior
-    per-ZType dict columns]
+  [#*: #~"typeChild", #~"typeGenericArg": flat
+    children / generic-args tables]
 
-The SQL dumper writes one row per dict, so every component table
+The SQL dumper writes one row per component entry, so every table
 has a direct SQL representation.
 
 
 #---: ZSymbolTable and ZScope
 
-#~"ZSymbolTable" (#~"src/zenv.py") is the scope stack the
+#~"ZSymbolTable" (#~"src/zenv.z") is the scope stack the
 typechecker uses for #_*"all" variable state -- type, ownership,
 lock state, narrowing, taken state. There is no separate flow-
 typing structure: state changes are recorded as new entries in
 overlay scopes; scope pop is the only thing that undoes them.
 
 #ul:
-  [#*: #~"ZScope": holds #~"entries: List[ZEntry]" (linear
-    scan rather than a dict; typical scope has fewer than ten
-    entries), a #~"kind" (#~"BLOCK", #~"CALL", or #~"OVERLAY"),
-    a #~"name", an #~"unreachable" flag, and a monotonic
-    #~"scope_id"]
-  [#*: #~"ZSymbolTable": stack of #~"ZScope" frames plus
-    #~"_history" (popped scopes, retained for SQL dump) and
-    #~"scope_log" (append-only log of push/pop events with
-    parent ids and sequence numbers)]
+  [#*: #~"ZScope": a #~"kind" (#~"BLOCK", #~"CALL", or
+    #~"OVERLAY"), a #~"name", a monotonic #~"scopeId", and an
+    #~"entryStart" index into the table's flat entry list.
+    Entries are scanned linearly (typical scope has fewer than
+    ten); unreachable scopes are tracked in a side set]
+  [#*: #~"ZSymbolTable": a stack of #~"ZScope" frames over a flat
+    #~"entries" list, plus #~"history" (popped scopes, retained
+    for SQL dump) and #~"scopeLog" (append-only log of push/pop
+    events with parent ids and sequence numbers)]
 
 Three scope kinds (full description in
 #~"compiler.pdoc:Scope Environment"):
@@ -304,28 +299,28 @@ Three scope kinds (full description in
     outer scope (new lock, narrowing, taken state).]
 
 Lock state is keyed on a path tuple #~"(root, f1, ..., fn)" stored
-on #~"ZLockInfo". #~"ZEntry.name" always equals #~"path[0]" so the
+on #~"ZEntry.lockPath". #~"ZEntry.name" always equals #~"path[0]" so the
 linear scan stays cheap; the full tuple is consulted only by the
 prefix-overlap rule. Key APIs (all on #~"ZSymbolTable"):
 
 #ul:
-  [#*: #~"lookup", #~"lookup_var", #~"lookup_var_by_id",
-    #~"lookup_entry" -- name → type / variable / entry resolution]
-  [#*: #~"try_lock" -- attempt to install a lock; returns
-    #~"ZLockInfo" or a conflict description. Multi-granularity
-    rule is in #~"_lock_acquire_conflict"]
-  [#*: #~"find_exclusive_lock", #~"is_path_locked" -- access-
+  [#*: #~"lookup", #~"lookupVarId", #~"lookupVarNameById"
+    -- name → type / variable resolution]
+  [#*: #~"tryLock" -- attempt to install a lock; returns the
+    installed lock or a conflict description. Multi-granularity
+    rule is in #~"lockAcquireConflict"]
+  [#*: #~"findExclusiveLock", #~"isPathLocked" -- access-
     site enforcement (used by lock-escape checks)]
   [#*: #~"narrow", #~"exclude" -- install a narrowing or
     exclusion overlay entry on the current scope]
 
-The lock conflict logic lives in #~"zenv.py", not in
-#~"ztypecheck.py". The typechecker only chooses #_*"when" to
+The lock conflict logic lives in #~"zenv.z", not in
+#~"ztypecheck.z". The typechecker only chooses #_*"when" to
 install a lock; the rule for whether it conflicts is owned by
 the scope module.
 
 
-#--: Code Map of #~"ztypecheck.py"
+#--: Code Map of #~"ztypecheck.z"
 
 The file is long, but it organises top-to-bottom roughly as
 follows. Functions are listed by name (no line numbers -- they
@@ -334,104 +329,89 @@ into the right region; read prose below for the semantics.
 
 #table:
   [#tr: [#th: Band] [#th: Key functions]]
-  [#tr: [#td: TypeChecker init]
-        [#td: #~"__init__" -- resolving stack, unit cache,
-              #~"_definition_resolvers" dispatch table, call-id
-              stack, fresh-namer for hoisting, MonoState,
-              TemplateIds, FunctionContext]]
+  [#tr: [#td: Pass setup]
+        [#td: module-level #~"typecheck" entry -- resolving
+              stack, unit cache, call-id stack, and the
+              fresh-temp counter (#~"ZTyping.nextTempId")]]
   [#tr: [#td: Entry point]
-        [#td: #~"check" -- starts at #~"main", drives demand-
+        [#td: #~"typecheck" -- starts at #~"main", drives demand-
               driven resolution and body checking, returns the
               accumulated error list]]
   [#tr: [#td: Unit-level name resolution]
-        [#td: #~"_resolve_unit_name", #~"_type_of_definition"
-              (dispatches over #~"NodeType" via the
-              #~"_definition_resolvers" dict)]]
+        [#td: #~"resolveDef" (dispatches over #~"nodetype"),
+              #~"resolveUnitBody"]]
   [#tr: [#td: Type-definition resolvers]
-        [#td: #~"_resolve_function_type",
-              #~"_resolve_record_type", #~"_resolve_class_type",
-              #~"_resolve_union_type",
-              #~"_resolve_variant_type",
-              #~"_resolve_protocol_type",
-              #~"_resolve_facet_type",
-              #~"_resolve_inline_unit_type", #~"_resolve_tag",
-              #~"_resolve_data_type"]]
+        [#td: #~"resolveFunction",
+              #~"resolveRecord", #~"resolveClass",
+              #~"resolveUnion",
+              #~"resolveVariant",
+              #~"resolveProtocol",
+              #~"resolveFacet",
+              #~"resolveInlineGenericUnit",
+              #~"resolveData"]]
   [#tr: [#td: Name and typeref resolution]
-        [#td: #~"_resolve_name", #~"_resolve_typeref",
-              #~"_resolve_typeref_call",
-              #~"_resolve_type_keyword",
-              #~"_resolve_this_keyword",
-              #~"_resolve_dp_parent_type",
-              #~"_resolve_dotted_path"]]
+        [#td: #~"resolveTyperefShell", #~"lookupTyperef",
+              #~"checkDotted", #~"dottedParentName", and the
+              #~"type" / #~"this" keyword resolvers]]
   [#tr: [#td: Monomorphisation]
-        [#td: #~"_monomorphize", #~"_mono_arg_key",
-              #~"_monomorphize_function",
-              #~"_check_mono_constraints"]]
+        [#td: #~"mintMono", #~"genericTypeKey",
+              #~"resolveMonos", #~"cloneUnitMethod",
+              #~"validateGenericTypeArgs"]]
   [#tr: [#td: Function body]
-        [#td: #~"_check_function_body",
-              #~"_check_function_body_inner"]]
+        [#td: #~"checkFunctionBody", #~"checkMethodBodies",
+              #~"checkBodies"]]
   [#tr: [#td: Statements]
-        [#td: #~"_check_statement",
-              #~"_check_statement_inner",
-              #~"_check_statement_line",
-              #~"_check_statement_line_inner",
-              #~"_check_assignment",
-              #~"_check_reassignment", #~"_check_swap"]]
+        [#td: #~"checkStatement",
+              #~"checkStmtInner",
+              #~"checkStatementLine",
+              #~"checkAssignment",
+              #~"checkReassignment", #~"checkSwap"]]
   [#tr: [#td: Expressions]
-        [#td: #~"_check_expression", #~"_check_operation",
-              #~"_check_path", #~"_check_atomid",
-              #~"_check_string_interpolation"]]
+        [#td: #~"checkExpression", #~"checkValue",
+              #~"checkAtomid",
+              #~"checkString"]]
   [#tr: [#td: Dotted paths]
-        [#td: #~"_check_dotted_path" (auto-call coercion gate
-              via #~"coerce_method_to_return"),
-              #~"_check_dotted_path_inner",
-              #~"_check_dp_take", #~"_check_dp_release",
-              #~"_check_dp_borrow", #~"_check_dp_lock",
-              #~"_check_dp_private"]]
+        [#td: #~"checkDotted" -- auto-call coercion gate;
+              handles #~".take" / #~".release" / #~".borrow" /
+              #~".lock" / #~".private"]]
   [#tr: [#td: Calls]
-        [#td: #~"_check_call", #~"_check_call_inner",
-              #~"_check_call_arguments",
-              #~"_check_missing_call_args",
-              #~"_check_missing_create_args",
-              #~"_apply_take_to_arg", #~"_lock_arg",
-              #~"_lock_receiver", #~"_install_borrow_locks",
-              #~"_check_aggregate_lock_escape",
-              #~"_check_protocol_create",
-              #~"_check_protocol_borrow",
-              #~"_check_typedef_create",
-              #~"_check_typedef_borrow"]]
+        [#td: #~"checkCall",
+              #~"checkMissingCallArgs",
+              #~"lockCallArg", #~"installBorrowLocks",
+              #~"checkProjectionCreate",
+              #~"checkTypedefCreate",
+              #~"checkTypedefBorrow", and the argument-take /
+              lock-escape helpers]]
   [#tr: [#td: Special call forms]
-        [#td: #~"_check_return_call" (unified
-              #~"children[create]" dispatch),
-              #~"_check_str_convert_call", #~"_check_binop"]]
+        [#td: #~"checkBinop" and the return-call
+              (#~"children[create]" construction) and
+              string-convert dispatch]]
   [#tr: [#td: Control flow]
-        [#td: #~"_check_if", #~"_check_exhaustive_if",
-              #~"_check_for", #~"_check_with",
-              #~"_check_case" (match arm checking, including
-              branch narrowing and post-match exclusion),
-              #~"_check_box_construction"]]
+        [#td: #~"checkIf",
+              #~"checkFor", #~"checkWith",
+              #~"checkCase" / #~"checkClause" (match arm checking,
+              including branch narrowing and post-match
+              exclusion), #~"checkBoxConstruction"]]
 
 
 #--: Dispatch Mechanism
 
-Per the project convention (#~"CLAUDE.md"), the typechecker uses
-field-based dispatch on the #~"NodeType" enum rather than
-#~"isinstance". The pattern appears in two forms:
+Per the project convention (#~"CLAUDE.md"), the typechecker
+dispatches on the #~"nodetype" discriminator rather than runtime
+type tests. The pattern appears in two forms:
 
 #ul:
-  [#*: #b:"Dict-of-bound-methods built at init time" -- e.g.
-    #~"_definition_resolvers" (NodeType → resolver method).
-    Used where the set of cases is closed and known up front
-    (type-definition resolvers, statement-line kinds). Lookup is
-    O(1) and avoids #~"getattr"-by-name.]
-  [#*: #b:"Inline switch on" #~"node.nodetype" -- used inside
-    #~"_check_expression", #~"_check_path", and a few similar
-    high-fan-out helpers where a flat #~"if / elif" chain reads
-    more clearly than a table.]
+  [#*: #b:"Closed dispatch keyed by #~"nodetype"" -- e.g. the
+    definition resolvers. Used where the set of cases is closed
+    and known up front (type-definition resolvers, statement-line
+    kinds).]
+  [#*: #b:"Inline match on" #~"node.nodetype" -- used inside
+    #~"checkExpression", #~"checkValue", and a few similar
+    high-fan-out helpers where a flat match reads more clearly
+    than a table.]
 
-#~"cast()" is used after the discriminator check to narrow the
-node type for the static type checker (#~"ty"); see
-#~"src/zast.py".
+After the discriminator check, #~"cast()" narrows the node to the
+concrete #~"Node" arm; see #~"src/zast.z".
 
 
 #--: Resolution Stack and Cycle Detection
@@ -440,32 +420,32 @@ Resolution is keyed by #_*"definition nodeid", not by synthesized
 dotted-string names. Every definition is one AST node with one stable
 #~"nodeid", and that node is shared across every reference to it, so
 the same definition always resolves to the same cached type no matter
-which unit asks. #~"TypeChecker._resolved" maps #~"defn.nodeid -> ZType";
-#~"TypeChecker._resolving" is the list-shaped resolution stack of
-#~"ResolvingFrame" entries (#~"unit_name", #~"def_id", #~"ztype",
-#~"defn"). The flow is:
+which unit asks. A resolved cache maps #~"defn.nodeid -> ZType";
+a list-shaped resolution stack records the definitions currently
+being resolved (each frame carrying its unit name, def-id, ztype,
+and AST node). The flow is:
 
 #ol:
-  [#*: #~"_resolve_unit_name(unit, name)" looks the definition up in
-    the unit's member table, then checks #~"self._resolved" keyed by
+  [#*: Unit-name resolution looks the definition up in the unit's
+    member table, then checks the resolved cache keyed by
     #~"defn.nodeid". Hit: return immediately.]
-  [#*: Cache miss: push a #~"ResolvingFrame" for #~"defn.nodeid" onto
-    #~"_resolving", dispatch to the appropriate #~"_resolve_*_type"
-    via #~"_definition_resolvers".]
+  [#*: Cache miss: push a resolution frame for #~"defn.nodeid" onto
+    the stack and dispatch to the appropriate #~"resolve*" resolver
+    by #~"nodetype".]
   [#*: If a nested resolution re-enters the same definition, the
     resolver finds its #~"def_id" on the stack and reports a cycle
     error.]
   [#*: On success, the resolver pops the stack frame and writes
-    the final #~"ZType" into #~"_resolved" under #~"defn.nodeid".]
+    the final #~"ZType" into the resolved cache under #~"defn.nodeid".]
 
 The emitter and SQL dump read #~"ZTyping.resolved", a qualified-name
-#~"({unit}.{member} -> ZType)" projection of the nodeid cache built by
-#~"_build_resolved_name_view" at the end of #~"typecheck".
+#~"({unit}.{member} -> ZType)" projection of the nodeid cache built
+at the end of #~"typecheck".
 
 The #~"type" keyword (in receiver position) resolves to the type
 at the bottom of the resolving stack, so a method body can refer
 to its own enclosing type without naming it. #~"this" works
-similarly via #~"_resolve_this_keyword".
+similarly.
 
 
 #--: Cross-Cutting Concerns
@@ -481,68 +461,65 @@ The 2-state ownership model (see #~"compiler.pdoc:Ownership and
 Lifetime") is enforced at the assignment and call sites:
 
 #ul:
-  [#*: #~"_check_assignment" -- definition site. Records the
+  [#*: #~"checkAssignment" -- definition site. Records the
     new variable's ownership in a fresh #~"ZVariable", consumes
-    any #~"ZExprResult.borrow_target" by installing a borrow
+    any #~"ZExprResult.borrowTarget" by installing a borrow
     lock.]
-  [#*: #~"_check_reassignment" -- enforces that the LHS variable
+  [#*: #~"checkReassignment" -- enforces that the LHS variable
     is currently #~"OWNED" and that the RHS provides the
     appropriate ownership; resets narrowing and re-runs lock
     escape checks.]
-  [#*: #~"_check_swap" -- symmetric ownership preservation.]
-  [#*: #~"_apply_take_to_arg" -- argument-site #~".take";
-    transfers ownership from the caller's binding into the
-    callee's parameter.]
+  [#*: #~"checkSwap" -- symmetric ownership preservation.]
+  [#*: the argument-site #~".take" -- transfers ownership from
+    the caller's binding into the callee's parameter.]
 
 Parameters default to #~".borrow"; #~".take" and #~".lock" are
-the opt-in transfers. The annotations live on
-#~"ZTyping.type_child.param_ownership", not on the parameter
-#~"ZType".
+the opt-in transfers. The annotations live on the
+#~"ZTyping.typeChild" rows (the param-ownership column), not on
+the parameter #~"ZType".
 
 
 #---: Lock checking
 
-The typechecker chooses #_*"when" to install a lock; #~"zenv.py"
-owns the conflict rule (#~"_lock_acquire_conflict") and the
-prefix-overlap path test (#~"_paths_overlap"). Two scopes of
+The typechecker chooses #_*"when" to install a lock; #~"zenv.z"
+owns the conflict rule (#~"lockAcquireConflict") and the
+prefix-overlap path test (#~"pathsOverlap"). Two scopes of
 locks, both described in #~"compiler.pdoc:Lock Checking":
 
 #ul:
-  [#*: #b:"Call-scoped" -- installed by #~"_lock_receiver" /
-    #~"_lock_arg" inside a #~"CALL" scope that wraps argument
-    processing. The leaf is #~"EXCLUSIVE"; every intermediate
-    prefix is #~"SHARED".]
+  [#*: #b:"Call-scoped" -- installed by #~"lockCallArg" inside a
+    #~"CALL" scope that wraps argument processing. The leaf is
+    #~"EXCLUSIVE"; every intermediate prefix is #~"SHARED".]
   [#*: #b:"Borrow-scoped" -- installed by
-    #~"_install_borrow_locks" when a binding takes a borrow into
+    #~"installBorrowLocks" when a binding takes a borrow into
     a #~"BLOCK" scope (#~".borrow", #~".lock", #~".stringview",
     #~"with", or a #~".lock"-param transfer). Persists for the
     lifetime of the binding's scope; released by scope pop or
     explicit #~".release".]
 
-#~"_check_aggregate_lock_escape" runs at storage sites (field
-writes) and at return sites; it consults #~"is_path_locked" on
+The aggregate-lock-escape check runs at storage sites (field
+writes) and at return sites; it consults #~"isPathLocked" on
 the scope chain to reject a write/return that would let a locked
 value escape its scope.
 
 Self-overlap during a single call (e.g.
 #~"f.method bv: f.byteview") is permitted via the call-identity
-stack (#~"_call_id_stack" + #~"ZLockHolder" tagging): #~"try_lock"
-skips the conflict check when the existing Holder matches the
+stack and #~"zlockholder" tagging: #~"tryLock"
+skips the conflict check when the existing holder matches the
 current call's identity.
 
 
 #---: Borrow correctness for parameters
 
 Deep methods that take a borrow into a return value record the
-source path on #~"_pending_borrow_lock", which
-#~"_check_expression" captures into #~"ZExprResult.borrow_target"
-and clears so it cannot leak across statements. The binding site
-(#~"_check_assignment" or #~"_check_call_arguments") then
+source path on a pending-borrow slot, which
+#~"checkExpression" captures into #~"ZExprResult.borrowTarget"
+and clears so it cannot leak across statements (see
+#~"takePendingBorrow" / #~"drainPendingBorrow"). The binding site
+(#~"checkAssignment" or the call-argument check) then
 installs the borrow lock against the actual destination scope.
-The dedicated deep helpers live under #~"_check_dp_*"
-(#~"_check_dp_borrow", #~"_check_dp_lock",
-#~"_check_dp_release", #~"_check_dp_private",
-#~"_check_dp_take").
+The dedicated #~".take" / #~".borrow" / #~".lock" / #~".release" /
+#~".private" handling lives in #~"checkDotted".
 
 
 #---: Monomorphisation
@@ -553,23 +530,22 @@ concrete types, and re-running the standard resolvers on the
 clone.
 
 #ul:
-  [#*: #~"_monomorphize" -- entry for generic type
+  [#*: #~"mintMono" -- entry for generic type
     instantiation. Builds a deduplication key via
-    #~"_mono_arg_key" (a tuple over arg #~"(name, const_value)"
+    #~"genericTypeKey" (over arg #~"(name, constValue)"
     pairs so numeric generics also dedupe), reuses an existing
     instantiation if present, otherwise clones and registers
-    into #~"ZTyping.mono_types".]
-  [#*: #~"_monomorphize_function" -- per-function variant.
+    into #~"ZTyping.monoTypes".]
+  [#*: #~"cloneUnitMethod" -- per-function variant.
     Clones the function AST, binds generic params, typechecks
     the clone with the mono context in scope.]
-  [#*: #~"_check_mono_constraints" -- enforces generic
+  [#*: #~"validateGenericTypeArgs" -- enforces generic
     constraints on a candidate argument type.]
 
-Cloned nodes carry #~"synth_origin" (the pass-name string) so the
-SQL dump and asthash can attribute them to monomorphisation
-rather than to the user. The synthesis toolkit
-(#~"src/zsynth.py") is documented in
-#~"compiler.pdoc:Synthesis Toolkit"; the same toolkit is used by
+Cloned nodes carry #~"synthOrigin" (the pass-name string) so the
+SQL dump can attribute them to monomorphisation
+rather than to the user. Node synthesis is described in
+#~"compiler.pdoc:Synthesis Toolkit"; the same machinery is used by
 per-call argument hoisting.
 
 #~"is native" methods (the compiler-provided collection methods
@@ -586,14 +562,14 @@ child-lookup path.
 Narrowing for #~"union" and #~"variant" subjects in match arms
 is implemented via overlay entries. When a match arm narrows
 subject #~"s" to subtype #~"ok", an overlay #~"ZEntry" with
-#~"narrowed_subtype: \"ok\"" is pushed onto the arm's scope.
+#~"narrowedSubtype: \"ok\"" is pushed onto the arm's scope.
 Inside the arm, name lookup for #~"s" finds this entry first and
 returns the narrowed type. The arm scope is popped at end of
 arm; narrowing resets automatically.
 
 Post-match #_*"exclusion" is the dual: arms that diverge
 (return, break, panic) contribute their handled subtypes to an
-#~"excluded_subtypes" entry placed on the parent scope after the
+#~"excludedSubtypes" entry placed on the parent scope after the
 match. Subsequent code that re-accesses #~"s" as an excluded
 subtype is rejected.
 
@@ -602,8 +578,8 @@ narrowing entry in the current scope at definition time;
 reassignment resets it.
 
 Both narrowing and exclusion carry id parallels
-(#~"narrowed_subtype_id", #~"excluded_subtype_ids") minted via
-#~"ZType.child_id_for". String fields remain authoritative; the
+(#~"narrowedSubtypeId", #~"excludedSubtypeIds") minted via
+#~"ZType.allocChild". String fields remain authoritative; the
 ids are the hot-path key prepared for future migration to the
 SQL-backed representation.
 
@@ -613,12 +589,12 @@ SQL-backed representation.
 A no-user-arg method dotted path read in value position
 (#~"v: s.stringview", #~"p1.distance" inside a string
 interpolation) is auto-called to its return type. The coercion
-lives entirely in #~"_check_dotted_path" and is gated by a
-#~"coerce_method_to_return" parameter. #~"_check_call" flips the
-flag off when resolving its own callable, so explicit calls
+lives entirely in #~"checkDotted" and is gated by a
+coerce-to-return flag. #~"checkCall" clears the
+flag when resolving its own callable, so explicit calls
 (#~"obj.method named: arg") see the function type and dispatch
 normally instead of constructing the return type. Path
-resolution itself (#~"_resolve_dotted_path") is context-free: it
+resolution itself is context-free: it
 always returns the FUNCTION type for a method path. Behaviour is
 identical for #~"is native" and user-defined methods.
 
@@ -629,8 +605,8 @@ A type used in callable position is rewritten through the
 unified-dispatch route. The bare-name construction call
 #~"Point x: 1 y: 2" resolves the callee to the #~"Point"
 #~"ZType", then looks up #~"children[create]" on that type to
-get the actual constructor. The mechanics live in
-#~"_check_return_call" and friends; #~"meta.create" on the
+get the actual constructor. The mechanics live in the return-call
+dispatch; #~"meta.create" on the
 parent #~"ZType" carries the compiler-generated raw allocator
 when one is needed. #~"create: null" in the type's #~"as" block
 disables bare-name construction (the case for #~"union" and
@@ -639,11 +615,11 @@ disables bare-name construction (the case for #~"union" and
 
 #--: Error Reporting
 
-Type errors are #~"zast.Error" value objects, appended to
-#~"self.errors" via the #~"_error()" helper. Errors are never
+Type errors are #~"zast.ErrorData" value objects, appended to
+#~"ZTyping.errors" via the #~"addError" helper. Errors are never
 raised as exceptions; the typechecker tries to continue
 collecting errors past the first failure where the AST permits.
-Error codes (the #~"ERR" enum in #~"src/zast.py") are grouped:
+Error codes (the #~"err" variant in #~"src/zast.z") are grouped:
 
 #ul:
   [#*: E0001-E0099 -- parser / syntax (raised earlier in the
@@ -654,9 +630,9 @@ Error codes (the #~"ERR" enum in #~"src/zast.py") are grouped:
   [#*: E0400-E0499 -- generic / monomorphisation]
 
 The diagnostic location is taken from the offending AST node's
-#~"loc" / #~"Token". After #~"check()" returns, the caller
-inspects #~"typing.errors" (or the return value of #~"check()")
-to decide whether to proceed to emission.
+#~"loc" / #~"Token". After #~"typecheck()" returns, the caller
+inspects #~"ZTyping.errors" to decide whether to proceed to
+emission.
 
 
 #--: What Lives Elsewhere
@@ -664,30 +640,23 @@ to decide whether to proceed to emission.
 Module boundaries the typechecker relies on:
 
 #ul:
-  [#*: #~"src/ztypes.py" -- #~"ZType", #~"ZVariable",
-    #~"ZEntry", #~"ZExprResult", #~"ZLockInfo", #~"ZLockHolder",
-    plus the #~"ZTypeType" / #~"ZOwnership" /
-    #~"ZParamOwnership" / #~"ZLockState" / #~"ZScopeKind" /
-    #~"ZSubType" / #~"ZControlKind" / #~"ZBuiltinFunc" /
-    #~"ZLockHolderKind" enums]
-  [#*: #~"src/ztyping.py" -- the #~"ZTyping" container,
+  [#*: #~"src/ztypes.z" -- #~"ZType", #~"ZVariable",
+    #~"ZEntry", #~"ZExprResult", #~"ZTypeRegistry",
+    plus the #~"ztypetype" / #~"zownership" /
+    #~"zparamownership" / #~"zlockstate" / #~"zscopekind" /
+    #~"zsubtype" / #~"zcontrolkind" / #~"zbuiltinfunc" /
+    #~"zlockholderkind" / #~"zlockholder" enums, and the shared
+    manglers #~"mangleFuncName" / #~"mangleVarName"]
+  [#*: #~"src/ztyping.z" -- the #~"ZTyping" container,
     #~"ZTypeChild" / #~"ZTypeGenericArg" flat-table rows]
-  [#*: #~"src/zenv.py" -- #~"ZSymbolTable", #~"ZScope",
+  [#*: #~"src/zenv.z" -- #~"ZSymbolTable", #~"ZScope",
     #~"ZScopeLogRow", the lock-conflict logic
-    (#~"_lock_acquire_conflict", #~"_paths_overlap"), narrowing
+    (#~"lockAcquireConflict", #~"pathsOverlap"), narrowing
     / exclusion installers]
-  [#*: #~"src/ztypeutil.py" -- collection-type predicates
-    (#~"is_array_type", #~"is_list_type", #~"list_element_type",
-    ...) shared between typechecker and emitter]
-  [#*: #~"src/zsynth.py" -- node synthesis toolkit
-    (#~"FreshNamer", #~"make_atom_id", #~"make_assignment",
-    #~"register_synth_var") used by per-call hoisting and
-    auto-generated equality]
-  [#*: #~"src/zsymtab_proto.py" -- the duck-typed
-    #~"ZSymbolTableProto" that breaks the
-    #~"zast" ↔ #~"zenv" import cycle]
-  [#*: #~"src/zasthash.py" -- structural hashing used by the
-    monomorphisation dedup key]
+
+Collection-type predicates (#~"typeIsReftype", #~"typeIsValtype",
+...), node synthesis, and the monomorphisation dedup hashing have
+no separate module -- they live within #~"src/ztypecheck.z" itself.
 
 
 #--: Reading Order
@@ -696,21 +665,19 @@ When opening the typechecker for the first time, read in this
 order:
 
 #ol:
-  [#*: #~"src/ztypes.py" -- the dataclass definitions in this
+  [#*: #~"src/ztypes.z" -- the type definitions in this
     file are the vocabulary for everything else.]
-  [#*: #~"src/ztyping.py" -- the #~"ZTyping" container makes the
+  [#*: #~"src/ztyping.z" -- the #~"ZTyping" container makes the
     component-table architecture concrete.]
-  [#*: #~"src/zenv.py" -- the scope stack and the lock-conflict
+  [#*: #~"src/zenv.z" -- the scope stack and the lock-conflict
     rule. The semantics of "what makes two locks conflict" lives
     here, not in the typechecker.]
-  [#*: #~"src/ztypecheck.py" -- enter via the Code Map above.
-    A good first dive is #~"check()" → #~"_resolve_unit_name" →
-    #~"_resolve_function_type" → #~"_check_function_body" →
-    #~"_check_statement" → #~"_check_expression" →
-    #~"_check_call". That path touches almost every cross-
+  [#*: #~"src/ztypecheck.z" -- enter via the Code Map above.
+    A good first dive is #~"typecheck" → #~"resolveDef" →
+    #~"resolveFunction" → #~"checkFunctionBody" →
+    #~"checkStatement" → #~"checkExpression" →
+    #~"checkCall". That path touches almost every cross-
     cutting concern in turn.]
-  [#*: #~"src/zsynth.py" -- read once you encounter a hoisted
-    temp in a SQL dump or test snapshot.]
 
 
 #--: Related Documents

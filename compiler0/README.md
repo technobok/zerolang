@@ -17,7 +17,7 @@ bin/zc <unit> --src src --system lib/system
 ```
 
 `cc bootstrap/zc.c` *is* the self-hosted compiler (the byte-stable self-emit; see
-`../bootstrap/README.md` and `../doc/bootstrap.pdoc`). compiler0 plays no part.
+`../bootstrap/README.md`). compiler0 plays no part.
 
 ## Why it's still in the tree
 
@@ -32,7 +32,7 @@ Its former roles are gone:
   opt-in escape hatch while the directory is present).
 - **Differential oracle** → retired with the port-vs-reference tests (their durable
   Python-free replacements — corpus/golden/fixpoint/ASan gates — already cover the
-  same ground; see `../doc/freeze_audit.md`).
+  same ground).
 
 ## Runtime caveat
 

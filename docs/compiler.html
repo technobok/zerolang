@@ -226,11 +226,11 @@ attempt to reset and continue compilation.</p>
 <h2 id="generator-desugaring"><a href="#generator-desugaring">6. Generator Desugaring</a></h2>
 <p>A function whose body contains at least one <code>yield</code> and whose
 declared return type resolves to the stdlib <code>Iterator</code> protocol is a
-<strong>generator</strong>. Generator lowering (helpers in <code>src/zgenerator.py</code>,
-driven by <code>TypeChecker._lower_generators</code>) rewrites every such
-function into a pair: a synthesised class implementing the iterator
+<strong>generator</strong>. Generator lowering (helpers in <code>src/zgenerator.z</code>,
+driven by <code>lowerGenerators</code> in <code>src/ztypecheck.z</code>) rewrites every
+such function into a pair: a synthesised class implementing the iterator
 protocol and a factory function that constructs an instance with all
-parameters captured. The lowering runs inside <code>TypeChecker.__init__</code>,
+parameters captured. The lowering runs early in the typecheck pass,
 after unit types are registered and before bodies are checked, so the
 rest of the typechecker sees only ordinary class + function code.</p>
 <p>The trigger resolves the return type's <code>Iterator</code> head by <strong>type
@@ -256,7 +256,7 @@ the pass produces approximately</p>
       }
       call: function {:this} out (option-wrapper-for-G) is {
           # original body, references to promoted names rewritten to this.&lt;n&gt;;
-          # carries synth_origin = "generator-call" so the emitter routes it
+          # carries synthOrigin = "generator-call" so the emitter routes it
           # through the state-machine codegen below.
       }
   }
@@ -269,7 +269,7 @@ Numeric suffix on collision.</p>
 <h3 id="liveness-which-locals-get-promoted"><a href="#liveness-which-locals-get-promoted">6.2. Liveness (which locals get promoted)</a></h3>
 <p>A local must become a class field iff its live range crosses a yield --
 otherwise its C-stack slot in <code>.call</code> is gone between invocations.
-<code>_crossing_locals(body, param_names)</code> in <code>src/zgenerator.py</code>
+<code>crossingLocals</code> in <code>src/zgenerator.z</code>
 runs a structural traversal applying two rules:</p>
 <ul>
 <li><strong>Yield-count rule</strong> -- track a running yield counter
@@ -286,11 +286,11 @@ iteration's yield).</li>
 synth class). Non-crossing locals stay as ordinary C locals inside the
 generated <code>.call</code> body.</p>
 <h3 id="state-machine-codegen"><a href="#state-machine-codegen">6.3. State-machine codegen</a></h3>
-<p>The emitter (<code>src/zemitterc.py</code>) routes any function whose
-<code>synth_origin == "generator-call"</code> through a dedicated state-machine
-path. Helpers <code>_setup_generator_ctx</code>, <code>_emit_generator_prologue</code>,
-<code>_emit_yield_fragment</code>, and <code>_emit_generator_epilogue</code> assign one
-state number per yield (entry = 0, terminal = -1) and emit:</p>
+<p>The emitter (<code>src/zemitterc.z</code>) routes any function whose
+<code>synthOrigin == "generator-call"</code> through a dedicated state-machine
+path. Helpers <code>emitGenPrologue</code>, <code>emitYieldStmt</code>, and
+<code>emitGenEpilogue</code> assign one state number per yield
+(entry = 0, terminal = -1) and emit:</p>
 <pre><code>  switch (this-&gt;state) {
       case 0:  goto L_entry;
       case 1:  goto L_resume_1;
@@ -308,25 +308,24 @@ state number per yield (entry = 0, terminal = -1) and emit:</p>
       this-&gt;state = -1;
       return OPTION_NONE;</code></pre>
 <p>C17 <code>goto</code> plus <code>switch</code> arbitrates cleanly; no GCC extensions.
-The yield-state numbers are pre-allocated in
-<code>_setup_generator_ctx</code> so the prologue, body fragments, and
+The yield-state numbers are pre-allocated from the function's yield
+count (<code>fnYieldCount</code>) so the prologue, body fragments, and
 epilogue agree.</p>
 <h3 id="termination-bidirectional-value-flow"><a href="#termination-bidirectional-value-flow">6.4. Termination + bidirectional value flow</a></h3>
 <p>A bare <code>return</code> anywhere in the body or fall-through past the last
 yield transitions to the terminal absorbing state. <code>return &lt;value&gt;</code>
-is rejected during desugaring (<code>_validate_no_return_value</code>). Code
+is rejected during desugaring. Code
 placed after the last yield runs on the call that crosses into terminal;
 it does not run on early drop, where class destruction releases
 locks and destroys owned fields via the standard class-lifetime path.</p>
-<p>For <code>accepts: K</code> generators, <code>_build_call_method</code> adds a
-<code>value: K</code> parameter; <code>_setup_generator_ctx</code> emits an
+<p>For <code>accepts: K</code> generators, <code>buildCallMethod</code> adds a
+<code>value: K</code> parameter; the generated prologue emits an
 entry-time store of <code>value</code> into <code>this-&gt;_resume_input</code>
 (destroying any prior owned value first). Expression-form yield
 (<code>x: yield v</code>) in the body reads <code>this-&gt;_resume_input</code> after
 the resume label so <code>x</code> binds to the caller's most recent input.
 The first reachable yield must be statement form -- the
-desugarer rejects expression-form first-yields
-(<code>_validate_first_yield_not_expression_form</code>), reflecting that
+desugarer rejects expression-form first-yields, reflecting that
 the resume-input slot is undefined before the first
 <code>.call value:</code> arrives.</p>
 <h3 id="known-gaps"><a href="#known-gaps">6.5. Known gaps</a></h3>
@@ -335,9 +334,9 @@ compiles today but stops after the first inner value, because the
 synthesised for-loop iterator is a C-stack local in <code>.call</code> that
 doesn't survive yield-suspension. Closing the gap requires either a
 desugarer-side synthetic local for each yielding-for-loop iterable
-(so <code>_crossing_locals</code> sees it and promotes it) or an emitter-side
+(so <code>crossingLocals</code> sees it and promotes it) or an emitter-side
 carve-out that promotes the for-loop iterator into a synth-class
-field. Tracked in the generator plan as deferred item P9.</p>
+field.</p>
 <h2 id="semantic-analyser-type-ownership-lock-checking"><a href="#semantic-analyser-type-ownership-lock-checking">7. Semantic Analyser (Type/Ownership/Lock checking)</a></h2>
 <p>The Semantic Analyser assigns a type to each node in the AST. It compares
 types of definitions, assignments and arguments being passed to ensure the
@@ -375,12 +374,12 @@ receiver declare that source as a <code>.lock</code>-annotated parameter
 locking, with no name-based pattern matching.</p>
 <p>A no-user-arg method dotted path (<code>v: s.stringview</code>, <code>p1.distance</code>
 inside string interpolation) is auto-called when read in value
-position. The coercion lives in <code>_check_dotted_path</code> and is gated
-by a <code>coerce_method_to_return</code> flag that <code>_check_call</code> flips off
+position. The coercion lives in <code>checkDotted</code> and is gated
+by a coerce-to-return flag that <code>checkCall</code> clears
 when resolving its callable -- so explicit method calls
 (<code>obj.method named: arg</code>) see the function type and dispatch
 normally instead of falling into construction-of-return-type. Path
-resolution itself (<code>_resolve_dotted_path</code>) is context-free: it
+resolution itself is context-free: it
 always returns the FUNCTION type for a method path. The behaviour is
 identical for <code>is native</code> and user-defined methods.</p>
 <h3 id="ownership-and-lifetime"><a href="#ownership-and-lifetime">7.3. Ownership and Lifetime</a></h3>
@@ -390,18 +389,18 @@ BORROWED (a temporary reference; the variable does not own the instance).</p>
 <p>Function parameters carry ownership annotations: <code>take</code> (caller transfers
 ownership to callee), <code>borrow</code> (callee gets a borrowed reference), or
 <code>lock</code> (callee locks the argument for the duration of the call). See
-<code>doc/ownership.pdoc</code> for the full specification.</p>
+<code>docs/ownership.pdoc</code> for the full specification.</p>
 <h3 id="scope-environment"><a href="#scope-environment">7.4. Scope Environment</a></h3>
 <p>All variable state -- type, ownership, lock state, type narrowing, and
 taken (consumed) status -- is tracked in a unified scope-based environment.
-Each scope holds a <code>List[Entry]</code> rather than a dictionary. Scopes are
+Entries are held in a flat <code>List ZEntry</code> on the symbol table, with each
+scope recording its start index rather than owning a dictionary. Scopes are
 small (measured maximum of approximately 6 entries in practice) so linear
-scan outperforms hash lookup. This also simplifies the eventual self-hosted
-implementation.</p>
-<p>An <code>Entry</code> carries: the variable name, its resolved type, whether it is a
-definition or a shadow overlay, optional ownership info (<code>VarInfo</code>),
-optional lock state (<code>LockInfo</code>), optional type narrowing
-(<code>narrowed_subtype</code> and <code>excluded_subtypes</code>), and optional taken state.</p>
+scan outperforms hash lookup.</p>
+<p>A <code>ZEntry</code> carries: the variable name, its resolved type, whether it is a
+definition or a shadow overlay, optional ownership info, optional lock
+state, optional type narrowing (<code>narrowedSubtype</code> and
+<code>excludedSubtypes</code>), and optional taken state.</p>
 <p>Three scope kinds are used:</p>
 <ul>
 <li>BLOCK -- language constructs (function, do, for, if, with, match,
@@ -415,15 +414,15 @@ an outer scope.</li>
 </ul>
 <p>State changes follow an immutability principle: new shadow entries are
 created in overlay scopes rather than modifying existing entries. The scope
-chain is the history. Scope exit (via <code>pop_to</code>) naturally releases all
+chain is the history. Scope exit (via <code>popTo</code>) naturally releases all
 state from that scope -- locks vanish, narrowing resets, taken markers are
 merged into the parent.</p>
-<p>Each scope carries a monotonically increasing <code>scope_id</code> for tracing and
+<p>Each scope carries a monotonically increasing <code>scopeId</code> for tracing and
 SQL output.</p>
 <h3 id="lock-checking"><a href="#lock-checking">7.5. Lock Checking</a></h3>
 <p>Lock keys are paths -- tuples <code>(root, f1, f2, ..., fn)</code>. Scope
-chain entries (<code>Entry.name</code>) are keyed by the root so the linear scan
-stays cheap; the full path lives on <code>Entry.lock.Path</code> and is consulted
+chain entries (<code>ZEntry.name</code>) are keyed by the root so the linear scan
+stays cheap; the full path lives on <code>ZEntry.lockPath</code> and is consulted
 to apply the prefix-overlap conflict rule. Two lock scopes exist:</p>
 <ul>
 <li>Call-scoped locks -- taken on function arguments during a call.
@@ -449,11 +448,10 @@ ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
 prefix relation) never conflict. Enforcement for access / mutation
 sites uses the same prefix-overlap test: any EXCLUSIVE whose path
 prefix-overlaps the target path is a conflict.</p>
-<p>Key code: <code>try_lock</code> / <code>find_exclusive_lock</code> /
-<code>_lock_acquire_conflict</code> in <code>src/zenv.py</code>; <code>_lock_arg</code> /
-<code>_lock_receiver</code> / <code>_install_borrow_locks</code> /
-<code>_get_dotted_path_tuple</code> / <code>_check_not_locked</code> in
-<code>src/ztypecheck.py</code>.</p>
+<p>Key code: <code>tryLock</code> / <code>findExclusiveLock</code> /
+<code>lockAcquireConflict</code> in <code>src/zenv.z</code>; <code>lockCallArg</code> /
+<code>installBorrowLocks</code> and the path-tuple builders and access-check
+helpers in <code>src/ztypecheck.z</code>.</p>
 <p>All parameters default to <code>.borrow</code> regardless of type family.
 For valtypes, <code>.borrow</code> means a copy (no lock, source not invalidated).
 For reftypes, <code>.borrow</code> means a reference (source not invalidated).
@@ -462,61 +460,51 @@ pass-by-value so identity-based locking is meaningless. Generic type
 parameters are exempt because they may monomorphize to a reftype.</p>
 <h3 id="numeric-literal-coercion"><a href="#numeric-literal-coercion">7.6. Numeric Literal Coercion</a></h3>
 <p>Bare numeric literals are typed as one of two compiler-internal
-singletons during typecheck: <code>LITERAL_INT</code> or <code>LITERAL_FLOAT</code>
-(both flagged <code>is_literal=True</code> on <code>ZType</code>). Constant expressions
+singletons during typecheck: <code>literalInt</code> or <code>literalFloat</code>
+(both flagged <code>isLiteral</code> on <code>ZType</code>). Constant expressions
 built from them stay literal-typed too &#x2014; the binop folder operates at
-unbounded Python-int precision when both operands are literal, with no
-intermediate range check. A LITERAL_INT only becomes a concrete numeric
+unbounded integer precision when both operands are literal, with no
+intermediate range check. A <code>literalInt</code> only becomes a concrete numeric
 when one of the following fires:</p>
 <ul>
-<li><em><strong>Typed-location coercion</strong></em> via <code>_coerce_literal</code> /
-<code>_coerce_literal_by_id</code> in <code>src/ztypecheck.py</code>. The helper reads
-<code>node_const_value</code>, applies the rule appropriate to the
-source/target combination (int&#x2192;int range check via
-<code>NUMERIC_RANGES</code>; int&#x2192;float exact mantissa via
-<code>int_fits_float</code>; float&#x2192;float round-trip via
-<code>float_fits_float</code>; float&#x2192;int rejected outright), and on
-success rewrites <code>node_type</code> to the target. Wired sites: call
-arguments (<code>_check_call_arguments</code>), function implicit return
-(<code>_check_function_body_inner</code>), reassignment RHS
-(<code>_check_reassignment_inner</code>), match-arm numeric patterns
-(<code>_check_case_inner</code>), if-/match-expression branch unification
-via <code>_unify_literal_branches</code>.</li>
-<li><em><strong>Bind-site materialisation</strong></em> via <code>_materialise_literal</code>.
-Called from <code>_check_assignment_inner</code> and
-<code>_resolve_unit_name</code> so a literal-typed RHS never escapes into
-long-lived storage (<code>ZVariable.ztype</code>,
-<code>TypeChecker._resolved</code>). Also wired into generic-arg
-inference (<code>_infer_generic_function_call</code>,
-<code>_infer_generic_record_construction</code>,
-<code>_infer_generic_union_construction</code>,
-<code>_check_box_construction</code>) so the monomorphization key is keyed
+<li><em><strong>Typed-location coercion</strong></em> via the literal-coercion helpers
+in <code>src/ztypecheck.z</code>. The helper reads <code>nodeConst</code>, applies
+the rule appropriate to the source/target combination (int&#x2192;int
+range check; int&#x2192;float exact mantissa; float&#x2192;float round-trip;
+float&#x2192;int rejected outright), and on success rewrites <code>nodeType</code>
+to the target. Wired sites: call arguments (<code>checkCall</code>),
+function implicit return (<code>checkFunctionBody</code>), reassignment RHS
+(<code>checkReassignment</code>), match-arm numeric patterns
+(<code>checkCase</code>), and if-/match-expression branch unification.</li>
+<li><em><strong>Bind-site materialisation</strong></em> via <code>materialiseLiteral</code>.
+Called from <code>checkAssignment</code> and unit-name resolution so a
+literal-typed RHS never escapes into long-lived storage
+(<code>ZVariable.ztypeId</code>, the resolution cache). Also wired into
+generic-arg inference (<code>inferGenericConstruction</code>,
+<code>checkBoxConstruction</code>) so the monomorphization key is keyed
 on the concrete default (e.g. <code>id_i64</code>, not
 <code>id_literal_int</code>).</li>
-<li><em><strong>Default-resolution late pass</strong></em> <code>_resolve_literal_defaults</code>,
-invoked from the module-level <code>typecheck()</code> entry point after
-<code>check()</code> returns. Walks <code>Typing.node_type</code> and blindly
-replaces any remaining literal-typed entry with its concrete
-default (<code>i64</code> for <code>LITERAL_INT</code>, <code>f64</code> for
-<code>LITERAL_FLOAT</code>). No range check fires here &#x2014; that is the
-coercion sites' job. Guarantees the emitter never sees a literal
-pseudo-type.</li>
+<li><em><strong>Default-resolution late pass</strong></em> -- a final walk invoked from
+the module-level <code>typecheck</code> entry point after resolution
+returns. Walks <code>ZTyping.nodeType</code> and blindly replaces any
+remaining literal-typed entry with its concrete default
+(<code>i64</code> for <code>literalInt</code>, <code>f64</code> for <code>literalFloat</code>). No
+range check fires here &#x2014; that is the coercion sites' job.
+Guarantees the emitter never sees a literal pseudo-type.</li>
 </ul>
 <p>Method dispatch on literal-typed receivers (e.g. <code>5.iterate</code>)
-follows the existing <code>typedef_base</code> walk. <code>_link_literal_typedefs</code>
-runs at the start of <code>check()</code> and points
-<code>LITERAL_INT.typedef_base = &lt;i64&gt;</code> and
-<code>LITERAL_FLOAT.typedef_base = &lt;f64&gt;</code>, so the operator-method lookup
-in <code>_check_binop_inner</code> and child-name lookups elsewhere resolve
-through the concrete type without per-site <code>is_literal</code> guards.</p>
-<p><code>_types_compatible</code> treats literal-vs-concrete-numeric as
+follows the existing <code>typedefBaseId</code> walk. An early pass points
+<code>literalInt.typedefBaseId</code> at <code>i64</code> and
+<code>literalFloat.typedefBaseId</code> at <code>f64</code>, so the operator-method
+lookup in <code>checkBinop</code> and child-name lookups elsewhere resolve
+through the concrete type without per-site <code>isLiteral</code> guards.</p>
+<p><code>typesCompatible</code> treats literal-vs-concrete-numeric as
 structurally compatible so multi-arm constructs unify cleanly; the
 range check happens at the typed-location coercion sites, not in the
 compat check.</p>
-<p>Three pre-existing typechecker gaps cover the remaining sites the
-original design called out &#x2014; record/class field-init type validation,
-data-block element type unification, and separable parameter defaults
-&#x2014; and are tracked separately from this work.</p>
+<p>Three typechecker gaps cover the remaining sites: record/class
+field-init type validation, data-block element type unification, and
+separable parameter defaults.</p>
 <h3 id="type-narrowing"><a href="#type-narrowing">7.7. Type Narrowing</a></h3>
 <p>Type narrowing for union and variant types is tracked through scope-based
 overlay entries. When a match arm narrows a variable to a specific subtype,
@@ -533,37 +521,34 @@ marked unreachable and subsequent statements are reported as dead code.</p>
 <h3 id="synthesis-toolkit"><a href="#synthesis-toolkit">7.8. Synthesis Toolkit</a></h3>
 <p>The type checker may need to introduce nodes that did not appear in
 the parsed source -- temporaries introduced by per-call argument
-hoisting, equality functions auto-generated from a type definition,
-and any future ANF / SSA rewrites. Those nodes are created through a
-small toolkit in <code>src/zsynth.py</code>:</p>
+hoisting and the generator-lowering rewrites. These nodes are
+synthesised inline in <code>src/ztypecheck.z</code> (there is no separate
+synthesis module):</p>
 <ul>
-<li>FreshNamer -- monotonic per-typechecker temp namer.
-Returns names of the form <code>_t0</code>, <code>_t1</code>, ... in the order they
-are requested. The monotonicity matters: tests rely on the
-numeric suffix to assert source-order evaluation of call
-arguments.</li>
-<li>make_atom_id,  make_assignment -- helpers that build
-AST nodes with the right node-id allocation, source location
-defaulting, and <code>synth_origin</code> stamping. Direct construction
-of nodes outside the toolkit is discouraged because it bypasses
-these defaults.</li>
-<li>register_synth_var -- registers a synth temp's
-<code>ZVariable</code> in the current symbol-table scope so downstream
-resolution finds it. Used in tandem with <code>make_assignment</code> to
-install a hoisted temp.</li>
+<li>Fresh temp names -- a monotonic counter,
+<code>ZTyping.nextTempId</code>, yields names of the form <code>_t0</code>, <code>_t1</code>,
+... in the order they are requested. The monotonicity matters:
+tests rely on the numeric suffix to assert source-order evaluation
+of call arguments.</li>
+<li>Node construction -- synthesised AST nodes are built with a
+fresh node id, a defaulted source location, and a <code>synthOrigin</code>
+stamp.</li>
+<li>Symbol-table registration -- a synth temp's <code>ZVariable</code>
+is registered in the current scope so downstream resolution finds
+it.</li>
 </ul>
-<p>Every synthesised node carries a <code>synth_origin: str</code> field on the
-<code>Node</code> base class (and on <code>ZVariable</code> in the symbol table). The
-field names the rewrite that introduced the node (for example,
-<code>"anf"</code> for per-call argument hoisting). The field is persisted
-in the SQL dump (<code>src/zsqldump.py</code>) so rewrite provenance survives
-into post-mortem inspection.</p>
+<p>Every synthesised node carries a <code>synthOrigin</code> field (and
+<code>ZVariable</code> carries one in the symbol table). The field names the
+rewrite that introduced the node (for example, <code>"anf"</code> for
+per-call argument hoisting). It is persisted in the SQL dump
+(<code>src/zsqldump.z</code>) so rewrite provenance survives into post-mortem
+inspection.</p>
 <p>Current consumers:</p>
 <ul>
-<li><code>_hoist_arg</code> in <code>src/ztypecheck.py</code> -- per-call atomic
+<li><code>hoistArg</code> in <code>src/ztypecheck.z</code> -- per-call atomic
 processing rewrites every non-trivial call argument to a synth
 temp inside a per-call sub-scope. See
-<code>doc/ownership.pdoc:Per-Call Atomic Processing</code> for the model.</li>
+<code>docs/ownership.pdoc:Per-Call Atomic Processing</code> for the model.</li>
 </ul>
 <h2 id="code-generator"><a href="#code-generator">8. Code Generator</a></h2>
 <p>The code generator (C emitter) walks the fully typed AST and emits C source
@@ -578,35 +563,34 @@ forward declarations, function typedefs, function bodies, and a <code>main()</co
 entry point. Each section is collected separately and assembled at the end.</p>
 <h3 id="c-name-generation"><a href="#c-name-generation">8.1. C Name Generation</a></h3>
 <p>Every C identifier is computed once, by the type checker, and stored on the
-entity it names: a type's <code>cname</code> / <code>cname_base</code>, a variable's
-<code>ZTyping.variable_cname</code>, and the protocol/facet helper names on the
+entity it names: a type's <code>cname</code> / <code>cnameBase</code>, a variable's
+<code>ZTyping.variableCname</code>, and the protocol/facet helper names on the
 <code>ZConformance</code> entity. The emitter only <strong>reads</strong> these stored names (or
-composes a sibling helper from <code>cname_base</code> -- the <code>_emit_autogen_eq</code>
-idiom); it never derives a <code>z_</code> identifier itself. The two shared, canonical
-manglers <code>mangle_func_name</code> and <code>mangle_var_name</code> (in <code>src/ztypes.py</code>)
-handle the residual sites that carry only a name string: natives, constant and
-data symbols, for-loop bindings, and synthesised wrapper parameters. This
-separation is enforced by <code>bootstrap-lint</code> ratchets that pin both the inline
-z-identifier derivations and the emitter-local name manglers in
-<code>src/zemitterc.py</code> at zero.</p>
+composes a sibling helper from <code>cnameBase</code>); it never derives a <code>z_</code>
+identifier itself. The two shared, canonical manglers <code>mangleFuncName</code> and
+<code>mangleVarName</code> (in <code>src/ztypes.z</code>) handle the residual sites that carry
+only a name string: natives, constant and data symbols, for-loop bindings, and
+synthesised wrapper parameters. This separation is enforced by
+<code>bootstrap-lint</code> ratchets that pin both the inline z-identifier derivations
+and the emitter-local name manglers in <code>src/zemitterc.z</code> at zero.</p>
 <h2 id="id-based-naming"><a href="#id-based-naming">9. Id-based naming</a></h2>
 <p>A type's (and a non-native function's) cname embeds its monotonic id right after
 the <code>z_</code> namespace prefix: <code>z_t{type_id}_&lt;mangled&gt;</code> (so the type
 <code>point</code> with id 525 becomes <code>z_t525_point_t</code>, its <strong>add</strong> method
 <code>z_t527_point_add</code>). Because the id is unique by construction, names cannot
-collide -- there is no dedup set and no on-collision suffix; <code>_assign_cname</code>
+collide -- there is no dedup set and no on-collision suffix; <code>cnameOf</code>
 just splices the id in. The id goes <strong>after</strong> <code>z_</code> so the emitter's
 <code>z_</code>-prefix / <code>_t</code>-suffix shape checks and <code>cname_base</code>-derived helper
 names keep working unchanged. Two kinds of symbol stay <strong>canonical</strong>
 (un-id'd): the hand-written runtime ABI -- native functions (<code>z_io_open</code>,
 <code>z_String_create</code>, ...) and the C entry point <code>z_main</code> -- and local
-variables (<code>mangle_var_name</code>); embedding a variable id is a separate,
+variables (<code>mangleVarName</code>); embedding a variable id is a separate,
 not-yet-applied step.</p>
-<p>The hand-written runtime (<code>src/runtime/*.inc</code> / <code>*.c.tmpl</code> and inline C in
-<code>zemitterc_runtime.py</code>) is authored with the <strong>canonical</strong> type spelling
-<code>z_&lt;Name&gt;</code>. A single <code>_substitute_runtime_cnames</code> pass over the emitted
-output rewrites each canonical spelling to the id-named <code>cname_base</code> recorded
-in <code>ZTyping.canonical_cname_base</code> (longest-canonical first, so <code>z_String</code>
+<p>The hand-written runtime (<code>src/runtime/*.inc</code> / <code>*.c.tmpl</code> /
+<code>src/runtime/natives/</code>) is authored with the <strong>canonical</strong> type spelling
+<code>z_&lt;Name&gt;</code>. A single <code>substituteAll</code> pass over the emitted
+output rewrites each canonical spelling to the id-named <code>cnameBase</code> recorded
+in <code>ZTyping.canonicalCnameBase</code> (longest-canonical first, so <code>z_String</code>
 is rewritten after <code>z_StringView</code>). Emitter-generated code already carries
 id-named names, so the pass is a no-op there; pure-C helpers (<code>z_panic</code>,
 <code>z_xmalloc</code>, <code>z_siphash_*</code>) have no entry and are untouched.</p>
@@ -624,13 +608,13 @@ id-named names, so the pass is a no-op there; pure-C helpers (<code>z_panic</cod
 <h3 id="memory-management"><a href="#memory-management">9.2. Memory Management</a></h3>
 <p>The emitter implements ownership-based memory management without a garbage
 collector.</p>
-<p>String values (<code>ZStr*</code>) are heap-allocated and freed via <code>zstr_free()</code>.
-Class instances are heap-allocated via <code>malloc()</code> and freed via generated
-<code>z_&lt;type&gt;_destroy()</code> functions that recursively free owned fields.</p>
+<p>String data buffers are heap-allocated and freed via <code>z_String_free()</code>.
+Class instances with owned fields are freed via generated
+<code>z_&lt;type&gt;_destroy()</code> functions that recursively free those fields.</p>
 <p>The emitter tracks variables that need cleanup in a per-function scope. At
 scope exit (function return or fall-through), all owned variables are destroyed
-in reverse declaration order. Each type carries <code>needs_destructor</code>,
-<code>destructor_name</code>, and <code>is_heap_allocated</code> metadata set by the type
+in reverse declaration order. Each type carries <code>needsFieldCleanup</code>,
+<code>destructorName</code>, and <code>isHeapAllocated</code> metadata set by the type
 checker, so the emitter delegates cleanup decisions to the type system.</p>
 <p>Temporary values (intermediate results within a statement) are tracked
 separately and freed at the end of each statement. When a temporary is

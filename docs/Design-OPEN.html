@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Zero Language Design-OPEN</title>
+<title>Zerolang Open Design Questions</title>
 <link rel="stylesheet" href="style/zerolang.css">
 <link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
 <link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
@@ -72,72 +72,24 @@
 
 </nav>
 <header>
-<h1 id="zero-language-design-ideas-under-consideration"><a href="#zero-language-design-ideas-under-consideration">Zero Language Design Ideas Under Consideration</a></h1>
+<h1 id="open-design-questions"><a href="#open-design-questions">Open Design Questions</a></h1>
 </header>
 <nav class="toc-sidebar" id="toc">
 <div id="tocfile">
 Table of Contents</div>
 
 <ul>
-<li><a href="#zero-language-design-ideas-under-consideration">Zero Language Design Ideas Under Consideration</a>
+<li><a href="#open-design-questions">Open Design Questions</a>
 <ul>
-<li><a href="#why-generators-yield">Why Generators/yield?</a>
-</li>
-<li><a href="#idea-deduplication-of-functions">IDEA: deduplication of functions</a>
-</li>
-<li><a href="#note-destructors">NOTE: Destructors</a>
-</li>
-<li><a href="#note-when-does-the-compiler-forget-the-actual-type-of-an-expression">NOTE: when does the compiler 'forget' the actual type of an expression</a>
-</li>
-<li><a href="#idea-match-can-also-dissect-a-generic-field">IDEA: match can also dissect a generic field?</a>
-</li>
-<li><a href="#default-values-landed">Default values -- LANDED</a>
-</li>
 <li><a href="#enum">enum</a>
 </li>
-<li><a href="#idea-vs">IDEA:  vs </a>
+<li><a href="#compile-time-numeric-constant-types">compile-time numeric constant types</a>
 </li>
-<li><a href="#note-public-private">NOTE: public / private</a>
+<li><a href="#single-constructor-for-unions">single  constructor for unions</a>
 </li>
-<li><a href="#todo-sugar">TODO: sugar</a>
+<li><a href="#meta-namespace">meta namespace</a>
 </li>
-<li><a href="#todo-compiler-generated-methods">TODO: compiler generated methods</a>
-</li>
-<li><a href="#todo-coercion">TODO: coercion</a>
-</li>
-<li><a href="#todo-type-alias-vs-new-type">TODO: type alias vs new type</a>
-</li>
-<li><a href="#what-can-be-generic">What can be generic?</a>
-</li>
-<li><a href="#generic-protocol">Generic Protocol</a>
-</li>
-<li><a href="#cast-to-compile-time-numeric-constant">cast to compile time numeric constant</a>
-</li>
-<li><a href="#memory-format-runtime-format-note">Memory format / runtime format (NOTE)</a>
-<ul>
-<li><a href="#class">class</a>
-</li>
-<li><a href="#record-and-other-valtypes">record (and other valtypes)</a>
-</li>
-<li><a href="#union">union</a>
-</li>
-<li><a href="#variant">variant</a>
-</li>
-<li><a href="#list">list</a>
-</li>
-<li><a href="#protocol-facet">protocol / facet</a>
-</li>
-</ul>
-</li>
-<li><a href="#idea-meta-namespace">IDEA: meta namespace</a>
-</li>
-<li><a href="#idea-pointers-ownership-give-take-on-valtypes">IDEA: Pointers, ownership, give/take on valtypes</a>
-</li>
-<li><a href="#think-higher-kinded-types">THINK: Higher kinded types?</a>
-</li>
-<li><a href="#think-checklist">THINK: checklist</a>
-</li>
-<li><a href="#think-how-to-typecheck">THINK: how to typecheck?</a>
+<li><a href="#higher-kinded-types">higher-kinded types?</a>
 </li>
 </ul>
 </li>
@@ -145,142 +97,19 @@ Table of Contents</div>
 
 </nav>
 <main id="content">
-<p>Language design ideas &#x2014; historical context for proposals discussed
-during early language design. Sections describe the original proposal;
-where the work has since landed, an inline  RESOLVED paragraph at
-the top of the section notes the current state and the source-of-truth
-doc (typically <code>doc/spec.pdoc</code> or <code>doc/ownership.pdoc</code>). Sections
-without that marker remain open or under discussion.</p>
-<h2 id="why-generators-yield"><a href="#why-generators-yield">1. Why Generators/yield?</a></h2>
-<ul>
-<li>used because need a way to enforce ownership during iteration/generation</li>
-<li>generators are composable</li>
-<li>yield is nice to turn functions 'inside out' which simplifies some algorithms</li>
-</ul>
-<p>Against:</p>
-<ul>
-<li>need another keyword. <code>generator</code>. No, do it another way</li>
-</ul>
-<h2 id="idea-deduplication-of-functions"><a href="#idea-deduplication-of-functions">2. IDEA: deduplication of functions</a></h2>
-<p> RESOLVED: function deduplication via AST hashing is implemented
-for monomorphized generic functions. See <code>MonoState.func_hashes</code>
-and <code>func_aliases</code> in <code>src/ztypecheck.py</code>; AST hashing in
-<code>src/zasthash.py</code>. Generic numeric arguments (the original
-motivation below) share output when they don't drive code shape.
-General (non-generic) function dedup is not implemented and not
-currently planned &#x2014; generic dedup covers the practical case.</p>
-<p>Have a way for function definitions to be deduplicated by detecting functions
-that generate identical AST's.</p>
-<p>Good for allowing generics over ints for example. If the function doesn't rely
-on the actual value of the int, it will generate the same AST so can be shared
-for those calls.</p>
-<pre><code class="language-zerolang"># i is a generic int (u8)
-# it must be specified as a constant at the top level
-# AST will be templated (?) for that constant to create actual function def
-# if function 'hash' already exists, use existing one and throw away the one
-#   just generated.
-# In the end, there will be one unique function for ints below 100 and one for
-# the rest
-myfunc: function { i: generic u8 } out u8 is {
-    if i &gt; 100 then {
-        io.print i
-    }
-    return i
-}
-
-# could be done for all functions:
-func1: function { i: int } out int is {
-    io.print i
-    return i
-}
-func2: function { i: int } out int is {
-    io.print i
-    return i
-}
-
-# func1 and func2 would be seen to be the same and would only output 1 shared
-# implimentation.</code></pre>
-<p>Need a way to create a canonical hash of an AST subtree. Internal variable
-names would need to be normalised (is this worth the effort? Probably skip this
-part.</p>
-<p>BUT!!!!!, numerical and enum generic values should somehow still be passed as
-(constant) variables so that there is not an explosion of output. ie. if the
-function definition does not generate different code based on the value, then
-all values should generate and share the same function AST. Maybe need the
-author to write this in a correct way for this to happen, eg. see generic
-array deduplication below - need to pass a parameter of this type...</p>
-<h2 id="note-destructors"><a href="#note-destructors">3. NOTE: Destructors</a></h2>
-<p>Definition: a destructor destroys all external children of an object, not the
-object itself. For valtypes, there are no external children so there is no
-destructor and the parent is responsible for destruction. For reftypes, the
-object itself is a pointer so destroying a reftype destroys everything except
-the pointer and the parent is responsible for destroying the pointer. A 'list'
-for reftypes, is a list of pointers.</p>
-<p>No user defined destructors ? Only finalizers?</p>
-<p>Finalizers can only be defined on reftypes? valtypes can be copied and do not
-have identity.</p>
-<p>Destructing an owned protocol instance: xxx</p>
-<p>Destructing an borrowed protocol instance: xxx</p>
-<p>Destructing a union instance: xxx</p>
-<p>To destroy a reftype, the compiler must generate a custom destructor for each
-reftype defined. The destructor will:</p>
-<ul>
-<li>call the finalize method on the parent object (if it exists). This has to be
-    done first so that the object and its children are still in a valid state</li>
-<li>recursively destroy each child reftype stored in fields in this reftype</li>
-<li>deallocate the memory for this object (the parent object itself)</li>
-</ul>
-<p>The destructor must be stored in the reftype? At offset 0? NOOO, not if we know
-the real type. For protocol instances, the destructor must be stored</p>
-<h2 id="note-when-does-the-compiler-forget-the-actual-type-of-an-expression"><a href="#note-when-does-the-compiler-forget-the-actual-type-of-an-expression">4. NOTE: when does the compiler 'forget' the actual type of an expression</a></h2>
-<p>When does the compiler not know the specific type of an object (at least,
-without generating a runtime check). This complicates destruction.</p>
-<ul>
-<li>owned interface instance</li>
-<li>union type (but not variant: even though we don't know specific type, we know
-    the amount of memory it is using (the biggest member) and it has not external
-    pointers so we can just deallocate the full block.)</li>
-<li>list - when know the type, but we don't know the actual capacity. The list
-    needs to know how to destroy itself.</li>
-</ul>
-<h2 id="idea-match-can-also-dissect-a-generic-field"><a href="#idea-match-can-also-dissect-a-generic-field">5. IDEA: match can also dissect a generic field?</a></h2>
-<p> RESOLVED: match on union/variant subtypes is implemented with
-type narrowing per arm (<code>SymbolTable.narrow</code> /
-<code>SymbolTable.exclude</code> in <code>src/zenv.py</code>; per-arm
-<code>narrowed_subtype</code> stamping in <code>src/ztypecheck.py</code>). The
-narrowed-subtype state dumps to the <code>narrowed_subtype</code> SQL table.</p>
-<p>Yes.</p>
-<p>This would result in only the hot path being included in the generated code for
-each particular type.</p>
-<p>RHS for each arm would be the type name (could have several dots if in another
-module). RHS would NOT have generic fields (? correct?) so don't need 'call'
-syntax for fully specified types.</p>
-<h2 id="default-values-landed"><a href="#default-values-landed">6. Default values -- LANDED</a></h2>
-<p>Moved to <a href="./spec.html">./spec.html</a>spec.pdoc. The finalized
-rules:</p>
-<p>- Numeric and function-reference (function-with-body) defaults --
-  already shipping pre-landing.
-- Variant / union subtype defaults -- only null-payload arms,
-  qualified `Type.arm` form, both `variant` and `union` types
-  eligible.
-- Generic-param type defaults via `(&lt;constraint&gt;.generic default:
-  &lt;T&gt;)` -- already shipping; the default now runs through the
-  same constraint check user-supplied bindings face at call
-  sites.
-- In-class method-reference defaults for class and record fields
-  (`instancemethod: method1`) -- the field's stored type is the
-  referenced method's FUNCTION signature, the default value is
-  the address of the method, and the slot is reassignable so the
-  field can be used as a swappable behaviour hook. Non-generic
-  types only.</p>
-<h2 id="enum"><a href="#enum">7. enum</a></h2>
-<p>Enums are unions or variants with no additional data. If a value is supplied,
-it must fit into the <code>tag</code> type for that object. If a value is not supplied,
-all subelements must be none.</p>
-<p>TODO: how to differentiate between a static value that can be used as the tag
-or a default value for the constructor of that subtype? Can't? 'tag' should be
-the enum? But then how to specify the subelements? Would need to be special
-syntax... Use <code>data</code>: data can have named members...</p>
+<p>Open design questions -- ideas that have been considered but are not yet
+decided or implemented. None of them describe shipped behaviour; they are
+kept so the thinking isn't lost. For the language as it currently exists,
+see <a href="./spec.html">the specification and</a>
+<a href="./ownership.html">the ownership model.</a></p>
+<h2 id="enum"><a href="#enum">1. enum</a></h2>
+<p>Enums today are unions or variants whose subtypes carry no data (see the
+<code>case</code> example in <code>examples/</code>). The open question is value-carrying tags:
+if a value is supplied it must fit into the <code>tag</code> type for that object; if no
+value is supplied, all subelements must be none.</p>
+<p>How do we differentiate between a static value usable as the tag and a default
+value for the constructor of that subtype? One option is to drive the tag type
+from a <code>data</code> block (which can have named members):</p>
 <pre><code class="language-zerolang">t: data { FIRST: 1 SECOND: 2 THIRD: 3 }
 
 myenum: variant {
@@ -306,262 +135,18 @@ myenum3: variant {
   SECOND: 2
   THIRD: 3
 }</code></pre>
-<h2 id="idea-vs"><a href="#idea-vs">8. IDEA: <code>is</code> vs <code>as</code></a></h2>
-<p> RESOLVED: <code>is</code>/<code>as</code> clauses are core syntax. <code>is</code> carries
-instance fields/subtypes; <code>as</code> carries shared functions, generic
-parameters, and implemented protocols. See <code>doc/grammar.pdoc</code> and
-<code>doc/spec.pdoc</code> for the normative form. The text below is the
-original design discussion that motivated the split.</p>
-<p>An <code>item</code> can have an <code>is</code> clause and optionally an <code>as</code> clause. (TODO: can
-have <code>as</code> clause by itself? - would be the same as a <code>unit</code>? no)</p>
-<p><code>is</code> specifies the contents of the object instance.</p>
-<p><code>as</code> specifies shared functionality and data for an instance (but all shared
-data must be static and can only be valtypes). Also, interfaces listed here
-signify that the object supports that interface (whereas if they were in the
-<code>is</code> clause, they would signify the type of that field in the instance).</p>
-<p>If <code>as</code> lists any generic fields, they must be specified first to make the
-definition 'concrete' before instances can be constructed (eg. (mything
-int).create) -- the declaration is then like a template. If <code>is</code> lists generic
-fields, they must be specified as fields in the constructor. Units can only
-list generics in <code>as</code> because they have no <code>is</code>.</p>
-<p>The items in <code>is</code> and <code>as</code> both share the same namespace.</p>
-<p>For record/class:</p>
-<ul>
-<li><code>is</code> has the fields of each instance. It can specify generic fields (which do
-not take any memory in the instance). Functions can be specified here but
-there will be a copy of the function reference in each instance, so this
-should only be used when the function is to be changed at runtime. All other
-declarations here are field member names, their types and optionally, their
-default values.</li>
-<li><code>as</code> has shared function definitions optionally including the custom
-constructor(s). Can have 'template' generic fields. Named interface
-references to interface definitions or inline interface definitions, indicate
-that this object supports that interface - and become converter functions on
-instances to convert that instance to that interface type at runtime (result
-will be a <code>borrow</code> and will <code>lock</code> 'this'). Any other fields here are static
-valtype fields that are shared across all instances and are readonly.</li>
-</ul>
-<p>For variant/union:</p>
-<ul>
-<li><code>is</code> has the list of childtypes for this sum-type (only one of which is
-'active' in each instance at runtime). Can have generic fields which then
-must be declared/specified in the implementor.</li>
-<li><code>as</code> has shared function definitions. CANNOT include any constructors
-(compiler will generate constructors for each child type). Can have
-'template' generic fields. Can list interfaces supported by this object (for
-all child types). Any other fields here are static valtype fields that are
-shared across all instances and are readonly.</li>
-</ul>
-<p>For protocol/variant:</p>
-<ul>
-<li><code>is</code> has the list of function specs of this interface, equivalent to the
-shared runtime table created for each instance that supports this interface.
-At runtime, interface instances are created that hold a reference to this
-shared method table and a reference to the underlying instance (or for
-valtypes, a copy of the instance data itself).</li>
-<li><code>as</code> has shared function definitions that may ONLY refer to fields in both
-the <code>is</code> and <code>as</code> clauses. A protocol/variant can also implement another
-interface by listing it here that becomes a converter function (same as
-record/class). Any other fields here are static valtype fields that are
-shared across all instances and are readonly. CANNOT include any contructors
-- the compiler will generate a constructor that will <code>take</code> its argument and
-returns an owned interface instance.</li>
-</ul>
-<h2 id="note-public-private"><a href="#note-public-private">9. NOTE: public / private</a></h2>
-<p> RESOLVED: public/private access control is implemented.
-<code>ZType.public_members</code> stores the public name map; private
-access is checked in <code>src/ztypecheck.py</code> with
-<code>ExprResult.is_private_access</code> flowing through dotted-path
-resolution. See <code>doc/spec.pdoc</code> for the normative model.</p>
-<p><code>public</code> is an automatically defined unit (if not specified) that includes all
-members in the current <code>item</code> or <code>unit</code>.</p>
-<p>If specified explicitly, it is done so in the <code>as</code> section of the item. For
-items that can be instantiated, the public specifier applies to <em><strong>both</strong></em>
-the item namespace ('classmethods/fields') and to the instance namespace.</p>
-<p>If you would like to make the publicly accessible namespace of the 'class'
-different from the public instance methods/fields, then hide that item
-definition in the containing unit (by not including it in the unit's public
-interface), then make a subunit that specifies and links to each static element
-in the item definition that you want to make public. The caller can then use
-this subunit to access the constructor etc.</p>
-<pre><code class="language-zerolang">MyObject: unit {
-  Myobject_internal: class {
-    # ...
-  } as {
-    # constructors
-    create: function out this is { } # ...
-    create2: function out this is { } # ...
-
-    # other misc methods
-    mymethod1: function in { :this } out xxx is { } # ...
-    mymethod2: function in { :this } out xxx is { } # ...
-    mymethod3: function in { :this } out xxx is { } # ...
-  }
-
-  public: unit {
-    create: Myobject_internal.create
-    create2: Myobject_internal.create2
-  }
-}
-
-# access the constructors...
-x: MyObject.create
-y: MyObject.create2
-
-# can call methods on instances...
-
-x.mymethod1
-
-# error, cannot access methods that were not exposed in the unit...
-# MyObject.mymethod1 x # error</code></pre>
-<p><code>private</code> is also automatically defined to have all members in the current
-item. It cannot be redefined.</p>
-<p>In parameter types, <code>public</code> could be specified but it should noe (it is the
-default). Both <code>public</code> and <code>private</code> are zero overhead operations - a protocol
-instance is not contructed, just the type system is modified. Both <code>public</code> and
-<code>private</code> (and all interfaces supported by an object) can have an ownership
-subspecifier eg. MyClass.private.lock, (or .take or .borrow)</p>
-<h2 id="todo-sugar"><a href="#todo-sugar">10. TODO: sugar</a></h2>
-<p> Type-in-callable-position construction (`mytype args...` as shorthand
-for `mytype.create args...`) and callable-instance dispatch (`mything
-args...` dispatches to `mything.call` when `mything` has a `call`
-method) are now normative and documented in the spec. See
-<code>doc/Spec.pdoc</code> section "Implicit Construction" under the Constructor
-section. Disabling the default constructor via <code>create: null</code> is
-documented in the same section.</p>
-<p>Remaining sugar items:</p>
-<ul>
-<li>binding to an instance in a <code>for</code> where that instance has an <code>iterate</code> method
-    that returns an iterator that takes no argument, is equivalent to calling
-    that <code>iterate</code> method before any iteration has begun and then using that
-    returned iterator before each iteration. eg. <code>for i: myiterable</code> is
-    equivalent to <code>with _x: myiterable.iterate for i: _x</code> (<code>_x</code> is an example
-    only and will actually be a compiler generated reference that is not
-    otherwise accessible)</li>
-<li>(this is not really sugar but compiler added attributes. see also <code>take</code>,
-    <code>borrow</code>, <code>lock</code>, <code>limit</code>, <code>generic</code>). Item definitions implicitly have
-    'public' and 'private' as members that expose the public interface (as
-    defined with the <code>as</code> keyword) and the private interface (all methods/fields
-    of an item). 'private' is only accessable from within the item definition,
-    although external 'friend' methods and items can declare that they support
-    'item.private' and methods of the orginal item can call/instantiate those
-    functions/items. If those friend methods/items return a borrowed item, then
-    the original item is locked... iterators can be implimented this way</li>
-<li>Generators with <code>yield</code> is the largest 'sugar'. It creates an entire compiler
-    generated class/record to turn the yielding function 'inside out'</li>
-</ul>
-<h2 id="todo-compiler-generated-methods"><a href="#todo-compiler-generated-methods">11. TODO: compiler generated methods</a></h2>
-<p> RESOLVED: the default <code>create</code> constructor and the valtype
-<code>==</code> / <code>!=</code> operators are auto-generated. See
-<code>doc/spec.pdoc</code> "Implicit Construction" and the
-<code>create</code>/<code>meta.create</code> routing in <code>src/ztypecheck.py</code>.
-Other auto-generation (e.g. <code>hash</code>, <code>copy</code>) is not currently
-planned.</p>
-<p>The compiler generates some methods automatically if they are not defined
-or explicitly removed. For the <code>create</code> constructor see <code>doc/Spec.pdoc</code>
-section "Implicit Construction" (disabled via <code>create: null</code> rather
-than the older <code>name: none</code> form). Remaining auto-generated methods:</p>
-<ul>
-<li><code>==</code>: predefined for value types, same value (memory contents) is equal</li>
-</ul>
-<h2 id="todo-coercion"><a href="#todo-coercion">12. TODO: coercion</a></h2>
-<p>Can coerce at:</p>
-<ul>
-<li>function argument boundary</li>
-<li>operation (RHS only can be coerced)</li>
-<li>return (and yield)</li>
-</ul>
-<p>Can coerce to:</p>
-<ul>
-<li>losslessly to a "larger" number type (more bits, careful with floats (never
-    coerce to a float?).</li>
-<li>from unsigned to signed (if more bits)</li>
-<li>NOT into a interface type (where the provided type implements that protocol)
-    Must explicitly pass parent.protocolname</li>
-<li>into a union/variant type (where the provided type is unambigiously one of
-    the members). So can 'return ...' where the return type is an Optional
-    (NO? always explicitly create the union/variant?)</li>
-<li>into a 'free' variable from a 'owned' variable. If a parameter to a function
-    is a <code>take</code> parameter, the argument in the caller is automatically converted
-    to a 'free' item (<code>take</code> is effectively automatically inserted). That will
-    take ownership from a var in the caller even if not explicitly granted.
-    Caller can still optionally use the <code>take</code> type to make this explicit.</li>
-</ul>
-<p>Can coerce from:</p>
-<ul>
-<li>an explicitly typed and named object</li>
-<li>an anonymous object (result of a for/if/do or function call)</li>
-</ul>
-<h2 id="todo-type-alias-vs-new-type"><a href="#todo-type-alias-vs-new-type">13. TODO: type alias vs new type</a></h2>
-<p> RESOLVED: <code>typedef</code> is implemented (record-style with
-<code>is native</code> body, supporting <code>from: any.generic</code>). See
-<code>doc/spec.pdoc</code> for the normative form. The distinction below
-between "alias" and "new type" is decided: a top-level assignment
-creates an alias; <code>record</code> / <code>class</code> with a single field
-creates a new type.</p>
-<p>A top level declaration can create a new name for an existing type just by
-creating a new name and referring to the old type on the rhs.</p>
-<p>int: system.int</p>
-<p>But this does not create a new type just an alias typically used to shorten
-references to that type in the current module.</p>
-<p>A new type can be created by using the class or record keyword with a single
-'is' element.</p>
-<h2 id="what-can-be-generic"><a href="#what-can-be-generic">14. What can be generic?</a></h2>
-<p> RESOLVED: generics for function / class / record / union /
-variant / protocol / facet are all implemented and exercised by
-the standard library (<code>List</code>, <code>Map</code>, <code>optionval</code>, etc.).
-See <code>doc/spec.pdoc</code> Generics and the monomorphization pipeline
-in <code>src/ztypecheck.py</code> (<code>_monomorphize</code> decomposed into 11
-named helpers per F5.C). Enum-with-generic-tag remains
-not-allowed by design.</p>
-<ul>
-<li>function: yes, generic param required</li>
-<li>class: yes, generic field required</li>
-<li>record: yes, generic field required</li>
-<li>union: yes (required for optionals), generic field required</li>
-<li>variant: yes (same as union), generic field required</li>
-<li>protocol: yes, declared the normal way (with a shared generic field), then
-    used in the destination (eg class) by declaring the fully qualified protocol
-    name with generic argument, then all related functions must resolve to that
-    consistent type (or all refer to a common generic parameter)</li>
-<li>enum: no, tag must be concrete numeric type</li>
-</ul>
-<h2 id="generic-protocol"><a href="#generic-protocol">15. Generic Protocol</a></h2>
-<p> RESOLVED: generic protocols are implemented. See examples in
-<code>lib/system/io.z</code> (<code>Reader</code>, <code>Writer</code> &#x2014; both generic over
-element type) and per-implementor vtable emission via the
-<code>z_protocol_vtable.c.tmpl</code> template in
-<code>src/runtime/</code>.</p>
-<p>Yes, generic protocols are allowed.</p>
-<pre><code class="language-zerolang">
-I32Or64: union { :i32 :i64 }
-
-# a generic protocol declaration
-Addable: protocol {
-    term: i32ori64.generic
-    add: function lhs: term rhs: term
-}
-
-# concrete class
-Adder: class {
-    add: function {lhs: i32 rhs: i32} is {
-      # ...
-    }
-} as {
-    # same as (Addable term: i32)   # term is default for type specifier
-    Addable: Addable i32
-}</code></pre>
-<h2 id="cast-to-compile-time-numeric-constant"><a href="#cast-to-compile-time-numeric-constant">16. cast to compile time numeric constant</a></h2>
-<p>At unit level:</p>
+<h2 id="compile-time-numeric-constant-types"><a href="#compile-time-numeric-constant-types">2. compile-time numeric constant types</a></h2>
+<p>A richer compile-time constant-type lattice than the one currently shipping
+(the language presently models integer/float literals with a single
+literal-int / literal-float pseudo-type). At unit level:</p>
 <p>x: 4</p>
-<p>is equivalent to:</p>
+<p>would be equivalent to:</p>
 <p>x: cast 4 as 4</p>
-<p>So x is specifically of type '4' but also an 'i64'</p>
-<p>All the const types live at the synthetic namespace at eg. system.const.i64_4 etc?</p>
-<p>---</p>
-<p>Each type has different methods for 'call' which determines
-their default runtime type, and other conversion methods provided this constant
-can losslessly be converted to those types. Some rules:</p>
+<p>so <code>x</code> is specifically of type '4' but also an 'i64'. The const types would
+live at a synthetic namespace, eg. <code>system.const.i64_4</code>.</p>
+<p>Each type has different methods for 'call' which determines their default
+runtime type, and other conversion methods provided this constant can
+losslessly be converted to those types. Some rules:</p>
 <ul>
 <li>default numeric type is i64 for all integer constants that can be stored in
     an i64. Larger numbers have no 'call' method and must be explicitly converted
@@ -598,28 +183,7 @@ it may not fit. Default (result of 'call') is c8</li>
 (supported methods: u8 i8 u16 i16 u32 i32 u64 i64 u128 i128 c8 c32). Default
 (result of 'call') is c32</li>
 </ul>
-<p>Character types?</p>
-<h2 id="memory-format-runtime-format-note"><a href="#memory-format-runtime-format-note">17. Memory format / runtime format (NOTE)</a></h2>
-<h3 id="class"><a href="#class">17.1. class</a></h3>
-<p>class instances are always references (pointers) to a piece of memory.</p>
-<p>But what about a class that has no fields? Can it be created with no
-allocation? Just held in the typesystem? This would be good for iterators with
-no fields. Still need a place in memory to hold them? Could be a null pointer?
-The class could still lock a parent and use it for state management - no, need
-to store reference to parent somewhere.</p>
-<h3 id="record-and-other-valtypes"><a href="#record-and-other-valtypes">17.2. record (and other valtypes)</a></h3>
-<p>records are always embedded in a container (local var/stack; part of another
-reftype or class). A valtype can be 'boxed' by the compiler to convert it into
-a reftype.</p>
-<p>As with class, can a record have no fields so a size of 0?</p>
-<h3 id="union"><a href="#union">17.3. union</a></h3>
-<p>union is always 2 words, stored inline:</p>
-<ul>
-<li>a discriminator, marking the specific subtype being stored</li>
-<li>the reference (pointer) to the underlying reftype value</li>
-</ul>
-<p>To store a valtype in a union requires it to be boxed.</p>
-<h4 id="idea-single-constructor-for-unions"><a href="#idea-single-constructor-for-unions">17.3.1. IDEA: Single <code>create</code> constructor for unions</a></h4>
+<h2 id="single-constructor-for-unions"><a href="#single-constructor-for-unions">3. single <code>create</code> constructor for unions</a></h2>
 <p>Could a union have a single <code>create</code> constructor that takes one argument of
 any valid subtype? It would match the first subtype whose type matches the
 argument. Would fail at compile time if more than one subtype matches the
@@ -637,58 +201,11 @@ c: Result.create "hello"  # matches err (string)
 <p>Open questions: how to handle null subtypes (no argument)? How to handle
 generic subtypes where the type may not be known? Is the convenience worth
 the potential ambiguity?</p>
-<h3 id="variant"><a href="#variant">17.4. variant</a></h3>
-<p>Can only store valtypes within it. Its layout is:</p>
-<ul>
-<li>a descriminator, marking the specific subtype being stored</li>
-<li>block of memory equal to the largest size of any of the subtypes</li>
-</ul>
-<h3 id="list"><a href="#list">17.5. list</a></h3>
-<p>'list' is the only object instance that can have a variable size set at
-runtime. This will need compiler support. list has a capacity and a length. To
-destroy a list, each object in it will need to be destroyed. A list of classes
-is a list of 'pointers'. A list of unions or protocols store the top level of
-those structures inline. A list of valtypes is a single contiguous block
-storing the valtypes inline. For a list of reftypes, each element needs to be
-finalized and destroyed. Finally, the list itself is destroyed in both cases
-(reftype or valtype).</p>
-<p>For homogenous types, the compiler knows the correct destructor to call. For
-object such as protocols, the protocol object knows how to destroy the
-underlying object and the protocol object itself is a fixed size.</p>
-<h3 id="protocol-facet"><a href="#protocol-facet">17.6. protocol / facet</a></h3>
-<p>For each protocol/facet... the compiler must generate a constant method table
-for each object type that adopts a protocol/facet and uses it at runtime (ie.
-not only used for generic purposes or to restrict a public interface). This can
-be shared by all objects of that type that are converted to this
-protocol/facet.</p>
-<p>Protocol construction is then allocating a small object that has:</p>
-<ul>
-<li>one pointer to the method table</li>
-<li>one pointer to the underlying reftype object. If the underlying object is a
-    valtype, it will need to be 'boxed' into a reftype (requires an allocation
-    then a copy of the value)</li>
-<li>one pointer to the destructor of the underlying object - to destroy and free
-    its memory</li>
-</ul>
-<p>For borrowed protocol instances, the allocation is done on the stack and falls
-out of scope without destroying the underlying object so that it is available
-after the scope ends. And there is no destructor for these stored in the
-protocol instance...</p>
-<p>Facet construction is allocating an object that has:</p>
-<ul>
-<li>one pointer to the method table</li>
-<li>block of memory equal to the largest size of any of the types that claim to
-    implement this facet. The value is then copied into this block during
-    assignment.</li>
-</ul>
-<h2 id="idea-meta-namespace"><a href="#idea-meta-namespace">18. IDEA: meta namespace</a></h2>
-<p> PARTIAL: <code>meta.create</code> is implemented as the canonical
-constructor for every object type (the only raw allocator &#x2014;
-user constructors must route through it). The other proposed
-<code>meta.*</code> surfaces (<code>meta.function</code> / <code>meta.object</code> /
-<code>meta.unit</code> / <code>meta.definition</code> / <code>meta.source</code> /
-<code>meta.define</code> / <code>meta.environment</code> / <code>meta.compiler</code> /
-<code>meta.language</code> / <code>meta.error</code>) are open &#x2014; none implemented.</p>
+<h2 id="meta-namespace"><a href="#meta-namespace">4. meta namespace</a></h2>
+<p><code>meta.create</code> is the only part of this implemented today -- the canonical
+constructor for every object type (the one raw allocator; user constructors
+route through it). The remaining <code>meta.*</code> surfaces below are open proposals,
+none implemented.</p>
 <p>'meta' is a special, dynamic namespace provided by the compiler at compile-time
 only. All items are readonly (?)</p>
 <p>meta can sort-of be used to add additional <code>keywords</code></p>
@@ -768,25 +285,7 @@ use defines?)</p>
 </ul>
 <p>meta.error: force a compile time error?</p>
 <p>TODO: move 'type' to 'meta.type'?</p>
-<h2 id="idea-pointers-ownership-give-take-on-valtypes"><a href="#idea-pointers-ownership-give-take-on-valtypes">19. IDEA: Pointers, ownership, give/take on valtypes</a></h2>
-<p> RESOLVED: ownership with <code>take</code> / <code>borrow</code> /
-<code>box</code> / <code>private</code> / <code>lock</code> / <code>release</code> is the normative
-ownership model. See <code>doc/ownership.pdoc</code> for the full
-description. Born-borrowed (Phases A-F) and lock-escape
-enforcement (G1/G2/G3) both landed. <code>this</code> is always passed
-as a pointer.</p>
-<ul>
-<li>'this' is always passed as a pointer. object cannot be destroyed within a
-    method, so should be safe even for reftypes</li>
-<li>more efficient for large reftypes - records. 'this' implies this
-    particular instance so signals that pass by reference is not used</li>
-<li>can never assign to 'this'</li>
-<li>can valtypes be passed by 'take'? Yes. But note that this would destroy the
-    var in the caller. Would need to return this value if you want to pass it
-    back. Compiler would need to be smart enough to pass a pointer back on return
-    to avoid copy both ways. Would be more efficient for large records.</li>
-</ul>
-<h2 id="think-higher-kinded-types"><a href="#think-higher-kinded-types">20. THINK: Higher kinded types?</a></h2>
+<h2 id="higher-kinded-types"><a href="#higher-kinded-types">5. higher-kinded types?</a></h2>
 <p>How would this even look? A generic field that takes a generic field as an
 argument?...</p>
 <pre><code class="language-zerolang">R: class {
@@ -794,49 +293,6 @@ argument?...</p>
   j: generic # ...
 
 }</code></pre>
-<h2 id="think-checklist"><a href="#think-checklist">21. THINK: checklist</a></h2>
-<p>Think about:</p>
-<ul>
-<li>how to 'take' in a 'match' statement (preferably once in the <code>in</code> operation...</li>
-<li>how to 'take' vs 'borrow' in a generator or iterator that accepts a value in
-    on each iteration. Also, how to control ownership of the returned item...
-    defaults to 'taken' but may want to return 'borrowed' sometimes...?</li>
-</ul>
-<h2 id="think-how-to-typecheck"><a href="#think-how-to-typecheck">22. THINK: how to typecheck?</a></h2>
-<p> RESOLVED: typechecking is implemented and described in
-<code>doc/compiler.pdoc</code>. The approach: demand-driven resolution
-with a <code>_resolving</code> cycle-detection stack (replaces the
-proposed in-progress sentinel) and a parsed/typed split where
-the parsed AST is frozen and typecheck output lives in
-<code>src/ztyping.py</code> keyed by parsed <code>nodeid</code>. Array/list are
-implemented as predeclared library types in
-<code>lib/system/collections.z</code>, not special syntax.</p>
-<p>Top level (definitions) first? then go back and do all code blocks? Also, a
-special 'type' to store in the AST to mark that compilation is in progress to
-prevent cycles?</p>
-<p>Array and list should be predeclared types (functions?) rather than special
-syntax? Why?</p>
-<ul>
-<li>syntax is weird, keywords with '~' in them</li>
-<li>can NOT have them as top level items. (need something else to store bulk
-    data? yes, 'data')</li>
-</ul>
-<p>BUT!:</p>
-<ul>
-<li>cannot pass a literal list of items to a function....</li>
-</ul>
-<p>TODO:</p>
-<ul>
-<li>remove array and list from spec? Only have 'data'? array and list can be in std lib</li>
-</ul>
-<p>Top level data:</p>
-<ul>
-<li>can have array but not list</li>
-<li>NO, NO RECORDS. can have records but they cannot have a custom constructor
-    (at 'create') and all non-default fields must be provided (as usual). NO</li>
-<li>records within records? declare in a static way? Yes.</li>
-<li>how to prevent mutation in top level records? Can't. Don't do it</li>
-</ul>
 </main>
 </body>
 </html>
