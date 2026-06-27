@@ -29,7 +29,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-parser test-infra test-native test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-parser test-infra test-native test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -406,6 +406,13 @@ install: bin/zc
 docs:
 	$(MAKE) -C docs
 	@echo "rendered docs/ -- commit the regenerated .html"
+
+# warn-check -- compile the emitted compiler C with every warning as an error.
+# Run before committing: warnings must be 0. The normal build keeps warnings
+# non-fatal so rapid iteration isn't blocked; this gate enforces "drive to 0".
+warn-check: bin/zc
+	$(CC) $(CFLAGS) -Werror -c bin/zc.c -o /dev/null
+	@echo "warn-check OK: zero compiler warnings"
 
 clean:
 	rm -rf $(BUILDDIR) bin

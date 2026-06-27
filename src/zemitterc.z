@@ -130,7 +130,7 @@ numLoStr: function {name: StringView} out String is {
     if name == "i8" then { return "-128".string }
     if name == "i16" then { return "-32768".string }
     if name == "i32" then { return "-2147483648".string }
-    if name == "i64" then { return "-9223372036854775808".string }
+    if name == "i64" then { return "(-9223372036854775807LL - 1)".string }
     if name == "i128" then { return "-170141183460469231731687303715884105728".string }
     return "0".string
 }
@@ -143,11 +143,54 @@ numHiStr: function {name: StringView} out String is {
     if name == "u8" then { return "255".string }
     if name == "c8" then { return "255".string }
     if name == "u16" then { return "65535".string }
-    if name == "u32" then { return "4294967295".string }
-    if name == "c32" then { return "4294967295".string }
-    if name == "u64" then { return "18446744073709551615".string }
+    if name == "u32" then { return "4294967295U".string }
+    if name == "c32" then { return "4294967295U".string }
+    if name == "u64" then { return "18446744073709551615ULL".string }
     if name == "u128" then { return "340282366920938463463374607431768211455".string }
     return "0".string
+}
+
+# numLitSuffix -- the C integer-literal suffix for an unsigned type, so a large
+# decimal literal (e.g. u64 max) is unambiguously unsigned to the C compiler.
+numLitSuffix: function {name: StringView} out String is {
+    if name == "u64" then { return "ULL".string }
+    if name == "u32" then { return "U".string }
+    if name == "c32" then { return "U".string }
+    return "".string
+}
+
+# castLitVal -- val with the unsigned C suffix appended when it is a bare decimal
+# literal cast to an unsigned type, so large u64 constants don't warn as signed.
+castLitVal: function {val: StringView dstName: StringView} out String is {
+    r: val.string
+    sfx: numLitSuffix name: dstName
+    if sfx.length == 0 then {
+        return r
+    }
+    if val.length == 0 then {
+        return r
+    }
+    allDig: true
+    i: 0.u64
+    n: val.length
+    for i < n loop {
+        bo: val.byteAt i: i
+        match (
+            bo
+        ) case some then {
+            if bo < 48 then {
+                allDig = false
+            }
+            if bo > 57 then {
+                allDig = false
+            }
+        } case none then {}
+        i = i + 1
+    }
+    if allDig then {
+        r.append sfx.stringview
+    }
+    return r
 }
 
 # emitNumericCast -- a runtime numeric conversion `<val>.<dstName>` from source
@@ -160,13 +203,14 @@ emitNumericCast: function {srcName: StringView dstName: StringView val: StringVi
     if dct.length == 0 then {
         return val.string
     }
+    sval: castLitVal val: val dstName: dstName
     dbits: numBits name: dstName
     if dbits == 0 then {
-        return "((\{dct})\{val})".string
+        return "((\{dct})\{sval})".string
     }
     sbits: numBits name: srcName
     if sbits == 0 then {
-        return "((\{dct})\{val})".string
+        return "((\{dct})\{sval})".string
     }
     ssig: numSigned name: srcName
     dsig: numSigned name: dstName
@@ -190,7 +234,7 @@ emitNumericCast: function {srcName: StringView dstName: StringView val: StringVi
     }
     if (needsLo) == false then {
         if (needsHi) == false then {
-            return "((\{dct})\{val})".string
+            return "((\{dct})\{sval})".string
         }
     }
     sct: cTypeOf name: srcName
@@ -434,12 +478,13 @@ collectLiteralsOpt: function {o: Option Node ids: List u64 texts: List String} i
 }
 
 # litIndexOf -- the 1-based pool index for a literal's nodeid (0 = absent).
-litIndexOf: function {ids: List u64 nid: u64} out u64 is {
+litIndexOf: function {ctx: Ctx nid: u64} out u64 is {
     i: 0.u64
-    n: ids.length
+    n: ctx.litIds.length
     for i < n loop {
-        v: ids.get i: i
+        v: ctx.litIds.get i: i
         if v == nid then {
+            ctx.usedLits.set key: nid value: true
             return i + 1
         }
         i = i + 1
@@ -536,6 +581,20 @@ stampIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     }
 }
 
+# matchDiverges -- true when a match node is stamped `never` (the typechecker's
+# exhaustive + all-arms-diverge result), so its `default:` is provably unreachable.
+matchDiverges: function {symtab: zenv.ZSymbolTable nid: u64} out bool is {
+    tid: stampIdOf symtab: symtab nid: nid
+    if tid == 0 then {
+        return false
+    }
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.NEVER then {
+        return true
+    }
+    return false
+}
+
 # stampNameOf -- the registry name of a node's stamped type ("" unstamped).
 stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     go: symtab.typing.nodeType.get key: nid
@@ -560,6 +619,7 @@ Ctx: class {
     strC: String
     svC: String
     litIds: (List u64)
+    usedLits: (Map u64 value: bool)
     constVals: (Map String value: String)
     needs: (Map String value: bool)
     methodReturns: (Map String value: String)
@@ -1232,7 +1292,7 @@ svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
     ) case expression then {
         return (svArgAddr symtab: symtab ctx: ctx n: n.expression)
     } case atomstring then {
-        li: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
+        li: litIndexOf ctx: ctx nid: n.nodeid.u64
         if li > 0 then {
             a1: "&_zs\{li}"
             return a1
@@ -1614,11 +1674,11 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr} out u64 is {
 
 popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
     if ctx.breakLabels.length > 0 then {
-        dropped: ctx.breakLabels.pop
+        ctx.breakLabels.pop
     }
     if ctx.breakFreesMarks.length > 0 then {
-        droppedF: ctx.breakFreesMarks.pop
-        droppedL: ctx.breakListMarks.pop
+        ctx.breakFreesMarks.pop
+        ctx.breakListMarks.pop
     }
     uo: ctx.breakLabelUsed.get key: id
     match (
@@ -2179,11 +2239,8 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
     omn: monoOriginName symtab: symtab tid: bt
-    isLV: false
     if omn.stringview != "List" then {
-        if omn.stringview == "ListView" then {
-            isLV = true
-        } else {
+        if omn.stringview != "ListView" then {
             return "".string
         }
     }
@@ -3193,6 +3250,9 @@ nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
             if row.value.kind == ztypes.zconstkind.IVAL then {
                 iv: row.value.ival
                 res = "\{iv}"
+                if iv > 9223372036854775807 then {
+                    res = "\{iv}ULL"
+                }
             }
             if row.value.kind == ztypes.zconstkind.FVAL then {
                 fv: row.value.fval
@@ -4492,6 +4552,8 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         if cTypeLk3.length > 0 then {
                             bv1: bn2.stringview
                             bc1: bv1.string
+                            sfx1: numLitSuffix name: mn2.stringview
+                            bc1.append sfx1.stringview
                             return bc1
                         }
                     }
@@ -5050,7 +5112,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             return ed9
         }
     } case atomstring then {
-        li9: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
+        li9: litIndexOf ctx: ctx nid: n.nodeid.u64
         if li9 > 0 then {
             se9: "_zs\{li9}"
             return se9
@@ -5578,7 +5640,7 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
         if (isInterp parts: n.stringparts) then {
             emitInterpPrint symtab: symtab ctx: ctx parts: n.stringparts ind: ind tmp: tmp buf: buf
         } else {
-            li: litIndexOf ids: ctx.litIds nid: n.nodeid.u64
+            li: litIndexOf ctx: ctx nid: n.nodeid.u64
             if li > 0 then {
                 l9: "\{ind}\{ctx.svC}_print(_zs\{li});\n"
                 buf.append l9.stringview
@@ -5660,7 +5722,7 @@ bindLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
         if (isInterp parts: n.stringparts) then {
             return 0
         } else {
-            return (litIndexOf ids: ctx.litIds nid: n.nodeid.u64)
+            return (litIndexOf ctx: ctx nid: n.nodeid.u64)
         }
     } else {
         return 0
@@ -6817,7 +6879,8 @@ emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData ass
     for c: citer loop {
         emitMatchClause symtab: symtab ctx: ctx c: c vtid: vtid isUni: isUni mN: mN sname: sname.stringview assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
     }
-    emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
+    mdvg: matchDiverges symtab: symtab nid: m.nodeid.u64
+    emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp diverges: mdvg buf: buf
     l9: "\{ind}}\n"
     buf.append l9.stringview
 }
@@ -6832,7 +6895,8 @@ emitScalarMatch: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData s
     for c: citer loop {
         emitScalarClause symtab: symtab ctx: ctx c: c assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
     }
-    emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp buf: buf
+    mdvg: matchDiverges symtab: symtab nid: m.nodeid.u64
+    emitMatchElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind2.stringview tmp: tmp diverges: mdvg buf: buf
     l9: "\{ind}}\n"
     buf.append l9.stringview
 }
@@ -6874,11 +6938,12 @@ emitBoolMatch: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData sub
             buf.append lcB9.stringview
         } else {}
     }
-    emitBoolElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind tmp: tmp buf: buf
+    bdvg: matchDiverges symtab: symtab nid: m.nodeid.u64
+    emitBoolElse symtab: symtab ctx: ctx o: m.elseclause assignTo: assignTo ind: ind tmp: tmp diverges: bdvg buf: buf
 }
 
 # emitBoolElse -- the trailing `else { ... }` of a bool match (none = nothing).
-emitBoolElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+emitBoolElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assignTo: StringView ind: StringView tmp: TmpCtr diverges: bool buf: String.borrow} is {
     match (
         o
     ) case some then {
@@ -6897,7 +6962,16 @@ emitBoolElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assign
         }
         lceB9: "\{ind}}\n"
         buf.append lceB9.stringview
-    } case none then {}
+    } case none then {
+        if diverges then {
+            leD9: "\{ind}else {\n"
+            buf.append leD9.stringview
+            lzD9: "\{ind}    z_unreachable();\n"
+            buf.append lzD9.stringview
+            lcD9: "\{ind}}\n"
+            buf.append lcD9.stringview
+        }
+    }
 }
 
 # scalarArmLabel -- the C case label for a scalar arm: the constant
@@ -7037,7 +7111,7 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
     } else {}
 }
 
-emitMatchElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assignTo: StringView ind: StringView tmp: TmpCtr buf: String.borrow} is {
+emitMatchElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assignTo: StringView ind: StringView tmp: TmpCtr diverges: bool buf: String.borrow} is {
     match (
         o
     ) case some then {
@@ -7059,8 +7133,13 @@ emitMatchElse: function {symtab: zenv.ZSymbolTable ctx: Ctx o: Option Node assig
         l9: "\{ind}}\n"
         buf.append l9.stringview
     } case none then {
-        ld0: "\{ind}default: break;\n"
-        buf.append ld0.stringview
+        if diverges then {
+            ld0: "\{ind}default: z_unreachable();\n"
+            buf.append ld0.stringview
+        } else {
+            ld1: "\{ind}default: break;\n"
+            buf.append ld1.stringview
+        }
     }
 }
 
@@ -9579,6 +9658,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "    fprintf(stderr, \"zpanic: %s\\n\", msg);\n"
     buf.append "    exit(1);\n"
     buf.append "}\n"
+    buf.append "static _Noreturn void z_unreachable(void) { z_panic(\"unreachable\"); }\n"
     buf.append "static void* z_xmalloc(size_t n) {\n"
     buf.append "    void* p = malloc(n);\n"
     buf.append "    if (!p) z_panic(\"out of memory\");\n"
@@ -9631,23 +9711,8 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     litIds: (List u64)
     litTexts: (List String)
     collectUnitLiterals program: program ids: litIds texts: litTexts
-    poolBuf: "".string
-    i: 0.u64
-    n: litIds.length
-    for i < n loop {
-        t: litTexts.get i: i
-        tv: t.stringview
-        esc: cEscape text: tv
-        blen: tv.length
-        idx: i + 1
-        l1: "static const char _zs\{idx}_d[] = \"\{esc}\";\n"
-        poolBuf.append l1.stringview
-        l2: "static const \{svC}_t _zs\{idx} = { _zs\{idx}_d, \{blen} };\n"
-        poolBuf.append l2.stringview
-        i = i + 1
-    }
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool))
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool))
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -9659,13 +9724,14 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         fnsBuf.append "void z_main(void) {\n"
         fnsBuf.append "}\n\n"
     }
-    # the string-literal pool precedes the monos/records/methods/functions that
-    # reference _zsN (class-method bodies use pooled literals too).
-    buf.append poolBuf.stringview
-    buf.append "\n"
-    emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    emitRuntimeSvIter symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    emitNeededNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
+    # emit all _zsN-referencing code into codeBuf first (each reference marks
+    # ctx.usedLits via litIndexOf), then write the literal pool with only the
+    # referenced entries so unused literals never reach the output. The pool must
+    # still precede the code in the file, so it is prepended below.
+    codeBuf: "".string
+    emitMonos symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
+    emitRuntimeSvIter symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
+    emitNeededNatives symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
     if (ioFileLive symtab: symtab ctx: ctx) then {
         needsAdd ctx: ctx name: "io"
         needsAdd ctx: ctx name: "io_file_close"
@@ -9674,14 +9740,38 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         needsAdd ctx: ctx name: "io_file_seek"
         needsAdd ctx: ctx name: "io_file_flush"
     }
-    emitRuntimeIo symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    emitIoFileConformance symtab: symtab ctx: ctx buf: buf
-    emitIoStdStreams symtab: symtab ctx: ctx buf: buf
-    emitRuntimeCli symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    emitRuntimeOs symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    emitFnptrTypedefs symtab: symtab ctx: ctx buf: buf
-    emitUserStructsOrdered symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: buf
-    emitRecordDefs program: program symtab: symtab ctx: ctx buf: buf
+    emitRuntimeIo symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
+    emitIoFileConformance symtab: symtab ctx: ctx buf: codeBuf
+    emitIoStdStreams symtab: symtab ctx: ctx buf: codeBuf
+    emitRuntimeCli symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
+    emitRuntimeOs symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
+    emitFnptrTypedefs symtab: symtab ctx: ctx buf: codeBuf
+    emitUserStructsOrdered symtab: symtab ctx: ctx runtimeDir: runtimeDir buf: codeBuf
+    emitRecordDefs program: program symtab: symtab ctx: ctx buf: codeBuf
+    poolBuf: "".string
+    pi9: 0.u64
+    pn9: ctx.litIds.length
+    for pi9 < pn9 loop {
+        plid9: ctx.litIds.get i: pi9
+        puo9: ctx.usedLits.get key: plid9
+        match (
+            puo9
+        ) case some then {
+            pt9: litTexts.get i: pi9
+            ptv9: pt9.stringview
+            pesc9: cEscape text: ptv9
+            pblen9: ptv9.length
+            pidx9: pi9 + 1
+            pl19: "static const char _zs\{pidx9}_d[] = \"\{pesc9}\";\n"
+            poolBuf.append pl19.stringview
+            pl29: "static const \{ctx.svC}_t _zs\{pidx9} = { _zs\{pidx9}_d, \{pblen9} };\n"
+            poolBuf.append pl29.stringview
+        } case none then {}
+        pi9 = pi9 + 1
+    }
+    buf.append poolBuf.stringview
+    buf.append "\n"
+    buf.append codeBuf.stringview
     buf.append fnsBuf.stringview
     buf.append "int main(int argc, char* argv[]) {\n"
     if (needsHas ctx: ctx name: "os_args") then {
@@ -13992,29 +14082,37 @@ emitDataBlock: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView op:
     ) case expression then {
         emitDataBlock symtab: symtab ctx: ctx name: name op: op.expression buf: buf
     } case datablock then {
-        ect: "int64_t".string
-        rbn: dataElemBaseName o: op.outType
-        if rbn.length > 0 then {
-            rc: cTypeOf name: rbn.stringview
-            if rc.length > 0 then {
-                ect = rc
+        ridtid9: userFnId symtab: symtab ctx: ctx name: name
+        ri9: false
+        rio9: symtab.reg.typeById.get key: ridtid9
+        match (
+            rio9
+        ) case some then {
+            ri9 = rio9.runtimeIndexed
+        } case none then {}
+        if ri9 then {
+            ect: "int64_t".string
+            rbn: dataElemBaseName o: op.outType
+            if rbn.length > 0 then {
+                rc: cTypeOf name: rbn.stringview
+                if rc.length > 0 then {
+                    ect = rc
+                }
             }
-        }
-        elems: "".string
-        cnt: 0.u64
-        eiter: op.elements.iterate
-        for e: eiter loop {
-            ev: emitDataElem symtab: symtab ctx: ctx n: e
-            if cnt > 0 then {
-                elems.append ", "
+            elems: "".string
+            cnt: 0.u64
+            eiter: op.elements.iterate
+            for e: eiter loop {
+                ev: emitDataElem symtab: symtab ctx: ctx n: e
+                if cnt > 0 then {
+                    elems.append ", "
+                }
+                elems.append ev.stringview
+                cnt = cnt + 1
             }
-            elems.append ev.stringview
-            cnt = cnt + 1
+            l0: "static const \{ect} z_\{name}[] = {\{elems}};\n\n"
+            buf.append l0.stringview
         }
-        l0: "static const \{ect} z_\{name}[] = {\{elems}};\n"
-        buf.append l0.stringview
-        l1: "static const \{ect} z_\{name}_len = \{cnt};\n\n"
-        buf.append l1.stringview
     } else {}
 }
 
