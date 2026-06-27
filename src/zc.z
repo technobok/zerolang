@@ -1,9 +1,9 @@
-# zerolang compiler driver, ported from src/zc.py.
+# zerolang compiler driver: the `zc` command-line interface.
 #
-# This slice wires the self-hosted pipeline far enough to dump SQL: it
-# parses a unit (over a stdlib + source VFS, like zc.py), runs the
-# typechecker, and writes either the SQL dump (--dump-sql, the default
-# target '-') or the emitted C (--emit-c, the Phase C surface).
+# Parses a unit over a stdlib + source VFS, type-checks it, then builds
+# it to a native executable (build), runs it (run), emits standalone C
+# (emit), dumps the typecheck model (dump), or explains an error code
+# (explain). A subcommand is required. See docs/zc.pdoc for the reference.
 
 Node: zast.Node
 
@@ -93,37 +93,95 @@ errorMessage: function {e: zast.ErrorData vfs: zvfs.ZVfs fallbackFsno: u32} out 
     return buf9
 }
 
-# isSubcommand -- the first arg is a go-style subcommand (else a uname name).
-isSubcommand: function {name: StringView} out bool is {
+# isPipelineVerb -- arg1 is a verb that proceeds to flag parsing. build/run/
+# emit/dump compile a unit; env prints settings. version/help/explain are
+# handled before this and exit early, so they are intentionally absent here.
+isPipelineVerb: function {name: StringView} out bool is {
     if name == "build" then { return true }
     if name == "run" then { return true }
     if name == "emit" then { return true }
     if name == "dump" then { return true }
-    if name == "dump-canon" then { return true }
-    if name == "version" then { return true }
-    if name == "help" then { return true }
+    if name == "env" then { return true }
     return false
 }
 
-# printUsage -- the multi-line help text (stderr).
+# zcVersion -- the single source of truth for the version string.
+zcVersion: function out String is {
+    return "0.1.0".string
+}
+
+# printUsage -- the general help text (stderr): command groups, then flags.
 printUsage: function is {
-    io.eprintln "usage: zc [command] <uname> [flags] -- ported zerolang compiler"
-    io.eprintln "commands:"
-    io.eprintln "  build <uname>        compile to a native executable (the default)"
-    io.eprintln "  run <uname> [args]   build, then run forwarding the trailing args"
-    io.eprintln "  emit <uname>         emit C source (-o FILE or stdout)"
-    io.eprintln "  dump <uname>         dump the SQL model"
-    io.eprintln "  dump-canon <uname>   dump the canonical model"
-    io.eprintln "  version             print the version"
-    io.eprintln "flags:"
-    io.eprintln "  --src DIR --system DIR --runtime DIR --full"
-    io.eprintln "  -o OUT --release --cc CC --target TRIPLE --cflags STR --ldflags STR"
-    io.eprintln "  --emit-c FILE --dump-sql FILE --dump-canon FILE   (legacy actions)"
+    io.eprintln "usage: zc <command> [arguments] [flags]"
+    io.eprintln ""
+    io.eprintln "build commands:"
+    io.eprintln "  build <src>          compile <src> to a native executable"
+    io.eprintln "  run   <src> [args]   build, then run it, forwarding [args]"
+    io.eprintln "  emit  <src>          emit standalone C (-o FILE, else stdout)"
+    io.eprintln ""
+    io.eprintln "diagnostics:"
+    io.eprintln "  dump  <src>          dump the typecheck model as SQL (--canon: id-normalized)"
+    io.eprintln "  explain <code>       explain an error code, e.g. zc explain E0200"
+    io.eprintln ""
+    io.eprintln "info:"
+    io.eprintln "  env                  print resolved tool paths and settings"
+    io.eprintln "  version              print the version"
+    io.eprintln "  help [command]       print usage, or help for one command"
+    io.eprintln ""
+    io.eprintln "<src> is a unit name (hello) or a path (hello.z, ./sub/hello.z)."
+    io.eprintln ""
+    io.eprintln "common flags:"
+    io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --target TRIPLE"
+    io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --full"
+    io.eprintln "  --system DIR  --runtime DIR  -h/--help  -V/--version"
+}
+
+# printCommandHelp -- detailed help for one command (stderr).
+printCommandHelp: function {cmd: StringView} is {
+    if cmd == "build" then {
+        io.eprintln "usage: zc build <src> [flags]"
+        io.eprintln "Compile <src> to a native executable."
+        io.eprintln "Output goes to -o OUT, else ./<unit> (./<unit>.exe for windows targets)."
+        io.eprintln "Flags: --release --cc CC --target TRIPLE --save-temps"
+        io.eprintln "       --cflags STR --ldflags STR --src DIR --full"
+    } else if cmd == "run" then {
+        io.eprintln "usage: zc run <src> [args] [flags]"
+        io.eprintln "Build <src>, then run it. Flags before <src> configure the build;"
+        io.eprintln "args after <src> (or after --) are passed to the program."
+        io.eprintln "The program's own exit code is propagated."
+    } else if cmd == "emit" then {
+        io.eprintln "usage: zc emit <src> [flags]"
+        io.eprintln "Emit standalone C17 to -o FILE (or stdout). The runtime is inlined,"
+        io.eprintln "so the single .c needs no extra include paths."
+    } else if cmd == "dump" then {
+        io.eprintln "usage: zc dump <src> [--canon] [flags]"
+        io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
+        io.eprintln "--canon emits the id-normalized model instead."
+        io.eprintln "--full type-checks every definition, not just those reachable from main."
+    } else if cmd == "explain" then {
+        io.eprintln "usage: zc explain <code>"
+        io.eprintln "Explain a diagnostic error code, e.g. zc explain E0200."
+    } else if cmd == "env" then {
+        io.eprintln "usage: zc env"
+        io.eprintln "Print resolved tool paths and settings: system and runtime dirs,"
+        io.eprintln "the C compiler, the target triple, and the version."
+    } else if cmd == "version" then {
+        io.eprintln "usage: zc version"
+        io.eprintln "Print the compiler version."
+    } else if cmd == "help" then {
+        io.eprintln "usage: zc help [command]"
+        io.eprintln "Print general usage, or detailed help for one command."
+    } else {
+        m9: "zc help: unknown command '\{cmd}'"
+        io.eprintln m9.stringview
+        printUsage
+    }
 }
 
 # printVersion -- a version line (stdout).
 printVersion: function is {
-    print "zc (zerolang) 0.1.0\n"
+    v9: zcVersion
+    print "zc (zerolang) \{v9}\n"
 }
 
 # dirname -- everything before the last '/', or "." when there is none.
@@ -158,6 +216,44 @@ joinPath: function {a: StringView b: StringView} out String is {
     }
     r.append b
     return r
+}
+
+# substr -- the bytes of p in [start, end) as a new String.
+substr: function {p: StringView start: u64 end: u64} out String is {
+    r: "".string
+    i: start
+    for i < end loop {
+        b: p.byteAt i: i
+        match (
+            b
+        ) case some then {
+            r.appendByte b: b
+        } case none then {}
+        i = i + 1
+    }
+    return r
+}
+
+# baseName -- the final path segment of p (everything after the last '/').
+baseName: function {p: StringView} out String is {
+    idxOpt: p.lastIndexOf needle: "/"
+    match (
+        idxOpt
+    ) case some then {
+        s9: idxOpt + 1
+        return (substr p: p start: s9 end: p.length)
+    } case none then {
+        return p.string
+    }
+}
+
+# stripDotZ -- p without a trailing ".z" extension, if present.
+stripDotZ: function {p: StringView} out String is {
+    if (p.endsWith suffix: ".z") then {
+        e9: p.length - 2
+        return (substr p: p start: 0 end: e9)
+    }
+    return p.string
 }
 
 # exeRoot -- the install root inferred from the executable: the parent of
@@ -263,6 +359,39 @@ pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
     return "cc".string
 }
 
+# printEnv -- resolved tool paths and settings as KEY=VALUE lines (stdout).
+printEnv: function {systemFlag: StringView runtimeFlag: StringView ccFlag: StringView targetTriple: StringView} is {
+    sysd: resolveSystemDir flagVal: systemFlag
+    rund: resolveRuntimeDir flagVal: runtimeFlag
+    cc: pickCc ccFlag: ccFlag targetTriple: targetTriple
+    root: exeRoot
+    ver: zcVersion
+    exep: "".string
+    ep: os.exePath
+    match (
+        ep
+    ) case ok then {
+        exep = ep.copy
+    } case err then {}
+    buf: "".string
+    buf.append "ZEROLANG_ROOT=".stringview
+    buf.append root.stringview
+    buf.append "\nZEROLANG_SYSTEM=".stringview
+    buf.append sysd.stringview
+    buf.append "\nZEROLANG_RUNTIME=".stringview
+    buf.append rund.stringview
+    buf.append "\nZC_CC=".stringview
+    buf.append cc.stringview
+    buf.append "\nZC_TARGET=".stringview
+    buf.append targetTriple
+    buf.append "\nZC_VERSION=".stringview
+    buf.append ver.stringview
+    buf.append "\nZC_EXE=".stringview
+    buf.append exep.stringview
+    buf.append "\n".stringview
+    print buf
+}
+
 # tempPath -- $TMPDIR (or /tmp) / zc-<pid>-<uname><ext>.
 tempPath: function {uname: StringView ext: StringView} out String is {
     base: "/tmp".string
@@ -340,6 +469,57 @@ removeTemp: function {path: StringView} is {
     ) case ok then {} case err then {}
 }
 
+# parseECode -- the numeric code in an "E0200"/"0200"/"200" string (0 if none).
+parseECode: function {s: StringView} out u32 is {
+    r: 0.u32
+    i: 0.u64
+    n: s.length
+    for i < n loop {
+        bo: s.byteAt i: i
+        match (
+            bo
+        ) case some then {
+            if bo >= 48 when bo <= 57 then {
+                d: (bo - 48).u32
+                r = r * 10
+                r = r + d
+            }
+        } case none then {}
+        i = i + 1
+    }
+    return r
+}
+
+# runExplain -- print the explanation for an error code, or a category fallback.
+runExplain: function {codeArg: StringView} is {
+    code: parseECode s: codeArg
+    if code == 0 then {
+        m9: "zc explain: not an error code: \{codeArg} (try e.g. zc explain E0200)"
+        io.eprintln m9.stringview
+        os.exit code: 2
+    }
+    txt: zast.explainText code: code
+    if txt.length > 0 then {
+        txt.append "\n".stringview
+        print txt
+    } else {
+        cat: "unknown category"
+        if code < 100 then {
+            cat = "parser / syntax error (E0001-E0099)"
+        } else if code < 200 then {
+            cat = "type resolution error (E0100-E0199)"
+        } else if code < 300 then {
+            cat = "ownership error (E0200-E0299)"
+        } else if code < 400 then {
+            cat = "call / argument error (E0300-E0399)"
+        } else if code < 500 then {
+            cat = "generic / monomorphization error (E0400-E0499)"
+        }
+        m9: "E\{code}: \{cat} -- no detailed explanation available\n"
+        print m9
+    }
+}
+
 main: function is {
     argv: os.args
     n: argv.length
@@ -349,37 +529,66 @@ main: function is {
     }
 
     arg1: (argv.get i: 1).copy
+
+    if (arg1.stringview == "-h") then {
+        printUsage
+        os.exit code: 0
+    }
+    if (arg1.stringview == "--help") then {
+        printUsage
+        os.exit code: 0
+    }
+    if (arg1.stringview == "-V") then {
+        printVersion
+        os.exit code: 0
+    }
+    if (arg1.stringview == "--version") then {
+        printVersion
+        os.exit code: 0
+    }
+    if (arg1.stringview == "version") then {
+        printVersion
+        os.exit code: 0
+    }
+    if (arg1.stringview == "help") then {
+        if n > 2 then {
+            hc: argv.get i: 2
+            printCommandHelp cmd: hc.stringview
+        } else {
+            printUsage
+        }
+        os.exit code: 0
+    }
+    if (arg1.stringview == "explain") then {
+        if n > 2 then {
+            ec: argv.get i: 2
+            runExplain codeArg: ec.stringview
+        } else {
+            io.eprintln "zc explain: missing error code (e.g. zc explain E0200)"
+            os.exit code: 2
+        }
+        os.exit code: 0
+    }
+
     sub: "".string
     unitname: "".string
-    if (isSubcommand name: arg1.stringview) then {
-        if (arg1.stringview == "version") then {
-            printVersion
-            os.exit code: 0
-        }
-        if (arg1.stringview == "help") then {
-            printUsage
-            os.exit code: 0
-        }
+    if (isPipelineVerb name: arg1.stringview) then {
         sub = arg1.copy
-    } else if (arg1.stringview == "-h") then {
-        printUsage
-        os.exit code: 0
-    } else if (arg1.stringview == "--help") then {
-        printUsage
-        os.exit code: 0
     } else {
         unitname = arg1.copy
     }
 
     srcdir: ".".string
+    srcSet: false
     systemFlag: "".string
     runtimeFlag: "".string
     emitTarget: "".string
-    canonTarget: "".string
     dumpSqlTarget: "".string
     outPath: "".string
     full: false
+    canon: false
     release: false
+    saveTemps: false
     ccFlag: "".string
     targetTriple: "".string
     cflags: "".string
@@ -395,9 +604,22 @@ main: function is {
             progArgs.append from: a.copy
         } else if (a.stringview == "--") then {
             inProgArgs = true
+        } else if (a.stringview == "-h") then {
+            printCommandHelp cmd: sub.stringview
+            os.exit code: 0
+        } else if (a.stringview == "--help") then {
+            printCommandHelp cmd: sub.stringview
+            os.exit code: 0
+        } else if (a.stringview == "-V") then {
+            printVersion
+            os.exit code: 0
+        } else if (a.stringview == "--version") then {
+            printVersion
+            os.exit code: 0
         } else if (a.stringview == "--src") then {
             i = i + 1
             srcdir = (argv.get i: i).copy
+            srcSet = true
         } else if (a.stringview == "--system") then {
             i = i + 1
             systemFlag = (argv.get i: i).copy
@@ -410,9 +632,6 @@ main: function is {
         } else if (a.stringview == "--dump-sql") then {
             i = i + 1
             dumpSqlTarget = (argv.get i: i).copy
-        } else if (a.stringview == "--dump-canon") then {
-            i = i + 1
-            canonTarget = (argv.get i: i).copy
         } else if (a.stringview == "-o") then {
             i = i + 1
             outPath = (argv.get i: i).copy
@@ -430,8 +649,12 @@ main: function is {
             ldflags = (argv.get i: i).copy
         } else if (a.stringview == "--full") then {
             full = true
+        } else if (a.stringview == "--canon") then {
+            canon = true
         } else if (a.stringview == "--release") then {
             release = true
+        } else if (a.stringview == "--save-temps") then {
+            saveTemps = true
         } else if unitname.length == 0 then {
             unitname = a.copy
         } else if isRun then {
@@ -441,32 +664,58 @@ main: function is {
         i = i + 1
     }
 
+    if sub.stringview == "env" then {
+        printEnv systemFlag: systemFlag.stringview runtimeFlag: runtimeFlag.stringview ccFlag: ccFlag.stringview targetTriple: targetTriple.stringview
+        os.exit code: 0
+    }
+
+    isEmit: sub.stringview == "emit"
+    isDumpSql: false
+    isDumpCanon: false
+    if sub.stringview == "dump" then {
+        if canon then {
+            isDumpCanon = true
+        } else {
+            isDumpSql = true
+        }
+    } else if sub.length == 0 then {
+        if emitTarget.length > 0 then {
+            isEmit = true
+        } else if dumpSqlTarget.length > 0 then {
+            isDumpSql = true
+        } else {
+            um9: "zc: unknown command '\{unitname.stringview}'"
+            io.eprintln um9.stringview
+            printUsage
+            os.exit code: 2
+        }
+    }
+
     if unitname.length == 0 then {
         io.eprintln "zc: no unit specified"
         os.exit code: 2
     }
 
+    if srcSet == false then {
+        isPath: false
+        if (unitname.stringview.endsWith suffix: ".z") then {
+            isPath = true
+        }
+        if (unitname.stringview.contains needle: "/") then {
+            isPath = true
+        }
+        if isPath then {
+            baseNoExt: stripDotZ p: unitname.stringview
+            d9: dirname p: baseNoExt.stringview
+            bn9: baseName p: baseNoExt.stringview
+            srcdir = d9
+            unitname = bn9
+        }
+    }
+
     systemdir: resolveSystemDir flagVal: systemFlag.stringview
     runtimeDir: resolveRuntimeDir flagVal: runtimeFlag.stringview
 
-    isEmit: false
-    isDumpSql: false
-    isDumpCanon: false
-    if sub.stringview == "emit" then {
-        isEmit = true
-    } else if sub.stringview == "dump" then {
-        isDumpSql = true
-    } else if sub.stringview == "dump-canon" then {
-        isDumpCanon = true
-    } else if sub.length == 0 then {
-        if emitTarget.length > 0 then {
-            isEmit = true
-        } else if canonTarget.length > 0 then {
-            isDumpCanon = true
-        } else if dumpSqlTarget.length > 0 then {
-            isDumpSql = true
-        }
-    }
     isDump: isDumpSql
     if isDumpCanon then {
         isDump = true
@@ -526,15 +775,18 @@ main: function is {
             }
             writeOut target: tgt.stringview content: csrc.stringview what: "C output"
         } else if isDumpCanon then {
-            canon: zsqldump.dumpCanon program: prog symtab: st
-            tgt2: canonTarget.copy
+            canonOut: zsqldump.dumpCanon program: prog symtab: st
+            tgt2: outPath.copy
             if tgt2.length == 0 then {
                 tgt2 = "-".string
             }
-            writeOut target: tgt2.stringview content: canon.stringview what: "canonical dump"
+            writeOut target: tgt2.stringview content: canonOut.stringview what: "canonical dump"
         } else if isDumpSql then {
             sql: zsqldump.dumpSql program: prog vfs: vfs symtab: st
             tgt3: dumpSqlTarget.copy
+            if tgt3.length == 0 then {
+                tgt3 = outPath.copy
+            }
             if tgt3.length == 0 then {
                 tgt3 = "-".string
             }
@@ -566,7 +818,12 @@ main: function is {
                 }
             }
             rc: buildExe cc: cc.stringview tempC: tmpc.stringview exe: exe.stringview release: release cflags: cflags.stringview ldflags: ldflags.stringview
-            removeTemp path: tmpc.stringview
+            if saveTemps then {
+                kept9: "zc: kept generated C at \{tmpc.stringview}"
+                io.eprintln kept9.stringview
+            } else {
+                removeTemp path: tmpc.stringview
+            }
             if rc != 0.i32 then {
                 if rc == 127.i32 then {
                     cmsg: "zc: could not run C compiler '\{cc.stringview}' (not found?); set --cc or install it"

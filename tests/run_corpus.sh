@@ -164,9 +164,9 @@ do_error() {
 
 ######################### DUMP (canonical state) cases #########################
 # Python-free compiler-state regression gate: the PORT emits a canonical
-# (id-normalized) dump (--full --dump-canon) compared to a committed golden.
-# Goldens are PORT-sourced (the reference has no --dump-canon flag); the port's
-# dump correctness is vouched for by the pytest test_dumpsql_z differential.
+# (id-normalized) dump (dump --full --canon) compared to a committed golden.
+# Goldens are PORT-sourced; the port's dump correctness is vouched for by the
+# pytest test_dumpsql_z differential.
 do_dump() {
   [ -f "$DUMPCASES" ] || return
   mkdir -p "$DUMPGOLD"
@@ -174,10 +174,10 @@ do_dump() {
   while read -r name dir; do
     [ -z "$name" ] && continue
     if [ "$MODE" = update ]; then
-      "$ZC" "$name" --src "$ROOT/$dir" --system "$SYS" --full --dump-canon - > "$DUMPGOLD/$name.canon" 2>/dev/null
+      "$ZC" dump "$name" --src "$ROOT/$dir" --system "$SYS" --full --canon > "$DUMPGOLD/$name.canon" 2>/dev/null
       echo "updated dump $name ($(wc -l < "$DUMPGOLD/$name.canon") lines)"; continue
     fi
-    "$ZC" "$name" --src "$ROOT/$dir" --system "$SYS" --full --dump-canon - > "$D/$name.canon" 2>/dev/null; ec=$?
+    "$ZC" dump "$name" --src "$ROOT/$dir" --system "$SYS" --full --canon > "$D/$name.canon" 2>/dev/null; ec=$?
     gold="$DUMPGOLD/$name.canon"; matches=0
     [ "$ec" = 0 ] && [ -f "$gold" ] && [ "$(cat "$D/$name.canon")" = "$(cat "$gold")" ] && matches=1
     if [ "$matches" = 1 ]; then pass=$((pass+1)); else echo "FAIL(dump) $name (exit=$ec)"; fails=$((fails+1)); fi

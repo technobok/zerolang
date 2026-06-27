@@ -3,6 +3,18 @@
 Zero is a systems programming language that compiles to C. The compiler is
 written in Python and emits C code which is compiled with gcc or clang.
 
+## Documentation
+
+The full documentation is rendered to HTML and published with GitHub Pages:
+
+- **[Documentation home](https://technobok.github.io/zerolang/)** — language
+  spec, grammar, ownership model, and standard library reference.
+- **[`zc` command reference](https://technobok.github.io/zerolang/zc.html)** —
+  the compiler CLI: commands, flags, tree resolution, and cross-compilation.
+
+The sources live in [`docs/`](docs/) as `.pdoc` files; run `make docs` to
+re-render the HTML after editing them.
+
 ## Language Basics
 
 Zero uses a clean, keyword-driven syntax with no operator precedence (all
@@ -120,8 +132,8 @@ cc -std=c17 -o zc bootstrap/zc.c
 
 ### Compile and Run
 
-`zc` builds a native executable by default and self-locates its standard
-library, so from the repo:
+`zc` self-locates its standard library, so from the repo a command is all
+you need:
 
 ```bash
 # Build and run in one step (trailing args are forwarded to the program)
@@ -151,8 +163,8 @@ make install ROOT=/opt/zerolang BINDIR=/usr/local/bin
 ```
 
 The installed `zc` finds its stdlib and runtime from any directory (it
-resolves its own executable path). See [`doc/zc.pdoc`](doc/zc.pdoc) for the
-full CLI: subcommands (`build`/`run`/`emit`/`dump`), flags, the
+resolves its own executable path). See [`docs/zc.pdoc`](docs/zc.pdoc) for the
+full CLI: subcommands (`build`/`run`/`emit`/`dump`/`explain`/`env`), flags, the
 tree-resolution precedence, environment variables, and cross-compilation.
 
 ## Example Programs
@@ -193,7 +205,7 @@ compiler0/         # original Python reference compiler (bootstrap + oracle)
   zc.py           # see compiler0/README.md — not the way to build the compiler
 lib/
   system/         # System library (system.z, core.z, io.z)
-doc/
+docs/
   spec.pdoc       # Language specification
   grammar.pdoc    # Formal grammar
   roadmap.pdoc    # Implementation roadmap

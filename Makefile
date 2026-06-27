@@ -29,7 +29,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-parser test-infra test-native test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-parser test-infra test-native test-leak leakcheck selfhost-asan test-corpus test-corpus-z ci test-lf fmt build clean bootstrap-lint style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -44,7 +44,7 @@ check:
 # Style ratchets over src/*.z (tools/lint_style.py), pinned at 0.
 # style-lint-fast is the parse-only empty-clause + first-arg-elision check (fast; runs in `check`).
 # style-lint adds the typecheck-based redundant-suffix check and the re-parse
-# -verified unneeded-paren check (~minutes; run pre-push). See doc/styleguide.pdoc
+# -verified unneeded-paren check (~minutes; run pre-push). See docs/styleguide.pdoc
 # "Literal Type Inference" / "Empty Clauses" / "Parentheses".
 style-lint-fast:
 	uv run python tools/lint_style.py --empty-only --check --check-elide --check-for-while
@@ -352,7 +352,7 @@ regen-goldens: out/zlexer out/zparser
 
 # bootstrap/zc.c -- the committed, Python-free bootstrap seed: a self-emitted,
 # self-reproducing C dump of the compiler. `cc bootstrap/zc.c` IS the
-# self-hosted compiler. See bootstrap/README.md and doc/bootstrap.pdoc.
+# self-hosted compiler. See bootstrap/README.md and docs/bootstrap.pdoc.
 #
 # bump-seed regenerates it from a fresh bin/zc (built by the default bootstrap --
 # the current seed; BOOTSTRAP=python to rebuild from the frozen reference instead).
@@ -392,13 +392,20 @@ test-bootstrap:
 install: bin/zc
 	mkdir -p $(ROOT)/bin $(ROOT)/lib $(BINDIR)
 	cp bin/zc $(ROOT)/bin/zc
-	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/doc $(ROOT)/src
+	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/docs $(ROOT)/src
 	cp -r lib/system $(ROOT)/lib/system
 	cp -r src/runtime $(ROOT)/lib/runtime
-	cp -r doc $(ROOT)/doc
+	cp -r docs $(ROOT)/docs
 	cp -r src $(ROOT)/src
 	ln -sf $(ROOT)/bin/zc $(BINDIR)/zc
 	@echo "installed zc -> $(BINDIR)/zc (tree: $(ROOT))"
+
+# docs -- render the .pdoc documentation to HTML. Commit the regenerated .html;
+# the docs/ folder is served via GitHub Pages. Needs the picodoc renderer at
+# ../picodoc-c/picodoc (see docs/Makefile).
+docs:
+	$(MAKE) -C docs
+	@echo "rendered docs/ -- commit the regenerated .html"
 
 clean:
 	rm -rf $(BUILDDIR) bin

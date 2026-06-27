@@ -16,7 +16,7 @@
 #doc.script src=style/init.js
 #doc.author: pw <p@zerolang.org>
 #doc.datecreated: 2026-03-23
-#doc.version: v0.1
+#doc.version: 0.1.0
 
 #doc.body class=toc-sidebar
 #nav id=nav: [#include literal=true: style/nav.html]
@@ -32,16 +32,17 @@
 #--: Synopsis
 
 #code: """
-  zc [command] <unit> [flags]
+  zc <command> [arguments] [flags]
   """
 
 
 #--: Description
 
-#~"zc" is the self-hosted zerolang compiler. By default it compiles a
-zerolang unit (#~".z") and links it into a native executable with the
-system C compiler. It can also build-and-run a program, emit C, dump the
-compiler's internal model, or cross-compile.
+#~"zc" is the self-hosted zerolang compiler. A #b:"command" is required: it
+compiles a zerolang unit (#~".z") and links it into a native executable
+(#b:"build"), builds and runs it (#b:"run"), emits C (#b:"emit"), dumps the
+compiler's internal model (#b:"dump"), explains a diagnostic code
+(#b:"explain"), or prints resolved settings (#b:"env").
 
 The compiler operates on #_*"units" — each source file defines a unit, and
 dependencies are discovered automatically through the Virtual File System
@@ -55,35 +56,67 @@ standard library and runtime relative to its own executable (see
 
 #--: Commands
 
-The first argument is a command when it is one of the names below;
-otherwise it is treated as a unit name and #~"zc" builds it (the default).
+The first argument is always a command. A bare unit name with no command is
+an error — use #~"zc build <src>".
 
 #ul:
-  [#*: #b:"build" #~"<unit>" — compile to a native executable; output is
+  [#*: #b:"build" #~"<src>" — compile to a native executable; output is
     #~"-o OUT" or #~"./<unit>".]
-  [#*: #b:"run" #~"<unit> [args...]" — build to a temporary file, then run
-    it with an inherited terminal, forwarding the trailing #~"args" and
+  [#*: #b:"run" #~"<src> [args...]" — build to a temporary file, then run it
+    with an inherited terminal, forwarding the trailing #~"args" and
     propagating the program's exit code.]
-  [#*: #b:"emit" #~"<unit>" — emit C source to #~"-o OUT" (or stdout).]
-  [#*: #b:"dump" #~"<unit>" — write the SQL model (#~"-o" or stdout).]
-  [#*: #b:"dump-canon" #~"<unit>" — write the canonical (id-normalized) model.]
+  [#*: #b:"emit" #~"<src>" — emit standalone C source to #~"-o OUT" (or stdout).]
+  [#*: #b:"dump" #~"<src>" — write the typecheck model as SQL (#~"-o" or
+    stdout); #~"--canon" writes the id-normalized model instead.]
+  [#*: #b:"explain" #~"<code>" — print an explanation for a diagnostic code,
+    for example #~"zc explain E0200".]
+  [#*: #b:"env" — print resolved tool paths and settings (see
+    #> to=inspecting-the-environment: Inspecting the environment).]
   [#*: #b:"version" — print the version.]
-  [#*: #b:"help" — print usage.]
+  [#*: #b:"help" #~"[command]" — print usage, or detailed help for one command.]
 
 For #~"run", flags before the unit configure the build; everything after
 the unit (or after a #~"--" separator) is passed to the program.
 
 #code: """
-  zc hello                      # build ./hello
+  zc build hello                # build ./hello
   zc run hello arg1 arg2        # build + run, forwarding arg1 arg2
   zc build hello --release -o hello
   zc emit hello -o hello.c
+  zc explain E0200
   """
+
+#~"-h" / #~"--help" and #~"-V" / #~"--version" are also accepted in any
+position, so #~"zc build --help" prints the help for #~"build".
+
+
+#--: The source argument
+
+#b:"build", #b:"run", #b:"emit", and #b:"dump" take a #b:"<src>" — either a
+unit name (#~"hello") or a path to a #~".z" file (#~"hello.z",
+#~"./sub/hello.z"). A path — anything containing #~"/" or ending in #~".z" —
+sets #~"--src" to the file's directory and the unit to its base name, unless
+#~"--src" is given explicitly.
+
+Because the command always comes first, a unit whose name collides with a
+command is reached through the explicit form: #~"zc build run" or
+#~"zc build ./run.z" to build a unit named #~"run".
 
 
 #--: Flags
 
-#---: Shared flags
+#---: Global flags
+
+These are accepted in any position.
+
+#ul:
+  [#*: #~"-h" / #~"--help" — print usage; after a command, print that
+    command's help.]
+  [#*: #~"-V" / #~"--version" — print the version.]
+
+#---: Build flags
+
+These apply to #~"build", #~"run", #~"emit", and #~"dump".
 
 #ul:
   [#*: #~"--src DIR" — user source directory (default: the current directory).]
@@ -92,25 +125,17 @@ the unit (or after a #~"--" separator) is passed to the program.
   [#*: #~"--full" — type-check every definition, not just those reachable
     from #~"main".]
   [#*: #~"-o OUT" — output path (the executable for #~"build", the C file
-    for #~"emit").]
+    for #~"emit", the model for #~"dump").]
   [#*: #~"--release" — optimize (#~"-O2"); the default is a debug build
     (#~"-O0 -g").]
+  [#*: #~"--save-temps" — keep the generated C file and print its path
+    (#~"build" / #~"run").]
   [#*: #~"--cc CC" — the C compiler to invoke.]
   [#*: #~"--target TRIPLE" — cross-compile (see
     #> to=cross-compilation: Cross-compilation).]
   [#*: #~"--cflags STR" / #~"--ldflags STR" — extra compiler / linker flags,
     split on spaces.]
-
-#---: Legacy action flags
-
-These predate the subcommands and still work, so existing tooling keeps
-running unchanged. Each selects its action directly — a bare #~"zc <unit>"
-with one of these does that action instead of building:
-
-#ul:
-  [#*: #~"--emit-c FILE" — emit C to #~"FILE" (or #~"-" for stdout).]
-  [#*: #~"--dump-sql FILE" — write the SQL model.]
-  [#*: #~"--dump-canon FILE" — write the canonical model.]
+  [#*: #~"--canon" — #~"dump" only: write the id-normalized model.]
 
 
 #--: Tree resolution
@@ -141,6 +166,7 @@ install tree. The C compiler is chosen as #~"--cc" > #~"--target"-derived
 file, and invokes the C compiler to produce an executable. Because the
 runtime is inlined at emit time, the single #~".c" needs no extra include
 paths. The debug default is #~"-O0 -g"; #~"--release" is #~"-O2".
+#~"--save-temps" keeps that temporary #~".c" and prints its path.
 
 #b:"run" builds the same way to a temporary location, then spawns the
 executable with the parent's stdin / stdout / stderr (a live terminal),
@@ -162,6 +188,20 @@ follow-on. Core, POSIX-free programs cross-build where the cross #~"cc" is
 installed.
 
 
+#--: Inspecting the environment
+
+#~"zc env" prints the resolved tool paths and settings as #~"KEY=VALUE"
+lines — #~"ZEROLANG_ROOT", #~"ZEROLANG_SYSTEM", #~"ZEROLANG_RUNTIME",
+#~"ZC_CC", #~"ZC_TARGET", #~"ZC_VERSION", and #~"ZC_EXE". It honours the
+same flags as a build, so #~"zc env --target x86_64-w64-mingw32" reports the
+cross compiler that would be used.
+
+#code: """
+  zc env
+  zc env --target x86_64-w64-mingw32
+  """
+
+
 #--: Installation
 
 #~"make install" builds #~"bin/zc" and copies a self-contained,
@@ -174,7 +214,7 @@ symlinking #~"BINDIR/zc" (default #~"~/.local/bin/zc") to it:
   """
 
 The tree contains #~"bin/zc", #~"lib/system", #~"lib/runtime" (copied from
-#~"src/runtime"), #~"doc", and #~"src". Because #~"os.exePath" resolves the
+#~"src/runtime"), #~"docs", and #~"src". Because #~"os.exePath" resolves the
 symlink to the real binary, the installed #~"zc" finds its stdlib and
 runtime from any working directory.
 
@@ -182,11 +222,13 @@ runtime from any working directory.
 #--: Exit Codes
 
 #ul:
-  [#*: #~"0" — Compilation succeeded. The output C file has been written.]
+  [#*: #~"0" — Success. For #~"build" the executable was produced; for
+    #~"run" the program ran (its own exit code is propagated); for #~"emit"
+    and #~"dump" the output was written.]
   [#*: #~"1" — Compilation failed. One or more errors were found during
     parsing or type checking. Error messages are written to stderr.]
-  [#*: #~"2" — Usage error. Invalid command-line arguments, invalid unit
-    name, or invalid directory paths.]
+  [#*: #~"2" — Usage error. Unknown or missing command, invalid unit name,
+    or invalid directory paths.]
   [#*: other — for #~"build" / #~"run", a non-zero exit from the C compiler
     or from the program itself is propagated unchanged.]
 
@@ -252,7 +294,8 @@ Error codes are grouped by category:
   [#*: #~"E0400–E0499": Generic and monomorphization errors — missing type
     arguments, failed type inference, invalid generic constraints]
 
-An error count summary is printed at the end:
+Run #~"zc explain <code>" for a longer description of any code (for example
+#~"zc explain E0200"). An error count summary is printed at the end:
 
 #code: """
   3 errors found
@@ -294,6 +337,12 @@ Build a release executable at a chosen path:
   zc build myapp --src src --release -o build/myapp
   """
 
+Build straight from a file path:
+
+#code: """
+  zc build ./examples/hello.z
+  """
+
 Emit C and compile it yourself:
 
 #code: """
@@ -310,4 +359,11 @@ Full type-check of a library (not just what is reachable from main):
 
 #code: """
   zc dump mylib --src lib --full
+  """
+
+Explain an error code, and inspect the resolved toolchain:
+
+#code: """
+  zc explain E0200
+  zc env
   """
