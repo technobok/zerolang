@@ -139,6 +139,7 @@ main: function is {
     cc: "gcc".string
     root: ".".string
     report: false
+    heavy: false
     timeoutSecs: 60.i32
     i: 1.u64
     for i < n loop {
@@ -155,6 +156,8 @@ main: function is {
             root = (argv.get i: i).copy
         } else if av == "--report" then {
             report = true
+        } else if av == "--heavy" then {
+            heavy = true
         } else if av == "--timeout" then {
             i = i + 1
             tval: (argv.get i: i).copy
@@ -665,6 +668,36 @@ main: function is {
                     }
                 }
             }
+        }
+    }
+
+    # ---------------- FIXPOINT (heavy) ----------------
+    # Self-host byte-identity: zc emitted by --zc, rebuilt, must re-emit itself
+    # identically. Heavy (two zc self-emits + one gcc of zc.c) -- opt-in.
+    if heavy then {
+        fp1: "\{d.stringview}/fp1.c"
+        fp1bin: "\{d.stringview}/fp1.bin"
+        fp2: "\{d.stringview}/fp2.c"
+        fpOk: false
+        e1: zcArgv zc: zc.stringview name: "zc" srcdir: srcDir.stringview sys: sys.stringview outc: fp1.stringview
+        if (os.spawn argv: e1 cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+            g1: gccArgv cc: cc.stringview bin: fp1bin.stringview csrc: fp1.stringview asan: false
+            if (os.spawn argv: g1 cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+                e2: zcArgv zc: fp1bin.stringview name: "zc" srcdir: srcDir.stringview sys: sys.stringview outc: fp2.stringview
+                if (os.spawn argv: e2 cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+                    c1: slurp path: fp1.stringview
+                    c2: slurp path: fp2.stringview
+                    if c1.stringview == c2.stringview then {
+                        fpOk = true
+                    }
+                }
+            }
+        }
+        if fpOk then {
+            passN = passN + 1
+        } else {
+            print "FAIL(fixpoint) zc stage1 != stage2"
+            fails = fails + 1
         }
     }
 
