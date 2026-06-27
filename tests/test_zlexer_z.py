@@ -1,10 +1,8 @@
 """End-to-end tests for the self-hosting lexer (src/zlexer.z).
 
-PRs 3-7 progressively grew the scanner; PR 8 wires the binary into the
-differential harness against the Python reference for all 96 example
-goldens (see tests/test_lexer_differential.py). This file keeps the
-small hand-curated fixtures under tests/fixtures/zlexer_z/ that gate
-each PR's token coverage in isolation.
+The whole-example token goldens live in tests/test_lexer_differential.py;
+this file keeps the small hand-curated fixtures under tests/fixtures/zlexer_z/
+that gate token coverage in isolation.
 
 The `zlexer_binary` fixture lives in tests/conftest.py.
 """
@@ -42,9 +40,9 @@ def _assert_matches_golden(zlexer_binary: str, name: str) -> None:
 
 
 def test_structural_fixture_matches_golden(zlexer_binary):
-    """PR 3: bedrock scanner output must match the Python reference for
-    a fixture exercising whitespace, comments, EOL, dot variants, and
-    structural single-char delimiters."""
+    """Bedrock scanner output must match the committed golden for a fixture
+    exercising whitespace, comments, EOL, dot variants, and structural
+    single-char delimiters."""
     _assert_matches_golden(zlexer_binary, "structural")
 
 

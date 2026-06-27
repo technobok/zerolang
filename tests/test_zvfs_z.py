@@ -6,7 +6,7 @@ one line per verb to stdout. Both tests parametrise over every `.script`
 fixture under tests/fixtures/zvfs_ops/ and assert byte-for-byte equality
 with the matching `.expected` golden:
 
-- test_zvfs_script_matches_golden runs the reference-built binary (zc.py).
+- test_zvfs_script_matches_golden runs the seed-built binary.
 - test_zvfs_selfhost_matches_golden runs the binary built by the PORTED zc.
 
 The fixtures live in tests/conftest.py.
@@ -64,7 +64,7 @@ def _run_zvfs_script(binary, script_name, tmp_path):
 
 @pytest.mark.parametrize("script_name", _list_script_names())
 def test_zvfs_script_matches_golden(script_name, zvfs_binary, tmp_path):
-    """The reference-built dispatcher's stdout matches the golden byte-for-byte."""
+    """The seed-built dispatcher's stdout matches the golden byte-for-byte."""
     proc, expected = _run_zvfs_script(zvfs_binary, script_name, tmp_path)
     if proc.returncode != 0:
         pytest.fail(

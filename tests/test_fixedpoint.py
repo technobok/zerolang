@@ -1,7 +1,7 @@
 """Self-hosting fixpoint: the integrated compiler reproduces itself.
 
-- stage1 = ``src/zc.z`` compiled by the reference (``zc.py``) into the ported
-  ``zc`` binary (the ``zc_binary`` fixture).
+- stage1 = ``src/zc.z`` compiled by the committed seed into the ported ``zc``
+  binary (the ``zc_binary`` fixture).
 - stage2 = ``src/zc.z`` compiled by stage1 (the ``zc_stage2_binary`` fixture).
 
 Two checks:
@@ -9,10 +9,9 @@ Two checks:
 - ``test_stage2_byte_identical_to_stage1`` -- the ``zc.c`` emitted by stage1 is
   byte-for-byte identical to the ``zc.c`` emitted by stage2. Both are the SAME
   ported compiler over the same inputs, so type-id allocation is identical -- a
-  true fixpoint (unlike port-vs-reference, where ids differ by construction; see
-  tests/test_emitc_z.py).
+  true fixpoint.
 - ``test_stage2_compiles_<unit>_to_golden`` -- stage2 compiles ztypes / ztyping
-  / zenv to C whose built binaries reproduce the reference smoke goldens, so the
+  / zenv to C whose built binaries reproduce the committed smoke goldens, so the
   fixpoint is the CORRECT compiler, not a fixpoint of a broken one.
 """
 
