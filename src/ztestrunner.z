@@ -671,6 +671,100 @@ main: function is {
         }
     }
 
+    # ---------------- SELFHOST-ASAN (heavy) ----------------
+    # Build zc itself with ASan, then run it as the compiler over every example
+    # and corpus unit in both --emit-c and --dump-sql modes; the COMPILER must
+    # be UAF-/leak-free. Heavy (one ASan gcc of zc.c + two runs per unit).
+    if heavy then {
+        zcaC: "\{d.stringview}/zca.c"
+        zcaB: "\{d.stringview}/zca.bin"
+        zcaOk: false
+        ea: zcArgv zc: zc.stringview name: "zc" srcdir: srcDir.stringview sys: sys.stringview outc: zcaC.stringview
+        if (os.spawn argv: ea cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+            gza: gccArgv cc: cc.stringview bin: zcaB.stringview csrc: zcaC.stringview asan: true
+            if (os.spawn argv: gza cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) == 0 then {
+                zcaOk = true
+            }
+        }
+        if zcaOk == false then {
+            print "FAIL(selfhost-asan-build) zc"
+            fails = fails + 1
+        }
+        if zcaOk then {
+            os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
+            saDirs: (List String)
+            saDirs.append from: examplesDir.copy
+            saDirs.append from: corpusDir.copy
+            sdi: 0.u64
+            for sdi < saDirs.length loop {
+                sad: (saDirs.get i: sdi).copy
+                sar: io.listDir path: sad.stringview
+                match (
+                    sar
+                ) case ok then {
+                    sai: 0.u64
+                    for sai < sar.length loop {
+                        sent: (sar.get i: sai).copy
+                        ssfx: sent.stringview.stripSuffix s: ".z"
+                        match (
+                            ssfx
+                        ) case some then {
+                            snm: ssfx.string
+                            saerr1: "\{d.stringview}/SA1_\{snm.stringview}.err"
+                            m1: (List String)
+                            m1.append from: zcaB.copy
+                            m1.append from: snm.copy
+                            m1.append from: "--src".string
+                            m1.append from: sad.copy
+                            m1.append from: "--system".string
+                            m1.append from: sys.copy
+                            m1.append from: "--emit-c".string
+                            m1.append from: "/dev/null".string
+                            os.spawn argv: m1 cwd: "" outPath: "/dev/null" errPath: saerr1.stringview timeoutSecs: timeoutSecs
+                            e1C: slurp path: saerr1.stringview
+                            if (isUnsafe s: e1C.stringview) then {
+                                print "FAIL(selfhost-asan) \{snm.stringview} emit-c unsafe"
+                                fails = fails + 1
+                            } else if (isLeak s: e1C.stringview) then {
+                                print "FAIL(selfhost-asan) \{snm.stringview} emit-c leak"
+                                fails = fails + 1
+                            } else {
+                                leakclean = leakclean + 1
+                            }
+                            saerr2: "\{d.stringview}/SA2_\{snm.stringview}.err"
+                            m2: (List String)
+                            m2.append from: zcaB.copy
+                            m2.append from: snm.copy
+                            m2.append from: "--src".string
+                            m2.append from: sad.copy
+                            m2.append from: "--system".string
+                            m2.append from: sys.copy
+                            m2.append from: "--full".string
+                            m2.append from: "--dump-sql".string
+                            m2.append from: "-".string
+                            os.spawn argv: m2 cwd: "" outPath: "/dev/null" errPath: saerr2.stringview timeoutSecs: timeoutSecs
+                            e2C: slurp path: saerr2.stringview
+                            if (isUnsafe s: e2C.stringview) then {
+                                print "FAIL(selfhost-asan) \{snm.stringview} dump-sql unsafe"
+                                fails = fails + 1
+                            } else if (isLeak s: e2C.stringview) then {
+                                print "FAIL(selfhost-asan) \{snm.stringview} dump-sql leak"
+                                fails = fails + 1
+                            } else {
+                                leakclean = leakclean + 1
+                            }
+                        } case none then {
+                        }
+                        sai = sai + 1
+                    }
+                } case err then {
+                }
+                sdi = sdi + 1
+            }
+            os.unsetEnv key: "ASAN_OPTIONS"
+        }
+    }
+
     # ---------------- FIXPOINT (heavy) ----------------
     # Self-host byte-identity: zc emitted by --zc, rebuilt, must re-emit itself
     # identically. Heavy (two zc self-emits + one gcc of zc.c) -- opt-in.
