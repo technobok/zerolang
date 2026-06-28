@@ -5037,6 +5037,12 @@ lookupTyperef: function {resolved: (Map String value: u64) mainName: StringView 
     return found
 }
 
+# builtinTidTc -- the canonical registry id of a stdlib builtin by base name
+# (mainName "" so a user type of the same name never shadows it). 0 when absent.
+builtinTidTc: function {st: zenv.ZSymbolTable base: StringView} out u64 is {
+    return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: "" base: base) d: 0)
+}
+
 # stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
 # resolved type. Runs after resolveCrossUnitDemand, so system + forward refs are present
 # in ty.resolved. pendingTyperef is a sibling field of resolved / nodeType (no lock
@@ -5276,11 +5282,11 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     # heap-pointer destroy). Views (ListView/OptionView) own no heap -- excluded.
     tplNmD: typeNameOf st: st tid: templateId
     needsDtorM: false
-    if tplNmD.stringview == "List" then { needsDtorM = true }
-    if tplNmD.stringview == "Option" then { needsDtorM = true }
-    if tplNmD.stringview == "Result" then { needsDtorM = true }
-    if tplNmD.stringview == "Map" then { needsDtorM = true }
-    if tplNmD.stringview == "Set" then { needsDtorM = true }
+    if templateId == (builtinTidTc st: st base: "List") then { needsDtorM = true }
+    if templateId == (builtinTidTc st: st base: "Option") then { needsDtorM = true }
+    if templateId == (builtinTidTc st: st base: "Result") then { needsDtorM = true }
+    if templateId == (builtinTidTc st: st base: "Map") then { needsDtorM = true }
+    if templateId == (builtinTidTc st: st base: "Set") then { needsDtorM = true }
     if needsDtorM then {
         mdnM: "\{name}_destroy".string
         st.reg.setDestructorName typeId: mid name: mdnM.stringview
@@ -5344,8 +5350,8 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     if tt == ztypes.ztypetype.RECORD then {
         tplNm9: typeNameOf st: st tid: templateId
         isSized9: false
-        if tplNm9.stringview == "str" then { isSized9 = true }
-        if tplNm9.stringview == "array" then { isSized9 = true }
+        if templateId == (builtinTidTc st: st base: "str") then { isSized9 = true }
+        if templateId == (builtinTidTc st: st base: "array") then { isSized9 = true }
         tk9: genericTypeKey st: st tid: templateId
         pfx9: "\{tk9}."
         pNames9: (List String)
@@ -7173,7 +7179,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                     bgo9
                 ) case some then {
                     gn9: typeNameOf st: st tid: bgo9
-                    if gn9.stringview == "str" then { isStrBase = true }
+                    if bgo9 == (builtinTidTc st: st base: "str") then { isStrBase = true }
                 } case none then {
                 }
             } case none then {
@@ -9569,8 +9575,8 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                             wgi9
                         ) case some then {
                             wgn9: typeNameOf st: st tid: wgi9
-                            if wgn9.stringview == "List" then { isWType = false }
-                            if wgn9.stringview == "Map" then { isWType = false }
+                            if wgi9 == (builtinTidTc st: st base: "List") then { isWType = false }
+                            if wgi9 == (builtinTidTc st: st base: "Map") then { isWType = false }
                         } case none then {
                         }
                     } case none then {
