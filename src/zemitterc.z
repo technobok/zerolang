@@ -10691,7 +10691,7 @@ payloadDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 arm: St
         if pn.stringview == "null" then {
             return "".string
         }
-        if pn.stringview == "String" then {
+        if co == ctx.strTid then {
             return "\{ctx.strC}_free".string
         }
         # childOf already resolves the arm to its concrete (possibly cross-unit)
@@ -10914,7 +10914,7 @@ mapFreeKeyDel: function {isStr: bool strC: StringView valFree: StringView} out S
 # via the String free, reftype / heap-collection value via its destructor, empty
 # for scalars. Mirrors emitStructDestructor's per-field cleanup.
 mapValFreeStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx valName: StringView valTid: u64 slot: StringView} out String is {
-    if valName == "String" then {
+    if valTid == ctx.strTid then {
         return "\{ctx.strC}_free(&\{slot});".string
     }
     if valTid > 0 then {
@@ -10998,6 +10998,23 @@ emitMapIters: function {symtab: zenv.ZSymbolTable runtimeDir: StringView nm: Str
 # emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
 # set/get/has/delete). The value's optionval mono (get's return) supplies the
 # value type and the OPTIONVAL placeholders; the key name is the remainder.
+# mapValType -- the canonical Map value type id, off the "set" method's "value"
+# param (mirrors listElemType). 0 when absent.
+mapValType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
+    so: symtab.typing.childOf parentTypeId: monoId name: "set"
+    match (
+        so
+    ) case some then {
+        vo: symtab.typing.childOf parentTypeId: so name: "value"
+        match (
+            vo
+        ) case some then {
+            return vo
+        } case none then {}
+    } case none then {}
+    return 0
+}
+
 emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView monoId: u64 buf: String.borrow} is {
     mn: typeNameOfReg9 symtab: symtab tid: monoId
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
@@ -11034,7 +11051,7 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     keyIsStr: keyName.stringview == "String"
     hashKeyBody: setHashBody isStr: keyIsStr
     keysEqBody: setEqBody isStr: keyIsStr
-    valTid: resolveTypeIdByName symtab: symtab ctx: ctx name: valName.stringview
+    valTid: mapValType symtab: symtab monoId: monoId
     vfDestroy: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "p->entries[i].value"
     vfDel: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[idx].value"
     vfDup: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[existing].value"
@@ -11050,12 +11067,17 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
         getBody = gbV
     } else {
-        if valName.stringview == "String" then {
+        if valTid == ctx.strTid then {
             gbS: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        _copy->size = _this->entries[idx].value.size;\n        _copy->capacity = _copy->size + 1;\n        _copy->data = (char*)z_xmalloc(_copy->capacity);\n        memcpy(_copy->data, _this->entries[idx].value.data, _copy->size);\n        _copy->data[_copy->size] = 0;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
             getBody = gbS
         } else {
-            gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
-            getBody = gbR
+            if (isReftypeParam symtab: symtab ctx: ctx tid: valTid) then {
+                gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+                getBody = gbR
+            } else {
+                gbVT: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        *_copy = _this->entries[idx].value;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+                getBody = gbVT
+            }
         }
     }
     p: "\{runtimeDir}/z_Map.c.tmpl"
