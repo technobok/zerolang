@@ -10756,16 +10756,50 @@ monoElemName: function {full: String prefixLen: u64} out String is {
 # setHashBody / setEqBody / setDestroyItems -- the element-kind-specific
 # fragments of a Set mono: SipHash + memcmp + per-item free for String keys,
 # the integer hash + `==` + no item cleanup otherwise.
-setHashBody: function {isStr: bool} out String is {
-    if isStr then {
+# keyHashKind -- classify a Set element / Map key by canonical id (never by
+# name, so a user shadow is handled by its nature): 1 native String, 2
+# StringView, 3 by-value struct (record/variant -> byte hash over contents), 0
+# scalar or pointer (cast hash, the prior `else`). A heap-owning struct lands in
+# 3 and fails to build at its `_eq` until the typecheck rejection lands (Slice 3).
+keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
+    if tid == ctx.strTid then {
+        return 1
+    }
+    if tid == ctx.svTid then {
+        return 2
+    }
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.RECORD then {
+        return 3
+    }
+    if tt == ztypes.ztypetype.VARIANT then {
+        return 3
+    }
+    return 0
+}
+
+setHashBody: function {kind: u64} out String is {
+    if kind == 1 then {
         return "z_siphash_string(_key)".string
+    }
+    if kind == 2 then {
+        return "z_siphash_stringview(_key)".string
+    }
+    if kind == 3 then {
+        return "z_siphash_bytes(&_key, sizeof(_key))".string
     }
     return "z_hash_u64((uint64_t)_key)".string
 }
 
-setEqBody: function {isStr: bool} out String is {
-    if isStr then {
+setEqBody: function {kind: u64} out String is {
+    if kind == 1 then {
         return "_a.size == _b.size && memcmp(_a.data, _b.data, _a.size) == 0".string
+    }
+    if kind == 2 then {
+        return "_a.length == _b.length && memcmp(_a.data, _b.data, _a.length) == 0".string
+    }
+    if kind == 3 then {
+        return "memcmp(&_a, &_b, sizeof(_a)) == 0".string
     }
     return "_a == _b".string
 }
@@ -10823,7 +10857,9 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     mcr: cUpperOf text: nm.stringview
     elemName: monoElemName full: mn prefixLen: 4
     itemT: cTypeForName symtab: symtab ctx: ctx name: elemName.stringview
-    isStr: elemName.stringview == "String"
+    elemTid: setElemType symtab: symtab monoId: monoId
+    ekind: keyHashKind symtab: symtab ctx: ctx tid: elemTid
+    isStr: ekind == 1
     ovName: "OptionView_\{elemName}".string
     ovId: monoIdByName symtab: symtab name: ovName.stringview
     siName: "SetIter_\{elemName}".string
@@ -10837,8 +10873,8 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     ov: cbaseNoPrefix tid: ovId name: ovName.stringview
     ovu: cUpperOf text: ovName.stringview
     si: cbaseNoPrefix tid: siId name: siName.stringview
-    hashBody: setHashBody isStr: isStr
-    eqBody: setEqBody isStr: isStr
+    hashBody: setHashBody kind: ekind
+    eqBody: setEqBody kind: ekind
     destroyItems: setDestroyItems isStr: isStr strC: ctx.strC.stringview
     freeItemDup: setFreeItemDup isStr: isStr strC: ctx.strC.stringview
     freeItemDel: setFreeItemDel isStr: isStr strC: ctx.strC.stringview
@@ -11000,6 +11036,36 @@ emitMapIters: function {symtab: zenv.ZSymbolTable runtimeDir: StringView nm: Str
 # value type and the OPTIONVAL placeholders; the key name is the remainder.
 # mapValType -- the canonical Map value type id, off the "set" method's "value"
 # param (mirrors listElemType). 0 when absent.
+mapKeyType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
+    so: symtab.typing.childOf parentTypeId: monoId name: "set"
+    match (
+        so
+    ) case some then {
+        ko: symtab.typing.childOf parentTypeId: so name: "key"
+        match (
+            ko
+        ) case some then {
+            return ko
+        } case none then {}
+    } case none then {}
+    return 0
+}
+
+setElemType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
+    ao: symtab.typing.childOf parentTypeId: monoId name: "add"
+    match (
+        ao
+    ) case some then {
+        io: symtab.typing.childOf parentTypeId: ao name: "item"
+        match (
+            io
+        ) case some then {
+            return io
+        } case none then {}
+    } case none then {}
+    return 0
+}
+
 mapValType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
     so: symtab.typing.childOf parentTypeId: monoId name: "set"
     match (
@@ -11048,9 +11114,11 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     ovu: cUpperOf text: ovName.stringview
     keyName: mapKeyName full: mn vlen: valName.length
     keyT: cTypeForName symtab: symtab ctx: ctx name: keyName.stringview
-    keyIsStr: keyName.stringview == "String"
-    hashKeyBody: setHashBody isStr: keyIsStr
-    keysEqBody: setEqBody isStr: keyIsStr
+    keyTid: mapKeyType symtab: symtab monoId: monoId
+    kkind: keyHashKind symtab: symtab ctx: ctx tid: keyTid
+    keyIsStr: kkind == 1
+    hashKeyBody: setHashBody kind: kkind
+    keysEqBody: setEqBody kind: kkind
     valTid: mapValType symtab: symtab monoId: monoId
     vfDestroy: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "p->entries[i].value"
     vfDel: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[idx].value"
