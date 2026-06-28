@@ -5635,6 +5635,31 @@ isSortEligible: function {name: StringView} out bool is {
     return false
 }
 
+# isStdlibUnitName / isUserShadowElem -- a collection element that is a USER type
+# shadowing a builtin name (e.g. a user `String`) is NOT the native builtin, so it
+# earns no builtin contains/sort (like any other user type). isUserShadowElem is true
+# when the element is defined in a user file unit (not a stdlib unit, not a scalar).
+isStdlibUnitName: function {name: StringView} out bool is {
+    if name == "system" then { return true }
+    if name == "core" then { return true }
+    if name == "collections" then { return true }
+    if name == "io" then { return true }
+    if name == "os" then { return true }
+    if name == "cli" then { return true }
+    return false
+}
+
+isUserShadowElem: function {st: zenv.ZSymbolTable elemTid: u64} out bool is {
+    duo: st.typing.definedInUnit.get key: elemTid
+    match (
+        duo
+    ) case some then {
+        return (isStdlibUnitName name: duo.stringview) == false
+    } case none then {
+        return false
+    }
+}
+
 # mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child; returns
 # the method's type id so callers can link its return type.
 mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoId: u64 m: StringView} out u64 is {
@@ -5797,11 +5822,11 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         st.reg.setReturnType typeId: stId value: elemArg
         ppId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "pop"
         st.reg.setReturnType typeId: ppId value: elemArg
-        if (isContainsEligible name: en.stringview) then {
+        if (isContainsEligible name: en.stringview) when (isUserShadowElem st: st elemTid: elemArg) == false then {
             cnId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "contains"
             st.reg.setReturnType typeId: cnId value: boolid
         }
-        if (isSortEligible name: en.stringview) then {
+        if (isSortEligible name: en.stringview) when (isUserShadowElem st: st elemTid: elemArg) == false then {
             mintCollectionMethod st: st monoName: monoName monoId: monoId m: "sort"
         }
         lvId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
