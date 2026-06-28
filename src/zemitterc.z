@@ -635,6 +635,15 @@ originTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
     return 0
 }
 
+# originIsTid -- true when tid's generic origin equals the (nonzero) originTid.
+# The 0-guard means an origin-less type never matches an unresolved (0) builtin.
+originIsTid: function {symtab: zenv.ZSymbolTable tid: u64 originTid: u64} out bool is {
+    if originTid == 0 then {
+        return false
+    }
+    return (originTidOf symtab: symtab tid: tid) == originTid
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -1046,10 +1055,10 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     if bnO.stringview == "meta" when mcO9.stringview == "create" then {
         return true
     }
-    if soO.stringview == "Option" when bnO.stringview == "Option" then {
+    if (originIsTid symtab: symtab tid: smidO originTid: ctx.optionOriginTid) when bnO.stringview == "Option" then {
         return true
     }
-    if soO.stringview == "Result" when bnO.stringview == "Result" then {
+    if (originIsTid symtab: symtab tid: smidO originTid: ctx.resultOriginTid) when bnO.stringview == "Result" then {
         return true
     }
     # user-defined union arm construction `MyUnion.arm <payload>`: the base atom
@@ -2125,10 +2134,10 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
         rid: dottedReceiverStampId symtab: symtab callable: n.callable
         rid = chaseColMono symtab: symtab tid: rid
         omn: monoOriginName symtab: symtab tid: rid
-        if omn.stringview == "List" then {
+        if (originIsTid symtab: symtab tid: rid originTid: ctx.listOriginTid) then {
             return true
         }
-        if omn.stringview == "ListView" then {
+        if (originIsTid symtab: symtab tid: rid originTid: ctx.listViewOriginTid) then {
             return true
         }
         return false
@@ -2171,7 +2180,7 @@ emitStrConvCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     rid0: stampIdOf symtab: symtab nid: call.nodeid.u64
     rid: chaseColMono symtab: symtab tid: rid0
     rori: monoOriginName symtab: symtab tid: rid
-    if rori.stringview != "str" then {
+    if (originIsTid symtab: symtab tid: rid originTid: ctx.strOriginTid) == false then {
         return "".string
     }
     rmn: typeNameOfReg9 symtab: symtab tid: rid
@@ -2254,7 +2263,7 @@ emitEmptyColCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
         amid0: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
         amid9: chaseColMono symtab: symtab tid: amid0
         amo9: monoOriginName symtab: symtab tid: amid9
-        if amo9.stringview == "array" then {
+        if (originIsTid symtab: symtab tid: amid9 originTid: ctx.arrayOriginTid) then {
             amn9: typeNameOfReg9 symtab: symtab tid: amid9
             acb9: cnameOf tid: amid9 name: amn9.stringview
             return "\{acb9}_create()"
@@ -2264,7 +2273,7 @@ emitEmptyColCreate: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
         smid0: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
         smid9: chaseColMono symtab: symtab tid: smid0
         smo9: monoOriginName symtab: symtab tid: smid9
-        if smo9.stringview == "str" then {
+        if (originIsTid symtab: symtab tid: smid9 originTid: ctx.strOriginTid) then {
             smn9: typeNameOfReg9 symtab: symtab tid: smid9
             scb9: cnameOf tid: smid9 name: smn9.stringview
             return "\{scb9}_create()"
@@ -2313,8 +2322,8 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
     omn: monoOriginName symtab: symtab tid: bt
-    if omn.stringview != "List" then {
-        if omn.stringview != "ListView" then {
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.listOriginTid) == false then {
+        if (originIsTid symtab: symtab tid: bt originTid: ctx.listViewOriginTid) == false then {
             return "".string
         }
     }
@@ -2377,7 +2386,7 @@ emitArrayMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
     ao9: monoOriginName symtab: symtab tid: bt
-    if ao9.stringview != "array" then {
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.arrayOriginTid) == false then {
         return "".string
     }
     btn: typeNameOfReg9 symtab: symtab tid: bt
@@ -2407,7 +2416,7 @@ emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
     omn: monoOriginName symtab: symtab tid: bt
-    if omn.stringview != "Set" then {
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.setOriginTid) == false then {
         return "".string
     }
     btn: typeNameOfReg9 symtab: symtab tid: bt
@@ -2442,7 +2451,7 @@ emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
     omn: monoOriginName symtab: symtab tid: bt
-    if omn.stringview != "Map" then {
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.mapOriginTid) == false then {
         return "".string
     }
     btn: typeNameOfReg9 symtab: symtab tid: bt
@@ -2796,10 +2805,10 @@ emitUnionCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         if smOrig9.stringview == "resultval" then {
             sysU9 = true
         }
-        if smOrig9.stringview == "Option" then {
+        if (originIsTid symtab: symtab tid: smid0 originTid: ctx.optionOriginTid) then {
             sysU9 = true
         }
-        if smOrig9.stringview == "Result" then {
+        if (originIsTid symtab: symtab tid: smid0 originTid: ctx.resultOriginTid) then {
             sysU9 = true
         }
         if sysU9 then {
@@ -2865,7 +2874,7 @@ emitVariantCtorCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     if sInline then {
         return (emitInlineVariantCtor symtab: symtab ctx: ctx call: call tid: smid arm: mn.stringview)
     }
-    if sorig.stringview == "Option" then {
+    if (originIsTid symtab: symtab tid: smid originTid: ctx.optionOriginTid) then {
         ovn9: typeNameOfReg9 symtab: symtab tid: smid
         ovc9: cnameOf tid: smid name: ovn9.stringview
         if mn.stringview == "none" then {
@@ -4872,7 +4881,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 # array/str monos are RECORD typetype but keep their own legs
                 # below (a.0 -> a.data[0]; str .length -> .len etc.).
                 bsoNmR9: monoOriginName symtab: symtab tid: bstamp
-                if bsoNmR9.stringview != "array" when bsoNmR9.stringview != "str" then {
+                if (originIsTid symtab: symtab tid: bstamp originTid: ctx.arrayOriginTid) == false when (originIsTid symtab: symtab tid: bstamp originTid: ctx.strOriginTid) == false then {
                     isRecOrCls = true
                 }
             }
@@ -5001,7 +5010,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             recvB2: colRecvRef ctx: ctx bn: bn2.stringview
             bsmn: monoOriginName symtab: symtab tid: bstamp
-            if bsmn.stringview == "array" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.arrayOriginTid) then {
                 bstna9: typeNameOfReg9 symtab: symtab tid: bstamp
                 acba9: cnameOf tid: bstamp name: bstna9.stringview
                 if mn2.stringview == "length" then {
@@ -5013,7 +5022,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return eai9
                 }
             }
-            if bsmn.stringview == "str" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.strOriginTid) then {
                 bstns9: typeNameOfReg9 symtab: symtab tid: bstamp
                 scba9: cnameOf tid: bstamp name: bstns9.stringview
                 if mn2.stringview == "length" then {
@@ -5033,7 +5042,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return esvw9
                 }
             }
-            if bsmn.stringview == "List" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.listOriginTid) then {
                 if mn2.stringview == "length" then {
                     el0: "\{bn2}\{accB2}length"
                     return el0
@@ -5061,13 +5070,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return epLi
                 }
             }
-            if bsmn.stringview == "ListView" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.listViewOriginTid) then {
                 if mn2.stringview == "length" then {
                     elv: "\{bn2}\{accB2}length"
                     return elv
                 }
             }
-            if bsmn.stringview == "Set" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.setOriginTid) then {
                 if mn2.stringview == "length" then {
                     esl: "\{bn2}->length"
                     return esl
@@ -5083,7 +5092,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return esi
                 }
             }
-            if bsmn.stringview == "Map" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.mapOriginTid) then {
                 if mn2.stringview == "length" then {
                     eml: "\{bn2}->length"
                     return eml
@@ -5103,7 +5112,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return emii
                 }
             }
-            if bsmn.stringview == "MapEntry" then {
+            if (originIsTid symtab: symtab tid: bstamp originTid: ctx.mapEntryOriginTid) then {
                 # a borrowed entry yielded by iterateItems: key/value project
                 # the entry struct's fields. The loop var binds a deref alias
                 # (`(*__borrow_e)`, a value), so access uses `.`; a genuine
@@ -5202,7 +5211,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         nlid9 = chaseColMono symtab: symtab tid: nlid9
         nlid9 = canonicalColId symtab: symtab ctx: ctx tid: nlid9
         nlomn9: monoOriginName symtab: symtab tid: nlid9
-        if nlomn9.stringview == "str" then {
+        if (originIsTid symtab: symtab tid: nlid9 originTid: ctx.strOriginTid) then {
             nstrtn9: typeNameOfReg9 symtab: symtab tid: nlid9
             nstrcb9: cnameOf tid: nlid9 name: nstrtn9.stringview
             if mn2.stringview == "length" then {
@@ -5218,7 +5227,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 return "(\{ctx.svC}_t){ \{base9}.data, \{base9}.len }"
             }
         }
-        if nlomn9.stringview == "List" then {
+        if (originIsTid symtab: symtab tid: nlid9 originTid: ctx.listOriginTid) then {
             nltn9: typeNameOfReg9 symtab: symtab tid: nlid9
             nlcb9: cnameOf tid: nlid9 name: nltn9.stringview
             recvB9: colRecvRef ctx: ctx bn: base9.stringview
@@ -5239,14 +5248,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         # collection template (not registry children), so a CLASS-dispatch
         # methodOwnerId scan would mis-resolve to a duplicate same-named mono. The
         # receiver field is already a pointer, so it is passed directly (no `&`).
-        if nlomn9.stringview == "Set" then {
+        if (originIsTid symtab: symtab tid: nlid9 originTid: ctx.setOriginTid) then {
             nstn9: typeNameOfReg9 symtab: symtab tid: nlid9
             nscb9: cnameOf tid: nlid9 name: nstn9.stringview
             if mn2.stringview == "iterate" then {
                 return "\{nscb9}_iterate(\{base9})"
             }
         }
-        if nlomn9.stringview == "Map" then {
+        if (originIsTid symtab: symtab tid: nlid9 originTid: ctx.mapOriginTid) then {
             nmptn9: typeNameOfReg9 symtab: symtab tid: nlid9
             nmpcb9: cnameOf tid: nlid9 name: nmptn9.stringview
             if mn2.stringview == "iterate" then {
@@ -5491,7 +5500,7 @@ interpBaseIsMapEntry: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
         bnid: atomNodeId9 n: n.parent
         bt: stampIdOf symtab: symtab nid: bnid
         bo: monoOriginName symtab: symtab tid: bt
-        if bo.stringview == "MapEntry" then {
+        if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "MapEntry")) then {
             return true
         }
         return false
@@ -5604,7 +5613,7 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
         } else {
             pStrId9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n)
             pStrOr9: monoOriginName symtab: symtab tid: pStrId9
-            if pStrOr9.stringview == "str" then {
+            if (originIsTid symtab: symtab tid: pStrId9 originTid: ctx.strOriginTid) then {
                 lstri9: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
                 buf.append lstri9.stringview
             } else {
@@ -5844,7 +5853,7 @@ emitPrintArg: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringVi
         } else {
             argTid: stampIdOf symtab: symtab nid: n.nodeid.u64
             pOrig9: monoOriginName symtab: symtab tid: argTid
-            if pOrig9.stringview == "str" then {
+            if (originIsTid symtab: symtab tid: argTid originTid: ctx.strOriginTid) then {
                 lpstr9: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){\{anm}.data, \{anm}.len});\n"
                 buf.append lpstr9.stringview
                 return
@@ -5981,7 +5990,7 @@ svSliceBaseAtom: function {symtab: zenv.ZSymbolTable n: Node} out String is {
         }
         bsid9: stampIdOf symtab: symtab nid: bpid
         bso9: monoOriginName symtab: symtab tid: bsid9
-        if bso9.stringview == "str" then {
+        if (originIsTid symtab: symtab tid: bsid9 originTid: (builtinTid symtab: symtab base: "str")) then {
             return ba
         }
         return "".string
@@ -6153,7 +6162,7 @@ emitOptionBoxHoist: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: St
         }
         mid: stampIdOf symtab: symtab nid: n.nodeid.u64
         mo9: monoOriginName symtab: symtab tid: mid
-        if mo9.stringview != "Option" then {
+        if (originIsTid symtab: symtab tid: mid originTid: ctx.optionOriginTid) == false then {
             return "".string
         }
         av: "0".string
@@ -6463,7 +6472,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         ltid = chaseColMono symtab: symtab tid: ltid
         ltnm: typeNameOfReg9 symtab: symtab tid: ltid
         ltmn: monoOriginName symtab: symtab tid: ltid
-        if ltmn.stringview == "List" then {
+        if (originIsTid symtab: symtab tid: ltid originTid: ctx.listOriginTid) then {
             lcb: cnameOf tid: ltid name: ltnm.stringview
             if (osNoArgCallRhs n: n.value) then {
                 # owned List returned by os.args / os.envNames: emit the call.
@@ -6496,7 +6505,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             tmp.listFreeVars.append nm.string
             return
         }
-        if ltmn.stringview == "Set" then {
+        if (originIsTid symtab: symtab tid: ltid originTid: ctx.setOriginTid) then {
             stn: typeNameOfReg9 symtab: symtab tid: ltid
             scb: cnameOf tid: ltid name: stn.stringview
             if (collectionValueCallRhs n: n.value) then {
@@ -6516,7 +6525,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             tmp.listFreeVars.append nm.string
             return
         }
-        if ltmn.stringview == "Map" then {
+        if (originIsTid symtab: symtab tid: ltid originTid: ctx.mapOriginTid) then {
             mtn: typeNameOfReg9 symtab: symtab tid: ltid
             mcb: cnameOf tid: ltid name: mtn.stringview
             if (collectionValueCallRhs n: n.value) then {
@@ -7722,7 +7731,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             buf.append l0.stringview
             l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv9});\n"
             buf.append l1.stringview
-            if oovorig.stringview == "Option" then {
+            if (originIsTid symtab: symtab tid: ovid originTid: ctx.optionOriginTid) then {
                 # owned heap-payload union: destroy the box on the NONE arm too.
                 l2o: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
                 buf.append l2o.stringview
@@ -7730,7 +7739,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                 l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
                 buf.append l2.stringview
             }
-            if oovorig.stringview == "OptionView" then {
+            if (originIsTid symtab: symtab tid: ovid originTid: ctx.optionViewOriginTid) then {
                 # borrowed-view yield: scalar payloads copy by value; aggregate
                 # payloads bind a borrowed pointer (no copy -> the shared fields
                 # are never double-freed).
@@ -7748,7 +7757,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                     av3p: "(*__borrow_\{lbl})".string
                     ctx.aliases.set key: lbl.copy value: av3p
                 }
-            } else if oovorig.stringview == "Option" then {
+            } else if (originIsTid symtab: symtab tid: ovid originTid: ctx.optionOriginTid) then {
                 # owned heap yield: move the payload out, free just the box; the
                 # loop var owns it and is freed at the end of each iteration.
                 l3op: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
@@ -7763,7 +7772,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
             fLO9: tmp.frees.length
             lLO9: tmp.listFrees.length
             emitBodyOpt symtab: symtab ctx: ctx o: m.body ind: ind2.stringview tmp: tmp buf: buf
-            if oovorig.stringview == "Option" then {
+            if (originIsTid symtab: symtab tid: ovid originTid: ctx.optionOriginTid) then {
                 freeFn: payloadDestructor symtab: symtab ctx: ctx tid: ovid arm: "some"
                 if freeFn.length > 0 then {
                     l3od: "\{ind}    \{freeFn}(&\{lbl});\n"
@@ -8229,10 +8238,10 @@ isSetMapPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView
     }
     bt: chaseColMono symtab: symtab tid: cid
     omn: monoOriginName symtab: symtab tid: bt
-    if omn.stringview == "Set" then {
+    if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "Set")) then {
         return true
     }
-    if omn.stringview == "Map" then {
+    if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "Map")) then {
         return true
     }
     return false
@@ -8248,7 +8257,7 @@ isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView t
     }
     cid: tid
     omn0: monoOriginName symtab: symtab tid: tid
-    if omn0.stringview != "List" then {
+    if (originIsTid symtab: symtab tid: tid originTid: (builtinTid symtab: symtab base: "List")) == false then {
         # a param type is a List SHELL (no genericOriginId, definedInUnit none);
         # resolve the canonical mono by its mangled name to read its origin.
         tn: typeNameOfReg9 symtab: symtab tid: tid
@@ -8261,7 +8270,7 @@ isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView t
     }
     bt: chaseColMono symtab: symtab tid: cid
     omn: monoOriginName symtab: symtab tid: bt
-    if omn.stringview == "List" then {
+    if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "List")) then {
         return true
     }
     return false
@@ -8658,12 +8667,12 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         return "\{bxinner9}*"
     }
     omn9: monoOriginName symtab: symtab tid: cid
-    if (isCollectionOrigin name: omn9.stringview) then {
+    if (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: cid)) then {
         cc9: cnameOf tid: cid name: tn.stringview
         ct9: "\{cc9}_t"
         return ct9
     }
-    if omn9.stringview == "array" then {
+    if (originIsTid symtab: symtab tid: cid originTid: ctx.arrayOriginTid) then {
         aca9: cnameOf tid: cid name: tn.stringview
         act9: "\{aca9}_t"
         return act9
@@ -10704,10 +10713,10 @@ usesHashCollections: function {symtab: zenv.ZSymbolTable} out bool is {
     t: 0.u64
     for t < last loop {
         onm: monoOriginName symtab: symtab tid: t
-        if onm.stringview == "Set" then {
+        if (originIsTid symtab: symtab tid: t originTid: (builtinTid symtab: symtab base: "Set")) then {
             return true
         }
-        if onm.stringview == "Map" then {
+        if (originIsTid symtab: symtab tid: t originTid: (builtinTid symtab: symtab base: "Map")) then {
             return true
         }
         t = t + 1
@@ -11301,10 +11310,10 @@ fieldMonoId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
 isHeapPtrCollection: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     cm: fieldMonoId symtab: symtab ctx: ctx tid: tid
     onm: monoOriginName symtab: symtab tid: cm
-    if onm.stringview == "Map" then {
+    if (originIsTid symtab: symtab tid: cm originTid: ctx.mapOriginTid) then {
         return true
     }
-    if onm.stringview == "Set" then {
+    if (originIsTid symtab: symtab tid: cm originTid: ctx.setOriginTid) then {
         return true
     }
     return false
@@ -11323,13 +11332,13 @@ cliClassIsComposite: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out 
         fid: fids.get i: fi
         cm: fieldMonoId symtab: symtab ctx: ctx tid: fid
         onm: monoOriginName symtab: symtab tid: cm
-        if onm.stringview == "List" then {
+        if (originIsTid symtab: symtab tid: cm originTid: ctx.listOriginTid) then {
             return true
         }
-        if onm.stringview == "Map" then {
+        if (originIsTid symtab: symtab tid: cm originTid: ctx.mapOriginTid) then {
             return true
         }
-        if onm.stringview == "Set" then {
+        if (originIsTid symtab: symtab tid: cm originTid: ctx.setOriginTid) then {
             return true
         }
         fi = fi + 1
@@ -11840,16 +11849,16 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     if (symtab.reg.hasDestructorName typeId: t) then {
                         fwdM9 = true
                     }
-                    if mo.stringview == "List" then {
+                    if (originIsTid symtab: symtab tid: t originTid: ctx.listOriginTid) then {
                         fwdM9 = true
                     }
-                    if mo.stringview == "ListView" then {
+                    if (originIsTid symtab: symtab tid: t originTid: ctx.listViewOriginTid) then {
                         fwdM9 = true
                     }
-                    if mo.stringview == "Set" then {
+                    if (originIsTid symtab: symtab tid: t originTid: ctx.setOriginTid) then {
                         fwdM9 = true
                     }
-                    if mo.stringview == "Map" then {
+                    if (originIsTid symtab: symtab tid: t originTid: ctx.mapOriginTid) then {
                         fwdM9 = true
                     }
                 }
@@ -11866,10 +11875,10 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
                     if (symtab.reg.hasDestructorName typeId: t) then {
                         fwdDtor9 = true
                     }
-                    if mo.stringview == "Map" then {
+                    if (originIsTid symtab: symtab tid: t originTid: ctx.mapOriginTid) then {
                         fwdDtor9 = true
                     }
-                    if mo.stringview == "Set" then {
+                    if (originIsTid symtab: symtab tid: t originTid: ctx.setOriginTid) then {
                         fwdDtor9 = true
                     }
                     if fwdDtor9 then {
@@ -11926,10 +11935,10 @@ monoMapKV: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u6
 monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
     origin: monoOriginName symtab: symtab tid: monoId
     isLV: false
-    if origin.stringview == "List" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.listOriginTid) then {
         isLV = true
     }
-    if origin.stringview == "ListView" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.listViewOriginTid) then {
         isLV = true
     }
     if isLV then {
@@ -11939,7 +11948,7 @@ monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: Lis
         }
         return
     }
-    if origin.stringview == "Set" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.setOriginTid) then {
         snm: typeNameOfReg9 symtab: symtab tid: monoId
         en: monoElemName full: snm prefixLen: 4
         eid: resolveTypeIdByName symtab: symtab ctx: ctx name: en.stringview
@@ -11948,7 +11957,7 @@ monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: Lis
         }
         return
     }
-    if origin.stringview == "Map" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.mapOriginTid) then {
         monoMapKV symtab: symtab ctx: ctx monoId: monoId acc: acc
         return
     }
@@ -11959,13 +11968,13 @@ monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: Lis
     if origin.stringview == "resultval" then {
         isWrap = true
     }
-    if origin.stringview == "Option" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.optionOriginTid) then {
         isWrap = true
     }
-    if origin.stringview == "Result" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.resultOriginTid) then {
         isWrap = true
     }
-    if origin.stringview == "OptionView" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.optionViewOriginTid) then {
         isWrap = true
     }
     if isWrap then {
@@ -12179,23 +12188,23 @@ emitMonoById: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
         emitOneVariant symtab: symtab ctx: ctx tid: monoId name: nm2.stringview buf: buf
         return
     }
-    if origin.stringview == "ListView" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.listViewOriginTid) then {
         emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
     }
-    if origin.stringview == "array" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.arrayOriginTid) then {
         emitArrayMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
     }
-    if origin.stringview == "List" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.listOriginTid) then {
         emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
     }
-    if origin.stringview == "Set" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.setOriginTid) then {
         emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
     }
-    if origin.stringview == "Map" then {
+    if (originIsTid symtab: symtab tid: monoId originTid: ctx.mapOriginTid) then {
         emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: monoId buf: buf
         return
     }
@@ -12605,7 +12614,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tstr9: 0.u64
     for tstr9 < last loop {
         snm9: monoOriginName symtab: symtab tid: tstr9
-        if snm9.stringview == "str" then {
+        if (originIsTid symtab: symtab tid: tstr9 originTid: ctx.strOriginTid) then {
             emitStrMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tstr9 buf: buf
         }
         tstr9 = tstr9 + 1
@@ -12748,10 +12757,10 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     for tiu < last loop {
         uonm: monoOriginName symtab: symtab tid: tiu
         isUM: false
-        if uonm.stringview == "Option" then {
+        if (originIsTid symtab: symtab tid: tiu originTid: ctx.optionOriginTid) then {
             isUM = true
         }
-        if uonm.stringview == "Result" then {
+        if (originIsTid symtab: symtab tid: tiu originTid: ctx.resultOriginTid) then {
             isUM = true
         }
         if isUM then {
@@ -12770,10 +12779,10 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         if uguo9.length > 0 when (symtab.reg.typetypeOf typeId: tugu9) == ztypes.ztypetype.UNION then {
             isUGU9 = true
         }
-        if isUGU9 when uguo9.stringview == "Option" then {
+        if isUGU9 when (originIsTid symtab: symtab tid: tugu9 originTid: ctx.optionOriginTid) then {
             isUGU9 = false
         }
-        if isUGU9 when uguo9.stringview == "Result" then {
+        if isUGU9 when (originIsTid symtab: symtab tid: tugu9 originTid: ctx.resultOriginTid) then {
             isUGU9 = false
         }
         if isUGU9 when uguo9.stringview == "optionval" then {
@@ -12782,10 +12791,10 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
         if isUGU9 when uguo9.stringview == "resultval" then {
             isUGU9 = false
         }
-        if isUGU9 when uguo9.stringview == "OptionView" then {
+        if isUGU9 when (originIsTid symtab: symtab tid: tugu9 originTid: ctx.optionViewOriginTid) then {
             isUGU9 = false
         }
-        if isUGU9 when (isCollectionOrigin name: uguo9.stringview) then {
+        if isUGU9 when (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: tugu9)) then {
             isUGU9 = false
         }
         if isUGU9 then {
@@ -12799,7 +12808,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tiov: 0.u64
     for tiov < last loop {
         oovnm: monoOriginName symtab: symtab tid: tiov
-        if oovnm.stringview == "OptionView" then {
+        if (originIsTid symtab: symtab tid: tiov originTid: ctx.optionViewOriginTid) then {
             emitOptionViewMono symtab: symtab ctx: ctx monoId: tiov buf: buf
         }
         tiov = tiov + 1
@@ -12809,7 +12818,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tarr9: 0.u64
     for tarr9 < last loop {
         anm9: monoOriginName symtab: symtab tid: tarr9
-        if anm9.stringview == "array" then {
+        if (originIsTid symtab: symtab tid: tarr9 originTid: ctx.arrayOriginTid) then {
             if (monoIsLate symtab: symtab ctx: ctx monoId: tarr9 userList: userListM) == false then {
                 emitArrayMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tarr9 buf: buf
             }
@@ -12819,7 +12828,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tid: 0.u64
     for tid < last loop {
         onm: monoOriginName symtab: symtab tid: tid
-        if onm.stringview == "ListView" then {
+        if (originIsTid symtab: symtab tid: tid originTid: ctx.listViewOriginTid) then {
             if (monoIsLate symtab: symtab ctx: ctx monoId: tid userList: userListM) == false then {
                 emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
             }
@@ -12829,7 +12838,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tid2: 0.u64
     for tid2 < last loop {
         onm2: monoOriginName symtab: symtab tid: tid2
-        if onm2.stringview == "List" then {
+        if (originIsTid symtab: symtab tid: tid2 originTid: ctx.listOriginTid) then {
             if (monoIsLate symtab: symtab ctx: ctx monoId: tid2 userList: userListM) == false then {
                 emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid2 buf: buf
             }
@@ -12841,7 +12850,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tset: 0.u64
     for tset < last loop {
         snm: monoOriginName symtab: symtab tid: tset
-        if snm.stringview == "Set" then {
+        if (originIsTid symtab: symtab tid: tset originTid: ctx.setOriginTid) then {
             if (monoIsLate symtab: symtab ctx: ctx monoId: tset userList: userListM) == false then {
                 emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tset buf: buf
             }
@@ -12853,7 +12862,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     tmap: 0.u64
     for tmap < last loop {
         mnm: monoOriginName symtab: symtab tid: tmap
-        if mnm.stringview == "Map" then {
+        if (originIsTid symtab: symtab tid: tmap originTid: ctx.mapOriginTid) then {
             if (monoIsLate symtab: symtab ctx: ctx monoId: tmap userList: userListM) == false then {
                 emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tmap buf: buf
             }
@@ -12958,13 +12967,13 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
                 ugUser9 = true
             }
         }
-        if ugUser9 when (isCollectionOrigin name: ugo9.stringview) then {
+        if ugUser9 when (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: tug9)) then {
             ugUser9 = false
         }
-        if ugUser9 when ugo9.stringview == "array" then {
+        if ugUser9 when (originIsTid symtab: symtab tid: tug9 originTid: ctx.arrayOriginTid) then {
             ugUser9 = false
         }
-        if ugUser9 when ugo9.stringview == "str" then {
+        if ugUser9 when (originIsTid symtab: symtab tid: tug9 originTid: ctx.strOriginTid) then {
             ugUser9 = false
         }
         if ugUser9 when (isBoxTid symtab: symtab tid: tug9) then {
@@ -13109,7 +13118,7 @@ protoParamCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx pid: u64 thisTid: 
         isCol = true
     }
     pco9: monoOriginName symtab: symtab tid: cpid
-    if (isCollectionOrigin name: pco9.stringview) then {
+    if (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: cpid)) then {
         isCol = true
     }
     if isCol then {
@@ -14081,7 +14090,7 @@ emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Ca
                         apfx9 = "&".string
                     }
                     aco9: monoOriginName symtab: symtab tid: atid9
-                    if (isCollectionOrigin name: aco9.stringview) then {
+                    if (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: atid9)) then {
                         apfx9 = "&".string
                     }
                     fs9p: "\{apfx9}\{av}".string
@@ -14115,7 +14124,7 @@ emitProtocolDispatch: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Ca
                     apfx9 = "&".string
                 }
                 aco9: monoOriginName symtab: symtab tid: atid9
-                if (isCollectionOrigin name: aco9.stringview) then {
+                if (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: atid9)) then {
                     apfx9 = "&".string
                 }
                 dargs.append ", "
