@@ -611,6 +611,30 @@ stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     return "".string
 }
 
+# builtinTid -- the canonical registry id of a stdlib builtin type (String, List,
+# Map, ...) resolved by base name against system/collections; mainName "" so a
+# user type of the same name never shadows it. 0 when absent from the program.
+builtinTid: function {symtab: zenv.ZSymbolTable base: StringView} out u64 is {
+    return (optU64Or9 o: (ztypecheck.lookupTyperef resolved: symtab.typing.resolved mainName: "" base: base))
+}
+
+# originTidOf -- a type's genericOriginId (the template it monomorphized from), or
+# 0 when it has none. The id form of monoOriginName.
+originTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
+    t: symtab.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        go: t.genericOriginId
+        match (
+            go
+        ) case some then {
+            return go
+        } case none then {}
+    } case none then {}
+    return 0
+}
+
 # Ctx -- the per-program emission context (anchor cnames, main unit name,
 # the literal pool, and the resolved-name map access).
 Ctx: class {
@@ -650,6 +674,22 @@ Ctx: class {
     breakFreesMarks: (List u64)
     breakListMarks: (List u64)
     borrowedVars: (Map String value: bool)
+    strTid: u64
+    svTid: u64
+    strOriginTid: u64
+    arrayOriginTid: u64
+    listOriginTid: u64
+    listViewOriginTid: u64
+    mapOriginTid: u64
+    setOriginTid: u64
+    mapEntryOriginTid: u64
+    listIterOriginTid: u64
+    setIterOriginTid: u64
+    mapKeyIterOriginTid: u64
+    mapItemIterOriginTid: u64
+    optionOriginTid: u64
+    optionViewOriginTid: u64
+    resultOriginTid: u64
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -1184,6 +1224,20 @@ isCompareOp: function {name: StringView} out bool is {
 isStringy: function {name: StringView} out bool is {
     if name == "String" then { return true }
     if name == "StringView" then { return true }
+    return false
+}
+
+# isStringyTid -- the id form of isStringy: tid is canonical String or StringView.
+isStringyTid: function {ctx: Ctx tid: u64} out bool is {
+    if tid == 0 then {
+        return false
+    }
+    if tid == ctx.strTid then {
+        return true
+    }
+    if tid == ctx.svTid then {
+        return true
+    }
     return false
 }
 
@@ -8462,6 +8516,24 @@ isCollectionOrigin: function {name: StringView} out bool is {
     return false
 }
 
+# isCollectionOriginTid -- the id form of isCollectionOrigin: originTid (a
+# genericOriginId) is one of the nine cached collection/iterator origin ids.
+isCollectionOriginTid: function {ctx: Ctx originTid: u64} out bool is {
+    if originTid == 0 then {
+        return false
+    }
+    if originTid == ctx.listOriginTid then { return true }
+    if originTid == ctx.listViewOriginTid then { return true }
+    if originTid == ctx.setOriginTid then { return true }
+    if originTid == ctx.mapOriginTid then { return true }
+    if originTid == ctx.mapEntryOriginTid then { return true }
+    if originTid == ctx.listIterOriginTid then { return true }
+    if originTid == ctx.setIterOriginTid then { return true }
+    if originTid == ctx.mapKeyIterOriginTid then { return true }
+    if originTid == ctx.mapItemIterOriginTid then { return true }
+    return false
+}
+
 # canonicalColId -- a collection mono is global and uniquely named, so a field
 # shell or duplicate stamp (de.field) resolves to the emitted mono id by name.
 # Bypasses the definedInUnit guard fieldMonoId/typeRefC use for cross-unit USER
@@ -9846,6 +9918,20 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     } case none then {}
     strC: cnameOf tid: strId name: "String"
     svC: cnameOf tid: svId name: "StringView"
+    strOriginTid: builtinTid symtab: symtab base: "str"
+    arrayOriginTid: builtinTid symtab: symtab base: "array"
+    listOriginTid: builtinTid symtab: symtab base: "List"
+    listViewOriginTid: builtinTid symtab: symtab base: "ListView"
+    mapOriginTid: builtinTid symtab: symtab base: "Map"
+    setOriginTid: builtinTid symtab: symtab base: "Set"
+    mapEntryOriginTid: builtinTid symtab: symtab base: "MapEntry"
+    listIterOriginTid: builtinTid symtab: symtab base: "ListIter"
+    setIterOriginTid: builtinTid symtab: symtab base: "SetIter"
+    mapKeyIterOriginTid: builtinTid symtab: symtab base: "MapKeyIter"
+    mapItemIterOriginTid: builtinTid symtab: symtab base: "MapItemIter"
+    optionOriginTid: builtinTid symtab: symtab base: "Option"
+    optionViewOriginTid: builtinTid symtab: symtab base: "OptionView"
+    resultOriginTid: builtinTid symtab: symtab base: "Result"
     p1: "\{runtimeDir}/z_String.inc"
     f1: loadFragment path: p1.stringview svC: svC.stringview strC: strC.stringview
     buf.append f1.stringview
@@ -9865,7 +9951,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     litTexts: (List String)
     collectUnitLiterals program: program ids: litIds texts: litTexts
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool))
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool) strTid: strId svTid: svId strOriginTid: strOriginTid arrayOriginTid: arrayOriginTid listOriginTid: listOriginTid listViewOriginTid: listViewOriginTid mapOriginTid: mapOriginTid setOriginTid: setOriginTid mapEntryOriginTid: mapEntryOriginTid listIterOriginTid: listIterOriginTid setIterOriginTid: setIterOriginTid mapKeyIterOriginTid: mapKeyIterOriginTid mapItemIterOriginTid: mapItemIterOriginTid optionOriginTid: optionOriginTid optionViewOriginTid: optionViewOriginTid resultOriginTid: resultOriginTid)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
