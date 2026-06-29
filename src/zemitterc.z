@@ -75,6 +75,21 @@ cTypeOf: function {name: StringView} out String is {
     return "".string
 }
 
+# scalarCTypeFor -- the C scalar type for a builtin-named tid, BUT empty when the
+# tid is a user type SHADOWING the scalar (defined in a user unit). The caller then
+# emits the user struct (typeRefC / cnameOf) instead of the C scalar. The single
+# "trust the canonical id, not the name" gate for the by-name C-type sites.
+scalarCTypeFor: function {symtab: zenv.ZSymbolTable name: StringView tid: u64} out String is {
+    sc: cTypeOf name: name
+    if sc.length == 0 then {
+        return sc
+    }
+    if (ztypecheck.isUserShadowElem st: symtab elemTid: tid) then {
+        return "".string
+    }
+    return sc
+}
+
 # isIntName -- integer scalar family check (snprintf %ld path).
 isIntName: function {name: StringView} out bool is {
     if name == "i8" then { return true }
@@ -7092,7 +7107,7 @@ emitMatchStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.CaseData ass
     }
     if (isVar) == false then {
         if (isUni) == false then {
-            sct: cTypeOf name: stn.stringview
+            sct: scalarCTypeFor symtab: symtab name: stn.stringview tid: vtid
             if sct.length > 0 then {
                 emitScalarMatch symtab: symtab ctx: ctx m: m subj: sx.stringview assignTo: assignTo ind: ind tmp: tmp buf: buf
                 return
@@ -7928,7 +7943,8 @@ emitForCond: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node cond: String.b
         } else {
             onid: exprNodeId9 n: n.operation
             tn: stampNameOf symtab: symtab nid: onid
-            ct: cTypeOf name: tn.stringview
+            ftid9: stampIdOf symtab: symtab nid: onid
+            ct: scalarCTypeFor symtab: symtab name: tn.stringview tid: ftid9
             iv: emitExpr symtab: symtab ctx: ctx n: n.operation
             if ct.length > 0 then {
                 li: "\{ind}\{ct} \{lbl} = \{iv};\n"
@@ -12431,7 +12447,7 @@ fnptrRetTypeC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out String
     if rtid == ctx.svTid then {
         return "\{ctx.svC}_t".string
     }
-    rc: cTypeOf name: rn.stringview
+    rc: scalarCTypeFor symtab: symtab name: rn.stringview tid: rtid
     if rc.length > 0 then {
         return rc
     }
@@ -12479,7 +12495,7 @@ fnptrParamTypeC: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64 pname: St
 # C). Guarded so emitUserStructsOrdered later emits the named struct body.
 ensureFwdStruct: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: String.borrow} is {
     nmS: typeNameOfReg9 symtab: symtab tid: tid
-    cTypeLk5: cTypeOf name: nmS.stringview
+    cTypeLk5: scalarCTypeFor symtab: symtab name: nmS.stringview tid: tid
     if cTypeLk5.length > 0 then {
         return
     }
@@ -14634,7 +14650,7 @@ emitOneVariant: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Stri
                     qco
                 ) case some then {
                     qtn: typeNameOfReg9 symtab: symtab tid: qco
-                    qsc: cTypeOf name: qtn.stringview
+                    qsc: scalarCTypeFor symtab: symtab name: qtn.stringview tid: qco
                     if qsc.length == 0 then {
                         qrid: resolveTypeIdByName symtab: symtab ctx: ctx name: qtn.stringview
                         if qrid > 0 then {
@@ -14886,7 +14902,7 @@ emitOneRecord: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: Strin
                 eqx.append " && "
             }
             ftn: typeNameOfReg9 symtab: symtab tid: fki
-            fscalar: cTypeOf name: ftn.stringview
+            fscalar: scalarCTypeFor symtab: symtab name: ftn.stringview tid: fki
             fdone: false
             if fscalar.length == 0 then {
                 frid: resolveTypeIdByName symtab: symtab ctx: ctx name: ftn.stringview
