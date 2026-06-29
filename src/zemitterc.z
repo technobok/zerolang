@@ -8609,6 +8609,17 @@ canonicalColId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 i
     return tid
 }
 
+# cTypeForNameTid -- like cTypeForName, but a user type SHADOWING a scalar (its
+# tid is defined in a user unit) emits its struct (typeRefC), not the by-name C
+# scalar. For collection-mono VAL_T/KEY_T/ELEM_T where the element/key/value tid
+# is known. A non-shadow tid (system scalar or shell) keeps the by-name path.
+cTypeForNameTid: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView tid: u64} out String is {
+    if (ztypecheck.isUserShadowElem st: symtab elemTid: tid) then {
+        return (typeRefC symtab: symtab ctx: ctx tid: tid thisTid: 0)
+    }
+    return (cTypeForName symtab: symtab ctx: ctx name: name)
+}
+
 # cTypeForName -- the C type for a type NAME: scalar via cTypeOf, else
 # resolve the type id (across units) and use typeRefC; "" when unknown.
 cTypeForName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out String is {
@@ -10907,8 +10918,8 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
     mcr: cUpperOf text: nm.stringview
     elemName: monoElemName full: mn prefixLen: 4
-    itemT: cTypeForName symtab: symtab ctx: ctx name: elemName.stringview
     elemTid: setElemType symtab: symtab monoId: monoId
+    itemT: cTypeForNameTid symtab: symtab ctx: ctx name: elemName.stringview tid: elemTid
     ekind: keyHashKind symtab: symtab ctx: ctx tid: elemTid
     isStr: ekind == 1
     ovName: "OptionView_\{elemName}".string
@@ -11160,17 +11171,17 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     ovOrigin: monoOriginName symtab: symtab tid: ovId
     ovPrefixLen: ovOrigin.length + 1
     valName: monoElemName full: ovName prefixLen: ovPrefixLen
-    valT: cTypeForName symtab: symtab ctx: ctx name: valName.stringview
+    valTid: mapValType symtab: symtab monoId: monoId
+    valT: cTypeForNameTid symtab: symtab ctx: ctx name: valName.stringview tid: valTid
     ov: cbaseNoPrefix tid: ovId name: ovName.stringview
     ovu: cUpperOf text: ovName.stringview
     keyName: mapKeyName full: mn vlen: valName.length
-    keyT: cTypeForName symtab: symtab ctx: ctx name: keyName.stringview
     keyTid: mapKeyType symtab: symtab monoId: monoId
+    keyT: cTypeForNameTid symtab: symtab ctx: ctx name: keyName.stringview tid: keyTid
     kkind: keyHashKind symtab: symtab ctx: ctx tid: keyTid
     keyIsStr: kkind == 1
     hashKeyBody: setHashBody kind: kkind
     keysEqBody: setEqBody kind: kkind
-    valTid: mapValType symtab: symtab monoId: monoId
     vfDestroy: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "p->entries[i].value"
     vfDel: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[idx].value"
     vfDup: mapValFreeStmt symtab: symtab ctx: ctx valName: valName.stringview valTid: valTid slot: "_this->entries[existing].value"
