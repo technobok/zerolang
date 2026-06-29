@@ -6441,6 +6441,19 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
     } case assignment then {
         tn: stampNameOf symtab: symtab nid: n.nodeid.u64
         ct: cTypeOf name: tn.stringview
+        if ct.length > 0 then {
+            btid9: stampIdOf symtab: symtab nid: n.nodeid.u64
+            if btid9 > 0 then {
+                bDu9: symtab.typing.definedInUnit.get key: btid9
+                match (
+                    bDu9
+                ) case some then {
+                    if (ztypecheck.isStdlibUnitName name: bDu9.stringview) == false then {
+                        ct = typeRefC symtab: symtab ctx: ctx tid: btid9 thisTid: 0
+                    }
+                } case none then {}
+            }
+        }
         if ct.length == 0 then {
             tgo: symtab.typing.nodeType.get key: n.nodeid.u64
             match (
@@ -8623,7 +8636,21 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
     tn: typeNameOfReg9 symtab: symtab tid: tid
     ct: cTypeOf name: tn.stringview
     if ct.length > 0 then {
-        return ct
+        # A user type shadowing a builtin scalar carries the scalar NAME but is
+        # defined in a USER unit -- emit its struct, not the C scalar. System
+        # scalars (definedInUnit a stdlib unit) and shells (none) keep the C type.
+        scDu9: symtab.typing.definedInUnit.get key: tid
+        scShadow9: false
+        match (
+            scDu9
+        ) case some then {
+            if (ztypecheck.isStdlibUnitName name: scDu9.stringview) == false then {
+                scShadow9 = true
+            }
+        } case none then {}
+        if (scShadow9) == false then {
+            return ct
+        }
     }
     # canonicalize shells: a param/field child may be a fresh shell id
     # named after the real type; this-typed params take the receiver.
@@ -13206,14 +13233,26 @@ methodRetCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid: u
 # `*` for collection params (List/ListView/Map and the Bytes/ByteView typedefs),
 # which the vtable function pointers and wrappers pass by pointer.
 protoParamCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx pid: u64 thisTid: u64} out String is {
-    # the spec param is a shell named after the system type; canonicalize to the
-    # real id (resolveTypeIdByName covers system types) so typeRefC resolves it
-    # (and chases ByteView/Bytes to their collection mono).
+    # The spec param is usually a SHELL named after the system type; canonicalize
+    # it by name (resolveTypeIdByName covers system types) so typeRefC resolves it
+    # (and chases ByteView/Bytes to their collection mono). But a param already
+    # resolved to a CANONICAL id (definedInUnit set, e.g. system i64) is trusted
+    # as-is -- re-resolving "i64" by name would wrongly pick up a user shadow of
+    # the scalar in the main unit. Mirrors typeRefC's none-branch shell gate.
     cpid: pid
-    pn9: typeNameOfReg9 symtab: symtab tid: pid
-    rcid: resolveTypeIdByName symtab: symtab ctx: ctx name: pn9.stringview
-    if rcid > 0 then {
-        cpid = rcid
+    pidDu9: symtab.typing.definedInUnit.get key: pid
+    pidShell9: false
+    match (
+        pidDu9
+    ) case some then {} case none then {
+        pidShell9 = true
+    }
+    if pidShell9 then {
+        pn9: typeNameOfReg9 symtab: symtab tid: pid
+        rcid: resolveTypeIdByName symtab: symtab ctx: ctx name: pn9.stringview
+        if rcid > 0 then {
+            cpid = rcid
+        }
     }
     pct: typeRefC symtab: symtab ctx: ctx tid: cpid thisTid: thisTid
     if pct.length == 0 then {
