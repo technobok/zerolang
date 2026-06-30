@@ -12426,7 +12426,161 @@ lowerGeneratorItems: function {ty: ztyping.ZTyping ids: zgenerator.GenIds typeNa
     }
 }
 
-typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
+# Equality of two optional type ids: both none, or both the same id.
+optEqU64: function {a: optionval u64 b: optionval u64} out bool is {
+    match (
+        a
+    ) case some then {
+        match (
+            b
+        ) case some then {
+            return (a == b)
+        } case none then {
+            return false
+        }
+    } case none then {
+        match (
+            b
+        ) case some then {
+            return false
+        } case none then {
+            return true
+        }
+    }
+}
+
+# Resolve a bare type name to its id through the units-as-containers hierarchy,
+# using lookupTyperef's unit precedence (the current unit shadows stdlib). The
+# childOf-based mirror of lookupTyperef.
+walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: StringView} out optionval u64 is {
+    units: (List String)
+    units.append currentUnit.string
+    units.append "system".string
+    units.append "collections".string
+    units.append "io".string
+    units.append "core".string
+    units.append "os".string
+    units.append "cli".string
+    found: (optionval.none u64)
+    done: false
+    uit: units.iterate
+    for u: uit loop {
+        if (done) == false then {
+            uc: u.copy
+            uido: ty.unitTypes.get key: uc
+            match (
+                uido
+            ) case some then {
+                co: ty.childOf parentTypeId: uido name: base
+                match (
+                    co
+                ) case some then {
+                    found = (optionval.some co)
+                    done = true
+                } case none then {}
+            } case none then {}
+        }
+    }
+    return found
+}
+
+# Append every top-level definition name in a unit body to the names list.
+collectDefNames: function {unitop: Node names: List String} is {
+    match (
+        unitop
+    ) case unitdef then {
+        with bit: unitop.body.iterate do for bm: bit loop {
+            match (
+                bm
+            ) case namedoperation then {
+                dn: unitLabel o: bm.name
+                names.append dn.copy
+            } else {}
+        }
+    } else {}
+}
+
+# Record (unit -> top-level def) child edges for one unit, mapping each resolved
+# definition name to its canonical type id.
+populateUnitBodyChildren: function {ty: ztyping.ZTyping unitName: StringView unitop: Node} is {
+    uido: ty.unitTypes.get key: unitName.string
+    match (
+        uido
+    ) case some then {
+        match (
+            unitop
+        ) case unitdef then {
+            with bit: unitop.body.iterate do for bm: bit loop {
+                match (
+                    bm
+                ) case namedoperation then {
+                    dn: unitLabel o: bm.name
+                    k: "\{unitName}.\{dn}".string
+                    rido: ty.resolved.get key: k
+                    match (
+                        rido
+                    ) case some then {
+                        ty.setChild parentTypeId: uido childName: dn.stringview childTypeId: rido
+                    } case none then {}
+                } else {}
+            }
+        } else {}
+    } case none then {}
+}
+
+# Populate the units-as-containers hierarchy: each unit's top-level defs become
+# childOf edges on the unit's type id.
+populateUnitChildren: function {ty: ztyping.ZTyping program: Node} is {
+    match (
+        program
+    ) case program then {
+        with uit: program.units.iterate do for ru: uit loop {
+            match (
+                ru
+            ) case namedoperation then {
+                unm: unitLabel o: ru.name
+                populateUnitBodyChildren ty: ty unitName: unm.stringview unitop: ru.operation
+            } else {}
+        }
+    } else {}
+}
+
+# Assert the childOf walk resolves every (unit context, definition name) pair to
+# the same id as the lookupTyperef ladder; panic on the first divergence. Run
+# only under the resolve-guard gate (typecheck checkResolve true).
+crossCheckResolution: function {ty: ztyping.ZTyping program: Node} is {
+    units: (List String)
+    names: (List String)
+    match (
+        program
+    ) case program then {
+        with uit: program.units.iterate do for ru: uit loop {
+            match (
+                ru
+            ) case namedoperation then {
+                unm: unitLabel o: ru.name
+                units.append unm.copy
+                collectDefNames unitop: ru.operation names: names
+            } else {}
+        }
+    } else {}
+    vit: units.iterate
+    for v: vit loop {
+        vs: v.copy
+        nit: names.iterate
+        for n: nit loop {
+            ns: n.copy
+            ao: walkLookupTyperef ty: ty currentUnit: vs.stringview base: ns.stringview
+            bo: lookupTyperef resolved: ty.resolved mainName: vs.stringview base: ns.stringview
+            if (optEqU64 a: ao b: bo) == false then {
+                emsg: "resolve-guard: childOf walk != ladder for ctx=\{vs} name=\{ns}".string
+                panic msg: emsg.stringview
+            }
+        }
+    }
+}
+
+typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool checkResolve: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     match (
         program
@@ -12444,6 +12598,10 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     }
     resolveCrossUnitDemand ty: ty reg: reg program: program full: full
     resolveTypeAliases ty: ty
+    if checkResolve then {
+        populateUnitChildren ty: ty program: program
+        crossCheckResolution ty: ty program: program
+    }
     match (
         program
     ) case program then {

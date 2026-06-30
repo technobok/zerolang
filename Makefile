@@ -19,7 +19,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard
+.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard resolve-guard
 
 # check -- the fast pre-commit gate: the parse/token style checks over src/*.z.
 check: style-lint-fast
@@ -51,6 +51,7 @@ test: bin/zc
 ci: bin/zc
 	$(MAKE) --no-print-directory style-lint
 	$(MAKE) --no-print-directory shadow-guard
+	$(MAKE) --no-print-directory resolve-guard
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
@@ -193,6 +194,22 @@ shadow-guard:
 	  exit 1; \
 	fi; \
 	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=18)  cTypeForName symtab:=$$n2 (<=2)"
+
+# resolve-guard -- prove the units-as-containers childOf hierarchy resolves
+# every type name identically to the lookupTyperef ladder. Self-compiles the
+# compiler and every example with ZEROLANG_CHECK_RESOLVE=1; the in-compiler
+# cross-check panics (non-zero exit) on any divergence. The hierarchy is built
+# only under this flag; no resolver consumes it yet.
+resolve-guard: bin/zc
+	@mkdir -p $(BUILDDIR)
+	ZEROLANG_CHECK_RESOLVE=1 bin/zc zc --src src --system lib/system --emit-c $(BUILDDIR)/resolve-guard.c
+	@ok=0; fail=0; \
+	for name in $(NAMES); do \
+		ZEROLANG_CHECK_RESOLVE=1 bin/zc $$name --src examples --system lib/system --emit-c $(BUILDDIR)/rg-$$name.c; \
+		if [ $$? -ne 0 ]; then echo "resolve-guard FAIL: $$name"; fail=$$((fail+1)); else ok=$$((ok+1)); fi; \
+	done; \
+	if [ $$fail -ne 0 ]; then echo "resolve-guard FAIL: $$fail example(s) diverged"; exit 1; fi; \
+	echo "resolve-guard OK: self-compile + $$ok examples (childOf walk == ladder)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
