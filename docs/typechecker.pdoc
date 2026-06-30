@@ -448,6 +448,49 @@ to its own enclosing type without naming it. #~"this" works
 similarly.
 
 
+#--: Type-name resolution and the canonical-id rule
+
+A bare type name (the #~"i64" in #~"x: i64", a conformance marker, a
+field or parameter type) resolves #_*"current-unit-relative", mirroring
+the module search path in #~"units.pdoc": the #_*"current unit" first,
+then the stdlib units (#~"system", #~"collections", #~"io", #~"core",
+#~"os", #~"cli"). First match wins, so a type defined in the current
+unit #_*"shadows" a same-named stdlib builtin. Two functions implement
+this:
+
+#ul:
+  [#*: #~"definingUnitFor(currentUnit, name)" -- the declare-before-bind
+    index (built upfront by #~"indexUnitDefs"): which unit defines
+    #~"name" for a reference in #~"currentUnit", current-unit first.
+    #~"resolveAtomType" routes a name atom through it, get-or-declaring
+    the ONE canonical id via #~"declareCanonicalType".]
+  [#*: #~"lookupTyperef(mainName, base)" -- looks #~"base" up in the
+    #~"resolved" cache over the same precedence. Despite its parameter
+    name, #~"mainName" is the #_*"search-root unit": the #_*"current"
+    unit at most call sites, the program's main unit at a few. It is
+    not unconditionally main-rooted.]
+
+Cross-unit references are #_*"dotted" (#~"zast.Node", #~"io.File"),
+resolved by the named unit; bare names never reach across units except
+to the stdlib fallback. (The same-named-directory #_*"submodule" feature
+in #~"units.pdoc" -- a unit #~"foo.z" with a private #~"foo/" directory --
+is implemented in the parser's #~"loadUnit"; the current corpus and the
+self-hosted compiler use flat units + dotted references, so its bare-name
+resolution is not exercised end-to-end at typecheck.)
+
+#b:"The canonical-id rule." A definition resolves #_*"once", into one
+canonical type id keyed by its #~"defn.nodeid" (with #~"defined_in_unit"
+recording the owning unit). That id #_*"is" the type's identity -- not
+its name. Downstream passes #_*"trust" the locked id and never re-resolve
+a type by its name: the C emitter derives a type's C form from the id
+(via #~"typeRefC" / #~"scalarCTypeFor" / #~"cTypeForNameTid"), never from
+the name, so a user type that shadows a builtin scalar
+(#~"i64: record { ... }") emits #_*"its" struct, while the system #~"i64"
+reached through the same name keeps the C scalar. Re-resolving by name
+would collapse the two onto whichever the search-root unit wins -- the
+bug class the #~"make shadow-guard" ratchet prevents from returning.
+
+
 #--: Cross-Cutting Concerns
 
 Each subsection below points at #_*"where" a concern lives in the

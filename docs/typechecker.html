@@ -107,6 +107,8 @@ Table of Contents</div>
 </li>
 <li><a href="#resolution-stack-and-cycle-detection">Resolution Stack and Cycle Detection</a>
 </li>
+<li><a href="#type-name-resolution-and-the-canonical-id-rule">Type-name resolution and the canonical-id rule</a>
+</li>
 <li><a href="#cross-cutting-concerns">Cross-Cutting Concerns</a>
 <ul>
 <li><a href="#ownership-enforcement">Ownership enforcement</a>
@@ -490,11 +492,49 @@ at the end of <code>typecheck</code>.</p>
 at the bottom of the resolving stack, so a method body can refer
 to its own enclosing type without naming it. <code>this</code> works
 similarly.</p>
-<h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">7. Cross-Cutting Concerns</a></h2>
+<h2 id="type-name-resolution-and-the-canonical-id-rule"><a href="#type-name-resolution-and-the-canonical-id-rule">7. Type-name resolution and the canonical-id rule</a></h2>
+<p>A bare type name (the <code>i64</code> in <code>x: i64</code>, a conformance marker, a
+field or parameter type) resolves <em><strong>current-unit-relative</strong></em>, mirroring
+the module search path in <code>units.pdoc</code>: the <em><strong>current unit</strong></em> first,
+then the stdlib units (<code>system</code>, <code>collections</code>, <code>io</code>, <code>core</code>,
+<code>os</code>, <code>cli</code>). First match wins, so a type defined in the current
+unit <em><strong>shadows</strong></em> a same-named stdlib builtin. Two functions implement
+this:</p>
+<ul>
+<li><code>definingUnitFor(currentUnit, name)</code> -- the declare-before-bind
+index (built upfront by <code>indexUnitDefs</code>): which unit defines
+<code>name</code> for a reference in <code>currentUnit</code>, current-unit first.
+<code>resolveAtomType</code> routes a name atom through it, get-or-declaring
+the ONE canonical id via <code>declareCanonicalType</code>.</li>
+<li><code>lookupTyperef(mainName, base)</code> -- looks <code>base</code> up in the
+<code>resolved</code> cache over the same precedence. Despite its parameter
+name, <code>mainName</code> is the <em><strong>search-root unit</strong></em>: the <em><strong>current</strong></em>
+unit at most call sites, the program's main unit at a few. It is
+not unconditionally main-rooted.</li>
+</ul>
+<p>Cross-unit references are <em><strong>dotted</strong></em> (<code>zast.Node</code>, <code>io.File</code>),
+resolved by the named unit; bare names never reach across units except
+to the stdlib fallback. (The same-named-directory <em><strong>submodule</strong></em> feature
+in <code>units.pdoc</code> -- a unit <code>foo.z</code> with a private <code>foo/</code> directory --
+is implemented in the parser's <code>loadUnit</code>; the current corpus and the
+self-hosted compiler use flat units + dotted references, so its bare-name
+resolution is not exercised end-to-end at typecheck.)</p>
+<p><strong>The canonical-id rule.</strong> A definition resolves <em><strong>once</strong></em>, into one
+canonical type id keyed by its <code>defn.nodeid</code> (with <code>defined_in_unit</code>
+recording the owning unit). That id <em><strong>is</strong></em> the type's identity -- not
+its name. Downstream passes <em><strong>trust</strong></em> the locked id and never re-resolve
+a type by its name: the C emitter derives a type's C form from the id
+(via <code>typeRefC</code> / <code>scalarCTypeFor</code> / <code>cTypeForNameTid</code>), never from
+the name, so a user type that shadows a builtin scalar
+(<code>i64: record { ... }</code>) emits <em><strong>its</strong></em> struct, while the system <code>i64</code>
+reached through the same name keeps the C scalar. Re-resolving by name
+would collapse the two onto whichever the search-root unit wins -- the
+bug class the <code>make shadow-guard</code> ratchet prevents from returning.</p>
+<h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">8. Cross-Cutting Concerns</a></h2>
 <p>Each subsection below points at <em><strong>where</strong></em> a concern lives in the
 typechecker. For <em><strong>why</strong></em> it works that way, follow the links to
 the semantic documents.</p>
-<h3 id="ownership-enforcement"><a href="#ownership-enforcement">7.1. Ownership enforcement</a></h3>
+<h3 id="ownership-enforcement"><a href="#ownership-enforcement">8.1. Ownership enforcement</a></h3>
 <p>The 2-state ownership model (see <code>compiler.pdoc:Ownership and
 Lifetime</code>) is enforced at the assignment and call sites:</p>
 <ul>
@@ -514,7 +554,7 @@ escape checks.</li>
 the opt-in transfers. The annotations live on the
 <code>ZTyping.typeChild</code> rows (the param-ownership column), not on
 the parameter <code>ZType</code>.</p>
-<h3 id="lock-checking"><a href="#lock-checking">7.2. Lock checking</a></h3>
+<h3 id="lock-checking"><a href="#lock-checking">8.2. Lock checking</a></h3>
 <p>The typechecker chooses <em><strong>when</strong></em> to install a lock; <code>zenv.z</code>
 owns the conflict rule (<code>lockAcquireConflict</code>) and the
 prefix-overlap path test (<code>pathsOverlap</code>). Two scopes of
@@ -539,7 +579,7 @@ value escape its scope.</p>
 stack and <code>zlockholder</code> tagging: <code>tryLock</code>
 skips the conflict check when the existing holder matches the
 current call's identity.</p>
-<h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">7.3. Borrow correctness for parameters</a></h3>
+<h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">8.3. Borrow correctness for parameters</a></h3>
 <p>Deep methods that take a borrow into a return value record the
 source path on a pending-borrow slot, which
 <code>checkExpression</code> captures into <code>ZExprResult.borrowTarget</code>
@@ -549,7 +589,7 @@ and clears so it cannot leak across statements (see
 installs the borrow lock against the actual destination scope.
 The dedicated <code>.take</code> / <code>.borrow</code> / <code>.lock</code> / <code>.release</code> /
 <code>.private</code> handling lives in <code>checkDotted</code>.</p>
-<h3 id="monomorphisation"><a href="#monomorphisation">7.4. Monomorphisation</a></h3>
+<h3 id="monomorphisation"><a href="#monomorphisation">8.4. Monomorphisation</a></h3>
 <p>Generic types and functions are monomorphised by deep-cloning
 the original AST subtree, binding the generic parameters to
 concrete types, and re-running the standard resolvers on the
@@ -579,7 +619,7 @@ only requirement is that their declaration in
 <code>lib/system/system.z</code> or <code>lib/system/collections.z</code> carries
 the <code>is native</code> form. Resolution flows through the standard
 child-lookup path.</p>
-<h3 id="type-narrowing"><a href="#type-narrowing">7.5. Type narrowing</a></h3>
+<h3 id="type-narrowing"><a href="#type-narrowing">8.5. Type narrowing</a></h3>
 <p>Narrowing for <code>union</code> and <code>variant</code> subjects in match arms
 is implemented via overlay entries. When a match arm narrows
 subject <code>s</code> to subtype <code>ok</code>, an overlay <code>ZEntry</code> with
@@ -600,7 +640,7 @@ reassignment resets it.</p>
 <code>ZType.allocChild</code>. String fields remain authoritative; the
 ids are the hot-path key prepared for future migration to the
 SQL-backed representation.</p>
-<h3 id="auto-call-coercion"><a href="#auto-call-coercion">7.6. Auto-call coercion</a></h3>
+<h3 id="auto-call-coercion"><a href="#auto-call-coercion">8.6. Auto-call coercion</a></h3>
 <p>A no-user-arg method dotted path read in value position
 (<code>v: s.stringview</code>, <code>p1.distance</code> inside a string
 interpolation) is auto-called to its return type. The coercion
@@ -612,7 +652,7 @@ normally instead of constructing the return type. Path
 resolution itself is context-free: it
 always returns the FUNCTION type for a method path. Behaviour is
 identical for <code>is native</code> and user-defined methods.</p>
-<h3 id="unified-call-dispatch"><a href="#unified-call-dispatch">7.7. Unified call dispatch</a></h3>
+<h3 id="unified-call-dispatch"><a href="#unified-call-dispatch">8.7. Unified call dispatch</a></h3>
 <p>A type used in callable position is rewritten through the
 unified-dispatch route. The bare-name construction call
 <code>Point x: 1 y: 2</code> resolves the callee to the <code>Point</code>
@@ -623,7 +663,7 @@ parent <code>ZType</code> carries the compiler-generated raw allocator
 when one is needed. <code>create: null</code> in the type's <code>as</code> block
 disables bare-name construction (the case for <code>union</code> and
 <code>variant</code> where subtype selection is required).</p>
-<h2 id="error-reporting"><a href="#error-reporting">8. Error Reporting</a></h2>
+<h2 id="error-reporting"><a href="#error-reporting">9. Error Reporting</a></h2>
 <p>Type errors are <code>zast.ErrorData</code> value objects, appended to
 <code>ZTyping.errors</code> via the <code>addError</code> helper. Errors are never
 raised as exceptions; the typechecker tries to continue
@@ -641,7 +681,7 @@ Error codes (the <code>err</code> variant in <code>src/zast.z</code>) are groupe
 <code>loc</code> / <code>Token</code>. After <code>typecheck()</code> returns, the caller
 inspects <code>ZTyping.errors</code> to decide whether to proceed to
 emission.</p>
-<h2 id="what-lives-elsewhere"><a href="#what-lives-elsewhere">9. What Lives Elsewhere</a></h2>
+<h2 id="what-lives-elsewhere"><a href="#what-lives-elsewhere">10. What Lives Elsewhere</a></h2>
 <p>Module boundaries the typechecker relies on:</p>
 <ul>
 <li><code>src/ztypes.z</code> -- <code>ZType</code>, <code>ZVariable</code>,
@@ -661,7 +701,7 @@ manglers <code>mangleFuncName</code> / <code>mangleVarName</code></li>
 <p>Collection-type predicates (<code>typeIsReftype</code>, <code>typeIsValtype</code>,
 ...), node synthesis, and the monomorphisation dedup hashing have
 no separate module -- they live within <code>src/ztypecheck.z</code> itself.</p>
-<h2 id="reading-order"><a href="#reading-order">10. Reading Order</a></h2>
+<h2 id="reading-order"><a href="#reading-order">11. Reading Order</a></h2>
 <p>When opening the typechecker for the first time, read in this
 order:</p>
 <ol>
@@ -679,7 +719,7 @@ A good first dive is <code>typecheck</code> &#x2192; <code>resolveDef</code> &#x
 <code>checkCall</code>. That path touches almost every cross-
 cutting concern in turn.</li>
 </ol>
-<h2 id="related-documents"><a href="#related-documents">11. Related Documents</a></h2>
+<h2 id="related-documents"><a href="#related-documents">12. Related Documents</a></h2>
 <ul>
 <li><code>compiler.pdoc</code> -- the pipeline overview and the
 semantic descriptions of demand-driven resolution,
