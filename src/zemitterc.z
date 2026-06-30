@@ -2492,6 +2492,11 @@ emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
         e3: "\{cb}_delete(\{bn}, \{vk})"
         return e3
     }
+    if mn.stringview == "remove" then {
+        vk: colArg symtab: symtab ctx: ctx call: call label: "key" consumes: false
+        e9: "\{cb}_remove(\{bn}, \{vk})"
+        return e9
+    }
     return "".string
 }
 
@@ -11209,6 +11214,35 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
             }
         }
     }
+    rmWrapId9: 0.u64
+    roMm9: symtab.typing.childOf parentTypeId: monoId name: "remove"
+    match (
+        roMm9
+    ) case some then {
+        rtMm9: symtab.reg.typeById.get key: roMm9
+        match (
+            rtMm9
+        ) case some then {
+            rrtoMm9: rtMm9.returnTypeId
+            match (
+                rrtoMm9
+            ) case some then {
+                rmWrapId9 = rrtoMm9
+            } case none then {}
+        } case none then {}
+    } case none then {}
+    rmWrapName9: typeNameOfReg9 symtab: symtab tid: rmWrapId9
+    rmWrap9: cbaseNoPrefix tid: rmWrapId9 name: rmWrapName9.stringview
+    rmWrapU9: cUpperOf text: rmWrapName9.stringview
+    rmWrapOrigin9: monoOriginName symtab: symtab tid: rmWrapId9
+    keyOnlyFree9: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview valFree: ""
+    delTail9: "\{keyOnlyFree9}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
+    removeBody9: "".string
+    if rmWrapOrigin9.stringview == "optionval" then {
+        removeBody9 = "    z_\{rmWrap9}_t _r;\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU9}_TAG_NONE;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU9}_TAG_SOME;\n    _r.data.some = _this->entries[idx].value;\n\{delTail9}    return _r;"
+    } else {
+        removeBody9 = "    z_\{rmWrap9}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU9}_TAG_NONE;\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU9}_TAG_SOME;\n    \{valT}* _box = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n    *_box = _this->entries[idx].value;\n    _r.data = _box;\n\{delTail9}    return _r;"
+    }
     p: "\{runtimeDir}/z_Map.c.tmpl"
     raw: io.readText path: p.stringview
     match (
@@ -11227,7 +11261,9 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         t11: applyTmpl text: t10 key: "OPTIONVAL_TAG" val: ovu.stringview
         t12: applyTmpl text: t11 key: "GET_BODY" val: getBody.stringview
         t13: applyTmpl text: t12 key: "FREE_VAL_DUP" val: freeValDup.stringview
-        buf.append t13.stringview
+        t14: applyTmpl text: t13 key: "REMOVE_WRAP" val: rmWrap9.stringview
+        t15: applyTmpl text: t14 key: "REMOVE_BODY" val: removeBody9.stringview
+        buf.append t15.stringview
         buf.append "\n"
     } case err then {
         return
