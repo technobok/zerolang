@@ -3,17 +3,20 @@ static z_Option_String_t z_Parsed_option(z_Parsed_t* self, const z_StringView_t*
     z_Option_String_t out = {0};
     z_String_t key = z_String_create(name->length);
     z_String_append(&key, name->data, name->length);
-    /* map.get returns an OWNED deep copy: a box whose inner
-       z_String_t owns its own heap buffer. Hand that box back
-       directly on a hit; free both halves on a miss. */
-    z_Option_String_t v = z_Map_String_String_get(
+    /* map.get returns a borrowed OptionView into the map's storage; deep-copy
+       the borrowed String into an owned box so the caller owns the result. */
+    z_OptionView_String_t v = z_Map_String_String_get(
         self->optionValues, key);
     z_String_free(&key);
-    if (v.tag == Z_OPTION_STRING_TAG_NONE) {
-        if (v.data) free(v.data);
+    if (v.tag == Z_OPTIONVIEW_STRING_TAG_NONE) {
         out.tag = Z_OPTION_STRING_TAG_NONE;
         return out;
     }
-    return v;
+    z_String_t* src = (z_String_t*)v.data;
+    z_String_t* box = (z_String_t*)z_xmalloc(sizeof(z_String_t));
+    *box = z_String_create(src->size);
+    z_String_append(box, src->data, src->size);
+    out.tag = Z_OPTION_STRING_TAG_SOME;
+    out.data = box;
+    return out;
 }
-

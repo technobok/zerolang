@@ -121,6 +121,19 @@ parentIdSql: function {boundId: optionval u64 ownerId: optionval u64} out String
 }
 
 # optStrSql -- an optional String as a SQL string literal, or "NULL".
+# ownOptStr -- copy a borrowed OptionView<String> (e.g. a String-value map's
+# get, which now returns a locked view) into an owned Option<String> for the
+# SQL formatters. The dump path is cold, so the copy is irrelevant.
+ownOptStr: function {o: OptionView String} out Option String is {
+    match (
+        o
+    ) case some then {
+        return (Option.some o.copy)
+    } case none then {
+        return (Option.none String)
+    }
+}
+
 optStrSql: function {o: Option String} out String is {
     match (
         o
@@ -508,7 +521,7 @@ ZDumper: class {
                 dnSql: optStrSql o: zt.destructorName
                 heapSql: boolNum b: zt.isHeapAllocated
                 cnSql: cnameSql c: zt.cname.stringview
-                duSql: optStrSql o: (st.typing.definedInUnit.get key: tid)
+                duSql: optStrSql o: (ownOptStr o: (st.typing.definedInUnit.get key: tid))
                 row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{parentSql}, \{valSql}, \{genSql}, \{tbSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
                 this.acc.append s: row.stringview
             } case none then {}
@@ -621,8 +634,8 @@ ZDumper: class {
             ztSql: optIdStr o: (st.typing.variableZtype.get key: vid)
             ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
             privNum: optBoolNumOr0 o: (st.typing.variableIsPrivate.get key: vid)
-            boSql: originSql o: (st.typing.variableBorrowOrigin.get key: vid)
-            soSql: originSql o: (st.typing.variableSynthOrigin.get key: vid)
+            boSql: originSql o: (ownOptStr o: (st.typing.variableBorrowOrigin.get key: vid))
+            soSql: originSql o: (ownOptStr o: (st.typing.variableSynthOrigin.get key: vid))
             r: "INSERT OR IGNORE INTO variable VALUES (\{vid}, \{ztSql}, \{ownSql}, \{privNum}, \{boSql}, \{soSql});\n"
             this.acc.append s: r.stringview
         }
@@ -842,8 +855,8 @@ ZDumper: class {
             ztSql: sqlStr s: ztName.stringview
             ownSql: varOwnSql o: (st.typing.variableOwnership.get key: vid)
             privNum: optBoolNumOr0 o: (st.typing.variableIsPrivate.get key: vid)
-            boSql: originSql o: (st.typing.variableBorrowOrigin.get key: vid)
-            soSql: originSql o: (st.typing.variableSynthOrigin.get key: vid)
+            boSql: originSql o: (ownOptStr o: (st.typing.variableBorrowOrigin.get key: vid))
+            soSql: originSql o: (ownOptStr o: (st.typing.variableSynthOrigin.get key: vid))
             vline: "\{ztSql} | \{ownSql} | \{privNum} | \{boSql} | \{soSql}"
             varRows.append vline
         }
