@@ -19,7 +19,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check
+.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard
 
 # check -- the fast pre-commit gate: the parse/token style checks over src/*.z.
 check: style-lint-fast
@@ -50,6 +50,7 @@ test: bin/zc
 # the Python-free seed bootstrap.
 ci: bin/zc
 	$(MAKE) --no-print-directory style-lint
+	$(MAKE) --no-print-directory shadow-guard
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
@@ -170,6 +171,28 @@ docs:
 warn-check: bin/zc
 	$(CC) $(CFLAGS) -Werror -c bin/zc.c -o /dev/null
 	@echo "warn-check OK: zero compiler warnings"
+
+# shadow-guard -- ratchet against the user-shadow miscompile class. The C emitter
+# must derive a type's C type from its canonical type id (typeRefC / scalarCTypeFor
+# / cTypeForNameTid), never from the type NAME (cTypeOf / cTypeForName) directly --
+# otherwise a user type shadowing a builtin scalar (i64: record {...}) emits the C
+# scalar instead of its struct. The baselines pin the known-safe remaining by-name
+# sites (numeric casts, userFnId-first dispatch, control-flow checks, and the
+# head-gated assignment / fnSignature / typeRefC sites); a new by-name site grows
+# the count and fails. New type emission must go through the id-based helpers.
+shadow-guard:
+	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
+	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
+	fail=0; \
+	if [ "$$n1" -gt 19 ]; then echo "shadow-guard FAIL: 'cTypeOf name:' = $$n1 (baseline 19)"; fail=1; fi; \
+	if [ "$$n2" -gt 2 ]; then echo "shadow-guard FAIL: 'cTypeForName symtab:' = $$n2 (baseline 2)"; fail=1; fi; \
+	if [ "$$fail" = "1" ]; then \
+	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
+	  echo "  type id via scalarCTypeFor / cTypeForNameTid / typeRefC, not cTypeOf(name)."; \
+	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
+	  exit 1; \
+	fi; \
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=19)  cTypeForName symtab:=$$n2 (<=2)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
