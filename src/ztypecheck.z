@@ -5755,6 +5755,22 @@ linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: String
 # then create. The array/str tables land when an example needs them. No-op
 # for other templates or when the instance already has children (re-mint
 # dedup).
+# monoValName -- the value-type name component of a get-wrapper mono name. A user
+# type SHADOWING a builtin (its name also names a system type) appends its canonical
+# id, so its wrapper mono is distinct from the system type's same-named wrapper (a
+# user i64 -> "i64_7" vs system "i64"); otherwise the bare name (no churn for a
+# non-shadow type). Without this the get-wrapper mono name (optionval_i64) collides
+# in monoByName and the shadow reuses the system instance (wrong `some`-arm type).
+monoValName: function {st: zenv.ZSymbolTable tid: u64} out String is {
+    tn: typeNameOf st: st tid: tid
+    if (isUserShadowElem st: st elemTid: tid) then {
+        if (builtinTidTc st: st base: tn.stringview) > 0 then {
+            return ("\{tn}_\{tid}")
+        }
+    }
+    return tn
+}
+
 mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView monoName: StringView monoId: u64 templateName: StringView suffix: StringView elemArg: u64 valArg: u64} is {
     isIter: false
     if templateName == "ListIter" then { isIter = true }
@@ -5901,7 +5917,7 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
         mgId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
         mintBorrowParam st: st methodId: mgId pname: "key" elemArg: elemArg
         wtpl: mapGetWrapperName st: st valArg: valArg
-        vn9: typeNameOf st: st tid: valArg
+        vn9: monoValName st: st tid: valArg
         wname: "\{wtpl}_\{vn9}"
         linkMonoReturn st: st methodId: mgId targetMono: wname.stringview
         mdId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "delete"
@@ -6009,7 +6025,7 @@ mintTemplateChains: function {st: zenv.ZSymbolTable mainName: StringView tname: 
     }
     if tname == "Map" when valA > 0 then {
         kn: typeNameOf st: st tid: firstA
-        vn: typeNameOf st: st tid: valA
+        vn: monoValName st: st tid: valA
         wtpl: mapGetWrapperName st: st valArg: valA
         vsfx: "_\{vn}"
         mintChain st: st mainName: mainName chainTpl: wtpl.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
