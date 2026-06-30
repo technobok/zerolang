@@ -184,7 +184,7 @@ shadow-guard:
 	@n1=$$(grep -c 'cTypeOf name:' src/zemitterc.z); \
 	n2=$$(grep -c 'cTypeForName symtab:' src/zemitterc.z); \
 	fail=0; \
-	if [ "$$n1" -gt 19 ]; then echo "shadow-guard FAIL: 'cTypeOf name:' = $$n1 (baseline 19)"; fail=1; fi; \
+	if [ "$$n1" -gt 18 ]; then echo "shadow-guard FAIL: 'cTypeOf name:' = $$n1 (baseline 18)"; fail=1; fi; \
 	if [ "$$n2" -gt 2 ]; then echo "shadow-guard FAIL: 'cTypeForName symtab:' = $$n2 (baseline 2)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new by-name C-type site was added. Resolve the C type from the canonical"; \
@@ -192,7 +192,7 @@ shadow-guard:
 	  echo "  (If a site was legitimately removed, lower the baseline here instead.)"; \
 	  exit 1; \
 	fi; \
-	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=19)  cTypeForName symtab:=$$n2 (<=2)"
+	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=18)  cTypeForName symtab:=$$n2 (<=2)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
