@@ -4564,6 +4564,12 @@ createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         ty.definedInUnit.set key: did value: unitName.string
         rk2: "\{unitName}.\{monoName}".string
         ty.resolved.set key: rk2 value: rid
+        ccu2: ty.unitTypes.get key: unitName.string
+        match (
+            ccu2
+        ) case some then {
+            ty.setChild parentTypeId: ccu2 childName: monoName childTypeId: rid
+        } case none then {}
         # link the mono to its template (inline templates register under
         # the main unit; file templates carry the per-unit UNIT type).
         tplKey: "\{unitName}.\{templateName}".string
@@ -5443,12 +5449,24 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     rk9: "\{mainName}.\{name}".string
     rv9: mid
     st.typing.resolved.set key: rk9 value: rv9
+    mcu9: st.typing.unitTypes.get key: mainName.string
+    match (
+        mcu9
+    ) case some then {
+        st.typing.setChild parentTypeId: mcu9 childName: name childTypeId: mid
+    } case none then {}
     # monos are global (defined_in_unit NULL): the system-keyed alias makes
     # them resolvable from every unit's lookup chain (a pending instantiation
     # staged while resolving io.z resolves nested args with mainName "io").
     rk8: "system.\{name}".string
     rv8: mid
     st.typing.resolved.set key: rk8 value: rv8
+    mcu8: st.typing.unitTypes.get key: "system".string
+    match (
+        mcu8
+    ) case some then {
+        st.typing.setChild parentTypeId: mcu8 childName: name childTypeId: mid
+    } case none then {}
     # A heap-owning generic instance carries a destructor (so a holder/local
     # frees it; the emitter builds the cname). Collections own native heap;
     # Option/Result own a heap box. A user generic whose template already has a
@@ -7086,7 +7104,7 @@ typedefBaseMangledOf: function {st: zenv.ZSymbolTable unitName: StringView tid: 
     match (
         bo
     ) case some then {
-        return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: bo.stringview) d: 0)
+        return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: bo.stringview) d: 0)
     } case none then {
         return 0
     }
@@ -10728,7 +10746,7 @@ resolveChildPayload: function {st: zenv.ZSymbolTable unitName: StringView cid: u
     if cn.length == 0 then {
         return cid
     }
-    return (optU64Or o: (lookupTyperef resolved: st.typing.resolved mainName: unitName base: cn.stringview) d: cid)
+    return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: cn.stringview) d: cid)
 }
 
 # lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
