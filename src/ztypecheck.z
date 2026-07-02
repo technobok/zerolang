@@ -5845,6 +5845,75 @@ typeNameOf: function {st: zenv.ZSymbolTable tid: u64} out String is {
     }
 }
 
+# respecialize -- a type that is itself a specialization (nonempty genericArgs)
+# re-specializes when any of its arguments is substituted: the origin template
+# specializes again with the mapped argument list. 0 when nothing changes.
+respecialize: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView specTid: u64 idSubs: (Map u64 value: u64)} out u64 is {
+    an9: reg.genericArgCount specId: specTid
+    if an9 == 0 then {
+        return 0
+    }
+    origin9: 0.u64
+    {
+        zo9: reg.typeById.get key: specTid
+        match (
+            zo9
+        ) case some then {
+            og9: zo9.genericOriginId
+            match (
+                og9
+            ) case some then {
+                origin9 = og9
+            } case none then {}
+        } case none then {}
+    }
+    if origin9 == 0 then {
+        return 0
+    }
+    changed9: false
+    mapped9: (List u64)
+    ai9: 0.u64
+    for ai9 < an9 loop {
+        av9: reg.genericArgAt specId: specTid ordinal: ai9
+        mo9: idSubs.get key: av9
+        match (
+            mo9
+        ) case some then {
+            mapped9.append mo9
+            changed9 = true
+        } case none then {
+            av9b: av9
+            mapped9.append av9b
+        }
+        ai9 = ai9 + 1
+    }
+    if changed9 == false then {
+        return 0
+    }
+    tk9: genericTypeKey ty: ty reg: reg tid: origin9
+    pn9: reg.genericParamNamesOf typeKey: tk9.stringview
+    if pn9.length != an9 then {
+        return 0
+    }
+    subs9: (Map String value: u64)
+    sfx9: "".string
+    on9: regTypeNameOf reg: reg tid: origin9
+    mi9: 0.u64
+    for mi9 < an9 loop {
+        mp9: pn9.get i: mi9
+        mv9: mapped9.get i: mi9
+        sk9: mp9.copy
+        sv9: mv9
+        subs9.set key: sk9 value: sv9
+        sfx9.append s: "_"
+        vn9: monoValName ty: ty reg: reg tid: mv9
+        sfx9.append s: vn9.stringview
+        mi9 = mi9 + 1
+    }
+    mn9: "\{on9}\{sfx9}"
+    return (getOrMintSpec ty: ty reg: reg mainName: mainName name: mn9.stringview templateId: origin9 subs: subs9 fallbackArg: 0)
+}
+
 # mintMono -- register one generic-instance type (deduped by mono name): the
 # template's typetype and valtype flag, genericOriginId linking back, and the
 # instance's children -- the template's children with generic-param targets
@@ -5853,7 +5922,7 @@ typeNameOf: function {st: zenv.ZSymbolTable tid: u64} out String is {
 # per-instance tag data type (variants and unions) and the autogen ==/!=
 # functions (variants). Childless templates (the collection classes) produce
 # no children; their cloned method children land with the class-mono slice.
-mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
+mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) idSubs: (Map u64 value: u64) fallbackArg: u64} out u64 is {
     kn: name.string
     got: ty.resolved.get key: ("system.\{name}".string)
     match (
@@ -5962,9 +6031,22 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
         chName: cNames.get i: ci
         chId: cIds.get i: ci
         target: chId
+        ido9: idSubs.get key: chId
+        match (
+            ido9
+        ) case some then {
+            target = ido9
+        } case none then {
+            rsp9: respecialize ty: ty reg: reg mainName: mainName specTid: chId idSubs: idSubs
+            if rsp9 > 0 then {
+                target = rsp9
+            }
+        }
         ctn: regTypeNameOf reg: reg tid: chId
-        target = optU64Or o: (subs.get key: ctn) d: target
-        if fallbackArg > 0 when (ctn.stringview == "null") == false then {
+        if target == chId then {
+            target = optU64Or o: (subs.get key: ctn) d: target
+        }
+        if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId then {
             cko: walkLookupTyperef ty: ty currentUnit: mainName base: ctn.stringview
             match (
                 cko
@@ -6258,7 +6340,24 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
             return cur8
         }
     }
-    mid8: mintMono ty: ty reg: reg mainName: mainName name: name templateId: templateId subs: subs fallbackArg: fallbackArg
+    idSubs8: (Map u64 value: u64)
+    if trieOk8 then {
+        pi8: 0.u64
+        pt8: pnames8.length
+        for pi8 < pt8 loop {
+            pnm8: pnames8.get i: pi8
+            pto8: reg.genericParamTidOf typeKey: tk8.stringview paramName: pnm8.stringview
+            match (
+                pto8
+            ) case some then {
+                kv8: keys8.get i: pi8
+                pk8: pto8
+                idSubs8.set key: pk8 value: kv8
+            } case none then {}
+            pi8 = pi8 + 1
+        }
+    }
+    mid8: mintMono ty: ty reg: reg mainName: mainName name: name templateId: templateId subs: subs idSubs: idSubs8 fallbackArg: fallbackArg
     if trieOk8 when mid8 > 0 then {
         cur9: templateId
         ki9: 0.u64
@@ -6568,7 +6667,8 @@ mintChain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Str
     ) case some then {
         mname: "\{chainTpl}\{suffix}"
         eSubs: (Map String value: u64)
-        cid: mintMono ty: ty reg: reg mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
+        emptyIds9: (Map u64 value: u64)
+        cid: mintMono ty: ty reg: reg mainName: mainName name: mname.stringview templateId: co subs: eSubs idSubs: emptyIds9 fallbackArg: elemArg
         mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl suffix: suffix elemArg: elemArg valArg: valArg
         return cid
     } case none then {
