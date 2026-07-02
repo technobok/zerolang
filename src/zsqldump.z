@@ -94,6 +94,8 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS generic_arg (spec_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, arg_id INTEGER NOT NULL);\n"
     return acc
 }
 
@@ -683,6 +685,118 @@ ZDumper: class {
         this.emitSection title: "unit".stringview rows: rows
     }
 
+
+    # appendGenericChildren -- one row per specialization-tree edge:
+    # parent type-id x argument key -> child spec type-id.
+    appendGenericChildren: function {:this st: zenv.ZSymbolTable} is {
+        n: st.reg.nextTypeId
+        tid: 0.u64
+        for tid < n loop {
+            zt: st.reg.typeById.get key: tid
+            match (
+                zt
+            ) case some then {
+                with git9: zt.genericChildren.iterateItems do for e9: git9 loop {
+                    row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{e9.key}, \{e9.value});\n"
+                    this.acc.append s: row.stringview
+                }
+            } case none then {}
+            tid = tid + 1
+        }
+    }
+
+    # appendGenericArgs -- one row per specialization argument, in
+    # definition-parameter order.
+    appendGenericArgs: function {:this st: zenv.ZSymbolTable} is {
+        n: st.reg.nextTypeId
+        tid: 0.u64
+        for tid < n loop {
+            zt: st.reg.typeById.get key: tid
+            match (
+                zt
+            ) case some then {
+                an9: zt.genericArgs.length
+                ai9: 0.u64
+                for ai9 < an9 loop {
+                    av9: zt.genericArgs.get i: ai9
+                    row: "INSERT OR IGNORE INTO generic_arg VALUES (\{tid}, \{ai9}, \{av9});\n"
+                    this.acc.append s: row.stringview
+                    ai9 = ai9 + 1
+                }
+            } case none then {}
+            tid = tid + 1
+        }
+    }
+
+    appendGenericChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        n: st.reg.nextTypeId
+        tid: 0.u64
+        for tid < n loop {
+            zt: st.reg.typeById.get key: tid
+            match (
+                zt
+            ) case some then {
+                du: st.typing.definedInUnit.get key: tid
+                inUnit: false
+                match (
+                    du
+                ) case some then {
+                    if du.stringview == unm then {
+                        inUnit = true
+                    }
+                } case none then {}
+                if inUnit then {
+                    with git9: zt.genericChildren.iterateItems do for e9: git9 loop {
+                        pn9: canonTypeName reg: st.reg tid: tid
+                        kn9: canonTypeName reg: st.reg tid: e9.key
+                        cn9: canonTypeName reg: st.reg tid: e9.value
+                        row: "generic_child \{pn9} \{kn9} \{cn9}"
+                        rows.append row
+                    }
+                }
+            } case none then {}
+            tid = tid + 1
+        }
+        this.emitSection title: "generic_child".stringview rows: rows
+    }
+
+    appendGenericArgsCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        n: st.reg.nextTypeId
+        tid: 0.u64
+        for tid < n loop {
+            zt: st.reg.typeById.get key: tid
+            match (
+                zt
+            ) case some then {
+                du: st.typing.definedInUnit.get key: tid
+                inUnit: false
+                match (
+                    du
+                ) case some then {
+                    if du.stringview == unm then {
+                        inUnit = true
+                    }
+                } case none then {}
+                if inUnit then {
+                    an9: zt.genericArgs.length
+                    ai9: 0.u64
+                    for ai9 < an9 loop {
+                        av9: zt.genericArgs.get i: ai9
+                        sn9: canonTypeName reg: st.reg tid: tid
+                        vn9: canonTypeName reg: st.reg tid: av9
+                        row: "generic_arg \{sn9} \{ai9} \{vn9}"
+                        rows.append row
+                        ai9 = ai9 + 1
+                    }
+                }
+            } case none then {}
+            tid = tid + 1
+        }
+        this.emitSection title: "generic_arg".stringview rows: rows
+    }
+
     appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
         n: st.reg.nextTypeId
@@ -1077,6 +1191,8 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     d.appendUnits program: program typing: symtab.typing
     d.appendTypes st: symtab
     d.appendTypeChildren typing: symtab.typing
+    d.appendGenericChildren st: symtab
+    d.appendGenericArgs st: symtab
     overrideExpressionStamps typing: symtab.typing program: program
     d.appendTypedNodes typing: symtab.typing
     d.appendConformance typing: symtab.typing
@@ -1131,6 +1247,8 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     d.appendUnitsCanon program: program
     d.appendTypesCanon unm: mu.stringview st: symtab
     d.appendTypeChildrenCanon unm: mu.stringview st: symtab
+    d.appendGenericChildrenCanon unm: mu.stringview st: symtab
+    d.appendGenericArgsCanon unm: mu.stringview st: symtab
     d.appendConformanceCanon unm: mu.stringview st: symtab
     d.appendSymbolTableCanon st: symtab
     return d.acc.copy

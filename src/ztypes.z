@@ -447,6 +447,12 @@ ZType: class {
     isTagGenericOrigin:  bool
     numericGenericParams: (Set String)
     genericDefaults:     (Map String value: u64)
+    # id-keyed specialization tree: one level per generic parameter in
+    # definition order -- argument type-id (or numeric value at a numeric
+    # parameter level) -> the child specialization's type-id. Specs record
+    # their ordered argument ids in genericArgs for backward substitution.
+    genericChildren:     (Map u64 value: u64)
+    genericArgs:         (List u64)
     constValue:          (Option ZConst)
     typedefBaseId:       (optionval u64)
     destructorName:      (Option String)
@@ -578,6 +584,8 @@ ZTypeRegistry: class {
         isTagGenericOrigin: false
         numericGenericParams: (Set String)
         genericDefaults: (Map String value: u64)
+        genericChildren: (Map u64 value: u64)
+        genericArgs: (List u64)
         constValue: (Option.none ZConst)
         typedefBaseId: (optionval.none u64)
         destructorName: (Option.none String)
@@ -774,6 +782,55 @@ ZTypeRegistry: class {
         ) case some then {
             got.isNative = value
         } case none then { }
+    }
+
+
+    setGenericChild: function {:this parentId: u64 key: u64 child: u64} is {
+        got: this.typeById.get key: parentId
+        match (
+            got
+        ) case some then {
+            got.genericChildren.set key: key value: child
+        } case none then {}
+    }
+
+    getGenericChild: function {:this parentId: u64 key: u64} out optionval u64 is {
+        got: this.typeById.get key: parentId
+        match (
+            got
+        ) case some then {
+            return (got.genericChildren.get key: key)
+        } case none then {}
+        return (optionval.none u64)
+    }
+
+    appendGenericArg: function {:this specId: u64 arg: u64} is {
+        got: this.typeById.get key: specId
+        match (
+            got
+        ) case some then {
+            got.genericArgs.append arg
+        } case none then {}
+    }
+
+    genericArgCount: function {:this specId: u64} out u64 is {
+        got: this.typeById.get key: specId
+        match (
+            got
+        ) case some then {
+            return got.genericArgs.length
+        } case none then {}
+        return 0
+    }
+
+    genericArgAt: function {:this specId: u64 ordinal: u64} out u64 is {
+        got: this.typeById.get key: specId
+        match (
+            got
+        ) case some then {
+            return (got.genericArgs.get i: ordinal)
+        } case none then {}
+        return 0
     }
 
     setGenericOrigin: function {:this typeId: u64 value: u64} is {
