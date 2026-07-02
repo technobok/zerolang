@@ -1264,6 +1264,9 @@ returnParamTid: function {reg: ztypes.ZTypeRegistry enclKey: StringView o: Optio
             ) case some then {
                 return po
             } case none then {}
+            rpt7: reg.newType name: bn.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+            reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: rpt7
+            return rpt7
         }
     } case none then {}
     return 0
@@ -2765,7 +2768,10 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         # method decls like user template methods. create is
                         # special-cased; length/capacity stay field children
                         # (their C surface is a struct read, not a method).
-                        if unitName == "collections" when defName == "List" then {
+                        famF3: false
+                        if defName == "List" then { famF3 = true }
+                        if defName == "ListView" then { famF3 = true }
+                        if unitName == "collections" when famF3 then {
                             prodSkipL: false
                             if fname.stringview == "create" then { prodSkipL = true }
                             if fname.stringview == "length" then { prodSkipL = true }
@@ -6794,6 +6800,17 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     }
     bk0: monoId
     ty.collectionChildrenBuilt.set key: bk0 value: true
+    # ListView children come from the produced template method (get); the
+    # length field (fresh const-clone u64) and the create child still
+    # materialize here, once per mono (post-memo: this arm mints).
+    if templateName == "ListView" then {
+        vlenV: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: vlenV value: true
+        ty.markAsConstClone typeId: vlenV
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: vlenV
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
+        return
+    }
     isSized: false
     if templateName == "str" then { isSized = true }
     if templateName == "array" then { isSized = true }
@@ -6826,15 +6843,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         clid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "call"
         clTarget: "OptionView_\{en}"
         linkMonoReturn ty: ty reg: reg methodId: clid targetMono: clTarget.stringview
-        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
-    }
-    if templateName == "ListView" then {
-        vlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        reg.setValtype typeId: vlen value: true
-        ty.markAsConstClone typeId: vlen
-        ty.setChild parentTypeId: monoId childName: "length" childTypeId: vlen
-        vgId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
-        reg.setReturnType typeId: vgId value: elemArg
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
     if templateName == "Set" then {
@@ -6961,8 +6969,7 @@ mintChain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Str
     ) case some then {
         mname: "\{chainTpl}\{suffix}"
         eSubs: (Map String value: u64)
-        emptyIds9: (Map u64 value: u64)
-        cid: mintMono ty: ty reg: reg mainName: mainName name: mname.stringview templateId: co subs: eSubs idSubs: emptyIds9 fallbackArg: elemArg
+        cid: getOrMintSpec ty: ty reg: reg mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
         mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl suffix: suffix elemArg: elemArg valArg: valArg
         return cid
     } case none then {
