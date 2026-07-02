@@ -344,13 +344,13 @@ indexUnitBody: function {ty: ztyping.ZTyping unitName: StringView unitIdx: u64 u
                 ) case some then {
                     k: "\{unitName}.\{dn}".string
                     ty.defTypetype.set key: k value: tto
-                    sk0: "\{unitName}.\{dn}".string
-                    uv0: unitIdx
-                    ty.defNodeUnitIdx.set key: sk0 value: uv0
-                    sk1: "\{unitName}.\{dn}".string
-                    bv1: bidx0
-                    ty.defNodeBodyIdx.set key: sk1 value: bv1
                 } case none then {}
+                sk0: "\{unitName}.\{dn}".string
+                uv0: unitIdx
+                ty.defNodeUnitIdx.set key: sk0 value: uv0
+                sk1: "\{unitName}.\{dn}".string
+                bv1: bidx0
+                ty.defNodeBodyIdx.set key: sk1 value: bv1
             } else {}
             bidx0 = bidx0 + 1
         }
@@ -405,31 +405,66 @@ defTypetypeOf: function {defn: Node name: StringView} out optionval ztypes.ztype
 # string is a safe sentinel: a unit name is never empty.
 definingUnitFor: function {ty: ztyping.ZTyping currentUnit: StringView name: StringView} out String is {
     k0: "\{currentUnit}.\{name}".string
-    if (ty.defTypetype.has key: k0) then {
+    k0b: "\{currentUnit}.\{name}".string
+    hitk0: ty.defTypetype.has key: k0
+    if (hitk0) == false then {
+        hitk0 = ty.defNodeUnitIdx.has key: k0b
+    }
+    if hitk0 then {
         return currentUnit.string
     }
     k1: "system.\{name}".string
-    if (ty.defTypetype.has key: k1) then {
+    k1b: "system.\{name}".string
+    hitk1: ty.defTypetype.has key: k1
+    if (hitk1) == false then {
+        hitk1 = ty.defNodeUnitIdx.has key: k1b
+    }
+    if hitk1 then {
         return "system".string
     }
     k2: "collections.\{name}".string
-    if (ty.defTypetype.has key: k2) then {
+    k2b: "collections.\{name}".string
+    hitk2: ty.defTypetype.has key: k2
+    if (hitk2) == false then {
+        hitk2 = ty.defNodeUnitIdx.has key: k2b
+    }
+    if hitk2 then {
         return "collections".string
     }
     k3: "io.\{name}".string
-    if (ty.defTypetype.has key: k3) then {
+    k3b: "io.\{name}".string
+    hitk3: ty.defTypetype.has key: k3
+    if (hitk3) == false then {
+        hitk3 = ty.defNodeUnitIdx.has key: k3b
+    }
+    if hitk3 then {
         return "io".string
     }
     k4: "core.\{name}".string
-    if (ty.defTypetype.has key: k4) then {
+    k4b: "core.\{name}".string
+    hitk4: ty.defTypetype.has key: k4
+    if (hitk4) == false then {
+        hitk4 = ty.defNodeUnitIdx.has key: k4b
+    }
+    if hitk4 then {
         return "core".string
     }
     k5: "os.\{name}".string
-    if (ty.defTypetype.has key: k5) then {
+    k5b: "os.\{name}".string
+    hitk5: ty.defTypetype.has key: k5
+    if (hitk5) == false then {
+        hitk5 = ty.defNodeUnitIdx.has key: k5b
+    }
+    if hitk5 then {
         return "os".string
     }
     k6: "cli.\{name}".string
-    if (ty.defTypetype.has key: k6) then {
+    k6b: "cli.\{name}".string
+    hitk6: ty.defTypetype.has key: k6
+    if (hitk6) == false then {
+        hitk6 = ty.defNodeUnitIdx.has key: k6b
+    }
+    if hitk6 then {
         return "cli".string
     }
     return "".string
@@ -953,67 +988,182 @@ monoArgName: function {an: StringView thisName: StringView} out String is {
     return an.string
 }
 
-# recordPendingMono -- record a pending generic instantiation for a call-shaped
-# parameterized type-ref, keyed to the EXPRESSION wrapper node `nid` (the
-# reference stamps the wrapper with the instance type). Args must be bare atoms
-# (`this` / `type` map to the enclosing type) or numeric size literals; an
-# empty callable skips the record.
-recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView op: Node nid: u32} is {
+# resolveDottedArgTid -- a unit-qualified dotted generic argument
+# (ztypes.zlockstate): descend the member in its defining unit. Marker /
+# non-unit dotted shapes resolve 0 (the caller skips the record).
+resolveDottedArgTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node dp: Node} out u64 is {
+    match (
+        dp
+    ) case dottedpath then {
+        pq9: atomName n: dp.parent
+        cq9: atomName n: dp.child
+        if pq9.length > 0 when cq9.length > 0 then {
+            if (reg.isUnitName name: pq9.stringview) then {
+                return (descendNamed ty: ty reg: reg units: units defUnit: pq9.stringview name: cq9.stringview)
+            }
+        }
+    } else {}
+    return 0
+}
+
+# ensureNativeLinkTargets -- descend the native templates the collection
+# materializer links returns against by NAME (String / StringView, the
+# option wrappers, the iterator/view families): inline specialization runs
+# at resolve time, before the demand worklist would have pulled them.
+# definedKeys makes every descent after the first a no-op.
+ensureNativeLinkTargets: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node} is {
+    if ty.nativeLinkTargetsDone then {
+        return
+    }
+    ty.nativeLinkTargetsDone = true
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "String"
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "StringView"
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "Option"
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "OptionView"
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "optionval"
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "Result"
+    descendNamed ty: ty reg: reg units: units defUnit: "system" name: "resultval"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "List"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "ListIter"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "ListView"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "Set"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "SetIter"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "Map"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "MapKeyIter"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "MapItemIter"
+    descendNamed ty: ty reg: reg units: units defUnit: "collections" name: "MapEntry"
+}
+
+# resolveMonoRefInline -- resolve a call-shaped parameterized type ref at the
+# point it is recorded: resolve the template and every argument now (nested
+# parameterized args recurse; the descent pulls unresolved defs), then dedup /
+# materialize through getOrMintSpec and stamp the wrapper node. Numeric size
+# literals join the instance name only (const values, not type refs). Returns
+# 0 -- recording nothing -- when the callable is empty or any argument is
+# unresolvable (a template-internal generic-param name stays a shell).
+resolveMonoRefInline: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView op: Node nid: u32} out u64 is {
     match (
         op
     ) case expression then {
-        recordPendingMono ty: ty unitName: unitName thisName: thisName op: op.expression nid: nid
+        return (resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: op.expression nid: nid)
     } case call then {
-        tname: atomName n: op.callable
-        margs: (List String)
-        margNames: (List String)
-        allAtoms: true
-        aiter: op.arguments.iterate
-        for arg: aiter loop {
+        return (resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: thisName callable: op.callable arguments: op.arguments nid: nid)
+    } else {}
+    return 0
+}
+
+# resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
+# callable and argument list directly so narrowed call subjects can feed it.
+resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView callable: Node arguments: List Node nid: u32} out u64 is {
+    {
+        tname9: atomName n: callable
+        if tname9.length == 0 then {
+            return 0
+        }
+        sfx9: "".string
+        subs9: (Map String value: u64)
+        firstA9: 0.u64
+        allOk9: true
+        aiter9: arguments.iterate
+        for arg9: aiter9 loop {
             match (
-                arg
+                arg9
             ) case namedoperation then {
-                an: atomName n: arg.operation
-                if (isNumericLiteralName name: an.stringview) then {
-                    # A numeric size arg joins as the literal text; the
-                    # resolver folds it into the mono suffix (str_16).
-                    nv: an.copy
-                    margs.append nv
-                    pn2: unitLabel o: arg.name
-                    margNames.append pn2
+                an9: atomName n: arg9.operation
+                if (isNumericLiteralName name: an9.stringview) then {
+                    sfx9.append s: "_"
+                    sfx9.append s: an9.stringview
                 } else {
-                    if an.length == 0 then {
-                        # a nested parameterized arg joins under its
-                        # mangled instance name and stages its own
-                        # stampless inner instantiation.
-                        mg: mangledTypeName op: arg.operation
-                        if mg.length == 0 then {
-                            allAtoms = false
-                        } else {
-                            margs.append mg
-                            pn3: unitLabel o: arg.name
-                            margNames.append pn3
-                            recordPendingMono ty: ty unitName: unitName thisName: thisName op: arg.operation nid: 0
+                    aid9: 0.u64
+                    if an9.length == 0 then {
+                        aid9 = resolveDottedArgTid ty: ty reg: reg units: units dp: arg9.operation
+                        if aid9 == 0 then {
+                            inner9: resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: arg9.operation nid: 0
+                            if inner9 > 0 then {
+                                aid9 = inner9
+                            } else {
+                                allOk9 = false
+                            }
                         }
                     } else {
-                        anc: monoArgName an: an.stringview thisName: thisName
-                        if anc.length == 0 then {
-                            allAtoms = false
+                        anc9: monoArgName an: an9.stringview thisName: thisName
+                        if anc9.length == 0 then {
+                            allOk9 = false
                         } else {
-                            margs.append anc
-                            pn: unitLabel o: arg.name
-                            margNames.append pn
+                            ao9: walkLookupTyperef ty: ty currentUnit: unitName base: anc9.stringview
+                            aid9 = optU64Or o: ao9 d: 0
+                            if aid9 == 0 then {
+                                duo9: definingUnitFor ty: ty currentUnit: unitName name: anc9.stringview
+                                if duo9.length > 0 then {
+                                    aid9 = descendNamed ty: ty reg: reg units: units defUnit: duo9.stringview name: anc9.stringview
+                                }
+                            }
+                            if aid9 == 0 then {
+                                allOk9 = false
+                            }
                         }
+                    }
+                    if aid9 > 0 then {
+                        sfx9.append s: "_"
+                        vn9: monoValName ty: ty reg: reg tid: aid9
+                        sfx9.append s: vn9.stringview
+                        if firstA9 == 0 then {
+                            firstA9 = aid9
+                        }
+                        pn9: unitLabel o: arg9.name
+                        sk9: pn9.copy
+                        sv9: aid9
+                        subs9.set key: sk9 value: sv9
                     }
                 }
             } else {}
         }
-        if tname.length > 0 when allAtoms when margs.length > 0 then {
-            oun: unitName.string
-            pm: (ztyping.PendingMono nodeid: nid template: tname originUnit: oun args: margs argNames: margNames)
-            ty.pendingMono.append pm
+        if allOk9 == false then {
+            return 0
         }
-    } else {}
+        if sfx9.length == 0 then {
+            return 0
+        }
+        tplO9: walkLookupTyperef ty: ty currentUnit: unitName base: tname9.stringview
+        tplId9: optU64Or o: tplO9 d: 0
+        if tplId9 == 0 then {
+            tduo9: definingUnitFor ty: ty currentUnit: unitName name: tname9.stringview
+            if tduo9.length > 0 then {
+                tplId9 = descendNamed ty: ty reg: reg units: units defUnit: tduo9.stringview name: tname9.stringview
+            }
+        }
+        if tplId9 == 0 then {
+            return 0
+        }
+        ensureNativeLinkTargets ty: ty reg: reg units: units
+        # generator wrapper collapse: the synth `.call` return's Option over a
+        # VALTYPE element is optionval (ownership is a physical no-op there).
+        tn9: tname9.string
+        gwv9: optBoolOr o: (ty.generatorWrapper.get key: nid.u64) d: false
+        if gwv9 when firstA9 > 0 then {
+            if (typeIsValtype ty: ty reg: reg tid: firstA9) then {
+                ovd9: descendNamed ty: ty reg: reg units: units defUnit: "system" name: "optionval"
+                if ovd9 > 0 then {
+                    tplId9 = ovd9
+                    tn9 = "optionval".string
+                }
+            }
+        }
+        mainName9: reg.regMainUnit.stringview
+        mname9: "\{tn9}\{sfx9}"
+        mid9: getOrMintSpec ty: ty reg: reg mainName: mainName9 name: mname9.stringview templateId: tplId9 subs: subs9 fallbackArg: 0
+        if mid9 == 0 then {
+            return 0
+        }
+        vv9: optU64Or o: (subs9.get key: ("value".string)) d: 0
+        mintTemplateChains ty: ty reg: reg mainName: mainName9 tname: tn9.stringview suffix: sfx9.stringview firstA: firstA9 valA: vv9
+        mintCollectionChildren ty: ty reg: reg mainName: mainName9 monoName: mname9.stringview monoId: mid9 templateName: tn9.stringview suffix: sfx9.stringview elemArg: firstA9 valArg: vv9
+        if nid > 0 then {
+            smv9: mid9
+            ty.nodeType.set key: nid.u64 value: smv9
+        }
+        return mid9
+    }
 }
 
 # recordTyperef -- record a signature type-ref node (param / field / arm / return) for
@@ -1021,12 +1171,12 @@ recordPendingMono: function {ty: ztyping.ZTyping unitName: StringView thisName: 
 # type may be unresolved here (system / forward refs), so the base name is resolved to its
 # real type later by stampTyperefs. Recurses parameterized args and strip-marker dotted
 # paths; `this`/`type` record as the enclosing type (thisName).
-recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView node: Node} is {
+recordTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView node: Node} is {
     match (
         node
     ) case expression then {
-        recordPendingMono ty: ty unitName: unitName thisName: thisName op: node.expression nid: node.nodeid
-        recordTyperef ty: ty unitName: unitName thisName: thisName node: node.expression
+        resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: node.expression nid: node.nodeid
+        recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: node.expression
     } case call then {
         # Parameterized type `(T arg: U ...)`: the outer node resolves to a NULL-defined
         # mono (filtered out); record each argument's inner TYPE-ref (e.g. the `u32` in
@@ -1041,7 +1191,7 @@ recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: Stri
             ) case namedoperation then {
                 an: atomName n: arg.operation
                 if (isNumericLiteralName name: an.stringview) == false then {
-                    recordTyperef ty: ty unitName: unitName thisName: thisName node: arg.operation
+                    recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: arg.operation
                 }
             } else {}
         }
@@ -1064,18 +1214,18 @@ recordTyperef: function {ty: ztyping.ZTyping unitName: StringView thisName: Stri
                 # a parameterized parent ((List of: String).take) has no base
                 # name; the marker dp wears the parent's mono stamp.
                 if bn.length == 0 then {
-                    recordPendingMono ty: ty unitName: unitName thisName: thisName op: node.parent nid: node.nodeid
+                    resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: node.parent nid: node.nodeid
                 }
                 # Ownership markers peel and stamp the inner ref; `.private` /
                 # `.public` resolve the pair atomically (no base-atom stamp).
                 if cn.stringview != "private" then {
                     if cn.stringview != "public" then {
-                        recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
+                        recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: node.parent
                     }
                 }
             } else {
                 if cn.stringview == "typedef" then {
-                    recordTyperef ty: ty unitName: unitName thisName: thisName node: node.parent
+                    recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: node.parent
                 }
             }
         }
@@ -1124,11 +1274,11 @@ recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 o: Option Node} is 
 # recordReturnType -- record a function's `out T` return type-ref (mirrors
 # demandReturnType's extraction). A parameterized return (out (Result ...)) yields no
 # bare base name and is skipped (its mono is NULL-defined, filtered out anyway).
-recordReturnType: function {ty: ztyping.ZTyping unitName: StringView thisName: StringView o: Option Node} is {
+recordReturnType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView o: Option Node} is {
     match (
         o
     ) case some then {
-        recordTyperef ty: ty unitName: unitName thisName: thisName node: o
+        recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: o
     } case none then {}
 }
 
@@ -1204,6 +1354,10 @@ resolveTyperefShell: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
     } case expression then {
         return (resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr.expression thisName: thisName)
     } case call then {
+        imid8: resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: thisName callable: typeExpr.callable arguments: typeExpr.arguments nid: 0
+        if imid8 > 0 then {
+            return imid8
+        }
         suffix: atomName n: typeExpr.callable
         reg.recordDemand name: suffix.stringview
         reg.recordSeededDemand un: unitName name: suffix.stringview
@@ -1588,7 +1742,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
                 if (paramIsThisReceiver op: pm.operation) then {
                     reg.setThisParamName typeId: fid name: pname.stringview
                 }
-                recordTyperef ty: ty unitName: unitName thisName: thisName node: pm.operation
+                recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: pm.operation
                 pown: pathOwnership n: pm.operation
                 match (
                     pown
@@ -1604,7 +1758,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
         } else {}
     }
     demandReturnType reg: reg unitName: unitName o: fnode.returntype
-    recordReturnType ty: ty unitName: unitName thisName: thisName o: fnode.returntype
+    recordReturnType ty: ty reg: reg units: units unitName: unitName thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
     stampGenericParamRef ty: ty reg: reg unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
     if (returnHasBorrowMarker o: fnode.returntype) then {
@@ -1872,7 +2026,7 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
         ) case namedoperation then {
             cnm: atomName n: mm.operation
             if (isNumericLiteralName name: cnm.stringview) == false then {
-                recordTyperef ty: ty unitName: unitName thisName: "" node: mm.operation
+                recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: "" node: mm.operation
             }
             mtid: markerTargetId ty: ty reg: reg unitName: unitName op: mm.operation
             match (
@@ -2165,7 +2319,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
                         if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.FUNCTION then {
                             ty.setChildFnptrField parentTypeId: rid name: fname.stringview
                         }
-                        recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+                        recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: "" node: fm.operation
                         dcn1: dottedChildName n: fm.operation
                         rdnr: rootNameOf n: fm.operation
                         if (isNumericLiteralName name: rdnr.stringview) then {
@@ -2245,7 +2399,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: L
             aname: unitLabel o: fm.name
             cid: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
-            recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+            recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if (isgen) == false then {
@@ -2419,7 +2573,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
             }
             cid: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
-            recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+            recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: "" node: fm.operation
         } else {}
     }
     if (isgen) == false then {
@@ -2597,7 +2751,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                     if (isTypedefField n: fm.operation) then {
                         # No field child for the wrapper, but the inner refs
                         # (the u8 in `(List of: u8).typedef`) still stamp.
-                        recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+                        recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: "" node: fm.operation
                     } else {
                         if fname.stringview != "_resume_input" then {
                             if (fieldTypeNeedsCleanup ty: ty reg: reg units: units unitName: unitName name: ftn.stringview isLock: lockField) then {
@@ -2609,7 +2763,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         if lockField then {
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
                         }
-                        recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
+                        recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: "" node: fm.operation
                         dcn0: dottedChildName n: fm.operation
                         rdnc: rootNameOf n: fm.operation
                         if (isNumericLiteralName name: rdnc.stringview) then {
@@ -2836,14 +2990,17 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     }
     tto9: ty.defTypetype.get key: ("\{defUnit}.\{name}".string)
     ttv9: ztypes.ztypetype.NULL
+    classified9: false
     match (
         tto9
     ) case some then {
         ttv9 = tto9
-    } case none then {
-        return 0
+        classified9 = true
+    } case none then {}
+    tid9: 0.u64
+    if classified9 then {
+        tid9 = declareCanonicalType ty: ty reg: reg defUnit: defUnit name: name typetype: ttv9
     }
-    tid9: declareCanonicalType ty: ty reg: reg defUnit: defUnit name: name typetype: ttv9
     dk9a: "\{defUnit}.\{name}".string
     if (ty.definedKeys.has item: dk9a) then {
         return tid9
@@ -2879,6 +3036,10 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
         descendIntoUnit ty: ty reg: reg units: units unitName: defUnit defName: name bodyIdx: bidx9 unitdef: ue9.operation
     } else {}
     ty.suppressSigStamp = sup9
+    if classified9 == false then {
+        ro9: ty.resolved.get key: ("\{defUnit}.\{name}".string)
+        return (optU64Or o: ro9 d: 0)
+    }
     return tid9
 }
 
@@ -5792,7 +5953,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
         target: chId
         ctn: regTypeNameOf reg: reg tid: chId
         target = optU64Or o: (subs.get key: ctn) d: target
-        if fallbackArg > 0 then {
+        if fallbackArg > 0 when (ctn.stringview == "null") == false then {
             cko: walkLookupTyperef ty: ty currentUnit: mainName base: ctn.stringview
             match (
                 cko
@@ -6109,7 +6270,6 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
                 } else {
                     inm9: "\{name}__node"
                     step9 = reg.newType name: inm9.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
-                    reg.setGenericOrigin typeId: step9 value: templateId
                     kj9: 0.u64
                     for kj9 <= ki9 loop {
                         pk9: keys8.get i: kj9
@@ -6448,184 +6608,6 @@ mintTemplateChains: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry main
             mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: mesfx.stringview elemArg: meid valArg: 0
             mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapItemIter" suffix: suffix elemArg: meid valArg: valA
         }
-    }
-}
-
-# One resolved instantiation staged for minting: the mono name parts, the
-# template id, the wrapper node to stamp, and the by-name substitution map.
-ResolvedMono: class {
-    template:   String
-    suffix:     String
-    templateId: u64
-    nodeid:     u32
-    firstArgId: u64
-    subs:       (Map String value: u64)
-}
-
-# resolveMonos -- the full-mode monomorphization pass: mint an instance type
-# per recorded parameterized signature ref whose template and args all resolve
-# by name (an unresolved arg -- e.g. the unbound T in a template's own
-# `(ListIter of: T)` -- skips the ref), build its children, and stamp the ref's
-# expression wrapper with the instance. Staged through a local list so nothing
-# holds the pendingMono iterator while minting mutates the registry. Minting a
-# List / ListView / ListIter instance also mints its iterator-family instances,
-# mirroring the reference's transitive method-signature instantiation; the
-# Set/Map chains land when an example needs them.
-# resolveMonosPass -- one stage+mint sweep over the pending instantiations.
-# Staging never mints (`staged` holds the pendingMono iterator while minting
-# mutates the registry); the driver loops passes to a fixpoint so an inner
-# mono registered by one pass resolves as an outer's argument in the next.
-resolveMonosPass: function {st: zenv.ZSymbolTable mainName: StringView} is {
-    staged: (List ResolvedMono)
-    with piter: st.typing.pendingMono.iterate do for pm: piter loop {
-        pmuv: pm.originUnit.stringview
-        pmu: pmuv.string
-        tplOpt: walkLookupTyperef ty: st.typing currentUnit: pmu.stringview base: pm.template.stringview
-        match (
-            tplOpt
-        ) case some then {
-            allOk: true
-            sfx: "".string
-            subs: (Map String value: u64)
-            firstA: 0.u64
-            j: 0.u64
-            na: pm.args.length
-            for j < na loop {
-                an: pm.args.get i: j
-                if (isNumericLiteralName name: an.stringview) then {
-                    sfx.append s: "_"
-                    sfx.append s: an.stringview
-                    j = j + 1
-                    continue
-                }
-                ao: walkLookupTyperef ty: st.typing currentUnit: pmu.stringview base: an.stringview
-                aid9: optU64Or o: ao d: 0
-                if aid9 == 0 then {
-                    # a cross-unit value/element arg (ztypes.zparamownership,
-                    # recorded bare as "zparamownership") is outside lookupTyperef's
-                    # main+system search; scan every dep unit's resolved scope so the
-                    # collection mono mints HERE (before the body walk) rather than
-                    # lazily at first construction -- else a field-access `.get` over
-                    # the field's shell can't resolve its optionval return.
-                    with uit9: st.typing.unitTypes.iterateItems do for ue9: uit9 loop {
-                        if aid9 == 0 then {
-                            k9: "\{ue9.key}.\{an}".string
-                            r9: st.typing.resolved.get key: k9
-                            aid9 = optU64Or o: r9 d: 0
-                        }
-                    }
-                }
-                if aid9 > 0 then {
-                    sfx.append s: "_"
-                    vn: monoValName ty: st.typing reg: st.reg tid: aid9
-                    sfx.append s: vn.stringview
-                    if j == 0 then {
-                        firstA = aid9
-                    }
-                    if j < pm.argNames.length then {
-                        pn: pm.argNames.get i: j
-                        sk: pn.copy
-                        sv: aid9
-                        subs.set key: sk value: sv
-                    }
-                } else {
-                    allOk = false
-                }
-                j = j + 1
-            }
-            if allOk when sfx.length > 0 then {
-                # generator wrapper collapse: the synth `.call` return's
-                # Option/OptionView over a VALTYPE element is optionval
-                # (ownership is a physical no-op for valtypes).
-                tplId2: tplOpt
-                tnOver: "".string
-                gwv: optBoolOr o: (st.typing.generatorWrapper.get key: pm.nodeid.u64) d: false
-                if gwv when firstA > 0 then {
-                    faVal: false
-                    {
-                        fz: st.reg.typeById.get key: firstA
-                        match (
-                            fz
-                        ) case some then {
-                            fvo: fz.isValtype
-                            match (
-                                fvo
-                            ) case some then {
-                                if fvo then {
-                                    faVal = true
-                                }
-                            } case none then {
-                            }
-                        } case none then {
-                        }
-                    }
-                    if faVal then {
-                        ovo: walkLookupTyperef ty: st.typing currentUnit: pmu.stringview base: "optionval"
-                        match (
-                            ovo
-                        ) case some then {
-                            tplId2 = ovo
-                            tnOver = "optionval".string
-                        } case none then {
-                        }
-                    }
-                }
-                tn: pm.template.copy
-                if tnOver.length > 0 then {
-                    tn = tnOver
-                }
-                tid: tplId2
-                pnid: pm.nodeid
-                rm: (ResolvedMono template: tn suffix: sfx templateId: tid nodeid: pnid firstArgId: firstA subs: subs)
-                staged.append rm
-            }
-        } case none then {
-        }
-    }
-    riter: staged.iterate
-    for rm2: riter loop {
-        mname: "\{rm2.template}\{rm2.suffix}"
-        mid: mintMono ty: st.typing reg: st.reg mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0
-        if rm2.nodeid > 0 then {
-            setn: mid
-            st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
-        }
-        # chain-family instances mint before the primary's children so the
-        # synthesized method return links can resolve by mono name.
-        vk: "value".string
-        vv: optU64Or o: (rm2.subs.get key: vk) d: 0
-        tnvv: rm2.template.stringview
-        tnv: tnvv.string
-        sfvv: rm2.suffix.stringview
-        sfv: sfvv.string
-        mintTemplateChains ty: st.typing reg: st.reg mainName: mainName tname: tnv.stringview suffix: sfv.stringview firstA: rm2.firstArgId valA: vv
-        mintCollectionChildren ty: st.typing reg: st.reg mainName: mainName monoName: mname.stringview monoId: mid templateName: tnv.stringview suffix: sfv.stringview elemArg: rm2.firstArgId valArg: vv
-    }
-}
-
-resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
-    match (
-        program
-    ) case program then {
-        mainName: program.mainUnitName.stringview
-        # nested instances resolve over passes: an inner mono
-        # (List_String) must register before an outer over it stages.
-        # The mono space is finite, so a non-converging loop means a
-        # mint re-creates types for the same instance every pass.
-        again7: true
-        passes7: 0.u64
-        for again7 loop {
-            passes7 = passes7 + 1
-            if passes7 > 64 then {
-                panic msg: "resolveMonos: no fixpoint after 64 passes"
-            }
-            before7: st.reg.nextTypeId
-            resolveMonosPass st: st mainName: mainName
-            if st.reg.nextTypeId == before7 then {
-                again7 = false
-            }
-        }
-    } else {
     }
 }
 
@@ -13071,7 +13053,6 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool che
         bracketInlineGenericParamNames ty: st.typing reg: st.reg program: program doRegister: false
     }
     if full then {
-        resolveMonos st: st program: program
         checkBodies st: st program: program
         match (
             program
