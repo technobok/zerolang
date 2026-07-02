@@ -2465,7 +2465,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
 # (`reg.hasDestructorName`). A scalar field, or an owned class/union field whose type
 # has no destructor, needs none. Name check for the natives is a scaffold-stage
 # approximation (system types carry no real id under resolve-only-main).
-fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView isLock: bool} out bool is {
+fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView name: StringView isLock: bool} out bool is {
     if isLock then { return true }
     if name == "String" then { return true }
     if name == "List" then { return true }
@@ -2473,6 +2473,28 @@ fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry u
     if name == "Set" then { return true }
     if name == "Option" then { return true }
     if name == "Result" then { return true }
+    duo8: definingUnitFor ty: ty currentUnit: unitName name: name
+    if duo8.length > 0 then {
+        tto8: ty.defTypetype.get key: ("\{duo8}.\{name}".string)
+        match (
+            tto8
+        ) case some then {
+            boxed8: false
+            if tto8 == ztypes.ztypetype.CLASS then {
+                boxed8 = true
+            }
+            if tto8 == ztypes.ztypetype.UNION then {
+                boxed8 = true
+            }
+            if boxed8 then {
+                gk8: "\{duo8}.\{name}".string
+                if (ty.resolving.has item: gk8) then {
+                    return true
+                }
+            }
+        } case none then {}
+        descendNamed ty: ty reg: reg units: units defUnit: duo8.stringview name: name
+    }
     rkey: "\{unitName}.\{name}".string
     rr: ty.resolved.get key: rkey
     match (
@@ -2509,7 +2531,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     istd: recordIsTypedef rnode: cnode
     if istd then {
         tdbase: objectTypedefBase onode: cnode
-        if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: tdbase.stringview isLock: false) then {
+        if (fieldTypeNeedsCleanup ty: ty reg: reg units: units unitName: unitName name: tdbase.stringview isLock: false) then {
             needsDtor = true
         }
         if tdbase.length > 0 then {
@@ -2578,7 +2600,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
                     } else {
                         if fname.stringview != "_resume_input" then {
-                            if (fieldTypeNeedsCleanup ty: ty reg: reg unitName: unitName name: ftn.stringview isLock: lockField) then {
+                            if (fieldTypeNeedsCleanup ty: ty reg: reg units: units unitName: unitName name: ftn.stringview isLock: lockField) then {
                                 needsDtor = true
                             }
                         }
@@ -3091,7 +3113,10 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
                     if (isUnitOp op: bm.operation) then {
                         resolveInlineGenericUnit ty: ty reg: reg units: units unitName: unitName defName: defName.stringview unitOp: bm.operation
                     } else {
-                        resolveDef ty: ty reg: reg units: units unitName: unitName defName: defName.stringview defn: bm.operation
+                        rkeyE: "\{unitName}.\{defName}".string
+                        if (ty.definedKeys.has item: rkeyE) == false then {
+                            resolveDef ty: ty reg: reg units: units unitName: unitName defName: defName.stringview defn: bm.operation
+                        }
                     }
                 }
             } else {}
