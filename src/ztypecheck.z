@@ -2771,6 +2771,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         famF3: false
                         if defName == "List" then { famF3 = true }
                         if defName == "ListView" then { famF3 = true }
+                        if defName == "Set" then { famF3 = true }
                         if unitName == "collections" when famF3 then {
                             prodSkipL: false
                             if fname.stringview == "create" then { prodSkipL = true }
@@ -6811,6 +6812,29 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
         return
     }
+    # Set children come from the produced template methods; the length/
+    # capacity fields (fresh const-clone u64s), the iterate chain-return
+    # link, and the create child still materialize here, once per mono.
+    if templateName == "Set" then {
+        slenS: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: slenS value: true
+        ty.markAsConstClone typeId: slenS
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: slenS
+        scapS: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: scapS value: true
+        ty.markAsConstClone typeId: scapS
+        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: scapS
+        sitS: ty.childOf parentTypeId: monoId name: "iterate"
+        match (
+            sitS
+        ) case some then {
+            sitnS: "SetIter\{suffix}"
+            linkMonoReturn ty: ty reg: reg methodId: sitS targetMono: sitnS.stringview
+        } case none then {
+        }
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
+        return
+    }
     isSized: false
     if templateName == "str" then { isSized = true }
     if templateName == "array" then { isSized = true }
@@ -6843,33 +6867,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         clid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "call"
         clTarget: "OptionView_\{en}"
         linkMonoReturn ty: ty reg: reg methodId: clid targetMono: clTarget.stringview
-        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
-    }
-    if templateName == "Set" then {
-        # length/capacity expose FRESH u64 clones (no defined-in unit), unlike
-        # List's global u64 -- the reference is asymmetric here and the clone
-        # stays invisible to unit-filtered projections.
-        slen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        reg.setValtype typeId: slen value: true
-        ty.markAsConstClone typeId: slen
-        ty.setChild parentTypeId: monoId childName: "length" childTypeId: slen
-        scap: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        reg.setValtype typeId: scap value: true
-        ty.markAsConstClone typeId: scap
-        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: scap
-        adId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "add"
-        mintTakeParam ty: ty reg: reg methodId: adId pname: "item" elemArg: elemArg
-        reg.setReturnType typeId: adId value: boolid
-        hsId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "has"
-        mintBorrowParam ty: ty reg: reg methodId: hsId pname: "item" elemArg: elemArg
-        reg.setReturnType typeId: hsId value: boolid
-        dlId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "delete"
-        mintBorrowParam ty: ty reg: reg methodId: dlId pname: "item" elemArg: elemArg
-        reg.setReturnType typeId: dlId value: boolid
-        itId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterate"
-        markReturnsBorrow ty: ty reg: reg methodId: itId
-        sitn: "SetIter\{suffix}"
-        linkMonoReturn ty: ty reg: reg methodId: itId targetMono: sitn.stringview
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
     if templateName == "Map" when valArg > 0 then {
