@@ -1250,6 +1250,25 @@ recordTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
     } else {}
 }
 
+# returnParamTid -- when a return typeref names one of the enclosing
+# template's generic parameters, its canonical parameter type id; else 0.
+returnParamTid: function {reg: ztypes.ZTypeRegistry enclKey: StringView o: Option Node} out u64 is {
+    match (
+        o
+    ) case some then {
+        bn: atomName n: o
+        if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
+            po: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
+            match (
+                po
+            ) case some then {
+                return po
+            } case none then {}
+        }
+    } case none then {}
+    return 0
+}
+
 # stampGenericParamRef -- a return typeref naming one of the enclosing
 # template's generic params stamps the unit's generic-param type directly
 # (generic params live outside the name-resolution table).
@@ -1775,6 +1794,10 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
     recordReturnType ty: ty reg: reg units: units unitName: unitName thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
     stampGenericParamRef ty: ty reg: reg unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
+    rpt4: returnParamTid reg: reg enclKey: enclKey.stringview o: fnode.returntype
+    if rpt4 > 0 then {
+        reg.setReturnType typeId: fid value: rpt4
+    }
     if (returnHasBorrowMarker o: fnode.returntype) then {
         fbk: fid
         fbv: true
@@ -1895,6 +1918,18 @@ resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
         return (optionval.some mid)
     } else {
         return (optionval.none u64)
+    }
+}
+
+# functiondefIsNative -- an is-block method marked `is native` (no body to
+# check or emit; its members come from the native materializer).
+functiondefIsNative: function {op: Node} out bool is {
+    match (
+        op
+    ) case functiondef then {
+        return op.isNative
+    } else {
+        return false
     }
 }
 
@@ -2718,7 +2753,15 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
             fm
         ) case namedoperation then {
             if (isFunctionDefOp op: fm.operation) then {
+                prodM4: false
                 if (isgen) == false then {
+                    prodM4 = true
+                } else {
+                    if (functiondefIsNative op: fm.operation) == false then {
+                        prodM4 = true
+                    }
+                }
+                if prodM4 then {
                     fname: unitLabel o: fm.name
                     qname: "\{defName}.\{fname}".string
                     mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
@@ -2726,6 +2769,9 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         mido
                     ) case some then {
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: mido
+                        if isgen then {
+                            reg.setGeneric typeId: mido value: true
+                        }
                         if (fnFieldFlaggableName name: fname.stringview) then {
                             ty.setChildFnptrField parentTypeId: cid name: fname.stringview
                         }
@@ -5845,6 +5891,110 @@ typeNameOf: function {st: zenv.ZSymbolTable tid: u64} out String is {
     }
 }
 
+# cloneMethodInto -- specialize one template method for an instance: a fresh
+# FUNCTION type named {spec}.{m} whose param children and return substitute
+# the template parameters (id-first, then re-specialization). genericOriginId
+# points at the TEMPLATE METHOD so the emitter's mono-instance sweep emits the
+# template body against this signature.
+cloneMethodInto: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView specName: StringView specId: u64 tplClassId: u64 m: StringView tplFnId: u64 idSubs: (Map u64 value: u64)} is {
+    fn5: "\{specName}.\{m}".string
+    fid5: reg.newType name: fn5.stringview typetype: ztypes.ztypetype.FUNCTION
+    reg.setGenericOrigin typeId: fid5 value: tplFnId
+    cN5: (List String)
+    cI5: (List u64)
+    cOh5: (List bool)
+    cOv5: (List ztypes.zparamownership)
+    with cit5: ty.typeChild.iterate do for tc5: cit5 loop {
+        if tc5.parentTypeId == tplFnId then {
+            co5: ty.childTypeById.get key: tc5.childNameId
+            match (
+                co5
+            ) case some then {
+                nm5: tc5.childName.copy
+                cN5.append nm5
+                cv5: co5
+                cI5.append cv5
+                oo5: ty.childOwnership.get key: tc5.childNameId
+                match (
+                    oo5
+                ) case some then {
+                    cOh5.append true
+                    ov5c: oo5
+                    cOv5.append ov5c
+                } case none then {
+                    cOh5.append false
+                    cOv5.append ztypes.zparamownership.BORROW
+                }
+            } case none then {}
+        }
+    }
+    pi5: 0.u64
+    pn5: cN5.length
+    for pi5 < pn5 loop {
+        pnm5: cN5.get i: pi5
+        ptid5: cI5.get i: pi5
+        tgt5: ptid5
+        if ptid5 == tplClassId then {
+            tgt5 = specId
+        }
+        if pnm5.stringview == "this" then {
+            tgt5 = specId
+        }
+        if tgt5 == ptid5 then {
+            ido5: idSubs.get key: ptid5
+            match (
+                ido5
+            ) case some then {
+                tgt5 = ido5
+            } case none then {
+                rs5: respecialize ty: ty reg: reg mainName: mainName specTid: ptid5 idSubs: idSubs
+                if rs5 > 0 then {
+                    tgt5 = rs5
+                }
+            }
+        }
+        ty.setChild parentTypeId: fid5 childName: pnm5.stringview childTypeId: tgt5
+        if (cOh5.get i: pi5) then {
+            pov5: cOv5.get i: pi5
+            ty.setChildOwnership parentTypeId: fid5 name: pnm5.stringview ownership: pov5
+        }
+        pi5 = pi5 + 1
+    }
+    rto5: 0.u64
+    {
+        tz5: reg.typeById.get key: tplFnId
+        match (
+            tz5
+        ) case some then {
+            ro5: tz5.returnTypeId
+            match (
+                ro5
+            ) case some then {
+                rto5 = ro5
+            } case none then {}
+        } case none then {}
+    }
+    if rto5 > 0 then {
+        rt5: rto5
+        if rto5 == tplClassId then {
+            rt5 = specId
+        }
+        rdo5: idSubs.get key: rto5
+        match (
+            rdo5
+        ) case some then {
+            rt5 = rdo5
+        } case none then {
+            rr5: respecialize ty: ty reg: reg mainName: mainName specTid: rto5 idSubs: idSubs
+            if rr5 > 0 then {
+                rt5 = rr5
+            }
+        }
+        reg.setReturnType typeId: fid5 value: rt5
+    }
+    ty.setChild parentTypeId: specId childName: m childTypeId: fid5
+}
+
 # respecialize -- a type that is itself a specialization (nonempty genericArgs)
 # re-specializes when any of its arguments is substituted: the origin template
 # specializes again with the mapped argument list. 0 when nothing changes.
@@ -5954,6 +6104,9 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     }
     reg.setGenericOrigin typeId: mid value: templateId
     reg.setNative typeId: mid value: tplNative
+    if tt == ztypes.ztypetype.CLASS then {
+        reg.setIsHeapAllocated typeId: mid
+    }
     # Register under <unit>.<mangled> so name lookups (field/arm shells named
     # by the mangled form) resolve to the instance once minted.
     rk9: "\{mainName}.\{name}".string
@@ -6055,7 +6208,34 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
                 target = fallbackArg
             }
         }
-        ty.setChild parentTypeId: mid childName: chName.stringview childTypeId: target
+        deep5: false
+        if target == chId then {
+            if (reg.typetypeOf typeId: chId) == ztypes.ztypetype.FUNCTION then {
+                chGen5: false
+                {
+                    cz5: reg.typeById.get key: chId
+                    match (
+                        cz5
+                    ) case some then {
+                        chGen5 = cz5.isgeneric
+                    } case none then {}
+                }
+                if chGen5 then {
+                    isSynth5: false
+                    if chName.stringview == "create" then { isSynth5 = true }
+                    if chName.stringview == "borrow" then { isSynth5 = true }
+                    if chName.stringview == "==" then { isSynth5 = true }
+                    if chName.stringview == "!=" then { isSynth5 = true }
+                    if isSynth5 == false then {
+                        cloneMethodInto ty: ty reg: reg mainName: mainName specName: name specId: mid tplClassId: templateId m: chName.stringview tplFnId: chId idSubs: idSubs
+                        deep5 = true
+                    }
+                }
+            }
+        }
+        if deep5 == false then {
+            ty.setChild parentTypeId: mid childName: chName.stringview childTypeId: target
+        }
         ci = ci + 1
     }
     # RECORD instances: numeric-param fields synthesize from their declared

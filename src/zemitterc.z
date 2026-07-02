@@ -1864,7 +1864,9 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
     }
     monoLk2: monoOriginName symtab: symtab tid: rtid
     if monoLk2.length > 0 then {
-        return "".string
+        if (isUserClassMonoTid symtab: symtab ctx: ctx tid: rtid) == false then {
+            return "".string
+        }
     }
     # system natives (String/StringView/io/cli/os) have dedicated dispatchers.
     rdu9: symtab.typing.definedInUnit.get key: rtid
@@ -3557,6 +3559,10 @@ emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u
 # atom is stamped to the mono FUNCTION id by checkGenericCall. Emit that mono's
 # cname applied to the args. "" when the callable does not resolve to a mono fn.
 emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    gdc9: dottedChildText n: call.callable
+    if gdc9.length > 0 then {
+        return "".string
+    }
     gmf9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
     if gmf9 == 0 then {
         return "".string
@@ -8192,6 +8198,33 @@ fnReturnTypeId: function {symtab: zenv.ZSymbolTable op: Node} out u64 is {
 # function param that is a CLASS or UNION, not a collection mono (List/Map/Set),
 # and not a value-native (String/StringView live in the system/collections
 # units). Records/variants/facets (valtypes) and natives stay by value.
+# isUserClassMonoTid -- a specialization of a non-native user CLASS template
+# (its instances behave like ordinary classes: pointer receivers, method
+# children cloned per spec).
+isUserClassMonoTid: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    zo4: symtab.reg.typeById.get key: tid
+    match (
+        zo4
+    ) case some then {
+        og4: zo4.genericOriginId
+        match (
+            og4
+        ) case some then {
+            if (symtab.reg.typetypeOf typeId: og4) == ztypes.ztypetype.CLASS then {
+                if (isCollectionOriginTid ctx: ctx originTid: og4) == false then {
+                    oz4: symtab.reg.typeById.get key: og4
+                    match (
+                        oz4
+                    ) case some then {
+                        return (oz4.isNative == false)
+                    } case none then {}
+                }
+            }
+        } case none then {}
+    } case none then {}
+    return false
+}
+
 isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     cid: tid
     rduo0: symtab.typing.definedInUnit.get key: tid
@@ -8217,7 +8250,9 @@ isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool 
     }
     monoLk4: monoOriginName symtab: symtab tid: cid
     if monoLk4.length > 0 then {
-        return false
+        if (isUserClassMonoTid symtab: symtab ctx: ctx tid: cid) == false then {
+            return false
+        }
     }
     duo: symtab.typing.definedInUnit.get key: cid
     match (
@@ -15116,7 +15151,78 @@ emitAsConsts: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name: String
     } else {}
 }
 
+# emitClassMonoMethods -- emit every specialization's bodied methods for a
+# generic class template: the clone's FUNCTION id supplies the substituted
+# signature and the template item supplies the body (the unit-mono pattern).
+emitClassMonoMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tplId: u64 op: Node declOnly: bool buf: String.borrow} is {
+    match (
+        op
+    ) case objectdef then {
+        last8: symtab.reg.nextTypeId
+        t8: 0.u64
+        for t8 < last8 loop {
+            isMono8: false
+            go8opt: (optionval.none u64)
+            {
+                to8: symtab.reg.typeById.get key: t8
+                match (
+                    to8
+                ) case some then {
+                    go8opt = to8.genericOriginId
+                } case none then {}
+            }
+            match (
+                go8opt
+            ) case some then {
+                if go8opt == tplId then {
+                    isMono8 = true
+                }
+            } case none then {}
+            if isMono8 then {
+                ait8: op.isItems.iterate
+                for am8: ait8 loop {
+                    match (
+                        am8
+                    ) case namedoperation then {
+                        if (isFunctionDefWithBody9 n: am8.operation) then {
+                            mn8: unitLabel9 o: am8.name
+                            co8: symtab.typing.childOf parentTypeId: t8 name: mn8.stringview
+                            match (
+                                co8
+                            ) case some then {
+                                cf8: co8
+                                if (symtab.reg.typetypeOf typeId: cf8) == ztypes.ztypetype.FUNCTION then {
+                                    fn8: typeNameOfReg9 symtab: symtab tid: cf8
+                                    sg8: fnSignature symtab: symtab ctx: ctx name: fn8.stringview fid: cf8 op: am8.operation
+                                    if declOnly then {
+                                        ld8: "\{sg8};\n"
+                                        buf.append ld8.stringview
+                                    } else {
+                                        lo8: "\{sg8} {\n"
+                                        buf.append lo8.stringview
+                                        ctx.ptrVars = (List String)
+                                        ctx.aliases = (Map String value: String)
+                                        ctx.narrowBox = (Map String value: String)
+                                        registerReftypeParams symtab: symtab ctx: ctx fid: cf8
+                                        emitFnBody symtab: symtab ctx: ctx op: am8.operation fid: cf8 buf: buf
+                                        buf.append "}\n\n"
+                                    }
+                                }
+                            } case none then {}
+                        }
+                    } else {}
+                }
+            }
+            t8 = t8 + 1
+        }
+    } else {}
+}
+
 emitRecordMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 op: Node declOnly: bool buf: String.borrow} is {
+    if (isGenericType symtab: symtab tid: tid) then {
+        emitClassMonoMethods symtab: symtab ctx: ctx tplId: tid op: op declOnly: declOnly buf: buf
+        return
+    }
     match (
         op
     ) case objectdef then {
