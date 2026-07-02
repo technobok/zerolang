@@ -493,6 +493,10 @@ resolveAtomType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
         match (
             tto7
         ) case some then {
+            did7: descendNamed ty: ty reg: reg units: units defUnit: duo7.stringview name: nm
+            if did7 > 0 then {
+                return did7
+            }
             return (declareCanonicalType ty: ty reg: reg defUnit: duo7.stringview name: nm typetype: tto7)
         } case none then {
             return (reg.newType name: nm typetype: ztypes.ztypetype.RECORD)
@@ -1226,6 +1230,10 @@ resolveTyperefShell: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
             cNm: atomName n: typeExpr.child
             reg.recordDemand name: cNm.stringview
             reg.recordSeededDemand un: unitName name: cNm.stringview
+            did8: descendNamed ty: ty reg: reg units: units defUnit: pNm.stringview name: cNm.stringview
+            if did8 > 0 then {
+                return did8
+            }
             return (resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: cNm.stringview thisName: thisName)
         } else {
             return (resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr.parent thisName: thisName)
@@ -2801,6 +2809,9 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     if ty.defNodeIndexBuilt == false then {
         return 0
     }
+    if defUnit == "core" then {
+        return 0
+    }
     tto9: ty.defTypetype.get key: ("\{defUnit}.\{name}".string)
     ttv9: ztypes.ztypetype.NULL
     match (
@@ -2837,12 +2848,15 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     } case none then {
         return tid9
     }
+    sup9: ty.suppressSigStamp
+    ty.suppressSigStamp = false
     ue9: units.get i: uidx9
     match (
         ue9
     ) case namedoperation then {
         descendIntoUnit ty: ty reg: reg units: units unitName: defUnit defName: name bodyIdx: bidx9 unitdef: ue9.operation
     } else {}
+    ty.suppressSigStamp = sup9
     return tid9
 }
 
@@ -2935,6 +2949,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             ty.funcAliases.set key: fk9 value: fv9
             # Use the canonical id if already resolved; else a shell placeholder
             # (overwritten by resolveTypeAliases) so the demand fixpoint terminates.
+            descendNamed ty: ty reg: reg units: units defUnit: apNm9.stringview name: acNm9.stringview
             tgo9: ty.resolved.get key: tgtKey9
             aid9: 0.u64
             match (
@@ -3901,6 +3916,123 @@ resolveCoreBoolsIn: function {ty: ztyping.ZTyping unitdef: Node} is {
         }
     } else {
     }
+}
+
+# onFirstEntry -- run a stdlib / dependency unit's one-time demand machinery the
+# first time the descent worklist resolves a def in it: seed io's internal
+# closure (under the full body-walk driver), resolve the conformance declarers
+# reference-following cannot reach (io / collections / system), and prime a user
+# dependency unit's return / never demands plus its class-body call scan.
+onFirstEntry: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView mainName: StringView unitdef: Node full: bool entered: Set String} is {
+    if (entered.has item: unitName.string) then {
+        return
+    }
+    entered.add item: unitName.string
+    if unitName == "io" then {
+        if full then {
+            seedIoDemands reg: reg
+        }
+        resolveConformanceDefs ty: ty reg: reg units: units unitName: "io" unitdef: unitdef
+        return
+    }
+    if unitName == "collections" then {
+        resolveConformanceDefs ty: ty reg: reg units: units unitName: "collections" unitdef: unitdef
+        return
+    }
+    if unitName == "system" then {
+        resolveConformanceDefs ty: ty reg: reg units: units unitName: "system" unitdef: unitdef
+        return
+    }
+    if unitName == "os" then {
+        return
+    }
+    if unitName == "cli" then {
+        return
+    }
+    if unitName == mainName then {
+        return
+    }
+    reg.recordDemand name: "return"
+    reg.recordDemand name: "never"
+    scanDemandedDepClassBodies reg: reg unitdef: unitdef
+}
+
+# resolveDemandsByDescent -- the descent-era demand worklist. Seeds the body-walk
+# demands, then body-drains the main unit (full mode) and every dependency unit
+# except core to a joint fixpoint; each resolved def's own references descend
+# inline (resolveAtomType -> descendNamed), so per-unit body order only decides
+# trigger order, not dependency order. Runs before resolveCrossUnitDemand, which
+# is asserted to find nothing left.
+resolveDemandsByDescent: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
+    seedBodyWalkDemands reg: reg program: program
+    if (reg.isDemanded name: "print") then {
+        reg.recordDemand name: "StringLike"
+        reg.recordDemand name: "str"
+        reg.recordDemand name: "List"
+    }
+    entered9: (Set String)
+    mainName9: reg.regMainUnit.stringview
+    match (
+        program
+    ) case program then {
+        if full then {
+            mdN9: program.units.length
+            mdI9: 0.u64
+            for mdI9 < mdN9 loop {
+                mu9: program.units.get i: mdI9
+                mdI9 = mdI9 + 1
+                match (
+                    mu9
+                ) case namedoperation then {
+                    mnm9: unitLabel o: mu9.name
+                    if mnm9.stringview == mainName9 then {
+                        againM9: true
+                        for againM9 loop {
+                            beforeM9: reg.nextTypeId
+                            resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: mainName9 shadowUnit: "" unitdef: mu9.operation
+                            if reg.nextTypeId == beforeM9 then {
+                                againM9 = false
+                            }
+                        }
+                        fixupDemandedParamOwnership ty: ty reg: reg unitName: mainName9 unitdef: mu9.operation
+                    }
+                } else {}
+            }
+        }
+        againU9: true
+        for againU9 loop {
+            beforeU9: reg.nextTypeId
+            seedSystemDemands reg: reg
+            seedIteratorDemands reg: reg
+            udN9: program.units.length
+            udI9: 0.u64
+            for udI9 < udN9 loop {
+                u9: program.units.get i: udI9
+                udI9 = udI9 + 1
+                match (
+                    u9
+                ) case namedoperation then {
+                    un9: unitLabel o: u9.name
+                    isDep9: true
+                    if un9.stringview == mainName9 then {
+                        isDep9 = false
+                    }
+                    if un9.stringview == "core" then {
+                        isDep9 = false
+                    }
+                    if isDep9 then {
+                        anyDem9: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: un9.stringview shadowUnit: mainName9 unitdef: u9.operation
+                        if anyDem9 then {
+                            onFirstEntry ty: ty reg: reg units: program.units unitName: un9.stringview mainName: mainName9 unitdef: u9.operation full: full entered: entered9
+                        }
+                    }
+                } else {}
+            }
+            if reg.nextTypeId == beforeU9 then {
+                againU9 = false
+            }
+        }
+    } else {}
 }
 
 # resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
@@ -12765,7 +12897,22 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool che
     if full then {
         scanMainBodyCalls reg: st.reg program: program
     }
+    resolveDemandsByDescent ty: st.typing reg: st.reg program: program full: full
+    ndBefore0: st.reg.nextTypeId
     resolveCrossUnitDemand ty: st.typing reg: st.reg program: program full: full
+    if st.reg.nextTypeId != ndBefore0 then {
+        di0: ndBefore0
+        for di0 < st.reg.nextTypeId loop {
+            dt0: st.reg.typeById.get key: di0
+            match (
+                dt0
+            ) case some then {
+                print "drain-resolved: \{dt0.name}"
+            } case none then {}
+            di0 = di0 + 1
+        }
+        panic msg: "stage2 assert: demand drain resolved types the descent missed"
+    }
     resolveTypeAliases ty: st.typing
     populateUnitChildren ty: st.typing program: program
     if checkResolve then {
