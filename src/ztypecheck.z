@@ -6033,6 +6033,105 @@ mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valAr
     return ("OptionView".string)
 }
 
+# getOrMintSpec -- the id-keyed specialization tree front door: derive the
+# definition-order argument keys from the name-keyed subs (fallbackArg fills a
+# single missing parameter), walk genericChildren, and return the existing
+# spec on a full-path hit. A parameter absent from subs with no fallback (a
+# numeric value parameter) skips the tree -- mintMono's name dedup still
+# holds for those. On a miss the leaf materializes via mintMono; multi-level
+# paths mint intermediate nodes (genericOriginId = template, genericArgs =
+# the key prefix) that cache partial paths without being emitted.
+getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
+    tk8: genericTypeKey ty: ty reg: reg tid: templateId
+    pnames8: reg.genericParamNamesOf typeKey: tk8.stringview
+    keys8: (List u64)
+    trieOk8: true
+    if pnames8.length == 0 then {
+        trieOk8 = false
+    }
+    with pit8: pnames8.iterate do for pn8: pit8 loop {
+        pgot8: subs.get key: pn8.copy
+        match (
+            pgot8
+        ) case some then {
+            keys8.append pgot8
+        } case none then {
+            if fallbackArg > 0 when pnames8.length == 1 then {
+                fb8: fallbackArg
+                keys8.append fb8
+            } else {
+                trieOk8 = false
+            }
+        }
+    }
+    if trieOk8 then {
+        cur8: templateId
+        ki8: 0.u64
+        kn8: keys8.length
+        hit8: true
+        for ki8 < kn8 loop {
+            k8: keys8.get i: ki8
+            n8: reg.getGenericChild parentId: cur8 key: k8
+            match (
+                n8
+            ) case some then {
+                cur8 = n8
+            } case none then {
+                hit8 = false
+                ki8 = kn8
+            }
+            ki8 = ki8 + 1
+        }
+        if hit8 then {
+            return cur8
+        }
+    }
+    mid8: mintMono ty: ty reg: reg mainName: mainName name: name templateId: templateId subs: subs fallbackArg: fallbackArg
+    if trieOk8 when mid8 > 0 then {
+        cur9: templateId
+        ki9: 0.u64
+        kn9: keys8.length
+        for ki9 < kn9 loop {
+            k9: keys8.get i: ki9
+            last9: false
+            if ki9 + 1 == kn9 then {
+                last9 = true
+            }
+            n9: reg.getGenericChild parentId: cur9 key: k9
+            step9: 0.u64
+            match (
+                n9
+            ) case some then {
+                step9 = n9
+            } case none then {
+                if last9 then {
+                    step9 = mid8
+                } else {
+                    inm9: "\{name}__node"
+                    step9 = reg.newType name: inm9.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                    reg.setGenericOrigin typeId: step9 value: templateId
+                    kj9: 0.u64
+                    for kj9 <= ki9 loop {
+                        pk9: keys8.get i: kj9
+                        reg.appendGenericArg specId: step9 arg: pk9
+                        kj9 = kj9 + 1
+                    }
+                }
+                reg.setGenericChild parentId: cur9 key: k9 child: step9
+            }
+            cur9 = step9
+            ki9 = ki9 + 1
+        }
+        ka9: 0.u64
+        for ka9 < kn9 loop {
+            av9: keys8.get i: ka9
+            reg.appendGenericArg specId: mid8 arg: av9
+            ka9 = ka9 + 1
+        }
+    }
+    return mid8
+}
+
 # linkMonoReturn -- point a synthesized method's return at an already-minted
 # instance (by mono name); no-op when the target is absent.
 linkMonoReturn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry methodId: u64 targetMono: StringView} is {
@@ -6747,7 +6846,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
         return 0
     }
     mname: "\{tname}\{sfx}"
-    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
     if mid == 0 then {
         return 0
     }
@@ -6859,7 +6958,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         return 0
     }
     mname: "\{tname}\{sfx}"
-    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: firstA
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: firstA
     if mid == 0 then {
         return 0
     }
@@ -7896,7 +7995,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                             sk0: "of".string
                             sv0: elo
                             asubs.set key: sk0 value: sv0
-                            amid: mintMono ty: st.typing reg: st.reg mainName: unitName name: amn.stringview templateId: ato subs: asubs fallbackArg: 0
+                            amid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: amn.stringview templateId: ato subs: asubs fallbackArg: 0
                             asfx: "_\{den}_\{ecnt}"
                             mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: amn.stringview monoId: amid templateName: "array" suffix: asfx.stringview elemArg: elo valArg: 0
                             setar: amid
@@ -8661,7 +8760,7 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Nod
                 ov0: payId0
                 osubs0.set key: ok0 value: ov0
                 omn0: "optionval_\{vtn0}"
-                omid0: mintMono ty: st.typing reg: st.reg mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 fallbackArg: 0
+                omid0: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 fallbackArg: 0
                 if omid0 > 0 then {
                     result = omid0
                 }
@@ -8891,7 +8990,7 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List No
                 lsubs9.set key: lk9 value: lv9
                 lsfx9: "_\{en9}"
                 lmn9: "List\{lsfx9}"
-                lmid9: mintMono ty: st.typing reg: st.reg mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 fallbackArg: 0
+                lmid9: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 fallbackArg: 0
                 if lmid9 > 0 then {
                     mintTemplateChains ty: st.typing reg: st.reg mainName: unitName tname: "List" suffix: lsfx9.stringview firstA: elemT9 valA: 0
                     mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: lmn9.stringview monoId: lmid9 templateName: "List" suffix: lsfx9.stringview elemArg: elemT9 valArg: 0
@@ -9934,7 +10033,7 @@ checkBoxConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitB
     sk: "t".string
     sv: vt
     subs.set key: sk value: sv
-    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
     if mid == 0 then {
         return 0
     }
@@ -10431,7 +10530,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                         pv2: subT
                                         subs2.set key: pk2 value: pv2
                                     }
-                                    mintedT: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 fallbackArg: subT
+                                    mintedT: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 fallbackArg: subT
                                     if mintedT > 0 then {
                                         setgu: mintedT
                                         st.typing.nodeType.set key: call.nodeid.u64 value: setgu
@@ -10907,7 +11006,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     } case none then {
         wasNew = true
     }
-    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: funcId subs: subs fallbackArg: 0
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: funcId subs: subs fallbackArg: 0
     rno: st.typing.funcReturnNode.get key: funcId
     match (
         rno
