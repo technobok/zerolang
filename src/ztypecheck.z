@@ -5484,8 +5484,12 @@ lookupTyperef: function {resolved: (Map String value: u64) mainName: StringView 
 
 # builtinTidTc -- the canonical registry id of a stdlib builtin by base name
 # (mainName "" so a user type of the same name never shadows it). 0 when absent.
+builtinTidT: function {ty: ztyping.ZTyping base: StringView} out u64 is {
+    return (optU64Or o: (walkLookupTyperef ty: ty currentUnit: "" base: base) d: 0)
+}
+
 builtinTidTc: function {st: zenv.ZSymbolTable base: StringView} out u64 is {
-    return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: "" base: base) d: 0)
+    return (builtinTidT ty: st.typing base: base)
 }
 
 # stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
@@ -5674,9 +5678,9 @@ typeNameOf: function {st: zenv.ZSymbolTable tid: u64} out String is {
 # per-instance tag data type (variants and unions) and the autogen ==/!=
 # functions (variants). Childless templates (the collection classes) produce
 # no children; their cloned method children land with the class-mono slice.
-mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
+mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
     kn: name.string
-    got: st.typing.monoByName.get key: kn
+    got: ty.monoByName.get key: kn
     match (
         got
     ) case some then {
@@ -5687,7 +5691,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     vto: (optionval.none bool)
     tplNative: false
     {
-        tpl: st.reg.typeById.get key: templateId
+        tpl: reg.typeById.get key: templateId
         match (
             tpl
         ) case some then {
@@ -5697,56 +5701,56 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         } case none then {
         }
     }
-    mid: st.reg.newType name: name typetype: tt
+    mid: reg.newType name: name typetype: tt
     match (
         vto
     ) case some then {
-        st.reg.setValtype typeId: mid value: vto
+        reg.setValtype typeId: mid value: vto
     } case none then {
     }
-    st.reg.setGenericOrigin typeId: mid value: templateId
-    st.reg.setNative typeId: mid value: tplNative
+    reg.setGenericOrigin typeId: mid value: templateId
+    reg.setNative typeId: mid value: tplNative
     setk: name.string
     setv: mid
-    st.typing.monoByName.set key: setk value: setv
+    ty.monoByName.set key: setk value: setv
     # Register under <unit>.<mangled> so name lookups (field/arm shells named
     # by the mangled form) resolve to the instance once minted.
     rk9: "\{mainName}.\{name}".string
     rv9: mid
-    st.typing.resolved.set key: rk9 value: rv9
-    mcu9: st.typing.unitTypes.get key: mainName.string
+    ty.resolved.set key: rk9 value: rv9
+    mcu9: ty.unitTypes.get key: mainName.string
     match (
         mcu9
     ) case some then {
-        st.typing.setChild parentTypeId: mcu9 childName: name childTypeId: mid
+        ty.setChild parentTypeId: mcu9 childName: name childTypeId: mid
     } case none then {}
     # monos are global (defined_in_unit NULL): the system-keyed alias makes
     # them resolvable from every unit's lookup chain (a pending instantiation
     # staged while resolving io.z resolves nested args with mainName "io").
     rk8: "system.\{name}".string
     rv8: mid
-    st.typing.resolved.set key: rk8 value: rv8
-    mcu8: st.typing.unitTypes.get key: "system".string
+    ty.resolved.set key: rk8 value: rv8
+    mcu8: ty.unitTypes.get key: "system".string
     match (
         mcu8
     ) case some then {
-        st.typing.setChild parentTypeId: mcu8 childName: name childTypeId: mid
+        ty.setChild parentTypeId: mcu8 childName: name childTypeId: mid
     } case none then {}
     # A heap-owning generic instance carries a destructor (so a holder/local
     # frees it; the emitter builds the cname). Collections own native heap;
     # Option/Result own a heap box. A user generic whose template already has a
     # destructor inherits one. Map/Set own native heap too (freed via a `&`-less
     # heap-pointer destroy). Views (ListView/OptionView) own no heap -- excluded.
-    tplNmD: typeNameOf st: st tid: templateId
+    tplNmD: regTypeNameOf reg: reg tid: templateId
     needsDtorM: false
-    if templateId == (builtinTidTc st: st base: "List") then { needsDtorM = true }
-    if templateId == (builtinTidTc st: st base: "Option") then { needsDtorM = true }
-    if templateId == (builtinTidTc st: st base: "Result") then { needsDtorM = true }
-    if templateId == (builtinTidTc st: st base: "Map") then { needsDtorM = true }
-    if templateId == (builtinTidTc st: st base: "Set") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty base: "List") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty base: "Option") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty base: "Result") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty base: "Map") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty base: "Set") then { needsDtorM = true }
     if needsDtorM then {
         mdnM: "\{name}_destroy".string
-        st.reg.setDestructorName typeId: mid name: mdnM.stringview
+        reg.setDestructorName typeId: mid name: mdnM.stringview
     }
     # An elided leading type argument stages under the empty name; rebind it
     # to the template's primary generic parameter so the substituted children
@@ -5757,7 +5761,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         match (
             ev
         ) case some then {
-            prnm: firstGenericParamName st: st templateId: templateId
+            prnm: firstGenericParamName ty: ty reg: reg templateId: templateId
             if prnm.length > 0 then {
                 subs.set key: prnm value: ev
             }
@@ -5766,9 +5770,9 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     }
     cNames: (List String)
     cIds: (List u64)
-    with citer: st.typing.typeChild.iterate do for tc: citer loop {
+    with citer: ty.typeChild.iterate do for tc: citer loop {
         if tc.parentTypeId == templateId then {
-            cto: st.typing.childTypeById.get key: tc.childNameId
+            cto: ty.childTypeById.get key: tc.childNameId
             match (
                 cto
             ) case some then {
@@ -5786,10 +5790,10 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         chName: cNames.get i: ci
         chId: cIds.get i: ci
         target: chId
-        ctn: typeNameOf st: st tid: chId
+        ctn: regTypeNameOf reg: reg tid: chId
         target = optU64Or o: (subs.get key: ctn) d: target
         if fallbackArg > 0 then {
-            cko: walkLookupTyperef ty: st.typing currentUnit: mainName base: ctn.stringview
+            cko: walkLookupTyperef ty: ty currentUnit: mainName base: ctn.stringview
             match (
                 cko
             ) case some then {
@@ -5797,7 +5801,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
                 target = fallbackArg
             }
         }
-        st.typing.setChild parentTypeId: mid childName: chName.stringview childTypeId: target
+        ty.setChild parentTypeId: mid childName: chName.stringview childTypeId: target
         ci = ci + 1
     }
     # RECORD instances: numeric-param fields synthesize from their declared
@@ -5805,16 +5809,16 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     # them; then the meta-create requalifies to the instance and ==/!=
     # synthesize -- except str/array, whose branches own those members.
     if tt == ztypes.ztypetype.RECORD then {
-        tplNm9: typeNameOf st: st tid: templateId
+        tplNm9: regTypeNameOf reg: reg tid: templateId
         isSized9: false
-        if templateId == (builtinTidTc st: st base: "str") then { isSized9 = true }
-        if templateId == (builtinTidTc st: st base: "array") then { isSized9 = true }
-        tk9: genericTypeKey st: st tid: templateId
+        if templateId == (builtinTidT ty: ty base: "str") then { isSized9 = true }
+        if templateId == (builtinTidT ty: ty base: "array") then { isSized9 = true }
+        tk9: genericTypeKey ty: ty reg: reg tid: templateId
         pfx9: "\{tk9}."
         pNames9: (List String)
         pCons9: (List String)
         allKeys9: (List String)
-        with kit9: st.reg.genericParamConstraint.iterate do for k9: kit9 loop {
+        with kit9: reg.genericParamConstraint.iterate do for k9: kit9 loop {
             kv0: k9.stringview
             kc0: kv0.string
             allKeys9.append kc0
@@ -5831,7 +5835,7 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
                 pNames9.append pn9
                 k1v: k1.stringview
                 k1o: k1v.string
-                co9: st.reg.genericParamConstraint.get key: k1o
+                co9: reg.genericParamConstraint.get key: k1o
                 match (
                     co9
                 ) case some then {
@@ -5855,16 +5859,16 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
             if pcon9.stringview == "Any" then { isNum9 = false }
             if pcon9.length == 0 then { isNum9 = false }
             if isNum9 then {
-                exo9: st.typing.childOf parentTypeId: mid name: pname9.stringview
+                exo9: ty.childOf parentTypeId: mid name: pname9.stringview
                 match (
                     exo9
                 ) case some then {
                 } case none then {
-                    cno9: walkLookupTyperef ty: st.typing currentUnit: mainName base: pcon9.stringview
+                    cno9: walkLookupTyperef ty: ty currentUnit: mainName base: pcon9.stringview
                     match (
                         cno9
                     ) case some then {
-                        st.typing.setChild parentTypeId: mid childName: pname9.stringview childTypeId: cno9
+                        ty.setChild parentTypeId: mid childName: pname9.stringview childTypeId: cno9
                     } case none then {
                     }
                 }
@@ -5873,19 +5877,19 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
         }
         if (isSized9) == false then {
             crq9: "\{name}.create"
-            crId9: st.reg.newType name: crq9.stringview typetype: ztypes.ztypetype.FUNCTION
-            st.typing.setChild parentTypeId: mid childName: "create" childTypeId: crId9
-            eqo9: st.typing.childOf parentTypeId: mid name: "=="
+            crId9: reg.newType name: crq9.stringview typetype: ztypes.ztypetype.FUNCTION
+            ty.setChild parentTypeId: mid childName: "create" childTypeId: crId9
+            eqo9: ty.childOf parentTypeId: mid name: "=="
             match (
                 eqo9
             ) case some then {
             } case none then {
                 req9: "\{name}.=="
-                reqId9: st.reg.newType name: req9.stringview typetype: ztypes.ztypetype.FUNCTION
-                st.typing.setChild parentTypeId: mid childName: "==" childTypeId: reqId9
+                reqId9: reg.newType name: req9.stringview typetype: ztypes.ztypetype.FUNCTION
+                ty.setChild parentTypeId: mid childName: "==" childTypeId: reqId9
                 rne9: "\{name}.!="
-                rneId9: st.reg.newType name: rne9.stringview typetype: ztypes.ztypetype.FUNCTION
-                st.typing.setChild parentTypeId: mid childName: "!=" childTypeId: rneId9
+                rneId9: reg.newType name: rne9.stringview typetype: ztypes.ztypetype.FUNCTION
+                ty.setChild parentTypeId: mid childName: "!=" childTypeId: rneId9
             }
         }
     }
@@ -5898,16 +5902,16 @@ mintMono: function {st: zenv.ZSymbolTable mainName: StringView name: StringView 
     }
     if wantTag then {
         tagName: "\{name}:tag:data"
-        tagId: st.reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
-        st.typing.setChild parentTypeId: mid childName: "tag" childTypeId: tagId
+        tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.DATA
+        ty.setChild parentTypeId: mid childName: "tag" childTypeId: tagId
     }
     if tt == ztypes.ztypetype.VARIANT then {
         eqName: "\{name}.=="
-        eqId: st.reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
-        st.typing.setChild parentTypeId: mid childName: "==" childTypeId: eqId
+        eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: mid childName: "==" childTypeId: eqId
         neName: "\{name}.!="
-        neId: st.reg.newType name: neName.stringview typetype: ztypes.ztypetype.FUNCTION
-        st.typing.setChild parentTypeId: mid childName: "!=" childTypeId: neId
+        neId: reg.newType name: neName.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: mid childName: "!=" childTypeId: neId
     }
     return mid
 }
@@ -5953,8 +5957,8 @@ isStdlibUnitName: function {name: StringView} out bool is {
     return false
 }
 
-isUserShadowElem: function {st: zenv.ZSymbolTable elemTid: u64} out bool is {
-    duo: st.typing.definedInUnit.get key: elemTid
+isUserShadowElem: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry elemTid: u64} out bool is {
+    duo: ty.definedInUnit.get key: elemTid
     match (
         duo
     ) case some then {
@@ -5966,48 +5970,48 @@ isUserShadowElem: function {st: zenv.ZSymbolTable elemTid: u64} out bool is {
 
 # mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child; returns
 # the method's type id so callers can link its return type.
-mintCollectionMethod: function {st: zenv.ZSymbolTable monoName: StringView monoId: u64 m: StringView} out u64 is {
+mintCollectionMethod: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry monoName: StringView monoId: u64 m: StringView} out u64 is {
     fname: "\{monoName}.\{m}"
-    fid: st.reg.newType name: fname.stringview typetype: ztypes.ztypetype.FUNCTION
-    st.reg.setNative typeId: fid value: true
-    st.typing.setChild parentTypeId: monoId childName: m childTypeId: fid
+    fid: reg.newType name: fname.stringview typetype: ztypes.ztypetype.FUNCTION
+    reg.setNative typeId: fid value: true
+    ty.setChild parentTypeId: monoId childName: m childTypeId: fid
     return fid
 }
 
 # mintTakeParam -- a synthesized method's consuming parameter: a child (its
 # type is irrelevant to the projections -- synth methods have no generic
 # origin) with recorded TAKE ownership, so the call-site arg walk consumes.
-mintTakeParam: function {st: zenv.ZSymbolTable methodId: u64 pname: StringView elemArg: u64} is {
+mintTakeParam: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry methodId: u64 pname: StringView elemArg: u64} is {
     pe: elemArg
-    st.typing.setChild parentTypeId: methodId childName: pname childTypeId: pe
-    st.typing.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.TAKE
+    ty.setChild parentTypeId: methodId childName: pname childTypeId: pe
+    ty.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.TAKE
 }
 
 # mintBorrowParam -- a synthesized method's borrowed parameter: a child with
 # recorded BORROW ownership, so the call-site arg walk locks instead of
 # consuming.
-mintBorrowParam: function {st: zenv.ZSymbolTable methodId: u64 pname: StringView elemArg: u64} is {
+mintBorrowParam: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry methodId: u64 pname: StringView elemArg: u64} is {
     pe: elemArg
-    st.typing.setChild parentTypeId: methodId childName: pname childTypeId: pe
-    st.typing.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.BORROW
+    ty.setChild parentTypeId: methodId childName: pname childTypeId: pe
+    ty.setChildOwnership parentTypeId: methodId name: pname ownership: ztypes.zparamownership.BORROW
 }
 
 # markReturnsBorrow -- carry the template's `.borrow` return marker onto a
 # synthesized method (the reference's _carry_native_method_metadata): the
 # auto-call borrow transfer keys on it.
-markReturnsBorrow: function {st: zenv.ZSymbolTable methodId: u64} is {
+markReturnsBorrow: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry methodId: u64} is {
     fbk: methodId
     fbv: true
-    st.typing.funcReturnsBorrow.set key: fbk value: fbv
+    ty.funcReturnsBorrow.set key: fbk value: fbv
 }
 
 # mapGetWrapperName -- the Map.get return-wrapper template by value kind:
 # optionval for valtypes (copy-out), OptionView for reftypes incl. String (a
 # borrowed, locked view into the map's storage; the caller `.copy`s to keep it).
-mapGetWrapperName: function {st: zenv.ZSymbolTable valArg: u64} out String is {
+mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valArg: u64} out String is {
     isVal: false
     {
-        vt: st.reg.typeById.get key: valArg
+        vt: reg.typeById.get key: valArg
         match (
             vt
         ) case some then {
@@ -6031,13 +6035,13 @@ mapGetWrapperName: function {st: zenv.ZSymbolTable valArg: u64} out String is {
 
 # linkMonoReturn -- point a synthesized method's return at an already-minted
 # instance (by mono name); no-op when the target is absent.
-linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: StringView} is {
+linkMonoReturn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry methodId: u64 targetMono: StringView} is {
     tk: targetMono.string
-    got: st.typing.monoByName.get key: tk
+    got: ty.monoByName.get key: tk
     match (
         got
     ) case some then {
-        st.reg.setReturnType typeId: methodId value: got
+        reg.setReturnType typeId: methodId value: got
     } case none then {
     }
 }
@@ -6057,17 +6061,17 @@ linkMonoReturn: function {st: zenv.ZSymbolTable methodId: u64 targetMono: String
 # user i64 -> "i64_7" vs system "i64"); otherwise the bare name (no churn for a
 # non-shadow type). Without this the get-wrapper mono name (optionval_i64) collides
 # in monoByName and the shadow reuses the system instance (wrong `some`-arm type).
-monoValName: function {st: zenv.ZSymbolTable tid: u64} out String is {
-    tn: typeNameOf st: st tid: tid
-    if (isUserShadowElem st: st elemTid: tid) then {
-        if (builtinTidTc st: st base: tn.stringview) > 0 then {
+monoValName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out String is {
+    tn: regTypeNameOf reg: reg tid: tid
+    if (isUserShadowElem ty: ty reg: reg elemTid: tid) then {
+        if (builtinTidT ty: ty base: tn.stringview) > 0 then {
             return ("\{tn}_\{tid}")
         }
     }
     return tn
 }
 
-mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView monoName: StringView monoId: u64 templateName: StringView suffix: StringView elemArg: u64 valArg: u64} is {
+mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView monoName: StringView monoId: u64 templateName: StringView suffix: StringView elemArg: u64 valArg: u64} is {
     isIter: false
     if templateName == "ListIter" then { isIter = true }
     if templateName == "SetIter" then { isIter = true }
@@ -6088,12 +6092,12 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     # pending ref each pass, and the str/array rebuild below would mint
     # fresh member types per pass (their instances copy template children
     # at mint time, so childCount cannot signal "already built").
-    bgot: st.typing.collectionChildrenBuilt.get key: monoId
+    bgot: ty.collectionChildrenBuilt.get key: monoId
     if (optBoolOr o: bgot d: false) then {
         return
     }
     bk0: monoId
-    st.typing.collectionChildrenBuilt.set key: bk0 value: true
+    ty.collectionChildrenBuilt.set key: bk0 value: true
     isSized: false
     if templateName == "str" then { isSized = true }
     if templateName == "array" then { isSized = true }
@@ -6101,12 +6105,12 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     # REPLACES members in place (setChild keeps positions), so the dedup
     # guard applies only to the from-scratch families.
     if (isSized) == false then {
-        if (st.typing.childCount parentTypeId: monoId) > 0 then {
+        if (ty.childCount parentTypeId: monoId) > 0 then {
             return
         }
     }
     u64id: 0.u64
-    uo: walkLookupTyperef ty: st.typing currentUnit: mainName base: "u64"
+    uo: walkLookupTyperef ty: ty currentUnit: mainName base: "u64"
     match (
         uo
     ) case some then {
@@ -6114,188 +6118,188 @@ mintCollectionChildren: function {st: zenv.ZSymbolTable mainName: StringView mon
     } case none then {
     }
     boolid: 0.u64
-    bo9: walkLookupTyperef ty: st.typing currentUnit: mainName base: "bool"
+    bo9: walkLookupTyperef ty: ty currentUnit: mainName base: "bool"
     match (
         bo9
     ) case some then {
         boolid = bo9
     } case none then {
     }
-    en: typeNameOf st: st tid: elemArg
+    en: regTypeNameOf reg: reg tid: elemArg
     if templateName == "List" then {
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
-        st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64id
-        apId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "append"
-        mintTakeParam st: st methodId: apId pname: "from" elemArg: elemArg
-        inId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "insert"
-        mintTakeParam st: st methodId: inId pname: "item" elemArg: elemArg
-        exId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extend"
-        mintTakeParam st: st methodId: exId pname: "from" elemArg: elemArg
-        gtId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
-        st.reg.setReturnType typeId: gtId value: elemArg
-        stId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
-        mintTakeParam st: st methodId: stId pname: "item" elemArg: elemArg
-        st.reg.setReturnType typeId: stId value: elemArg
-        ppId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "pop"
-        st.reg.setReturnType typeId: ppId value: elemArg
-        if (isContainsEligible name: en.stringview) when (isUserShadowElem st: st elemTid: elemArg) == false then {
-            cnId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "contains"
-            st.reg.setReturnType typeId: cnId value: boolid
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
+        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64id
+        apId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "append"
+        mintTakeParam ty: ty reg: reg methodId: apId pname: "from" elemArg: elemArg
+        inId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "insert"
+        mintTakeParam ty: ty reg: reg methodId: inId pname: "item" elemArg: elemArg
+        exId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "extend"
+        mintTakeParam ty: ty reg: reg methodId: exId pname: "from" elemArg: elemArg
+        gtId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
+        reg.setReturnType typeId: gtId value: elemArg
+        stId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "set"
+        mintTakeParam ty: ty reg: reg methodId: stId pname: "item" elemArg: elemArg
+        reg.setReturnType typeId: stId value: elemArg
+        ppId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "pop"
+        reg.setReturnType typeId: ppId value: elemArg
+        if (isContainsEligible name: en.stringview) when (isUserShadowElem ty: ty reg: reg elemTid: elemArg) == false then {
+            cnId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "contains"
+            reg.setReturnType typeId: cnId value: boolid
         }
-        if (isSortEligible name: en.stringview) when (isUserShadowElem st: st elemTid: elemArg) == false then {
-            mintCollectionMethod st: st monoName: monoName monoId: monoId m: "sort"
+        if (isSortEligible name: en.stringview) when (isUserShadowElem ty: ty reg: reg elemTid: elemArg) == false then {
+            mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "sort"
         }
-        lvId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "listview"
-        markReturnsBorrow st: st methodId: lvId
+        lvId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "listview"
+        markReturnsBorrow ty: ty reg: reg methodId: lvId
         lvTarget: "ListView_\{en}"
-        linkMonoReturn st: st methodId: lvId targetMono: lvTarget.stringview
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "extendView"
-        itid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
-        markReturnsBorrow st: st methodId: itid
+        linkMonoReturn ty: ty reg: reg methodId: lvId targetMono: lvTarget.stringview
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "extendView"
+        itid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterate"
+        markReturnsBorrow ty: ty reg: reg methodId: itid
         itTarget: "ListIter_\{en}"
-        linkMonoReturn st: st methodId: itid targetMono: itTarget.stringview
+        linkMonoReturn ty: ty reg: reg methodId: itid targetMono: itTarget.stringview
     }
     if isIter then {
-        clid: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "call"
+        clid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "call"
         clTarget: "OptionView_\{en}"
-        linkMonoReturn st: st methodId: clid targetMono: clTarget.stringview
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+        linkMonoReturn ty: ty reg: reg methodId: clid targetMono: clTarget.stringview
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
     if templateName == "ListView" then {
-        vlen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: vlen value: true
-        st.typing.markAsConstClone typeId: vlen
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: vlen
-        vgId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
-        st.reg.setReturnType typeId: vgId value: elemArg
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+        vlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: vlen value: true
+        ty.markAsConstClone typeId: vlen
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: vlen
+        vgId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
+        reg.setReturnType typeId: vgId value: elemArg
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
     if templateName == "Set" then {
         # length/capacity expose FRESH u64 clones (no defined-in unit), unlike
         # List's global u64 -- the reference is asymmetric here and the clone
         # stays invisible to unit-filtered projections.
-        slen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: slen value: true
-        st.typing.markAsConstClone typeId: slen
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: slen
-        scap: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: scap value: true
-        st.typing.markAsConstClone typeId: scap
-        st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: scap
-        adId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "add"
-        mintTakeParam st: st methodId: adId pname: "item" elemArg: elemArg
-        st.reg.setReturnType typeId: adId value: boolid
-        hsId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "has"
-        mintBorrowParam st: st methodId: hsId pname: "item" elemArg: elemArg
-        st.reg.setReturnType typeId: hsId value: boolid
-        dlId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "delete"
-        mintBorrowParam st: st methodId: dlId pname: "item" elemArg: elemArg
-        st.reg.setReturnType typeId: dlId value: boolid
-        itId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
-        markReturnsBorrow st: st methodId: itId
+        slen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: slen value: true
+        ty.markAsConstClone typeId: slen
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: slen
+        scap: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: scap value: true
+        ty.markAsConstClone typeId: scap
+        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: scap
+        adId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "add"
+        mintTakeParam ty: ty reg: reg methodId: adId pname: "item" elemArg: elemArg
+        reg.setReturnType typeId: adId value: boolid
+        hsId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "has"
+        mintBorrowParam ty: ty reg: reg methodId: hsId pname: "item" elemArg: elemArg
+        reg.setReturnType typeId: hsId value: boolid
+        dlId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "delete"
+        mintBorrowParam ty: ty reg: reg methodId: dlId pname: "item" elemArg: elemArg
+        reg.setReturnType typeId: dlId value: boolid
+        itId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterate"
+        markReturnsBorrow ty: ty reg: reg methodId: itId
         sitn: "SetIter\{suffix}"
-        linkMonoReturn st: st methodId: itId targetMono: sitn.stringview
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+        linkMonoReturn ty: ty reg: reg methodId: itId targetMono: sitn.stringview
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
     if templateName == "Map" when valArg > 0 then {
         # Fresh u64 clones, mirroring the Set branch (see note there).
-        mlen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: mlen value: true
-        st.typing.markAsConstClone typeId: mlen
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: mlen
-        mcap: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: mcap value: true
-        st.typing.markAsConstClone typeId: mcap
-        st.typing.setChild parentTypeId: monoId childName: "capacity" childTypeId: mcap
-        msId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
-        mintTakeParam st: st methodId: msId pname: "key" elemArg: elemArg
-        mintTakeParam st: st methodId: msId pname: "value" elemArg: valArg
-        mgId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
-        mintBorrowParam st: st methodId: mgId pname: "key" elemArg: elemArg
-        wtpl: mapGetWrapperName st: st valArg: valArg
-        vn9: monoValName st: st tid: valArg
+        mlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: mlen value: true
+        ty.markAsConstClone typeId: mlen
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: mlen
+        mcap: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: mcap value: true
+        ty.markAsConstClone typeId: mcap
+        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: mcap
+        msId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "set"
+        mintTakeParam ty: ty reg: reg methodId: msId pname: "key" elemArg: elemArg
+        mintTakeParam ty: ty reg: reg methodId: msId pname: "value" elemArg: valArg
+        mgId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
+        mintBorrowParam ty: ty reg: reg methodId: mgId pname: "key" elemArg: elemArg
+        wtpl: mapGetWrapperName ty: ty reg: reg valArg: valArg
+        vn9: monoValName ty: ty reg: reg tid: valArg
         wname: "\{wtpl}_\{vn9}"
-        linkMonoReturn st: st methodId: mgId targetMono: wname.stringview
-        mrmId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "remove"
-        mintBorrowParam st: st methodId: mrmId pname: "key" elemArg: elemArg
+        linkMonoReturn ty: ty reg: reg methodId: mgId targetMono: wname.stringview
+        mrmId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "remove"
+        mintBorrowParam ty: ty reg: reg methodId: mrmId pname: "key" elemArg: elemArg
         rwt9: "Option".string
-        if (typeIsValtype st: st tid: valArg) then {
+        if (typeIsValtype ty: ty reg: reg tid: valArg) then {
             rwt9 = "optionval".string
         }
         rwn9: "\{rwt9}_\{vn9}"
-        linkMonoReturn st: st methodId: mrmId targetMono: rwn9.stringview
-        mhId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "has"
-        mintBorrowParam st: st methodId: mhId pname: "key" elemArg: elemArg
-        st.reg.setReturnType typeId: mhId value: boolid
-        mitId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterate"
-        markReturnsBorrow st: st methodId: mitId
+        linkMonoReturn ty: ty reg: reg methodId: mrmId targetMono: rwn9.stringview
+        mhId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "has"
+        mintBorrowParam ty: ty reg: reg methodId: mhId pname: "key" elemArg: elemArg
+        reg.setReturnType typeId: mhId value: boolid
+        mitId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterate"
+        markReturnsBorrow ty: ty reg: reg methodId: mitId
         kitn: "MapKeyIter\{suffix}"
-        linkMonoReturn st: st methodId: mitId targetMono: kitn.stringview
-        miiId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "iterateItems"
-        markReturnsBorrow st: st methodId: miiId
+        linkMonoReturn ty: ty reg: reg methodId: mitId targetMono: kitn.stringview
+        miiId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterateItems"
+        markReturnsBorrow ty: ty reg: reg methodId: miiId
         iitn: "MapItemIter\{suffix}"
-        linkMonoReturn st: st methodId: miiId targetMono: iitn.stringview
+        linkMonoReturn ty: ty reg: reg methodId: miiId targetMono: iitn.stringview
     }
     if templateName == "MapEntry" then {
-        kyId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "key"
-        st.reg.setReturnType typeId: kyId value: elemArg
-        vlId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "value"
+        kyId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "key"
+        reg.setReturnType typeId: kyId value: elemArg
+        vlId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "value"
         if valArg > 0 then {
-            st.reg.setReturnType typeId: vlId value: valArg
+            reg.setReturnType typeId: vlId value: valArg
         }
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
     if templateName == "array" then {
-        agId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "get"
-        st.reg.setReturnType typeId: agId value: elemArg
-        asId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "set"
-        st.reg.setReturnType typeId: asId value: elemArg
-        alen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: alen value: true
-        st.typing.markAsConstClone typeId: alen
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: alen
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
-        st.typing.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
-        aeqId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "=="
-        st.reg.setReturnType typeId: aeqId value: boolid
-        aneId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "!="
-        st.reg.setReturnType typeId: aneId value: boolid
+        agId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
+        reg.setReturnType typeId: agId value: elemArg
+        asId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "set"
+        reg.setReturnType typeId: asId value: elemArg
+        alen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: alen value: true
+        ty.markAsConstClone typeId: alen
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: alen
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
+        ty.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
+        aeqId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "=="
+        reg.setReturnType typeId: aeqId value: boolid
+        aneId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "!="
+        reg.setReturnType typeId: aneId value: boolid
     }
     if templateName == "str" then {
-        tlen: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: tlen value: true
-        st.typing.markAsConstClone typeId: tlen
-        st.typing.setChild parentTypeId: monoId childName: "length" childTypeId: tlen
-        tsz: st.reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        st.reg.setValtype typeId: tsz value: true
-        st.typing.markAsConstClone typeId: tsz
-        st.typing.setChild parentTypeId: monoId childName: "size" childTypeId: tsz
-        tstId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "string"
-        sgo: walkLookupTyperef ty: st.typing currentUnit: mainName base: "String"
+        tlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: tlen value: true
+        ty.markAsConstClone typeId: tlen
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: tlen
+        tsz: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: tsz value: true
+        ty.markAsConstClone typeId: tsz
+        ty.setChild parentTypeId: monoId childName: "size" childTypeId: tsz
+        tstId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "string"
+        sgo: walkLookupTyperef ty: ty currentUnit: mainName base: "String"
         sgid: optU64Or o: sgo d: 0
         if sgid > 0 then {
-            st.reg.setReturnType typeId: tstId value: sgid
+            reg.setReturnType typeId: tstId value: sgid
         }
-        mintCollectionMethod st: st monoName: monoName monoId: monoId m: "create"
-        st.typing.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
-        teqId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "=="
-        st.reg.setReturnType typeId: teqId value: boolid
-        tneId: mintCollectionMethod st: st monoName: monoName monoId: monoId m: "!="
-        st.reg.setReturnType typeId: tneId value: boolid
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
+        ty.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
+        teqId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "=="
+        reg.setReturnType typeId: teqId value: boolid
+        tneId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "!="
+        reg.setReturnType typeId: tneId value: boolid
     }
 }
 
 # mintChain -- mint one chain-family instance (`{tpl}{suffix}`) when the
 # chain template resolves; returns the instance id (0 when unresolved).
-mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: StringView suffix: StringView elemArg: u64 valArg: u64} out u64 is {
-    co: walkLookupTyperef ty: st.typing currentUnit: mainName base: chainTpl
+mintChain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView chainTpl: StringView suffix: StringView elemArg: u64 valArg: u64} out u64 is {
+    co: walkLookupTyperef ty: ty currentUnit: mainName base: chainTpl
     match (
         co
     ) case some then {
         mname: "\{chainTpl}\{suffix}"
         eSubs: (Map String value: u64)
-        cid: mintMono st: st mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
-        mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl suffix: suffix elemArg: elemArg valArg: valArg
+        cid: mintMono ty: ty reg: reg mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
+        mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl suffix: suffix elemArg: elemArg valArg: valArg
         return cid
     } case none then {
     }
@@ -6308,42 +6312,42 @@ mintChain: function {st: zenv.ZSymbolTable mainName: StringView chainTpl: String
 # + ListView + ListIter. Set: OptionView + SetIter. Map: the get wrapper
 # (by value kind), the key OptionView + MapKeyIter, then MapEntry + its
 # OptionView + MapItemIter.
-mintTemplateChains: function {st: zenv.ZSymbolTable mainName: StringView tname: StringView suffix: StringView firstA: u64 valA: u64} is {
+mintTemplateChains: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView tname: StringView suffix: StringView firstA: u64 valA: u64} is {
     if tname == "List" then {
-        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
-        mintChain st: st mainName: mainName chainTpl: "ListView" suffix: suffix elemArg: firstA valArg: 0
-        mintChain st: st mainName: mainName chainTpl: "ListIter" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "ListView" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "ListIter" suffix: suffix elemArg: firstA valArg: 0
     }
     if tname == "ListView" then {
-        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
     }
     if tname == "ListIter" then {
-        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
     }
     if tname == "Set" then {
-        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
-        mintChain st: st mainName: mainName chainTpl: "SetIter" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "SetIter" suffix: suffix elemArg: firstA valArg: 0
     }
     if tname == "Map" when valA > 0 then {
-        kn: typeNameOf st: st tid: firstA
-        vn: monoValName st: st tid: valA
-        wtpl: mapGetWrapperName st: st valArg: valA
+        kn: regTypeNameOf reg: reg tid: firstA
+        vn: monoValName ty: ty reg: reg tid: valA
+        wtpl: mapGetWrapperName ty: ty reg: reg valArg: valA
         vsfx: "_\{vn}"
-        mintChain st: st mainName: mainName chainTpl: wtpl.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: wtpl.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
         rwtpl0: "Option".string
-        if (typeIsValtype st: st tid: valA) then {
+        if (typeIsValtype ty: ty reg: reg tid: valA) then {
             rwtpl0 = "optionval".string
         }
-        mintChain st: st mainName: mainName chainTpl: rwtpl0.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: rwtpl0.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
         ksfx: "_\{kn}"
-        mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: ksfx.stringview elemArg: firstA valArg: 0
-        mintChain st: st mainName: mainName chainTpl: "MapKeyIter" suffix: suffix elemArg: firstA valArg: valA
-        meid: mintChain st: st mainName: mainName chainTpl: "MapEntry" suffix: suffix elemArg: firstA valArg: valA
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: ksfx.stringview elemArg: firstA valArg: 0
+        mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapKeyIter" suffix: suffix elemArg: firstA valArg: valA
+        meid: mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapEntry" suffix: suffix elemArg: firstA valArg: valA
         if meid > 0 then {
-            men: typeNameOf st: st tid: meid
+            men: regTypeNameOf reg: reg tid: meid
             mesfx: "_\{men}"
-            mintChain st: st mainName: mainName chainTpl: "OptionView" suffix: mesfx.stringview elemArg: meid valArg: 0
-            mintChain st: st mainName: mainName chainTpl: "MapItemIter" suffix: suffix elemArg: meid valArg: valA
+            mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: mesfx.stringview elemArg: meid valArg: 0
+            mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapItemIter" suffix: suffix elemArg: meid valArg: valA
         }
     }
 }
@@ -6414,7 +6418,7 @@ resolveMonosPass: function {st: zenv.ZSymbolTable mainName: StringView} is {
                 }
                 if aid9 > 0 then {
                     sfx.append s: "_"
-                    vn: monoValName st: st tid: aid9
+                    vn: monoValName ty: st.typing reg: st.reg tid: aid9
                     sfx.append s: vn.stringview
                     if j == 0 then {
                         firstA = aid9
@@ -6482,7 +6486,7 @@ resolveMonosPass: function {st: zenv.ZSymbolTable mainName: StringView} is {
     riter: staged.iterate
     for rm2: riter loop {
         mname: "\{rm2.template}\{rm2.suffix}"
-        mid: mintMono st: st mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0
+        mid: mintMono ty: st.typing reg: st.reg mainName: mainName name: mname.stringview templateId: rm2.templateId subs: rm2.subs fallbackArg: 0
         if rm2.nodeid > 0 then {
             setn: mid
             st.typing.nodeType.set key: rm2.nodeid.u64 value: setn
@@ -6495,8 +6499,8 @@ resolveMonosPass: function {st: zenv.ZSymbolTable mainName: StringView} is {
         tnv: tnvv.string
         sfvv: rm2.suffix.stringview
         sfv: sfvv.string
-        mintTemplateChains st: st mainName: mainName tname: tnv.stringview suffix: sfv.stringview firstA: rm2.firstArgId valA: vv
-        mintCollectionChildren st: st mainName: mainName monoName: mname.stringview monoId: mid templateName: tnv.stringview suffix: sfv.stringview elemArg: rm2.firstArgId valArg: vv
+        mintTemplateChains ty: st.typing reg: st.reg mainName: mainName tname: tnv.stringview suffix: sfv.stringview firstA: rm2.firstArgId valA: vv
+        mintCollectionChildren ty: st.typing reg: st.reg mainName: mainName monoName: mname.stringview monoId: mid templateName: tnv.stringview suffix: sfv.stringview elemArg: rm2.firstArgId valArg: vv
     }
 }
 
@@ -6528,9 +6532,9 @@ resolveMonos: function {st: zenv.ZSymbolTable program: Node} is {
 
 # genericTypeKey -- "{defining-unit}.{name}" for the registry's generic-param
 # set lookups.
-genericTypeKey: function {st: zenv.ZSymbolTable tid: u64} out String is {
-    tn: typeNameOf st: st tid: tid
-    duo: st.typing.definedInUnit.get key: tid
+genericTypeKey: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out String is {
+    tn: regTypeNameOf reg: reg tid: tid
+    duo: ty.definedInUnit.get key: tid
     match (
         duo
     ) case some then {
@@ -6543,11 +6547,11 @@ genericTypeKey: function {st: zenv.ZSymbolTable tid: u64} out String is {
 # firstGenericParamName -- the primary (first-declared) generic parameter
 # name of a template, or empty when it has none. Binds an elided leading type
 # argument (`(List String)` == `(List of: String)`) to its parameter.
-firstGenericParamName: function {st: zenv.ZSymbolTable templateId: u64} out String is {
-    tk: genericTypeKey st: st tid: templateId
+firstGenericParamName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry templateId: u64} out String is {
+    tk: genericTypeKey ty: ty reg: reg tid: templateId
     pfx: "\{tk}."
     result: "".string
-    with kit: st.reg.genericParamConstraint.iterate do for k: kit loop {
+    with kit: reg.genericParamConstraint.iterate do for k: kit loop {
         if result.length == 0 then {
             po: k.stringview.stripPrefix p: pfx.stringview
             match (
@@ -6572,7 +6576,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
     if tname.length == 0 then {
         return 0
     }
-    tk: genericTypeKey st: st tid: tplId
+    tk: genericTypeKey ty: st.typing reg: st.reg tid: tplId
     # Stage the template's children, then keep the ones whose TYPE NAME is a
     # registered generic param (field shells carry the param name, not a
     # GENERIC_PARAM typetype).
@@ -6613,7 +6617,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
     subs: (Map String value: u64)
     boundParams: (Set String)
     firstA: 0.u64
-    primaryName: firstGenericParamName st: st templateId: tplId
+    primaryName: firstGenericParamName ty: st.typing reg: st.reg templateId: tplId
     argIdx: 0.u64
     with aiter: call.arguments.iterate do for arg: aiter loop {
         match (
@@ -6743,7 +6747,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
         return 0
     }
     mname: "\{tname}\{sfx}"
-    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
+    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
     if mid == 0 then {
         return 0
     }
@@ -6769,14 +6773,14 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
     if tname.length == 0 then {
         return 0
     }
-    tk0: genericTypeKey st: st tid: tplId
+    tk0: genericTypeKey ty: st.typing reg: st.reg tid: tplId
     sfx: "".string
     subs: (Map String value: u64)
     numParamNames9: (List String)
     numParamVals9: (List String)
     firstA: 0.u64
     anyMiss: false
-    primaryName: firstGenericParamName st: st templateId: tplId
+    primaryName: firstGenericParamName ty: st.typing reg: st.reg templateId: tplId
     argIdx: 0.u64
     aiter: call.arguments.iterate
     for arg: aiter loop {
@@ -6855,7 +6859,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         return 0
     }
     mname: "\{tname}\{sfx}"
-    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: firstA
+    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: firstA
     if mid == 0 then {
         return 0
     }
@@ -6869,8 +6873,8 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
     }
     vk2: "value".string
     vv2: optU64Or o: (subs.get key: vk2) d: 0
-    mintTemplateChains st: st mainName: unitName tname: tname.stringview suffix: sfx.stringview firstA: firstA valA: vv2
-    mintCollectionChildren st: st mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: vv2
+    mintTemplateChains ty: st.typing reg: st.reg mainName: unitName tname: tname.stringview suffix: sfx.stringview firstA: firstA valA: vv2
+    mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: vv2
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped like the reference.
     gcb: bareAtomName n: call.callable
@@ -6895,7 +6899,7 @@ validateGenericTypeArgs: function {st: zenv.ZSymbolTable unitName: StringView ca
     if tname.length == 0 then {
         return true
     }
-    tk: genericTypeKey st: st tid: tplId
+    tk: genericTypeKey ty: st.typing reg: st.reg tid: tplId
     childNames: (List String)
     with fiter: st.typing.typeChild.iterate do for tc: fiter loop {
         if tc.parentTypeId == tplId then {
@@ -6904,7 +6908,7 @@ validateGenericTypeArgs: function {st: zenv.ZSymbolTable unitName: StringView ca
             childNames.append cn1
         }
     }
-    primaryName: firstGenericParamName st: st templateId: tplId
+    primaryName: firstGenericParamName ty: st.typing reg: st.reg templateId: tplId
     seen: (Set String)
     ok: true
     argIdx: 0.u64
@@ -7892,9 +7896,9 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                             sk0: "of".string
                             sv0: elo
                             asubs.set key: sk0 value: sv0
-                            amid: mintMono st: st mainName: unitName name: amn.stringview templateId: ato subs: asubs fallbackArg: 0
+                            amid: mintMono ty: st.typing reg: st.reg mainName: unitName name: amn.stringview templateId: ato subs: asubs fallbackArg: 0
                             asfx: "_\{den}_\{ecnt}"
-                            mintCollectionChildren st: st mainName: unitName monoName: amn.stringview monoId: amid templateName: "array" suffix: asfx.stringview elemArg: elo valArg: 0
+                            mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: amn.stringview monoId: amid templateName: "array" suffix: asfx.stringview elemArg: elo valArg: 0
                             setar: amid
                             st.typing.nodeType.set key: dp.nodeid.u64 value: setar
                             return amid
@@ -8657,7 +8661,7 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Nod
                 ov0: payId0
                 osubs0.set key: ok0 value: ov0
                 omn0: "optionval_\{vtn0}"
-                omid0: mintMono st: st mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 fallbackArg: 0
+                omid0: mintMono ty: st.typing reg: st.reg mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 fallbackArg: 0
                 if omid0 > 0 then {
                     result = omid0
                 }
@@ -8887,10 +8891,10 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List No
                 lsubs9.set key: lk9 value: lv9
                 lsfx9: "_\{en9}"
                 lmn9: "List\{lsfx9}"
-                lmid9: mintMono st: st mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 fallbackArg: 0
+                lmid9: mintMono ty: st.typing reg: st.reg mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 fallbackArg: 0
                 if lmid9 > 0 then {
-                    mintTemplateChains st: st mainName: unitName tname: "List" suffix: lsfx9.stringview firstA: elemT9 valA: 0
-                    mintCollectionChildren st: st mainName: unitName monoName: lmn9.stringview monoId: lmid9 templateName: "List" suffix: lsfx9.stringview elemArg: elemT9 valArg: 0
+                    mintTemplateChains ty: st.typing reg: st.reg mainName: unitName tname: "List" suffix: lsfx9.stringview firstA: elemT9 valA: 0
+                    mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: lmn9.stringview monoId: lmid9 templateName: "List" suffix: lsfx9.stringview elemArg: elemT9 valArg: 0
                     setf9: lmid9
                     st.typing.nodeType.set key: fornode.nodeid.u64 value: setf9
                     return lmid9
@@ -9177,8 +9181,8 @@ typeIsReftype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
 # typeIsValtype -- a registered type whose isValtype flag is explicitly true
 # (records, variants, facets, primitives). Unset or unregistered ids are not
 # valtypes.
-typeIsValtype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
-    zo: st.reg.typeById.get key: tid
+typeIsValtype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out bool is {
+    zo: reg.typeById.get key: tid
     match (
         zo
     ) case some then {
@@ -9930,7 +9934,7 @@ checkBoxConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitB
     sk: "t".string
     sv: vt
     subs.set key: sk value: sv
-    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
+    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
     if mid == 0 then {
         return 0
     }
@@ -10427,7 +10431,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                         pv2: subT
                                         subs2.set key: pk2 value: pv2
                                     }
-                                    mintedT: mintMono st: st mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 fallbackArg: subT
+                                    mintedT: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 fallbackArg: subT
                                     if mintedT > 0 then {
                                         setgu: mintedT
                                         st.typing.nodeType.set key: call.nodeid.u64 value: setgu
@@ -10903,7 +10907,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     } case none then {
         wasNew = true
     }
-    mid: mintMono st: st mainName: unitName name: mname.stringview templateId: funcId subs: subs fallbackArg: 0
+    mid: mintMono ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: funcId subs: subs fallbackArg: 0
     rno: st.typing.funcReturnNode.get key: funcId
     match (
         rno
@@ -11710,7 +11714,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                     }
                     isGenP9: false
                     if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.GENERIC_PARAM then { isGenP9 = true }
-                    if isLockP9 when (paramIsThisReceiver op: pm.operation) == false when (typeIsValtype st: st tid: ptid) when (isGenP9) == false then {
+                    if isLockP9 when (paramIsThisReceiver op: pm.operation) == false when (typeIsValtype ty: st.typing reg: st.reg tid: ptid) when (isGenP9) == false then {
                         ptn9: typeNameOf st: st tid: ptid
                         ptnc9: ptn9.copy
                         pnc9: pname.copy
