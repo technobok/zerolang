@@ -2753,16 +2753,30 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
             fm
         ) case namedoperation then {
             if (isFunctionDefOp op: fm.operation) then {
+                fname: unitLabel o: fm.name
                 prodM4: false
                 if (isgen) == false then {
                     prodM4 = true
                 } else {
                     if (functiondefIsNative op: fm.operation) == false then {
                         prodM4 = true
+                    } else {
+                        # Flipped collection families resolve their native
+                        # method decls like user template methods. create is
+                        # special-cased; length/capacity stay field children
+                        # (their C surface is a struct read, not a method).
+                        if unitName == "collections" when defName == "List" then {
+                            prodSkipL: false
+                            if fname.stringview == "create" then { prodSkipL = true }
+                            if fname.stringview == "length" then { prodSkipL = true }
+                            if fname.stringview == "capacity" then { prodSkipL = true }
+                            if (prodSkipL) == false then {
+                                prodM4 = true
+                            }
+                        }
                     }
                 }
                 if prodM4 then {
-                    fname: unitLabel o: fm.name
                     qname: "\{defName}.\{fname}".string
                     mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
                     match (
@@ -5900,6 +5914,33 @@ cloneMethodInto: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
     fn5: "\{specName}.\{m}".string
     fid5: reg.newType name: fn5.stringview typetype: ztypes.ztypetype.FUNCTION
     reg.setGenericOrigin typeId: fid5 value: tplFnId
+    # The clone answers call-site questions the same way the template does:
+    # isNative gates arg validation, thisParamName drives receiver auto-fill
+    # and the no-paren auto-call, funcReturnsBorrow carries the `.borrow`
+    # return marker, and funcReturnNode backs methodReturnOf for concrete
+    # (non-generic) returns.
+    tpn0: "".string
+    {
+        tz0: reg.typeById.get key: tplFnId
+        match (
+            tz0
+        ) case some then {
+            if tz0.isNative then {
+                reg.setNative typeId: fid5 value: true
+            }
+            tpn0 = optStrOrEmpty o: tz0.thisParamName
+            if tpn0.length > 0 then {
+                reg.setThisParamName typeId: fid5 name: tpn0.stringview
+            }
+        } case none then {}
+    }
+    if (optBoolOr o: (ty.funcReturnsBorrow.get key: tplFnId) d: false) then {
+        ty.funcReturnsBorrow.set key: fid5 value: true
+    }
+    frn0: optU64Or o: (ty.funcReturnNode.get key: tplFnId) d: 0
+    if frn0 > 0 then {
+        ty.funcReturnNode.set key: fid5 value: frn0
+    }
     cN5: (List String)
     cI5: (List u64)
     cOh5: (List bool)
@@ -5928,6 +5969,7 @@ cloneMethodInto: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
             } case none then {}
         }
     }
+    tplNm5: regTypeNameOf reg: reg tid: tplClassId
     pi5: 0.u64
     pn5: cN5.length
     for pi5 < pn5 loop {
@@ -5939,6 +5981,17 @@ cloneMethodInto: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
         }
         if pnm5.stringview == "this" then {
             tgt5 = specId
+        }
+        if tpn0.length > 0 when pnm5.stringview == tpn0.stringview then {
+            tgt5 = specId
+        }
+        if tgt5 == ptid5 then {
+            # `this`/`type`-typed params carry fresh shells named after the
+            # class; shell-name identity marks the self type.
+            ptn5: regTypeNameOf reg: reg tid: ptid5
+            if ptn5.stringview == tplNm5.stringview then {
+                tgt5 = specId
+            }
         }
         if tgt5 == ptid5 then {
             ido5: idSubs.get key: ptid5
@@ -5978,6 +6031,12 @@ cloneMethodInto: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
         rt5: rto5
         if rto5 == tplClassId then {
             rt5 = specId
+        }
+        if rt5 == rto5 then {
+            rtn5: regTypeNameOf reg: reg tid: rto5
+            if rtn5.stringview == tplNm5.stringview then {
+                rt5 = specId
+            }
         }
         rdo5: idSubs.get key: rto5
         match (
@@ -6178,6 +6237,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
             }
         }
     }
+    listTplT5: builtinTidT ty: ty base: "List"
     ci: 0.u64
     cn3: cNames.length
     for ci < cn3 loop {
@@ -6199,7 +6259,20 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
         if target == chId then {
             target = optU64Or o: (subs.get key: ctn) d: target
         }
-        if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId then {
+        # Generic FUNCTION children are clone candidates: the elided-arg
+        # fallback must not swallow them (a method child's dotted name never
+        # resolves, so the lookup-miss leg would replace the method with the
+        # element type).
+        chGen5: false
+        if (reg.typetypeOf typeId: chId) == ztypes.ztypetype.FUNCTION then {
+            cz5: reg.typeById.get key: chId
+            match (
+                cz5
+            ) case some then {
+                chGen5 = cz5.isgeneric
+            } case none then {}
+        }
+        if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId when (chGen5) == false then {
             cko: walkLookupTyperef ty: ty currentUnit: mainName base: ctn.stringview
             match (
                 cko
@@ -6209,27 +6282,48 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
             }
         }
         deep5: false
-        if target == chId then {
-            if (reg.typetypeOf typeId: chId) == ztypes.ztypetype.FUNCTION then {
-                chGen5: false
-                {
-                    cz5: reg.typeById.get key: chId
-                    match (
-                        cz5
-                    ) case some then {
-                        chGen5 = cz5.isgeneric
-                    } case none then {}
-                }
-                if chGen5 then {
-                    isSynth5: false
-                    if chName.stringview == "create" then { isSynth5 = true }
-                    if chName.stringview == "borrow" then { isSynth5 = true }
-                    if chName.stringview == "==" then { isSynth5 = true }
-                    if chName.stringview == "!=" then { isSynth5 = true }
-                    if isSynth5 == false then {
-                        cloneMethodInto ty: ty reg: reg mainName: mainName specName: name specId: mid tplClassId: templateId m: chName.stringview tplFnId: chId idSubs: idSubs
-                        deep5 = true
+        if target == chId when chGen5 then {
+            isSynth5: false
+            if chName.stringview == "create" then { isSynth5 = true }
+            if chName.stringview == "borrow" then { isSynth5 = true }
+            if chName.stringview == "==" then { isSynth5 = true }
+            if chName.stringview == "!=" then { isSynth5 = true }
+            if isSynth5 == false then {
+                skip5: false
+                # List's contains/sort exist only for eligible element
+                # kinds (use-site parity with the materializer gate).
+                if templateId == listTplT5 when listTplT5 > 0 then {
+                    csM5: false
+                    if chName.stringview == "contains" then { csM5 = true }
+                    if chName.stringview == "sort" then { csM5 = true }
+                    if csM5 then {
+                        elemT5: optU64Or o: (subs.get key: ("of".string)) d: 0
+                        if elemT5 == 0 then {
+                            elemT5 = fallbackArg
+                        }
+                        ok5: false
+                        if elemT5 > 0 then {
+                            enE5: regTypeNameOf reg: reg tid: elemT5
+                            csel5: false
+                            if chName.stringview == "contains" then {
+                                csel5 = isContainsEligible name: enE5.stringview
+                            } else {
+                                csel5 = isSortEligible name: enE5.stringview
+                            }
+                            if csel5 when (isUserShadowElem ty: ty reg: reg elemTid: elemT5) == false then {
+                                ok5 = true
+                            }
+                        }
+                        if (ok5) == false then {
+                            skip5 = true
+                        }
                     }
+                }
+                if skip5 then {
+                    deep5 = true
+                } else {
+                    cloneMethodInto ty: ty reg: reg mainName: mainName specName: name specId: mid tplClassId: templateId m: chName.stringview tplFnId: chId idSubs: idSubs
+                    deep5 = true
                 }
             }
         }
@@ -6478,6 +6572,22 @@ mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valAr
 getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
     tk8: genericTypeKey ty: ty reg: reg tid: templateId
     pnames8: reg.genericParamNamesOf typeKey: tk8.stringview
+    # An elided leading type argument stages under the empty name; rebind it
+    # to the primary generic parameter before the trie keys and idSubs build
+    # (mintMono's own rebind happens after both).
+    {
+        emptyKey8: "".string
+        ev8: subs.get key: emptyKey8
+        match (
+            ev8
+        ) case some then {
+            prnm8: firstGenericParamName ty: ty reg: reg templateId: templateId
+            if prnm8.length > 0 then {
+                subs.set key: prnm8 value: ev8
+            }
+        } case none then {
+        }
+    }
     keys8: (List u64)
     trieOk8: true
     if pnames8.length == 0 then {
@@ -6637,6 +6747,43 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     if (isColl) == false then {
         return
     }
+    # List children come from the produced template methods cloned per
+    # instance; only the chain-typed returns link here (a template's
+    # parameterized return has no pre-substitution id). Runs on every naming
+    # so late chain mints heal; linkMonoReturn no-ops until the target
+    # exists.
+    if templateName == "List" then {
+        u64L: 0.u64
+        uoL: walkLookupTyperef ty: ty currentUnit: mainName base: "u64"
+        match (
+            uoL
+        ) case some then {
+            u64L = uoL
+        } case none then {
+        }
+        if u64L > 0 then {
+            ty.setChild parentTypeId: monoId childName: "length" childTypeId: u64L
+            ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64L
+        }
+        enL: regTypeNameOf reg: reg tid: elemArg
+        lvoL: ty.childOf parentTypeId: monoId name: "listview"
+        match (
+            lvoL
+        ) case some then {
+            lvtL: "ListView_\{enL}"
+            linkMonoReturn ty: ty reg: reg methodId: lvoL targetMono: lvtL.stringview
+        } case none then {
+        }
+        itoL: ty.childOf parentTypeId: monoId name: "iterate"
+        match (
+            itoL
+        ) case some then {
+            ittL: "ListIter_\{enL}"
+            linkMonoReturn ty: ty reg: reg methodId: itoL targetMono: ittL.stringview
+        } case none then {
+        }
+        return
+    }
     # One build per instance: the resolveMonos fixpoint re-walks every
     # pending ref each pass, and the str/array rebuild below would mint
     # fresh member types per pass (their instances copy template children
@@ -6675,39 +6822,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     } case none then {
     }
     en: regTypeNameOf reg: reg tid: elemArg
-    if templateName == "List" then {
-        ty.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
-        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64id
-        apId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "append"
-        mintTakeParam ty: ty reg: reg methodId: apId pname: "from" elemArg: elemArg
-        inId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "insert"
-        mintTakeParam ty: ty reg: reg methodId: inId pname: "item" elemArg: elemArg
-        exId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "extend"
-        mintTakeParam ty: ty reg: reg methodId: exId pname: "from" elemArg: elemArg
-        gtId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
-        reg.setReturnType typeId: gtId value: elemArg
-        stId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "set"
-        mintTakeParam ty: ty reg: reg methodId: stId pname: "item" elemArg: elemArg
-        reg.setReturnType typeId: stId value: elemArg
-        ppId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "pop"
-        reg.setReturnType typeId: ppId value: elemArg
-        if (isContainsEligible name: en.stringview) when (isUserShadowElem ty: ty reg: reg elemTid: elemArg) == false then {
-            cnId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "contains"
-            reg.setReturnType typeId: cnId value: boolid
-        }
-        if (isSortEligible name: en.stringview) when (isUserShadowElem ty: ty reg: reg elemTid: elemArg) == false then {
-            mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "sort"
-        }
-        lvId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "listview"
-        markReturnsBorrow ty: ty reg: reg methodId: lvId
-        lvTarget: "ListView_\{en}"
-        linkMonoReturn ty: ty reg: reg methodId: lvId targetMono: lvTarget.stringview
-        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "extendView"
-        itid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterate"
-        markReturnsBorrow ty: ty reg: reg methodId: itid
-        itTarget: "ListIter_\{en}"
-        linkMonoReturn ty: ty reg: reg methodId: itid targetMono: itTarget.stringview
-    }
     if isIter then {
         clid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "call"
         clTarget: "OptionView_\{en}"
@@ -7504,6 +7618,17 @@ optStrEquals: function {o: Option String s: StringView} out bool is {
         return o.stringview == s
     } case none then {
         return false
+    }
+}
+
+# optStrOrEmpty -- copy of the option's payload, or "" when none.
+optStrOrEmpty: function {o: Option String} out String is {
+    match (
+        o
+    ) case some then {
+        return (o.copy)
+    } case none then {
+        return ("".string)
     }
 }
 
@@ -9398,7 +9523,7 @@ comparisonCoerceTarget: function {st: zenv.ZSymbolTable unitName: StringView con
     match (
         opo9
     ) case some then {
-        p0n9: positionalParamName st: st funcId: opo9 idx: 0
+        p0n9: positionalParamName st: st funcId: opo9 idx: 0 skipRecv: true
         if p0n9.length > 0 then {
             ppo9: st.typing.childOf parentTypeId: opo9 name: p0n9.stringview
             match (
@@ -9610,15 +9735,38 @@ methodReceiverRoot: function {n: Node} out String is {
 }
 
 # positionalParamName -- the funcId's parameter name at `idx` (typeChild
-# position order), "" when absent. Positional call args map to it.
-positionalParamName: function {st: zenv.ZSymbolTable funcId: u64 idx: u64} out String is {
+# position order), "" when absent. Positional call args map to it. With
+# skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
+# from the count: a dotted method call supplies the receiver implicitly, so
+# its positional args map onto the remaining params.
+positionalParamName: function {st: zenv.ZSymbolTable funcId: u64 idx: u64 skipRecv: bool} out String is {
     result: "".string
     found: false
+    seen: 0.u64
     with citer: st.typing.typeChild.iterate do for tc: citer loop {
         if (found) == false then {
-            if tc.parentTypeId == funcId when tc.position == idx then {
-                result = tc.childName.copy
-                found = true
+            if tc.parentTypeId == funcId then {
+                isRecv9: false
+                if skipRecv then {
+                    if tc.childName.stringview == "this" then {
+                        isRecv9 = true
+                    }
+                    zoR9: st.reg.typeById.get key: funcId
+                    match (
+                        zoR9
+                    ) case some then {
+                        if (optStrEquals o: zoR9.thisParamName s: tc.childName.stringview) then {
+                            isRecv9 = true
+                        }
+                    } case none then {}
+                }
+                if (isRecv9) == false then {
+                    if seen == idx then {
+                        result = tc.childName.copy
+                        found = true
+                    }
+                    seen = seen + 1
+                }
             }
         }
     }
@@ -9988,7 +10136,7 @@ checkMissingCallArgs: function {st: zenv.ZSymbolTable call: zast.CallData funcId
     }
 }
 
-walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData funcId: u64 isCtor: bool reportUnknown: bool} out String is {
+walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node call: zast.CallData funcId: u64 isCtor: bool reportUnknown: bool recvImplicit: bool} out String is {
     lockRoot: "".string
     st.typing.lastLockParamRoot = "".string
     argIdx: 0.u64
@@ -10080,7 +10228,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                 wasPos9: false
                 if pn.length == 0 then {
                     wasPos9 = true
-                    pp: positionalParamName st: st funcId: funcId idx: argIdx
+                    pp: positionalParamName st: st funcId: funcId idx: argIdx skipRecv: recvImplicit
                     pn = pp
                 }
                 if reportUnknown when funcId > 0 when pn.length > 0 then {
@@ -10473,7 +10621,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                 }
                 if isWType when call.arguments.length > 0 then {
                     wcm: st.pushCall
-                    _wlr09: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: wcv isCtor: true reportUnknown: false
+                    _wlr09: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: wcv isCtor: true reportUnknown: false recvImplicit: false
                     checkMissingCallArgs st: st call: call funcId: wcv isCtor: true
                     st.popTo marker: wcm
                     wck: wcv
@@ -10513,7 +10661,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                 setmb: mtid
                 st.typing.nodeType.set key: mcid.u64 value: setmb
                 mcm: st.pushCall
-                mclr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: mtid isCtor: true reportUnknown: false
+                mclr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: mtid isCtor: true reportUnknown: false recvImplicit: false
                 checkMissingCallArgs st: st call: call funcId: mtid isCtor: true
                 st.popTo marker: mcm
                 setmc: mtid
@@ -10644,7 +10792,21 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         }
                     }
                     mcm: st.pushCall
-                    mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false reportUnknown: false
+                    # Dotted on a value in scope = the receiver is implicit;
+                    # dotted on the type (`Counter.increment c`) passes the
+                    # receiver as an ordinary positional arg.
+                    recvVal9: false
+                    rrn9: rootNameOf n: call.callable
+                    if rrn9.length > 0 then {
+                        rlo9: st.lookup name: rrn9.stringview
+                        match (
+                            rlo9
+                        ) case some then {
+                            recvVal9 = true
+                        } case none then {
+                        }
+                    }
+                    mlr: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: false reportUnknown: false recvImplicit: recvVal9
                     checkMissingCallArgs st: st call: call funcId: dro isCtor: false
                     # The receiver locks for the call's duration too (after
                     # the args, matching the oracle's entry order).
@@ -10916,7 +11078,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         if isCtorT9 then {
                             if call.arguments.length > 0 then {
                                 dcm9: st.pushCall
-                                _wlr19: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: true reportUnknown: false
+                                _wlr19: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: dro isCtor: true reportUnknown: false recvImplicit: false
                                 checkMissingCallArgs st: st call: call funcId: dro isCtor: true
                                 st.popTo marker: dcm9
                                 dck9: dro
@@ -11002,7 +11164,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             setc: funcId
             st.typing.nodeType.set key: calid.u64 value: setc
             cm: st.pushCall
-            lockRoot: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: funcId isCtor: isCtor reportUnknown: true
+            lockRoot: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: funcId isCtor: isCtor reportUnknown: true recvImplicit: false
             checkMissingCallArgs st: st call: call funcId: funcId isCtor: isCtor
             st.popTo marker: cm
             if isCtor then {
@@ -11084,7 +11246,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                             st.typing.nodeType.set key: calid9.u64 value: setc9
                         }
                         cm9: st.pushCall
-                        _wlr29: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: gmid isCtor: true reportUnknown: false
+                        _wlr29: walkCallArgsHoist st: st unitName: unitName unitBody: unitBody call: call funcId: gmid isCtor: true reportUnknown: false recvImplicit: false
                         checkMissingCallArgs st: st call: call funcId: gmid isCtor: true
                         st.popTo marker: cm9
                         ctk9: gmid
