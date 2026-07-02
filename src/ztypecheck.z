@@ -312,23 +312,27 @@ indexUnitDefs: function {ty: ztyping.ZTyping program: Node} is {
     match (
         program
     ) case program then {
+        uidx0: 0.u64
         with uit: program.units.iterate do for ru: uit loop {
             match (
                 ru
             ) case namedoperation then {
                 unm: unitLabel o: ru.name
-                indexUnitBody ty: ty unitName: unm.stringview unitop: ru.operation
+                indexUnitBody ty: ty unitName: unm.stringview unitIdx: uidx0 unitop: ru.operation
             } else {}
+            uidx0 = uidx0 + 1
         }
+        ty.defNodeIndexBuilt = true
     } else {}
 }
 
 # indexUnitBody -- index one unit's top-level defs (mirrors resolveDemandedUnitBody's
 # unitdef.body walk).
-indexUnitBody: function {ty: ztyping.ZTyping unitName: StringView unitop: Node} is {
+indexUnitBody: function {ty: ztyping.ZTyping unitName: StringView unitIdx: u64 unitop: Node} is {
     match (
         unitop
     ) case unitdef then {
+        bidx0: 0.u64
         with bit: unitop.body.iterate do for bm: bit loop {
             match (
                 bm
@@ -340,8 +344,15 @@ indexUnitBody: function {ty: ztyping.ZTyping unitName: StringView unitop: Node} 
                 ) case some then {
                     k: "\{unitName}.\{dn}".string
                     ty.defTypetype.set key: k value: tto
+                    sk0: "\{unitName}.\{dn}".string
+                    uv0: unitIdx
+                    ty.defNodeUnitIdx.set key: sk0 value: uv0
+                    sk1: "\{unitName}.\{dn}".string
+                    bv1: bidx0
+                    ty.defNodeBodyIdx.set key: sk1 value: bv1
                 } case none then {}
             } else {}
+            bidx0 = bidx0 + 1
         }
     } else {}
 }
@@ -451,7 +462,7 @@ declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry de
 # resolves to the enclosing record (passed as thisName); a leading-digit name is
 # a numeric-literal field/param default and resolves to f64 (has a dot) or i64;
 # otherwise the name is taken verbatim. Shells carry no members, no definedInUnit.
-resolveAtomType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView nm: StringView thisName: StringView} out u64 is {
+resolveAtomType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView nm: StringView thisName: StringView} out u64 is {
     if nm == "this" then {
         return (reg.newType name: thisName typetype: ztypes.ztypetype.RECORD)
     }
@@ -1174,20 +1185,20 @@ typeArgSuffixName: function {reg: ztypes.ZTypeRegistry op: Node} out String is {
     }
 }
 
-resolveTyperefShell: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView typeExpr: Node thisName: StringView} out u64 is {
+resolveTyperefShell: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView typeExpr: Node thisName: StringView} out u64 is {
     match (
         typeExpr
     ) case atomid then {
         reg.recordDemand name: typeExpr.name.stringview
         reg.recordSeededDemand un: unitName name: typeExpr.name.stringview
         if (ty.sysScopedTyperef.has key: typeExpr.nodeid.u64) then {
-            return (resolveAtomType ty: ty reg: reg unitName: "" nm: typeExpr.name.stringview thisName: thisName)
+            return (resolveAtomType ty: ty reg: reg units: units unitName: "" nm: typeExpr.name.stringview thisName: thisName)
         }
-        return (resolveAtomType ty: ty reg: reg unitName: unitName nm: typeExpr.name.stringview thisName: thisName)
+        return (resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: typeExpr.name.stringview thisName: thisName)
     } case labelvalue then {
-        return (resolveAtomType ty: ty reg: reg unitName: unitName nm: typeExpr.name.stringview thisName: thisName)
+        return (resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: typeExpr.name.stringview thisName: thisName)
     } case expression then {
-        return (resolveTyperefShell ty: ty reg: reg unitName: unitName typeExpr: typeExpr.expression thisName: thisName)
+        return (resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr.expression thisName: thisName)
     } case call then {
         suffix: atomName n: typeExpr.callable
         reg.recordDemand name: suffix.stringview
@@ -1215,9 +1226,9 @@ resolveTyperefShell: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
             cNm: atomName n: typeExpr.child
             reg.recordDemand name: cNm.stringview
             reg.recordSeededDemand un: unitName name: cNm.stringview
-            return (resolveAtomType ty: ty reg: reg unitName: unitName nm: cNm.stringview thisName: thisName)
+            return (resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: cNm.stringview thisName: thisName)
         } else {
-            return (resolveTyperefShell ty: ty reg: reg unitName: unitName typeExpr: typeExpr.parent thisName: thisName)
+            return (resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr.parent thisName: thisName)
         }
     } else {
         return (reg.newType name: "?" typetype: ztypes.ztypetype.RECORD)
@@ -1297,7 +1308,7 @@ typeofSourceType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
 # (and the typeof node stamps); otherwise the shell is marked and the
 # body's first `this.<field> =` write swaps it (the reference's
 # placeholder mechanism).
-resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView ownerId: u64 typeExpr: Node thisName: StringView} out u64 is {
+resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView ownerId: u64 typeExpr: Node thisName: StringView} out u64 is {
     isTof: false
     match (
         typeExpr
@@ -1317,7 +1328,7 @@ resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegist
         }
     } else {
     }
-    cid: resolveTyperefShell ty: ty reg: reg unitName: unitName typeExpr: typeExpr thisName: thisName
+    cid: resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr thisName: thisName
     if isTof then {
         match (
             typeExpr
@@ -1474,7 +1485,7 @@ demandReturnType: function {reg: ztypes.ZTypeRegistry unitName: StringView o: Op
 # entry in the resolved name-view. Returns the FUNCTION type id (a record method
 # binds it as a child; a free function discards it). The map `set`s TAKE the u64,
 # so copies are threaded for `definedInUnit.set` and the returned id.
-resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView skipThisType: bool} out u64 is {
+resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView skipThisType: bool} out u64 is {
     fid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.FUNCTION
     reg.setNative typeId: fid value: fnode.isNative
     dfid: fid
@@ -1540,7 +1551,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 }
             } else {
                 pname: unitLabel o: pm.name
-                cid: resolveTyperefShell ty: ty reg: reg unitName: unitName typeExpr: pm.operation thisName: thisName
+                cid: resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: pm.operation thisName: thisName
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
                 if (isNumericLiteralName name: ptn.stringview) then {
                     ty.setChildDefault parentTypeId: fid name: pname.stringview default: ptn.stringview
@@ -1698,11 +1709,11 @@ fixupFnParamOwnership: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry u
 # operation is a functiondef) into a qualified `{record}.{method}` FUNCTION type,
 # `this` params bound to thisName (the record). Returns its type id, or none for a
 # non-function as-item (tag spec / generic param), which the caller skips.
-resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView qname: StringView thisName: StringView op: Node} out optionval u64 is {
+resolveMethodFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView qname: StringView thisName: StringView op: Node} out optionval u64 is {
     match (
         op
     ) case functiondef then {
-        mid: resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: false
+        mid: resolveFunction ty: ty reg: reg units: units unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: false
         midS: mid
         ty.nodeType.set key: op.nodeid.u64 value: midS
         return (optionval.some mid)
@@ -1729,11 +1740,11 @@ isFunctionDefOp: function {op: Node} out bool is {
 # whose operation is a functiondef) into a qualified `{type}.{spec}` FUNCTION. Like
 # resolveMethodFn but drops the `:this` receiver: a facet/protocol `this` resolves to
 # nothing (the reference returns no type), so the spec keeps only its real params.
-resolveSpecFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView qname: StringView thisName: StringView op: Node skipThis: bool} out optionval u64 is {
+resolveSpecFn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView qname: StringView thisName: StringView op: Node skipThis: bool} out optionval u64 is {
     match (
         op
     ) case functiondef then {
-        sid: resolveFunction ty: ty reg: reg unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: skipThis
+        sid: resolveFunction ty: ty reg: reg units: units unitName: unitName defName: qname fnode: op thisName: thisName skipThisType: skipThis
         sidS: sid
         ty.nodeType.set key: op.nodeid.u64 value: sidS
         return (optionval.some sid)
@@ -1776,7 +1787,7 @@ markerTargetId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
 # as children of `parentId`, returning whether one is named `create` (so the caller
 # skips the synth create). Takes the item list by value so its iterator's lock is
 # released on return -- letting attachMarkers re-scan the same list (cf. resolveUnion).
-attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView parentId: u64 asItems: List Node} out bool is {
+attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView parentId: u64 asItems: List Node} out bool is {
     hasCreate: false
     aiter: asItems.iterate
     for am: aiter loop {
@@ -1788,7 +1799,7 @@ attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 hasCreate = true
             }
             qname: "\{defName}.\{mname}".string
-            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: am.operation
             match (
                 mido
             ) case some then {
@@ -1812,7 +1823,7 @@ attachMethods: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                 }
             }
             gfn: "\{defName}_\{mname}".string
-            synthGeneratorForMethod ty: ty reg: reg unitName: unitName fnName: gfn.stringview thisName: defName op: am.operation
+            synthGeneratorForMethod ty: ty reg: reg units: units unitName: unitName fnName: gfn.stringview thisName: defName op: am.operation
         } else {}
     }
     return hasCreate
@@ -1844,7 +1855,7 @@ recordConformance: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry implT
     }
 }
 
-attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView parentId: u64 asItems: List Node} out bool is {
+attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView parentId: u64 asItems: List Node} out bool is {
     needsDtor: false
     miter: asItems.iterate
     for mm: miter loop {
@@ -1868,7 +1879,7 @@ attachMarkers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
             } case none then {
                 if (isLabelValue op: mm.operation) then {
                     amlbl: unitLabel o: mm.name
-                    amlid: resolveAtomType ty: ty reg: reg unitName: unitName nm: amlbl.stringview thisName: ""
+                    amlid: resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: amlbl.stringview thisName: ""
                     ty.setChild parentTypeId: parentId childName: amlbl.stringview childTypeId: amlid
                     acf: reg.newConformance implTypeId: parentId specTypeId: amlid label: amlbl.stringview isFacet: false
                     ty.conformance.append acf
@@ -2073,7 +2084,7 @@ fnFieldFlaggableName: function {name: StringView} out bool is {
     return true
 }
 
-resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
+resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView rnode: zast.ObjectDefData} is {
     rid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.RECORD
     rrid: rid
     reg.setValtype typeId: rid value: true
@@ -2106,7 +2117,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
             ) case namedoperation then {
                 fname: unitLabel o: fm.name
                 qname: "\{defName}.\{fname}".string
-                mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
+                mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
                 match (
                     mido
                 ) case some then {
@@ -2141,7 +2152,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
                         handledR9 = true
                     } case none then {}
                     if (handledR9) == false then {
-                        cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
+                        cid: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
                         if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.FUNCTION then {
                             ty.setChildFnptrField parentTypeId: rid name: fname.stringview
@@ -2171,12 +2182,12 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
             } else {}
         }
     }
-    hasCreateAs: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: rid asItems: rnode.asItems
+    hasCreateAs: attachMethods ty: ty reg: reg units: units unitName: unitName defName: defName parentId: rid asItems: rnode.asItems
     hasCreate: hasCreateIs
     if hasCreateAs then {
         hasCreate = true
     }
-    attachMarkers ty: ty reg: reg unitName: unitName parentId: rid asItems: rnode.asItems
+    attachMarkers ty: ty reg: reg units: units unitName: unitName parentId: rid asItems: rnode.asItems
     if (hasCreate) == false then {
         createName: "\{defName}.create".string
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
@@ -2208,7 +2219,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName:
 # synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), any as-block
 # methods, then synthesized `==`/`!=`. Variants have no `create` (bare construction is
 # disabled). Custom-DATA tags + generics arrive later.
-resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
+resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
     vid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.VARIANT
     vvid: vid
     reg.setValtype typeId: vid value: true
@@ -2224,7 +2235,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
             fm
         ) case namedoperation then {
             aname: unitLabel o: fm.name
-            cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
+            cid: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
             recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
@@ -2249,7 +2260,7 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         ) case namedoperation then {
             mname: unitLabel o: am.name
             qname: "\{defName}.\{mname}".string
-            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: am.operation
             match (
                 mido
             ) case some then {
@@ -2377,7 +2388,7 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
 # destructor unless every arm is `null` (Priority elides it; IntResult/Result/Typed
 # keep it). A custom DATA tag (`as { tag: <data>.tag }`) becomes the `tag` child in
 # place of the synth wrapper; generics arrive later.
-resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
+resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView vnode: zast.ObjectDefData} is {
     uid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.UNION
     uuid: uid
     reg.setValtype typeId: uid value: false
@@ -2398,7 +2409,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
             if an.stringview != "null" then {
                 allNull = false
             }
-            cid: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
+            cid: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: 0 typeExpr: fm.operation thisName: ""
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
             recordTyperef ty: ty unitName: unitName thisName: "" node: fm.operation
         } else {}
@@ -2423,7 +2434,7 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         ) case namedoperation then {
             mname: unitLabel o: am.name
             qname: "\{defName}.\{mname}".string
-            mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: am.operation
+            mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: am.operation
             match (
                 mido
             ) case some then {
@@ -2473,7 +2484,7 @@ fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry u
 # `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
 # needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
 # `null` create, generics + protocols come later.
-resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView cnode: zast.ObjectDefData} is {
+resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView cnode: zast.ObjectDefData} is {
     cid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.CLASS
     ccid: cid
     rcid: cid
@@ -2512,7 +2523,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                 if (isgen) == false then {
                     fname: unitLabel o: fm.name
                     qname: "\{defName}.\{fname}".string
-                    mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
+                    mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: defName op: fm.operation
                     match (
                         mido
                     ) case some then {
@@ -2563,7 +2574,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
                                 needsDtor = true
                             }
                         }
-                        cidf: resolveTyperefShellMarked ty: ty reg: reg unitName: unitName ownerId: cid typeExpr: fm.operation thisName: ""
+                        cidf: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: cid typeExpr: fm.operation thisName: ""
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
                         if lockField then {
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
@@ -2595,11 +2606,11 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
     }
     hasCreate: false
     if (isgen) == false then {
-        hcAs: attachMethods ty: ty reg: reg unitName: unitName defName: defName parentId: cid asItems: cnode.asItems
+        hcAs: attachMethods ty: ty reg: reg units: units unitName: unitName defName: defName parentId: cid asItems: cnode.asItems
         if hcAs then {
             hasCreate = true
         }
-        mNeedsDtor: attachMarkers ty: ty reg: reg unitName: unitName parentId: cid asItems: cnode.asItems
+        mNeedsDtor: attachMarkers ty: ty reg: reg units: units unitName: unitName parentId: cid asItems: cnode.asItems
         if mNeedsDtor then {
             needsDtor = true
         }
@@ -2630,7 +2641,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
 # is-block spec method (the `:this` receiver dropped), then synthesized `create` +
 # `borrow` FUNCTION shells (JOIN-only, no own row). Facets are value types
 # (is_valtype true), no destructor, no `==`/`!=`. Generic facets arrive later.
-resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
+resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
     fid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.FACET
     ffid: fid
     rfid: fid
@@ -2660,7 +2671,7 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
         ) case namedoperation then {
             mname: unitLabel o: sm.name
             qname: "\{defName}.\{mname}".string
-            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: specThisStr.stringview op: sm.operation skipThis: dropThis
+            sido: resolveSpecFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: specThisStr.stringview op: sm.operation skipThis: dropThis
             match (
                 sido
             ) case some then {
@@ -2683,7 +2694,7 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: 
 # per is-block spec method (the `:this` receiver dropped), then synth `create` +
 # `borrow` FUNCTION shells, then an unconditional destructor (a protocol wraps heap
 # data). Reference type (is_valtype false), no `==`/`!=`. Generic protocols arrive later.
-resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
+resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
     pid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.PROTOCOL
     ppid: pid
     rpid: pid
@@ -2722,7 +2733,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
         ) case namedoperation then {
             mname: unitLabel o: sm.name
             qname: "\{defName}.\{mname}".string
-            sido: resolveSpecFn ty: ty reg: reg unitName: unitName qname: qname.stringview thisName: specThisStr.stringview op: sm.operation skipThis: dropThis
+            sido: resolveSpecFn ty: ty reg: reg units: units unitName: unitName qname: qname.stringview thisName: specThisStr.stringview op: sm.operation skipThis: dropThis
             match (
                 sido
             ) case some then {
@@ -2760,21 +2771,98 @@ registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitN
     return nid
 }
 
+# descendIntoUnit -- fetch the def node at bodyIdx inside a unit's body and
+# resolve it. Split from descendNamed so the unit node arrives as a plain
+# parameter (matching resolveUnitBody's narrowing shape).
+descendIntoUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView bodyIdx: u64 unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        bm9: unitdef.body.get i: bodyIdx
+        match (
+            bm9
+        ) case namedoperation then {
+            dn9: unitLabel o: bm9.name
+            if dn9.stringview == defName then {
+                resolveDef ty: ty reg: reg units: units unitName: unitName defName: defName defn: bm9.operation
+            }
+        } else {}
+    } else {}
+}
+
+# descendNamed -- reference-level DFS entry: resolve a named top-level def's
+# body by descending into its AST node (located via the defNodeUnitIdx /
+# defNodeBodyIdx node finder) so a reference's dependency resolves before the
+# referrer continues. Returns the canonical forward-decl id; a grey
+# (in-progress) or already-resolved target returns it without re-descending.
+# Returns 0 when the name is not an indexed top-level def, so the caller keeps
+# its shell behavior.
+descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node defUnit: StringView name: StringView} out u64 is {
+    if ty.defNodeIndexBuilt == false then {
+        return 0
+    }
+    tto9: ty.defTypetype.get key: ("\{defUnit}.\{name}".string)
+    ttv9: ztypes.ztypetype.NULL
+    match (
+        tto9
+    ) case some then {
+        ttv9 = tto9
+    } case none then {
+        return 0
+    }
+    tid9: declareCanonicalType ty: ty reg: reg defUnit: defUnit name: name typetype: ttv9
+    dk9a: "\{defUnit}.\{name}".string
+    if (ty.definedKeys.has item: dk9a) then {
+        return tid9
+    }
+    dk9b: "\{defUnit}.\{name}".string
+    if (ty.resolving.has item: dk9b) then {
+        return tid9
+    }
+    uo9: ty.defNodeUnitIdx.get key: ("\{defUnit}.\{name}".string)
+    uidx9: 0.u64
+    match (
+        uo9
+    ) case some then {
+        uidx9 = uo9
+    } case none then {
+        return tid9
+    }
+    bo9: ty.defNodeBodyIdx.get key: ("\{defUnit}.\{name}".string)
+    bidx9: 0.u64
+    match (
+        bo9
+    ) case some then {
+        bidx9 = bo9
+    } case none then {
+        return tid9
+    }
+    ue9: units.get i: uidx9
+    match (
+        ue9
+    ) case namedoperation then {
+        descendIntoUnit ty: ty reg: reg units: units unitName: defUnit defName: name bodyIdx: bidx9 unitdef: ue9.operation
+    } else {}
+    return tid9
+}
+
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
 # blocks, records, variants, unions, classes, facets and protocols; a top-level data
 # block parses as an `expression` wrapping a `datablock`, so unwrap one level and
 # re-dispatch. Enums and generics arrive in later slices.
-resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView defn: Node} is {
+resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView defn: Node} is {
+    gk0: "\{unitName}.\{defName}".string
+    ty.resolving.add item: gk0
     match (
         defn
     ) case functiondef then {
-        fid: resolveFunction ty: ty reg: reg unitName: unitName defName: defName fnode: defn thisName: "" skipThisType: false
+        fid: resolveFunction ty: ty reg: reg units: units unitName: unitName defName: defName fnode: defn thisName: "" skipThisType: false
         ty.nodeType.set key: defn.nodeid.u64 value: fid
         if (isGeneratorReturn o: defn.returntype) then {
-            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: defName thisName: "" fnode: defn
+            synthGeneratorIterClass ty: ty reg: reg units: units unitName: unitName fnName: defName thisName: "" fnode: defn
         }
     } case expression then {
-        resolveDef ty: ty reg: reg unitName: unitName defName: defName defn: defn.expression
+        resolveDef ty: ty reg: reg units: units unitName: unitName defName: defName defn: defn.expression
         exprKey: "\{unitName}.\{defName}".string
         exprid: ty.resolved.get key: exprKey
         match (
@@ -2803,19 +2891,19 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
                     setnv9: nvid9
                     ty.nodeType.set key: defn.nodeid.u64 value: setnv9
                 } else {
-                    resolveRecord ty: ty reg: reg unitName: unitName defName: defName rnode: defn
+                    resolveRecord ty: ty reg: reg units: units unitName: unitName defName: defName rnode: defn
                 }
             }
         } case VARIANT then {
-            resolveVariant ty: ty reg: reg unitName: unitName defName: defName vnode: defn
+            resolveVariant ty: ty reg: reg units: units unitName: unitName defName: defName vnode: defn
         } case UNION then {
-            resolveUnion ty: ty reg: reg unitName: unitName defName: defName vnode: defn
+            resolveUnion ty: ty reg: reg units: units unitName: unitName defName: defName vnode: defn
         } case CLASS then {
-            resolveClass ty: ty reg: reg unitName: unitName defName: defName cnode: defn
+            resolveClass ty: ty reg: reg units: units unitName: unitName defName: defName cnode: defn
         } case FACET then {
-            resolveFacet ty: ty reg: reg unitName: unitName defName: defName fnode: defn
+            resolveFacet ty: ty reg: reg units: units unitName: unitName defName: defName fnode: defn
         } case PROTOCOL then {
-            resolveProtocol ty: ty reg: reg unitName: unitName defName: defName fnode: defn
+            resolveProtocol ty: ty reg: reg units: units unitName: unitName defName: defName fnode: defn
         } else {}
         objKey: "\{unitName}.\{defName}".string
         objrid: ty.resolved.get key: objKey
@@ -2854,7 +2942,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             ) case some then {
                 aid9 = tgo9
             } case none then {
-                aid9 = resolveAtomType ty: ty reg: reg unitName: unitName nm: acNm9.stringview thisName: ""
+                aid9 = resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: acNm9.stringview thisName: ""
             }
             ark9b: ark9.copy
             arv9: aid9
@@ -2877,6 +2965,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: St
             ty.setChild parentTypeId: cuid childName: defName childTypeId: crid
         } case none then {}
     } case none then {}
+    gk1: "\{unitName}.\{defName}".string
+    ty.resolving.delete item: gk1
     dkk0: "\{unitName}.\{defName}".string
     ty.definedKeys.add item: dkk0
 }
@@ -2905,7 +2995,7 @@ resolveTypeAliases: function {ty: ztyping.ZTyping} is {
 # resolves every member; the full body-walk mode mirrors check()'s eager set
 # (functions and units only -- other definitions resolve on demand, so unused
 # main-unit records/classes/unions drop out of the full dump).
-resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node full: bool} is {
+resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView unitdef: Node full: bool} is {
     match (
         unitdef
     ) case unitdef then {
@@ -2984,9 +3074,9 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNam
                 }
                 if eager then {
                     if (isUnitOp op: bm.operation) then {
-                        resolveInlineGenericUnit ty: ty reg: reg unitName: unitName defName: defName.stringview unitOp: bm.operation
+                        resolveInlineGenericUnit ty: ty reg: reg units: units unitName: unitName defName: defName.stringview unitOp: bm.operation
                     } else {
-                        resolveDef ty: ty reg: reg unitName: unitName defName: defName.stringview defn: bm.operation
+                        resolveDef ty: ty reg: reg units: units unitName: unitName defName: defName.stringview defn: bm.operation
                     }
                 }
             } else {}
@@ -3043,7 +3133,11 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         # Pass 2: resolve EVERY file unit's definition signatures (main + deps
         # like zlexer/zast/zvfs), so cross-unit type refs resolve to the dep's
         # own type and the dep's type/fn def nodes get stamped for emission.
-        with miter: program.units.iterate do for mu: miter loop {
+        muN0: program.units.length
+        muI0: 0.u64
+        for muI0 < muN0 loop {
+            mu: program.units.get i: muI0
+            muI0 = muI0 + 1
             match (
                 mu
             ) case namedoperation then {
@@ -3062,7 +3156,7 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                         }
                     }
                     ty.suppressSigStamp = supp
-                    resolveUnitBody ty: ty reg: reg unitName: nm.stringview unitdef: mu.operation full: full
+                    resolveUnitBody ty: ty reg: reg units: program.units unitName: nm.stringview unitdef: mu.operation full: full
                     ty.suppressSigStamp = false
                 }
             } else {}
@@ -3073,7 +3167,7 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
 # resolveDemandedUnitBody -- resolve the definitions of a non-main unit that a
 # main-unit signature referenced (reg.isDemanded) and that aren't resolved yet,
 # stamping them with that unit's name (mirrors the oracle's on-demand resolution).
-resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView shadowUnit: StringView unitdef: Node} out bool is {
+resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView shadowUnit: StringView unitdef: Node} out bool is {
     anyDemanded: false
     match (
         unitdef
@@ -3108,7 +3202,7 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
                         anyDemanded = true
                         rkey: "\{unitName}.\{dn}".string
                         if (ty.definedKeys.has item: rkey) == false then {
-                            resolveDef ty: ty reg: reg unitName: unitName defName: dn.stringview defn: bm.operation
+                            resolveDef ty: ty reg: reg units: units unitName: unitName defName: dn.stringview defn: bm.operation
                         }
                     }
                 }
@@ -3157,7 +3251,7 @@ declaresConformance: function {op: Node} out bool is {
 # resolveConformanceDefs -- resolve every not-yet-resolved unit def that declares a
 # conformance marker, mirroring the oracle's eager conformance pass. Only `str`
 # (`:Text`) qualifies in collections today; called when the unit was demanded at all.
-resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
+resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView unitdef: Node} is {
     match (
         unitdef
     ) case unitdef then {
@@ -3170,7 +3264,7 @@ resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                     dn: unitLabel o: bm.name
                     rkey: "\{unitName}.\{dn}".string
                     if (ty.definedKeys.has item: rkey) == false then {
-                        resolveDef ty: ty reg: reg unitName: unitName defName: dn.stringview defn: bm.operation
+                        resolveDef ty: ty reg: reg units: units unitName: unitName defName: dn.stringview defn: bm.operation
                     }
                 }
             } else {}
@@ -3829,7 +3923,11 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         program
     ) case program then {
         if full then {
-            with miter2: program.units.iterate do for mu: miter2 loop {
+            muN2: program.units.length
+            muI2: 0.u64
+            for muI2 < muN2 loop {
+                mu: program.units.get i: muI2
+                muI2 = muI2 + 1
                 match (
                     mu
                 ) case namedoperation then {
@@ -3842,7 +3940,7 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                         again: true
                         for again loop {
                             before: reg.nextTypeId
-                            resolveDemandedUnitBody ty: ty reg: reg unitName: mnm.stringview shadowUnit: "" unitdef: mu.operation
+                            resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: mnm.stringview shadowUnit: "" unitdef: mu.operation
                             if reg.nextTypeId == before then {
                                 again = false
                             }
@@ -3859,14 +3957,17 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         againU: true
         for againU loop {
             beforeU: reg.nextTypeId
-            uiter: program.units.iterate
-            for u: uiter loop {
+            uN3: program.units.length
+            uI3: 0.u64
+            for uI3 < uN3 loop {
+                u: program.units.get i: uI3
+                uI3 = uI3 + 1
                 match (
                     u
                 ) case namedoperation then {
                     nm: unitLabel o: u.name
                     if nm.stringview == "io" then {
-                        anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         if anyDemandedIo then {
                             if full then {
                                 seedIoDemands reg: reg
@@ -3877,35 +3978,35 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                             again9: true
                             for again9 loop {
                                 before9: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                                 if reg.nextTypeId == before9 then {
                                     again9 = false
                                 }
                             }
-                            resolveConformanceDefs ty: ty reg: reg unitName: "io" unitdef: u.operation
+                            resolveConformanceDefs ty: ty reg: reg units: program.units unitName: "io" unitdef: u.operation
                         }
                     }
                     if nm.stringview == "collections" then {
                         seedIteratorDemands reg: reg
-                        anyDemanded: resolveDemandedUnitBody ty: ty reg: reg unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        anyDemanded: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         if anyDemanded then {
-                            resolveConformanceDefs ty: ty reg: reg unitName: "collections" unitdef: u.operation
+                            resolveConformanceDefs ty: ty reg: reg units: program.units unitName: "collections" unitdef: u.operation
                         }
                     }
                     if nm.stringview == "system" then {
                         seedSystemDemands reg: reg
-                        anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg unitName: "system" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "system" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         if anyDemandedSys then {
-                            resolveConformanceDefs ty: ty reg: reg unitName: "system" unitdef: u.operation
+                            resolveConformanceDefs ty: ty reg: reg units: program.units unitName: "system" unitdef: u.operation
                         }
                     }
                     if nm.stringview == "os" then {
-                        anyDemandedOs: resolveDemandedUnitBody ty: ty reg: reg unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        anyDemandedOs: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         if anyDemandedOs then {
                             again10: true
                             for again10 loop {
                                 before10: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                                 if reg.nextTypeId == before10 then {
                                     again10 = false
                                 }
@@ -3913,12 +4014,12 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                         }
                     }
                     if nm.stringview == "cli" then {
-                        anyDemandedCli: resolveDemandedUnitBody ty: ty reg: reg unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        anyDemandedCli: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         if anyDemandedCli then {
                             again11: true
                             for again11 loop {
                                 before11: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                                 if reg.nextTypeId == before11 then {
                                     again11 = false
                                 }
@@ -3938,7 +4039,7 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                         # signatures (the reference's on-demand cross-unit
                         # resolution); its functions have bodies, so the
                         # body walks need return/never resolved.
-                        anyDemandedUser: resolveDemandedUnitBody ty: ty reg: reg unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                        anyDemandedUser: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                         if anyDemandedUser then {
                             reg.recordDemand name: "return"
                             reg.recordDemand name: "never"
@@ -3946,7 +4047,7 @@ resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                             again12: true
                             for again12 loop {
                                 before12: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
+                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
                                 if reg.nextTypeId == before12 then {
                                     again12 = false
                                 }
@@ -4278,14 +4379,14 @@ assignmentInnerName: function {s: Node} out String is {
 
 # addPromotedLocals -- add a field (i64) per top-level local binding in a generator body
 # (the loop-carried counters promoted to iter-class fields).
-addPromotedLocals: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 body: Option Node} is {
+addPromotedLocals: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node iterId: u64 body: Option Node} is {
     match (
         body
     ) case some then {
-        addPromotedLocalsBlk ty: ty reg: reg iterId: iterId blk: body
+        addPromotedLocalsBlk ty: ty reg: reg units: units iterId: iterId blk: body
     } case none then {}
 }
-addPromotedLocalsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 blk: Node} is {
+addPromotedLocalsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node iterId: u64 blk: Node} is {
     match (
         blk
     ) case statement then {
@@ -4293,7 +4394,7 @@ addPromotedLocalsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry it
         for st: siter loop {
             nm: assignmentLocalName line: st
             if nm.length != 0 then {
-                lf: resolveAtomType ty: ty reg: reg unitName: "" nm: "i64" thisName: ""
+                lf: resolveAtomType ty: ty reg: reg units: units unitName: "" nm: "i64" thisName: ""
                 ty.setChild parentTypeId: iterId childName: nm.stringview childTypeId: lf
             }
         }
@@ -4308,18 +4409,18 @@ addPromotedLocalsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry it
 # addResumeInput -- for a bidirectional generator (`accepts: U` in the Iterator
 # return), add the `_resume_input: U` field to the iter class and a `value: U` param
 # (with the annotated ownership) to its `call` method.
-addResumeInput: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 callId: u64 returntype: Option Node} is {
+addResumeInput: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node iterId: u64 callId: u64 returntype: Option Node} is {
     match (
         returntype
     ) case some then {
-        addResumeInputExpr ty: ty reg: reg iterId: iterId callId: callId rt: returntype
+        addResumeInputExpr ty: ty reg: reg units: units iterId: iterId callId: callId rt: returntype
     } case none then {}
 }
-addResumeInputExpr: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 callId: u64 rt: Node} is {
+addResumeInputExpr: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node iterId: u64 callId: u64 rt: Node} is {
     match (
         rt
     ) case expression then {
-        addResumeInputExpr ty: ty reg: reg iterId: iterId callId: callId rt: rt.expression
+        addResumeInputExpr ty: ty reg: reg units: units iterId: iterId callId: callId rt: rt.expression
     } case call then {
         aiter: rt.arguments.iterate
         for arg: aiter loop {
@@ -4329,9 +4430,9 @@ addResumeInputExpr: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iter
                 an: unitLabel o: arg.name
                 if an.stringview == "accepts" then {
                     tn: baseTypeName n: arg.operation
-                    rf: resolveAtomType ty: ty reg: reg unitName: "" nm: tn.stringview thisName: ""
+                    rf: resolveAtomType ty: ty reg: reg units: units unitName: "" nm: tn.stringview thisName: ""
                     ty.setChild parentTypeId: iterId childName: "_resume_input" childTypeId: rf
-                    vf: resolveAtomType ty: ty reg: reg unitName: "" nm: tn.stringview thisName: ""
+                    vf: resolveAtomType ty: ty reg: reg units: units unitName: "" nm: tn.stringview thisName: ""
                     ty.setChild parentTypeId: callId childName: "value" childTypeId: vf
                     own: pathOwnership n: arg.operation
                     match (
@@ -4386,14 +4487,14 @@ forIterableCallable: function {e: Node} out String is {
 # whose iterable is an inline generator call (chain/map_filter's nested pipeline). The
 # field is typed by the nested generator's iter class; no create param (that lives on
 # the excluded NULL-unit create).
-addInlineIterFields: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 body: Option Node} is {
+addInlineIterFields: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node iterId: u64 body: Option Node} is {
     match (
         body
     ) case some then {
-        addInlineIterFieldsBlk ty: ty reg: reg iterId: iterId blk: body
+        addInlineIterFieldsBlk ty: ty reg: reg units: units iterId: iterId blk: body
     } case none then {}
 }
-addInlineIterFieldsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry iterId: u64 blk: Node} is {
+addInlineIterFieldsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node iterId: u64 blk: Node} is {
     match (
         blk
     ) case statement then {
@@ -4404,7 +4505,7 @@ addInlineIterFieldsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             if cb.length != 0 then {
                 fieldName: "_iter\{n}".string
                 fieldType: "\{cb.stringview}_iter".string
-                ft: resolveAtomType ty: ty reg: reg unitName: "" nm: fieldType.stringview thisName: ""
+                ft: resolveAtomType ty: ty reg: reg units: units unitName: "" nm: fieldType.stringview thisName: ""
                 ty.setChild parentTypeId: iterId childName: fieldName.stringview childTypeId: ft
                 n = n + 1
             }
@@ -4415,24 +4516,24 @@ addInlineIterFieldsBlk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
 # synthGeneratorForMethod -- synthesize the iter class for a generator METHOD (an
 # as-block method whose return is the Iterator protocol). thisName is the enclosing
 # type, so a `this`-typed captured param (b: this.private.lock) resolves to it.
-synthGeneratorForMethod: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView thisName: StringView op: Node} is {
+synthGeneratorForMethod: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView fnName: StringView thisName: StringView op: Node} is {
     match (
         op
     ) case functiondef then {
         if (isGeneratorReturn o: op.returntype) then {
-            synthGeneratorIterClass ty: ty reg: reg unitName: unitName fnName: fnName thisName: thisName fnode: op
+            synthGeneratorIterClass ty: ty reg: reg units: units unitName: unitName fnName: fnName thisName: thisName fnode: op
         }
     } else {}
 }
 
-synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fnName: StringView thisName: StringView fnode: zast.FunctionData} is {
+synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView fnName: StringView thisName: StringView fnode: zast.FunctionData} is {
     iterName: "\{fnName}_iter".string
     iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.CLASS
     iid: iterId
     reg.setValtype typeId: iterId value: false
     ty.definedInUnit.set key: iid value: unitName.string
     needsDtor: false
-    st1: resolveAtomType ty: ty reg: reg unitName: unitName nm: "i64" thisName: ""
+    st1: resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: "i64" thisName: ""
     ty.setChild parentTypeId: iterId childName: "state" childTypeId: st1
     createName: "\{iterName}.create".string
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.FUNCTION
@@ -4451,9 +4552,9 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
         ) case namedoperation then {
             pn: unitLabel o: pm.name
             ptn: baseTypeName n: pm.operation
-            f1: resolveAtomType ty: ty reg: reg unitName: unitName nm: ptn.stringview thisName: thisName
+            f1: resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: ptn.stringview thisName: thisName
             ty.setChild parentTypeId: iterId childName: pn.stringview childTypeId: f1
-            f2: resolveAtomType ty: ty reg: reg unitName: unitName nm: ptn.stringview thisName: thisName
+            f2: resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: ptn.stringview thisName: thisName
             ty.setChild parentTypeId: createId childName: pn.stringview childTypeId: f2
             pown: pathOwnership n: pm.operation
             match (
@@ -4464,11 +4565,11 @@ synthGeneratorIterClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             } case none then {}
         } else {}
     }
-    addResumeInput ty: ty reg: reg iterId: iterId callId: callId returntype: fnode.returntype
+    addResumeInput ty: ty reg: reg units: units iterId: iterId callId: callId returntype: fnode.returntype
     if (bodyHasYieldingLoop body: fnode.body) then {
-        addPromotedLocals ty: ty reg: reg iterId: iterId body: fnode.body
+        addPromotedLocals ty: ty reg: reg units: units iterId: iterId body: fnode.body
     }
-    addInlineIterFields ty: ty reg: reg iterId: iterId body: fnode.body
+    addInlineIterFields ty: ty reg: reg units: units iterId: iterId body: fnode.body
     ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
     ty.setChild parentTypeId: iterId childName: "call" childTypeId: callId
     if needsDtor then {
@@ -4494,7 +4595,7 @@ isUnitOp: function {op: Node} out bool is {
 # Any.generic; add; double }) into a UNIT type (is_generic) whose functions are mangled
 # {unit}_{fn} FUNCTION children (with their generic-param types KEPT -- unlike a generic
 # FILE unit, an inline template's params are not suppressed).
-resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView defName: StringView unitOp: Node} is {
+resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView unitOp: Node} is {
     match (
         unitOp
     ) case unitdef then {
@@ -4534,7 +4635,7 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
             ) case namedoperation then {
                 fn: unitLabel o: bm.name
                 qn: "\{defName}_\{fn}".string
-                mido: resolveMethodFn ty: ty reg: reg unitName: unitName qname: qn.stringview thisName: "" op: bm.operation
+                mido: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: qn.stringview thisName: "" op: bm.operation
                 match (
                     mido
                 ) case some then {
@@ -4733,7 +4834,7 @@ registerMonoFnParams: function {ty: ztyping.ZTyping op: Node fnId: u64 gpNames: 
     } else {}
 }
 
-buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tmplUnitName: StringView tmplName: StringView monoId: u64 monoName: StringView tplId: u64 argId: u64 templateOp: Node} is {
+buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node tmplUnitName: StringView tmplName: StringView monoId: u64 monoName: StringView tplId: u64 argId: u64 templateOp: Node} is {
     bgot9: ty.collectionChildrenBuilt.get key: monoId
     if (optBoolOr o: bgot9 d: false) then {
         return
@@ -4778,7 +4879,7 @@ buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tmplU
                         srcId = tfo
                     } case none then {
                         tq: "\{tmplName}_\{fn}".string
-                        mo0: resolveMethodFn ty: ty reg: reg unitName: tmplUnitName qname: tq.stringview thisName: "" op: fm.operation
+                        mo0: resolveMethodFn ty: ty reg: reg units: units unitName: tmplUnitName qname: tq.stringview thisName: "" op: fm.operation
                         match (
                             mo0
                         ) case some then {
@@ -4896,7 +4997,7 @@ buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tmplU
 
 # completeInlineReq -- locate an inline template member by name in the main
 # unit body and build its mono's full-mode completion.
-completeInlineReq: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView monoId: u64 monoName: StringView tmplName: StringView tplId: u64 argId: u64 mainOp: Node} is {
+completeInlineReq: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node mainName: StringView monoId: u64 monoName: StringView tmplName: StringView tplId: u64 argId: u64 mainOp: Node} is {
     match (
         mainOp
     ) case unitdef then {
@@ -4908,7 +5009,7 @@ completeInlineReq: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainN
                 bn: unitLabel o: bm.name
                 if bn.stringview == tmplName then {
                     if (isUnitOp op: bm.operation) then {
-                        buildUnitMonoFull ty: ty reg: reg tmplUnitName: mainName tmplName: tmplName monoId: monoId monoName: monoName tplId: tplId argId: argId templateOp: bm.operation
+                        buildUnitMonoFull ty: ty reg: reg units: units tmplUnitName: mainName tmplName: tmplName monoId: monoId monoName: monoName tplId: tplId argId: argId templateOp: bm.operation
                     }
                 }
             } else {}
@@ -5052,16 +5153,20 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
                 match (
                     program
                 ) case program then {
-                    with uiter9: program.units.iterate do for u9: uiter9 loop {
+                    uN9: program.units.length
+                    uI9: 0.u64
+                    for uI9 < uN9 loop {
+                        u9: program.units.get i: uI9
+                        uI9 = uI9 + 1
                         match (
                             u9
                         ) case namedoperation then {
                             un9: unitLabel o: u9.name
                             if un9.stringview == rt.stringview then {
-                                buildUnitMonoFull ty: ty reg: reg tmplUnitName: un9.stringview tmplName: rt.stringview monoId: mid9 monoName: rm.stringview tplId: tplId argId: argId templateOp: u9.operation
+                                buildUnitMonoFull ty: ty reg: reg units: program.units tmplUnitName: un9.stringview tmplName: rt.stringview monoId: mid9 monoName: rm.stringview tplId: tplId argId: argId templateOp: u9.operation
                             }
                             if un9.stringview == mainName.stringview then {
-                                completeInlineReq ty: ty reg: reg mainName: mainName.stringview monoId: mid9 monoName: rm.stringview tmplName: rt.stringview tplId: tplId argId: argId mainOp: u9.operation
+                                completeInlineReq ty: ty reg: reg units: program.units mainName: mainName.stringview monoId: mid9 monoName: rm.stringview tmplName: rt.stringview tplId: tplId argId: argId mainOp: u9.operation
                             }
                         } else {}
                     }
@@ -12246,13 +12351,17 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
         }
         reg.recordDemand name: "Iterator"
         reg.recordDemand name: "optionval"
-        with siter: program.units.iterate do for su: siter loop {
+        suN0: program.units.length
+        suI0: 0.u64
+        for suI0 < suN0 loop {
+            su: program.units.get i: suI0
+            suI0 = suI0 + 1
             match (
                 su
             ) case namedoperation then {
                 snm: unitLabel o: su.name
                 if snm.stringview == "system" then {
-                    resolveDemandedUnitBody ty: ty reg: reg unitName: "system" shadowUnit: "" unitdef: su.operation
+                    resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "system" shadowUnit: "" unitdef: su.operation
                 }
             } else {
             }
