@@ -6388,7 +6388,8 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     # RECORD instances: numeric-param fields synthesize from their declared
     # constraint (size: u64.generic -> a u64 child) when no field references
     # them; then the meta-create requalifies to the instance and ==/!=
-    # synthesize -- except str/array, whose branches own those members.
+    # synthesize -- except str/array, whose branches own those members
+    # (their u64 `to` child comes from THIS synth; the branches add none).
     if tt == ztypes.ztypetype.RECORD then {
         tplNm9: regTypeNameOf reg: reg tid: templateId
         isSized9: false
@@ -6618,8 +6619,8 @@ mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valAr
 # definition-order argument keys from the name-keyed subs (fallbackArg fills a
 # single missing parameter), walk genericChildren, and return the existing
 # spec on a full-path hit. A parameter absent from subs with no fallback (a
-# numeric value parameter) skips the tree -- mintMono's name dedup still
-# holds for those. On a miss the leaf materializes via mintMono; multi-level
+# numeric value parameter -- str/array's `to`) skips the tree -- mintMono's
+# name dedup still holds for those. On a miss the leaf materializes via mintMono; multi-level
 # paths mint intermediate nodes (genericOriginId = template, genericArgs =
 # the key prefix) that cache partial paths without being emitted.
 getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
@@ -6954,21 +6955,22 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     isSized: false
     if templateName == "str" then { isSized = true }
     if templateName == "array" then { isSized = true }
-    # str/array templates copy their children at mint time; the branch below
-    # REPLACES members in place (setChild keeps positions), so the dedup
-    # guard applies only to the from-scratch families.
+    # str/array are PERMANENT materializer arms: sized RECORDs are keyed by
+    # a numeric value parameter that never enters subs/idSubs/the spec tree
+    # (getOrMintSpec skips it; sized specs dedup by name), so produce+clone
+    # has nothing to substitute. Their templates resolve from source (record
+    # attachMethods runs regardless of genericity) and copy their children
+    # at mint time; the branches below REPLACE the value-dependent members
+    # in place (setChild keeps positions) -- fresh const-clone size fields,
+    # element-typed get/set returns, String-returning string, and the ==/!=
+    # that resolveRecord and mintMono both skip for sized records. The
+    # emitter builds the structs from the z_str/z_array tmpls by name-parsed
+    # size and reads only the == child's presence. The dedup guard below
+    # applies only to the from-scratch families.
     if (isSized) == false then {
         if (ty.childCount parentTypeId: monoId) > 0 then {
             return
         }
-    }
-    u64id: 0.u64
-    uo: walkLookupTyperef ty: ty currentUnit: mainName base: "u64"
-    match (
-        uo
-    ) case some then {
-        u64id = uo
-    } case none then {
     }
     boolid: 0.u64
     bo9: walkLookupTyperef ty: ty currentUnit: mainName base: "bool"
@@ -6978,7 +6980,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         boolid = bo9
     } case none then {
     }
-    en: regTypeNameOf reg: reg tid: elemArg
     if templateName == "MapEntry" then {
         kyId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "key"
         reg.setReturnType typeId: kyId value: elemArg
@@ -6998,7 +6999,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         ty.markAsConstClone typeId: alen
         ty.setChild parentTypeId: monoId childName: "length" childTypeId: alen
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
-        ty.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
         aeqId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "=="
         reg.setReturnType typeId: aeqId value: boolid
         aneId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "!="
@@ -7020,7 +7020,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             reg.setReturnType typeId: tstId value: sgid
         }
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
-        ty.setChild parentTypeId: monoId childName: "to" childTypeId: u64id
         teqId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "=="
         reg.setReturnType typeId: teqId value: boolid
         tneId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "!="
