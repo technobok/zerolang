@@ -12624,7 +12624,7 @@ isComplexFnptrParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out 
     return false
 }
 
-emitOneFnptrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 seen: List u64 buf: String.borrow} is {
+emitOneFnptrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 seen: List u64 fnOwner: (Map u64 value: u64) buf: String.borrow} is {
     if (seen.contains item: tid) then {
         return
     }
@@ -12632,11 +12632,41 @@ emitOneFnptrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 seen:
     pNames: (List String)
     pIds: (List u64)
     recFieldLists symtab: symtab tid: tid names: pNames ids: pIds
+    # A method's `this`/self-typed receiver child is a fresh shell named after
+    # the owner; resolve it to the owner's canonical id so the typedef matches
+    # the method's emitted signature (a by-name canonicalization can land on an
+    # unrelated same-named type, e.g. a stdlib generic template).
+    ownT9: 0.u64
+    fno9: fnOwner.get key: tid
+    match (
+        fno9
+    ) case some then {
+        ownT9 = fno9
+    } case none then {}
+    ownNm9: typeNameOfReg9 symtab: symtab tid: ownT9
+    rIds9: (List u64)
+    ri9: 0.u64
+    rn9: pIds.length
+    for ri9 < rn9 loop {
+        rpv9: pIds.get i: ri9
+        if ownT9 > 0 then {
+            rpn9: pNames.get i: ri9
+            rtn9: typeNameOfReg9 symtab: symtab tid: rpv9
+            isRecv9: false
+            if rpn9.stringview == "this" then { isRecv9 = true }
+            if rtn9.stringview == "this" then { isRecv9 = true }
+            if rtn9.stringview == ownNm9.stringview then { isRecv9 = true }
+            if rpv9 == ownT9 then { isRecv9 = true }
+            if isRecv9 then { rpv9 = ownT9 }
+        }
+        rIds9.append rpv9.u64
+        ri9 = ri9 + 1
+    }
     skipIt9: false
     sj9: 0.u64
     sn9: pIds.length
     for sj9 < sn9 loop {
-        spid9: pIds.get i: sj9
+        spid9: rIds9.get i: sj9
         if (isComplexFnptrParam symtab: symtab ctx: ctx tid: spid9) then {
             skipIt9 = true
         }
@@ -12662,9 +12692,9 @@ emitOneFnptrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 seen:
     di: 0.u64
     dn: pIds.length
     for di < dn loop {
-        pidd: pIds.get i: di
+        pidd: rIds9.get i: di
         if (symtab.reg.typetypeOf typeId: pidd) == ztypes.ztypetype.FUNCTION then {
-            emitOneFnptrTypedef symtab: symtab ctx: ctx tid: pidd seen: seen buf: buf
+            emitOneFnptrTypedef symtab: symtab ctx: ctx tid: pidd seen: seen fnOwner: fnOwner buf: buf
         }
         ensureFwdStruct symtab: symtab ctx: ctx tid: pidd buf: buf
         di = di + 1
@@ -12678,7 +12708,7 @@ emitOneFnptrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 seen:
     pn: pNames.length
     for pi < pn loop {
         pnm: pNames.get i: pi
-        pidp: pIds.get i: pi
+        pidp: rIds9.get i: pi
         pct: fnptrParamTypeC symtab: symtab ctx: ctx fid: tid pname: pnm.stringview pid: pidp
         if pi > 0 then {
             params.append ", "
@@ -12702,11 +12732,33 @@ emitOneFnptrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 seen:
 emitFnptrTypedefs: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
     last: symtab.reg.nextTypeId
     seen: (List u64)
+    # method FUNCTION tid -> owning object tid, for receiver-param resolution
+    fnOwner: (Map u64 value: u64)
+    with fociter: symtab.typing.typeChild.iterate do for foc: fociter loop {
+        fco: symtab.typing.childTypeById.get key: foc.childNameId
+        match (
+            fco
+        ) case some then {
+            if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.FUNCTION then {
+                fpt0: symtab.reg.typetypeOf typeId: foc.parentTypeId
+                isObj0: false
+                if fpt0 == ztypes.ztypetype.RECORD then { isObj0 = true }
+                if fpt0 == ztypes.ztypetype.CLASS then { isObj0 = true }
+                if fpt0 == ztypes.ztypetype.UNION then { isObj0 = true }
+                if fpt0 == ztypes.ztypetype.VARIANT then { isObj0 = true }
+                if fpt0 == ztypes.ztypetype.PROTOCOL then { isObj0 = true }
+                if fpt0 == ztypes.ztypetype.FACET then { isObj0 = true }
+                if isObj0 then {
+                    fnOwner.set key: fco value: foc.parentTypeId
+                }
+            }
+        } case none then {}
+    }
     t0: 0.u64
     for t0 < last loop {
         if (symtab.reg.typetypeOf typeId: t0) == ztypes.ztypetype.FUNCTION then {
             if (fnptrTypedefEligible symtab: symtab ctx: ctx tid: t0) then {
-                emitOneFnptrTypedef symtab: symtab ctx: ctx tid: t0 seen: seen buf: buf
+                emitOneFnptrTypedef symtab: symtab ctx: ctx tid: t0 seen: seen fnOwner: fnOwner buf: buf
             }
         }
         t0 = t0 + 1
