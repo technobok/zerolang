@@ -2869,6 +2869,51 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
             }
         } else {}
     }
+    # Flipped iterator families: their only method decl (`call`) lives in
+    # the as-block; produce it like the isItems loop does. attachMethods
+    # stays non-generic-only (it also handles const-clone members and
+    # generator synthesis, which native decls never need).
+    aiterP4: cnode.asItems.iterate
+    for amP4: aiterP4 loop {
+        match (
+            amP4
+        ) case namedoperation then {
+            if (isFunctionDefOp op: amP4.operation) then {
+                afnP4: unitLabel o: amP4.name
+                prodA4: false
+                if isgen when (functiondefIsNative op: amP4.operation) then {
+                    famA4: false
+                    if defName == "ListIter" then { famA4 = true }
+                    if defName == "SetIter" then { famA4 = true }
+                    if defName == "MapKeyIter" then { famA4 = true }
+                    if defName == "MapItemIter" then { famA4 = true }
+                    if unitName == "collections" when famA4 then {
+                        skipA4: false
+                        if afnP4.stringview == "create" then { skipA4 = true }
+                        if afnP4.stringview == "length" then { skipA4 = true }
+                        if afnP4.stringview == "capacity" then { skipA4 = true }
+                        if (skipA4) == false then {
+                            prodA4 = true
+                        }
+                    }
+                }
+                if prodA4 then {
+                    aqnP4: "\{defName}.\{afnP4}".string
+                    amidP4: resolveMethodFn ty: ty reg: reg units: units unitName: unitName qname: aqnP4.stringview thisName: defName op: amP4.operation
+                    match (
+                        amidP4
+                    ) case some then {
+                        ty.setChild parentTypeId: cid childName: afnP4.stringview childTypeId: amidP4
+                        reg.setGeneric typeId: amidP4 value: true
+                        if (fnFieldFlaggableName name: afnP4.stringview) then {
+                            ty.setChildFnptrField parentTypeId: cid name: afnP4.stringview
+                        }
+                    } case none then {}
+                }
+            }
+        } else {
+        }
+    }
     hasCreate: false
     if (isgen) == false then {
         hcAs: attachMethods ty: ty reg: reg units: units unitName: unitName defName: defName parentId: cid asItems: cnode.asItems
@@ -6835,6 +6880,22 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
         return
     }
+    # Iterator families: call is produced+cloned; its OptionView return
+    # links here (a composite generic return has no pre-substitution id)
+    # and the create child stays minted, once per mono.
+    if isIter then {
+        enI4: regTypeNameOf reg: reg tid: elemArg
+        cloI4: ty.childOf parentTypeId: monoId name: "call"
+        match (
+            cloI4
+        ) case some then {
+            cltI4: "OptionView_\{enI4}"
+            linkMonoReturn ty: ty reg: reg methodId: cloI4 targetMono: cltI4.stringview
+        } case none then {
+        }
+        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
+        return
+    }
     isSized: false
     if templateName == "str" then { isSized = true }
     if templateName == "array" then { isSized = true }
@@ -6863,12 +6924,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     } case none then {
     }
     en: regTypeNameOf reg: reg tid: elemArg
-    if isIter then {
-        clid: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "call"
-        clTarget: "OptionView_\{en}"
-        linkMonoReturn ty: ty reg: reg methodId: clid targetMono: clTarget.stringview
-        mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
-    }
     if templateName == "Map" when valArg > 0 then {
         # Fresh u64 clones, mirroring the Set branch (see note there).
         mlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
