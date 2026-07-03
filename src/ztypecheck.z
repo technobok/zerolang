@@ -1235,9 +1235,14 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
         if mid9 == 0 then {
             return 0
         }
-        vv9: optU64Or o: (subs9.get key: ("value".string)) d: 0
-        mintTemplateChains ty: ty reg: reg mainName: mainName9 tname: tn9.stringview suffix: sfx9.stringview firstA: firstA9 valA: vv9
-        mintCollectionChildren ty: ty reg: reg mainName: mainName9 monoName: mname9.stringview monoId: mid9 templateName: tn9.stringview suffix: sfx9.stringview elemArg: firstA9 valArg: vv9
+        # sized records (str/array) dedup by name and skip the trie; their
+        # permanent materializer arm is invoked here with the element in hand
+        isSized9: false
+        if tn9.stringview == "str" then { isSized9 = true }
+        if tn9.stringview == "array" then { isSized9 = true }
+        if isSized9 then {
+            mintCollectionChildren ty: ty reg: reg mainName: mainName9 monoName: mname9.stringview monoId: mid9 templateName: tn9.stringview suffix: sfx9.stringview elemArg: firstA9 valArg: 0
+        }
         if nid > 0 then {
             smv9: mid9
             ty.nodeType.set key: nid.u64 value: smv9
@@ -6792,29 +6797,39 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         if keys8.length > 1 then {
             valC3 = keys8.get i: 1
         }
-        # MapItemIter's iterator element is the derived MapEntry spec, not a
-        # trie key -- its chain caller carries the right id, so it is excluded
+        # MapItemIter's iterator element is the derived MapEntry spec (its
+        # call's OptionView some-arm), not a trie key
         skipC3: false
-        if tnC3.stringview == "MapItemIter" then { skipC3 = true }
+        if tnC3.stringview == "MapItemIter" then {
+            skipC3 = true
+            micoC4: ty.childOf parentTypeId: mid8 name: "call"
+            match (
+                micoC4
+            ) case some then {
+                mizoC4: reg.typeById.get key: micoC4
+                match (
+                    mizoC4
+                ) case some then {
+                    mrtoC4: mizoC4.returnTypeId
+                    match (
+                        mrtoC4
+                    ) case some then {
+                        mieoC4: ty.childOf parentTypeId: mrtoC4 name: "some"
+                        match (
+                            mieoC4
+                        ) case some then {
+                            elemC3 = mieoC4
+                            skipC3 = false
+                        } case none then {}
+                    } case none then {}
+                } case none then {}
+            } case none then {}
+        }
         if skipC3 == false then {
-            mintTemplateChains ty: ty reg: reg mainName: mainName tname: tnC3.stringview suffix: sfxC3.stringview firstA: elemC3 valA: valC3
             mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: name monoId: mid8 templateName: tnC3.stringview suffix: sfxC3.stringview elemArg: elemC3 valArg: valC3
         }
     }
     return mid8
-}
-
-# linkMonoReturn -- point a synthesized method's return at an already-minted
-# instance (by mono name); no-op when the target is absent.
-linkMonoReturn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry methodId: u64 targetMono: StringView} is {
-    tk: targetMono.string
-    got: ty.resolved.get key: ("system.\{targetMono}".string)
-    match (
-        got
-    ) case some then {
-        reg.setReturnType typeId: methodId value: got
-    } case none then {
-    }
 }
 
 # mintCollectionChildren -- the collection-class instance children, mirroring
@@ -6860,10 +6875,8 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         return
     }
     # List children come from the produced template methods cloned per
-    # instance; only the chain-typed returns link here (a template's
-    # parameterized return has no pre-substitution id). Runs on every naming
-    # so late chain mints heal; linkMonoReturn no-ops until the target
-    # exists.
+    # instance (composite returns healed by respecialize); only the
+    # length/capacity u64 children materialize here. Runs on every naming.
     if templateName == "List" then {
         u64L: 0.u64
         uoL: walkLookupTyperef ty: ty currentUnit: mainName base: "u64"
@@ -6876,23 +6889,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         if u64L > 0 then {
             ty.setChild parentTypeId: monoId childName: "length" childTypeId: u64L
             ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: u64L
-        }
-        enL: regTypeNameOf reg: reg tid: elemArg
-        lvoL: ty.childOf parentTypeId: monoId name: "listview"
-        match (
-            lvoL
-        ) case some then {
-            lvtL: "ListView_\{enL}"
-            linkMonoReturn ty: ty reg: reg methodId: lvoL targetMono: lvtL.stringview
-        } case none then {
-        }
-        itoL: ty.childOf parentTypeId: monoId name: "iterate"
-        match (
-            itoL
-        ) case some then {
-            ittL: "ListIter_\{enL}"
-            linkMonoReturn ty: ty reg: reg methodId: itoL targetMono: ittL.stringview
-        } case none then {
         }
         return
     }
@@ -6917,9 +6913,9 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
         return
     }
-    # Set children come from the produced template methods; the length/
-    # capacity fields (fresh const-clone u64s), the iterate chain-return
-    # link, and the create child still materialize here, once per mono.
+    # Set children come from the produced template methods (returns healed
+    # by respecialize); the length/capacity fields (fresh const-clone u64s)
+    # and the create child materialize here, once per mono.
     if templateName == "Set" then {
         slenS: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
         reg.setValtype typeId: slenS value: true
@@ -6929,38 +6925,22 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         reg.setValtype typeId: scapS value: true
         ty.markAsConstClone typeId: scapS
         ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: scapS
-        sitS: ty.childOf parentTypeId: monoId name: "iterate"
-        match (
-            sitS
-        ) case some then {
-            sitnS: "SetIter\{suffix}"
-            linkMonoReturn ty: ty reg: reg methodId: sitS targetMono: sitnS.stringview
-        } case none then {
-        }
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
         return
     }
-    # Iterator families: call is produced+cloned; its OptionView return
-    # links here (a composite generic return has no pre-substitution id)
-    # and the create child stays minted, once per mono.
+    # Iterator families: call is produced+cloned (its OptionView return
+    # healed by respecialize); only the create child mints here, once per
+    # mono.
     if isIter then {
-        enI4: regTypeNameOf reg: reg tid: elemArg
-        cloI4: ty.childOf parentTypeId: monoId name: "call"
-        match (
-            cloI4
-        ) case some then {
-            cltI4: "OptionView_\{enI4}"
-            linkMonoReturn ty: ty reg: reg methodId: cloI4 targetMono: cltI4.stringview
-        } case none then {
-        }
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
         return
     }
-    # Map children come from the produced template methods; the length/
-    # capacity fields, the value-kind wrapper returns for get/remove
-    # (inexpressible in source), and the iterator chain links still
-    # materialize here, once per mono. Map has no create child (its
-    # construction path is separate).
+    # Map children come from the produced template methods (iterator
+    # returns healed by respecialize); the length/capacity fields and the
+    # value-kind wrapper returns for get/remove (inexpressible in source:
+    # optionval for a valtype, Option/OptionView otherwise) materialize
+    # here, once per mono. Map has no create child (its construction path
+    # is separate).
     if templateName == "Map" when valArg > 0 then {
         mlenM: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
         reg.setValtype typeId: mlenM value: true
@@ -6976,8 +6956,18 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             mgoM
         ) case some then {
             wtplM: mapGetWrapperName ty: ty reg: reg valArg: valArg
-            wnM: "\{wtplM}_\{vnM}"
-            linkMonoReturn ty: ty reg: reg methodId: mgoM targetMono: wnM.stringview
+            wtoM: walkLookupTyperef ty: ty currentUnit: mainName base: wtplM.stringview
+            match (
+                wtoM
+            ) case some then {
+                wnM: "\{wtplM}_\{vnM}"
+                weM: (Map String value: u64)
+                wmidM: getOrMintSpec ty: ty reg: reg mainName: mainName name: wnM.stringview templateId: wtoM subs: weM fallbackArg: valArg
+                if wmidM > 0 then {
+                    reg.setReturnType typeId: mgoM value: wmidM
+                }
+            } case none then {
+            }
         } case none then {
         }
         mrmoM: ty.childOf parentTypeId: monoId name: "remove"
@@ -6988,24 +6978,18 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             if (typeIsValtype ty: ty reg: reg tid: valArg) then {
                 rwtM = "optionval".string
             }
-            rwnM: "\{rwtM}_\{vnM}"
-            linkMonoReturn ty: ty reg: reg methodId: mrmoM targetMono: rwnM.stringview
-        } case none then {
-        }
-        mitoM: ty.childOf parentTypeId: monoId name: "iterate"
-        match (
-            mitoM
-        ) case some then {
-            kitnM: "MapKeyIter\{suffix}"
-            linkMonoReturn ty: ty reg: reg methodId: mitoM targetMono: kitnM.stringview
-        } case none then {
-        }
-        miioM: ty.childOf parentTypeId: monoId name: "iterateItems"
-        match (
-            miioM
-        ) case some then {
-            iitnM: "MapItemIter\{suffix}"
-            linkMonoReturn ty: ty reg: reg methodId: miioM targetMono: iitnM.stringview
+            rwtoM: walkLookupTyperef ty: ty currentUnit: mainName base: rwtM.stringview
+            match (
+                rwtoM
+            ) case some then {
+                rwnM: "\{rwtM}_\{vnM}"
+                rweM: (Map String value: u64)
+                rwmidM: getOrMintSpec ty: ty reg: reg mainName: mainName name: rwnM.stringview templateId: rwtoM subs: rweM fallbackArg: valArg
+                if rwmidM > 0 then {
+                    reg.setReturnType typeId: mrmoM value: rwmidM
+                }
+            } case none then {
+            }
         } case none then {
         }
         return
@@ -7082,69 +7066,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         reg.setReturnType typeId: teqId value: boolid
         tneId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "!="
         reg.setReturnType typeId: tneId value: boolid
-    }
-}
-
-# mintChain -- mint one chain-family instance (`{tpl}{suffix}`) when the
-# chain template resolves; returns the instance id (0 when unresolved).
-mintChain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView chainTpl: StringView suffix: StringView elemArg: u64 valArg: u64} out u64 is {
-    co: walkLookupTyperef ty: ty currentUnit: mainName base: chainTpl
-    match (
-        co
-    ) case some then {
-        mname: "\{chainTpl}\{suffix}"
-        eSubs: (Map String value: u64)
-        cid: getOrMintSpec ty: ty reg: reg mainName: mainName name: mname.stringview templateId: co subs: eSubs fallbackArg: elemArg
-        mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: mname.stringview monoId: cid templateName: chainTpl suffix: suffix elemArg: elemArg valArg: valArg
-        return cid
-    } case none then {
-    }
-    return 0
-}
-
-# mintTemplateChains -- the iterator/view-family instances a collection
-# template's synthesized methods reference, minted before the primary's
-# children so the return links resolve by mono name. List family: OptionView
-# + ListView + ListIter. Set: OptionView + SetIter. Map: the get wrapper
-# (by value kind), the key OptionView + MapKeyIter, then MapEntry + its
-# OptionView + MapItemIter.
-mintTemplateChains: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView tname: StringView suffix: StringView firstA: u64 valA: u64} is {
-    if tname == "List" then {
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "ListView" suffix: suffix elemArg: firstA valArg: 0
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "ListIter" suffix: suffix elemArg: firstA valArg: 0
-    }
-    if tname == "ListView" then {
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
-    }
-    if tname == "ListIter" then {
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
-    }
-    if tname == "Set" then {
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: suffix elemArg: firstA valArg: 0
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "SetIter" suffix: suffix elemArg: firstA valArg: 0
-    }
-    if tname == "Map" when valA > 0 then {
-        kn: regTypeNameOf reg: reg tid: firstA
-        vn: monoValName ty: ty reg: reg tid: valA
-        wtpl: mapGetWrapperName ty: ty reg: reg valArg: valA
-        vsfx: "_\{vn}"
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: wtpl.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
-        rwtpl0: "Option".string
-        if (typeIsValtype ty: ty reg: reg tid: valA) then {
-            rwtpl0 = "optionval".string
-        }
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: rwtpl0.stringview suffix: vsfx.stringview elemArg: valA valArg: 0
-        ksfx: "_\{kn}"
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: ksfx.stringview elemArg: firstA valArg: 0
-        mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapKeyIter" suffix: suffix elemArg: firstA valArg: valA
-        meid: mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapEntry" suffix: suffix elemArg: firstA valArg: valA
-        if meid > 0 then {
-            men: regTypeNameOf reg: reg tid: meid
-            mesfx: "_\{men}"
-            mintChain ty: ty reg: reg mainName: mainName chainTpl: "OptionView" suffix: mesfx.stringview elemArg: meid valArg: 0
-            mintChain ty: ty reg: reg mainName: mainName chainTpl: "MapItemIter" suffix: suffix elemArg: meid valArg: valA
-        }
     }
 }
 
@@ -7489,10 +7410,12 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         st.typing.setChildDefault parentTypeId: mid name: npName9.stringview default: npVal9.stringview
         npi9 = npi9 + 1
     }
-    vk2: "value".string
-    vv2: optU64Or o: (subs.get key: vk2) d: 0
-    mintTemplateChains ty: st.typing reg: st.reg mainName: unitName tname: tname.stringview suffix: sfx.stringview firstA: firstA valA: vv2
-    mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: vv2
+    isSized2: false
+    if tname.stringview == "str" then { isSized2 = true }
+    if tname.stringview == "array" then { isSized2 = true }
+    if isSized2 then {
+        mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: 0
+    }
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped like the reference.
     gcb: bareAtomName n: call.callable
