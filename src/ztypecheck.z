@@ -399,10 +399,13 @@ defTypetypeOf: function {defn: Node name: StringView} out optionval ztypes.ztype
 }
 
 # definingUnitFor -- the unit that defines `name` for a reference in `currentUnit`,
-# by bare-name visibility order (the current unit shadows stdlib). "" when no
-# indexed unit declares it (generic params, this/numerics, forward refs to a
-# nonexistent type) -- the caller then mints a shell exactly as before. Empty
-# string is a safe sentinel: a unit name is never empty.
+# by bare-name visibility order (the current unit shadows stdlib). The
+# INDEX-SIDE encoding of that order (defTypetype/defNodeUnitIdx metadata,
+# pre-resolution); walkLookupTyperef is its id-side counterpart over resolved
+# types. "" when no indexed unit declares it (generic params, this/numerics,
+# forward refs to a nonexistent type) -- the caller then mints a shell
+# exactly as before. Empty string is a safe sentinel: a unit name is never
+# empty.
 definingUnitFor: function {ty: ztyping.ZTyping currentUnit: StringView name: StringView} out String is {
     k0: "\{currentUnit}.\{name}".string
     k0b: "\{currentUnit}.\{name}".string
@@ -3543,10 +3546,10 @@ resolveConformanceDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     } else {}
 }
 
-# seedIteratorDemands -- a generic collection CLASS template carries no method
-# children (gated in resolveClass), so its sibling iterator/view templates are not
-# reached by ordinary type-ref demand. When a collection is demanded, demand its
-# iterators too, so the forward demand pass resolves them as bare generic templates.
+# seedIteratorDemands -- a collection template's produced methods carry
+# shell returns (chain returns link per-instance via the family fixup arms),
+# so the sibling iterator/view templates are still unreachable by reference
+# descent. When a collection is demanded, demand its iterators too.
 seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
     if (reg.isDemanded name: "Set") then {
         reg.recordDemand name: "SetIter"
@@ -3562,9 +3565,13 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
     }
 }
 
-# seedSystemDemands -- demand the system-unit types the i64/f64 pre-seed pulls into
-# resolve_only_main's closure. The .z side has no monomorphizer / return-type walk, so
-# it demands them by name (like seedIteratorDemands), grown by dependency layer.
+# seedSystemDemands -- the literal-materialization set: the system types a
+# program can require without ever writing a resolvable reference to them.
+# Numeric scalars + tag back per-use literal shells (resolveAtomType mints
+# them by name; the canonical defs must exist as typedef/emission bases),
+# and bool backs core's true/false re-exports (resolveCoreBools links
+# against the already-resolved system.bool). Every other system type is
+# reached by reference descent at its first use.
 seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "i8"
     reg.recordDemand name: "i16"
@@ -3580,19 +3587,6 @@ seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "f64"
     reg.recordDemand name: "tag"
     reg.recordDemand name: "bool"
-    reg.recordDemand name: "optionval"
-    reg.recordDemand name: "parseerror"
-    reg.recordDemand name: "resultval"
-    reg.recordDemand name: "String"
-    reg.recordDemand name: "StringView"
-    reg.recordDemand name: "CpIter"
-    reg.recordDemand name: "Splitter"
-    reg.recordDemand name: "LinesIter"
-    reg.recordDemand name: "Text"
-    reg.recordDemand name: "Iterator"
-    reg.recordDemand name: "Any"
-    reg.recordDemand name: "Option"
-    reg.recordDemand name: "OptionView"
 }
 
 # seedIoDemands -- demand the io-unit closure the reference's full typecheck pulls
