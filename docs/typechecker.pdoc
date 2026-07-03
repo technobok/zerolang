@@ -490,13 +490,15 @@ reached through the same name keeps the C scalar. Re-resolving by name
 would collapse the two onto whichever the search-root unit wins -- the
 bug class the #~"make shadow-guard" ratchet prevents from returning.
 
-#b:"Mono identity follows the same rule." A generic instance is deduped by a
-name-derived key (#~"optionval_i64", #~"Map_String_i64") in #~"monoByName", so a
-user type and the same-named system builtin would collide on it. A mono argument
-that is a user shadow of a builtin therefore appends its canonical id
-(#~"monoValName": #~"optionval_i64_7" vs the system #~"optionval_i64"), keeping
-the instances distinct -- e.g. a user #~"i64" shadow used as a #~"Map" value gets
-its own get / remove wrapper over the user struct, not the system scalar.
+#b:"Mono identity follows the same rule." A generic instance is identified by
+the specialization trie: each template holds #~"genericChildren", one level per
+parameter in definition order, keyed by the argument's type id -- or, for an
+integer-scalar-constrained parameter (#~"str to: 16"), by the literal VALUE
+itself (#~"genericArgIsValue" marks such ordinals). Ids cannot collide across
+same-named types, and the mono NAME (#~"Map_String_i64") remains only as the
+display / C-name stem; a user shadow of a builtin still appends its canonical
+id to that name (#~"monoValName": #~"optionval_i64_7") so generated wrapper
+names stay distinct too.
 
 
 #--: Cross-Cutting Concerns
@@ -581,12 +583,12 @@ concrete types, and re-running the standard resolvers on the
 clone.
 
 #ul:
-  [#*: #~"mintMono" -- entry for generic type
-    instantiation. Builds a deduplication key via
-    #~"genericTypeKey" (over arg #~"(name, constValue)"
-    pairs so numeric generics also dedupe), reuses an existing
-    instantiation if present, otherwise clones and registers
-    into #~"ZTyping.monoTypes".]
+  [#*: #~"getOrMintSpec" -- the one specialization front
+    door. Walks the template's trie level per definition-order
+    parameter (type-id keys, literal-value keys for numeric
+    parameters); a hit returns the existing instance, a miss
+    materializes one via #~"mintMono" and links it into the
+    trie with its ordered #~"genericArgs".]
   [#*: #~"cloneUnitMethod" -- per-function variant.
     Clones the function AST, binds generic params, typechecks
     the clone with the mono context in scope.]

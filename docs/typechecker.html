@@ -530,13 +530,15 @@ the name, so a user type that shadows a builtin scalar
 reached through the same name keeps the C scalar. Re-resolving by name
 would collapse the two onto whichever the search-root unit wins -- the
 bug class the <code>make shadow-guard</code> ratchet prevents from returning.</p>
-<p><strong>Mono identity follows the same rule.</strong> A generic instance is deduped by a
-name-derived key (<code>optionval_i64</code>, <code>Map_String_i64</code>) in <code>monoByName</code>, so a
-user type and the same-named system builtin would collide on it. A mono argument
-that is a user shadow of a builtin therefore appends its canonical id
-(<code>monoValName</code>: <code>optionval_i64_7</code> vs the system <code>optionval_i64</code>), keeping
-the instances distinct -- e.g. a user <code>i64</code> shadow used as a <code>Map</code> value gets
-its own get / remove wrapper over the user struct, not the system scalar.</p>
+<p><strong>Mono identity follows the same rule.</strong> A generic instance is identified by
+the specialization trie: each template holds <code>genericChildren</code>, one level per
+parameter in definition order, keyed by the argument's type id -- or, for an
+integer-scalar-constrained parameter (<code>str to: 16</code>), by the literal VALUE
+itself (<code>genericArgIsValue</code> marks such ordinals). Ids cannot collide across
+same-named types, and the mono NAME (<code>Map_String_i64</code>) remains only as the
+display / C-name stem; a user shadow of a builtin still appends its canonical
+id to that name (<code>monoValName</code>: <code>optionval_i64_7</code>) so generated wrapper
+names stay distinct too.</p>
 <h2 id="cross-cutting-concerns"><a href="#cross-cutting-concerns">8. Cross-Cutting Concerns</a></h2>
 <p>Each subsection below points at <em><strong>where</strong></em> a concern lives in the
 typechecker. For <em><strong>why</strong></em> it works that way, follow the links to
@@ -602,12 +604,12 @@ the original AST subtree, binding the generic parameters to
 concrete types, and re-running the standard resolvers on the
 clone.</p>
 <ul>
-<li><code>mintMono</code> -- entry for generic type
-instantiation. Builds a deduplication key via
-<code>genericTypeKey</code> (over arg <code>(name, constValue)</code>
-pairs so numeric generics also dedupe), reuses an existing
-instantiation if present, otherwise clones and registers
-into <code>ZTyping.monoTypes</code>.</li>
+<li><code>getOrMintSpec</code> -- the one specialization front
+door. Walks the template's trie level per definition-order
+parameter (type-id keys, literal-value keys for numeric
+parameters); a hit returns the existing instance, a miss
+materializes one via <code>mintMono</code> and links it into the
+trie with its ordered <code>genericArgs</code>.</li>
 <li><code>cloneUnitMethod</code> -- per-function variant.
 Clones the function AST, binds generic params, typechecks
 the clone with the mono context in scope.</li>
