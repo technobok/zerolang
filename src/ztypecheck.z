@@ -6832,15 +6832,14 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
     return mid8
 }
 
-# mintCollectionChildren -- the collection-class instance children, mirroring
-# the reference's programmatic synthesis (length/capacity as direct u64 value
-# children, then the method family in synthesis order; meta create appended
-# last for every collection class except List and Map, which have their own
-# create paths). The iterator family (ListIter/SetIter/MapKeyIter/MapItemIter)
-# shares one shape: .call returning the minted OptionView over the element,
-# then create. The array/str tables land when an example needs them. No-op
-# for other templates or when the instance already has children (re-mint
-# dedup).
+# mintCollectionChildren -- the per-instance collection children the
+# produced templates cannot express: length/capacity u64 value children,
+# the create child (except List and Map, which have their own create
+# paths), the Map get/remove value-kind wrapper returns, MapEntry's
+# key/value accessors, and the sized str/array member tables. Method
+# signatures and composite returns come from the cloned template methods
+# (healed by respecialize). No-op for other templates or when the
+# instance already has children (re-mint dedup).
 # monoValName -- the value-type name component of a get-wrapper mono name. A user
 # type SHADOWING a builtin (its name also names a system type) appends its canonical
 # id, so its wrapper mono is distinct from the system type's same-named wrapper (a
@@ -6892,10 +6891,10 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         }
         return
     }
-    # One build per instance: the resolveMonos fixpoint re-walks every
-    # pending ref each pass, and the str/array rebuild below would mint
-    # fresh member types per pass (their instances copy template children
-    # at mint time, so childCount cannot signal "already built").
+    # One build per instance: a spec can reach this arm from several mint
+    # paths, and the str/array rebuild below would mint fresh member types
+    # per invocation (their instances copy template children at mint time,
+    # so childCount cannot signal "already built").
     bgot: ty.collectionChildrenBuilt.get key: monoId
     if (optBoolOr o: bgot d: false) then {
         return
@@ -7305,7 +7304,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
 # genericTypeConstruction -- a generic TYPE template in callable position
 # with type-name arguments constructs its mono in place (`(List of: String)`
 # in value position): resolve each argument as a type, mint the deduped mono
-# with its chains and children (the resolveMonos shapes), and the call's
+# with its chains and children, and the call's
 # value is the mono.
 genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView call: zast.CallData tplId: u64} out u64 is {
     tname: typeNameOf st: st tid: tplId
