@@ -1850,63 +1850,6 @@ paramIsBorrowReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry un
     return isref
 }
 
-# fixupDemandedParamOwnership -- under the full body-walk driver, a main-unit
-# reftype may resolve AFTER the functions that reference it (demand order, not
-# body order), so resolveFunction's default-ownership rule missed it. Re-run
-# the rule for top-level main-unit function params with no recorded ownership.
-fixupDemandedParamOwnership: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView unitdef: Node} is {
-    match (
-        unitdef
-    ) case unitdef then {
-        biter: unitdef.body.iterate
-        for bm: biter loop {
-            match (
-                bm
-            ) case namedoperation then {
-                if (isFunctionDefOp op: bm.operation) then {
-                    dn: unitLabel o: bm.name
-                    rkey: "\{unitName}.\{dn}".string
-                    fo: ty.resolved.get key: rkey
-                    match (
-                        fo
-                    ) case some then {
-                        fixupFnParamOwnership ty: ty reg: reg unitName: unitName fid: fo defn: bm.operation
-                    } case none then {
-                    }
-                }
-            } else {}
-        }
-    } else {}
-}
-
-fixupFnParamOwnership: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView fid: u64 defn: Node} is {
-    match (
-        defn
-    ) case functiondef then {
-        piter: defn.parameters.iterate
-        for pm: piter loop {
-            match (
-                pm
-            ) case namedoperation then {
-                pname: unitLabel o: pm.name
-                hasOwn: ty.hasChildOwnership parentTypeId: fid name: pname.stringview
-                if (hasOwn) == false then {
-                    pown: pathOwnership n: pm.operation
-                    match (
-                        pown
-                    ) case some then {
-                    } case none then {
-                        isref: paramIsBorrowReftype ty: ty reg: reg unitName: unitName thisName: "" op: pm.operation
-                        if isref then {
-                            ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: ztypes.zparamownership.BORROW
-                        }
-                    }
-                }
-            } else {}
-        }
-    } else {}
-}
-
 # resolveMethodFn -- resolve one record-method as-item (a namedoperation whose
 # operation is a functiondef) into a qualified `{record}.{method}` FUNCTION type,
 # `this` params bound to thisName (the record). Returns its type id, or none for a
@@ -4307,7 +4250,6 @@ resolveDemandsByDescent: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
                                 againM9 = false
                             }
                         }
-                        fixupDemandedParamOwnership ty: ty reg: reg unitName: mainName9 unitdef: mu9.operation
                     }
                 } else {}
             }
@@ -12882,6 +12824,33 @@ objectHasYieldMethod: function {n: Node} out bool is {
     }
 }
 
+# resolveNamedDefsIn -- resolve exactly the named top-level defs of one
+# unit. The generator pass runs pre-index (no node finder, no descent), so
+# it walks the unitdef it already holds instead of the demand machinery.
+resolveNamedDefsIn: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView unitdef: Node wantA: StringView wantB: StringView} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        biter: unitdef.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                dn: unitLabel o: bm.name
+                hit: false
+                if dn.stringview == wantA then { hit = true }
+                if dn.stringview == wantB then { hit = true }
+                if hit then {
+                    rkey: "\{unitName}.\{dn}".string
+                    if (ty.definedKeys.has item: rkey) == false then {
+                        resolveDef ty: ty reg: reg units: units unitName: unitName defName: dn.stringview defn: bm.operation
+                    }
+                }
+            } else {}
+        }
+    } else {}
+}
+
 # lowerGenerators -- the generator lowering pass (the reference's
 # _lower_generators): for each unit, rewrite every yield-function whose
 # declared return head resolves to the stdlib Iterator protocol into a
@@ -12907,8 +12876,6 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
         if (anyYield) == false then {
             return
         }
-        reg.recordDemand name: "Iterator"
-        reg.recordDemand name: "optionval"
         suN0: program.units.length
         suI0: 0.u64
         for suI0 < suN0 loop {
@@ -12919,7 +12886,7 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             ) case namedoperation then {
                 snm: unitLabel o: su.name
                 if snm.stringview == "system" then {
-                    resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "system" shadowUnit: "" unitdef: su.operation
+                    resolveNamedDefsIn ty: ty reg: reg units: program.units unitName: "system" unitdef: su.operation wantA: "Iterator" wantB: "optionval"
                 }
             } else {
             }
