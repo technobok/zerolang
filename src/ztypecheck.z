@@ -597,6 +597,38 @@ resolveAtomType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
 literalIntId: 0x7FFFFFFFFFFFFFFF.u64
 literalFloatId: 0x7FFFFFFFFFFFFFFE.u64
 
+# parseDecimalU64 -- a decimal digit string as a u64 value; none when empty
+# or any byte is not a digit (signs, radix prefixes, suffixed forms stay on
+# the name-keyed path).
+parseDecimalU64: function {text: StringView} out optionval u64 is {
+    acc9: 0.u64
+    i9: 0.u64
+    any9: false
+    run9: true
+    for run9 loop {
+        bo9: text.byteAt i9
+        match (
+            bo9
+        ) case some then {
+            if bo9 >= 48 when bo9 <= 57 then {
+                d9: bo9 - 48
+                acc9 = acc9 * 10 + d9.u64
+                any9 = true
+            } else {
+                any9 = false
+                run9 = false
+            }
+        } case none then {
+            run9 = false
+        }
+        i9 = i9 + 1
+    }
+    if any9 then {
+        return (optionval.some acc9)
+    }
+    return (optionval.none u64)
+}
+
 # isNumericLiteralName -- true when a name begins with a digit: a numeric-literal
 # atom (an `as`-block static constant like `version: 1`), as opposed to a type-name
 # atom (a conformance marker). 48..57 are the ASCII digits.
@@ -1138,6 +1170,7 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
         }
         sfx9: "".string
         subs9: (Map String value: u64)
+        valSubsR9: (Map String value: u64)
         firstA9: 0.u64
         allOk9: true
         aiter9: arguments.iterate
@@ -1149,6 +1182,15 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
                 if (isNumericLiteralName name: an9.stringview) then {
                     sfx9.append s: "_"
                     sfx9.append s: an9.stringview
+                    pdv9: parseDecimalU64 text: an9.stringview
+                    match (
+                        pdv9
+                    ) case some then {
+                        vpn9: unitLabel o: arg9.name
+                        vsk9: vpn9.copy
+                        vsv9: pdv9
+                        valSubsR9.set key: vsk9 value: vsv9
+                    } case none then {}
                 } else {
                     aid9: 0.u64
                     if an9.length == 0 then {
@@ -1231,7 +1273,7 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
         # from the call label (Option's `t` vs the conventional `of:`), the
         # clone fallback leg types native-union arms from it -- a spec first
         # minted from a TYPE-position ref must carry real arm payloads.
-        mid9: getOrMintSpec ty: ty reg: reg mainName: mainName9 name: mname9.stringview templateId: tplId9 subs: subs9 fallbackArg: firstA9
+        mid9: getOrMintSpec ty: ty reg: reg mainName: mainName9 name: mname9.stringview templateId: tplId9 subs: subs9 valSubs: valSubsR9 fallbackArg: firstA9
         if mid9 == 0 then {
             return 0
         }
@@ -1444,7 +1486,8 @@ partialTyperefTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units
         }
         mn6: "\{tname6}\{sfx6}"
         mainName6: reg.regMainUnit.stringview
-        return (getOrMintSpec ty: ty reg: reg mainName: mainName6 name: mn6.stringview templateId: tplId6 subs: subs6 fallbackArg: 0)
+        vsA9: (Map String value: u64)
+        return (getOrMintSpec ty: ty reg: reg mainName: mainName6 name: mn6.stringview templateId: tplId6 subs: subs6 valSubs: vsA9 fallbackArg: 0)
     } else {}
     return 0
 }
@@ -6116,22 +6159,28 @@ respecialize: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: 
     ai9: 0.u64
     for ai9 < an9 loop {
         av9: reg.genericArgAt specId: specTid ordinal: ai9
-        mo9: idSubs.get key: av9
-        match (
-            mo9
-        ) case some then {
-            mapped9.append mo9
-            changed9 = true
-        } case none then {
-            # an arg that is itself a spec may carry substitutable args one
-            # level down (OptionView over a MapEntry partial) -- recurse
-            rec9: respecialize ty: ty reg: reg mainName: mainName specTid: av9 idSubs: idSubs
-            if rec9 > 0 then {
-                mapped9.append rec9
+        if (reg.genericArgIsValueAt specId: specTid ordinal: ai9) then {
+            # a numeric VALUE ordinal has nothing to substitute
+            av9v: av9
+            mapped9.append av9v
+        } else {
+            mo9: idSubs.get key: av9
+            match (
+                mo9
+            ) case some then {
+                mapped9.append mo9
                 changed9 = true
-            } else {
-                av9b: av9
-                mapped9.append av9b
+            } case none then {
+                # an arg that is itself a spec may carry substitutable args one
+                # level down (OptionView over a MapEntry partial) -- recurse
+                rec9: respecialize ty: ty reg: reg mainName: mainName specTid: av9 idSubs: idSubs
+                if rec9 > 0 then {
+                    mapped9.append rec9
+                    changed9 = true
+                } else {
+                    av9b: av9
+                    mapped9.append av9b
+                }
             }
         }
         ai9 = ai9 + 1
@@ -6145,22 +6194,31 @@ respecialize: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: 
         return 0
     }
     subs9: (Map String value: u64)
+    rvSubs9: (Map String value: u64)
     sfx9: "".string
     on9: regTypeNameOf reg: reg tid: origin9
     mi9: 0.u64
     for mi9 < an9 loop {
         mp9: pn9.get i: mi9
         mv9: mapped9.get i: mi9
-        sk9: mp9.copy
-        sv9: mv9
-        subs9.set key: sk9 value: sv9
         sfx9.append s: "_"
-        vn9: monoValName ty: ty reg: reg tid: mv9
-        sfx9.append s: vn9.stringview
+        if (reg.genericArgIsValueAt specId: specTid ordinal: mi9) then {
+            vk9: mp9.copy
+            vv9r: mv9
+            rvSubs9.set key: vk9 value: vv9r
+            nvs9: "\{mv9}"
+            sfx9.append s: nvs9.stringview
+        } else {
+            sk9: mp9.copy
+            sv9: mv9
+            subs9.set key: sk9 value: sv9
+            vn9: monoValName ty: ty reg: reg tid: mv9
+            sfx9.append s: vn9.stringview
+        }
         mi9 = mi9 + 1
     }
     mn9: "\{on9}\{sfx9}"
-    return (getOrMintSpec ty: ty reg: reg mainName: mainName name: mn9.stringview templateId: origin9 subs: subs9 fallbackArg: 0)
+    return (getOrMintSpec ty: ty reg: reg mainName: mainName name: mn9.stringview templateId: origin9 subs: subs9 valSubs: rvSubs9 fallbackArg: 0)
 }
 
 # mintMono -- register one generic-instance type (deduped by mono name): the
@@ -6588,6 +6646,21 @@ mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valAr
 # pass; value-kind constraints check typeIsValtype/typeIsReftype; StringLike
 # checks membership. GENERIC_PARAM args skip -- partial specs re-check on
 # completion. Location-free (the spec front door holds no source node).
+# constraintNumericMax -- the largest value an integer-scalar generic-param
+# constraint admits; none when the constraint is not an integer scalar (a
+# numeric argument on such a parameter stays on the name-keyed path).
+constraintNumericMax: function {cv: StringView} out optionval u64 is {
+    if cv == "u8" then { return (optionval.some 255.u64) }
+    if cv == "u16" then { return (optionval.some 65535.u64) }
+    if cv == "u32" then { return (optionval.some 4294967295.u64) }
+    if cv == "u64" then { return (optionval.some 18446744073709551615.u64) }
+    if cv == "i8" then { return (optionval.some 127.u64) }
+    if cv == "i16" then { return (optionval.some 32767.u64) }
+    if cv == "i32" then { return (optionval.some 2147483647.u64) }
+    if cv == "i64" then { return (optionval.some 9223372036854775807.u64) }
+    return (optionval.none u64)
+}
+
 checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry typeKey: StringView paramName: StringView argTid: u64} is {
     if (reg.typetypeOf typeId: argTid) == ztypes.ztypetype.GENERIC_PARAM then {
         return
@@ -6629,7 +6702,7 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
     }
 }
 
-getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
+getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) valSubs: (Map String value: u64) fallbackArg: u64} out u64 is {
     tk8: genericTypeKey ty: ty reg: reg tid: templateId
     pnames8: reg.genericParamNamesOf typeKey: tk8.stringview
     # An elided leading type argument stages under the empty name; rebind it
@@ -6647,8 +6720,19 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
             }
         } case none then {
         }
+        evv8: valSubs.get key: emptyKey8
+        match (
+            evv8
+        ) case some then {
+            prnmv8: firstGenericParamName ty: ty reg: reg templateId: templateId
+            if prnmv8.length > 0 then {
+                valSubs.set key: prnmv8 value: evv8
+            }
+        } case none then {
+        }
     }
     keys8: (List u64)
+    keyIsVal8: (List bool)
     trieOk8: true
     if pnames8.length == 0 then {
         trieOk8 = false
@@ -6660,12 +6744,37 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         ) case some then {
             checkConstraintSat ty: ty reg: reg typeKey: tk8.stringview paramName: pn8.stringview argTid: pgot8
             keys8.append pgot8
+            keyIsVal8.append false
         } case none then {
-            if fallbackArg > 0 when pnames8.length == 1 then {
-                fb8: fallbackArg
-                keys8.append fb8
-            } else {
-                trieOk8 = false
+            vgot8: valSubs.get key: pn8.copy
+            match (
+                vgot8
+            ) case some then {
+                # a numeric literal keys its trie level by VALUE; per-level
+                # kind is fixed by the parameter, so values and type ids
+                # cannot collide
+                cvn8: reg.genericParamConstraintOf typeKey: tk8.stringview paramName: pn8.stringview
+                cmx8: constraintNumericMax cv: cvn8.stringview
+                match (
+                    cmx8
+                ) case some then {
+                    if vgot8 > cmx8 then {
+                        m8v: "numeric argument \{vgot8} exceeds constraint '\{cvn8}' on parameter '\{pn8}' of '\{tk8}'"
+                        addResolveError ty: ty e: zast.err.GENERICERROR msg: m8v
+                    }
+                    keys8.append vgot8
+                    keyIsVal8.append true
+                } case none then {
+                    trieOk8 = false
+                }
+            } case none then {
+                if fallbackArg > 0 when pnames8.length == 1 then {
+                    fb8: fallbackArg
+                    keys8.append fb8
+                    keyIsVal8.append false
+                } else {
+                    trieOk8 = false
+                }
             }
         }
     }
@@ -6701,9 +6810,11 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
             match (
                 pto8
             ) case some then {
-                kv8: keys8.get i: pi8
-                pk8: pto8
-                idSubs8.set key: pk8 value: kv8
+                if (keyIsVal8.get i: pi8) == false then {
+                    kv8: keys8.get i: pi8
+                    pk8: pto8
+                    idSubs8.set key: pk8 value: kv8
+                }
             } case none then {}
             pi8 = pi8 + 1
         }
@@ -6713,9 +6824,11 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         hk8: 0.u64
         hn8: keys8.length
         for hk8 < hn8 loop {
-            hv8: keys8.get i: hk8
-            if (reg.typetypeOf typeId: hv8) == ztypes.ztypetype.GENERIC_PARAM then {
-                hasParamKey8 = true
+            if (keyIsVal8.get i: hk8) == false then {
+                hv8: keys8.get i: hk8
+                if (reg.typetypeOf typeId: hv8) == ztypes.ztypetype.GENERIC_PARAM then {
+                    hasParamKey8 = true
+                }
             }
             hk8 = hk8 + 1
         }
@@ -6756,7 +6869,11 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
                     kj9: 0.u64
                     for kj9 <= ki9 loop {
                         pk9: keys8.get i: kj9
-                        reg.appendGenericArg specId: step9 arg: pk9
+                        if (keyIsVal8.get i: kj9) then {
+                            reg.appendGenericArgValue specId: step9 value: pk9
+                        } else {
+                            reg.appendGenericArg specId: step9 arg: pk9
+                        }
                         kj9 = kj9 + 1
                     }
                 }
@@ -6768,7 +6885,11 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         ka9: 0.u64
         for ka9 < kn9 loop {
             av9: keys8.get i: ka9
-            reg.appendGenericArg specId: mid8 arg: av9
+            if (keyIsVal8.get i: ka9) then {
+                reg.appendGenericArgValue specId: mid8 value: av9
+            } else {
+                reg.appendGenericArg specId: mid8 arg: av9
+            }
             ka9 = ka9 + 1
         }
     }
@@ -6789,13 +6910,24 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
             sfv3: (nmC3.stringview from: tnl3 to: nml3)
             sfxC3 = sfv3.string
         }
+        # elem = the first TYPE key (a sized record's leading value key is
+        # not an element); val = the second key only when it is a type
         elemC3: 0.u64
-        if keys8.length > 0 then {
-            elemC3 = keys8.get i: 0
+        ei3: 0.u64
+        en3: keys8.length
+        for ei3 < en3 loop {
+            if elemC3 == 0 then {
+                if (keyIsVal8.get i: ei3) == false then {
+                    elemC3 = keys8.get i: ei3
+                }
+            }
+            ei3 = ei3 + 1
         }
         valC3: 0.u64
         if keys8.length > 1 then {
-            valC3 = keys8.get i: 1
+            if (keyIsVal8.get i: 1) == false then {
+                valC3 = keys8.get i: 1
+            }
         }
         # MapItemIter's iterator element is the derived MapEntry spec (its
         # call's OptionView some-arm), not a trie key
@@ -6961,7 +7093,8 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             ) case some then {
                 wnM: "\{wtplM}_\{vnM}"
                 weM: (Map String value: u64)
-                wmidM: getOrMintSpec ty: ty reg: reg mainName: mainName name: wnM.stringview templateId: wtoM subs: weM fallbackArg: valArg
+                vsB9: (Map String value: u64)
+                wmidM: getOrMintSpec ty: ty reg: reg mainName: mainName name: wnM.stringview templateId: wtoM subs: weM valSubs: vsB9 fallbackArg: valArg
                 if wmidM > 0 then {
                     reg.setReturnType typeId: mgoM value: wmidM
                 }
@@ -6983,7 +7116,8 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             ) case some then {
                 rwnM: "\{rwtM}_\{vnM}"
                 rweM: (Map String value: u64)
-                rwmidM: getOrMintSpec ty: ty reg: reg mainName: mainName name: rwnM.stringview templateId: rwtoM subs: rweM fallbackArg: valArg
+                vsC9: (Map String value: u64)
+                rwmidM: getOrMintSpec ty: ty reg: reg mainName: mainName name: rwnM.stringview templateId: rwtoM subs: rweM valSubs: vsC9 fallbackArg: valArg
                 if rwmidM > 0 then {
                     reg.setReturnType typeId: mrmoM value: rwmidM
                 }
@@ -7285,7 +7419,8 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
         return 0
     }
     mname: "\{tname}\{sfx}"
-    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
+    vsD9: (Map String value: u64)
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs valSubs: vsD9 fallbackArg: 0
     if mid == 0 then {
         return 0
     }
@@ -7314,6 +7449,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
     tk0: genericTypeKey ty: st.typing reg: st.reg tid: tplId
     sfx: "".string
     subs: (Map String value: u64)
+    valSubs2: (Map String value: u64)
     numParamNames9: (List String)
     numParamVals9: (List String)
     firstA: 0.u64
@@ -7365,6 +7501,14 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
                     numParamNames9.append npn0
                     npv0: an.copy
                     numParamVals9.append npv0
+                    pdv0: parseDecimalU64 text: an.stringview
+                    match (
+                        pdv0
+                    ) case some then {
+                        vgk0: pk0.copy
+                        vgv0: pdv0
+                        valSubs2.set key: vgk0 value: vgv0
+                    } case none then {}
                 }
             } else {
                 ao: walkLookupTyperef ty: st.typing currentUnit: unitName base: an.stringview
@@ -7397,7 +7541,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
         return 0
     }
     mname: "\{tname}\{sfx}"
-    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: firstA
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs valSubs: valSubs2 fallbackArg: firstA
     if mid == 0 then {
         return 0
     }
@@ -8447,7 +8591,8 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                             sk0: "of".string
                             sv0: elo
                             asubs.set key: sk0 value: sv0
-                            amid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: amn.stringview templateId: ato subs: asubs fallbackArg: 0
+                            vsE9: (Map String value: u64)
+                            amid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: amn.stringview templateId: ato subs: asubs valSubs: vsE9 fallbackArg: 0
                             asfx: "_\{den}_\{ecnt}"
                             mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: amn.stringview monoId: amid templateName: "array" suffix: asfx.stringview elemArg: elo valArg: 0
                             setar: amid
@@ -9215,7 +9360,8 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Nod
                 ov0: payId0
                 osubs0.set key: ok0 value: ov0
                 omn0: "optionval_\{vtn0}"
-                omid0: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 fallbackArg: 0
+                vsF9: (Map String value: u64)
+                omid0: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: omn0.stringview templateId: ovo0 subs: osubs0 valSubs: vsF9 fallbackArg: 0
                 if omid0 > 0 then {
                     result = omid0
                 }
@@ -9445,7 +9591,8 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List No
                 lsubs9.set key: lk9 value: lv9
                 lsfx9: "_\{en9}"
                 lmn9: "List\{lsfx9}"
-                lmid9: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 fallbackArg: 0
+                vsG9: (Map String value: u64)
+                lmid9: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: lmn9.stringview templateId: lto9 subs: lsubs9 valSubs: vsG9 fallbackArg: 0
                 if lmid9 > 0 then {
                     setf9: lmid9
                     st.typing.nodeType.set key: fornode.nodeid.u64 value: setf9
@@ -10513,7 +10660,8 @@ checkBoxConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitB
     sk: "t".string
     sv: vt
     subs.set key: sk value: sv
-    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs fallbackArg: 0
+    vsJ9: (Map String value: u64)
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: tplId subs: subs valSubs: vsJ9 fallbackArg: 0
     if mid == 0 then {
         return 0
     }
@@ -11024,7 +11172,8 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                         pv2: subT
                                         subs2.set key: pk2 value: pv2
                                     }
-                                    mintedT: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 fallbackArg: subT
+                                    vsH9: (Map String value: u64)
+                                    mintedT: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname2.stringview templateId: dtp subs: subs2 valSubs: vsH9 fallbackArg: subT
                                     if mintedT > 0 then {
                                         setgu: mintedT
                                         st.typing.nodeType.set key: call.nodeid.u64 value: setgu
@@ -11508,7 +11657,8 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     } case none then {
         wasNew = true
     }
-    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: funcId subs: subs fallbackArg: 0
+    vsI9: (Map String value: u64)
+    mid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: mname.stringview templateId: funcId subs: subs valSubs: vsI9 fallbackArg: 0
     rno: st.typing.funcReturnNode.get key: funcId
     match (
         rno
