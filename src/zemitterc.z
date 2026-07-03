@@ -636,6 +636,11 @@ builtinTid: function {symtab: zenv.ZSymbolTable base: StringView} out u64 is {
 # originTidOf -- a type's genericOriginId (the template it monomorphized from), or
 # 0 when it has none. The id form of monoOriginName.
 originTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
+    # a partial spec (GENERIC_PARAM typetype) is trie bookkeeping, never an
+    # emittable mono; origin-keyed sweeps must not select it
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.GENERIC_PARAM then {
+        return 0
+    }
     t: symtab.reg.typeById.get key: tid
     match (
         t
@@ -10314,6 +10319,10 @@ applyTmpl: function {text: String key: StringView val: StringView} out String is
 # monoOriginName -- the template name a mono derives from (List/Map/Set),
 # "" when not a mono.
 monoOriginName: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
+    # partial specs (GENERIC_PARAM typetype) are trie bookkeeping, not monos
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.GENERIC_PARAM then {
+        return "".string
+    }
     t: symtab.reg.typeById.get key: tid
     match (
         t
@@ -10551,16 +10560,24 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
 # used (the ListIter / OptionView monos were minted). The OptionView mono is
 # emitted by the earlier OptionView pass, so this can reference it.
 emitListIter: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 nm: StringView elemName: StringView buf: String.borrow} is {
-    liName: "ListIter_\{elemName}".string
-    liId: monoIdByName symtab: symtab name: liName.stringview
+    liId: monoMethodReturn symtab: symtab monoId: monoId mname: "iterate"
+    if liId == 0 then {
+        liNameF: "ListIter_\{elemName}"
+        liId = monoIdByName symtab: symtab name: liNameF.stringview
+    }
     if liId == 0 then {
         return
     }
-    ovName: "OptionView_\{elemName}".string
-    ovId: monoIdByName symtab: symtab name: ovName.stringview
+    liName: typeNameOfReg9 symtab: symtab tid: liId
+    ovId: monoMethodReturn symtab: symtab monoId: liId mname: "call"
+    if ovId == 0 then {
+        ovNameF: "OptionView_\{elemName}"
+        ovId = monoIdByName symtab: symtab name: ovNameF.stringview
+    }
     if ovId == 0 then {
         return
     }
+    ovName: typeNameOfReg9 symtab: symtab tid: ovId
     li: cbaseNoPrefix tid: liId name: liName.stringview
     ov: cbaseNoPrefix tid: ovId name: ovName.stringview
     ovu: cUpperOf text: ovName.stringview
@@ -10847,6 +10864,24 @@ monoIdByName: function {symtab: zenv.ZSymbolTable name: StringView} out u64 is {
     }
 }
 
+# monoMethodReturn -- a mono method child's registered return id (0 when the
+# method or its return is absent). The id-first way to reach a collection's
+# iterator/view/wrapper companions.
+monoMethodReturn: function {symtab: zenv.ZSymbolTable monoId: u64 mname: StringView} out u64 is {
+    co: symtab.typing.childOf parentTypeId: monoId name: mname
+    match (
+        co
+    ) case some then {
+        mro: ztypecheck.methodReturnOf st: symtab mid: co
+        match (
+            mro
+        ) case some then {
+            return mro
+        } case none then {}
+    } case none then {}
+    return 0
+}
+
 # monoElemName -- a mono name's element segment, dropping a known prefix
 # (e.g. "Set_i64" with prefixLen 4 -> "i64"). Substring rides String.stringview
 # (a bare StringView receiver mis-resolves `from:/to:` to a .create).
@@ -10963,16 +10998,24 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     itemT: cTypeForNameTid symtab: symtab ctx: ctx name: elemName.stringview tid: elemTid
     ekind: keyHashKind symtab: symtab ctx: ctx tid: elemTid
     isStr: ekind == 1
-    ovName: "OptionView_\{elemName}".string
-    ovId: monoIdByName symtab: symtab name: ovName.stringview
-    siName: "SetIter_\{elemName}".string
-    siId: monoIdByName symtab: symtab name: siName.stringview
-    if ovId == 0 then {
-        return
+    siId: monoMethodReturn symtab: symtab monoId: monoId mname: "iterate"
+    if siId == 0 then {
+        siNameF: "SetIter_\{elemName}"
+        siId = monoIdByName symtab: symtab name: siNameF.stringview
     }
     if siId == 0 then {
         return
     }
+    siName: typeNameOfReg9 symtab: symtab tid: siId
+    ovId: monoMethodReturn symtab: symtab monoId: siId mname: "call"
+    if ovId == 0 then {
+        ovNameF: "OptionView_\{elemName}"
+        ovId = monoIdByName symtab: symtab name: ovNameF.stringview
+    }
+    if ovId == 0 then {
+        return
+    }
+    ovName: typeNameOfReg9 symtab: symtab tid: ovId
     ov: cbaseNoPrefix tid: ovId name: ovName.stringview
     ovu: cUpperOf text: ovName.stringview
     si: cbaseNoPrefix tid: siId name: siName.stringview
@@ -11081,32 +11124,58 @@ mapValFreeStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx valName: StringView
 # emitted only when those iterator monos were minted. Their OptionView returns
 # (OptionView_<K>, OptionView_MapEntry_<K>_<V>) are defined by the earlier
 # OptionView leg.
-emitMapIters: function {symtab: zenv.ZSymbolTable runtimeDir: StringView nm: StringView keyName: StringView valName: StringView keyT: StringView valT: StringView buf: String.borrow} is {
-    miiName: "MapItemIter_\{keyName}_\{valName}".string
-    miiId: monoIdByName symtab: symtab name: miiName.stringview
+emitMapIters: function {symtab: zenv.ZSymbolTable monoId: u64 runtimeDir: StringView nm: StringView keyName: StringView valName: StringView keyT: StringView valT: StringView buf: String.borrow} is {
+    miiId: monoMethodReturn symtab: symtab monoId: monoId mname: "iterateItems"
+    if miiId == 0 then {
+        miiNameF: "MapItemIter_\{keyName}_\{valName}"
+        miiId = monoIdByName symtab: symtab name: miiNameF.stringview
+    }
     if miiId == 0 then {
         return
     }
-    mkiName: "MapKeyIter_\{keyName}_\{valName}".string
-    mkiId: monoIdByName symtab: symtab name: mkiName.stringview
-    meName: "MapEntry_\{keyName}_\{valName}".string
-    meId: monoIdByName symtab: symtab name: meName.stringview
-    ovkName: "OptionView_\{keyName}".string
-    ovkId: monoIdByName symtab: symtab name: ovkName.stringview
-    oveName: "OptionView_\{meName}".string
-    oveId: monoIdByName symtab: symtab name: oveName.stringview
+    miiName: typeNameOfReg9 symtab: symtab tid: miiId
+    mkiId: monoMethodReturn symtab: symtab monoId: monoId mname: "iterate"
+    if mkiId == 0 then {
+        mkiNameF: "MapKeyIter_\{keyName}_\{valName}"
+        mkiId = monoIdByName symtab: symtab name: mkiNameF.stringview
+    }
     if mkiId == 0 then {
         return
     }
-    if meId == 0 then {
-        return
+    mkiName: typeNameOfReg9 symtab: symtab tid: mkiId
+    ovkId: monoMethodReturn symtab: symtab monoId: mkiId mname: "call"
+    if ovkId == 0 then {
+        ovkNameF: "OptionView_\{keyName}"
+        ovkId = monoIdByName symtab: symtab name: ovkNameF.stringview
     }
     if ovkId == 0 then {
         return
     }
+    ovkName: typeNameOfReg9 symtab: symtab tid: ovkId
+    oveId: monoMethodReturn symtab: symtab monoId: miiId mname: "call"
+    if oveId == 0 then {
+        oveNameF: "OptionView_MapEntry_\{keyName}_\{valName}"
+        oveId = monoIdByName symtab: symtab name: oveNameF.stringview
+    }
     if oveId == 0 then {
         return
     }
+    oveName: typeNameOfReg9 symtab: symtab tid: oveId
+    meId: 0.u64
+    meo: symtab.typing.childOf parentTypeId: oveId name: "some"
+    match (
+        meo
+    ) case some then {
+        meId = meo
+    } case none then {}
+    if meId == 0 then {
+        meNameF: "MapEntry_\{keyName}_\{valName}"
+        meId = monoIdByName symtab: symtab name: meNameF.stringview
+    }
+    if meId == 0 then {
+        return
+    }
+    meName: typeNameOfReg9 symtab: symtab tid: meId
     mki: cbaseNoPrefix tid: mkiId name: mkiName.stringview
     mii: cbaseNoPrefix tid: miiId name: miiName.stringview
     me: cbaseNoPrefix tid: meId name: meName.stringview
@@ -11303,7 +11372,7 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     } case err then {
         return
     }
-    emitMapIters symtab: symtab runtimeDir: runtimeDir nm: nm.stringview keyName: keyName.stringview valName: valName.stringview keyT: keyT.stringview valT: valT.stringview buf: buf
+    emitMapIters symtab: symtab monoId: monoId runtimeDir: runtimeDir nm: nm.stringview keyName: keyName.stringview valName: valName.stringview keyT: keyT.stringview valT: valT.stringview buf: buf
 }
 
 # emitMonos -- emit every collection-mono instance in the registry (List

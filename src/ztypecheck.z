@@ -1338,6 +1338,122 @@ returnParamTid: function {reg: ztypes.ZTypeRegistry enclKey: StringView o: Optio
     return 0
 }
 
+# partialTyperefTid -- resolve a composite parameterized typeref inside a
+# template method signature ((ListIter of: of), nested (OptionView t:
+# (MapEntry key: key value: value))) to a spec through the trie. An argument
+# naming one of the enclosing template's generic params uses its param tid,
+# so the resulting spec is PARTIAL and the clone-side respecialize completes
+# it per instance. 0 when the node is not a composite call, no argument is a
+# generic param, or any part is unresolvable.
+partialTyperefTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView enclKey: StringView n: Node} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (partialTyperefTid ty: ty reg: reg units: units unitName: unitName enclKey: enclKey n: n.expression)
+    } case dottedpath then {
+        dcn6: atomName n: n.child
+        if (isStripMarker name: dcn6.stringview) then {
+            return (partialTyperefTid ty: ty reg: reg units: units unitName: unitName enclKey: enclKey n: n.parent)
+        }
+        return 0
+    } case call then {
+        tname6: atomName n: n.callable
+        if tname6.length == 0 then {
+            return 0
+        }
+        sfx6: "".string
+        subs6: (Map String value: u64)
+        allOk6: true
+        hasParam6: false
+        aiter6: n.arguments.iterate
+        for arg6: aiter6 loop {
+            match (
+                arg6
+            ) case namedoperation then {
+                an6: atomName n: arg6.operation
+                if (isNumericLiteralName name: an6.stringview) then {
+                    allOk6 = false
+                } else {
+                    aid6: 0.u64
+                    if an6.length == 0 then {
+                        aid6 = partialTyperefTid ty: ty reg: reg units: units unitName: unitName enclKey: enclKey n: arg6.operation
+                        if aid6 > 0 then {
+                            hasParam6 = true
+                        }
+                    } else {
+                        if (reg.isGenericParamOf typeKey: enclKey name: an6.stringview) then {
+                            po6: reg.genericParamTidOf typeKey: enclKey paramName: an6.stringview
+                            match (
+                                po6
+                            ) case some then {
+                                aid6 = po6
+                            } case none then {
+                                aid6 = reg.newType name: an6.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                                reg.setGenericParamTid typeKey: enclKey paramName: an6.stringview tid: aid6
+                            }
+                            hasParam6 = true
+                        } else {
+                            ao6: walkLookupTyperef ty: ty currentUnit: unitName base: an6.stringview
+                            aid6 = optU64Or o: ao6 d: 0
+                            if aid6 == 0 then {
+                                duo6: definingUnitFor ty: ty currentUnit: unitName name: an6.stringview
+                                if duo6.length > 0 then {
+                                    aid6 = descendNamed ty: ty reg: reg units: units defUnit: duo6.stringview name: an6.stringview
+                                }
+                            }
+                        }
+                    }
+                    if aid6 == 0 then {
+                        allOk6 = false
+                    } else {
+                        sfx6.append s: "_"
+                        vn6: monoValName ty: ty reg: reg tid: aid6
+                        sfx6.append s: vn6.stringview
+                        pn6: unitLabel o: arg6.name
+                        sk6: pn6.copy
+                        sv6: aid6
+                        subs6.set key: sk6 value: sv6
+                    }
+                }
+            } else {}
+        }
+        if allOk6 == false then {
+            return 0
+        }
+        if hasParam6 == false then {
+            return 0
+        }
+        if sfx6.length == 0 then {
+            return 0
+        }
+        tplO6: walkLookupTyperef ty: ty currentUnit: unitName base: tname6.stringview
+        tplId6: optU64Or o: tplO6 d: 0
+        if tplId6 == 0 then {
+            tduo6: definingUnitFor ty: ty currentUnit: unitName name: tname6.stringview
+            if tduo6.length > 0 then {
+                tplId6 = descendNamed ty: ty reg: reg units: units defUnit: tduo6.stringview name: tname6.stringview
+            }
+        }
+        if tplId6 == 0 then {
+            return 0
+        }
+        mn6: "\{tname6}\{sfx6}"
+        mainName6: reg.regMainUnit.stringview
+        return (getOrMintSpec ty: ty reg: reg mainName: mainName6 name: mn6.stringview templateId: tplId6 subs: subs6 fallbackArg: 0)
+    } else {}
+    return 0
+}
+
+# partialReturnTid -- partialTyperefTid over a function's return typeref.
+partialReturnTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView enclKey: StringView o: Option Node} out u64 is {
+    match (
+        o
+    ) case some then {
+        return (partialTyperefTid ty: ty reg: reg units: units unitName: unitName enclKey: enclKey n: o)
+    } case none then {}
+    return 0
+}
+
 # stampGenericParamRef -- a return typeref naming one of the enclosing
 # template's generic params stamps the unit's generic-param type directly
 # (generic params live outside the name-resolution table).
@@ -1873,6 +1989,22 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
     rpt4: returnParamTid reg: reg enclKey: enclKey.stringview o: fnode.returntype
     if rpt4 > 0 then {
         reg.setReturnType typeId: fid value: rpt4
+    }
+    if rpt4 == 0 when unitName == "collections" then {
+        # collection template methods declare composite parameterized returns
+        # ((ListIter of: of).borrow); they resolve to partial specs so clones
+        # heal through respecialize. Map.get/remove keep their value-kind
+        # wrapper projection (optionval/Option/OptionView by the value's
+        # nature) and are skipped here.
+        skipPr4: false
+        if defName == "Map.get" then { skipPr4 = true }
+        if defName == "Map.remove" then { skipPr4 = true }
+        if skipPr4 == false then {
+            prt4: partialReturnTid ty: ty reg: reg units: units unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
+            if prt4 > 0 then {
+                reg.setReturnType typeId: fid value: prt4
+            }
+        }
     }
     if (returnHasBorrowMarker o: fnode.returntype) then {
         fbk: fid
@@ -5939,7 +6071,12 @@ cloneMethodInto: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
                 rt5 = rr5
             }
         }
-        reg.setReturnType typeId: fid5 value: rt5
+        # a return still GENERIC_PARAM-typed (a partial the subs could not
+        # complete -- multi-param chains mint with empty subs) stays unset;
+        # the name-keyed fixup arms heal it after minting
+        if (reg.typetypeOf typeId: rt5) != ztypes.ztypetype.GENERIC_PARAM then {
+            reg.setReturnType typeId: fid5 value: rt5
+        }
     }
     ty.setChild parentTypeId: specId childName: m childTypeId: fid5
 }
@@ -6566,7 +6703,29 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
             pi8 = pi8 + 1
         }
     }
-    mid8: mintMono ty: ty reg: reg mainName: mainName name: name templateId: templateId subs: subs idSubs: idSubs8 fallbackArg: fallbackArg
+    hasParamKey8: false
+    if trieOk8 then {
+        hk8: 0.u64
+        hn8: keys8.length
+        for hk8 < hn8 loop {
+            hv8: keys8.get i: hk8
+            if (reg.typetypeOf typeId: hv8) == ztypes.ztypetype.GENERIC_PARAM then {
+                hasParamKey8 = true
+            }
+            hk8 = hk8 + 1
+        }
+    }
+    mid8: 0.u64
+    if hasParamKey8 then {
+        # a generic-param arg makes the spec PARTIAL: a trie-only entry that
+        # is never emitted or name-registered; the clone-side respecialize
+        # completes it with concrete args per instance.
+        pnmP8: "\{name}__partial"
+        mid8 = reg.newType name: pnmP8.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+        reg.setGenericOrigin typeId: mid8 value: templateId
+    } else {
+        mid8 = mintMono ty: ty reg: reg mainName: mainName name: name templateId: templateId subs: subs idSubs: idSubs8 fallbackArg: fallbackArg
+    }
     if trieOk8 when mid8 > 0 then {
         cur9: templateId
         ki9: 0.u64
