@@ -399,7 +399,7 @@ defTypetypeOf: function {defn: Node name: StringView} out optionval ztypes.ztype
 }
 
 # definingUnitFor -- the unit that defines `name` for a reference in `currentUnit`,
-# by lookupTyperef's precedence (the current unit shadows stdlib). "" when no
+# by bare-name visibility order (the current unit shadows stdlib). "" when no
 # indexed unit declares it (generic params, this/numerics, forward refs to a
 # nonexistent type) -- the caller then mints a shell exactly as before. Empty
 # string is a safe sentinel: a unit name is never empty.
@@ -2511,7 +2511,7 @@ dottedParentName: function {n: Node} out String is {
 
 # dottedTyperefId -- the type id of a cross-unit qualified type ref `unit.Type`
 # (e.g. the `zvfs.ProviderBox` element of a `(List of: zvfs.ProviderBox)`),
-# resolved through the defining unit's scope. lookupTyperef searches only
+# resolved through the defining unit's scope. Bare-name visibility covers only
 # main+system, so a dep element misses there; this bridges via unitTypes +
 # resolved. 0 when not a dotted ref or unresolved.
 dottedTyperefId: function {st: zenv.ZSymbolTable op: Node} out u64 is {
@@ -5737,39 +5737,6 @@ resolveMainUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRe
 # typecheck -- entry point. Registers a UNIT type per unit and resolves the main
 # unit's definition signatures, then demand-resolves the cross-unit types those
 # signatures referenced. The registry is supplied by the caller, read by the dumper.
-# lookupTyperef -- resolve a recorded base name to its real type id. Searches the
-# `mainName` unit first, then the stdlib units (system, collections, io, core, os,
-# cli); first match wins, so the searched unit's type shadows a same-named stdlib
-# type. Despite its name, `mainName` is the SEARCH-ROOT unit -- the CURRENT unit at
-# most call sites (resolution is current-unit-relative, mirroring docs/units.pdoc),
-# the program's main unit at a few. none when unresolved (numeric-literal shells).
-lookupTyperef: function {resolved: (Map String value: u64) mainName: StringView base: StringView} out optionval u64 is {
-    units: (List String)
-    units.append mainName.string
-    units.append "system".string
-    units.append "collections".string
-    units.append "io".string
-    units.append "core".string
-    units.append "os".string
-    units.append "cli".string
-    found: (optionval.none u64)
-    done: false
-    uit: units.iterate
-    for u: uit loop {
-        if (done) == false then {
-            k: "\{u}.\{base}".string
-            r: resolved.get key: k
-            match (
-                r
-            ) case some then {
-                found = (optionval.some r)
-                done = true
-            } case none then {}
-        }
-    }
-    return found
-}
-
 # builtinTidTc -- the canonical registry id of a stdlib builtin by base name
 # (mainName "" so a user type of the same name never shadows it). 0 when absent.
 builtinTidT: function {ty: ztyping.ZTyping base: StringView} out u64 is {
@@ -7325,7 +7292,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
             pk0: unitLabel o: arg.name
             # An elided leading type argument (`(List zvfs.ProviderBox)`) binds
             # the primary generic param: probe the unnamed first arg as a type
-            # (atom via lookupTyperef, cross-unit dotted via dottedTyperefId).
+            # (atom via walkLookupTyperef, cross-unit dotted via dottedTyperefId).
             # Only a real type rebinds; a value first arg (`(box 5)`) keeps its
             # empty label so the field-bound inference leg owns the call.
             if pk0.length == 0 when argIdx == 0 then {
@@ -10991,7 +10958,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                                 subT = optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: etn.stringview) d: 0
                                                 if subT == 0 then {
                                                     # a cross-unit type arg (optionval.none ztypes.zlockstate):
-                                                    # paramTypeBaseName/lookupTyperef miss a dotted ref, resolve cross-unit.
+                                                    # paramTypeBaseName/walkLookupTyperef miss a dotted ref, resolve cross-unit.
                                                     subT = dottedTyperefId st: st op: farg.operation
                                                 }
                                             } else {
@@ -13368,8 +13335,9 @@ optEqU64: function {a: optionval u64 b: optionval u64} out bool is {
 }
 
 # Resolve a bare type name to its id through the units-as-containers hierarchy,
-# using lookupTyperef's unit precedence (the current unit shadows stdlib). The
-# childOf-based mirror of lookupTyperef.
+# over the bare-name visibility order (the current unit shadows the stdlib
+# units: system, collections, io, core, os, cli) -- the ONE encoding of that
+# order on the id side (definingUnitFor is its index-side counterpart).
 walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: StringView} out optionval u64 is {
     units: (List String)
     units.append currentUnit.string
@@ -13400,22 +13368,6 @@ walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: S
         }
     }
     return found
-}
-
-# Append every top-level definition name in a unit body to the names list.
-collectDefNames: function {unitop: Node names: List String} is {
-    match (
-        unitop
-    ) case unitdef then {
-        with bit: unitop.body.iterate do for bm: bit loop {
-            match (
-                bm
-            ) case namedoperation then {
-                dn: unitLabel o: bm.name
-                names.append dn.copy
-            } else {}
-        }
-    } else {}
 }
 
 # Record (unit -> top-level def) child edges for one unit, mapping each resolved
@@ -13463,42 +13415,7 @@ populateUnitChildren: function {ty: ztyping.ZTyping program: Node} is {
     } else {}
 }
 
-# Assert the childOf walk resolves every (unit context, definition name) pair to
-# the same id as the lookupTyperef ladder; panic on the first divergence. Run
-# only under the resolve-guard gate (typecheck checkResolve true).
-crossCheckResolution: function {ty: ztyping.ZTyping program: Node} is {
-    units: (List String)
-    names: (List String)
-    match (
-        program
-    ) case program then {
-        with uit: program.units.iterate do for ru: uit loop {
-            match (
-                ru
-            ) case namedoperation then {
-                unm: unitLabel o: ru.name
-                units.append unm.copy
-                collectDefNames unitop: ru.operation names: names
-            } else {}
-        }
-    } else {}
-    vit: units.iterate
-    for v: vit loop {
-        vs: v.copy
-        nit: names.iterate
-        for n: nit loop {
-            ns: n.copy
-            ao: walkLookupTyperef ty: ty currentUnit: vs.stringview base: ns.stringview
-            bo: lookupTyperef resolved: ty.resolved mainName: vs.stringview base: ns.stringview
-            if (optEqU64 a: ao b: bo) == false then {
-                emsg: "resolve-guard: childOf walk != ladder for ctx=\{vs} name=\{ns}".string
-                panic msg: emsg.stringview
-            }
-        }
-    }
-}
-
-typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool checkResolve: bool} out zenv.ZSymbolTable is {
+typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     match (
         program
@@ -13533,9 +13450,6 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool che
     }
     resolveTypeAliases ty: st.typing
     populateUnitChildren ty: st.typing program: program
-    if checkResolve then {
-        crossCheckResolution ty: st.typing program: program
-    }
     match (
         program
     ) case program then {
