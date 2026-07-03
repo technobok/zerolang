@@ -4274,8 +4274,8 @@ onFirstEntry: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
 # demands, then body-drains the main unit (full mode) and every dependency unit
 # except core to a joint fixpoint; each resolved def's own references descend
 # inline (resolveAtomType -> descendNamed), so per-unit body order only decides
-# trigger order, not dependency order. Runs before resolveCrossUnitDemand, which
-# is asserted to find nothing left.
+# trigger order, not dependency order. The tail resolves core's bool
+# re-exports explicitly (descent skips core).
 resolveDemandsByDescent: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
     seedBodyWalkDemands reg: reg program: program
     if (reg.isDemanded name: "print") then {
@@ -4346,171 +4346,12 @@ resolveDemandsByDescent: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             }
         }
     } else {}
-}
-
-# resolveCrossUnitDemand -- resolve the cross-unit types main-unit signatures
-# referenced (io / collections / system, each by demanded name plus its
-# conformance declarers). Under full, an io demand also seeds the io-internal
-# closure (stream protocols / IoError / seekorigin); the signature-only
-# reference resolves no io at all, so the seed must stay sigonly-silent.
-resolveCrossUnitDemand: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
-    seedBodyWalkDemands reg: reg program: program
-    # print is generic over StringLike; its signature closure pulls StringLike
-    # (system) + str + List (collections, which seeds ListIter/ListView and the
-    # str->Text conformance). Seed it like the iterator/system closures.
-    if (reg.isDemanded name: "print") then {
-        reg.recordDemand name: "StringLike"
-        reg.recordDemand name: "str"
-        reg.recordDemand name: "List"
-    }
-
-    match (
-        program
-    ) case program then {
-        if full then {
-            muN2: program.units.length
-            muI2: 0.u64
-            for muI2 < muN2 loop {
-                mu: program.units.get i: muI2
-                muI2 = muI2 + 1
-                match (
-                    mu
-                ) case namedoperation then {
-                    mnm: unitLabel o: mu.name
-                    if mnm.stringview == program.mainUnitName.stringview then {
-                        # main-unit demand fixpoint: signatures and body scans
-                        # demand main-unit definitions transitively (a demanded
-                        # record's fields demand further records), so iterate
-                        # until no new types mint.
-                        again: true
-                        for again loop {
-                            before: reg.nextTypeId
-                            resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: mnm.stringview shadowUnit: "" unitdef: mu.operation
-                            if reg.nextTypeId == before then {
-                                again = false
-                            }
-                        }
-                        fixupDemandedParamOwnership ty: ty reg: reg unitName: mnm.stringview unitdef: mu.operation
-                    }
-                } else {
-                }
-            }
-        }
-        # cross-unit signature closure: a later leg's resolution demands
-        # names an earlier leg already passed (os.setEnv -> io.IoError),
-        # so the per-unit legs run to a joint fixpoint.
-        againU: true
-        for againU loop {
-            beforeU: reg.nextTypeId
-            uN3: program.units.length
-            uI3: 0.u64
-            for uI3 < uN3 loop {
-                u: program.units.get i: uI3
-                uI3 = uI3 + 1
-                match (
-                    u
-                ) case namedoperation then {
-                    nm: unitLabel o: u.name
-                    if nm.stringview == "io" then {
-                        anyDemandedIo: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                        if anyDemandedIo then {
-                            if full then {
-                                seedIoDemands reg: reg
-                            }
-                            # signature-closure fixpoint: a resolved signature
-                            # demands types an earlier body position already
-                            # passed (lstat -> filestat -> filekind).
-                            again9: true
-                            for again9 loop {
-                                before9: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "io" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                                if reg.nextTypeId == before9 then {
-                                    again9 = false
-                                }
-                            }
-                            resolveConformanceDefs ty: ty reg: reg units: program.units unitName: "io" unitdef: u.operation
-                        }
-                    }
-                    if nm.stringview == "collections" then {
-                        seedIteratorDemands reg: reg
-                        anyDemanded: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "collections" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                        if anyDemanded then {
-                            resolveConformanceDefs ty: ty reg: reg units: program.units unitName: "collections" unitdef: u.operation
-                        }
-                    }
-                    if nm.stringview == "system" then {
-                        seedSystemDemands reg: reg
-                        anyDemandedSys: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "system" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                        if anyDemandedSys then {
-                            resolveConformanceDefs ty: ty reg: reg units: program.units unitName: "system" unitdef: u.operation
-                        }
-                    }
-                    if nm.stringview == "os" then {
-                        anyDemandedOs: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                        if anyDemandedOs then {
-                            again10: true
-                            for again10 loop {
-                                before10: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "os" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                                if reg.nextTypeId == before10 then {
-                                    again10 = false
-                                }
-                            }
-                        }
-                    }
-                    if nm.stringview == "cli" then {
-                        anyDemandedCli: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                        if anyDemandedCli then {
-                            again11: true
-                            for again11 loop {
-                                before11: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: "cli" shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                                if reg.nextTypeId == before11 then {
-                                    again11 = false
-                                }
-                            }
-                        }
-                    }
-                    isKnown9: false
-                    if nm.stringview == program.mainUnitName.stringview then { isKnown9 = true }
-                    if nm.stringview == "io" then { isKnown9 = true }
-                    if nm.stringview == "collections" then { isKnown9 = true }
-                    if nm.stringview == "system" then { isKnown9 = true }
-                    if nm.stringview == "core" then { isKnown9 = true }
-                    if nm.stringview == "os" then { isKnown9 = true }
-                    if nm.stringview == "cli" then { isKnown9 = true }
-                    if (isKnown9) == false then {
-                        # a USER dependency unit: resolve its demanded member
-                        # signatures (the reference's on-demand cross-unit
-                        # resolution); its functions have bodies, so the
-                        # body walks need return/never resolved.
-                        anyDemandedUser: resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                        if anyDemandedUser then {
-                            reg.recordDemand name: "return"
-                            reg.recordDemand name: "never"
-                            scanDemandedDepClassBodies reg: reg unitdef: u.operation
-                            again12: true
-                            for again12 loop {
-                                before12: reg.nextTypeId
-                                resolveDemandedUnitBody ty: ty reg: reg units: program.units unitName: nm.stringview shadowUnit: program.mainUnitName.stringview unitdef: u.operation
-                                if reg.nextTypeId == before12 then {
-                                    again12 = false
-                                }
-                            }
-                        }
-                    }
-                } else {}
-            }
-            if reg.nextTypeId == beforeU then {
-                againU = false
-            }
-        }
-    } else {}
     # bare bool literals resolve through core's true/false re-exports
     # (`false: bool.false`): the constant registers as the bool type and
     # its definition's dotted ref stamps bool. Core's other members are
     # unit aliases the demand sweep must NOT resolve, so this walks only
-    # the two names (post-sweep: bool is resolved by now).
+    # the two names (post-sweep: bool is resolved by now). Descent skips
+    # core by design; this is the driver's explicit core leg.
     wantBool: reg.isDemanded name: "true"
     if (reg.isDemanded name: "false") then {
         wantBool = true
@@ -5748,7 +5589,7 @@ builtinTidTc: function {st: zenv.ZSymbolTable base: StringView} out u64 is {
 }
 
 # stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
-# resolved type. Runs after resolveCrossUnitDemand, so system + forward refs are present
+# resolved type. Runs after the demand descent, so system + forward refs are present
 # in ty.resolved. pendingTyperef is a sibling field of resolved / nodeType (no lock
 # conflict). The widened typed_nodes differential reads the resulting nodeType rows.
 stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
@@ -13433,21 +13274,6 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
         scanMainBodyCalls reg: st.reg program: program
     }
     resolveDemandsByDescent ty: st.typing reg: st.reg program: program full: full
-    ndBefore0: st.reg.nextTypeId
-    resolveCrossUnitDemand ty: st.typing reg: st.reg program: program full: full
-    if st.reg.nextTypeId != ndBefore0 then {
-        di0: ndBefore0
-        for di0 < st.reg.nextTypeId loop {
-            dt0: st.reg.typeById.get key: di0
-            match (
-                dt0
-            ) case some then {
-                print "drain-resolved: \{dt0.name}"
-            } case none then {}
-            di0 = di0 + 1
-        }
-        panic msg: "stage2 assert: demand drain resolved types the descent missed"
-    }
     resolveTypeAliases ty: st.typing
     populateUnitChildren ty: st.typing program: program
     match (
