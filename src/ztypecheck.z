@@ -132,9 +132,9 @@ atomName: function {n: Node} out String is {
 
 # addError -- append a typecheck diagnostic to the typing's error list,
 # deduped by node position so a spec resolved more than once reports once.
-# addCycleError -- a resolution-cycle diagnostic raised from the descent
-# core, which holds no source node: location-free, deduped by message.
-addCycleError: function {ty: ztyping.ZTyping msg: String} is {
+# addResolveError -- a diagnostic raised from the resolution core, which
+# holds no source node: location-free, deduped by message.
+addResolveError: function {ty: ztyping.ZTyping e: zast.err msg: String} is {
     dup9: false
     with eit9: ty.errors.iterate do for pe9: eit9 loop {
         if pe9.msg.stringview == msg.stringview then {
@@ -144,7 +144,7 @@ addCycleError: function {ty: ztyping.ZTyping msg: String} is {
     if (dup9) == false then {
         en9: "".string
         eh9: "".string
-        ty.errors.append (zast.ErrorData nodeid: 0 lineno: 0 colno: 0 width: 1 err: zast.err.TYPEERROR msg: msg.copy fsno: 0 note: en9 hint: eh9)
+        ty.errors.append (zast.ErrorData nodeid: 0 lineno: 0 colno: 0 width: 1 err: e msg: msg.copy fsno: 0 note: en9 hint: eh9)
         ty.isError = true
     }
 }
@@ -849,9 +849,36 @@ registerGenericParams: function {reg: ztypes.ZTypeRegistry typeKey: StringView i
             if (isGenericParam op: m.operation) then {
                 pn: unitLabel o: m.name
                 cb: genericConstraintBase n: m.operation
-                reg.addGenericParam typeKey: typeKey paramName: pn.stringview constraint: cb.stringview
+                ckx9: genericConstraintKind n: m.operation
+                cf9x: cb.copy
+                if ckx9.length > 0 then {
+                    cf9x = "\{cb}.\{ckx9}"
+                }
+                reg.addGenericParam typeKey: typeKey paramName: pn.stringview constraint: cf9x.stringview
             }
         } else {}
+    }
+}
+
+# genericConstraintKind -- the value-kind leaf of a constraint declaration
+# (`Any.valtype` -> "valtype", `Any.reftype` -> "reftype"), "" for plain
+# `.generic` bounds.
+genericConstraintKind: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (genericConstraintKind n: n.expression)
+    } case dottedpath then {
+        cn9: atomName n: n.child
+        if cn9.stringview == "valtype" then {
+            return cn9
+        }
+        if cn9.stringview == "reftype" then {
+            return cn9
+        }
+        return "".string
+    } else {
+        return "".string
     }
 }
 
@@ -1718,6 +1745,10 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
     isgen: hasGenericParam items: fnode.asItems
     if isgen then {
         reg.setGeneric typeId: fid value: true
+        # Function templates register their param constraints like type
+        # templates do (checkGenericCall checks satisfaction per call).
+        fgtk9: "\{unitName}.\{defName}".string
+        registerGenericParams reg: reg typeKey: fgtk9.stringview items: fnode.asItems
         aiter2: fnode.asItems.iterate
         for am: aiter2 loop {
             match (
@@ -3114,7 +3145,7 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
             if ttv9 == ztypes.ztypetype.ENUM then { cycV9 = true }
             if cycV9 then {
                 cem9: "containment cycle: value type '\{defUnit}.\{name}' contains itself by value; box the field behind a class, union, or Option"
-                addCycleError ty: ty msg: cem9
+                addResolveError ty: ty e: zast.err.TYPEERROR msg: cem9
             }
         }
         return tid9
@@ -3249,7 +3280,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             # (overwritten by resolveTypeAliases) so the demand fixpoint terminates.
             if (ty.resolving.has item: tgtKey9) then {
                 aem9: "alias cycle: '\{unitName}.\{defName}' aliases '\{tgtKey9}' which is still resolving"
-                addCycleError ty: ty msg: aem9
+                addResolveError ty: ty e: zast.err.TYPEERROR msg: aem9
             }
             descendNamed ty: ty reg: reg units: units defUnit: apNm9.stringview name: acNm9.stringview
             tgo9: ty.resolved.get key: tgtKey9
@@ -6387,6 +6418,52 @@ mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valAr
 # name dedup still holds for those. On a miss the leaf materializes via mintMono; multi-level
 # paths mint intermediate nodes (genericOriginId = template, genericArgs =
 # the key prefix) that cache partial paths without being emitted.
+# checkConstraintSat -- a specialization argument against its parameter's
+# declared constraint. Any (and numeric bounds, which never reach the tree)
+# pass; value-kind constraints check typeIsValtype/typeIsReftype; StringLike
+# checks membership. GENERIC_PARAM args skip -- partial specs re-check on
+# completion. Location-free (the spec front door holds no source node).
+checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry typeKey: StringView paramName: StringView argTid: u64} is {
+    if (reg.typetypeOf typeId: argTid) == ztypes.ztypetype.GENERIC_PARAM then {
+        return
+    }
+    con9: reg.genericParamConstraintOf typeKey: typeKey paramName: paramName
+    if con9.length == 0 then {
+        return
+    }
+    cv9: con9.stringview
+    ok9: true
+    if cv9 == "Any.valtype" then {
+        ok9 = typeIsValtype ty: ty reg: reg tid: argTid
+    }
+    if cv9 == "Any.reftype" then {
+        rz9: reg.typeById.get key: argTid
+        rOk9: false
+        match (
+            rz9
+        ) case some then {
+            rv9: rz9.isValtype
+            match (
+                rv9
+            ) case some then {
+                rOk9 = rv9 == false
+            } case none then {
+            }
+        } case none then {
+        }
+        ok9 = rOk9
+    }
+    # StringLike enforcement is deferred: in a unit that shadows String, an
+    # interpolation's stamped type is the SHADOW (a name-era artifact -- the
+    # runtime value is the system String), so print/error/panic calls would
+    # false-positive. Enforce once interpolation stamps are canonical.
+    if (ok9) == false then {
+        an9: regTypeNameOf reg: reg tid: argTid
+        m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{typeKey}'"
+        addResolveError ty: ty e: zast.err.GENERICERROR msg: m9
+    }
+}
+
 getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) fallbackArg: u64} out u64 is {
     tk8: genericTypeKey ty: ty reg: reg tid: templateId
     pnames8: reg.genericParamNamesOf typeKey: tk8.stringview
@@ -6416,6 +6493,7 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         match (
             pgot8
         ) case some then {
+            checkConstraintSat ty: ty reg: reg typeKey: tk8.stringview paramName: pn8.stringview argTid: pgot8
             keys8.append pgot8
         } case none then {
             if fallbackArg > 0 when pnames8.length == 1 then {
@@ -11249,6 +11327,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
         return 0
     }
     allOk: true
+    gtk4: genericTypeKey ty: st.typing reg: st.reg tid: funcId
     giter2: gparams.iterate
     for gp3: giter2 loop {
         gv: gp3.stringview
@@ -11257,6 +11336,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
         match (
             ggot
         ) case some then {
+            checkConstraintSat ty: st.typing reg: st.reg typeKey: gtk4.stringview paramName: gv argTid: ggot
             an4: typeNameOf st: st tid: ggot
             mname.append s: "_"
             mname.append s: an4.stringview
