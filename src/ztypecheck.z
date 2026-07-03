@@ -2772,6 +2772,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         if defName == "List" then { famF3 = true }
                         if defName == "ListView" then { famF3 = true }
                         if defName == "Set" then { famF3 = true }
+                        if defName == "Map" then { famF3 = true }
                         if unitName == "collections" when famF3 then {
                             prodSkipL: false
                             if fname.stringview == "create" then { prodSkipL = true }
@@ -6896,6 +6897,60 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
         return
     }
+    # Map children come from the produced template methods; the length/
+    # capacity fields, the value-kind wrapper returns for get/remove
+    # (inexpressible in source), and the iterator chain links still
+    # materialize here, once per mono. Map has no create child (its
+    # construction path is separate).
+    if templateName == "Map" when valArg > 0 then {
+        mlenM: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: mlenM value: true
+        ty.markAsConstClone typeId: mlenM
+        ty.setChild parentTypeId: monoId childName: "length" childTypeId: mlenM
+        mcapM: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
+        reg.setValtype typeId: mcapM value: true
+        ty.markAsConstClone typeId: mcapM
+        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: mcapM
+        vnM: monoValName ty: ty reg: reg tid: valArg
+        mgoM: ty.childOf parentTypeId: monoId name: "get"
+        match (
+            mgoM
+        ) case some then {
+            wtplM: mapGetWrapperName ty: ty reg: reg valArg: valArg
+            wnM: "\{wtplM}_\{vnM}"
+            linkMonoReturn ty: ty reg: reg methodId: mgoM targetMono: wnM.stringview
+        } case none then {
+        }
+        mrmoM: ty.childOf parentTypeId: monoId name: "remove"
+        match (
+            mrmoM
+        ) case some then {
+            rwtM: "Option".string
+            if (typeIsValtype ty: ty reg: reg tid: valArg) then {
+                rwtM = "optionval".string
+            }
+            rwnM: "\{rwtM}_\{vnM}"
+            linkMonoReturn ty: ty reg: reg methodId: mrmoM targetMono: rwnM.stringview
+        } case none then {
+        }
+        mitoM: ty.childOf parentTypeId: monoId name: "iterate"
+        match (
+            mitoM
+        ) case some then {
+            kitnM: "MapKeyIter\{suffix}"
+            linkMonoReturn ty: ty reg: reg methodId: mitoM targetMono: kitnM.stringview
+        } case none then {
+        }
+        miioM: ty.childOf parentTypeId: monoId name: "iterateItems"
+        match (
+            miioM
+        ) case some then {
+            iitnM: "MapItemIter\{suffix}"
+            linkMonoReturn ty: ty reg: reg methodId: miioM targetMono: iitnM.stringview
+        } case none then {
+        }
+        return
+    }
     isSized: false
     if templateName == "str" then { isSized = true }
     if templateName == "array" then { isSized = true }
@@ -6924,45 +6979,6 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     } case none then {
     }
     en: regTypeNameOf reg: reg tid: elemArg
-    if templateName == "Map" when valArg > 0 then {
-        # Fresh u64 clones, mirroring the Set branch (see note there).
-        mlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        reg.setValtype typeId: mlen value: true
-        ty.markAsConstClone typeId: mlen
-        ty.setChild parentTypeId: monoId childName: "length" childTypeId: mlen
-        mcap: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
-        reg.setValtype typeId: mcap value: true
-        ty.markAsConstClone typeId: mcap
-        ty.setChild parentTypeId: monoId childName: "capacity" childTypeId: mcap
-        msId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "set"
-        mintTakeParam ty: ty reg: reg methodId: msId pname: "key" elemArg: elemArg
-        mintTakeParam ty: ty reg: reg methodId: msId pname: "value" elemArg: valArg
-        mgId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
-        mintBorrowParam ty: ty reg: reg methodId: mgId pname: "key" elemArg: elemArg
-        wtpl: mapGetWrapperName ty: ty reg: reg valArg: valArg
-        vn9: monoValName ty: ty reg: reg tid: valArg
-        wname: "\{wtpl}_\{vn9}"
-        linkMonoReturn ty: ty reg: reg methodId: mgId targetMono: wname.stringview
-        mrmId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "remove"
-        mintBorrowParam ty: ty reg: reg methodId: mrmId pname: "key" elemArg: elemArg
-        rwt9: "Option".string
-        if (typeIsValtype ty: ty reg: reg tid: valArg) then {
-            rwt9 = "optionval".string
-        }
-        rwn9: "\{rwt9}_\{vn9}"
-        linkMonoReturn ty: ty reg: reg methodId: mrmId targetMono: rwn9.stringview
-        mhId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "has"
-        mintBorrowParam ty: ty reg: reg methodId: mhId pname: "key" elemArg: elemArg
-        reg.setReturnType typeId: mhId value: boolid
-        mitId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterate"
-        markReturnsBorrow ty: ty reg: reg methodId: mitId
-        kitn: "MapKeyIter\{suffix}"
-        linkMonoReturn ty: ty reg: reg methodId: mitId targetMono: kitn.stringview
-        miiId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "iterateItems"
-        markReturnsBorrow ty: ty reg: reg methodId: miiId
-        iitn: "MapItemIter\{suffix}"
-        linkMonoReturn ty: ty reg: reg methodId: miiId targetMono: iitn.stringview
-    }
     if templateName == "MapEntry" then {
         kyId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "key"
         reg.setReturnType typeId: kyId value: elemArg
