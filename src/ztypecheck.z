@@ -132,6 +132,23 @@ atomName: function {n: Node} out String is {
 
 # addError -- append a typecheck diagnostic to the typing's error list,
 # deduped by node position so a spec resolved more than once reports once.
+# addCycleError -- a resolution-cycle diagnostic raised from the descent
+# core, which holds no source node: location-free, deduped by message.
+addCycleError: function {ty: ztyping.ZTyping msg: String} is {
+    dup9: false
+    with eit9: ty.errors.iterate do for pe9: eit9 loop {
+        if pe9.msg.stringview == msg.stringview then {
+            dup9 = true
+        }
+    }
+    if (dup9) == false then {
+        en9: "".string
+        eh9: "".string
+        ty.errors.append (zast.ErrorData nodeid: 0 lineno: 0 colno: 0 width: 1 err: zast.err.TYPEERROR msg: msg.copy fsno: 0 note: en9 hint: eh9)
+        ty.isError = true
+    }
+}
+
 addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String note: String hint: String width: u32} is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
@@ -1168,7 +1185,11 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
         }
         mainName9: reg.regMainUnit.stringview
         mname9: "\{tn9}\{sfx9}"
-        mid9: getOrMintSpec ty: ty reg: reg mainName: mainName9 name: mname9.stringview templateId: tplId9 subs: subs9 fallbackArg: 0
+        # firstA9 rides as the fallback: when a template's param name differs
+        # from the call label (Option's `t` vs the conventional `of:`), the
+        # clone fallback leg types native-union arms from it -- a spec first
+        # minted from a TYPE-position ref must carry real arm payloads.
+        mid9: getOrMintSpec ty: ty reg: reg mainName: mainName9 name: mname9.stringview templateId: tplId9 subs: subs9 fallbackArg: firstA9
         if mid9 == 0 then {
             return 0
         }
@@ -1529,7 +1550,10 @@ resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegist
         }
     } else {
     }
+    prevCE9: ty.inContainmentEdge
+    ty.inContainmentEdge = true
     cid: resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr thisName: thisName
+    ty.inContainmentEdge = prevCE9
     if isTof then {
         match (
             typeExpr
@@ -3080,6 +3104,19 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     }
     dk9b: "\{defUnit}.\{name}".string
     if (ty.resolving.has item: dk9b) then {
+        # A grey hit is a back-edge. Reference-kind targets (UNION/CLASS --
+        # boxed) are legal forward declarations; a VALUE-kind target reached
+        # through a containment edge cannot lay out.
+        if ty.inContainmentEdge then {
+            cycV9: false
+            if ttv9 == ztypes.ztypetype.RECORD then { cycV9 = true }
+            if ttv9 == ztypes.ztypetype.VARIANT then { cycV9 = true }
+            if ttv9 == ztypes.ztypetype.ENUM then { cycV9 = true }
+            if cycV9 then {
+                cem9: "containment cycle: value type '\{defUnit}.\{name}' contains itself by value; box the field behind a class, union, or Option"
+                addCycleError ty: ty msg: cem9
+            }
+        }
         return tid9
     }
     uo9: ty.defNodeUnitIdx.get key: ("\{defUnit}.\{name}".string)
@@ -3123,6 +3160,11 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
 resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView defn: Node} is {
     gk0: "\{unitName}.\{defName}".string
     ty.resolving.add item: gk0
+    # A containment edge is ONE hop: this def's own resolution starts a
+    # fresh context (its field/arm legs re-arm the flag), so an outer field
+    # bracket never taints nested param/return resolution.
+    prevCE0: ty.inContainmentEdge
+    ty.inContainmentEdge = false
     match (
         defn
     ) case functiondef then {
@@ -3205,6 +3247,10 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             ty.funcAliases.set key: fk9 value: fv9
             # Use the canonical id if already resolved; else a shell placeholder
             # (overwritten by resolveTypeAliases) so the demand fixpoint terminates.
+            if (ty.resolving.has item: tgtKey9) then {
+                aem9: "alias cycle: '\{unitName}.\{defName}' aliases '\{tgtKey9}' which is still resolving"
+                addCycleError ty: ty msg: aem9
+            }
             descendNamed ty: ty reg: reg units: units defUnit: apNm9.stringview name: acNm9.stringview
             tgo9: ty.resolved.get key: tgtKey9
             aid9: 0.u64
@@ -3236,6 +3282,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             ty.setChild parentTypeId: cuid childName: defName childTypeId: crid
         } case none then {}
     } case none then {}
+    ty.inContainmentEdge = prevCE0
     gk1: "\{unitName}.\{defName}".string
     ty.resolving.delete item: gk1
     dkk0: "\{unitName}.\{defName}".string
