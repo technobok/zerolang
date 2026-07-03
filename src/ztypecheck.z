@@ -149,6 +149,19 @@ addResolveError: function {ty: ztyping.ZTyping e: zast.err msg: String} is {
     }
 }
 
+# stampGate -- a body-walk node stamp that suppresses GENERIC_PARAM values
+# during a generic template walk: the emitter re-walks the shared template
+# AST per instance and must not see template-time param stamps.
+stampGate: function {st: zenv.ZSymbolTable nid: u32 tid: u64} is {
+    if st.typing.suppressParamStamps then {
+        if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.GENERIC_PARAM then {
+            return
+        }
+    }
+    sv9: tid
+    st.typing.nodeType.set key: nid.u64 value: sv9
+}
+
 addErrorH: function {st: zenv.ZSymbolTable nodeid: u32 lineno: u32 colno: u32 e: zast.err msg: String note: String hint: String width: u32} is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
@@ -210,9 +223,11 @@ typesCompatible: function {st: zenv.ZSymbolTable unitName: StringView a: u64 b: 
     if a == b then { return true }
     if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.NEVER then { return true }
     if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.GENERIC_PARAM when (st.reg.typetypeOf typeId: b) == ztypes.ztypetype.GENERIC_PARAM then {
-        ga9: typeNameOf st: st tid: a
-        gb9: typeNameOf st: st tid: b
-        if ga9.stringview == gb9.stringview then { return true }
+        # Any two type parameters are template-compatible: unit templates
+        # still carry the legacy __generic_param placeholder beside the
+        # canonical param tids, and the per-instance clone checks are the
+        # concrete backstop.
+        return true
     }
     aLit9: isLiteralTypeId st: st tid: a
     bLit9: isLiteralTypeId st: st tid: b
@@ -8526,10 +8541,14 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                 }
             }
         }
-        setd: result
-        st.typing.nodeType.set key: dp.nodeid.u64 value: setd
+        stampGate st: st nid: dp.nodeid tid: result
         return result
     } case none then {
+        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.GENERIC_PARAM then {
+            btn9x: typeNameOf st: st tid: bt
+            mgp9: "type parameter '\{btn9x}' has no member '\{cn}' (its constraint provides none)".string
+            addError st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.GENERICERROR msg: mgp9
+        }
         return 0
     }
 }
@@ -8549,8 +8568,7 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
         if isBrk9 then {
             result = optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: "never") d: result
         }
-        setk: result
-        st.typing.nodeType.set key: node.nodeid.u64 value: setk
+        stampGate st: st nid: node.nodeid tid: result
     } case none then {
         if node.name.stringview == "return" then {
             mrt9: st.typing.currentReturnTypeId
@@ -9519,11 +9537,15 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List 
         result = tdb2
     }
     if result > 0 when (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.GENERIC_PARAM then {
-        return 0
+        # Structural pass-through: the SAME parameter on both sides flows
+        # through arithmetic as itself (the per-instance clone checks remain
+        # the arithmetic backstop); mixed operands stay untyped.
+        if (result == rt) == false then {
+            return 0
+        }
     }
     if result > 0 then {
-        setk: result
-        st.typing.nodeType.set key: binop.nodeid.u64 value: setk
+        stampGate st: st nid: binop.nodeid tid: result
     }
     return result
 }
@@ -11727,8 +11749,7 @@ checkValue: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List 
     } case expression then {
         t: checkValue st: st unitName: unitName unitBody: unitBody node: node.expression
         if t > 0 then {
-            setk: t
-            st.typing.nodeType.set key: node.nodeid.u64 value: setk
+            stampGate st: st nid: node.nodeid tid: t
         }
         return t
     } else {
@@ -11961,9 +11982,6 @@ maybeWalkMethods: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     ) case namedoperation then {
         scanMemberSignatures st: st unitName: unitName unitBody: unitBody op: mem.operation
         canWalk: objectdefHasMethodBodies op: mem.operation
-        if canWalk when (objectdefIsGeneric o: mem.operation) then {
-            canWalk = false
-        }
         if canWalk then {
             prev: st.typing.synthLabel.copy
             prevThis: st.typing.currentThisName.copy
@@ -12120,10 +12138,15 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             }
         } case none then {
         }
-        if isGenDef then {
-            return
-        }
         if hasBody then {
+            # A generic template body is checked ONCE, for diagnostics; the
+            # emitter re-walks the shared AST per instance, so
+            # GENERIC_PARAM-valued stamps are suppressed for the walk (and
+            # its scopes/entries stay out of the dump log).
+            prevSup9: st.typing.suppressParamStamps
+            if isGenDef then {
+                st.typing.suppressParamStamps = true
+            }
             sname: "function:\{defName}"
             st.push name: sname.stringview
             piter: defn.parameters.iterate
@@ -12143,7 +12166,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                             ) case some then {
                             } case none then {
                                 setpp: ptid
-                                st.typing.nodeType.set key: pnid.u64 value: setpp
+                                stampGate st: st nid: pnid tid: setpp
                             }
                         }
                     }
@@ -12232,6 +12255,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                 }
             }
             st.pop
+            st.typing.suppressParamStamps = prevSup9
         }
     } else {
     }
@@ -12310,27 +12334,13 @@ depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} i
                     match (
                         rgo
                     ) case some then {
-                        isGenD9: false
-                        {
-                            gz9: st.reg.typeById.get key: rgo
-                            match (
-                                gz9
-                            ) case some then {
-                                if gz9.isgeneric then {
-                                    isGenD9 = true
-                                }
-                            } case none then {
-                            }
-                        }
                         walked: optBoolOr o: (st.typing.walkedMethodOwners.get key: rk) d: false
                         if (walked) == false then {
                             wv: true
                             wk2: "\{depName}.\{fn}".string
                             st.typing.walkedMethodOwners.set key: wk2 value: wv
-                            if (isGenD9) == false then {
-                                dq: "\{depName}.\{fn}".string
-                                checkFunctionBody st: st unitName: depName defName: dq.stringview defn: bm2.operation thisName: "" unitBody: unitOp.body depUnits: emptyD
-                            }
+                            dq: "\{depName}.\{fn}".string
+                            checkFunctionBody st: st unitName: depName defName: dq.stringview defn: bm2.operation thisName: "" unitBody: unitOp.body depUnits: emptyD
                         }
                     } case none then {}
                 } else {
