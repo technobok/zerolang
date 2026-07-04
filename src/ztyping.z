@@ -29,6 +29,13 @@ ZTypeChild: class {
     position:     u64
 }
 
+# Per-parent row-index bucket: append-order indices into ZTyping.typeChild for
+# one parentTypeId. A derived accelerator (not dumped) that makes child-name
+# resolution and child counting a per-parent scan, not a whole-list scan.
+ChildBucket: class {
+    rows: (List u64)
+}
+
 # One edge of the generic-args table: a (parent, param-name) link. The
 # mutable arg-type id lives in genericArgTypeBy, keyed by parentTypeId +
 # paramName.
@@ -125,6 +132,7 @@ ZTyping: class {
 
     # flat edge tables
     typeChild:      (List ZTypeChild)
+    childIndex:     (Map u64 value: ChildBucket)
     typeGenericArg: (List ZTypeGenericArg)
 
     # per-edge mutable state, keyed by childNameId
@@ -247,14 +255,18 @@ ZTyping: class {
 
     # Resolve the childNameId of an existing (parent, name) edge.
     childNameIdOf: function {:this parentTypeId: u64 name: StringView} out optionval u64 is {
-        iter: this.typeChild.iterate
-        for row: iter loop {
-            if row.parentTypeId == parentTypeId then {
+        b: this.childIndex.get key: parentTypeId
+        match (
+            b
+        ) case some then {
+            ridx: b.rows.iterate
+            for ri: ridx loop {
+                row: this.typeChild.get i: ri
                 if row.childName.stringview == name then {
                     return (optionval.some row.childNameId)
                 }
             }
-        }
+        } case none then {}
         return (optionval.none u64)
     }
 
@@ -271,8 +283,24 @@ ZTyping: class {
             cid: this.childIdFor parentTypeId: parentTypeId name: childName
             pos: this.childCount parentTypeId: parentTypeId
             this.typeChild.append (ZTypeChild parentTypeId: parentTypeId childName: childName.string childNameId: cid position: pos)
+            ridx: this.typeChild.length - 1
+            this.pushChildIndex parentTypeId: parentTypeId rowIdx: ridx
             sv: childTypeId
             this.childTypeById.set key: cid value: sv
+        }
+    }
+
+    # Record a new typeChild row index under its parent's bucket (get-or-create).
+    pushChildIndex: function {:this parentTypeId: u64 rowIdx: u64} is {
+        b: this.childIndex.get key: parentTypeId
+        match (
+            b
+        ) case some then {
+            b.rows.append rowIdx
+        } case none then {
+            nb: (ChildBucket rows: (List u64))
+            nb.rows.append rowIdx
+            this.childIndex.set key: parentTypeId value: nb
         }
     }
 
@@ -317,14 +345,13 @@ ZTyping: class {
     }
 
     childCount: function {:this parentTypeId: u64} out u64 is {
-        c: 0.u64
-        iter: this.typeChild.iterate
-        for row: iter loop {
-            if row.parentTypeId == parentTypeId then {
-                c = c + 1
-            }
-        }
-        return c
+        b: this.childIndex.get key: parentTypeId
+        match (
+            b
+        ) case some then {
+            return b.rows.length
+        } case none then {}
+        return 0
     }
 
     # --- bool sidecars (private / lock-field / lock-arm) ---
@@ -695,6 +722,7 @@ newTyping: function {} out ZTyping is {
         nextChildId: 0
         childIdMemo: (Map String value: u64)
         typeChild: (List ZTypeChild)
+        childIndex: (Map u64 value: ChildBucket)
         typeGenericArg: (List ZTypeGenericArg)
         childTypeById: (Map u64 value: u64)
         childPrivate: (Map u64 value: bool)
