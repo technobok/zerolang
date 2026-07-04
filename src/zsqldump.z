@@ -85,7 +85,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, typedef_base_id INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS type_children (type_id INTEGER, child_name TEXT NOT NULL, child_type_id INTEGER, position INTEGER, child_id INTEGER, is_private INTEGER, is_lock_field INTEGER, is_lock_arm INTEGER, default_expr TEXT, param_ownership INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, cname TEXT, is_const INTEGER, const_value TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL, vtable_cname TEXT, create_cname TEXT, create_owned_cname TEXT, destroy_cname TEXT);\n"
@@ -107,18 +107,6 @@ optBoolSql: function {o: optionval bool} out String is {
         return (boolNum b: o)
     } case none then {
         return "NULL".string
-    }
-}
-
-# parentIdSql -- the `parent_type_id` column: bound id if set, else data-owner
-# id, else NULL (mutually exclusive by typetype in the reference).
-parentIdSql: function {boundId: optionval u64 ownerId: optionval u64} out String is {
-    match (
-        boundId
-    ) case some then {
-        return "\{boundId}".string
-    } case none then {
-        return (optIdStr o: ownerId)
     }
 }
 
@@ -514,17 +502,16 @@ ZDumper: class {
                 nameSql: sqlStr s: zt.name.stringview
                 ttName: ztypes.ztypetypeName t: zt.typetype
                 ttSql: sqlStr s: ttName.stringview
-                parentSql: parentIdSql boundId: zt.boundId ownerId: zt.dataOwnerId
+                parentSql: optIdStr o: zt.boundId
                 valSql: optBoolSql o: zt.isValtype
                 genSql: boolNum b: zt.isgeneric
-                tbSql: optIdStr o: zt.typedefBaseId
                 goSql: optIdStr o: zt.genericOriginId
                 ndSql: optStrSome o: zt.destructorName
                 dnSql: optStrSql o: zt.destructorName
                 heapSql: boolNum b: zt.isHeapAllocated
                 cnSql: cnameSql c: zt.cname.stringview
                 duSql: optStrSql o: (ownOptStr o: (st.typing.definedInUnit.get key: tid))
-                row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{parentSql}, \{valSql}, \{genSql}, \{tbSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
+                row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{parentSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
                 this.acc.append s: row.stringview
             } case none then {}
             tid = tid + 1
