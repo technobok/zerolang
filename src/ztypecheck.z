@@ -1955,6 +1955,10 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
     if thisName.length != 0 then {
         enclKey = "\{unitName}.\{thisName}".string
     }
+    fnKey9: "".string
+    if isgen then {
+        fnKey9 = "\{unitName}.\{defName}".string
+    }
     piter: fnode.parameters.iterate
     for pm: piter loop {
         match (
@@ -1962,17 +1966,44 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
         ) case namedoperation then {
             skipParam: false
             genParam: false
+            fnParam9: false
             ptn: atomName n: pm.operation
             if skipThisType then {
                 if ptn.stringview == "this" then {
                     skipParam = true
                 }
             }
-            if (reg.isGenericParamOf typeKey: enclKey.stringview name: ptn.stringview) then {
+            if skipParam == false when isgen then {
+                if (reg.isGenericParamOf typeKey: fnKey9.stringview name: ptn.stringview) then {
+                    skipParam = true
+                    fnParam9 = true
+                }
+            }
+            if skipParam == false when (reg.isGenericParamOf typeKey: enclKey.stringview name: ptn.stringview) then {
                 skipParam = true
                 genParam = true
             }
             if skipParam then {
+                if fnParam9 then {
+                    # the template's own param: bind the canonical
+                    # per-(template,param) tid as the child so holder
+                    # inference and the idSubs clone substitution ride it.
+                    # No node stamp (fn monos re-walk the SHARED template
+                    # AST) and no typeref/demand recording (a user type
+                    # coincidentally named like the param must not bind).
+                    pnameF9: unitLabel o: pm.name
+                    fpt9: 0.u64
+                    fpo9: reg.genericParamTidOf typeKey: fnKey9.stringview paramName: ptn.stringview
+                    match (
+                        fpo9
+                    ) case some then {
+                        fpt9 = fpo9
+                    } case none then {
+                        fpt9 = reg.newType name: ptn.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                        reg.setGenericParamTid typeKey: fnKey9.stringview paramName: ptn.stringview tid: fpt9
+                    }
+                    ty.setChild parentTypeId: fid childName: pnameF9.stringview childTypeId: fpt9
+                }
                 if genParam then {
                     uk2: unitName.string
                     ugo2: ty.unitGenericParamId.get key: uk2
