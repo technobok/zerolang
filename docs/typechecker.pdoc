@@ -107,23 +107,14 @@ Key fields:
   [#*: #~"typetype": the #~"ztypetype" enum
     (#~"RECORD", #~"CLASS", #~"VARIANT", #~"UNION", #~"PROTOCOL",
     #~"FACET", #~"FUNCTION", #~"UNIT", numerics, ...)]
-  [#*: #~"enclosingTypeId": the enclosing unit type, or none
-    for top-level units]
-  [#*: #~"childrenIdMap": per-name monotonic child id,
-    minted lazily by #~"allocChild". The id is the
-    authoritative key for children in #~"ZTyping.typeChild" rows
-    and for narrowing entries that need a numeric subject]
-  [#*: #~"returnTypeId", #~"returnOwnership", #~"thisParamName":
+  [#*: #~"returnTypeId", #~"thisParamName":
     populated for function types]
-  [#*: generic-state fields: #~"genericParams",
-    #~"genericDefaults", #~"genericOriginId",
-    #~"numericGenericParams", #~"isTagGenericOrigin"]
-  [#*: #~"constValue": a literal value carried on a
-    #~"ZType" used as either an as-block constant or a numeric
-    generic-arg carrier (the #~"8" in #~"array<i64, 8>")]
+  [#*: generic-state fields: #~"genericOriginId",
+    #~"isTagGenericOrigin", and the specialization-tree edges
+    #~"genericChildKeys" / #~"genericChildTids" with the ordered
+    argument ids in #~"genericArgs" / #~"genericArgIsValue"]
   [#*: layout / memory metadata: #~"destructorName",
-    #~"isHeapAllocated", #~"needsFieldCleanup",
-    #~"isNullablePtr", #~"isBox" (see
+    #~"isHeapAllocated", #~"isBox" (see
     #~"representation_of_types.pdoc")]
   [#*: #~"createDisabled", #~"metaCreateId":
     unified-call-dispatch metadata: bare-name calls route through
@@ -355,7 +346,7 @@ into the right region; read prose below for the semantics.
               #~"type" / #~"this" keyword resolvers]]
   [#tr: [#td: Monomorphisation]
         [#td: #~"mintMono", #~"genericTypeKey",
-              #~"resolveMonos", #~"cloneUnitMethod",
+              #~"cloneUnitMethod",
               #~"validateGenericTypeArgs"]]
   [#tr: [#td: Function body]
         [#td: #~"checkFunctionBody", #~"checkMethodBodies",
@@ -420,10 +411,10 @@ Resolution is keyed by #_*"definition nodeid", not by synthesized
 dotted-string names. Every definition is one AST node with one stable
 #~"nodeid", and that node is shared across every reference to it, so
 the same definition always resolves to the same cached type no matter
-which unit asks. A resolved cache maps #~"defn.nodeid -> ZType";
-a list-shaped resolution stack records the definitions currently
-being resolved (each frame carrying its unit name, def-id, ztype,
-and AST node). The flow is:
+which unit asks. A resolved cache maps #~"defn.nodeid -> ZType"; a grey #~"resolving"
+set of dotted names records the definitions currently being resolved,
+so a reference that reaches a name already in the set is a cycle
+back-edge and uses the forward-declared id. The flow is:
 
 #ol:
   [#*: Unit-name resolution looks the definition up in the unit's
@@ -491,7 +482,8 @@ would collapse the two onto whichever the search-root unit wins -- the
 bug class the #~"make shadow-guard" ratchet prevents from returning.
 
 #b:"Mono identity follows the same rule." A generic instance is identified by
-the specialization trie: each template holds #~"genericChildren", one level per
+the specialization trie: each template holds its spec-tree edges in
+#~"genericChildKeys" / #~"genericChildTids", one level per
 parameter in definition order, keyed by the argument's type id -- or, for an
 integer-scalar-constrained parameter (#~"str to: 16"), by the literal VALUE
 itself (#~"genericArgIsValue" marks such ordinals). Ids cannot collide across

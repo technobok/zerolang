@@ -198,23 +198,14 @@ enum) and a set of optional fields.</p>
 <li><code>typetype</code>: the <code>ztypetype</code> enum
 (<code>RECORD</code>, <code>CLASS</code>, <code>VARIANT</code>, <code>UNION</code>, <code>PROTOCOL</code>,
 <code>FACET</code>, <code>FUNCTION</code>, <code>UNIT</code>, numerics, ...)</li>
-<li><code>enclosingTypeId</code>: the enclosing unit type, or none
-for top-level units</li>
-<li><code>childrenIdMap</code>: per-name monotonic child id,
-minted lazily by <code>allocChild</code>. The id is the
-authoritative key for children in <code>ZTyping.typeChild</code> rows
-and for narrowing entries that need a numeric subject</li>
-<li><code>returnTypeId</code>, <code>returnOwnership</code>, <code>thisParamName</code>:
+<li><code>returnTypeId</code>, <code>thisParamName</code>:
 populated for function types</li>
-<li>generic-state fields: <code>genericParams</code>,
-    <code>genericDefaults</code>, <code>genericOriginId</code>,
-    <code>numericGenericParams</code>, <code>isTagGenericOrigin</code></li>
-<li><code>constValue</code>: a literal value carried on a
-<code>ZType</code> used as either an as-block constant or a numeric
-generic-arg carrier (the <code>8</code> in <code>array&lt;i64, 8&gt;</code>)</li>
+<li>generic-state fields: <code>genericOriginId</code>,
+    <code>isTagGenericOrigin</code>, and the specialization-tree edges
+    <code>genericChildKeys</code> / <code>genericChildTids</code> with the ordered
+    argument ids in <code>genericArgs</code> / <code>genericArgIsValue</code></li>
 <li>layout / memory metadata: <code>destructorName</code>,
-    <code>isHeapAllocated</code>, <code>needsFieldCleanup</code>,
-    <code>isNullablePtr</code>, <code>isBox</code> (see
+    <code>isHeapAllocated</code>, <code>isBox</code> (see
     <code>representation_of_types.pdoc</code>)</li>
 <li><code>createDisabled</code>, <code>metaCreateId</code>:
 unified-call-dispatch metadata: bare-name calls route through
@@ -415,7 +406,7 @@ accumulated error list</td></tr>
 <code>checkDotted</code>, <code>dottedParentName</code>, and the
 <code>type</code> / <code>this</code> keyword resolvers</td></tr>
 <tr><td>Monomorphisation</td><td><code>mintMono</code>, <code>genericTypeKey</code>,
-<code>resolveMonos</code>, <code>cloneUnitMethod</code>,
+<code>cloneUnitMethod</code>,
 <code>validateGenericTypeArgs</code></td></tr>
 <tr><td>Function body</td><td><code>checkFunctionBody</code>, <code>checkMethodBodies</code>,
 <code>checkBodies</code></td></tr>
@@ -468,10 +459,10 @@ concrete <code>Node</code> arm; see <code>src/zast.z</code>.</p>
 dotted-string names. Every definition is one AST node with one stable
 <code>nodeid</code>, and that node is shared across every reference to it, so
 the same definition always resolves to the same cached type no matter
-which unit asks. A resolved cache maps <code>defn.nodeid -&gt; ZType</code>;
-a list-shaped resolution stack records the definitions currently
-being resolved (each frame carrying its unit name, def-id, ztype,
-and AST node). The flow is:</p>
+which unit asks. A resolved cache maps <code>defn.nodeid -&gt; ZType</code>; a grey <code>resolving</code>
+set of dotted names records the definitions currently being resolved,
+so a reference that reaches a name already in the set is a cycle
+back-edge and uses the forward-declared id. The flow is:</p>
 <ol>
 <li>Unit-name resolution looks the definition up in the unit's
     member table, then checks the resolved cache keyed by
@@ -531,7 +522,8 @@ reached through the same name keeps the C scalar. Re-resolving by name
 would collapse the two onto whichever the search-root unit wins -- the
 bug class the <code>make shadow-guard</code> ratchet prevents from returning.</p>
 <p><strong>Mono identity follows the same rule.</strong> A generic instance is identified by
-the specialization trie: each template holds <code>genericChildren</code>, one level per
+the specialization trie: each template holds its spec-tree edges in
+<code>genericChildKeys</code> / <code>genericChildTids</code>, one level per
 parameter in definition order, keyed by the argument's type id -- or, for an
 integer-scalar-constrained parameter (<code>str to: 16</code>), by the literal VALUE
 itself (<code>genericArgIsValue</code> marks such ordinals). Ids cannot collide across
