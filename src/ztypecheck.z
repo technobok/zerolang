@@ -5537,85 +5537,6 @@ completeInlineReq: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units
     } else {}
 }
 
-# registerUnitGenericParams -- register (or remove) an inline template's
-# bare generic-param names in resolved, minting a GENERIC_PARAM type per
-# name. Bracketed around stampTyperefs only: a persistent registration
-# would hijack generic-param-named children in later mono resolution.
-registerUnitGenericParams: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView unitOp: Node doRegister: bool} is {
-    match (
-        unitOp
-    ) case unitdef then {
-        with giter: unitOp.body.iterate do for gm: giter loop {
-            match (
-                gm
-            ) case namedoperation then {
-                if (isBareGenericParam op: gm.operation) then {
-                    gpn: unitLabel o: gm.name
-                    gpk: "\{mainName}.\{gpn}".string
-                    if doRegister then {
-                        ego: ty.resolved.get key: gpk
-                        match (
-                            ego
-                        ) case some then {} case none then {
-                            tpid: reg.newType name: gpn.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
-                            tpv: tpid
-                            ty.resolved.set key: gpk value: tpv
-                        }
-                    } else {
-                        ggo: ty.resolved.get key: gpk
-                        match (
-                            ggo
-                        ) case some then {
-                            if (reg.typetypeOf typeId: ggo) == ztypes.ztypetype.GENERIC_PARAM then {
-                                ty.resolved.remove key: gpk
-                            }
-                        } case none then {}
-                    }
-                }
-            } else {}
-        }
-    } else {}
-}
-
-# bracketInlineMainOp -- walk the main unit body's inline templates for the
-# bracket (bare param so the unitdef arm narrows).
-bracketInlineMainOp: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView mainOp: Node doRegister: bool} is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biterB: mainOp.body.iterate
-        for bmB: biterB loop {
-            match (
-                bmB
-            ) case namedoperation then {
-                if (isUnitOp op: bmB.operation) then {
-                    registerUnitGenericParams ty: ty reg: reg mainName: mainName unitOp: bmB.operation doRegister: doRegister
-                }
-            } else {}
-        }
-    } else {}
-}
-
-# bracketInlineGenericParamNames -- apply registerUnitGenericParams to every
-# inline generic template in the main unit.
-bracketInlineGenericParamNames: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node doRegister: bool} is {
-    mainName: programMainName program: program
-    match (
-        program
-    ) case program then {
-        with uiterB: program.units.iterate do for uB: uiterB loop {
-            match (
-                uB
-            ) case namedoperation then {
-                unB: unitLabel o: uB.name
-                if unB.stringview == mainName.stringview then {
-                    bracketInlineMainOp ty: ty reg: reg mainName: mainName.stringview mainOp: uB.operation doRegister: doRegister
-                }
-            } else {}
-        }
-    } else {}
-}
-
 # completeUnitInstantiations -- post-demand full-mode pass: with system types
 # resolved, finish each generic-unit instantiation (substituted children +
 # clone stash), register the binding name, and stamp the instantiation's
@@ -13814,13 +13735,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
         resolveConstantDefs ty: st.typing program: program
         completeUnitInstantiations ty: st.typing reg: st.reg program: program
     }
-    if full then {
-        bracketInlineGenericParamNames ty: st.typing reg: st.reg program: program doRegister: true
-    }
     stampTyperefs ty: st.typing program: program
-    if full then {
-        bracketInlineGenericParamNames ty: st.typing reg: st.reg program: program doRegister: false
-    }
     if full then {
         checkBodies st: st program: program
         match (
