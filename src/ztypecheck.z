@@ -5980,11 +5980,14 @@ checkString: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
             checkValue st: st unitName: unitName unitBody: unitBody node: part
         }
     }
+    # the runtime value is always the SYSTEM String/StringView (the interp
+    # machinery and the literal pool build system strings), so the stamp is
+    # canonical even in a unit that shadows the name
     tyOpt: (optionval.none u64)
     if hasInterp then {
-        tyOpt = walkLookupTyperef ty: st.typing currentUnit: unitName base: "String"
+        tyOpt = walkLookupTyperef ty: st.typing currentUnit: "" base: "String"
     } else {
-        tyOpt = walkLookupTyperef ty: st.typing currentUnit: unitName base: "StringView"
+        tyOpt = walkLookupTyperef ty: st.typing currentUnit: "" base: "StringView"
     }
     match (
         tyOpt
@@ -6728,10 +6731,43 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
         }
         ok9 = rOk9
     }
-    # StringLike enforcement is deferred: in a unit that shadows String, an
-    # interpolation's stamped type is the SHADOW (a name-era artifact -- the
-    # runtime value is the system String), so print/error/panic calls would
-    # false-positive. Enforce once interpolation stamps are canonical.
+    if cv9 == "StringLike" then {
+        okSL9: false
+        svT9: builtinTidT ty: ty base: "StringView"
+        if svT9 > 0 when argTid == svT9 then {
+            okSL9 = true
+        }
+        if okSL9 == false then {
+            # conformance rows live on the declaring type; a mono (str_32)
+            # conforms through its generic origin (the str template)
+            probeT9: argTid
+            ago9: reg.typeById.get key: argTid
+            match (
+                ago9
+            ) case some then {
+                agoo9: ago9.genericOriginId
+                match (
+                    agoo9
+                ) case some then {
+                    probeT9 = agoo9
+                } case none then {}
+            } case none then {}
+            txT9: builtinTidT ty: ty base: "Text"
+            if txT9 > 0 then {
+                with cit9: ty.conformance.iterate do for crow9: cit9 loop {
+                    if crow9.specTypeId == txT9 then {
+                        if crow9.implTypeId == argTid then {
+                            okSL9 = true
+                        }
+                        if crow9.implTypeId == probeT9 then {
+                            okSL9 = true
+                        }
+                    }
+                }
+            }
+        }
+        ok9 = okSL9
+    }
     if (ok9) == false then {
         an9: regTypeNameOf reg: reg tid: argTid
         m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{typeKey}'"
