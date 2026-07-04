@@ -1863,6 +1863,16 @@ demandReturnType: function {reg: ztypes.ZTypeRegistry unitName: StringView o: Op
 resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView fnode: zast.FunctionData thisName: StringView skipThisType: bool} out u64 is {
     fid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.FUNCTION
     reg.setNative typeId: fid value: fnode.isNative
+    {
+        fhbV: false
+        match (
+            fnode.body
+        ) case some then {
+            fhbV = true
+        } case none then {}
+        fhbK: fid
+        ty.fnHasBody.set key: fhbK value: fhbV
+    }
     dfid: fid
     rfid: fid
     isgen: hasGenericParam items: fnode.asItems
@@ -3019,6 +3029,9 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                         }
                         cidf: resolveTyperefShellMarked ty: ty reg: reg units: units unitName: unitName ownerId: cid typeExpr: fm.operation thisName: defName
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
+                        if (reg.typetypeOf typeId: cidf) == ztypes.ztypetype.FUNCTION then {
+                            ty.setChildFnptrField parentTypeId: cid name: fname.stringview
+                        }
                         if lockField then {
                             ty.setChildLockField parentTypeId: cid name: fname.stringview
                         }
@@ -10394,7 +10407,13 @@ checkMissingCallArgs: function {st: zenv.ZSymbolTable call: zast.CallData funcId
             vpos = vpos + 1
             need: true
             if isCtor when (st.reg.typetypeOf typeId: pcid) == ztypes.ztypetype.FUNCTION then {
-                need = false
+                # only a body-carrying fn type defaults the field (a bodyless
+                # SPEC field requires the reference), and only record
+                # constructions wire the omission default today
+                fhbOk9: optBoolOr o: (st.typing.fnHasBody.get key: pcid) d: false
+                if fhbOk9 when (st.reg.typetypeOf typeId: effId) == ztypes.ztypetype.RECORD then {
+                    need = false
+                }
             }
             if (st.typing.hasChildDefault parentTypeId: effId name: pname.stringview) then {
                 need = false
