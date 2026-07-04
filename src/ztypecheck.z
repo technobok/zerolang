@@ -1149,20 +1149,20 @@ ensureNativeLinkTargets: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
 # literals join the instance name only (const values, not type refs). Returns
 # 0 -- recording nothing -- when the callable is empty or any argument is
 # unresolvable (a template-internal generic-param name stays a shell).
-resolveMonoRefInline: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView op: Node nid: u32} out u64 is {
+resolveMonoRefInline: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView enclKey: StringView op: Node nid: u32} out u64 is {
     match (
         op
     ) case expression then {
-        return (resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: op.expression nid: nid)
+        return (resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName enclKey: enclKey op: op.expression nid: nid)
     } case call then {
-        return (resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: thisName callable: op.callable arguments: op.arguments nid: nid)
+        return (resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: thisName enclKey: enclKey callable: op.callable arguments: op.arguments nid: nid)
     } else {}
     return 0
 }
 
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
 # callable and argument list directly so narrowed call subjects can feed it.
-resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView callable: Node arguments: List Node nid: u32} out u64 is {
+resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView thisName: StringView enclKey: StringView callable: Node arguments: List Node nid: u32} out u64 is {
     {
         tname9: atomName n: callable
         if tname9.length == 0 then {
@@ -1196,7 +1196,7 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
                     if an9.length == 0 then {
                         aid9 = resolveDottedArgTid ty: ty reg: reg units: units dp: arg9.operation
                         if aid9 == 0 then {
-                            inner9: resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: arg9.operation nid: 0
+                            inner9: resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName enclKey: enclKey op: arg9.operation nid: 0
                             if inner9 > 0 then {
                                 aid9 = inner9
                             } else {
@@ -1208,12 +1208,23 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
                         if anc9.length == 0 then {
                             allOk9 = false
                         } else {
+                            if enclKey.length > 0 when (reg.isGenericParamOf typeKey: enclKey name: anc9.stringview) then {
+                                epo9: reg.genericParamTidOf typeKey: enclKey paramName: anc9.stringview
+                                match (
+                                    epo9
+                                ) case some then {
+                                    aid9 = epo9
+                                } case none then {
+                                    aid9 = reg.newType name: anc9.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                                    reg.setGenericParamTid typeKey: enclKey paramName: anc9.stringview tid: aid9
+                                }
+                            }
                             # a name the CURRENT unit defines wins even when
                             # not yet declared -- the ladder walk sees only
                             # declared defs and would fall through to a
                             # same-named stdlib type (resolveAtomType's rule)
                             duo9: definingUnitFor ty: ty currentUnit: unitName name: anc9.stringview
-                            if duo9.stringview == unitName then {
+                            if aid9 == 0 when duo9.stringview == unitName then {
                                 aid9 = descendNamed ty: ty reg: reg units: units defUnit: duo9.stringview name: anc9.stringview
                             }
                             if aid9 == 0 then {
@@ -1317,7 +1328,7 @@ recordTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
     match (
         node
     ) case expression then {
-        resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: node.expression nid: node.nodeid
+        resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName enclKey: "" op: node.expression nid: node.nodeid
         recordTyperef ty: ty reg: reg units: units unitName: unitName thisName: thisName node: node.expression
     } case call then {
         # Parameterized type `(T arg: U ...)`: the outer node resolves to a NULL-defined
@@ -1356,7 +1367,7 @@ recordTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
                 # a parameterized parent ((List of: String).take) has no base
                 # name; the marker dp wears the parent's mono stamp.
                 if bn.length == 0 then {
-                    resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName op: node.parent nid: node.nodeid
+                    resolveMonoRefInline ty: ty reg: reg units: units unitName: unitName thisName: thisName enclKey: "" op: node.parent nid: node.nodeid
                 }
                 # Ownership markers peel and stamp the inner ref; `.private` /
                 # `.public` resolve the pair atomically (no base-atom stamp).
@@ -1401,12 +1412,10 @@ returnParamTid: function {reg: ztypes.ZTypeRegistry enclKey: StringView o: Optio
 }
 
 # partialTyperefTid -- resolve a composite parameterized typeref inside a
-# template method signature ((ListIter of: of), nested (OptionView t:
-# (MapEntry key: key value: value))) to a spec through the trie. An argument
-# naming one of the enclosing template's generic params uses its param tid,
-# so the resulting spec is PARTIAL and the clone-side respecialize completes
-# it per instance. 0 when the node is not a composite call, no argument is a
-# generic param, or any part is unresolvable.
+# template method signature to a spec through the shared disassembly
+# (resolveMonoRefParts with the template's enclKey). Returns the spec only
+# when it is PARTIAL (an argument named a generic param); a fully-concrete
+# composite stays 0, preserving the caller's eager-path behavior.
 partialTyperefTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView enclKey: StringView n: Node} out u64 is {
     match (
         n
@@ -1419,90 +1428,13 @@ partialTyperefTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units
         }
         return 0
     } case call then {
-        tname6: atomName n: n.callable
-        if tname6.length == 0 then {
-            return 0
-        }
-        sfx6: "".string
-        subs6: (Map String value: u64)
-        allOk6: true
-        hasParam6: false
-        aiter6: n.arguments.iterate
-        for arg6: aiter6 loop {
-            match (
-                arg6
-            ) case namedoperation then {
-                an6: atomName n: arg6.operation
-                if (isNumericLiteralName name: an6.stringview) then {
-                    allOk6 = false
-                } else {
-                    aid6: 0.u64
-                    if an6.length == 0 then {
-                        aid6 = partialTyperefTid ty: ty reg: reg units: units unitName: unitName enclKey: enclKey n: arg6.operation
-                        if aid6 > 0 then {
-                            hasParam6 = true
-                        }
-                    } else {
-                        if (reg.isGenericParamOf typeKey: enclKey name: an6.stringview) then {
-                            po6: reg.genericParamTidOf typeKey: enclKey paramName: an6.stringview
-                            match (
-                                po6
-                            ) case some then {
-                                aid6 = po6
-                            } case none then {
-                                aid6 = reg.newType name: an6.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
-                                reg.setGenericParamTid typeKey: enclKey paramName: an6.stringview tid: aid6
-                            }
-                            hasParam6 = true
-                        } else {
-                            ao6: walkLookupTyperef ty: ty currentUnit: unitName base: an6.stringview
-                            aid6 = optU64Or o: ao6 d: 0
-                            if aid6 == 0 then {
-                                duo6: definingUnitFor ty: ty currentUnit: unitName name: an6.stringview
-                                if duo6.length > 0 then {
-                                    aid6 = descendNamed ty: ty reg: reg units: units defUnit: duo6.stringview name: an6.stringview
-                                }
-                            }
-                        }
-                    }
-                    if aid6 == 0 then {
-                        allOk6 = false
-                    } else {
-                        sfx6.append s: "_"
-                        vn6: monoValName ty: ty reg: reg tid: aid6
-                        sfx6.append s: vn6.stringview
-                        pn6: unitLabel o: arg6.name
-                        sk6: pn6.copy
-                        sv6: aid6
-                        subs6.set key: sk6 value: sv6
-                    }
-                }
-            } else {}
-        }
-        if allOk6 == false then {
-            return 0
-        }
-        if hasParam6 == false then {
-            return 0
-        }
-        if sfx6.length == 0 then {
-            return 0
-        }
-        tplO6: walkLookupTyperef ty: ty currentUnit: unitName base: tname6.stringview
-        tplId6: optU64Or o: tplO6 d: 0
-        if tplId6 == 0 then {
-            tduo6: definingUnitFor ty: ty currentUnit: unitName name: tname6.stringview
-            if tduo6.length > 0 then {
-                tplId6 = descendNamed ty: ty reg: reg units: units defUnit: tduo6.stringview name: tname6.stringview
+        rmp6: resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: "" enclKey: enclKey callable: n.callable arguments: n.arguments nid: 0
+        if rmp6 > 0 then {
+            if (reg.typetypeOf typeId: rmp6) == ztypes.ztypetype.GENERIC_PARAM then {
+                return rmp6
             }
         }
-        if tplId6 == 0 then {
-            return 0
-        }
-        mn6: "\{tname6}\{sfx6}"
-        mainName6: reg.regMainUnit.stringview
-        vsA9: (Map String value: u64)
-        return (getOrMintSpec ty: ty reg: reg mainName: mainName6 name: mn6.stringview templateId: tplId6 subs: subs6 valSubs: vsA9 fallbackArg: 0)
+        return 0
     } else {}
     return 0
 }
@@ -1632,7 +1564,7 @@ resolveTyperefShell: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
     } case expression then {
         return (resolveTyperefShell ty: ty reg: reg units: units unitName: unitName typeExpr: typeExpr.expression thisName: thisName)
     } case call then {
-        imid8: resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: thisName callable: typeExpr.callable arguments: typeExpr.arguments nid: 0
+        imid8: resolveMonoRefParts ty: ty reg: reg units: units unitName: unitName thisName: thisName enclKey: "" callable: typeExpr.callable arguments: typeExpr.arguments nid: 0
         if imid8 > 0 then {
             return imid8
         }
