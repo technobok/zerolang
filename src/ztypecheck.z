@@ -8866,6 +8866,25 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                 } case none then {}
             }
         }
+        if coerce when (st.typing.isChildFnptrField parentTypeId: bt name: cn.stringview) then {
+            # bare name = call: a value-position read of an args-bearing
+            # fn-pointer field is a call missing its arguments; `.take` is
+            # the reference form (peeled before this leg)
+            natE3: st.typing.inAssignTarget
+            nzo3: st.reg.typeById.get key: mo
+            match (
+                nzo3
+            ) case some then {
+                if nzo3.isNative then {
+                    natE3 = true
+                }
+            } case none then {}
+            if natE3 == false when (methodHasNoUserArgs st: st mid: mo) == false then {
+                cnE3: cn.copy
+                mE3: "function-pointer field '\{cnE3}' takes arguments; call it, or reference it with '.take'".string
+                addError st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.CALLERROR msg: mE3
+            }
+        }
         if coerce when (methodHasNoUserArgs st: st mid: mo) then {
             ro: methodReturnOf st: st mid: mo
             match (
@@ -9178,7 +9197,9 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
 # reset any narrowing on a bare-name target (appends a non-definition overlay
 # entry, mirroring _check_reassignment_inner's reset_narrowing).
 checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Node rasgn: zast.ReassignmentData} is {
+    st.typing.inAssignTarget = true
     lvt: checkValue st: st unitName: unitName unitBody: unitBody node: rasgn.topath
+    st.typing.inAssignTarget = false
     rvt: checkValue st: st unitName: unitName unitBody: unitBody node: rasgn.value
     # A typeof-placeholder field resolves at its first write: swap the
     # field child to the RHS's type and restamp the target path.
