@@ -6787,6 +6787,51 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
     }
 }
 
+# heapOwningValtypeTid -- a RECORD/VARIANT that transitively owns heap
+# members (a class/union box, a destructor-carrying mono, or another owning
+# valtype): its byte-range hash and equality cannot cover them.
+heapOwningValtypeTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out bool is {
+    tt9: reg.typetypeOf typeId: tid
+    isVR9: false
+    if tt9 == ztypes.ztypetype.RECORD then { isVR9 = true }
+    if tt9 == ztypes.ztypetype.VARIANT then { isVR9 = true }
+    if isVR9 == false then {
+        return false
+    }
+    with hcit9: ty.typeChild.iterate do for htc9: hcit9 loop {
+        if htc9.parentTypeId == tid then {
+            hcto9: ty.childTypeById.get key: htc9.childNameId
+            match (
+                hcto9
+            ) case some then {
+                hctt9: reg.typetypeOf typeId: hcto9
+                if hctt9 != ztypes.ztypetype.FUNCTION when htc9.childName.stringview != "tag" then {
+                    if hctt9 == ztypes.ztypetype.CLASS then {
+                        return true
+                    }
+                    if hctt9 == ztypes.ztypetype.UNION then {
+                        return true
+                    }
+                    if (reg.hasDestructorName typeId: hcto9) then {
+                        return true
+                    }
+                    if hctt9 == ztypes.ztypetype.RECORD then {
+                        if (heapOwningValtypeTid ty: ty reg: reg tid: hcto9) then {
+                            return true
+                        }
+                    }
+                    if hctt9 == ztypes.ztypetype.VARIANT then {
+                        if (heapOwningValtypeTid ty: ty reg: reg tid: hcto9) then {
+                            return true
+                        }
+                    }
+                }
+            } case none then {}
+        }
+    }
+    return false
+}
+
 getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) valSubs: (Map String value: u64) fallbackArg: u64} out u64 is {
     tk8: genericTypeKey ty: ty reg: reg tid: templateId
     pnames8: reg.genericParamNamesOf typeKey: tk8.stringview
@@ -6860,6 +6905,28 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
                 } else {
                     trieOk8 = false
                 }
+            }
+        }
+    }
+    if trieOk8 when keys8.length > 0 then {
+        # byte-range hash/equality cannot cover owned members: a heap-owning
+        # valtype cannot key a Set/Map (classes hash by identity, String by
+        # content -- both fine)
+        hkSet9: builtinTidT ty: ty base: "Set"
+        hkMap9: builtinTidT ty: ty base: "Map"
+        hkKind9: "".string
+        if hkSet9 > 0 when templateId == hkSet9 then {
+            hkKind9 = "Set element".string
+        }
+        if hkMap9 > 0 when templateId == hkMap9 then {
+            hkKind9 = "Map key".string
+        }
+        if hkKind9.length > 0 when (keyIsVal8.get i: 0) == false then {
+            hkT9: keys8.get i: 0
+            if (heapOwningValtypeTid ty: ty reg: reg tid: hkT9) then {
+                hkN9: regTypeNameOf reg: reg tid: hkT9
+                mHK9: "heap-owning value type '\{hkN9}' cannot be a \{hkKind9}"
+                addResolveError ty: ty e: zast.err.GENERICERROR msg: mHK9
             }
         }
     }
