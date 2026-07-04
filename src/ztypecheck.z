@@ -1452,21 +1452,25 @@ partialReturnTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units:
 # stampGenericParamRef -- a return typeref naming one of the enclosing
 # template's generic params stamps the unit's generic-param type directly
 # (generic params live outside the name-resolution table).
-stampGenericParamRef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView enclKey: StringView o: Option Node} is {
+stampGenericParamRef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry enclKey: StringView o: Option Node} is {
     match (
         o
     ) case some then {
         bn: atomName n: o
         if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
-            uk3: unitName.string
-            ugo3: ty.unitGenericParamId.get key: uk3
+            gpt3: 0.u64
+            gpo3: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
             match (
-                ugo3
+                gpo3
             ) case some then {
-                gnid3: nodeId n: o
-                ugv3: ugo3
-                ty.nodeType.set key: gnid3.u64 value: ugv3
-            } case none then {}
+                gpt3 = gpo3
+            } case none then {
+                gpt3 = reg.newType name: bn.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: gpt3
+            }
+            gnid3: nodeId n: o
+            gpv3b: gpt3
+            ty.nodeType.set key: gnid3.u64 value: gpv3b
         }
     } case none then {}
 }
@@ -1959,15 +1963,23 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
                     ty.setChild parentTypeId: fid childName: pnameF9.stringview childTypeId: fpt9
                 }
                 if genParam then {
-                    uk2: unitName.string
-                    ugo2: ty.unitGenericParamId.get key: uk2
+                    # the unit's own param: stamp the param node with the
+                    # canonical per-(enclosing,param) tid (get-or-mint). No
+                    # setChild -- unit template methods stay childless (emit
+                    # `(void)`); unit bodies clone, so the stamp is per-clone.
+                    gpt2: 0.u64
+                    gpo2: reg.genericParamTidOf typeKey: enclKey.stringview paramName: ptn.stringview
                     match (
-                        ugo2
+                        gpo2
                     ) case some then {
-                        pnid2: nodeId n: pm.operation
-                        ugv2: ugo2
-                        ty.nodeType.set key: pnid2.u64 value: ugv2
-                    } case none then {}
+                        gpt2 = gpo2
+                    } case none then {
+                        gpt2 = reg.newType name: ptn.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                        reg.setGenericParamTid typeKey: enclKey.stringview paramName: ptn.stringview tid: gpt2
+                    }
+                    pnid2: nodeId n: pm.operation
+                    gpv2b: gpt2
+                    ty.nodeType.set key: pnid2.u64 value: gpv2b
                 }
             } else {
                 pname: unitLabel o: pm.name
@@ -2018,7 +2030,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
     demandReturnType reg: reg unitName: unitName o: fnode.returntype
     recordReturnType ty: ty reg: reg units: units unitName: unitName thisName: thisName o: fnode.returntype
     recordFuncReturnNode ty: ty fid: fid o: fnode.returntype
-    stampGenericParamRef ty: ty reg: reg unitName: unitName enclKey: enclKey.stringview o: fnode.returntype
+    stampGenericParamRef ty: ty reg: reg enclKey: enclKey.stringview o: fnode.returntype
     rpt4: 0.u64
     if isgen then {
         rpt4 = returnParamTid reg: reg enclKey: fnKey9.stringview o: fnode.returntype
@@ -3539,23 +3551,31 @@ resolveUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
     ) case unitdef then {
         if (hasGenericParam items: unitdef.body) then {
             registerGenericParams reg: reg typeKey: unitName items: unitdef.body
-            gpid: reg.newType name: "__generic_param" typetype: ztypes.ztypetype.GENERIC_PARAM
-            gpidK: gpid
-            ty.definedInUnit.set key: gpidK value: unitName.string
-            uk0: unitName.string
-            gpv0: gpid
-            ty.unitGenericParamId.set key: uk0 value: gpv0
-            # Each generic-param name resolves to the unit's generic-param
-            # type, so template signatures and bodies stamp it; the param
-            # definition's value node carries it too.
+            # Each generic-param name gets a canonical per-(unit,param)
+            # GENERIC_PARAM tid (get-or-mint), attributed to the unit; the
+            # param definition's value node carries it so template signatures
+            # and bodies stamp it.
             with gpiter: unitdef.body.iterate do for gm: gpiter loop {
                 match (
                     gm
                 ) case namedoperation then {
                     if (isBareGenericParam op: gm.operation) then {
+                        gpn0: unitLabel o: gm.name
+                        gtid0: 0.u64
+                        gpo0: reg.genericParamTidOf typeKey: unitName paramName: gpn0.stringview
+                        match (
+                            gpo0
+                        ) case some then {
+                            gtid0 = gpo0
+                        } case none then {
+                            gtid0 = reg.newType name: gpn0.stringview typetype: ztypes.ztypetype.GENERIC_PARAM
+                            reg.setGenericParamTid typeKey: unitName paramName: gpn0.stringview tid: gtid0
+                        }
+                        gtidK0: gtid0
+                        ty.definedInUnit.set key: gtidK0 value: unitName.string
                         gpnid: nodeId n: gm.operation
-                        gpv2: gpid
-                        ty.nodeType.set key: gpnid.u64 value: gpv2
+                        gtidV0: gtid0
+                        ty.nodeType.set key: gpnid.u64 value: gtidV0
                     }
                 } else {}
             }
