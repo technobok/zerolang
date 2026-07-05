@@ -385,6 +385,11 @@ indexUnitBody: function {ty: ztyping.ZTyping unitName: StringView unitIdx: u64 u
                 sk0: "\{unitName}.\{dn}".string
                 uv0: unitIdx
                 ty.defNodeUnitIdx.set key: sk0 value: uv0
+                atgt0: dottedDefTarget n: bm.operation
+                if atgt0.length > 0 then {
+                    ak0: "\{unitName}.\{dn}".string
+                    ty.funcAliases.set key: ak0 value: atgt0
+                }
                 sk1: "\{unitName}.\{dn}".string
                 bv1: bidx0
                 ty.defNodeBodyIdx.set key: sk1 value: bv1
@@ -533,6 +538,22 @@ declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry de
     return id
 }
 
+# dottedDefTarget -- the "unit.Type" target of a cross-unit type alias
+# (`Node: zast.Node`), or "" when the definition is not a dotted alias.
+dottedDefTarget: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (dottedDefTarget n: n.expression)
+    } case dottedpath then {
+        pn: atomName n: n.parent
+        cn: atomName n: n.child
+        return "\{pn}.\{cn}".string
+    } else {
+        return "".string
+    }
+}
+
 # resolveNamedType -- resolve a bare type NAME to its canonical id via the
 # declare-before-bind index (definingUnitFor -> declareCanonicalType), minting a
 # RECORD shell only for a numeric-literal default or an unresolved/forward name.
@@ -541,6 +562,12 @@ declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry de
 # so a native method's `:this` / `rhs: type` lands on the one canonical id, not a
 # fresh shell.
 resolveNamedType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView name: StringView thisName: StringView} out u64 is {
+    if name == "null" then {
+        return (declareCanonicalType ty: ty reg: reg defUnit: "system" name: "null" typetype: ztypes.ztypetype.NULL)
+    }
+    if name == "never" then {
+        return (declareCanonicalType ty: ty reg: reg defUnit: "system" name: "never" typetype: ztypes.ztypetype.NEVER)
+    }
     b0: name.byteAt 0.u64
     isnum: false
     match (
@@ -583,6 +610,35 @@ resolveNamedType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units:
             }
             return (declareCanonicalType ty: ty reg: reg defUnit: duo7.stringview name: name typetype: tto7)
         } case none then {
+            k7b: "\{duo7}.\{name}".string
+            ex7: ty.resolved.get key: k7b
+            match (
+                ex7
+            ) case some then {
+                return ex7
+            } case none then {}
+            k7c: "\{duo7}.\{name}".string
+            fa7: ty.funcAliases.get key: k7c
+            match (
+                fa7
+            ) case some then {
+                ap7: "".string
+                ac7: "".string
+                with sit7: (fa7.stringview.split sep: ".") do for seg7: sit7 loop {
+                    if ap7.length == 0 then {
+                        ap7 = seg7.string
+                    } else {
+                        ac7 = seg7.string
+                    }
+                }
+                dtk7: "\{ap7}.\{ac7}".string
+                tt7: ty.defTypetype.get key: dtk7
+                match (
+                    tt7
+                ) case some then {
+                    return (declareCanonicalType ty: ty reg: reg defUnit: ap7.stringview name: ac7.stringview typetype: tt7)
+                } case none then {}
+            } case none then {}
             return (reg.newType name: name typetype: ztypes.ztypetype.RECORD)
         }
     } else {
@@ -3290,6 +3346,18 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
 # valtype with a single synth `create` child. The reference special-cases these: they are
 # `record is native` in source but carry a distinct typetype and only a create child.
 registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView tt: ztypes.ztypetype} out u64 is {
+    rk0: "\{unitName}.\{name}".string
+    ex0: ty.resolved.get key: rk0
+    match (
+        ex0
+    ) case some then {
+        reg.setValtype typeId: ex0 value: true
+        ccn0: "\{name}.create".string
+        cci0: reg.newType name: ccn0.stringview typetype: ztypes.ztypetype.FUNCTION
+        ty.setChild parentTypeId: ex0 childName: "create" childTypeId: cci0
+        ty.definedInUnit.set key: ex0 value: unitName.string
+        return ex0
+    } case none then {}
     nid: reg.newType name: name typetype: tt
     nnid: nid
     reg.setValtype typeId: nid value: true
