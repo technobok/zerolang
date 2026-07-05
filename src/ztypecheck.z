@@ -3582,20 +3582,8 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             ty.nodeType.set key: defn.nodeid.u64 value: sda9
         }
     } else {}
-    # Add this def to its unit's children in the persistent hierarchy as it
-    # resolves (the sole builder of unit -> def childOf edges).
-    cuid: ty.unitTypes.get key: unitName.string
-    match (
-        cuid
-    ) case some then {
-        crk: "\{unitName}.\{defName}".string
-        crid: resolvedByKey ty: ty key: crk
-        match (
-            crid
-        ) case some then {
-            ty.setChild parentTypeId: cuid childName: defName childTypeId: crid
-        } case none then {}
-    } case none then {}
+    # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
+    # defs and on demand (resolvedByKey's alias-follow) for aliases; no tail pass.
     ty.inContainmentEdge = prevCE0
     gk1: "\{unitName}.\{defName}".string
     ty.resolving.delete item: gk1
@@ -5249,6 +5237,17 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
         ty.definedInUnit.set key: did value: unitName.string
         rk: "\{unitName}.\{defName}".string
         ty.resolved.set key: rk value: rid
+        # A non-generic inline unit is a real type; lay its unit->def childOf edge
+        # (a generic template must NOT get one -- its id is the pre-instantiation
+        # template, which would shadow instance lookups).
+        if (hasGenericParam items: unitOp.body) == false then {
+            icu0: ty.unitTypes.get key: unitName.string
+            match (
+                icu0
+            ) case some then {
+                ty.setChild parentTypeId: icu0 childName: defName childTypeId: rid
+            } case none then {}
+        }
         biter: unitOp.body.iterate
         for bm: biter loop {
             match (
@@ -13794,7 +13793,7 @@ resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
             return (optionval.some tgo)
         } case none then {}
     } case none then {}
-    return (ty.resolved.get key: key.copy)
+    return (optionval.none u64)
 }
 
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
