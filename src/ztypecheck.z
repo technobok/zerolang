@@ -515,6 +515,12 @@ declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry de
         return ex
     } case none then {}
     id: reg.newType name: name typetype: typetype
+    cud0: ty.unitTypes.get key: defUnit.string
+    match (
+        cud0
+    ) case some then {
+        ty.setChild parentTypeId: cud0 childName: name childTypeId: id
+    } case none then {}
     k2: "\{defUnit}.\{name}".string
     rv: id
     ty.resolved.set key: k2 value: rv
@@ -13714,7 +13720,7 @@ walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: S
 # childOf (during-resolution reads) or non-type binding keys. The read path off
 # the flat map (Stage A). Free fn (not a ZTyping method) so smoke-built low-level
 # modules never pull in .split.
-resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
+childOfWalk: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
     cur: 0.u64
     started: false
     ok: true
@@ -13745,6 +13751,49 @@ resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
     if ok when started then {
         return (optionval.some cur)
     }
+    return (optionval.none u64)
+}
+
+resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
+    wo: childOfWalk ty: ty key: key
+    match (
+        wo
+    ) case some then {
+        return (optionval.some wo)
+    } case none then {}
+    # On-demand alias resolution (no descend, no units): if `key` is a unit-level type
+    # alias, resolve its target with a childOf-only walk and lay the unit->alias edge,
+    # so this and future lookups resolve through childOf instead of the flat map. The
+    # target walk does NOT recurse through this alias-follow, so it always terminates
+    # and a cyclic alias (whose target never has a childOf edge) falls through to the
+    # existing cycle diagnostic rather than being silently followed.
+    aok: key.copy
+    ao: ty.funcAliases.get key: aok
+    match (
+        ao
+    ) case some then {
+        tgo: childOfWalk ty: ty key: ao
+        match (
+            tgo
+        ) case some then {
+            au: "".string
+            an: "".string
+            with sk: (key.stringview.split sep: ".") do for sg: sk loop {
+                if au.length == 0 then {
+                    au = sg.string
+                } else {
+                    an = sg.string
+                }
+            }
+            uro: ty.unitTypes.get key: au
+            match (
+                uro
+            ) case some then {
+                ty.setChild parentTypeId: uro childName: an.stringview childTypeId: tgo
+            } case none then {}
+            return (optionval.some tgo)
+        } case none then {}
+    } case none then {}
     return (ty.resolved.get key: key.copy)
 }
 
@@ -13764,6 +13813,8 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     # resolution (lowerGenerators pre-resolves system.Iterator/optionval when a
     # generator is present), so childOf-at-mint always sees a populated unit root.
     registerUnitRoots ty: st.typing reg: st.reg program: program
+    declareCanonicalType ty: st.typing reg: st.reg defUnit: "system" name: "never" typetype: ztypes.ztypetype.NEVER
+    declareCanonicalType ty: st.typing reg: st.reg defUnit: "system" name: "null" typetype: ztypes.ztypetype.NULL
     lowerGenerators ty: st.typing reg: st.reg program: program
     indexUnitDefs ty: st.typing program: program
     registerAndResolveMain ty: st.typing reg: st.reg program: program full: full
