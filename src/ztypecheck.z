@@ -1323,7 +1323,7 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
         if tn9.stringview == "str" then { isSized9 = true }
         if tn9.stringview == "array" then { isSized9 = true }
         if isSized9 then {
-            mintCollectionChildren ty: ty reg: reg mainName: mainName9 monoName: mname9.stringview monoId: mid9 templateName: tn9.stringview suffix: sfx9.stringview elemArg: firstA9 valArg: 0
+            mintCollectionChildren ty: ty reg: reg mainName: mainName9 monoName: mname9.stringview monoId: mid9 templateId: tplId9 suffix: sfx9.stringview elemArg: firstA9 valArg: 0
         }
         if nid > 0 then {
             smv9: mid9
@@ -6988,7 +6988,7 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         # MapItemIter's iterator element is the derived MapEntry spec (its
         # call's OptionView some-arm), not a trie key
         skipC3: false
-        if tnC3.stringview == "MapItemIter" then {
+        if templateId == (builtinTidT ty: ty base: "MapItemIter") then {
             skipC3 = true
             micoC4: ty.childOf parentTypeId: mid8 name: "call"
             match (
@@ -7014,7 +7014,7 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
             } case none then {}
         }
         if skipC3 == false then {
-            mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: name monoId: mid8 templateName: tnC3.stringview suffix: sfxC3.stringview elemArg: elemC3 valArg: valC3
+            mintCollectionChildren ty: ty reg: reg mainName: mainName monoName: name monoId: mid8 templateId: templateId suffix: sfxC3.stringview elemArg: elemC3 valArg: valC3
         }
     }
     return mid8
@@ -7057,27 +7057,38 @@ monoValName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} o
     return tn
 }
 
-mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView monoName: StringView monoId: u64 templateName: StringView suffix: StringView elemArg: u64 valArg: u64} is {
+mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView monoName: StringView monoId: u64 templateId: u64 suffix: StringView elemArg: u64 valArg: u64} is {
+    listTid: builtinTidT ty: ty base: "List"
+    listViewTid: builtinTidT ty: ty base: "ListView"
+    setTid: builtinTidT ty: ty base: "Set"
+    mapTid: builtinTidT ty: ty base: "Map"
+    mapEntryTid: builtinTidT ty: ty base: "MapEntry"
+    strTid: builtinTidT ty: ty base: "str"
+    arrayTid: builtinTidT ty: ty base: "array"
+    listIterTid: builtinTidT ty: ty base: "ListIter"
+    setIterTid: builtinTidT ty: ty base: "SetIter"
+    mapKeyIterTid: builtinTidT ty: ty base: "MapKeyIter"
+    mapItemIterTid: builtinTidT ty: ty base: "MapItemIter"
     isIter: false
-    if templateName == "ListIter" then { isIter = true }
-    if templateName == "SetIter" then { isIter = true }
-    if templateName == "MapKeyIter" then { isIter = true }
-    if templateName == "MapItemIter" then { isIter = true }
+    if templateId == listIterTid then { isIter = true }
+    if templateId == setIterTid then { isIter = true }
+    if templateId == mapKeyIterTid then { isIter = true }
+    if templateId == mapItemIterTid then { isIter = true }
     isColl: isIter
-    if templateName == "List" then { isColl = true }
-    if templateName == "ListView" then { isColl = true }
-    if templateName == "Set" then { isColl = true }
-    if templateName == "Map" then { isColl = true }
-    if templateName == "MapEntry" then { isColl = true }
-    if templateName == "str" then { isColl = true }
-    if templateName == "array" then { isColl = true }
+    if templateId == listTid then { isColl = true }
+    if templateId == listViewTid then { isColl = true }
+    if templateId == setTid then { isColl = true }
+    if templateId == mapTid then { isColl = true }
+    if templateId == mapEntryTid then { isColl = true }
+    if templateId == strTid then { isColl = true }
+    if templateId == arrayTid then { isColl = true }
     if (isColl) == false then {
         return
     }
     # List children come from the produced template methods cloned per
     # instance (composite returns healed by respecialize); only the
     # length/capacity u64 children materialize here. Runs on every naming.
-    if templateName == "List" then {
+    if templateId == listTid then {
         u64L: 0.u64
         uoL: walkLookupTyperef ty: ty currentUnit: mainName base: "u64"
         match (
@@ -7105,7 +7116,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     # ListView children come from the produced template method (get); the
     # length field (fresh const-clone u64) and the create child still
     # materialize here, once per mono (post-memo: this arm mints).
-    if templateName == "ListView" then {
+    if templateId == listViewTid then {
         vlenV: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
         reg.setValtype typeId: vlenV value: true
         ty.markAsConstClone typeId: vlenV
@@ -7116,7 +7127,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     # Set children come from the produced template methods (returns healed
     # by respecialize); the length/capacity fields (fresh const-clone u64s)
     # and the create child materialize here, once per mono.
-    if templateName == "Set" then {
+    if templateId == setTid then {
         slenS: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
         reg.setValtype typeId: slenS value: true
         ty.markAsConstClone typeId: slenS
@@ -7141,7 +7152,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     # optionval for a valtype, Option/OptionView otherwise) materialize
     # here, once per mono. Map has no create child (its construction path
     # is separate).
-    if templateName == "Map" when valArg > 0 then {
+    if templateId == mapTid when valArg > 0 then {
         mlenM: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
         reg.setValtype typeId: mlenM value: true
         ty.markAsConstClone typeId: mlenM
@@ -7187,8 +7198,8 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         return
     }
     isSized: false
-    if templateName == "str" then { isSized = true }
-    if templateName == "array" then { isSized = true }
+    if templateId == strTid then { isSized = true }
+    if templateId == arrayTid then { isSized = true }
     # str/array are PERMANENT materializer arms: sized RECORDs are keyed by
     # a numeric value parameter that rides the trie as a literal VALUE key
     # (genericArgIsValue marks the ordinal); it never enters idSubs, so
@@ -7214,7 +7225,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         boolid = bo9
     } case none then {
     }
-    if templateName == "MapEntry" then {
+    if templateId == mapEntryTid then {
         kyId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "key"
         reg.setReturnType typeId: kyId value: elemArg
         vlId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "value"
@@ -7223,7 +7234,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         }
         mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "create"
     }
-    if templateName == "array" then {
+    if templateId == arrayTid then {
         agId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "get"
         reg.setReturnType typeId: agId value: elemArg
         asId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "set"
@@ -7238,7 +7249,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         aneId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "!="
         reg.setReturnType typeId: aneId value: boolid
     }
-    if templateName == "str" then {
+    if templateId == strTid then {
         tlen: reg.newType name: "u64" typetype: ztypes.ztypetype.RECORD
         reg.setValtype typeId: tlen value: true
         ty.markAsConstClone typeId: tlen
@@ -7616,7 +7627,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
     if tname.stringview == "str" then { isSized2 = true }
     if tname.stringview == "array" then { isSized2 = true }
     if isSized2 then {
-        mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: mname.stringview monoId: mid templateName: tname.stringview suffix: sfx.stringview elemArg: firstA valArg: 0
+        mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: mname.stringview monoId: mid templateId: tplId suffix: sfx.stringview elemArg: firstA valArg: 0
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped like the reference.
@@ -8411,8 +8422,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     # A StringView base keeps the member path below (StringView.string is a real
     # native converting view -> owned String).
     if cn.stringview == "string" then {
-        sbn9: typeNameOf st: st tid: bt
-        if sbn9.stringview == "String" then {
+        if bt == (builtinTidTc st: st base: "String") then {
             sso9: walkLookupTyperef ty: st.typing currentUnit: unitName base: "String"
             match (
                 sso9
@@ -8428,10 +8438,9 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     # the path resolves to the str TEMPLATE (unstamped -- the call check
     # mints the sized instance and stamps only the Call node).
     if cn.stringview == "str" then {
-        bnm9: typeNameOf st: st tid: bt
         isStrBase: false
-        if bnm9.stringview == "String" then { isStrBase = true }
-        if bnm9.stringview == "StringView" then { isStrBase = true }
+        if bt == (builtinTidTc st: st base: "String") then { isStrBase = true }
+        if bt == (builtinTidTc st: st base: "StringView") then { isStrBase = true }
         if (isStrBase) == false then {
             bz9: st.reg.typeById.get key: bt
             match (
@@ -8653,7 +8662,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                             vsE9: (Map String value: u64)
                             amid: getOrMintSpec ty: st.typing reg: st.reg mainName: unitName name: amn.stringview templateId: ato subs: asubs valSubs: vsE9 fallbackArg: 0
                             asfx: "_\{den}_\{ecnt}"
-                            mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: amn.stringview monoId: amid templateName: "array" suffix: asfx.stringview elemArg: elo valArg: 0
+                            mintCollectionChildren ty: st.typing reg: st.reg mainName: unitName monoName: amn.stringview monoId: amid templateId: ato suffix: asfx.stringview elemArg: elo valArg: 0
                             setar: amid
                             st.typing.nodeType.set key: dp.nodeid.u64 value: setar
                             return amid
@@ -11055,8 +11064,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         }
                         isSvw9: false
                         if svret9 > 0 then {
-                            rn9: typeNameOf st: st tid: svret9
-                            if rn9.stringview == "StringView" then { isSvw9 = true }
+                            if svret9 == (builtinTidTc st: st base: "StringView") then { isSvw9 = true }
                         }
                         hasFT9: false
                         with fiter9: call.arguments.iterate do for fa9: fiter9 loop {
