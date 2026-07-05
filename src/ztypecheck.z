@@ -3577,7 +3577,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
         }
     } else {}
     # Add this def to its unit's children in the persistent hierarchy as it
-    # resolves, mirroring populateUnitBodyChildren edge-for-edge.
+    # resolves (the sole builder of unit -> def childOf edges).
     cuid: ty.unitTypes.get key: unitName.string
     match (
         cuid
@@ -13740,51 +13740,6 @@ resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
     return (ty.resolved.get key: key.copy)
 }
 
-# Record (unit -> top-level def) child edges for one unit, mapping each resolved
-# definition name to its canonical type id.
-populateUnitBodyChildren: function {ty: ztyping.ZTyping unitName: StringView unitop: Node} is {
-    uido: ty.unitTypes.get key: unitName.string
-    match (
-        uido
-    ) case some then {
-        match (
-            unitop
-        ) case unitdef then {
-            with bit: unitop.body.iterate do for bm: bit loop {
-                match (
-                    bm
-                ) case namedoperation then {
-                    dn: unitLabel o: bm.name
-                    k: "\{unitName}.\{dn}".string
-                    rido: ty.resolved.get key: k
-                    match (
-                        rido
-                    ) case some then {
-                        ty.setChild parentTypeId: uido childName: dn.stringview childTypeId: rido
-                    } case none then {}
-                } else {}
-            }
-        } else {}
-    } case none then {}
-}
-
-# Populate the units-as-containers hierarchy: each unit's top-level defs become
-# childOf edges on the unit's type id.
-populateUnitChildren: function {ty: ztyping.ZTyping program: Node} is {
-    match (
-        program
-    ) case program then {
-        with uit: program.units.iterate do for ru: uit loop {
-            match (
-                ru
-            ) case namedoperation then {
-                unm: unitLabel o: ru.name
-                populateUnitBodyChildren ty: ty unitName: unm.stringview unitop: ru.operation
-            } else {}
-        }
-    } else {}
-}
-
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     match (
@@ -13806,7 +13761,6 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     }
     resolveDemandsByDescent ty: st.typing reg: st.reg program: program full: full
     resolveTypeAliases ty: st.typing reg: st.reg
-    populateUnitChildren ty: st.typing program: program
     match (
         program
     ) case program then {
