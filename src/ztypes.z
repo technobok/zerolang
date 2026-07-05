@@ -492,6 +492,24 @@ ZEntry: class {
 # returns its id; the symbol table / type checker read type metadata by
 # id. The by-id conformance table arrives with a later slice. ---
 
+# A generic parameter's declared constraint, classified once at registration
+# so the checks compare a tag rather than the text. numericMax carries the
+# integer bound for NUMERIC; it is none for every other kind.
+constraintkind: variant {
+    NONE:       null
+    ANY:        null
+    VALTYPE:    null
+    REFTYPE:    null
+    STRINGLIKE: null
+    NUMERIC:    null
+    OTHER:      null
+} as { tag: u8.tag }
+
+ConstraintDesc: record {
+    kind:       constraintkind
+    numericMax: (optionval u64)
+}
+
 ZTypeRegistry: class {
     nextTypeId:        u64
     nextChildId:       u64
@@ -505,7 +523,7 @@ ZTypeRegistry: class {
     unitSeededDemand:  (Map String value: bool)
     regMainUnit:       String
     genericParamSet:   (Set String)
-    genericParamConstraint: (Map String value: String)
+    genericParamConstraint: (Map String value: ConstraintDesc)
     genericParamTid:     (Map String value: u64)
 } as {
     allocType: function {:this} out u64 is {
@@ -946,10 +964,10 @@ ZTypeRegistry: class {
         this.genericParamTid.set key: k value: v
     }
 
-    addGenericParam: function {:this typeKey: StringView paramName: StringView constraint: StringView} is {
+    addGenericParam: function {:this typeKey: StringView paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
         this.genericParamSet.add item: "\{typeKey}.\{paramName}".string
         ck: "\{typeKey}.\{paramName}".string
-        cv: constraint.string
+        cv: (ConstraintDesc kind: kind numericMax: numericMax)
         this.genericParamConstraint.set key: ck value: cv
     }
 
@@ -957,17 +975,16 @@ ZTypeRegistry: class {
         return (this.genericParamSet.has item: "\{typeKey}.\{name}".string)
     }
 
-    # genericParamConstraintOf -- the declared constraint text for a
-    # template parameter ("Any", "Any.valtype", "u64", "StringLike"), or ""
-    # when the parameter is unknown.
-    genericParamConstraintOf: function {:this typeKey: StringView paramName: StringView} out String is {
+    # genericParamConstraintOf -- the classified constraint for a template
+    # parameter, or a NONE-kind descriptor when the parameter is unknown.
+    genericParamConstraintOf: function {:this typeKey: StringView paramName: StringView} out ConstraintDesc is {
         got: this.genericParamConstraint.get key: "\{typeKey}.\{paramName}".string
         match (
             got
         ) case some then {
-            return got.copy
+            return (ConstraintDesc kind: got.kind numericMax: got.numericMax)
         } case none then {}
-        return "".string
+        return (ConstraintDesc kind: constraintkind.NONE numericMax: (optionval.none u64))
     }
 
     genericParamNamesOf: function {:this typeKey: StringView} out List String is {
@@ -988,7 +1005,7 @@ ZTypeRegistry: class {
 }
 
 newRegistry: function {} out ZTypeRegistry is {
-    return (ZTypeRegistry nextTypeId: 0 nextChildId: 0 nextVariableId: 0 nextScopeId: 0 nextEntryId: 0 nextConformanceId: 0 typeById: (Map u64 value: ZType) crossUnitDemand: (Set String) unitNameTid: (Map String value: u64) unitSeededDemand: (Map String value: bool) regMainUnit: "".string genericParamSet: (Set String) genericParamConstraint: (Map String value: String) genericParamTid: (Map String value: u64))
+    return (ZTypeRegistry nextTypeId: 0 nextChildId: 0 nextVariableId: 0 nextScopeId: 0 nextEntryId: 0 nextConformanceId: 0 typeById: (Map u64 value: ZType) crossUnitDemand: (Set String) unitNameTid: (Map String value: u64) unitSeededDemand: (Map String value: bool) regMainUnit: "".string genericParamSet: (Set String) genericParamConstraint: (Map String value: ConstraintDesc) genericParamTid: (Map String value: u64))
 }
 
 makeIntConst: function {v: i64} out ZConst is {

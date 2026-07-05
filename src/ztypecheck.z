@@ -915,7 +915,12 @@ registerGenericParams: function {reg: ztypes.ZTypeRegistry typeKey: StringView i
                 if ckx9.length > 0 then {
                     cf9x = "\{cb}.\{ckx9}"
                 }
-                reg.addGenericParam typeKey: typeKey paramName: pn.stringview constraint: cf9x.stringview
+                k9: constraintKindFor text: cf9x.stringview
+                mx9: (optionval.none u64)
+                if k9 == ztypes.constraintkind.NUMERIC then {
+                    mx9 = constraintNumericMax cv: cf9x.stringview
+                }
+                reg.addGenericParam typeKey: typeKey paramName: pn.stringview kind: k9 numericMax: mx9
             }
         } else {}
     }
@@ -6422,8 +6427,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
                 match (
                     co9
                 ) case some then {
-                    cvv9: co9.stringview
-                    cc9: cvv9.string
+                    cc9: constraintTextOf desc: co9
                     pCons9.append cc9
                 } case none then {
                     e9: "".string
@@ -6602,6 +6606,57 @@ mapGetWrapperName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry valAr
 # pass; value-kind constraints check typeIsValtype/typeIsReftype; StringLike
 # checks membership. GENERIC_PARAM args skip -- partial specs re-check on
 # completion. Location-free (the spec front door holds no source node).
+# constraintKindFor -- classify a constraint's declared text into a tag once,
+# at registration; the checks then compare the tag, not the string.
+constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
+    if text == "Any.valtype" then { return ztypes.constraintkind.VALTYPE }
+    if text == "Any.reftype" then { return ztypes.constraintkind.REFTYPE }
+    if text == "StringLike" then { return ztypes.constraintkind.STRINGLIKE }
+    if text == "Any" then { return ztypes.constraintkind.ANY }
+    if text.length == 0 then { return ztypes.constraintkind.NONE }
+    nm9: constraintNumericMax cv: text
+    match (
+        nm9
+    ) case some then {
+        return ztypes.constraintkind.NUMERIC
+    } case none then {
+    }
+    return ztypes.constraintkind.OTHER
+}
+
+# constraintNumericName -- the integer-scalar name for a numeric bound, for
+# diagnostics; the exact inverse of constraintNumericMax.
+constraintNumericName: function {max: u64} out String is {
+    if max == 255 then { return "u8".string }
+    if max == 65535 then { return "u16".string }
+    if max == 4294967295 then { return "u32".string }
+    if max == 18446744073709551615.u64 then { return "u64".string }
+    if max == 127 then { return "i8".string }
+    if max == 32767 then { return "i16".string }
+    if max == 2147483647 then { return "i32".string }
+    if max == 9223372036854775807 then { return "i64".string }
+    return "".string
+}
+
+# constraintTextOf -- reconstruct a constraint's declared text from its tag
+# for diagnostics; reads fields only, constructs nothing.
+constraintTextOf: function {desc: ztypes.ConstraintDesc} out String is {
+    if desc.kind == ztypes.constraintkind.VALTYPE then { return "Any.valtype".string }
+    if desc.kind == ztypes.constraintkind.REFTYPE then { return "Any.reftype".string }
+    if desc.kind == ztypes.constraintkind.STRINGLIKE then { return "StringLike".string }
+    if desc.kind == ztypes.constraintkind.ANY then { return "Any".string }
+    if desc.kind == ztypes.constraintkind.NUMERIC then {
+        nmx7: desc.numericMax
+        match (
+            nmx7
+        ) case some then {
+            return (constraintNumericName max: nmx7)
+        } case none then {
+        }
+    }
+    return "".string
+}
+
 # constraintNumericMax -- the largest value an integer-scalar generic-param
 # constraint admits; none when the constraint is not an integer scalar (a
 # numeric argument on such a parameter stays on the name-keyed path).
@@ -6621,16 +6676,16 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
     if (reg.typetypeOf typeId: argTid) == ztypes.ztypetype.GENERIC_PARAM then {
         return
     }
-    con9: reg.genericParamConstraintOf typeKey: typeKey paramName: paramName
-    if con9.length == 0 then {
+    cd9: reg.genericParamConstraintOf typeKey: typeKey paramName: paramName
+    ck9: cd9.kind
+    if ck9 == ztypes.constraintkind.NONE then {
         return
     }
-    cv9: con9.stringview
     ok9: true
-    if cv9 == "Any.valtype" then {
+    if ck9 == ztypes.constraintkind.VALTYPE then {
         ok9 = typeIsValtype ty: ty reg: reg tid: argTid
     }
-    if cv9 == "Any.reftype" then {
+    if ck9 == ztypes.constraintkind.REFTYPE then {
         rz9: reg.typeById.get key: argTid
         rOk9: false
         match (
@@ -6647,7 +6702,7 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
         }
         ok9 = rOk9
     }
-    if cv9 == "StringLike" then {
+    if ck9 == ztypes.constraintkind.STRINGLIKE then {
         okSL9: false
         svT9: builtinTidT ty: ty base: "StringView"
         if svT9 > 0 when argTid == svT9 then {
@@ -6686,6 +6741,7 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
     }
     if (ok9) == false then {
         an9: regTypeNameOf reg: reg tid: argTid
+        con9: constraintTextOf desc: cd9
         m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{typeKey}'"
         addResolveError ty: ty e: zast.err.GENERICERROR msg: m9
     }
@@ -6787,12 +6843,13 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
                 # a numeric literal keys its trie level by VALUE; per-level
                 # kind is fixed by the parameter, so values and type ids
                 # cannot collide
-                cvn8: reg.genericParamConstraintOf typeKey: tk8.stringview paramName: pn8.stringview
-                cmx8: constraintNumericMax cv: cvn8.stringview
+                cd8: reg.genericParamConstraintOf typeKey: tk8.stringview paramName: pn8.stringview
+                nmx8: cd8.numericMax
                 match (
-                    cmx8
+                    nmx8
                 ) case some then {
-                    if vgot8 > cmx8 then {
+                    if vgot8 > nmx8 then {
+                        cvn8: constraintTextOf desc: cd8
                         m8v: "numeric argument \{vgot8} exceeds constraint '\{cvn8}' on parameter '\{pn8}' of '\{tk8}'"
                         addResolveError ty: ty e: zast.err.GENERICERROR msg: m8v
                     }
