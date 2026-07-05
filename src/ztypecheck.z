@@ -501,18 +501,22 @@ definingUnitFor: function {ty: ztyping.ZTyping currentUnit: StringView name: Str
     return "".string
 }
 
-# declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` into
-# ty.resolved (with definedInUnit set). The single convergence point for both a
+# declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` as a
+# childOf edge under its unit (with definedInUnit set). The single convergence point for both a
 # reference (resolveAtomType) and the definition (the resolveX resolvers): whoever
 # runs first mints; the rest reuse the same id. Does NOT touch definedKeys (the
 # body-resolved marker), so demanded bodies still resolve lazily.
 declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry defUnit: StringView name: StringView typetype: ztypes.ztypetype} out u64 is {
-    k: "\{defUnit}.\{name}".string
-    ex: ty.resolved.get key: k
+    cudm: ty.unitTypes.get key: defUnit.string
     match (
-        ex
+        cudm
     ) case some then {
-        return ex
+        exm: ty.childOf parentTypeId: cudm name: name
+        match (
+            exm
+        ) case some then {
+            return exm
+        } case none then {}
     } case none then {}
     id: reg.newType name: name typetype: typetype
     cud0: ty.unitTypes.get key: defUnit.string
@@ -521,9 +525,6 @@ declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry de
     ) case some then {
         ty.setChild parentTypeId: cud0 childName: name childTypeId: id
     } case none then {}
-    k2: "\{defUnit}.\{name}".string
-    rv: id
-    ty.resolved.set key: k2 value: rv
     idu: id
     duv: defUnit.string
     ty.definedInUnit.set key: idu value: duv
@@ -603,7 +604,7 @@ resolveNamedType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units:
             return (declareCanonicalType ty: ty reg: reg defUnit: duo7.stringview name: name typetype: tto7)
         } case none then {
             k7b: "\{duo7}.\{name}".string
-            ex7: ty.resolved.get key: k7b
+            ex7: resolvedByKey ty: ty key: k7b
             match (
                 ex7
             ) case some then {
@@ -2130,8 +2131,6 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
         ty.funcReturnsBorrow.set key: fbk value: fbv
     }
     ty.definedInUnit.set key: dfid value: unitName.string
-    key: "\{unitName}.\{defName}".string
-    ty.resolved.set key: key value: fid
     return rfid
 }
 
@@ -2422,8 +2421,6 @@ resolveData: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: S
     tagId: declareCanonicalType ty: ty reg: reg defUnit: "system" name: tagName.stringview typetype: ztypes.ztypetype.RECORD
     ty.setChild parentTypeId: did childName: "tag" childTypeId: tagId
     ty.definedInUnit.set key: ddid value: unitName.string
-    key: "\{unitName}.\{defName}".string
-    ty.resolved.set key: key value: did
 }
 
 # isTypedefField -- true when a type-expr Node is an `X.typedef` dottedpath (the
@@ -2693,8 +2690,6 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
         }
     }
     ty.definedInUnit.set key: rrid value: unitName.string
-    key: "\{unitName}.\{defName}".string
-    ty.resolved.set key: key value: rid
 }
 
 # resolveVariant -- resolve a variant ObjectDef into a VARIANT valtype: a child per
@@ -2760,8 +2755,6 @@ resolveVariant: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: L
         ty.setChild parentTypeId: vid childName: "!=" childTypeId: neqId
     }
     ty.definedInUnit.set key: vvid value: unitName.string
-    key: "\{unitName}.\{defName}".string
-    ty.resolved.set key: key value: vid
 }
 
 # dottedParentName -- the parent atom name of a `parent.child` dottedpath Node, ""
@@ -2930,8 +2923,6 @@ resolveUnion: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
         reg.setDestructorName typeId: uid name: dn.stringview
     }
     ty.definedInUnit.set key: uuid value: unitName.string
-    key: "\{unitName}.\{defName}".string
-    ty.resolved.set key: key value: uid
 }
 
 # fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder keeps
@@ -2992,10 +2983,7 @@ fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry u
 resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView cnode: zast.ObjectDefData} is {
     cid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.CLASS
     ccid: cid
-    rcid: cid
     reg.setValtype typeId: cid value: false
-    rkey: "\{unitName}.\{defName}".string
-    ty.resolved.set key: rkey value: rcid
     needsDtor: false
     isgen: hasGenericParam items: cnode.asItems
     if isgen then {
@@ -3227,10 +3215,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
 resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
     fid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.FACET
     ffid: fid
-    rfid: fid
     reg.setValtype typeId: fid value: true
-    rkey: "\{unitName}.\{defName}".string
-    ty.resolved.set key: rkey value: rfid
     isgen: hasGenericParam items: fnode.isItems
     if isgen then {
         reg.setGeneric typeId: fid value: true
@@ -3280,10 +3265,7 @@ resolveFacet: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
 resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List Node unitName: StringView defName: StringView fnode: zast.ObjectDefData} is {
     pid: declareCanonicalType ty: ty reg: reg defUnit: unitName name: defName typetype: ztypes.ztypetype.PROTOCOL
     ppid: pid
-    rpid: pid
     reg.setValtype typeId: pid value: false
-    rkey: "\{unitName}.\{defName}".string
-    ty.resolved.set key: rkey value: rpid
     isgen: hasGenericParam items: fnode.isItems
     if isgen then {
         reg.setGeneric typeId: pid value: true
@@ -3342,7 +3324,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
 # `record is native` in source but carry a distinct typetype and only a create child.
 registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView tt: ztypes.ztypetype} out u64 is {
     rk0: "\{unitName}.\{name}".string
-    ex0: ty.resolved.get key: rk0
+    ex0: resolvedByKey ty: ty key: rk0
     match (
         ex0
     ) case some then {
@@ -3360,9 +3342,6 @@ registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitN
     ccid: reg.newType name: ccname.stringview typetype: ztypes.ztypetype.FUNCTION
     ty.setChild parentTypeId: nid childName: "create" childTypeId: ccid
     ty.definedInUnit.set key: nnid value: unitName.string
-    rk: "\{unitName}.\{name}".string
-    rv9: nid
-    ty.resolved.set key: rk value: rv9
     return nid
 }
 
@@ -3575,9 +3554,6 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             } case none then {
                 aid9 = resolveAtomType ty: ty reg: reg units: units unitName: unitName nm: acNm9.stringview thisName: ""
             }
-            ark9b: ark9.copy
-            arv9: aid9
-            ty.resolved.set key: ark9b value: arv9
             sda9: aid9
             ty.nodeType.set key: defn.nodeid.u64 value: sda9
         }
@@ -3603,9 +3579,7 @@ resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is 
         match (
             tgo
         ) case some then {
-            ak: "\{e.key}".string
             tv: tgo
-            ty.resolved.set key: ak value: tv
             au: "".string
             an: "".string
             with skit: (e.key.stringview.split sep: ".") do for kseg: skit loop {
@@ -3666,8 +3640,6 @@ resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is 
                             isMem = false
                         }
                         if isMem then {
-                            vak: "\{e.key}".string
-                            ty.resolved.set key: vak value: tto
                             vuro: ty.unitTypes.get key: vau.copy
                             match (
                                 vuro
@@ -5235,8 +5207,6 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
             }
         }
         ty.definedInUnit.set key: did value: unitName.string
-        rk: "\{unitName}.\{defName}".string
-        ty.resolved.set key: rk value: rid
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
@@ -5286,8 +5256,6 @@ createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         iuk: monoName.string
         iuv: monoId
         ty.unitTypes.set key: iuk value: iuv
-        rk2: "\{unitName}.\{monoName}".string
-        ty.resolved.set key: rk2 value: rid
         ccu2: ty.unitTypes.get key: unitName.string
         match (
             ccu2
@@ -5592,9 +5560,6 @@ buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units
                     }
                     registerMonoFnParams ty: ty op: fm.operation fnId: newFnId gpNames: gpNames argId: argId
                     ty.setChild parentTypeId: monoId childName: fn.stringview childTypeId: newFnId
-                    rfk: "\{monoName}.\{fn}".string
-                    rfv: newFnId
-                    ty.resolved.set key: rfk value: rfv
                     co9: cloneUnitMethod ids: ids9 op: fm.operation
                     match (
                         co9
@@ -5713,9 +5678,6 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
                     }
                 } else {}
             }
-            bk: "\{mainName}.\{rb}".string
-            bv: mid9
-            ty.resolved.set key: bk value: bv
             if re > 0 then {
                 ev: mid9
                 ty.nodeType.set key: re value: ev
@@ -5837,7 +5799,7 @@ builtinTidTc: function {st: zenv.ZSymbolTable base: StringView} out u64 is {
 
 # stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
 # resolved type. Runs after the demand descent, so system + forward refs are present
-# in ty.resolved. pendingTyperef is a sibling field of resolved / nodeType (no lock
+# in childOf. pendingTyperef is a sibling field of nodeType (no lock
 # conflict). The widened typed_nodes differential reads the resulting nodeType rows.
 stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
     match (
@@ -6307,9 +6269,6 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     }
     # Register under <unit>.<mangled> so name lookups (field/arm shells named
     # by the mangled form) resolve to the instance once minted.
-    rk9: "\{mainName}.\{name}".string
-    rv9: mid
-    ty.resolved.set key: rk9 value: rv9
     mcu9: ty.unitTypes.get key: mainName.string
     match (
         mcu9
@@ -6319,9 +6278,6 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     # monos are global (defined_in_unit NULL): the system-keyed alias makes
     # them resolvable from every unit's lookup chain (a pending instantiation
     # staged while resolving io.z resolves nested args with mainName "io").
-    rk8: "system.\{name}".string
-    rv8: mid
-    ty.resolved.set key: rk8 value: rv8
     mcu8: ty.unitTypes.get key: "system".string
     match (
         mcu8
@@ -13204,9 +13160,6 @@ resolveUnitIfDef: function {ty: ztyping.ZTyping mainName: StringView defName: St
             ty.nodeType.set key: wrapperId.u64 value: setw9
             seti9: t9
             ty.nodeType.set key: n.nodeid.u64 value: seti9
-            k9: "\{mainName}.\{defName}".string
-            setr9: t9
-            ty.resolved.set key: k9 value: setr9
             cu9: ty.unitTypes.get key: mainName.string
             match (
                 cu9
@@ -13239,9 +13192,6 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
             match (
                 tOpt
             ) case some then {
-                k: "\{mainName}.\{defName}".string
-                setv: tOpt
-                ty.resolved.set key: k value: setv
                 cu: ty.unitTypes.get key: mainName.string
                 match (
                     cu
@@ -13270,9 +13220,6 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
                 match (
                     mOpt
                 ) case some then {
-                    k2: "\{mainName}.\{defName}".string
-                    setv2: mOpt
-                    ty.resolved.set key: k2 value: setv2
                     cu2: ty.unitTypes.get key: mainName.string
                     match (
                         cu2
@@ -13283,9 +13230,6 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
                 }
             } else {
                 if bt > 0 then {
-                    k3: "\{mainName}.\{defName}".string
-                    setv3: bt
-                    ty.resolved.set key: k3 value: setv3
                     cu3: ty.unitTypes.get key: mainName.string
                     match (
                         cu3
