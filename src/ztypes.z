@@ -510,6 +510,19 @@ ConstraintDesc: record {
     numericMax: (optionval u64)
 }
 
+# ParamDesc / ParamList -- a template's generic parameters in declaration
+# order, each with the constraint classified at registration. The resolved
+# GENERIC_PARAM type id stays in genericParamTid (set later, during
+# resolution). ParamDesc is a class because it holds a String.
+ParamDesc: class {
+    name:       String
+    constraint: ConstraintDesc
+}
+
+ParamList: class {
+    params: (List ParamDesc)
+}
+
 ZTypeRegistry: class {
     nextTypeId:        u64
     nextChildId:       u64
@@ -522,8 +535,7 @@ ZTypeRegistry: class {
     unitNameTid:       (Map String value: u64)
     unitSeededDemand:  (Map String value: bool)
     regMainUnit:       String
-    genericParamSet:   (Set String)
-    genericParamConstraint: (Map String value: ConstraintDesc)
+    genericParams: (Map String value: ParamList)
     genericParamTid:     (Map String value: u64)
 } as {
     allocType: function {:this} out u64 is {
@@ -965,47 +977,90 @@ ZTypeRegistry: class {
     }
 
     addGenericParam: function {:this typeKey: StringView paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
-        this.genericParamSet.add item: "\{typeKey}.\{paramName}".string
-        ck: "\{typeKey}.\{paramName}".string
-        cv: (ConstraintDesc kind: kind numericMax: numericMax)
-        this.genericParamConstraint.set key: ck value: cv
+        tk: typeKey.string
+        plo: this.genericParams.get key: tk
+        match (
+            plo
+        ) case some then {
+            has9: false
+            i9: 0.u64
+            n9: plo.params.length
+            for i9 < n9 loop {
+                pdx: plo.params.get i: i9
+                if pdx.name.stringview == paramName then {
+                    has9 = true
+                }
+                i9 = i9 + 1
+            }
+            if (has9) == false then {
+                plo.params.append (ParamDesc name: paramName.string constraint: (ConstraintDesc kind: kind numericMax: numericMax))
+            }
+        } case none then {
+            np: (ParamList params: (List ParamDesc))
+            np.params.append (ParamDesc name: paramName.string constraint: (ConstraintDesc kind: kind numericMax: numericMax))
+            this.genericParams.set key: tk value: np
+        }
     }
 
     isGenericParamOf: function {:this typeKey: StringView name: StringView} out bool is {
-        return (this.genericParamSet.has item: "\{typeKey}.\{name}".string)
+        plo: this.genericParams.get key: typeKey.string
+        match (
+            plo
+        ) case some then {
+            i9: 0.u64
+            n9: plo.params.length
+            for i9 < n9 loop {
+                pdx: plo.params.get i: i9
+                if pdx.name.stringview == name then {
+                    return true
+                }
+                i9 = i9 + 1
+            }
+        } case none then {}
+        return false
     }
 
     # genericParamConstraintOf -- the classified constraint for a template
     # parameter, or a NONE-kind descriptor when the parameter is unknown.
     genericParamConstraintOf: function {:this typeKey: StringView paramName: StringView} out ConstraintDesc is {
-        got: this.genericParamConstraint.get key: "\{typeKey}.\{paramName}".string
+        plo: this.genericParams.get key: typeKey.string
         match (
-            got
+            plo
         ) case some then {
-            return (ConstraintDesc kind: got.kind numericMax: got.numericMax)
+            i9: 0.u64
+            n9: plo.params.length
+            for i9 < n9 loop {
+                pdx: plo.params.get i: i9
+                if pdx.name.stringview == paramName then {
+                    return (ConstraintDesc kind: pdx.constraint.kind numericMax: pdx.constraint.numericMax)
+                }
+                i9 = i9 + 1
+            }
         } case none then {}
         return (ConstraintDesc kind: constraintkind.NONE numericMax: (optionval.none u64))
     }
 
     genericParamNamesOf: function {:this typeKey: StringView} out List String is {
         names: (List String)
-        pfx: "\{typeKey}."
-        with kit: this.genericParamConstraint.iterate do for k: kit loop {
-            po: k.stringview.stripPrefix p: pfx.stringview
-            match (
-                po
-            ) case some then {
-                names.append po.string
-            } case none then {
+        plo: this.genericParams.get key: typeKey.string
+        match (
+            plo
+        ) case some then {
+            i9: 0.u64
+            n9: plo.params.length
+            for i9 < n9 loop {
+                pdx: plo.params.get i: i9
+                names.append pdx.name.copy
+                i9 = i9 + 1
             }
-        }
+        } case none then {}
         return names
     }
 
 }
 
 newRegistry: function {} out ZTypeRegistry is {
-    return (ZTypeRegistry nextTypeId: 0 nextChildId: 0 nextVariableId: 0 nextScopeId: 0 nextEntryId: 0 nextConformanceId: 0 typeById: (Map u64 value: ZType) crossUnitDemand: (Set String) unitNameTid: (Map String value: u64) unitSeededDemand: (Map String value: bool) regMainUnit: "".string genericParamSet: (Set String) genericParamConstraint: (Map String value: ConstraintDesc) genericParamTid: (Map String value: u64))
+    return (ZTypeRegistry nextTypeId: 0 nextChildId: 0 nextVariableId: 0 nextScopeId: 0 nextEntryId: 0 nextConformanceId: 0 typeById: (Map u64 value: ZType) crossUnitDemand: (Set String) unitNameTid: (Map String value: u64) unitSeededDemand: (Map String value: bool) regMainUnit: "".string genericParams: (Map String value: ParamList) genericParamTid: (Map String value: u64))
 }
 
 makeIntConst: function {v: i64} out ZConst is {
