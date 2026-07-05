@@ -371,6 +371,10 @@ indexUnitBody: function {ty: ztyping.ZTyping unitName: StringView unitIdx: u64 u
                 if atgt0.length > 0 then {
                     ak0: "\{unitName}.\{dn}".string
                     ty.funcAliases.set key: ak0 value: atgt0
+                    adn0: "\{unitName}.\{dn}".string
+                    adnid0: nodeId n: bm.operation
+                    adv0: adnid0.u64
+                    ty.aliasDefNode.set key: adn0 value: adv0
                 }
                 sk1: "\{unitName}.\{dn}".string
                 bv1: bidx0
@@ -3599,7 +3603,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
 # Without this an alias whose target was unresolved when first walked stays bound to a
 # phantom RECORD shell (a second empty `Node` beside the real zast.Node union), which
 # breaks cross-unit return types and union-arm construction.
-resolveTypeAliases: function {ty: ztyping.ZTyping} is {
+resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is {
     with it: ty.funcAliases.iterateItems do for e: it loop {
         tgo: resolvedByKey ty: ty key: e.value
         match (
@@ -3623,7 +3627,73 @@ resolveTypeAliases: function {ty: ztyping.ZTyping} is {
             ) case some then {
                 ty.setChild parentTypeId: uro childName: an.stringview childTypeId: tv
             } case none then {}
-        } case none then {}
+        } case none then {
+            vau: "".string
+            van: "".string
+            with vkit: (e.key.stringview.split sep: ".") do for vseg: vkit loop {
+                if vau.length == 0 then {
+                    vau = vseg.string
+                } else {
+                    van = vseg.string
+                }
+            }
+            vroot: "".string
+            vmem: "".string
+            with vvit: (e.value.stringview.split sep: ".") do for vvseg: vvit loop {
+                if vroot.length == 0 then {
+                    vroot = vvseg.string
+                } else {
+                    vmem = vvseg.string
+                }
+            }
+            tto: walkLookupTyperef ty: ty currentUnit: vau.stringview base: vroot.stringview
+            match (
+                tto
+            ) case some then {
+                memo: ty.childOf parentTypeId: tto name: vmem.stringview
+                match (
+                    memo
+                ) case some then {
+                    rtt: reg.typetypeOf typeId: tto
+                    isTag: false
+                    if rtt == ztypes.ztypetype.VARIANT then {
+                        isTag = true
+                    }
+                    if rtt == ztypes.ztypetype.UNION then {
+                        isTag = true
+                    }
+                    if isTag then {
+                        mtt: reg.typetypeOf typeId: memo
+                        isMem: true
+                        if mtt == ztypes.ztypetype.FUNCTION then {
+                            isMem = false
+                        }
+                        if mtt == ztypes.ztypetype.DATA then {
+                            isMem = false
+                        }
+                        if isMem then {
+                            vak: "\{e.key}".string
+                            ty.resolved.set key: vak value: tto
+                            vuro: ty.unitTypes.get key: vau.copy
+                            match (
+                                vuro
+                            ) case some then {
+                                ty.setChild parentTypeId: vuro childName: van.stringview childTypeId: tto
+                            } case none then {}
+                            vno: ty.aliasDefNode.get key: e.key.copy
+                            match (
+                                vno
+                            ) case some then {
+                                vrn: vroot.copy
+                                ty.pendingTyperef.set key: vno value: vrn
+                                vun: vau.copy
+                                ty.pendingTyperefUnit.set key: vno value: vun
+                            } case none then {}
+                        }
+                    }
+                } case none then {}
+            } case none then {}
+        }
     }
 }
 
@@ -3944,8 +4014,8 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
 # program can require without ever writing a resolvable reference to them.
 # Numeric scalars + tag back per-use literal shells (resolveAtomType mints
 # them by name; the canonical defs must exist as typedef/emission bases),
-# and bool backs core's true/false re-exports (resolveCoreBools links
-# against the already-resolved system.bool). Every other system type is
+# and bool backs core's true/false re-exports (resolveTypeAliases resolves
+# them against the already-resolved system.bool). Every other system type is
 # reached by reference descent at its first use.
 seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "i8"
@@ -4485,64 +4555,6 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
     } else {}
 }
 
-# resolveCoreBools -- register core's true/false re-exports as the bool
-# type and stamp each definition's `bool.<tag>` ref. The rest of core is
-# alias re-exports the demand sweep must not touch.
-resolveCoreBools: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
-    match (
-        program
-    ) case program then {
-        with citer: program.units.iterate do for cu: citer loop {
-            match (
-                cu
-            ) case namedoperation then {
-                cnm: unitLabel o: cu.name
-                if cnm.stringview == "core" then {
-                    resolveCoreBoolsIn ty: ty unitdef: cu.operation
-                }
-            } else {
-            }
-        }
-    } else {
-    }
-}
-
-resolveCoreBoolsIn: function {ty: ztyping.ZTyping unitdef: Node} is {
-    boolId: optU64Or o: (resolvedByKey ty: ty key: "system.bool".string) d: 0
-    if boolId == 0 then {
-        return
-    }
-    match (
-        unitdef
-    ) case unitdef then {
-        biter: unitdef.body.iterate
-        for bm: biter loop {
-            match (
-                bm
-            ) case namedoperation then {
-                dn: unitLabel o: bm.name
-                isBoolName: false
-                if dn.stringview == "true" then { isBoolName = true }
-                if dn.stringview == "false" then { isBoolName = true }
-                if isBoolName then {
-                    rk: "core.\{dn}".string
-                    rv: boolId
-                    ty.resolved.set key: rk value: rv
-                    did: nodeId n: bm.operation
-                    if did > 0 then {
-                        bnm: "bool".string
-                        ty.pendingTyperef.set key: did.u64 value: bnm
-                        bun: "".string
-                        ty.pendingTyperefUnit.set key: did.u64 value: bun
-                    }
-                }
-            } else {
-            }
-        }
-    } else {
-    }
-}
-
 # onFirstEntry -- run a stdlib / dependency unit's one-time demand machinery the
 # first time the descent worklist resolves a def in it: seed io's internal
 # closure (under the full body-walk driver), resolve the conformance declarers
@@ -4657,19 +4669,6 @@ resolveDemandsByDescent: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
             }
         }
     } else {}
-    # bare bool literals resolve through core's true/false re-exports
-    # (`false: bool.false`): the constant registers as the bool type and
-    # its definition's dotted ref stamps bool. Core's other members are
-    # unit aliases the demand sweep must NOT resolve, so this walks only
-    # the two names (post-sweep: bool is resolved by now). Descent skips
-    # core by design; this is the driver's explicit core leg.
-    wantBool: reg.isDemanded name: "true"
-    if (reg.isDemanded name: "false") then {
-        wantBool = true
-    }
-    if wantBool then {
-        resolveCoreBools ty: ty reg: reg program: program
-    }
 }
 
 # callableUnitName -- the callable's name when a binding value is a (possibly
@@ -13806,7 +13805,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
         scanMainBodyCalls reg: st.reg program: program
     }
     resolveDemandsByDescent ty: st.typing reg: st.reg program: program full: full
-    resolveTypeAliases ty: st.typing
+    resolveTypeAliases ty: st.typing reg: st.reg
     populateUnitChildren ty: st.typing program: program
     match (
         program
