@@ -3821,19 +3821,18 @@ isFileUnit: function {name: StringView} out bool is {
     return true
 }
 
-registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
+# registerUnitRoots -- Stage D: register a UNIT type + name for EVERY unit up
+# front, before lowerGenerators / indexUnitDefs / demand resolution, so
+# ty.unitTypes is complete and childOf-at-mint (declareCanonicalType) always sees
+# a populated unit root. The main unit precedes its deps in unit order, so a
+# cross-unit qualified type ref (zlexer.Token) sees the dep as a unit; member
+# paths type their base as the UNIT type via this name-keyed side map -- never the
+# resolution chain, where a main unit sharing a type's name (str.z, panic.z) would
+# shadow it. Formerly registerAndResolveMain Pass 1.
+registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
-        # Pass 1: register a UNIT type + name for EVERY unit before resolving the
-        # main signatures. The main unit precedes its deps in unit order, so a
-        # cross-unit qualified type ref (zlexer.Token) must already see the dep as
-        # a unit -- both to resolve the member (not a unit-named shell) and to
-        # record it under its defining unit for post-demand stamping.
-        # unit-qualified member paths type their base as the UNIT type via a
-        # name-keyed side map -- never the resolution chain, where a main unit
-        # sharing a type's name (str.z, panic.z) would shadow it.
         with riter: program.units.iterate do for ru: riter loop {
             match (
                 ru
@@ -3849,6 +3848,15 @@ registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
                 reg.setUnitName name: nm.stringview uid: uid3
             } else {}
         }
+    } else {}
+}
+
+registerAndResolveMain: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node full: bool} is {
+    match (
+        program
+    ) case program then {
+        mainName: program.mainUnitName.stringview
+        # Pass 1 (unit-root minting) hoisted to registerUnitRoots, run before lowerGenerators.
         # Pass 2: resolve EVERY file unit's definition signatures (main + deps
         # like zlexer/zast/zvfs), so cross-unit type refs resolve to the dep's
         # own type and the dep's type/fn def nodes get stamped for emission.
@@ -13752,6 +13760,10 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     # child type is always that canonical id, never 0.
     reg.newType name: "notype" typetype: ztypes.ztypetype.NULL
     st: zenv.newSymbolTable reg: reg typing: ty
+    # Stage D: mint every unit's root + fill unitTypes BEFORE any demand
+    # resolution (lowerGenerators pre-resolves system.Iterator/optionval when a
+    # generator is present), so childOf-at-mint always sees a populated unit root.
+    registerUnitRoots ty: st.typing reg: st.reg program: program
     lowerGenerators ty: st.typing reg: st.reg program: program
     indexUnitDefs ty: st.typing program: program
     registerAndResolveMain ty: st.typing reg: st.reg program: program full: full
