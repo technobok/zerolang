@@ -801,17 +801,24 @@ aliasResolve: function {ctx: Ctx name: StringView} out String is {
 # narrowing's union box payload (narrowBox) takes priority over a plain `.take`
 # alias, so the source zeroing invalidates the box, not just the narrowed copy.
 takeSourceResolve: function {ctx: Ctx name: StringView} out String is {
-    nbo: ctx.narrowBox.get key: name.string
-    match (
-        nbo
-    ) case some then {
-        return nbo.string
-    } case none then {
-        # C-keyword-mangle the alias-resolved name for emission (this result is a
-        # zeroing lvalue / source name). The narrowBox leg is a cast -- mangle no-op.
-        ar: aliasResolve ctx: ctx name: name
-        return (ztypes.mangleVarName name: ar.stringview)
+    nbs9: "".string
+    hitN9: false
+    {
+        nbo: ctx.narrowBox.get key: name.string
+        match (
+            nbo
+        ) case some then {
+            hitN9 = true
+            nbs9 = nbo.copy
+        } case none then {}
     }
+    if hitN9 then {
+        return nbs9
+    }
+    # C-keyword-mangle the alias-resolved name for emission (this result is a
+    # zeroing lvalue / source name). The narrowBox leg is a cast -- mangle no-op.
+    ar: aliasResolve ctx: ctx name: name
+    return (ztypes.mangleVarName name: ar.stringview)
 }
 
 # takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
@@ -1821,7 +1828,7 @@ hoistBorrowValArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView p
         return "".string
     }
     vrid: pid
-    vduo: symtab.typing.definedInUnit.get key: pid
+    vduo: definedInUnitOf symtab: symtab tid: pid
     match (
         vduo
     ) case none then {
@@ -1874,7 +1881,7 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
         }
     }
     # system natives (String/StringView/io/cli/os) have dedicated dispatchers.
-    rdu9: symtab.typing.definedInUnit.get key: rtid
+    rdu9: definedInUnitOf symtab: symtab tid: rtid
     match (
         rdu9
     ) case some then {
@@ -1997,7 +2004,7 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                                 hdt9 = "    \{ctx.strC}_free(&\{nmH9});\n"
                             } else {
                                 hrid9: pid9
-                                hduo9: symtab.typing.definedInUnit.get key: pid9
+                                hduo9: definedInUnitOf symtab: symtab tid: pid9
                                 match (
                                     hduo9
                                 ) case none then {
@@ -2102,7 +2109,7 @@ collectionValueCallRhs: function {n: Node} out bool is {
 # and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
 # `.copy` / `.string` / `.take` are owned and handled before this check.)
 resolveShellTid: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
-    duo: symtab.typing.definedInUnit.get key: tid
+    duo: definedInUnitOf symtab: symtab tid: tid
     match (
         duo
     ) case some then {
@@ -3536,7 +3543,7 @@ emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u
     hcty: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0
     htyc: hcty.string
     hrid: pid
-    hduo: symtab.typing.definedInUnit.get key: pid
+    hduo: definedInUnitOf symtab: symtab tid: pid
     match (
         hduo
     ) case none then {
@@ -4886,7 +4893,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 # like String reached via a fresh shell id resolves to the
                 # registered class whose struct + methods are emitted (mirrors
                 # the typeRefC canonicalization, so method cnames match).
-                bduo9: symtab.typing.definedInUnit.get key: bstamp0
+                bduo9: definedInUnitOf symtab: symtab tid: bstamp0
                 match (
                     bduo9
                 ) case some then {} case none then {
@@ -4945,7 +4952,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     }
                 }
                 isFile9: false
-                fduo9: symtab.typing.definedInUnit.get key: bstamp
+                fduo9: definedInUnitOf symtab: symtab tid: bstamp
                 match (
                     fduo9
                 ) case some then {
@@ -5550,7 +5557,8 @@ interpBaseIsMapEntry: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
         bnid: atomNodeId9 n: n.parent
         bt: stampIdOf symtab: symtab nid: bnid
         bo: monoOriginName symtab: symtab tid: bt
-        if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "MapEntry")) then {
+        meT9: builtinTid symtab: symtab base: "MapEntry"
+        if (originIsTid symtab: symtab tid: bt originTid: meT9) then {
             return true
         }
         return false
@@ -5755,17 +5763,10 @@ methodReturnByName: function {symtab: zenv.ZSymbolTable dotted: StringView} out 
         si = si + 1
     }
     if found > 0 then {
-        mt: symtab.reg.typeById.get key: found
-        match (
-            mt
-        ) case some then {
-            rt2: mt.returnTypeId
-            match (
-                rt2
-            ) case some then {
-                return (typeNameOfReg9 symtab: symtab tid: rt2)
-            } case none then {}
-        } case none then {}
+        rt2: fnReturnTidOf symtab: symtab tid: found
+        if rt2 > 0 then {
+            return (typeNameOfReg9 symtab: symtab tid: rt2)
+        }
     }
     return "".string
 }
@@ -5777,25 +5778,17 @@ stampNameDeep: function {symtab: zenv.ZSymbolTable n: Node} out String is {
         # a value-position FUNCTION stamp is an auto-call; its value
         # type is the method's return.
         if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.FUNCTION then {
-            t: symtab.reg.typeById.get key: sid
+            rto: fnReturnTidOf symtab: symtab tid: sid
+            if rto > 0 then {
+                return (typeNameOfReg9 symtab: symtab tid: rto)
+            }
+            rno9: symtab.typing.funcReturnNode.get key: sid
             match (
-                t
+                rno9
             ) case some then {
-                rto: t.returnTypeId
-                match (
-                    rto
-                ) case some then {
-                    return (typeNameOfReg9 symtab: symtab tid: rto)
-                } case none then {
-                    rno9: symtab.typing.funcReturnNode.get key: sid
-                    match (
-                        rno9
-                    ) case some then {
-                        rrt9: stampIdOf symtab: symtab nid: rno9
-                        if rrt9 > 0 then {
-                            return (typeNameOfReg9 symtab: symtab tid: rrt9)
-                        }
-                    } case none then {}
+                rrt9: stampIdOf symtab: symtab nid: rno9
+                if rrt9 > 0 then {
+                    return (typeNameOfReg9 symtab: symtab tid: rrt9)
                 }
             } case none then {}
             # a shell FUNCTION named "Base.member": resolve the method
@@ -6040,7 +6033,8 @@ svSliceBaseAtom: function {symtab: zenv.ZSymbolTable n: Node} out String is {
         }
         bsid9: stampIdOf symtab: symtab nid: bpid
         bso9: monoOriginName symtab: symtab tid: bsid9
-        if (originIsTid symtab: symtab tid: bsid9 originTid: (builtinTid symtab: symtab base: "str")) then {
+        strT9: builtinTid symtab: symtab base: "str"
+        if (originIsTid symtab: symtab tid: bsid9 originTid: strT9) then {
             return ba
         }
         return "".string
@@ -6487,7 +6481,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if ct.length > 0 then {
             btid9: stampIdOf symtab: symtab nid: n.nodeid.u64
             if btid9 > 0 then {
-                bDu9: symtab.typing.definedInUnit.get key: btid9
+                bDu9: definedInUnitOf symtab: symtab tid: btid9
                 match (
                     bDu9
                 ) case some then {
@@ -7086,6 +7080,63 @@ resolveTypeIdByName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringVi
     return found2
 }
 
+# fnReturnTidOf -- the registry-recorded return tid for a FUNCTION id, 0 when
+# absent. Scopes the typeById view so no lock outlives the read.
+fnReturnTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
+    r9: 0.u64
+    {
+        t9: symtab.reg.typeById.get key: tid
+        match (
+            t9
+        ) case some then {
+            rt9: t9.returnTypeId
+            match (
+                rt9
+            ) case some then {
+                r9 = rt9
+            } case none then {}
+        } case none then {}
+    }
+    return r9
+}
+
+# genericOriginOf9 -- the registry-recorded generic origin for `tid`, 0 when
+# absent. Scopes the typeById view like fnReturnTidOf.
+genericOriginOf9: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
+    g9: 0.u64
+    {
+        t9: symtab.reg.typeById.get key: tid
+        match (
+            t9
+        ) case some then {
+            go9: t9.genericOriginId
+            match (
+                go9
+            ) case some then {
+                g9 = go9
+            } case none then {}
+        } case none then {}
+    }
+    return g9
+}
+
+# definedInUnitOf -- the defining unit recorded for `tid`, as an OWNED option.
+# The map view lives only inside this body: a view bound at a call site would
+# hold its shared lock across symtab-passing calls and conflict.
+definedInUnitOf: function {symtab: zenv.ZSymbolTable tid: u64} out (Option of: String) is {
+    r9: (Option.none String)
+    {
+        g9: symtab.typing.definedInUnit.get key: tid
+        match (
+            g9
+        ) case some then {
+            gc9: g9.copy
+            r9 = (Option.some gc9)
+        } case none then {}
+    }
+    return r9
+}
+
 # emitReassignLvalue -- the C lvalue for a reassignment target. A `got.field`
 # whose base atom is a narrowed match-arm binding over a borrowed reftype view
 # (seeded in narrowBox) writes THROUGH the box into the live entry; the local
@@ -7674,17 +7725,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
         bareFnId9: 0.u64
         if (symtab.reg.typetypeOf typeId: itid0) == ztypes.ztypetype.FUNCTION then {
             brt9: 0.u64
-            btx9: symtab.reg.typeById.get key: itid0
-            match (
-                btx9
-            ) case some then {
-                brto9: btx9.returnTypeId
-                match (
-                    brto9
-                ) case some then {
-                    brt9 = brto9
-                } case none then {}
-            } case none then {}
+            brt9 = fnReturnTidOf symtab: symtab tid: itid0
             if brt9 == 0 then {
                 mro9: ztypecheck.methodReturnOf st: symtab mid: itid0
                 match (
@@ -8237,32 +8278,33 @@ fnReturnTypeId: function {symtab: zenv.ZSymbolTable op: Node} out u64 is {
 # (its instances behave like ordinary classes: pointer receivers, method
 # children cloned per spec).
 isUserClassMonoTid: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
-    zo4: symtab.reg.typeById.get key: tid
-    match (
-        zo4
-    ) case some then {
-        og4: zo4.genericOriginId
-        match (
-            og4
-        ) case some then {
-            if (symtab.reg.typetypeOf typeId: og4) == ztypes.ztypetype.CLASS then {
-                if (isCollectionOriginTid ctx: ctx originTid: og4) == false then {
+    og4: genericOriginOf9 symtab: symtab tid: tid
+    if og4 > 0 then {
+        if (symtab.reg.typetypeOf typeId: og4) == ztypes.ztypetype.CLASS then {
+            if (isCollectionOriginTid ctx: ctx originTid: og4) == false then {
+                hit4: false
+                nat4: false
+                {
                     oz4: symtab.reg.typeById.get key: og4
                     match (
                         oz4
                     ) case some then {
-                        return (oz4.isNative == false)
+                        hit4 = true
+                        if oz4.isNative then { nat4 = true }
                     } case none then {}
                 }
+                if hit4 then {
+                    return (nat4 == false)
+                }
             }
-        } case none then {}
-    } case none then {}
+        }
+    }
     return false
 }
 
 isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     cid: tid
-    rduo0: symtab.typing.definedInUnit.get key: tid
+    rduo0: definedInUnitOf symtab: symtab tid: tid
     isShell0: true
     match (
         rduo0
@@ -8289,7 +8331,7 @@ isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool 
             return false
         }
     }
-    duo: symtab.typing.definedInUnit.get key: cid
+    duo: definedInUnitOf symtab: symtab tid: cid
     match (
         duo
     ) case some then {
@@ -8345,10 +8387,12 @@ isSetMapPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView
     }
     bt: chaseColMono symtab: symtab tid: cid
     omn: monoOriginName symtab: symtab tid: bt
-    if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "Set")) then {
+    setT9: builtinTid symtab: symtab base: "Set"
+    if (originIsTid symtab: symtab tid: bt originTid: setT9) then {
         return true
     }
-    if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "Map")) then {
+    mapT9: builtinTid symtab: symtab base: "Map"
+    if (originIsTid symtab: symtab tid: bt originTid: mapT9) then {
         return true
     }
     return false
@@ -8364,7 +8408,8 @@ isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView t
     }
     cid: tid
     omn0: monoOriginName symtab: symtab tid: tid
-    if (originIsTid symtab: symtab tid: tid originTid: (builtinTid symtab: symtab base: "List")) == false then {
+    listT9: builtinTid symtab: symtab base: "List"
+    if (originIsTid symtab: symtab tid: tid originTid: listT9) == false then {
         # a param type is a List SHELL (no genericOriginId, definedInUnit none);
         # resolve the canonical mono by its mangled name to read its origin.
         tn: typeNameOfReg9 symtab: symtab tid: tid
@@ -8377,7 +8422,8 @@ isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView t
     }
     bt: chaseColMono symtab: symtab tid: cid
     omn: monoOriginName symtab: symtab tid: bt
-    if (originIsTid symtab: symtab tid: bt originTid: (builtinTid symtab: symtab base: "List")) then {
+    listT8: builtinTid symtab: symtab base: "List"
+    if (originIsTid symtab: symtab tid: bt originTid: listT8) then {
         return true
     }
     return false
@@ -8458,14 +8504,9 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
         }
     }
     {
-        t: symtab.reg.typeById.get key: fid
-        match (
-            t
-        ) case some then {
-            rto: t.returnTypeId
-            match (
-                rto
-            ) case some then {
+        rto: fnReturnTidOf symtab: symtab tid: fid
+        if rto > 0 then {
+            {
                 rn: typeNameOfReg9 symtab: symtab tid: rto
                 rc: cTypeOf name: rn.stringview
                 if rc.length > 0 then {
@@ -8486,8 +8527,8 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
                         }
                     }
                 }
-            } case none then {}
-        } case none then {}
+            }
+        }
     }
     if ret.stringview == "void" then {
         rtnid9: fnReturnTypeId symtab: symtab op: op
@@ -8566,35 +8607,34 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
 # the typedef-base chain (meters -> i64, height -> meters -> i64); ""
 # when the type is not a typedef.
 typedefChaseC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out String is {
-    bo: symtab.typing.typedefBaseName.get key: tid
-    match (
-        bo
-    ) case some then {
-        bn: bo.stringview.string
-        bc: cTypeOf name: bn.stringview
+    bnX9: "".string
+    hitB9: false
+    {
+        bo: symtab.typing.typedefBaseName.get key: tid
+        match (
+            bo
+        ) case some then {
+            hitB9 = true
+            bnX9 = bo.copy
+        } case none then {}
+    }
+    if hitB9 then {
+        bc: cTypeOf name: bnX9.stringview
         if bc.length > 0 then {
             return bc
         }
-        bid: userFnId symtab: symtab ctx: ctx name: bn.stringview
+        bid: userFnId symtab: symtab ctx: ctx name: bnX9.stringview
         if bid > 0 then {
             return (typeRefC symtab: symtab ctx: ctx tid: bid thisTid: 0)
         }
         return "int64_t".string
-    } case none then {
-        return "".string
     }
+    return "".string
 }
 
 # isTypedefType -- the type id carries a typedef base.
 isTypedefType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
-    bo: symtab.typing.typedefBaseName.get key: tid
-    match (
-        bo
-    ) case some then {
-        return true
-    } case none then {
-        return false
-    }
+    return (symtab.typing.typedefBaseName.has key: tid)
 }
 
 # isBoxTid -- the type is a builtin Box mono (heap pointer), as flagged by the
@@ -8667,7 +8707,7 @@ isCollectionOriginTid: function {ctx: Ctx originTid: u64} out bool is {
 canonicalColId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
     tn: typeNameOfReg9 symtab: symtab tid: tid
     rid: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
-    duo: symtab.typing.definedInUnit.get key: tid
+    duo: definedInUnitOf symtab: symtab tid: tid
     hasU9: false
     match (
         duo
@@ -8721,11 +8761,19 @@ cTypeForName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out
 # List_u8, ByteView -> ListView_u8), the underlying mono id; else tid. The
 # emitter treats Bytes/ByteView as zero-overhead aliases of their collection.
 chaseColMono: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
-    bo: symtab.typing.typedefBaseMangled.get key: tid
-    match (
-        bo
-    ) case some then {
-        mo: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: ("system.\{bo}".string)
+    bmX9: "".string
+    hitM9: false
+    {
+        bo: symtab.typing.typedefBaseMangled.get key: tid
+        match (
+            bo
+        ) case some then {
+            hitM9 = true
+            bmX9 = bo.copy
+        } case none then {}
+    }
+    if hitM9 then {
+        mo: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: ("system.\{bmX9}".string)
         match (
             mo
         ) case some then {
@@ -8734,7 +8782,7 @@ chaseColMono: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
                 return mo
             }
         } case none then {}
-    } case none then {}
+    }
     return tid
 }
 
@@ -8745,7 +8793,7 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         # A user type shadowing a builtin scalar carries the scalar NAME but is
         # defined in a USER unit -- emit its struct, not the C scalar. System
         # scalars (definedInUnit a stdlib unit) and shells (none) keep the C type.
-        scDu9: symtab.typing.definedInUnit.get key: tid
+        scDu9: definedInUnitOf symtab: symtab tid: tid
         scShadow9: false
         match (
             scDu9
@@ -8769,7 +8817,7 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         # type is used directly, so a cross-unit same-name type (io.Reader vs a
         # main-unit Reader) is not re-resolved to the main unit's.
         hasUnit9: false
-        duo0: symtab.typing.definedInUnit.get key: tid
+        duo0: definedInUnitOf symtab: symtab tid: tid
         match (
             duo0
         ) case some then {
@@ -10348,17 +10396,10 @@ monoOriginName: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.GENERIC_PARAM then {
         return "".string
     }
-    t: symtab.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        go: t.genericOriginId
-        match (
-            go
-        ) case some then {
-            return (typeNameOfReg9 symtab: symtab tid: go)
-        } case none then {}
-    } case none then {}
+    go: genericOriginOf9 symtab: symtab tid: tid
+    if go > 0 then {
+        return (typeNameOfReg9 symtab: symtab tid: go)
+    }
     return "".string
 }
 
@@ -10697,14 +10738,9 @@ listviewMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 nm: St
     match (
         lo
     ) case some then {
-        t: symtab.reg.typeById.get key: lo
-        match (
-            t
-        ) case some then {
-            rt: t.returnTypeId
-            match (
-                rt
-            ) case some then {
+        rt: fnReturnTidOf symtab: symtab tid: lo
+        if rt > 0 then {
+            {
                 lvn0: typeNameOfReg9 symtab: symtab tid: rt
                 lvc: cnameOf tid: rt name: lvn0.stringview
                 buf: "".string
@@ -10719,8 +10755,8 @@ listviewMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 nm: St
                 buf.append "    _this->length += _from.length;\n"
                 buf.append "}\n\n"
                 return buf
-            } case none then {}
-        } case none then {}
+            }
+        }
     } case none then {}
     return "".string
 }
@@ -10741,7 +10777,7 @@ isGenericType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
 # definedInNonMain -- the type is defined in a non-main (system/io/...)
 # unit (a reachable library type to emit alongside the main closure).
 definedInNonMain: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
-    duo: symtab.typing.definedInUnit.get key: tid
+    duo: definedInUnitOf symtab: symtab tid: tid
     match (
         duo
     ) case some then {
@@ -10866,10 +10902,12 @@ usesHashCollections: function {symtab: zenv.ZSymbolTable} out bool is {
     t: 0.u64
     for t < last loop {
         onm: monoOriginName symtab: symtab tid: t
-        if (originIsTid symtab: symtab tid: t originTid: (builtinTid symtab: symtab base: "Set")) then {
+        setT8: builtinTid symtab: symtab base: "Set"
+        if (originIsTid symtab: symtab tid: t originTid: setT8) then {
             return true
         }
-        if (originIsTid symtab: symtab tid: t originTid: (builtinTid symtab: symtab base: "Map")) then {
+        mapT8: builtinTid symtab: symtab base: "Map"
+        if (originIsTid symtab: symtab tid: t originTid: mapT8) then {
             return true
         }
         t = t + 1
@@ -11567,7 +11605,7 @@ ioClassReferenced: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView
         if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
             tn: typeNameOfReg9 symtab: symtab tid: ti
             if tn.stringview == name then {
-                duo: symtab.typing.definedInUnit.get key: ti
+                duo: definedInUnitOf symtab: symtab tid: ti
                 match (
                     duo
                 ) case some then {
@@ -11596,7 +11634,7 @@ cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} o
         if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
             tn: typeNameOfReg9 symtab: symtab tid: ti
             if tn.stringview == name then {
-                duo: symtab.typing.definedInUnit.get key: ti
+                duo: definedInUnitOf symtab: symtab tid: ti
                 match (
                     duo
                 ) case some then {
@@ -11619,7 +11657,7 @@ cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} o
 # (else monoOriginName of the shell is "" and a Map/List field looks scalar).
 fieldMonoId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
     cid: tid
-    duo: symtab.typing.definedInUnit.get key: tid
+    duo: definedInUnitOf symtab: symtab tid: tid
     match (
         duo
     ) case some then {} case none then {
@@ -11705,7 +11743,7 @@ emitIoFileConformance: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
         if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
             cmo9: monoOriginName symtab: symtab tid: ti
             if cmo9.length == 0 then {
-                duo9: symtab.typing.definedInUnit.get key: ti
+                duo9: definedInUnitOf symtab: symtab tid: ti
                 isIoC9: false
                 match (
                     duo9
@@ -12021,7 +12059,7 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     }
     rid0: eid
     snm0: typeNameOfReg9 symtab: symtab tid: eid
-    sduo: symtab.typing.definedInUnit.get key: eid
+    sduo: definedInUnitOf symtab: symtab tid: eid
     match (
         sduo
     ) case some then {} case none then {
@@ -12040,7 +12078,7 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if (isGenericType symtab: symtab tid: cid) then {
         return
     }
-    duoPe: symtab.typing.definedInUnit.get key: cid
+    duoPe: definedInUnitOf symtab: symtab tid: cid
     peUnit: ctx.mainName.copy
     match (
         duoPe
@@ -12146,7 +12184,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
             gen: isGenericType symtab: symtab tid: t
             mo: monoOriginName symtab: symtab tid: t
             if mo.length == 0 when gen == false then {
-                duo: symtab.typing.definedInUnit.get key: t
+                duo: definedInUnitOf symtab: symtab tid: t
                 match (
                     duo
                 ) case some then {
@@ -12336,7 +12374,7 @@ buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx acc: List u64} i
             mo: monoOriginName symtab: symtab tid: t
             gen: isGenericType symtab: symtab tid: t
             if mo.length == 0 when gen == false then {
-                duo: symtab.typing.definedInUnit.get key: t
+                duo: definedInUnitOf symtab: symtab tid: t
                 match (
                     duo
                 ) case some then {
@@ -12458,7 +12496,7 @@ emitUserTypeById: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Str
     if nm.length == 0 then {
         return
     }
-    duo: symtab.typing.definedInUnit.get key: tid
+    duo: definedInUnitOf symtab: symtab tid: tid
     sm: ctx.mainName.copy
     match (
         duo
@@ -12554,7 +12592,7 @@ fnptrTypedefEligible: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out
     if mo.length > 0 then {
         return false
     }
-    duo: symtab.typing.definedInUnit.get key: tid
+    duo: definedInUnitOf symtab: symtab tid: tid
     match (
         duo
     ) case some then {
@@ -12659,7 +12697,7 @@ ensureFwdStruct: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Stri
     if cTypeLk5.length > 0 then {
         return
     }
-    duo5: symtab.typing.definedInUnit.get key: tid
+    duo5: definedInUnitOf symtab: symtab tid: tid
     match (
         duo5
     ) case some then {
@@ -12870,7 +12908,7 @@ emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir:
             pgen: isGenericType symtab: symtab tid: tp
             pmo: monoOriginName symtab: symtab tid: tp
             if pmo.length == 0 when pgen == false then {
-                pduo: symtab.typing.definedInUnit.get key: tp
+                pduo: definedInUnitOf symtab: symtab tid: tp
                 match (
                     pduo
                 ) case some then {
@@ -13012,7 +13050,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             iuo: monoOriginName symtab: symtab tid: tsu
             iugen: isGenericType symtab: symtab tid: tsu
             if iuo.length == 0 when iugen == false then {
-                iduo: symtab.typing.definedInUnit.get key: tsu
+                iduo: definedInUnitOf symtab: symtab tid: tsu
                 isIoUnit: false
                 match (
                     iduo
@@ -13044,7 +13082,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             clfgen: isGenericType symtab: symtab tid: tclf
             clfmo: monoOriginName symtab: symtab tid: tclf
             if clfmo.length == 0 when clfgen == false then {
-                clfduo: symtab.typing.definedInUnit.get key: tclf
+                clfduo: definedInUnitOf symtab: symtab tid: tclf
                 isCliLeaf: false
                 match (
                     clfduo
@@ -13089,7 +13127,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             sro: monoOriginName symtab: symtab tid: tsr
             srgen: isGenericType symtab: symtab tid: tsr
             if sro.length == 0 when srgen == false then {
-                rduo: symtab.typing.definedInUnit.get key: tsr
+                rduo: definedInUnitOf symtab: symtab tid: tsr
                 isIoR: false
                 match (
                     rduo
@@ -13254,7 +13292,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             clcgen: isGenericType symtab: symtab tid: tclc
             clcmo: monoOriginName symtab: symtab tid: tclc
             if clcmo.length == 0 when clcgen == false then {
-                clcduo: symtab.typing.definedInUnit.get key: tclc
+                clcduo: definedInUnitOf symtab: symtab tid: tclc
                 isCliComp: false
                 match (
                     clcduo
@@ -13302,7 +13340,7 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
             scmo: monoOriginName symtab: symtab tid: tsc
             if scmo.length == 0 when scgen == false then {
                 scn: typeNameOfReg9 symtab: symtab tid: tsc
-                cduo: symtab.typing.definedInUnit.get key: tsc
+                cduo: definedInUnitOf symtab: symtab tid: tsc
                 isIoC: false
                 match (
                     cduo
@@ -13484,7 +13522,7 @@ protoParamCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx pid: u64 thisTid: 
     # as-is -- re-resolving "i64" by name would wrongly pick up a user shadow of
     # the scalar in the main unit. Mirrors typeRefC's none-branch shell gate.
     cpid: pid
-    pidDu9: symtab.typing.definedInUnit.get key: pid
+    pidDu9: definedInUnitOf symtab: symtab tid: pid
     pidShell9: false
     match (
         pidDu9
@@ -13756,7 +13794,7 @@ fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is 
     if omn9.length != 0 then {
         return 0
     }
-    duo9: symtab.typing.definedInUnit.get key: tid
+    duo9: definedInUnitOf symtab: symtab tid: tid
     isIoT9: false
     match (
         duo9
@@ -14721,12 +14759,14 @@ emitDataBlock: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView op:
     } case datablock then {
         ridtid9: userFnId symtab: symtab ctx: ctx name: name
         ri9: false
-        rio9: symtab.reg.typeById.get key: ridtid9
-        match (
-            rio9
-        ) case some then {
-            ri9 = rio9.runtimeIndexed
-        } case none then {}
+        {
+            rio9: symtab.reg.typeById.get key: ridtid9
+            match (
+                rio9
+            ) case some then {
+                ri9 = rio9.runtimeIndexed
+            } case none then {}
+        }
         if ri9 then {
             ect: "int64_t".string
             rbn: dataElemBaseName o: op.outType
@@ -15516,18 +15556,7 @@ setupGenCtx: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 op: Node} out
         ctx.genActive = false
         return false
     }
-    rid: 0.u64
-    t: symtab.reg.typeById.get key: mid
-    match (
-        t
-    ) case some then {
-        rto: t.returnTypeId
-        match (
-            rto
-        ) case some then {
-            rid = rto
-        } case none then {}
-    } case none then {}
+    rid: fnReturnTidOf symtab: symtab tid: mid
     if rid == 0 then {
         mro: ztypecheck.methodReturnOf st: symtab mid: mid
         match (
@@ -15680,20 +15709,13 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     mc: cnameOf tid: mid name: mtn.stringview
     ret: "void".string
     {
-        t: symtab.reg.typeById.get key: mid
-        match (
-            t
-        ) case some then {
-            rto: t.returnTypeId
-            match (
-                rto
-            ) case some then {
-                rr: typeRefC symtab: symtab ctx: ctx tid: rto thisTid: thisTid9
-                if rr.length > 0 then {
-                    ret = rr
-                }
-            } case none then {}
-        } case none then {}
+        rto: fnReturnTidOf symtab: symtab tid: mid
+        if rto > 0 then {
+            rr: typeRefC symtab: symtab ctx: ctx tid: rto thisTid: thisTid9
+            if rr.length > 0 then {
+                ret = rr
+            }
+        }
     }
     if ret.stringview == "void" then {
         # generic-mono returns (optionval/Option/resultval) carry no registry
