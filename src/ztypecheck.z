@@ -197,20 +197,20 @@ isBorrowedVar: function {st: zenv.ZSymbolTable vid: u64} out bool is {
 }
 
 # isNumericTid -- a concrete integer/float type id (literal-coercion target).
-isNumericTid: function {ty: ztyping.ZTyping tid: u64} out bool is {
+isNumericTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out bool is {
     if tid == 0 then { return false }
-    if tid == (builtinTidT ty: ty base: "i8") then { return true }
-    if tid == (builtinTidT ty: ty base: "i16") then { return true }
-    if tid == (builtinTidT ty: ty base: "i32") then { return true }
-    if tid == (builtinTidT ty: ty base: "i64") then { return true }
-    if tid == (builtinTidT ty: ty base: "i128") then { return true }
-    if tid == (builtinTidT ty: ty base: "u8") then { return true }
-    if tid == (builtinTidT ty: ty base: "u16") then { return true }
-    if tid == (builtinTidT ty: ty base: "u32") then { return true }
-    if tid == (builtinTidT ty: ty base: "u64") then { return true }
-    if tid == (builtinTidT ty: ty base: "u128") then { return true }
-    if tid == (builtinTidT ty: ty base: "f32") then { return true }
-    if tid == (builtinTidT ty: ty base: "f64") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "i8") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "i16") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "i32") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "i64") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "i128") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "u8") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "u16") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "u32") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "u64") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "u128") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "f32") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "f64") then { return true }
     return false
 }
 
@@ -230,10 +230,10 @@ typesCompatible: function {st: zenv.ZSymbolTable unitName: StringView a: u64 b: 
     bLit9: isLiteralTypeId st: st tid: b
     if aLit9 when bLit9 then { return true }
     if aLit9 then {
-        if (isNumericTid ty: st.typing tid: b) then { return true }
+        if (isNumericTid ty: st.typing reg: st.reg tid: b) then { return true }
     }
     if bLit9 then {
-        if (isNumericTid ty: st.typing tid: a) then { return true }
+        if (isNumericTid ty: st.typing reg: st.reg tid: a) then { return true }
     }
     cur9: a
     for cur9 > 0 loop {
@@ -507,7 +507,7 @@ definingUnitFor: function {ty: ztyping.ZTyping currentUnit: StringView name: Str
 # runs first mints; the rest reuse the same id. Does NOT touch definedKeys (the
 # body-resolved marker), so demanded bodies still resolve lazily.
 declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry defUnit: StringView name: StringView typetype: ztypes.ztypetype} out u64 is {
-    cudm: ty.unitTypes.get key: defUnit.string
+    cudm: reg.unitNameTid.get key: defUnit.string
     match (
         cudm
     ) case some then {
@@ -519,7 +519,7 @@ declareCanonicalType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry de
         } case none then {}
     } case none then {}
     id: reg.newType name: name typetype: typetype
-    cud0: ty.unitTypes.get key: defUnit.string
+    cud0: reg.unitNameTid.get key: defUnit.string
     match (
         cud0
     ) case some then {
@@ -604,7 +604,7 @@ resolveNamedType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units:
             return (declareCanonicalType ty: ty reg: reg defUnit: duo7.stringview name: name typetype: tto7)
         } case none then {
             k7b: "\{duo7}.\{name}".string
-            ex7: resolvedByKey ty: ty key: k7b
+            ex7: resolvedByKey ty: ty reg: reg key: k7b
             match (
                 ex7
             ) case some then {
@@ -1296,7 +1296,7 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
                                 aid9 = descendNamed ty: ty reg: reg units: units defUnit: duo9.stringview name: anc9.stringview
                             }
                             if aid9 == 0 then {
-                                ao9: walkLookupTyperef ty: ty currentUnit: unitName base: anc9.stringview
+                                ao9: walkLookupTyperef ty: ty reg: reg currentUnit: unitName base: anc9.stringview
                                 aid9 = optU64Or o: ao9 d: 0
                             }
                             if aid9 == 0 then {
@@ -1336,7 +1336,7 @@ resolveMonoRefParts: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry uni
             tplId9 = descendNamed ty: ty reg: reg units: units defUnit: tduo9.stringview name: tname9.stringview
         }
         if tplId9 == 0 then {
-            tplO9: walkLookupTyperef ty: ty currentUnit: unitName base: tname9.stringview
+            tplO9: walkLookupTyperef ty: ty reg: reg currentUnit: unitName base: tname9.stringview
             tplId9 = optU64Or o: tplO9 d: 0
         }
         if tplId9 == 0 then {
@@ -1424,7 +1424,7 @@ recordTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
         # NULL-defined typedef wrapper the dump filters out.
         cn: atomName n: node.child
         pn: atomName n: node.parent
-        if (ty.unitTypes.has key: pn) then {
+        if (reg.unitNameTid.has key: pn) then {
             # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
             # its DEFINING unit (the parent) so stampTyperefs bridges this node.
             recordResolvedName ty: ty unitName: pn.stringview thisName: thisName name: cn.stringview nid: node.nodeid.u64
@@ -1712,7 +1712,7 @@ typeofSourceType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
         ) case some then {
             cn9: regTypeNameOf reg: reg tid: co
             if cn9.length > 0 then {
-                ro9: walkLookupTyperef ty: ty currentUnit: unitName base: cn9.stringview
+                ro9: walkLookupTyperef ty: ty reg: reg currentUnit: unitName base: cn9.stringview
                 match (
                     ro9
                 ) case some then {
@@ -1730,7 +1730,7 @@ typeofSourceType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
         fn9: atomName n: n.callable
         if fn9.length > 0 then {
             sk9: "\{unitName}.\{fn9}_iter".string
-            so9: resolvedByKey ty: ty key: sk9
+            so9: resolvedByKey ty: ty reg: reg key: sk9
             match (
                 so9
             ) case some then {
@@ -1796,7 +1796,7 @@ resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegist
 # matched here -- only user class/union types defined in this unit.
 nameIsInUnitReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView} out bool is {
     rkey: "\{unitName}.\{name}".string
-    rr: resolvedByKey ty: ty key: rkey
+    rr: resolvedByKey ty: ty reg: reg key: rkey
     match (
         rr
     ) case some then {
@@ -2057,7 +2057,7 @@ resolveFunction: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
                     ty.setChildDefault parentTypeId: fid name: pname.stringview default: ptn.stringview
                 } else {
                     fnRefIsFn9: false
-                    fnRefOpt9: walkLookupTyperef ty: ty currentUnit: unitName base: ptn.stringview
+                    fnRefOpt9: walkLookupTyperef ty: ty reg: reg currentUnit: unitName base: ptn.stringview
                     match (
                         fnRefOpt9
                     ) case some then {
@@ -2241,7 +2241,7 @@ markerTargetId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         return (optionval.none u64)
     }
     rkey: "\{unitName}.\{tn}".string
-    rr: resolvedByKey ty: ty key: rkey
+    rr: resolvedByKey ty: ty reg: reg key: rkey
     match (
         rr
     ) case some then {
@@ -2614,7 +2614,7 @@ resolveRecord: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Li
                 } case none then {
                     ftnR9: fieldHeadName n: fm.operation
                     mkeyR9: "\{unitName}.\{defName}.\{ftnR9}".string
-                    mrefR9: resolvedByKey ty: ty key: mkeyR9
+                    mrefR9: resolvedByKey ty: ty reg: reg key: mkeyR9
                     handledR9: false
                     match (
                         mrefR9
@@ -2774,7 +2774,7 @@ dottedParentName: function {n: Node} out String is {
 # dottedTyperefId -- the type id of a cross-unit qualified type ref `unit.Type`
 # (e.g. the `zvfs.ProviderBox` element of a `(List of: zvfs.ProviderBox)`),
 # resolved through the defining unit's scope. Bare-name visibility covers only
-# main+system, so a dep element misses there; this bridges via unitTypes +
+# main+system, so a dep element misses there; this bridges via unitNameTid +
 # resolved. 0 when not a dotted ref or unresolved.
 dottedTyperefId: function {st: zenv.ZSymbolTable op: Node} out u64 is {
     match (
@@ -2784,9 +2784,9 @@ dottedTyperefId: function {st: zenv.ZSymbolTable op: Node} out u64 is {
     } case dottedpath then {
         pn: atomName n: op.parent
         cn: atomName n: op.child
-        if (st.typing.unitTypes.has key: pn) then {
+        if (st.reg.unitNameTid.has key: pn) then {
             k: "\{pn}.\{cn}".string
-            ro: resolvedByKey ty: st.typing key: k
+            ro: resolvedByKey ty: st.typing reg: st.reg key: k
             return (optU64Or o: ro d: 0)
         } else {
             return 0
@@ -2809,7 +2809,7 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
             if nm.stringview == "tag" then {
                 pn: dottedParentName n: am.operation
                 if pn.length != 0 then {
-                    rr: walkLookupTyperef ty: ty currentUnit: unitName base: pn.stringview
+                    rr: walkLookupTyperef ty: ty reg: reg currentUnit: unitName base: pn.stringview
                     match (
                         rr
                     ) case some then {
@@ -2828,7 +2828,7 @@ unionCustomTagId: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitNa
                             # standalone, unstamped).
                             if unitName == reg.regMainUnit.stringview then {
                                 tgk: "system.tag".string
-                                tgo: resolvedByKey ty: ty key: tgk
+                                tgo: resolvedByKey ty: ty reg: reg key: tgk
                                 match (
                                     tgo
                                 ) case some then {
@@ -2962,7 +2962,7 @@ fieldTypeNeedsCleanup: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry u
         descendNamed ty: ty reg: reg units: units defUnit: duo8.stringview name: name
     }
     rkey: "\{unitName}.\{name}".string
-    rr: resolvedByKey ty: ty key: rkey
+    rr: resolvedByKey ty: ty reg: reg key: rkey
     match (
         rr
     ) case some then {
@@ -3067,7 +3067,7 @@ resolveClass: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
                     lockField = true
                 } case none then {}
                 mkey: "\{unitName}.\{defName}.\{ftn}".string
-                mref: resolvedByKey ty: ty key: mkey
+                mref: resolvedByKey ty: ty reg: reg key: mkey
                 match (
                     mref
                 ) case some then {
@@ -3324,7 +3324,7 @@ resolveProtocol: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: 
 # `record is native` in source but carry a distinct typetype and only a create child.
 registerEmptyType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView tt: ztypes.ztypetype} out u64 is {
     rk0: "\{unitName}.\{name}".string
-    ex0: resolvedByKey ty: ty key: rk0
+    ex0: resolvedByKey ty: ty reg: reg key: rk0
     match (
         ex0
     ) case some then {
@@ -3440,7 +3440,7 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     } else {}
     ty.suppressSigStamp = sup9
     if classified9 == false then {
-        ro9: resolvedByKey ty: ty key: ("\{defUnit}.\{name}".string)
+        ro9: resolvedByKey ty: ty reg: reg key: ("\{defUnit}.\{name}".string)
         return (optU64Or o: ro9 d: 0)
     }
     return tid9
@@ -3469,7 +3469,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
     } case expression then {
         resolveDef ty: ty reg: reg units: units unitName: unitName defName: defName defn: defn.expression
         exprKey: "\{unitName}.\{defName}".string
-        exprid: resolvedByKey ty: ty key: exprKey
+        exprid: resolvedByKey ty: ty reg: reg key: exprKey
         match (
             exprid
         ) case some then {
@@ -3478,7 +3478,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
     } case datablock then {
         resolveData ty: ty reg: reg unitName: unitName defName: defName dnode: defn
         dbKey: "\{unitName}.\{defName}".string
-        dbrid: resolvedByKey ty: ty key: dbKey
+        dbrid: resolvedByKey ty: ty reg: reg key: dbKey
         match (
             dbrid
         ) case some then {
@@ -3511,7 +3511,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
             resolveProtocol ty: ty reg: reg units: units unitName: unitName defName: defName fnode: defn
         } else {}
         objKey: "\{unitName}.\{defName}".string
-        objrid: resolvedByKey ty: ty key: objKey
+        objrid: resolvedByKey ty: ty reg: reg key: objKey
         match (
             objrid
         ) case some then {
@@ -3545,7 +3545,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
                 addResolveError ty: ty e: zast.err.TYPEERROR msg: aem9
             }
             descendNamed ty: ty reg: reg units: units defUnit: apNm9.stringview name: acNm9.stringview
-            tgo9: resolvedByKey ty: ty key: tgtKey9
+            tgo9: resolvedByKey ty: ty reg: reg key: tgtKey9
             aid9: 0.u64
             match (
                 tgo9
@@ -3575,7 +3575,7 @@ resolveDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: List 
 # breaks cross-unit return types and union-arm construction.
 resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is {
     with it: ty.funcAliases.iterateItems do for e: it loop {
-        tgo: resolvedByKey ty: ty key: e.value
+        tgo: resolvedByKey ty: ty reg: reg key: e.value
         match (
             tgo
         ) case some then {
@@ -3589,7 +3589,7 @@ resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is 
                     an = kseg.string
                 }
             }
-            uro: ty.unitTypes.get key: au
+            uro: reg.unitNameTid.get key: au
             match (
                 uro
             ) case some then {
@@ -3614,7 +3614,7 @@ resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is 
                     vmem = vvseg.string
                 }
             }
-            tto: walkLookupTyperef ty: ty currentUnit: vau.stringview base: vroot.stringview
+            tto: walkLookupTyperef ty: ty reg: reg currentUnit: vau.stringview base: vroot.stringview
             match (
                 tto
             ) case some then {
@@ -3640,7 +3640,7 @@ resolveTypeAliases: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is 
                             isMem = false
                         }
                         if isMem then {
-                            vuro: ty.unitTypes.get key: vau.copy
+                            vuro: reg.unitNameTid.get key: vau.copy
                             match (
                                 vuro
                             ) case some then {
@@ -3789,7 +3789,7 @@ isFileUnit: function {name: StringView} out bool is {
 
 # registerUnitRoots -- Stage D: register a UNIT type + name for EVERY unit up
 # front, before lowerGenerators / indexUnitDefs / demand resolution, so
-# ty.unitTypes is complete and childOf-at-mint (declareCanonicalType) always sees
+# reg.unitNameTid is complete and childOf-at-mint (declareCanonicalType) always sees
 # a populated unit root. The main unit precedes its deps in unit order, so a
 # cross-unit qualified type ref (zlexer.Token) sees the dep as a unit; member
 # paths type their base as the UNIT type via this name-keyed side map -- never the
@@ -3805,11 +3805,8 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
             ) case namedoperation then {
                 nm: unitLabel o: ru.name
                 uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.UNIT
-                uid2: uid
                 opid: unitdefNodeId n: ru.operation
                 ty.unitTypesById.set key: opid.u64 value: uid
-                unk: nm.copy
-                ty.unitTypes.set key: unk value: uid2
                 uid3: uid
                 reg.setUnitName name: nm.stringview uid: uid3
             } else {}
@@ -3878,7 +3875,7 @@ resolveDemandedUnitBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
                     shadowed: false
                     if shadowUnit.length != 0 then {
                         skey: "\{shadowUnit}.\{dn}".string
-                        sgot: resolvedByKey ty: ty key: skey
+                        sgot: resolvedByKey ty: ty reg: reg key: skey
                         match (
                             sgot
                         ) case some then {
@@ -4064,7 +4061,7 @@ stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
                 match (
                     ngo
                 ) case some then {
-                    nrt: optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: ngo.stringview) d: 0
+                    nrt: optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: ngo.stringview) d: 0
                     if nrt > 0 then {
                         nd4: nodes.get i: di
                         setd4: nrt
@@ -4095,7 +4092,7 @@ fixupCustomTags: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
     for ci < cn loop {
         cuid: pend.get i: ci
         cnm: pnames.get i: ci
-        co: walkLookupTyperef ty: ty currentUnit: mainName base: cnm.stringview
+        co: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: cnm.stringview
         ctid: optU64Or o: co d: 0
         if ctid > 0 then {
             if (reg.typetypeOf typeId: ctid) == ztypes.ztypetype.DATA then {
@@ -4107,7 +4104,7 @@ fixupCustomTags: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
                 cnid9: optU64Or o: cngo d: 0
                 if cnid9 > 0 then {
                     tgk2: "system.tag".string
-                    tgo2: resolvedByKey ty: ty key: tgk2
+                    tgo2: resolvedByKey ty: ty reg: reg key: tgk2
                     match (
                         tgo2
                     ) case some then {
@@ -5211,7 +5208,7 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
         if (hasGenericParam items: unitOp.body) == false then {
-            icu0: ty.unitTypes.get key: unitName.string
+            icu0: reg.unitNameTid.get key: unitName.string
             match (
                 icu0
             ) case some then {
@@ -5241,7 +5238,7 @@ resolveInlineGenericUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistr
 # demand. Dedups on the mono's resolved key.
 createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView monoName: StringView templateName: StringView templateOp: Node} is {
     rkey: "\{unitName}.\{monoName}".string
-    got: resolvedByKey ty: ty key: rkey
+    got: resolvedByKey ty: ty reg: reg key: rkey
     exists: false
     match (
         got
@@ -5253,12 +5250,9 @@ createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         did: monoId
         rid: monoId
         ty.definedInUnit.set key: did value: unitName.string
-        iuk: monoName.string
-        iuv: monoId
-        ty.unitTypes.set key: iuk value: iuv
         iur: monoId
         reg.setUnitName name: monoName uid: iur
-        ccu2: ty.unitTypes.get key: unitName.string
+        ccu2: reg.unitNameTid.get key: unitName.string
         match (
             ccu2
         ) case some then {
@@ -5267,14 +5261,14 @@ createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
         # link the mono to its template (inline templates register under
         # the main unit; file templates carry the per-unit UNIT type).
         tplKey: "\{unitName}.\{templateName}".string
-        tplGot: resolvedByKey ty: ty key: tplKey
+        tplGot: resolvedByKey ty: ty reg: reg key: tplKey
         match (
             tplGot
         ) case some then {
             reg.setGenericOrigin typeId: monoId value: tplGot
         } case none then {
             tplK2: templateName.string
-            utGot: ty.unitTypes.get key: tplK2
+            utGot: reg.unitNameTid.get key: tplK2
             match (
                 utGot
             ) case some then {
@@ -5558,7 +5552,7 @@ buildUnitMonoFull: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units
                                 ) case some then {
                                     rid2 = argId
                                 } case none then {
-                                    rlo2: walkLookupTyperef ty: ty currentUnit: tmplUnitName base: rnm.stringview
+                                    rlo2: walkLookupTyperef ty: ty reg: reg currentUnit: tmplUnitName base: rnm.stringview
                                     match (
                                         rlo2
                                     ) case some then {
@@ -5672,19 +5666,16 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
         rl: r.calId
         rg: r.argAtomId
         mk: "\{mainName}.\{rm}".string
-        mgo: resolvedByKey ty: ty key: mk
+        mgo: resolvedByKey ty: ty reg: reg key: mk
         match (
             mgo
         ) case some then {
             mid9: mgo
-            bk9: rb.copy
-            bv9: mid9
-            ty.unitTypes.set key: bk9 value: bv9
             br9: mid9
             reg.setUnitName name: rb.stringview uid: br9
             tplId: 0.u64
             tk: "\{mainName}.\{rt}".string
-            tgo: resolvedByKey ty: ty key: tk
+            tgo: resolvedByKey ty: ty reg: reg key: tk
             match (
                 tgo
             ) case some then {
@@ -5692,7 +5683,7 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
             } case none then {
                 tnv9: rt.stringview
                 tn9: tnv9.string
-                ugo: ty.unitTypes.get key: tn9
+                ugo: reg.unitNameTid.get key: tn9
                 match (
                     ugo
                 ) case some then {
@@ -5700,7 +5691,7 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
                 } case none then {}
             }
             argId: 0.u64
-            ago: walkLookupTyperef ty: ty currentUnit: mainName.stringview base: ra.stringview
+            ago: walkLookupTyperef ty: ty reg: reg currentUnit: mainName.stringview base: ra.stringview
             match (
                 ago
             ) case some then {
@@ -5845,7 +5836,7 @@ resolveMainUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRe
 # signatures referenced. The registry is supplied by the caller, read by the dumper.
 # builtinTidTc -- the canonical registry id of a stdlib builtin by base name
 # (mainName "" so a user type of the same name never shadows it). 0 when absent.
-builtinTidT: function {ty: ztyping.ZTyping base: StringView} out u64 is {
+builtinTidT: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry base: StringView} out u64 is {
     bk: base.string
     m: ty.builtinTidMemo.get key: bk
     match (
@@ -5853,7 +5844,7 @@ builtinTidT: function {ty: ztyping.ZTyping base: StringView} out u64 is {
     ) case some then {
         return m
     } case none then {}
-    r: (optU64Or o: (walkLookupTyperef ty: ty currentUnit: "" base: base) d: 0)
+    r: (optU64Or o: (walkLookupTyperef ty: ty reg: reg currentUnit: "" base: base) d: 0)
     if r == 0 then {
         return r
     }
@@ -5862,14 +5853,14 @@ builtinTidT: function {ty: ztyping.ZTyping base: StringView} out u64 is {
 }
 
 builtinTidTc: function {st: zenv.ZSymbolTable base: StringView} out u64 is {
-    return (builtinTidT ty: st.typing base: base)
+    return (builtinTidT ty: st.typing reg: st.reg base: base)
 }
 
 # stampTyperefs -- post-demand pass: stamp every recorded type-ref node with its real
 # resolved type. Runs after the demand descent, so system + forward refs are present
 # in childOf. pendingTyperef is a sibling field of nodeType (no lock
 # conflict). The widened typed_nodes differential reads the resulting nodeType rows.
-stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
+stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
@@ -5898,7 +5889,7 @@ stampTyperefs: function {ty: ztyping.ZTyping program: Node} is {
                 }
             }
             if (skip0) == false then {
-                r: walkLookupTyperef ty: ty currentUnit: origin base: e.value.stringview
+                r: walkLookupTyperef ty: ty reg: reg currentUnit: origin base: e.value.stringview
                 match (
                     r
                 ) case some then {
@@ -5935,7 +5926,7 @@ ownershipOfParam: function {o: optionval ztypes.zparamownership} out ztypes.zown
 # paramTypeId -- the resolved type id of a parameter's type-expr. Reads the
 # post-demand node stamp (stampTyperefs), falling back to a cross-unit name
 # lookup for a bare-atom base.
-paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} out u64 is {
+paramTypeId: function {typing: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView op: Node} out u64 is {
     # A parameter type carrying an ownership marker (ztypes.ZTypeRegistry.take)
     # resolves through its peeled base: the marker node is recorded under the
     # current unit and left unstamped, so read the inner cross-unit ref that
@@ -5945,7 +5936,7 @@ paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} ou
     ) case dottedpath then {
         ocn: atomName n: op.child
         if (isStripMarker name: ocn.stringview) then {
-            return (paramTypeId typing: typing unitName: unitName op: op.parent)
+            return (paramTypeId typing: typing reg: reg unitName: unitName op: op.parent)
         }
     } else {
     }
@@ -5957,7 +5948,7 @@ paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} ou
         return r
     } case none then {
         an: atomName n: op
-        ano: walkLookupTyperef ty: typing currentUnit: unitName base: an.stringview
+        ano: walkLookupTyperef ty: typing reg: reg currentUnit: unitName base: an.stringview
         anid: optU64Or o: ano d: 0
         if anid > 0 then {
             return anid
@@ -5966,7 +5957,7 @@ paramTypeId: function {typing: ztyping.ZTyping unitName: StringView op: Node} ou
         # the parameter's type is the tagged parent.
         bn: rootNameOf n: op
         if bn.length > 0 then {
-            return (optU64Or o: (walkLookupTyperef ty: typing currentUnit: unitName base: bn.stringview) d: 0)
+            return (optU64Or o: (walkLookupTyperef ty: typing reg: reg currentUnit: unitName base: bn.stringview) d: 0)
         }
         return 0
     }
@@ -6016,9 +6007,9 @@ checkString: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     # canonical even in a unit that shadows the name
     tyOpt: (optionval.none u64)
     if hasInterp then {
-        tyOpt = walkLookupTyperef ty: st.typing currentUnit: "" base: "String"
+        tyOpt = walkLookupTyperef ty: st.typing reg: st.reg currentUnit: "" base: "String"
     } else {
-        tyOpt = walkLookupTyperef ty: st.typing currentUnit: "" base: "StringView"
+        tyOpt = walkLookupTyperef ty: st.typing reg: st.reg currentUnit: "" base: "StringView"
     }
     match (
         tyOpt
@@ -6302,7 +6293,7 @@ respecialize: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: 
 # no children; their cloned method children land with the class-mono slice.
 mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) idSubs: (Map u64 value: u64) fallbackArg: u64} out u64 is {
     kn: name.string
-    got: resolvedByKey ty: ty key: ("system.\{name}".string)
+    got: resolvedByKey ty: ty reg: reg key: ("system.\{name}".string)
     match (
         got
     ) case some then {
@@ -6337,7 +6328,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     }
     # Register under <unit>.<mangled> so name lookups (field/arm shells named
     # by the mangled form) resolve to the instance once minted.
-    mcu9: ty.unitTypes.get key: mainName.string
+    mcu9: reg.unitNameTid.get key: mainName.string
     match (
         mcu9
     ) case some then {
@@ -6346,7 +6337,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     # monos are global (defined_in_unit NULL): the system-keyed alias makes
     # them resolvable from every unit's lookup chain (a pending instantiation
     # staged while resolving io.z resolves nested args with mainName "io").
-    mcu8: ty.unitTypes.get key: "system".string
+    mcu8: reg.unitNameTid.get key: "system".string
     match (
         mcu8
     ) case some then {
@@ -6359,11 +6350,11 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     # heap-pointer destroy). Views (ListView/OptionView) own no heap -- excluded.
     tplNmD: regTypeNameOf reg: reg tid: templateId
     needsDtorM: false
-    if templateId == (builtinTidT ty: ty base: "List") then { needsDtorM = true }
-    if templateId == (builtinTidT ty: ty base: "Option") then { needsDtorM = true }
-    if templateId == (builtinTidT ty: ty base: "Result") then { needsDtorM = true }
-    if templateId == (builtinTidT ty: ty base: "Map") then { needsDtorM = true }
-    if templateId == (builtinTidT ty: ty base: "Set") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty reg: reg base: "List") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty reg: reg base: "Option") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty reg: reg base: "Result") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty reg: reg base: "Map") then { needsDtorM = true }
+    if templateId == (builtinTidT ty: ty reg: reg base: "Set") then { needsDtorM = true }
     if needsDtorM then {
         mdnM: "\{name}_destroy".string
         reg.setDestructorName typeId: mid name: mdnM.stringview
@@ -6400,7 +6391,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
             }
         }
     }
-    listTplT5: builtinTidT ty: ty base: "List"
+    listTplT5: builtinTidT ty: ty reg: reg base: "List"
     ci: 0.u64
     cn3: cNames.length
     for ci < cn3 loop {
@@ -6436,7 +6427,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
             } case none then {}
         }
         if fallbackArg > 0 when (ctn.stringview == "null") == false when target == chId when (chGen5) == false then {
-            cko: walkLookupTyperef ty: ty currentUnit: mainName base: ctn.stringview
+            cko: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: ctn.stringview
             match (
                 cko
             ) case some then {
@@ -6468,9 +6459,9 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
                         if elemT5 > 0 then {
                             csel5: false
                             if chName.stringview == "contains" then {
-                                csel5 = isContainsEligibleTid ty: ty tid: elemT5
+                                csel5 = isContainsEligibleTid ty: ty reg: reg tid: elemT5
                             } else {
-                                csel5 = isSortEligibleTid ty: ty tid: elemT5
+                                csel5 = isSortEligibleTid ty: ty reg: reg tid: elemT5
                             }
                             if csel5 then {
                                 ok5 = true
@@ -6502,8 +6493,8 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
     if tt == ztypes.ztypetype.RECORD then {
         tplNm9: regTypeNameOf reg: reg tid: templateId
         isSized9: false
-        if templateId == (builtinTidT ty: ty base: "str") then { isSized9 = true }
-        if templateId == (builtinTidT ty: ty base: "array") then { isSized9 = true }
+        if templateId == (builtinTidT ty: ty reg: reg base: "str") then { isSized9 = true }
+        if templateId == (builtinTidT ty: ty reg: reg base: "array") then { isSized9 = true }
         tk9: genericTypeKey ty: ty reg: reg tid: templateId
         pNames9: reg.genericParamNamesOf typeKey: tk9.stringview
         pi9: 0.u64
@@ -6521,7 +6512,7 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
                 ) case some then {
                 } case none then {
                     pcon9: constraintTextOf desc: cdx9
-                    cno9: walkLookupTyperef ty: ty currentUnit: mainName base: pcon9.stringview
+                    cno9: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: pcon9.stringview
                     match (
                         cno9
                     ) case some then {
@@ -6576,17 +6567,17 @@ mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: Stri
 # isContainsEligibleTid / isSortEligibleTid -- element types List.contains /
 # List.sort support (the hardcoded equality / ordering dispatch): numerics +
 # bool + the String/StringView/str family; sort excludes bool (no ordering).
-isContainsEligibleTid: function {ty: ztyping.ZTyping tid: u64} out bool is {
-    if tid == (builtinTidT ty: ty base: "bool") then { return true }
-    return (isSortEligibleTid ty: ty tid: tid)
+isContainsEligibleTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out bool is {
+    if tid == (builtinTidT ty: ty reg: reg base: "bool") then { return true }
+    return (isSortEligibleTid ty: ty reg: reg tid: tid)
 }
 
-isSortEligibleTid: function {ty: ztyping.ZTyping tid: u64} out bool is {
+isSortEligibleTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out bool is {
     if tid == 0 then { return false }
-    if (isNumericTid ty: ty tid: tid) then { return true }
-    if tid == (builtinTidT ty: ty base: "String") then { return true }
-    if tid == (builtinTidT ty: ty base: "StringView") then { return true }
-    if tid == (builtinTidT ty: ty base: "str") then { return true }
+    if (isNumericTid ty: ty reg: reg tid: tid) then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "String") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "StringView") then { return true }
+    if tid == (builtinTidT ty: ty reg: reg base: "str") then { return true }
     return false
 }
 
@@ -6764,7 +6755,7 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
     }
     if ck9 == ztypes.constraintkind.STRINGLIKE then {
         okSL9: false
-        svT9: builtinTidT ty: ty base: "StringView"
+        svT9: builtinTidT ty: ty reg: reg base: "StringView"
         if svT9 > 0 when argTid == svT9 then {
             okSL9 = true
         }
@@ -6783,7 +6774,7 @@ checkConstraintSat: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry type
                     probeT9 = agoo9
                 } case none then {}
             } case none then {}
-            txT9: builtinTidT ty: ty base: "Text"
+            txT9: builtinTidT ty: ty reg: reg base: "Text"
             if txT9 > 0 then {
                 with cit9: ty.conformance.iterate do for crow9: cit9 loop {
                     if crow9.specTypeId == txT9 then {
@@ -6933,8 +6924,8 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         # byte-range hash/equality cannot cover owned members: a heap-owning
         # valtype cannot key a Set/Map (classes hash by identity, String by
         # content -- both fine)
-        hkSet9: builtinTidT ty: ty base: "Set"
-        hkMap9: builtinTidT ty: ty base: "Map"
+        hkSet9: builtinTidT ty: ty reg: reg base: "Set"
+        hkMap9: builtinTidT ty: ty reg: reg base: "Map"
         hkKind9: "".string
         if hkSet9 > 0 when templateId == hkSet9 then {
             hkKind9 = "Set element".string
@@ -7105,7 +7096,7 @@ getOrMintSpec: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName:
         # MapItemIter's iterator element is the derived MapEntry spec (its
         # call's OptionView some-arm), not a trie key
         skipC3: false
-        if templateId == (builtinTidT ty: ty base: "MapItemIter") then {
+        if templateId == (builtinTidT ty: ty reg: reg base: "MapItemIter") then {
             skipC3 = true
             micoC4: ty.childOf parentTypeId: mid8 name: "call"
             match (
@@ -7167,7 +7158,7 @@ mintReturnWrapper: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainN
 monoValName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out String is {
     tn: regTypeNameOf reg: reg tid: tid
     if (isUserShadowElem ty: ty reg: reg elemTid: tid) then {
-        if (builtinTidT ty: ty base: tn.stringview) > 0 then {
+        if (builtinTidT ty: ty reg: reg base: tn.stringview) > 0 then {
             return ("\{tn}_\{tid}")
         }
     }
@@ -7175,17 +7166,17 @@ monoValName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} o
 }
 
 mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView monoName: StringView monoId: u64 templateId: u64 suffix: StringView elemArg: u64 valArg: u64} is {
-    listTid: builtinTidT ty: ty base: "List"
-    listViewTid: builtinTidT ty: ty base: "ListView"
-    setTid: builtinTidT ty: ty base: "Set"
-    mapTid: builtinTidT ty: ty base: "Map"
-    mapEntryTid: builtinTidT ty: ty base: "MapEntry"
-    strTid: builtinTidT ty: ty base: "str"
-    arrayTid: builtinTidT ty: ty base: "array"
-    listIterTid: builtinTidT ty: ty base: "ListIter"
-    setIterTid: builtinTidT ty: ty base: "SetIter"
-    mapKeyIterTid: builtinTidT ty: ty base: "MapKeyIter"
-    mapItemIterTid: builtinTidT ty: ty base: "MapItemIter"
+    listTid: builtinTidT ty: ty reg: reg base: "List"
+    listViewTid: builtinTidT ty: ty reg: reg base: "ListView"
+    setTid: builtinTidT ty: ty reg: reg base: "Set"
+    mapTid: builtinTidT ty: ty reg: reg base: "Map"
+    mapEntryTid: builtinTidT ty: ty reg: reg base: "MapEntry"
+    strTid: builtinTidT ty: ty reg: reg base: "str"
+    arrayTid: builtinTidT ty: ty reg: reg base: "array"
+    listIterTid: builtinTidT ty: ty reg: reg base: "ListIter"
+    setIterTid: builtinTidT ty: ty reg: reg base: "SetIter"
+    mapKeyIterTid: builtinTidT ty: ty reg: reg base: "MapKeyIter"
+    mapItemIterTid: builtinTidT ty: ty reg: reg base: "MapItemIter"
     isIter: false
     if templateId == listIterTid then { isIter = true }
     if templateId == setIterTid then { isIter = true }
@@ -7207,7 +7198,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
     # length/capacity u64 children materialize here. Runs on every naming.
     if templateId == listTid then {
         u64L: 0.u64
-        uoL: walkLookupTyperef ty: ty currentUnit: mainName base: "u64"
+        uoL: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: "u64"
         match (
             uoL
         ) case some then {
@@ -7270,7 +7261,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             mgoM
         ) case some then {
             wtplM: mapGetWrapperName ty: ty reg: reg valArg: valArg
-            wtoM: walkLookupTyperef ty: ty currentUnit: mainName base: wtplM.stringview
+            wtoM: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: wtplM.stringview
             match (
                 wtoM
             ) case some then {
@@ -7288,7 +7279,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
             if (typeIsValtype ty: ty reg: reg tid: valArg) then {
                 rwtM = "optionval".string
             }
-            rwtoM: walkLookupTyperef ty: ty currentUnit: mainName base: rwtM.stringview
+            rwtoM: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: rwtM.stringview
             match (
                 rwtoM
             ) case some then {
@@ -7321,7 +7312,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         }
     }
     boolid: 0.u64
-    bo9: walkLookupTyperef ty: ty currentUnit: mainName base: "bool"
+    bo9: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: "bool"
     match (
         bo9
     ) case some then {
@@ -7353,7 +7344,7 @@ mintCollectionChildren: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry 
         ty.setChild parentTypeId: monoId childName: "length" childTypeId: u64id
         ty.setChild parentTypeId: monoId childName: "size" childTypeId: u64id
         tstId: mintCollectionMethod ty: ty reg: reg monoName: monoName monoId: monoId m: "string"
-        sgo: walkLookupTyperef ty: ty currentUnit: mainName base: "String"
+        sgo: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: "String"
         sgid: optU64Or o: sgo d: 0
         if sgid > 0 then {
             reg.setReturnType typeId: tstId value: sgid
@@ -7458,7 +7449,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
             if pk.length == 0 when argIdx == 0 then {
                 anE: paramTypeBaseName op: arg.operation
                 if (isNumericLiteralName name: anE.stringview) == false then {
-                    teo: walkLookupTyperef ty: st.typing currentUnit: unitName base: anE.stringview
+                    teo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: anE.stringview
                     match (
                         teo
                     ) case some then {
@@ -7480,7 +7471,7 @@ inferGenericConstruction: function {st: zenv.ZSymbolTable unitName: StringView u
                     sfx.append s: an.stringview
                     boundParams.add item: pk.copy
                 } else {
-                    ao: walkLookupTyperef ty: st.typing currentUnit: unitName base: an.stringview
+                    ao: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: an.stringview
                     match (
                         ao
                     ) case some then {
@@ -7630,7 +7621,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
                     anP: paramTypeBaseName op: arg.operation
                     pid0: 0.u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
-                        pao0: walkLookupTyperef ty: st.typing currentUnit: unitName base: anP.stringview
+                        pao0: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: anP.stringview
                         pid0 = optU64Or o: pao0 d: 0
                         if pid0 == 0 then {
                             pid0 = dottedTyperefId st: st op: arg.operation
@@ -7667,7 +7658,7 @@ genericTypeConstruction: function {st: zenv.ZSymbolTable unitName: StringView ca
                     } case none then {}
                 }
             } else {
-                ao: walkLookupTyperef ty: st.typing currentUnit: unitName base: an.stringview
+                ao: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: an.stringview
                 aid: optU64Or o: ao d: 0
                 if aid == 0 then {
                     aid = dottedTyperefId st: st op: arg.operation
@@ -7763,7 +7754,7 @@ validateGenericTypeArgs: function {st: zenv.ZSymbolTable unitName: StringView ca
                     anP: paramTypeBaseName op: arg.operation
                     pid0: 0.u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
-                        pao0: walkLookupTyperef ty: st.typing currentUnit: unitName base: anP.stringview
+                        pao0: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: anP.stringview
                         pid0 = optU64Or o: pao0 d: 0
                         if pid0 == 0 then {
                             pid0 = dottedTyperefId st: st op: arg.operation
@@ -7890,21 +7881,21 @@ iterWrapperElem: function {st: zenv.ZSymbolTable unitName: StringView wid: u64} 
         return (optionval.none u64)
     }
     isWrapper: false
-    oo: walkLookupTyperef ty: st.typing currentUnit: unitName base: "Option"
+    oo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "Option"
     match (
         oo
     ) case some then {
         if origin == oo then { isWrapper = true }
     } case none then {
     }
-    vo: walkLookupTyperef ty: st.typing currentUnit: unitName base: "optionval"
+    vo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "optionval"
     match (
         vo
     ) case some then {
         if origin == vo then { isWrapper = true }
     } case none then {
     }
-    wo: walkLookupTyperef ty: st.typing currentUnit: unitName base: "OptionView"
+    wo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "OptionView"
     match (
         wo
     ) case some then {
@@ -7940,7 +7931,7 @@ isOptionViewMono: function {st: zenv.ZSymbolTable unitName: StringView wid: u64}
     if origin == 0 then {
         return false
     }
-    wo: walkLookupTyperef ty: st.typing currentUnit: unitName base: "OptionView"
+    wo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "OptionView"
     match (
         wo
     ) case some then {
@@ -8210,7 +8201,7 @@ typedefBaseOf: function {st: zenv.ZSymbolTable unitName: StringView tid: u64} ou
     match (
         bo
     ) case some then {
-        return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: bo.stringview) d: 0)
+        return (optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: bo.stringview) d: 0)
     } case none then {
         return 0
     }
@@ -8224,7 +8215,7 @@ typedefBaseMangledOf: function {st: zenv.ZSymbolTable unitName: StringView tid: 
     match (
         bo
     ) case some then {
-        return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: bo.stringview) d: 0)
+        return (optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: bo.stringview) d: 0)
     } case none then {
         return 0
     }
@@ -8380,9 +8371,9 @@ canonicalChildBase: function {st: zenv.ZSymbolTable bt: u64 child: StringView} o
         return 0
     }
     cands9: (List u64)
-    with uit: st.typing.unitTypes.iterateItems do for ue: uit loop {
+    with uit: st.reg.unitNameTid.iterateItems do for ue: uit loop {
         k: "\{ue.key}.\{nm}".string
-        ro9: resolvedByKey ty: st.typing key: k
+        ro9: resolvedByKey ty: st.typing reg: st.reg key: k
         match (
             ro9
         ) case some then {
@@ -8431,7 +8422,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     castBase: atomName n: dp.parent
     if (isNumericLiteralName name: castBase.stringview) then {
         castChild: atomName n: dp.child
-        castOpt: walkLookupTyperef ty: st.typing currentUnit: unitName base: castChild.stringview
+        castOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: castChild.stringview
         match (
             castOpt
         ) case some then {
@@ -8452,7 +8443,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
         # path (io.stdout): the side map types the base as the UNIT type.
         ubn: atomName n: dp.parent
         if ubn.length > 0 then {
-            ubo: st.typing.unitTypes.get key: ubn
+            ubo: st.reg.unitNameTid.get key: ubn
             match (
                 ubo
             ) case some then {
@@ -8509,7 +8500,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     # native converting view -> owned String).
     if cn.stringview == "string" then {
         if bt == (builtinTidTc st: st base: "String") then {
-            sso9: walkLookupTyperef ty: st.typing currentUnit: unitName base: "String"
+            sso9: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "String"
             match (
                 sso9
             ) case some then {
@@ -8544,7 +8535,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
             }
         }
         if isStrBase then {
-            sto9: walkLookupTyperef ty: st.typing currentUnit: unitName base: "str"
+            sto9: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "str"
             match (
                 sto9
             ) case some then {
@@ -8652,7 +8643,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                 }
             } case none then {
                 if cn.stringview == "release" then {
-                    dfo9: walkLookupTyperef ty: st.typing currentUnit: unitName base: mkRoot.stringview
+                    dfo9: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: mkRoot.stringview
                     match (
                         dfo9
                     ) case some then {
@@ -8731,12 +8722,12 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                     eno
                 ) case some then {
                     den: eno.string
-                    elo: walkLookupTyperef ty: st.typing currentUnit: unitName base: den.stringview
+                    elo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: den.stringview
                     match (
                         elo
                     ) case some then {
                         ecnt: (st.typing.childCount parentTypeId: bt) - 1
-                        ato: walkLookupTyperef ty: st.typing currentUnit: unitName base: "array"
+                        ato: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "array"
                         match (
                             ato
                         ) case some then {
@@ -8767,7 +8758,7 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
     # position (its return is the path's value).
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.UNIT then {
         un9: typeNameOf st: st tid: bt
-        mo9: walkLookupTyperef ty: st.typing currentUnit: un9.stringview base: cn.stringview
+        mo9: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: un9.stringview base: cn.stringview
         match (
             mo9
         ) case some then {
@@ -9007,7 +8998,7 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
         if node.name.stringview == "break" then { isBrk9 = true }
         if node.name.stringview == "continue" then { isBrk9 = true }
         if isBrk9 then {
-            result = optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: "never") d: result
+            result = optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never") d: result
         }
         stampGate st: st nid: node.nodeid tid: result
     } case none then {
@@ -9045,7 +9036,7 @@ checkAtomid: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
             setl: result
             st.typing.nodeType.set key: node.nodeid.u64 value: setl
         } else {
-            fo: walkLookupTyperef ty: st.typing currentUnit: unitName base: node.name.stringview
+            fo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: node.name.stringview
             match (
                 fo
             ) case some then {
@@ -9180,7 +9171,7 @@ materialiseLiteral: function {st: zenv.ZSymbolTable unitName: StringView t: u64}
     if base.length == 0 then {
         return t
     }
-    return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: base) d: t)
+    return (optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: base) d: t)
 }
 
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
@@ -9526,7 +9517,7 @@ checkDo: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Nod
             payId0 = st.typing.literalFloatShellId
         }
         if vtn0.length > 0 then {
-            ovo0: walkLookupTyperef ty: st.typing currentUnit: unitName base: "optionval"
+            ovo0: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "optionval"
             match (
                 ovo0
             ) case some then {
@@ -9589,7 +9580,7 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List No
             facId: 0.u64
             fbn: bareAtomName n: cond.operation
             if fbn.length > 0 then {
-                ffo: walkLookupTyperef ty: st.typing currentUnit: unitName base: fbn.stringview
+                ffo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: fbn.stringview
                 match (
                     ffo
                 ) case some then {
@@ -9756,7 +9747,7 @@ checkFor: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List No
         if en9.stringview == "null" then { isNull9 = true }
         if en9.length == 0 then { isNull9 = true }
         if (isNull9) == false then {
-            lto9: walkLookupTyperef ty: st.typing currentUnit: unitName base: "List"
+            lto9: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "List"
             match (
                 lto9
             ) case some then {
@@ -9813,7 +9804,7 @@ checkIf: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List Nod
     ifMarker: st.pushBlock name: "if"
     liveBefore: st.getLiveOwnedVars
     takenAcross: (Set String)
-    nvId: optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: "never") d: 0
+    nvId: optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never") d: 0
     branchTypes: (List u64)
     allDiverge: true
     cliter: ifnode.clauses.iterate
@@ -9924,7 +9915,7 @@ checkBinop: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List 
     rt: checkValue st: st unitName: unitName unitBody: unitBody node: binop.rhs
     opn: atomName n: binop.operator
     if (isComparisonOp name: opn.stringview) then {
-        boOpt: walkLookupTyperef ty: st.typing currentUnit: unitName base: "bool"
+        boOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "bool"
         match (
             boOpt
         ) case some then {
@@ -10580,7 +10571,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                             if ptid9 > 0 when vt > 0 then {
                                 if (typesCompatible st: st unitName: unitName a: vt b: ptid9) == false then {
                                     skipMM9: false
-                                    if (isNumericTid ty: st.typing tid: vt) when (isNumericTid ty: st.typing tid: ptid9) then { skipMM9 = true }
+                                    if (isNumericTid ty: st.typing reg: st.reg tid: vt) when (isNumericTid ty: st.typing reg: st.reg tid: ptid9) then { skipMM9 = true }
                                     ptt9: st.reg.typetypeOf typeId: ptid9
                                     if ptt9 == ztypes.ztypetype.PROTOCOL then { skipMM9 = true }
                                     if ptt9 == ztypes.ztypetype.FACET then { skipMM9 = true }
@@ -10638,7 +10629,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                             if ptidP9 > 0 when vt > 0 then {
                                 if (typesCompatible st: st unitName: unitName a: vt b: ptidP9) == false then {
                                     skipP9: false
-                                    if (isNumericTid ty: st.typing tid: vt) when (isNumericTid ty: st.typing tid: ptidP9) then { skipP9 = true }
+                                    if (isNumericTid ty: st.typing reg: st.reg tid: vt) when (isNumericTid ty: st.typing reg: st.reg tid: ptidP9) then { skipP9 = true }
                                     pttP9: st.reg.typetypeOf typeId: ptidP9
                                     if pttP9 == ztypes.ztypetype.PROTOCOL then { skipP9 = true }
                                     if pttP9 == ztypes.ztypetype.FACET then { skipP9 = true }
@@ -10918,7 +10909,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
     result: 0.u64
     cn: atomName n: call.callable
     if cn.stringview == "return" then {
-        rtOpt: walkLookupTyperef ty: st.typing currentUnit: unitName base: "return"
+        rtOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "return"
         match (
             rtOpt
         ) case some then {
@@ -10950,7 +10941,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             } else {
             }
         }
-        nvOpt: walkLookupTyperef ty: st.typing currentUnit: unitName base: "never"
+        nvOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never"
         match (
             nvOpt
         ) case some then {
@@ -11039,7 +11030,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             # params are the type's field children, so the ctor arg walk
             # (hoists, coercion, field consumption) rides funcId = the type.
             mctn: st.typing.currentThisName.copy
-            mto: walkLookupTyperef ty: st.typing currentUnit: unitName base: mctn.stringview
+            mto: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: mctn.stringview
             mtid: optU64Or o: mto d: 0
             if mtid > 0 then {
                 setmb: mtid
@@ -11324,7 +11315,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                             argFound = true
                                             if isNullPay then {
                                                 etn: paramTypeBaseName op: farg.operation
-                                                subT = optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: etn.stringview) d: 0
+                                                subT = optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: etn.stringview) d: 0
                                                 if subT == 0 then {
                                                     # a cross-unit type arg (optionval.none ztypes.zlockstate):
                                                     # paramTypeBaseName/walkLookupTyperef miss a dotted ref, resolve cross-unit.
@@ -11492,7 +11483,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
             } case none then {
             }
             if funcId <= 0 then {
-                fo: walkLookupTyperef ty: st.typing currentUnit: unitName base: cn.stringview
+                fo: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: cn.stringview
                 match (
                     fo
                 ) case some then {
@@ -11504,7 +11495,7 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                     # otherwise the construction returns 0 and the binding goes
                     # unstamped.
                     maybeWalkMethods st: st unitName: unitName unitBody: unitBody name: cn.stringview
-                    fo2: walkLookupTyperef ty: st.typing currentUnit: unitName base: cn.stringview
+                    fo2: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: cn.stringview
                     match (
                         fo2
                     ) case some then {
@@ -11749,7 +11740,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
             }
             if isTypeArg then {
                 tn3: atomName n: arg.operation
-                to3: walkLookupTyperef ty: st.typing currentUnit: unitName base: tn3.stringview
+                to3: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: tn3.stringview
                 match (
                     to3
                 ) case some then {
@@ -11826,7 +11817,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     }
     wasNew: false
     nk: mname.string
-    ngot: resolvedByKey ty: st.typing key: ("system.\{mname}".string)
+    ngot: resolvedByKey ty: st.typing reg: st.reg key: ("system.\{mname}".string)
     match (
         ngot
     ) case some then {
@@ -11851,7 +11842,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
             ) case some then {
                 st.reg.setReturnType typeId: mid value: rgot2
             } case none then {
-                rconc: walkLookupTyperef ty: st.typing currentUnit: unitName base: rv
+                rconc: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: rv
                 match (
                     rconc
                 ) case some then {
@@ -11950,7 +11941,7 @@ resolveChildPayload: function {st: zenv.ZSymbolTable unitName: StringView cid: u
     if cn.length == 0 then {
         return cid
     }
-    return (optU64Or o: (walkLookupTyperef ty: st.typing currentUnit: unitName base: cn.stringview) d: cid)
+    return (optU64Or o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: cn.stringview) d: cid)
 }
 
 # lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
@@ -11987,7 +11978,7 @@ checkCase: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
         targetName = tn
     }
     neverId: 0.u64
-    nvOpt: walkLookupTyperef ty: st.typing currentUnit: unitName base: "never"
+    nvOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never"
     match (
         nvOpt
     ) case some then {
@@ -12443,7 +12434,7 @@ maybeWalkMethods: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
             st.typing.currentThisName = prevThis
         }
         rko: "\{unitName}.\{name}".string
-        rgo9: resolvedByKey ty: st.typing key: rko
+        rgo9: resolvedByKey ty: st.typing reg: st.reg key: rko
         match (
             rgo9
         ) case some then {
@@ -12574,7 +12565,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
         }
         isGenDef: false
         rkey: "\{unitName}.\{defName}".string
-        rgot: resolvedByKey ty: st.typing key: rkey
+        rgot: resolvedByKey ty: st.typing reg: st.reg key: rkey
         match (
             rgot
         ) case some then {
@@ -12609,12 +12600,12 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                 ) case namedoperation then {
                     pname: unitLabel o: pm.name
                     pnid: nodeId n: pm.operation
-                    ptid: paramTypeId typing: st.typing unitName: unitName op: pm.operation
+                    ptid: paramTypeId typing: st.typing reg: st.reg unitName: unitName op: pm.operation
                     if ptid == 0 when isGenDef then {
                         # a template's own bare param carries no stamp; bind
                         # the canonical param tid from the FUNCTION child so
                         # the walk types it (stampGate suppresses the stamp)
-                        fgo3: resolvedByKey ty: st.typing key: rkey
+                        fgo3: resolvedByKey ty: st.typing reg: st.reg key: rkey
                         match (
                             fgo3
                         ) case some then {
@@ -12642,7 +12633,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                         }
                     }
                     if thisName.length > 0 when (paramIsThisReceiver op: pm.operation) then {
-                        thOpt: walkLookupTyperef ty: st.typing currentUnit: unitName base: thisName
+                        thOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: thisName
                         match (
                             thOpt
                         ) case some then {
@@ -12691,7 +12682,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
                 runDepUnitWalks st: st mainName: unitName depUnits: depUnits
             }
             prevRet9: st.typing.currentReturnTypeId
-            fitid9: optU64Or o: (resolvedByKey ty: st.typing key: rkey) d: 0
+            fitid9: optU64Or o: (resolvedByKey ty: st.typing reg: st.reg key: rkey) d: 0
             crt9: 0.u64
             if fitid9 > 0 then {
                 crt9 = optU64Or o: (methodReturnOf st: st mid: fitid9) d: 0
@@ -12703,7 +12694,7 @@ checkFunctionBody: function {st: zenv.ZSymbolTable unitName: StringView defName:
             # the function's concrete return type, stamped on the statement
             # line (the node the reference coerces by id).
             ftid: 0.u64
-            ftid = optU64Or o: (resolvedByKey ty: st.typing key: rkey) d: ftid
+            ftid = optU64Or o: (resolvedByKey ty: st.typing reg: st.reg key: rkey) d: ftid
             if ftid > 0 then {
                 ro: methodReturnOf st: st mid: ftid
                 match (
@@ -12800,7 +12791,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} i
                 if (isFunctionDefWithBody o: bm2.operation) then {
                     fn: unitLabel o: bm2.name
                     rk: "\{depName}.\{fn}".string
-                    rgo: resolvedByKey ty: st.typing key: rk
+                    rgo: resolvedByKey ty: st.typing reg: st.reg key: rk
                     match (
                         rgo
                     ) case some then {
@@ -12816,7 +12807,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable depName: StringView unitOp: Node} i
                 } else {
                     cls: unitLabel o: bm2.name
                     crk: "\{depName}.\{cls}".string
-                    crgo: resolvedByKey ty: st.typing key: crk
+                    crgo: resolvedByKey ty: st.typing reg: st.reg key: crk
                     match (
                         crgo
                     ) case some then {
@@ -12934,7 +12925,7 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
     ) case program then {
         mainName: program.mainUnitName.stringview
         intId: 0.u64
-        li: walkLookupTyperef ty: st.typing currentUnit: mainName base: "i64"
+        li: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: mainName base: "i64"
         match (
             li
         ) case some then {
@@ -12942,7 +12933,7 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable program: Node} is {
         } case none then {
         }
         floatId: 0.u64
-        lf: walkLookupTyperef ty: st.typing currentUnit: mainName base: "f64"
+        lf: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: mainName base: "f64"
         match (
             lf
         ) case some then {
@@ -13022,11 +13013,11 @@ isBinopNode: function {n: Node} out bool is {
 # visible default later), a name reads an already-materialised constant from
 # resolved (body order), and a binop takes the first concretely-typed operand
 # (else the literal pseudo). 0 = not a constant shape.
-constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node} out u64 is {
+constantOperandType: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView n: Node} out u64 is {
     match (
         n
     ) case expression then {
-        return (constantOperandType ty: ty mainName: mainName n: n.expression)
+        return (constantOperandType ty: ty reg: reg mainName: mainName n: n.expression)
     } case atomid then {
         result: 0.u64
         if (isNumericLiteralName name: n.name.stringview) then {
@@ -13036,7 +13027,7 @@ constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node}
                 result = literalIntId
             }
         } else {
-            ro: walkLookupTyperef ty: ty currentUnit: mainName base: n.name.stringview
+            ro: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: n.name.stringview
             match (
                 ro
             ) case some then {
@@ -13050,8 +13041,8 @@ constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node}
         }
         return result
     } case binop then {
-        lt: constantOperandType ty: ty mainName: mainName n: n.lhs
-        rt: constantOperandType ty: ty mainName: mainName n: n.rhs
+        lt: constantOperandType ty: ty reg: reg mainName: mainName n: n.lhs
+        rt: constantOperandType ty: ty reg: reg mainName: mainName n: n.rhs
         opn9: atomName n: n.operator
         if (isComparisonOp name: opn9.stringview) then {
             # A comparison condition: the result is bool and a literal
@@ -13090,7 +13081,7 @@ constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node}
                 }
             }
             bres9: 0.u64
-            bo9: walkLookupTyperef ty: ty currentUnit: mainName base: "bool"
+            bo9: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: "bool"
             match (
                 bo9
             ) case some then {
@@ -13129,7 +13120,7 @@ constantOperandType: function {ty: ztyping.ZTyping mainName: StringView n: Node}
 # expression types through the constant walk; literal results materialise to
 # their defaults (i64/f64) on the statement, its expression wrapper, and the
 # atom. Returns the (materialised) last-statement type.
-constantBranchWalk: function {ty: ztyping.ZTyping mainName: StringView block: Node} out u64 is {
+constantBranchWalk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView block: Node} out u64 is {
     match (
         block
     ) case statement then {
@@ -13139,13 +13130,13 @@ constantBranchWalk: function {ty: ztyping.ZTyping mainName: StringView block: No
             match (
                 s9
             ) case statementline then {
-                bt0: constantOperandType ty: ty mainName: mainName n: s9.statementline
+                bt0: constantOperandType ty: ty reg: reg mainName: mainName n: s9.statementline
                 mt0: 0.u64
                 if bt0 == literalIntId then {
-                    mt0 = optU64Or o: (walkLookupTyperef ty: ty currentUnit: mainName base: "i64") d: 0
+                    mt0 = optU64Or o: (walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: "i64") d: 0
                 }
                 if bt0 == literalFloatId then {
-                    mt0 = optU64Or o: (walkLookupTyperef ty: ty currentUnit: mainName base: "f64") d: 0
+                    mt0 = optU64Or o: (walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: "f64") d: 0
                 }
                 if mt0 > 0 then {
                     sets0: mt0
@@ -13178,11 +13169,11 @@ constantBranchWalk: function {ty: ztyping.ZTyping mainName: StringView block: No
 }
 
 # constantBranchWalkOpt -- constantBranchWalk over an optional block.
-constantBranchWalkOpt: function {ty: ztyping.ZTyping mainName: StringView bodyOpt: Option Node} out u64 is {
+constantBranchWalkOpt: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView bodyOpt: Option Node} out u64 is {
     match (
         bodyOpt
     ) case some then {
-        return (constantBranchWalk ty: ty mainName: mainName block: bodyOpt)
+        return (constantBranchWalk ty: ty reg: reg mainName: mainName block: bodyOpt)
     } case none then {
         return 0
     }
@@ -13193,7 +13184,7 @@ constantBranchWalkOpt: function {ty: ztyping.ZTyping mainName: StringView bodyOp
 # coerce literal operands), branches walk + materialise, and the definition
 # resolves to the first branch's type -- stamped on the If, its Expression
 # wrapper, and resolved[unit.name].
-resolveUnitIfDef: function {ty: ztyping.ZTyping mainName: StringView defName: StringView wrapperId: u32 n: Node} is {
+resolveUnitIfDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView defName: StringView wrapperId: u32 n: Node} is {
     match (
         n
     ) case ifexpr then {
@@ -13208,18 +13199,18 @@ resolveUnitIfDef: function {ty: ztyping.ZTyping mainName: StringView defName: St
                     match (
                         cond
                     ) case namedoperation then {
-                        constantOperandType ty: ty mainName: mainName n: cond.operation
+                        constantOperandType ty: ty reg: reg mainName: mainName n: cond.operation
                     } else {
                     }
                 }
-                bt9: constantBranchWalk ty: ty mainName: mainName block: clause.statement
+                bt9: constantBranchWalk ty: ty reg: reg mainName: mainName block: clause.statement
                 if t9 == 0 then {
                     t9 = bt9
                 }
             } else {
             }
         }
-        et9: constantBranchWalkOpt ty: ty mainName: mainName bodyOpt: n.elseclause
+        et9: constantBranchWalkOpt ty: ty reg: reg mainName: mainName bodyOpt: n.elseclause
         if t9 == 0 then {
             t9 = et9
         }
@@ -13228,7 +13219,7 @@ resolveUnitIfDef: function {ty: ztyping.ZTyping mainName: StringView defName: St
             ty.nodeType.set key: wrapperId.u64 value: setw9
             seti9: t9
             ty.nodeType.set key: n.nodeid.u64 value: seti9
-            cu9: ty.unitTypes.get key: mainName.string
+            cu9: reg.unitNameTid.get key: mainName.string
             match (
                 cu9
             ) case some then {
@@ -13244,23 +13235,23 @@ resolveUnitIfDef: function {ty: ztyping.ZTyping mainName: StringView defName: St
 # default (i64 / f64 -- both pre-demanded by seedSystemDemands). The definition's
 # own nodes stay unstamped: the oracle's stamps there carry its unregistered
 # literal pseudo-type (NULL in the dump), invisible to every projection.
-resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: StringView defn: Node} is {
+resolveConstantDef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView defName: StringView defn: Node} is {
     match (
         defn
     ) case expression then {
-        resolveUnitIfDef ty: ty mainName: mainName defName: defName wrapperId: defn.nodeid n: defn.expression
-        resolveConstantDef ty: ty mainName: mainName defName: defName defn: defn.expression
+        resolveUnitIfDef ty: ty reg: reg mainName: mainName defName: defName wrapperId: defn.nodeid n: defn.expression
+        resolveConstantDef ty: ty reg: reg mainName: mainName defName: defName defn: defn.expression
     } case atomid then {
         if (isNumericLiteralName name: defn.name.stringview) then {
             base: "i64"
             if (isFloatLiteralName name: defn.name.stringview) then {
                 base = "f64"
             }
-            tOpt: walkLookupTyperef ty: ty currentUnit: mainName base: base
+            tOpt: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: base
             match (
                 tOpt
             ) case some then {
-                cu: ty.unitTypes.get key: mainName.string
+                cu: reg.unitNameTid.get key: mainName.string
                 match (
                     cu
                 ) case some then {
@@ -13275,7 +13266,7 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
             # walk stamps the refs and the binop; a literal result materialises
             # to its default, a concrete one (an already-materialised constant)
             # keeps it.
-            bt: constantOperandType ty: ty mainName: mainName n: defn
+            bt: constantOperandType ty: ty reg: reg mainName: mainName n: defn
             base2: ""
             if bt == literalIntId then {
                 base2 = "i64"
@@ -13284,11 +13275,11 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
                 base2 = "f64"
             }
             if base2.length > 0 then {
-                mOpt: walkLookupTyperef ty: ty currentUnit: mainName base: base2
+                mOpt: walkLookupTyperef ty: ty reg: reg currentUnit: mainName base: base2
                 match (
                     mOpt
                 ) case some then {
-                    cu2: ty.unitTypes.get key: mainName.string
+                    cu2: reg.unitNameTid.get key: mainName.string
                     match (
                         cu2
                     ) case some then {
@@ -13298,7 +13289,7 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
                 }
             } else {
                 if bt > 0 then {
-                    cu3: ty.unitTypes.get key: mainName.string
+                    cu3: reg.unitNameTid.get key: mainName.string
                     match (
                         cu3
                     ) case some then {
@@ -13310,7 +13301,7 @@ resolveConstantDef: function {ty: ztyping.ZTyping mainName: StringView defName: 
     }
 }
 
-resolveConstantDefsInUnit: function {ty: ztyping.ZTyping mainName: StringView unitdef: Node} is {
+resolveConstantDefsInUnit: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView unitdef: Node} is {
     match (
         unitdef
     ) case unitdef then {
@@ -13321,7 +13312,7 @@ resolveConstantDefsInUnit: function {ty: ztyping.ZTyping mainName: StringView un
             ) case namedoperation then {
                 defName: unitLabel o: bm.name
                 if defName.length > 0 then {
-                    resolveConstantDef ty: ty mainName: mainName defName: defName.stringview defn: bm.operation
+                    resolveConstantDef ty: ty reg: reg mainName: mainName defName: defName.stringview defn: bm.operation
                 }
             } else {
             }
@@ -13333,7 +13324,7 @@ resolveConstantDefsInUnit: function {ty: ztyping.ZTyping mainName: StringView un
 # resolveConstantDefs -- under the full driver, materialise the main unit's numeric
 # constant definitions the way the oracle resolves them on first name lookup. Runs
 # post-demand so the numeric defaults are already in resolved.
-resolveConstantDefs: function {ty: ztyping.ZTyping program: Node} is {
+resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
@@ -13345,7 +13336,7 @@ resolveConstantDefs: function {ty: ztyping.ZTyping program: Node} is {
             ) case namedoperation then {
                 nm: unitLabel o: u.name
                 if nm.stringview == mainName then {
-                    resolveConstantDefsInUnit ty: ty mainName: mainName unitdef: u.operation
+                    resolveConstantDefsInUnit ty: ty reg: reg mainName: mainName unitdef: u.operation
                 }
             } else {
             }
@@ -13481,7 +13472,7 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             }
         }
         ik: "system.Iterator".string
-        iterTid: optU64Or o: (resolvedByKey ty: ty key: ik) d: 0
+        iterTid: optU64Or o: (resolvedByKey ty: ty reg: reg key: ik) d: 0
         if iterTid == 0 then {
             return
         }
@@ -13694,7 +13685,7 @@ lowerGeneratorItems: function {ty: ztyping.ZTyping ids: zgenerator.GenIds typeNa
 # over the bare-name visibility order (the current unit shadows the stdlib
 # units: system, collections, io, core, os, cli) -- the ONE encoding of that
 # order on the id side (definingUnitFor is its index-side counterpart).
-walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: StringView} out optionval u64 is {
+walkLookupTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry currentUnit: StringView base: StringView} out optionval u64 is {
     units: (List String)
     units.append currentUnit.string
     units.append "system".string
@@ -13709,7 +13700,7 @@ walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: S
     for u: uit loop {
         if (done) == false then {
             uc: u.copy
-            uido: ty.unitTypes.get key: uc
+            uido: reg.unitNameTid.get key: uc
             match (
                 uido
             ) case some then {
@@ -13731,14 +13722,14 @@ walkLookupTyperef: function {ty: ztyping.ZTyping currentUnit: StringView base: S
 # childOf (during-resolution reads) or non-type binding keys. The read path off
 # the flat map (Stage A). Free fn (not a ZTyping method) so smoke-built low-level
 # modules never pull in .split.
-childOfWalk: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
+childOfWalk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry key: String} out optionval u64 is {
     cur: 0.u64
     started: false
     ok: true
     with it: (key.stringview.split sep: ".") do for seg: it loop {
         if ok then {
             if (started == false) then {
-                ro: ty.unitTypes.get key: seg.string
+                ro: reg.unitNameTid.get key: seg.string
                 match (
                     ro
                 ) case some then {
@@ -13765,8 +13756,8 @@ childOfWalk: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
     return (optionval.none u64)
 }
 
-resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
-    wo: childOfWalk ty: ty key: key
+resolvedByKey: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry key: String} out optionval u64 is {
+    wo: childOfWalk ty: ty reg: reg key: key
     match (
         wo
     ) case some then {
@@ -13783,7 +13774,7 @@ resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
     match (
         ao
     ) case some then {
-        tgo: childOfWalk ty: ty key: ao
+        tgo: childOfWalk ty: ty reg: reg key: ao
         match (
             tgo
         ) case some then {
@@ -13796,7 +13787,7 @@ resolvedByKey: function {ty: ztyping.ZTyping key: String} out optionval u64 is {
                     an = sg.string
                 }
             }
-            uro: ty.unitTypes.get key: au
+            uro: reg.unitNameTid.get key: au
             match (
                 uro
             ) case some then {
@@ -13820,7 +13811,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     # child type is always that canonical id, never 0.
     reg.newType name: "notype" typetype: ztypes.ztypetype.NULL
     st: zenv.newSymbolTable reg: reg typing: ty
-    # Stage D: mint every unit's root + fill unitTypes BEFORE any demand
+    # Stage D: mint every unit's root + fill unitNameTid BEFORE any demand
     # resolution (lowerGenerators pre-resolves system.Iterator/optionval when a
     # generator is present), so childOf-at-mint always sees a populated unit root.
     registerUnitRoots ty: st.typing reg: st.reg program: program
@@ -13841,10 +13832,10 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
         fixupCustomTags ty: st.typing reg: st.reg mainName: program.mainUnitName.stringview
     } else {}
     if full then {
-        resolveConstantDefs ty: st.typing program: program
+        resolveConstantDefs ty: st.typing reg: st.reg program: program
         completeUnitInstantiations ty: st.typing reg: st.reg program: program
     }
-    stampTyperefs ty: st.typing program: program
+    stampTyperefs ty: st.typing reg: st.reg program: program
     if full then {
         checkBodies st: st program: program
         match (
