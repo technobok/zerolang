@@ -219,6 +219,8 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
+<li><a href="#container-views-and-locks">Container Views and Locks</a>
+</li>
 <li><a href="#protocol-objects">Protocol Objects</a>
 </li>
 <li><a href="#common-errors">Common Errors</a>
@@ -1258,7 +1260,72 @@ and <code>ListView</code> types in the standard library. Because the view is a
 single-owner class, the source stays safely locked for the view's
 lifetime and no copy of the view can outlive it. See <code>examples/ListView.z</code>
 and <code>examples/borrowed_record.z</code> for worked examples.</p>
-<h2 id="protocol-objects"><a href="#protocol-objects">14. Protocol Objects</a></h2>
+<h2 id="container-views-and-locks"><a href="#container-views-and-locks">14. Container Views and Locks</a></h2>
+<p>A <code>Map.get</code> over a reftype or <code>String</code> value does not copy the stored
+value out -- it returns an <code>OptionView</code> whose payload is a borrowed
+reference into the map's own storage. The same is true of iterator yields,
+<code>MapEntry</code> pairs from <code>iterateItems</code>, and the <code>stringview</code> /
+<code>listview</code> / <code>byteview</code> families. These are all <strong>views</strong>: cheap,
+non-owning windows into a parent container.</p>
+<p>Two rules make views sound, and the compiler enforces both:</p>
+<ul>
+<li><strong>A view's payload cannot be moved out.</strong> Binding it to a new name,
+reassigning it away, marking it <code>.take</code>, or passing it to a taking
+parameter are all rejected with <code>E0200</code>. Moving the payload would
+drain the map's stored value in place -- the map would keep answering
+<code>some</code> with an empty husk. Call <code>.copy</code> on the payload to keep an
+owned copy; reading it in place (interpolation, <code>.stringview</code>,
+<code>.length</code>, comparisons, method calls) is always fine.</li>
+<li><strong>A live view locks its parent.</strong> The binding holds a SHARED
+path-scoped lock on the container for its whole scope. Readers may
+overlap; a writer may not.</li>
+</ul>
+<p>The lock model is <strong>many readers or one writer, and iterators are
+exclusive</strong>:</p>
+<ul>
+<li>Any number of live views and reader calls (<code>get</code>, <code>has</code>,
+      <code>length</code>, <code>copy</code>, ...) coexist on one container.</li>
+<li>A writer call (<code>Map.set</code> / <code>remove</code>, <code>Set.add</code> / <code>delete</code>,
+      <code>List.append</code> / <code>pop</code> / ..., <code>String.append</code>) is rejected while
+      any view or iterator on that container is live. A <code>set</code> can rehash
+      and reallocate; every live payload pointer would dangle.</li>
+<li>An iterator (<code>iterate</code> / <code>iterateItems</code>) holds its container
+      <strong>exclusively</strong> for its lifetime: no other access, not even reads,
+      until the loop ends. Iteration that needs values pairs them via
+      <code>iterateItems</code>; code that must consult or mutate the container per
+      element snapshots the keys into a <code>List</code> first and loops over the
+      snapshot.</li>
+</ul>
+<pre><code class="language-zerolang">m: (Map String value: String)
+m.set key: "a".string value: "x".string
+m.set key: "b".string value: "y".string
+
+g1: m.get key: "a".string        # SHARED lock on m, held by g1
+g2: m.get key: "b".string        # fine: readers coexist
+n: m.length                      # fine: reader call
+match (
+    g1
+) case some then {
+    kept: g1.copy                # OK: copy to keep
+    # stolen: g1                 # E0200: cannot move payload out of a view
+} case none then {}
+# m.set key: "c" ...             # E0200: writer while g1/g2 live</code></pre>
+<pre><code class="language-zerolang">with it: m.iterate do for k: it loop {
+    v: m.get key: k.copy         # E0200: m is exclusively locked by 'it'
+}
+# pair values with the iteration instead:
+with items: m.iterateItems do for e: items loop {
+    print "\{e.key}: \{e.value}"
+}</code></pre>
+<p>The same discipline covers strings: <code>sv: s.stringview</code> holds a SHARED lock
+on <code>s</code>, so <code>s.append</code> (which may reallocate the buffer <code>sv</code> points
+into) is rejected while <code>sv</code> is live.</p>
+<p>User-defined functions are treated conservatively: passing a container to
+any function locks it exclusively for the call, because the compiler does
+not look into the callee's body. Read a value out first (scope the view in
+a bare <code>{ }</code> block and <code>.copy</code> what you need) when you must hold data
+across such a call.</p>
+<h2 id="protocol-objects"><a href="#protocol-objects">15. Protocol Objects</a></h2>
 <p>Protocol instances can be created in three ways, each with different ownership
 semantics:</p>
 <ul>
@@ -1314,7 +1381,7 @@ supported: <code>.create</code> already heap-allocates the owned copy
 internally, so composition is unnecessary. The conformance check rejects
 <code>proto.create from: (Box from: x)</code> with a hint steering the user to
 the direct form.</p>
-<h2 id="common-errors"><a href="#common-errors">15. Common Errors</a></h2>
+<h2 id="common-errors"><a href="#common-errors">16. Common Errors</a></h2>
 <table>
 <colgroup>
 <col style="width: 33%">

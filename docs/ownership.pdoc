@@ -1305,6 +1305,83 @@ lifetime and no copy of the view can outlive it. See #~"examples/ListView.z"
 and #~"examples/borrowed_record.z" for worked examples.
 
 
+#--: Container Views and Locks
+
+A #~"Map.get" over a reftype or #~"String" value does not copy the stored
+value out -- it returns an #~"OptionView" whose payload is a borrowed
+reference into the map's own storage. The same is true of iterator yields,
+#~"MapEntry" pairs from #~"iterateItems", and the #~"stringview" /
+#~"listview" / #~"byteview" families. These are all #b:"views": cheap,
+non-owning windows into a parent container.
+
+Two rules make views sound, and the compiler enforces both:
+
+#ul:
+  [#*: #b:"A view's payload cannot be moved out." Binding it to a new name,
+      reassigning it away, marking it #~".take", or passing it to a taking
+      parameter are all rejected with #~"E0200". Moving the payload would
+      drain the map's stored value in place -- the map would keep answering
+      #~"some" with an empty husk. Call #~".copy" on the payload to keep an
+      owned copy; reading it in place (interpolation, #~".stringview",
+      #~".length", comparisons, method calls) is always fine.]
+  [#*: #b:"A live view locks its parent." The binding holds a SHARED
+      path-scoped lock on the container for its whole scope. Readers may
+      overlap; a writer may not.]
+
+The lock model is #b:"many readers or one writer, and iterators are
+exclusive":
+
+#ul:
+  [#*: Any number of live views and reader calls (#~"get", #~"has",
+      #~"length", #~"copy", ...) coexist on one container.]
+  [#*: A writer call (#~"Map.set" / #~"remove", #~"Set.add" / #~"delete",
+      #~"List.append" / #~"pop" / ..., #~"String.append") is rejected while
+      any view or iterator on that container is live. A #~"set" can rehash
+      and reallocate; every live payload pointer would dangle.]
+  [#*: An iterator (#~"iterate" / #~"iterateItems") holds its container
+      #b:"exclusively" for its lifetime: no other access, not even reads,
+      until the loop ends. Iteration that needs values pairs them via
+      #~"iterateItems"; code that must consult or mutate the container per
+      element snapshots the keys into a #~"List" first and loops over the
+      snapshot.]
+
+#code language=zerolang: """
+  m: (Map String value: String)
+  m.set key: "a".string value: "x".string
+  m.set key: "b".string value: "y".string
+
+  g1: m.get key: "a".string        # SHARED lock on m, held by g1
+  g2: m.get key: "b".string        # fine: readers coexist
+  n: m.length                      # fine: reader call
+  match (
+      g1
+  ) case some then {
+      kept: g1.copy                # OK: copy to keep
+      # stolen: g1                 # E0200: cannot move payload out of a view
+  } case none then {}
+  # m.set key: "c" ...             # E0200: writer while g1/g2 live
+  """
+
+#code language=zerolang: """
+  with it: m.iterate do for k: it loop {
+      v: m.get key: k.copy         # E0200: m is exclusively locked by 'it'
+  }
+  # pair values with the iteration instead:
+  with items: m.iterateItems do for e: items loop {
+      print "\{e.key}: \{e.value}"
+  }
+  """
+
+The same discipline covers strings: #~"sv: s.stringview" holds a SHARED lock
+on #~"s", so #~"s.append" (which may reallocate the buffer #~"sv" points
+into) is rejected while #~"sv" is live.
+
+User-defined functions are treated conservatively: passing a container to
+any function locks it exclusively for the call, because the compiler does
+not look into the callee's body. Read a value out first (scope the view in
+a bare #~"{ }" block and #~".copy" what you need) when you must hold data
+across such a call.
+
 #--: Protocol Objects
 
 Protocol instances can be created in three ways, each with different ownership
