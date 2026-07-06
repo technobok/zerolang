@@ -214,6 +214,54 @@ isNumericTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} 
     return false
 }
 
+# isViewFamilyTid -- a borrowed-view type: OptionView/ListView/MapEntry monos
+# (generic-origin keyed) or the non-generic StringView/ByteView views. A view
+# result is a borrow into its parent container/string: the binding holds a
+# SHARED lock on the parent and the payload cannot be moved out.
+isViewFamilyTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
+    if tid == 0 then { return false }
+    if tid == (builtinTidT ty: st.typing reg: st.reg base: "StringView") then { return true }
+    if tid == (builtinTidT ty: st.typing reg: st.reg base: "ByteView") then { return true }
+    vog9: 0.u64
+    {
+        vt9: st.reg.typeById.get key: tid
+        match (
+            vt9
+        ) case some then {
+            vgo9: vt9.genericOriginId
+            match (
+                vgo9
+            ) case some then {
+                vog9 = vgo9
+            } case none then {}
+        } case none then {}
+    }
+    if vog9 == 0 then { return false }
+    if vog9 == (builtinTidT ty: st.typing reg: st.reg base: "OptionView") then { return true }
+    if vog9 == (builtinTidT ty: st.typing reg: st.reg base: "ListView") then { return true }
+    if vog9 == (builtinTidT ty: st.typing reg: st.reg base: "MapEntry") then { return true }
+    return false
+}
+
+# isViewVar -- a borrowed binding whose DECLARED type is a view (OptionView
+# from Map.get, StringView, ...): its payload aliases the parent's storage,
+# so moving the (narrowed) payload out would drain the parent. Borrowed
+# non-view bindings (a protocol call's fresh result bound conservatively)
+# keep the pre-existing move semantics.
+isViewVar: function {st: zenv.ZSymbolTable vid: u64} out bool is {
+    if (isBorrowedVar st: st vid: vid) == false then {
+        return false
+    }
+    vzo9: st.typing.variableZtype.get key: vid
+    match (
+        vzo9
+    ) case some then {
+        return (isViewFamilyTid st: st tid: vzo9)
+    } case none then {
+        return false
+    }
+}
+
 # typesCompatible -- compare two type ids: identity, never (divergent) actual,
 # generic-param pairs, literal/numeric coercion (literal_int/float -> concrete
 # numerics), and an asymmetric typedef-base walk on `a`.
@@ -8595,6 +8643,14 @@ checkDotted: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List
                 mvo
             ) case some then {
                 relBlocked9: false
+                if cn.stringview == "take" then {
+                    if (isViewVar st: st vid: mvo) then {
+                        relBlocked9 = true
+                        tbr9: mkRoot.copy
+                        mtb9: "Cannot move borrowed variable '\{tbr9}' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source".string
+                        addError st: st nodeid: dp.nodeid lineno: dp.lineno colno: dp.colno e: zast.err.OWNERERROR msg: mtb9
+                    }
+                }
                 if cn.stringview == "release" then {
                     rpath9: (List String)
                     mrkc9: mkRoot.copy
@@ -9232,7 +9288,7 @@ checkAssignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody: 
             }
         }
         if own == ztypes.zownership.BORROWED then {
-            installBorrowLocks st: st src: bsrc vid: vid
+            installBorrowLocks st: st src: bsrc vid: vid leafShared: (isViewFamilyTid st: st tid: vt)
         }
         # Binding a tagged-subtype construction narrows the name to the
         # constructed arm (assignment-based narrowing: the overlay keeps the
@@ -9337,7 +9393,7 @@ checkReassignment: function {st: zenv.ZSymbolTable unitName: StringView unitBody
         ) case some then {
             if (isBorrowedVar st: st vid: vo) then {
                 rnc9: rn.copy
-                mc9: "Cannot move borrowed variable '\{rnc9}' into reftype field — borrowed names stay bound to their source for the full scope".string
+                mc9: "Cannot move borrowed variable '\{rnc9}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source".string
                 addError st: st nodeid: rasgn.nodeid lineno: rasgn.lineno colno: rasgn.colno e: zast.err.OWNERERROR msg: mc9
             } else {
                 st.invalidate name: rn.stringview loc: (optionval.none ztypes.zsrcpos)
@@ -9414,7 +9470,7 @@ checkWith: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
         vid2: vid
         st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
         if (typeIsReftype st: st tid: vt) then {
-            installBorrowLocks st: st src: btgt vid: vid
+            installBorrowLocks st: st src: btgt vid: vid leafShared: (isViewFamilyTid st: st tid: vt)
         }
         setk: vt
         st.typing.nodeType.set key: withnode.nodeid.u64 value: setk
@@ -10228,7 +10284,7 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
 # (the symtab appends one lock overlay entry per acquisition, keyed by the
 # path root -- the oracle's non-definition rows). Holder = the binding var.
-installBorrowLocks: function {st: zenv.ZSymbolTable src: List String vid: u64} is {
+installBorrowLocks: function {st: zenv.ZSymbolTable src: List String vid: u64 leafShared: bool} is {
     n: src.length
     if n == 0 then {
         return
@@ -10258,7 +10314,11 @@ installBorrowLocks: function {st: zenv.ZSymbolTable src: List String vid: u64} i
     }
     he: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vid)
     he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: vid)
-    re: st.tryLock path: full lockType: ztypes.zlockstate.EXCLUSIVE holder: he hasSelfHolder: false selfHolder: he2
+    lk9: ztypes.zlockstate.EXCLUSIVE
+    if leafShared then {
+        lk9 = ztypes.zlockstate.SHARED
+    }
+    re: st.tryLock path: full lockType: lk9 holder: he hasSelfHolder: false selfHolder: he2
 }
 
 # isLiteralTypeId -- a literal-typed value: the unregistered int/float pseudo
@@ -10331,7 +10391,7 @@ hoistArg: function {st: zenv.ZSymbolTable argNode: Node argType: u64 paramType: 
     vid: v.variableId
     st.defineVar name: tname.stringview var: v
     if hown == ztypes.zownership.BORROWED then {
-        installBorrowLocks st: st src: hbsrc vid: vid
+        installBorrowLocks st: st src: hbsrc vid: vid leafShared: (isViewFamilyTid st: st tid: argType)
     }
     st.typing.defVariableId.set key: assignId.u64 value: vid
     if consumes then {
@@ -10722,7 +10782,16 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                             bvo
                         ) case some then {
                             if isTake then {
-                                st.invalidate name: bn.stringview loc: takenHere
+                                if (isViewVar st: st vid: bvo) then {
+                                    bnc7: bn.copy
+                                    mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source".string
+                                    aid7: nodeId n: arg.operation
+                                    aln7: nodeLine n: arg.operation
+                                    acl7: nodeCol n: arg.operation
+                                    addError st: st nodeid: aid7 lineno: aln7 colno: acl7 e: zast.err.OWNERERROR msg: mb7
+                                } else {
+                                    st.invalidate name: bn.stringview loc: takenHere
+                                }
                             } else {
                                 if isLockish then {
                                     lockCallArg st: st name: bn.stringview callId: call.nodeid.u64
@@ -10811,7 +10880,23 @@ checkBoxConstruction: function {st: zenv.ZSymbolTable unitName: StringView unitB
                             }
                             bn: bareAtomName n: arg.operation
                             if bn.length > 0 when (typeIsReftype st: st tid: vt) then {
-                                st.invalidate name: bn.stringview loc: takenHere
+                                bvo8: st.lookupVarId name: bn.stringview
+                                match (
+                                    bvo8
+                                ) case some then {
+                                    if (isViewVar st: st vid: bvo8) then {
+                                        bnc8: bn.copy
+                                        mb8: "Cannot move borrowed variable '\{bnc8}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source".string
+                                        aid8: nodeId n: arg.operation
+                                        aln8: nodeLine n: arg.operation
+                                        acl8: nodeCol n: arg.operation
+                                        addError st: st nodeid: aid8 lineno: aln8 colno: acl8 e: zast.err.OWNERERROR msg: mb8
+                                    } else {
+                                        st.invalidate name: bn.stringview loc: takenHere
+                                    }
+                                } case none then {
+                                    st.invalidate name: bn.stringview loc: takenHere
+                                }
                             }
                         } else {
                             hoistArg st: st argNode: arg.operation argType: vt paramType: 0 consumes: true
@@ -11270,6 +11355,23 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         drainPendingBorrow st: st
                         mlrc: mlr.copy
                         st.typing.pendingBorrowPath.append mlrc
+                    }
+                    # A view-typed result (OptionView from Map.get, ...) is a
+                    # borrow into the receiver even without a .borrow marker:
+                    # the wrapper is synthesized, so the return TYPE is the
+                    # marker. Report the receiver root so the binding goes
+                    # borrowed (payload moves rejected, view lock installed).
+                    if mres > 0 when mlr.length == 0 when rro.length > 0 then {
+                        if (isViewFamilyTid st: st tid: mres) then {
+                            rvb9: st.lookupVarId name: rro.stringview
+                            match (
+                                rvb9
+                            ) case some then {
+                                drainPendingBorrow st: st
+                                rrbc9: rro.copy
+                                st.typing.pendingBorrowPath.append rrbc9
+                            } case none then {}
+                        }
                     }
                     return mres
                 } else {
