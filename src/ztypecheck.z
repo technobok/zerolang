@@ -262,6 +262,58 @@ isViewVar: function {st: zenv.ZSymbolTable vid: u64} out bool is {
     }
 }
 
+# isContainerReaderCall -- a synthesized container method known not to
+# mutate its receiver: the call's receiver lock is SHARED so readers
+# coexist with live views (many readers XOR one writer XOR one exclusive
+# iterator). Writers and user methods (opaque bodies) stay EXCLUSIVE.
+isContainerReaderCall: function {st: zenv.ZSymbolTable recvTid: u64 mname: StringView} out bool is {
+    if recvTid == 0 then { return false }
+    base9: recvTid
+    {
+        rt9: st.reg.typeById.get key: recvTid
+        match (
+            rt9
+        ) case some then {
+            rg9: rt9.genericOriginId
+            match (
+                rg9
+            ) case some then {
+                base9 = rg9
+            } case none then {}
+        } case none then {}
+    }
+    if base9 == (builtinTidT ty: st.typing reg: st.reg base: "Map") then {
+        if mname == "get" then { return true }
+        if mname == "has" then { return true }
+        if mname == "length" then { return true }
+        if mname == "capacity" then { return true }
+        if mname == "copy" then { return true }
+        return false
+    }
+    if base9 == (builtinTidT ty: st.typing reg: st.reg base: "Set") then {
+        if mname == "has" then { return true }
+        if mname == "length" then { return true }
+        if mname == "capacity" then { return true }
+        if mname == "copy" then { return true }
+        return false
+    }
+    if base9 == (builtinTidT ty: st.typing reg: st.reg base: "List") then {
+        if mname == "get" then { return true }
+        if mname == "contains" then { return true }
+        if mname == "length" then { return true }
+        if mname == "capacity" then { return true }
+        if mname == "copy" then { return true }
+        return false
+    }
+    if base9 == (builtinTidT ty: st.typing reg: st.reg base: "String") then {
+        if mname == "length" then { return true }
+        if mname == "compare" then { return true }
+        if mname == "copy" then { return true }
+        return false
+    }
+    return false
+}
+
 # typesCompatible -- compare two type ids: identity, never (divergent) actual,
 # generic-param pairs, literal/numeric coercion (literal_int/float -> concrete
 # numerics), and an asymmetric typedef-base walk on `a`.
@@ -10207,13 +10259,17 @@ positionalParamName: function {st: zenv.ZSymbolTable funcId: u64 idx: u64 skipRe
 # lockCallArg -- the call-scoped EXCLUSIVE lock a lock/borrow parameter takes
 # on its argument's root for the call's duration (the symtab appends the lock
 # overlay entry in the open call scope; it vanishes when the scope pops).
-lockCallArg: function {st: zenv.ZSymbolTable name: StringView callId: u64} is {
+lockCallArg: function {st: zenv.ZSymbolTable name: StringView callId: u64 shared: bool} is {
     pth: (List String)
     nm: name.string
     pth.append nm
     h: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
     h2: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
-    r: st.tryLock path: pth lockType: ztypes.zlockstate.EXCLUSIVE holder: h hasSelfHolder: true selfHolder: h2
+    clk9: ztypes.zlockstate.EXCLUSIVE
+    if shared then {
+        clk9 = ztypes.zlockstate.SHARED
+    }
+    r: st.tryLock path: pth lockType: clk9 holder: h hasSelfHolder: true selfHolder: h2
 }
 
 # lockSuffixBase -- the bare base name of a `<atom>.lock` argument, ""
@@ -10794,7 +10850,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                                 }
                             } else {
                                 if isLockish then {
-                                    lockCallArg st: st name: bn.stringview callId: call.nodeid.u64
+                                    lockCallArg st: st name: bn.stringview callId: call.nodeid.u64 shared: false
                                     if lockRoot.length == 0 then {
                                         lockRoot = bn.copy
                                     }
@@ -10841,7 +10897,7 @@ walkCallArgsHoist: function {st: zenv.ZSymbolTable unitName: StringView unitBody
                     tnm: hoistArg st: st argNode: arg.operation argType: vt paramType: pt consumes: consumes
                     if (hadPending) == false then {
                         if isLockish when (typeIsReftype st: st tid: vt) then {
-                            lockCallArg st: st name: tnm.stringview callId: call.nodeid.u64
+                            lockCallArg st: st name: tnm.stringview callId: call.nodeid.u64 shared: false
                         }
                     }
                 }
@@ -11307,7 +11363,8 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                                     }
                                 }
                                 if doLock then {
-                                    lockCallArg st: st name: rro.stringview callId: call.nodeid.u64
+                                    rmn9: dottedChildName n: call.callable
+                                    lockCallArg st: st name: rro.stringview callId: call.nodeid.u64 shared: (isContainerReaderCall st: st recvTid: rvt2 mname: rmn9.stringview)
                                 }
                             } case none then {
                             }
