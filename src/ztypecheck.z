@@ -5277,7 +5277,18 @@ createUnitMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName
                 utGot
             ) case some then {
                 reg.setGenericOrigin typeId: monoId value: utGot
-            } case none then {}
+            } case none then {
+                # inline generic template: no childOf edge and not a unit
+                # root -- its id lives only in the full-mode def-node stamp
+                # laid by resolveInlineGenericUnit.
+                itnid: unitdefNodeId n: templateOp
+                itso: ty.nodeType.get key: itnid.u64
+                match (
+                    itso
+                ) case some then {
+                    reg.setGenericOrigin typeId: monoId value: itso
+                } case none then {}
+            }
         }
         attachMonoUnitFuncs ty: ty reg: reg monoId: monoId monoName: monoName templateOp: templateOp
         reg.recordDemand name: "return"
@@ -5602,6 +5613,39 @@ completeInlineReq: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units
     } else {}
 }
 
+# inlineTemplateTid -- the canonical id of an inline generic-unit template
+# (mathops: unit as {...} in the main body). A generic inline template has no
+# unit->def childOf edge (it would shadow instance lookups) and is not a unit
+# root, so the only durable record of its id is the full-mode def-node stamp
+# laid by resolveInlineGenericUnit; 0 when no such binding is stamped.
+inlineTemplateTid: function {ty: ztyping.ZTyping mainOp: Node tmplName: StringView} out u64 is {
+    found: 0.u64
+    match (
+        mainOp
+    ) case unitdef then {
+        biter: mainOp.body.iterate
+        for bm: biter loop {
+            match (
+                bm
+            ) case namedoperation then {
+                bn: unitLabel o: bm.name
+                if bn.stringview == tmplName then {
+                    if (isUnitOp op: bm.operation) then {
+                        tnid: unitdefNodeId n: bm.operation
+                        tso: ty.nodeType.get key: tnid.u64
+                        match (
+                            tso
+                        ) case some then {
+                            found = tso
+                        } case none then {}
+                    }
+                }
+            } else {}
+        }
+    } else {}
+    return found
+}
+
 # completeUnitInstantiations -- post-demand full-mode pass: with system types
 # resolved, finish each generic-unit instantiation (substituted children +
 # clone stash), register the binding name, and stamp the instantiation's
@@ -5631,6 +5675,9 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
             mgo
         ) case some then {
             mid9: mgo
+            bk9: rb.copy
+            bv9: mid9
+            ty.unitTypes.set key: bk9 value: bv9
             tplId: 0.u64
             tk: "\{mainName}.\{rt}".string
             tgo: resolvedByKey ty: ty key: tk
@@ -5655,6 +5702,23 @@ completeUnitInstantiations: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegis
             ) case some then {
                 argId = ago
             } case none then {}
+            if tplId == 0 then {
+                match (
+                    program
+                ) case program then {
+                    tuiter: program.units.iterate
+                    for tu: tuiter loop {
+                        match (
+                            tu
+                        ) case namedoperation then {
+                            tun: unitLabel o: tu.name
+                            if tun.stringview == mainName.stringview then {
+                                tplId = inlineTemplateTid ty: ty mainOp: tu.operation tmplName: rt.stringview
+                            }
+                        } else {}
+                    }
+                } else {}
+            }
             if tplId > 0 then {
                 match (
                     program
