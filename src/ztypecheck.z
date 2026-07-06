@@ -10217,6 +10217,32 @@ methodReceiverRoot: function {n: Node} out String is {
     }
 }
 
+# methodReceiverTuple -- the full dotted path of a method call's receiver
+# (everything before the method name): `st.reg.unitNameTid.get` -> [st, reg,
+# unitNameTid]. Empty when the callable is not a dotted path or the receiver
+# is not a plain path. Path-scoped locks need the full tuple so sibling
+# fields stay independent.
+methodReceiverTuple: function {n: Node dst: List String} is {
+    match (
+        n
+    ) case dottedpath then {
+        appendValueTuple n: n.parent dst: dst
+    } else {
+    }
+}
+
+# dottedParentNodeId -- the nodeid of a dotted callable's receiver expression
+# (its stamped type is the immediate receiver type); 0 otherwise.
+dottedParentNodeId: function {n: Node} out u32 is {
+    match (
+        n
+    ) case dottedpath then {
+        return (nodeId n: n.parent)
+    } else {
+        return 0
+    }
+}
+
 # positionalParamName -- the funcId's parameter name at `idx` (typeChild
 # position order), "" when absent. Positional call args map to it. With
 # skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
@@ -10270,6 +10296,46 @@ lockCallArg: function {st: zenv.ZSymbolTable name: StringView callId: u64 shared
         clk9 = ztypes.zlockstate.SHARED
     }
     r: st.tryLock path: pth lockType: clk9 holder: h hasSelfHolder: true selfHolder: h2
+}
+
+# lockCallPath -- call-scoped path lock over a full receiver tuple: SHARED
+# on the strict prefixes, reader/writer kind on the leaf. Same-call locks
+# share the CALL holder identity (self-idempotent).
+lockCallPath: function {st: zenv.ZSymbolTable path: List String callId: u64 shared: bool} is {
+    n: path.length
+    if n == 0 then {
+        return
+    }
+    end: 1.u64
+    for end < n loop {
+        sub: (List String)
+        i: 0.u64
+        for i < end loop {
+            e: path.get i: i
+            ec: e.copy
+            sub.append ec
+            i = i + 1
+        }
+        hs: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
+        hs2: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
+        rs: st.tryLock path: sub lockType: ztypes.zlockstate.SHARED holder: hs hasSelfHolder: true selfHolder: hs2
+        end = end + 1
+    }
+    full: (List String)
+    j: 0.u64
+    for j < n loop {
+        e2: path.get i: j
+        ec2: e2.copy
+        full.append ec2
+        j = j + 1
+    }
+    he: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
+    he2: (ztypes.zlockholder kind: ztypes.zlockholderkind.CALL id: callId)
+    clk9: ztypes.zlockstate.EXCLUSIVE
+    if shared then {
+        clk9 = ztypes.zlockstate.SHARED
+    }
+    re: st.tryLock path: full lockType: clk9 holder: he hasSelfHolder: true selfHolder: he2
 }
 
 # lockSuffixBase -- the bare base name of a `<atom>.lock` argument, ""
@@ -11371,6 +11437,28 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         } case none then {
                         }
                     }
+                    if rro.length == 0 then {
+                        # Nested receiver (st.reg.map.get ...): the root-name
+                        # block above cannot see it. Lock the full receiver
+                        # tuple; the immediate receiver type (the stamped
+                        # parent) drives the reader/writer kind.
+                        rtupC: (List String)
+                        methodReceiverTuple n: call.callable dst: rtupC
+                        if rtupC.length > 1 then {
+                            rt0: rtupC.get i: 0
+                            rvoN: st.lookupVarId name: rt0.stringview
+                            match (
+                                rvoN
+                            ) case some then {
+                                rpidN: dottedParentNodeId n: call.callable
+                                rvtN: optU64Or o: (st.typing.nodeType.get key: rpidN.u64) d: 0
+                                if rvtN > 0 when (typeIsReftype st: st tid: rvtN) then {
+                                    rmnN: dottedChildName n: call.callable
+                                    lockCallPath st: st path: rtupC callId: call.nodeid.u64 shared: (isContainerReaderCall st: st recvTid: rvtN mname: rmnN.stringview)
+                                }
+                            } case none then {}
+                        }
+                    }
                     st.popTo marker: mcm
                     mres: 0.u64
                     mro: methodReturnOf st: st mid: dro
@@ -11408,26 +11496,52 @@ checkCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody: List N
                         drainPendingBorrow st: st
                         st.typing.pendingBorrowPath.append xroot
                     }
-                    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) when mlr.length > 0 then {
-                        drainPendingBorrow st: st
-                        mlrc: mlr.copy
-                        st.typing.pendingBorrowPath.append mlrc
+                    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) then {
+                        rtupB: (List String)
+                        methodReceiverTuple n: call.callable dst: rtupB
+                        pushedB: false
+                        if rtupB.length > 0 then {
+                            rb0: rtupB.get i: 0
+                            rvoB: st.lookupVarId name: rb0.stringview
+                            match (
+                                rvoB
+                            ) case some then {
+                                drainPendingBorrow st: st
+                                with tib: rtupB.iterate do for segB: tib loop {
+                                    sgc: segB.copy
+                                    st.typing.pendingBorrowPath.append sgc
+                                }
+                                pushedB = true
+                            } case none then {}
+                        }
+                        if (pushedB) == false when mlr.length > 0 then {
+                            drainPendingBorrow st: st
+                            mlrc: mlr.copy
+                            st.typing.pendingBorrowPath.append mlrc
+                        }
                     }
                     # A view-typed result (OptionView from Map.get, ...) is a
                     # borrow into the receiver even without a .borrow marker:
                     # the wrapper is synthesized, so the return TYPE is the
                     # marker. Report the receiver root so the binding goes
                     # borrowed (payload moves rejected, view lock installed).
-                    if mres > 0 when mlr.length == 0 when rro.length > 0 then {
+                    if mres > 0 when mlr.length == 0 then {
                         if (isViewFamilyTid st: st tid: mres) then {
-                            rvb9: st.lookupVarId name: rro.stringview
-                            match (
-                                rvb9
-                            ) case some then {
-                                drainPendingBorrow st: st
-                                rrbc9: rro.copy
-                                st.typing.pendingBorrowPath.append rrbc9
-                            } case none then {}
+                            rtupV: (List String)
+                            methodReceiverTuple n: call.callable dst: rtupV
+                            if rtupV.length > 0 then {
+                                rv0: rtupV.get i: 0
+                                rvb9: st.lookupVarId name: rv0.stringview
+                                match (
+                                    rvb9
+                                ) case some then {
+                                    drainPendingBorrow st: st
+                                    with tiv: rtupV.iterate do for segV: tiv loop {
+                                        svc: segV.copy
+                                        st.typing.pendingBorrowPath.append svc
+                                    }
+                                } case none then {}
+                            }
                         }
                     }
                     return mres
