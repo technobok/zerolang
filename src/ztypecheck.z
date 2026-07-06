@@ -322,6 +322,57 @@ suggestSimilar: function {st: zenv.ZSymbolTable parentTypeId: u64 name: StringVi
     return "".string
 }
 
+# populatePreludeBody -- record one unit body's unit-rooted dotted aliases as
+# prelude entries (bare name -> defining unit). Type-rooted targets
+# (true: bool.true) are value re-exports, never asked of the index side.
+populatePreludeBody: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitop: Node} is {
+    match (
+        unitop
+    ) case unitdef then {
+        with bit: unitop.body.iterate do for bm: bit loop {
+            match (
+                bm
+            ) case namedoperation then {
+                dn: unitLabel o: bm.name
+                atgt0: dottedDefTarget n: bm.operation
+                if atgt0.length > 0 then {
+                    ps0: "".string
+                    with pit: (atgt0.stringview.split sep: ".") do for pseg: pit loop {
+                        if ps0.length == 0 then {
+                            ps0 = pseg.string
+                        }
+                    }
+                    pchk0: ps0.copy
+                    if (reg.unitNameTid.has key: pchk0) then {
+                        pk0: dn.copy
+                        ty.preludeUnit.set key: pk0 value: ps0
+                    }
+                }
+            } else {}
+        }
+    } else {}
+}
+
+# populatePrelude -- fill ty.preludeUnit from core's re-exports BEFORE any
+# demand resolution (lowerGenerators pre-resolves system types, whose defs
+# already ask definingUnitFor for prelude names).
+populatePrelude: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        with uit: program.units.iterate do for ru: uit loop {
+            match (
+                ru
+            ) case namedoperation then {
+                unm: unitLabel o: ru.name
+                if unm.stringview == "core" then {
+                    populatePreludeBody ty: ty reg: reg unitop: ru.operation
+                }
+            } else {}
+        }
+    } else {}
+}
+
 # indexUnitDefs -- pre-scan every unit's top-level definitions into a
 # (unit.name) -> typetype index BEFORE resolution, so a reference can declare the
 # ONE canonical record id (declare-before-bind) instead of an anonymous shell. No
@@ -426,14 +477,14 @@ defTypetypeOf: function {defn: Node name: StringView} out optionval ztypes.ztype
     }
 }
 
-# definingUnitFor -- the unit that defines `name` for a reference in `currentUnit`,
-# by bare-name visibility order (the current unit shadows stdlib). The
-# INDEX-SIDE encoding of that order (defTypetype/defNodeUnitIdx metadata,
-# pre-resolution); walkLookupTyperef is its id-side counterpart over resolved
-# types. "" when no indexed unit declares it (generic params, this/numerics,
-# forward refs to a nonexistent type) -- the caller then mints a shell
-# exactly as before. Empty string is a safe sentinel: a unit name is never
-# empty.
+# definingUnitFor -- the unit that defines `name` for a reference in
+# `currentUnit`: the current unit's own defs (declare-before-bind index),
+# else the prelude surface (core's unit-rooted re-exports, ty.preludeUnit).
+# "" when neither indexes it (generic params, this/numerics, forward refs
+# to a nonexistent type) -- the caller then mints a shell exactly as
+# before. Scope-shaped: the current unit shadows the prelude. The id-side
+# bare walk (walkLookupTyperef) keeps its own full root order for
+# internal/mangled queries.
 definingUnitFor: function {ty: ztyping.ZTyping currentUnit: StringView name: StringView} out String is {
     k0: "\{currentUnit}.\{name}".string
     k0b: "\{currentUnit}.\{name}".string
@@ -444,60 +495,12 @@ definingUnitFor: function {ty: ztyping.ZTyping currentUnit: StringView name: Str
     if hitk0 then {
         return currentUnit.string
     }
-    k1: "system.\{name}".string
-    k1b: "system.\{name}".string
-    hitk1: ty.defTypetype.has key: k1
-    if (hitk1) == false then {
-        hitk1 = ty.defNodeUnitIdx.has key: k1b
-    }
-    if hitk1 then {
-        return "system".string
-    }
-    k2: "collections.\{name}".string
-    k2b: "collections.\{name}".string
-    hitk2: ty.defTypetype.has key: k2
-    if (hitk2) == false then {
-        hitk2 = ty.defNodeUnitIdx.has key: k2b
-    }
-    if hitk2 then {
-        return "collections".string
-    }
-    k3: "io.\{name}".string
-    k3b: "io.\{name}".string
-    hitk3: ty.defTypetype.has key: k3
-    if (hitk3) == false then {
-        hitk3 = ty.defNodeUnitIdx.has key: k3b
-    }
-    if hitk3 then {
-        return "io".string
-    }
-    k4: "core.\{name}".string
-    k4b: "core.\{name}".string
-    hitk4: ty.defTypetype.has key: k4
-    if (hitk4) == false then {
-        hitk4 = ty.defNodeUnitIdx.has key: k4b
-    }
-    if hitk4 then {
-        return "core".string
-    }
-    k5: "os.\{name}".string
-    k5b: "os.\{name}".string
-    hitk5: ty.defTypetype.has key: k5
-    if (hitk5) == false then {
-        hitk5 = ty.defNodeUnitIdx.has key: k5b
-    }
-    if hitk5 then {
-        return "os".string
-    }
-    k6: "cli.\{name}".string
-    k6b: "cli.\{name}".string
-    hitk6: ty.defTypetype.has key: k6
-    if (hitk6) == false then {
-        hitk6 = ty.defNodeUnitIdx.has key: k6b
-    }
-    if hitk6 then {
-        return "cli".string
-    }
+    pgo0: ty.preludeUnit.get key: name.string
+    match (
+        pgo0
+    ) case some then {
+        return pgo0.copy
+    } case none then {}
     return "".string
 }
 
@@ -13683,8 +13686,10 @@ lowerGeneratorItems: function {ty: ztyping.ZTyping ids: zgenerator.GenIds typeNa
 
 # Resolve a bare type name to its id through the units-as-containers hierarchy,
 # over the bare-name visibility order (the current unit shadows the stdlib
-# units: system, collections, io, core, os, cli) -- the ONE encoding of that
-# order on the id side (definingUnitFor is its index-side counterpart).
+# units: system, collections, io, core, os, cli) -- the SOLE encoding of that
+# order. It serves internal/mangled queries (mono names, dotted member keys)
+# beyond the source-level prelude surface, so it keeps the full root list
+# where the index side (definingUnitFor) narrowed to current-unit + prelude.
 walkLookupTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry currentUnit: StringView base: StringView} out optionval u64 is {
     units: (List String)
     units.append currentUnit.string
@@ -13817,6 +13822,7 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     registerUnitRoots ty: st.typing reg: st.reg program: program
     declareCanonicalType ty: st.typing reg: st.reg defUnit: "system" name: "never" typetype: ztypes.ztypetype.NEVER
     declareCanonicalType ty: st.typing reg: st.reg defUnit: "system" name: "null" typetype: ztypes.ztypetype.NULL
+    populatePrelude ty: st.typing reg: st.reg program: program
     lowerGenerators ty: st.typing reg: st.reg program: program
     indexUnitDefs ty: st.typing program: program
     registerAndResolveMain ty: st.typing reg: st.reg program: program full: full
