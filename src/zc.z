@@ -46,9 +46,13 @@ rpad4: function {n: u32} out String is {
 # errorMessage -- rustc-style render: code+message, location, source snippet +
 # caret, then note/hint. fallbackFsno (the main unit's file) covers errors that
 # carry no file id of their own (typecheck errors stamp fsno 0).
-errorMessage: function {e: zast.ErrorData vfs: zvfs.ZVfs fallbackFsno: u32} out String is {
+errorMessage: function {e: zast.ErrorData vfs: zvfs.ZVfs p: zparser.Parser fallbackFsno: u32} out String is {
     buf9: zast.errorLine e: e
     fno9: e.fsno
+    if fno9 == 0 when e.nodeid > 0 then {
+        sf9: p.fsnoForNode nodeid: e.nodeid
+        if sf9 > 0 then { fno9 = sf9 }
+    }
     if fno9 == 0 then { fno9 = fallbackFsno }
     if fno9 > 0 when e.lineno > 0 then {
         path9: vfs.pathfromprovider dentryid: fno9
@@ -765,7 +769,7 @@ main: function is {
     match (
         prog
     ) case error then {
-        emsg9: errorMessage e: prog vfs: vfs fallbackFsno: mainFsno
+        emsg9: errorMessage e: prog vfs: vfs p: p fallbackFsno: mainFsno
         io.eprintln emsg9.stringview
         io.eprintln "1 error found"
         os.exit code: 1
@@ -775,7 +779,7 @@ main: function is {
         nerr: st.typing.errors.length
         if nerr > 0 then {
             with eit: st.typing.errors.iterate do for er: eit loop {
-                elx: errorMessage e: er vfs: vfs fallbackFsno: mainFsno
+                elx: errorMessage e: er vfs: vfs p: p fallbackFsno: mainFsno
                 io.eprintln elx.stringview
             }
             if nerr == 1 then {

@@ -192,14 +192,26 @@ isValidUnitName: function {name: StringView} out bool is {
     return true
 }
 
+# FileSeg -- one parsed file's contiguous nodeid range [startId, endId) and
+# its VFS fsno. Subunit loads nest child ranges inside the parent's; the
+# innermost containing range wins (fsnoForNode).
+FileSeg: class {
+    startId: u32
+    endId:   u32
+    fsno:    u32
+}
+
 Parser: class {
     # Monotonic source-node id, assigned in parse order.
     nextNodeId: u32
     # Nesting depth of function bodies (reserved for later slices).
     functionBodyDepth: u32
+    # Per-file nodeid segments: diagnostics map an erroring node back to
+    # the file whose parse allocated it.
+    fileSegs: (List FileSeg)
 } as {
     create: function {} out this is {
-        return (meta.create nextNodeId: 1 functionBodyDepth: 0)
+        return (meta.create nextNodeId: 1 functionBodyDepth: 0 fileSegs: (List FileSeg))
     }
 
     # Allocate the next node id.
@@ -207,6 +219,33 @@ Parser: class {
         id: this.nextNodeId
         this.nextNodeId = this.nextNodeId + 1
         return id
+    }
+
+    # fsnoForNode -- the fsno of the file whose parse allocated `nodeid`:
+    # the innermost containing segment (subunit ranges nest inside their
+    # parent's, so the largest containing startId wins). 0 when no segment
+    # contains it (synthesized nodes minted after parsing).
+    fsnoForNode: function {:this nodeid: u32} out u32 is {
+        best9: 0.u32
+        bestStart9: 0.u32
+        n9: this.fileSegs.length
+        i9: 0.u64
+        for i9 < n9 loop {
+            sg9: this.fileSegs.get i: i9
+            i9 = i9 + 1
+            if sg9.startId <= nodeid when nodeid < sg9.endId then {
+                if best9 == 0 then {
+                    best9 = sg9.fsno
+                    bestStart9 = sg9.startId
+                } else {
+                    if sg9.startId >= bestStart9 then {
+                        best9 = sg9.fsno
+                        bestStart9 = sg9.startId
+                    }
+                }
+            }
+        }
+        return best9
     }
 
     # Build an error node located at `tok`.
@@ -2224,6 +2263,7 @@ Parser: class {
             tk: zlexer.Tokenizer.create source: r.take fsno: fsid
             lx: zlexer.Lexer.create lexer: tk
             firstTok: lx.peek
+            segStart9: this.nextNodeId
             body: this.acceptUnitBody lex: lx
             bn: body.length
             if bn > 0 then {
@@ -2240,6 +2280,7 @@ Parser: class {
                 return (this.mkError tok: bad code: zast.err.BADUNIT msg: "Expected EOF at end of unit file".string)
             } case some then {
             }
+            this.fileSegs.append (FileSeg startId: segStart9 endId: this.nextNodeId fsno: fsid)
             ewBindNames scope: outNames items: body
             raw: collectExterns body: body
             dirid: vfs.walk parent: parentid name: unitname.stringview
