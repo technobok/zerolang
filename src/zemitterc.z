@@ -708,9 +708,9 @@ Ctx: class {
     dataElems: (Map String value: String)
     dataConst: (Map String value: String)
     ptrVars: (List String)
-    aliases: (Map String value: String)
-    narrowBox: (Map String value: String)
-    narrowTid: (Map String value: u64)
+    aliases: (List NameVal)
+    narrowBox: (List NameVal)
+    narrowTid: (List NameTid)
     genActive: bool
     genYieldCount: u64
     genYieldNext: u64
@@ -808,42 +808,143 @@ pathIsPointer: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is
     }
 }
 
+# NameVal / NameTid -- assoc-list entries for the per-function narrowing and
+# alias state. A handful of entries at most, so linear StringView probes beat
+# a map's per-probe owned-key allocation and hash.
+NameVal: class {
+    name: String
+    val: String
+}
+
+NameTid: class {
+    name: String
+    tid: u64
+}
+
+# nvGet -- the value recorded for name, "" when absent (values never empty).
+nvGet: function {xs: List NameVal name: StringView} out String is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            return e9.val.copy
+        }
+        i9 = i9 + 1
+    }
+    return "".string
+}
+
+nvHas: function {xs: List NameVal name: StringView} out bool is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            return true
+        }
+        i9 = i9 + 1
+    }
+    return false
+}
+
+# nvSet -- replace-or-append: one entry per name (map.set semantics).
+nvSet: function {xs: List NameVal name: StringView val: StringView} is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            xs.set i: i9 val: (NameVal name: name.string val: val.string)
+            return
+        }
+        i9 = i9 + 1
+    }
+    xs.append (NameVal name: name.string val: val.string)
+}
+
+# nvRemove -- drop name's entry (swap-with-last; names are unique).
+nvRemove: function {xs: List NameVal name: StringView} is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            last9: xs.pop
+            if i9 + 1 < n9 then {
+                xs.set i: i9 val: last9
+            }
+            return
+        }
+        i9 = i9 + 1
+    }
+}
+
+ntGet: function {xs: List NameTid name: StringView} out optionval u64 is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            return (optionval.some e9.tid)
+        }
+        i9 = i9 + 1
+    }
+    return (optionval.none u64)
+}
+
+ntSet: function {xs: List NameTid name: StringView tid: u64} is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            xs.set i: i9 val: (NameTid name: name.string tid: tid)
+            return
+        }
+        i9 = i9 + 1
+    }
+    xs.append (NameTid name: name.string tid: tid)
+}
+
+ntRemove: function {xs: List NameTid name: StringView} is {
+    i9: 0.u64
+    n9: xs.length
+    for i9 < n9 loop {
+        e9: xs.get i: i9
+        if e9.name.stringview == name then {
+            last9: xs.pop
+            if i9 + 1 < n9 then {
+                xs.set i: i9 val: last9
+            }
+            return
+        }
+        i9 = i9 + 1
+    }
+}
+
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
 aliasResolve: function {ctx: Ctx name: StringView} out String is {
     # A match-arm narrowing (narrowBox) takes priority: inside the arm the name
     # resolves to the narrowed union payload cast, not the un-narrowed binding or a
     # stale for-loop/borrow/take alias -- mirrors takeSourceResolve.
-    nbo: ctx.narrowBox.get key: name.string
-    match (
-        nbo
-    ) case some then {
-        return nbo.string
-    } case none then {}
-    ao: ctx.aliases.get key: name.string
-    match (
-        ao
-    ) case some then {
-        return ao.string
-    } case none then {
-        return name.string
+    nbo: nvGet xs: ctx.narrowBox name: name
+    if nbo.length > 0 then {
+        return nbo
     }
+    ao: nvGet xs: ctx.aliases name: name
+    if ao.length > 0 then {
+        return ao
+    }
+    return name.string
 }
 
 # takeSourceResolve -- the C lvalue to zero after a take of `name`: a match-arm
 # narrowing's union box payload (narrowBox) takes priority over a plain `.take`
 # alias, so the source zeroing invalidates the box, not just the narrowed copy.
 takeSourceResolve: function {ctx: Ctx name: StringView} out String is {
-    nbs9: "".string
-    hitN9: false
-    {
-        nbo: ctx.narrowBox.get key: name.string
-        match (
-            nbo
-        ) case some then {
-            hitN9 = true
-            nbs9 = nbo.copy
-        } case none then {}
-    }
+    nbs9: nvGet xs: ctx.narrowBox name: name
+    hitN9: nbs9.length > 0
     if hitN9 then {
         return nbs9
     }
@@ -993,9 +1094,9 @@ emitNarrowedTakeZero: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: 
         cn9: atomTextOf n: n.child
         if cn9.stringview == "take" then {
             bn9: atomTextOf n: n.parent
-            if (ctx.narrowBox.has key: bn9.string) then {
+            if (nvHas xs: ctx.narrowBox name: bn9.stringview) then {
                 box9: takeSourceResolve ctx: ctx name: bn9.stringview
-                tido9: ctx.narrowTid.get key: bn9.string
+                tido9: ntGet xs: ctx.narrowTid name: bn9.stringview
                 match (
                     tido9
                 ) case some then {
@@ -2181,7 +2282,7 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
     } case dottedpath then {
         ch9: atomTextOf n: n.child
         bnm9: atomTextOf n: n.parent
-        if (ctx.narrowBox.has key: bnm9.string) then {
+        if (nvHas xs: ctx.narrowBox name: bnm9.stringview) then {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
             # the subject's heap); an ownership builtin yields an owned value.
             if ch9.stringview == "take" then { return false }
@@ -3441,6 +3542,9 @@ nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
         return "".string
     }
     res: "".string
+    if symtab.typing.nodeConst.length == 0 then {
+        return res
+    }
     with citer: symtab.typing.nodeConst.iterate do for row: citer loop {
         if row.nodeid == nid when res.length == 0 then {
             if row.value.kind == ztypes.zconstkind.IVAL then {
@@ -4585,6 +4689,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         return "/* zemitterc: unhandled expr */0".string
     } case atomid then {
         av: n.name.stringview
+        # stamped variable use first: the local, alias-resolved and C-mangled
+        # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
+        # key alloc + hash) never runs for it
+        avo9: symtab.typing.atomVariableId.get key: n.nodeid.u64
+        match (
+            avo9
+        ) case some then {
+            acv9: aliasResolve ctx: ctx name: av
+            return (ztypes.mangleVarName name: acv9.stringview)
+        } case none then {}
         ac: av.string
         cgo: ctx.constVals.get key: ac
         match (
@@ -4593,15 +4707,6 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             cvv: cgo.stringview
             cvc: cvv.string
             return cvc
-        } case none then {}
-        # stamped variable use: the local, alias-resolved and C-mangled --
-        # no name probe (a variable atom is never a unit-def reference)
-        avo9: symtab.typing.atomVariableId.get key: n.nodeid.u64
-        match (
-            avo9
-        ) case some then {
-            acv9: aliasResolve ctx: ctx name: av
-            return (ztypes.mangleVarName name: acv9.stringview)
         } case none then {}
         # stamped unit-def reference: the RECORD / FUNCTION legs run off the
         # stamped tid; unstamped atoms (fn-mono template re-emission walks
@@ -6531,7 +6636,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
         nm: ztypes.mangleVarName name: n.name.stringview
         nbrw9: bindingRhsIsBorrow symtab: symtab ctx: ctx n: n.value
-        ctx.borrowedVars.set key: "\{nm.stringview}" value: nbrw9
+        ctx.borrowedVars.set key: nm.copy value: nbrw9
         if ctx.genActive when (isYieldNode n: n.value) then {
             emitExprFormYield symtab: symtab ctx: ctx value: n.value aid: n.nodeid.u64 nm: nm.stringview ind: ind tmp: tmp buf: buf
             return
@@ -6542,7 +6647,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         if tabA.length > 0 then {
             lalA: "\{ind}/* alias: \{nm} => \{tabA} */\n"
             buf.append lalA.stringview
-            ctx.aliases.set key: nm.string value: tabA
+            nvSet xs: ctx.aliases name: nm.stringview val: tabA.stringview
             return
         }
         ltid: stampIdOf symtab: symtab nid: n.nodeid.u64
@@ -6986,7 +7091,7 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
                 rcvNm9: dottedBaseAtom n: n
                 rcvKey9: ztypes.mangleVarName name: rcvNm9.stringview
                 rbrw9: false
-                bvg9: ctx.borrowedVars.get key: "\{rcvKey9.stringview}"
+                bvg9: ctx.borrowedVars.get key: rcvKey9.copy
                 match (
                     bvg9
                 ) case some then {
@@ -7190,15 +7295,13 @@ emitReassignLvalue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
     ) case dottedpath then {
         ba9: atomTextOf n: n.parent
         if ba9.length > 0 then {
-            nbo9: ctx.narrowBox.get key: ba9.string
-            match (
-                nbo9
-            ) case some then {
+            nbo9: nvGet xs: ctx.narrowBox name: ba9.stringview
+            if nbo9.length > 0 then {
                 mem9: atomTextOf n: n.child
-                bx9: nbo9.string
+                bx9: nbo9.copy
                 lvx9: "\{bx9}.\{mem9}".string
                 return lvx9
-            } case none then {}
+            }
         }
         memFp9: atomTextOf n: n.child
         rpnid9: nodeIdOf9 n: n.parent
@@ -7460,12 +7563,12 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
                 cmt9: "\{ind}    /* alias: \{sname} => (*(\{pc}*)_m\{mN}.data) */\n"
                 buf.append cmt9.stringview
                 nbv: "(*(\{pc}*)_m\{mN}.data)".string
-                ctx.narrowBox.set key: sname.string value: nbv
+                nvSet xs: ctx.narrowBox name: sname val: nbv.stringview
                 co: symtab.typing.childOf parentTypeId: vtid name: arm
                 match (
                     co
                 ) case some then {
-                    ctx.narrowTid.set key: sname.string value: co
+                    ntSet xs: ctx.narrowTid name: sname tid: co
                 } case none then {}
                 didSeed = true
             } else {
@@ -7486,8 +7589,8 @@ emitMatchClause: function {symtab: zenv.ZSymbolTable ctx: Ctx c: Node vtid: u64 
             flushBlockFrees ctx: ctx tmp: tmp fL: fL9 lL: lL9 buf: buf
         }
         if didSeed then {
-            ctx.narrowBox.remove key: sname.string
-            ctx.narrowTid.remove key: sname.string
+            nvRemove xs: ctx.narrowBox name: sname
+            ntRemove xs: ctx.narrowTid name: sname
         }
         l5: "\{ind}    break;\n"
         buf.append l5.stringview
@@ -7924,7 +8027,7 @@ emitObjIterFor: function {symtab: zenv.ZSymbolTable ctx: Ctx m: zast.ForData ind
                     l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
                     buf.append l3pa.stringview
                     av3p: "(*__borrow_\{lbl})".string
-                    ctx.aliases.set key: lbl.copy value: av3p
+                    nvSet xs: ctx.aliases name: lbl.stringview val: av3p.stringview
                 }
             } else if (originIsTid symtab: symtab tid: ovid originTid: ctx.optionOriginTid) then {
                 # owned heap yield: move the payload out, free just the box; the
@@ -9582,8 +9685,8 @@ emitUnitMonoInstances: function {symtab: zenv.ZSymbolTable ctx: Ctx templateName
                                         lo9: "\{sig9} {\n"
                                         buf.append lo9.stringview
                                         ctx.ptrVars = (List String)
-                                        ctx.aliases = (Map String value: String)
-                                        ctx.narrowBox = (Map String value: String)
+                                        ctx.aliases = (List NameVal)
+                                        ctx.narrowBox = (List NameVal)
                                         registerReftypeParams symtab: symtab ctx: ctx fid: cfid9
                                         emitFnBody symtab: symtab ctx: ctx op: fm9.operation fid: cfid9 buf: buf
                                         buf.append "}\n\n"
@@ -9673,8 +9776,8 @@ emitFnMonoInstances: function {symtab: zenv.ZSymbolTable ctx: Ctx templateFnId: 
                 lo9: "\{sig9} {\n"
                 buf.append lo9.stringview
                 ctx.ptrVars = (List String)
-                ctx.aliases = (Map String value: String)
-                ctx.narrowBox = (Map String value: String)
+                ctx.aliases = (List NameVal)
+                ctx.narrowBox = (List NameVal)
                 registerReftypeParams symtab: symtab ctx: ctx fid: t9
                 emitFnBody symtab: symtab ctx: ctx op: templateFnOp fid: t9 buf: buf
                 buf.append "}\n\n"
@@ -9751,8 +9854,8 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
                         lo: "\{sig} {\n"
                         buf.append lo.stringview
                         ctx.ptrVars = (List String)
-                        ctx.aliases = (Map String value: String)
-                        ctx.narrowBox = (Map String value: String)
+                        ctx.aliases = (List NameVal)
+                        ctx.narrowBox = (List NameVal)
                         registerReftypeParams symtab: symtab ctx: ctx fid: fid
                         emitFnBody symtab: symtab ctx: ctx op: dm2.operation fid: fid buf: buf
                         buf.append "}\n\n"
@@ -9926,7 +10029,7 @@ emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView keepRefd: 
                 keepF = false
             }
         }
-        if (ctx.aliases.has key: fvR) then {
+        if (nvHas xs: ctx.aliases name: fvR.stringview) then {
             keepF = false
         }
         if keepF then {
@@ -9945,7 +10048,7 @@ emitReturnCleanup: function {ctx: Ctx tmp: TmpCtr retExpr: StringView keepRefd: 
                 keepL = false
             }
         }
-        if (ctx.aliases.has key: var9) then {
+        if (nvHas xs: ctx.aliases name: var9.stringview) then {
             keepL = false
         }
         if keepL then {
@@ -10166,7 +10269,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     litTexts: (List String)
     collectUnitLiterals program: program ids: litIds texts: litTexts
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) tmplCache: (Map String value: String) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool) strTid: strId svTid: svId strOriginTid: strOriginTid arrayOriginTid: arrayOriginTid listOriginTid: listOriginTid listViewOriginTid: listViewOriginTid mapOriginTid: mapOriginTid setOriginTid: setOriginTid mapEntryOriginTid: mapEntryOriginTid listIterOriginTid: listIterOriginTid setIterOriginTid: setIterOriginTid mapKeyIterOriginTid: mapKeyIterOriginTid mapItemIterOriginTid: mapItemIterOriginTid optionOriginTid: optionOriginTid optionViewOriginTid: optionViewOriginTid resultOriginTid: resultOriginTid optionvalOriginTid: optionvalOriginTid resultvalOriginTid: resultvalOriginTid)
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (List NameVal) narrowBox: (List NameVal) narrowTid: (List NameTid) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) tmplCache: (Map String value: String) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool) strTid: strId svTid: svId strOriginTid: strOriginTid arrayOriginTid: arrayOriginTid listOriginTid: listOriginTid listViewOriginTid: listViewOriginTid mapOriginTid: mapOriginTid setOriginTid: setOriginTid mapEntryOriginTid: mapEntryOriginTid listIterOriginTid: listIterOriginTid setIterOriginTid: setIterOriginTid mapKeyIterOriginTid: mapKeyIterOriginTid mapItemIterOriginTid: mapItemIterOriginTid optionOriginTid: optionOriginTid optionViewOriginTid: optionViewOriginTid resultOriginTid: resultOriginTid optionvalOriginTid: optionvalOriginTid resultvalOriginTid: resultvalOriginTid)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -15286,8 +15389,8 @@ emitClassMonoMethods: function {symtab: zenv.ZSymbolTable ctx: Ctx tplId: u64 op
                                         lo8: "\{sg8} {\n"
                                         buf.append lo8.stringview
                                         ctx.ptrVars = (List String)
-                                        ctx.aliases = (Map String value: String)
-                                        ctx.narrowBox = (Map String value: String)
+                                        ctx.aliases = (List NameVal)
+                                        ctx.narrowBox = (List NameVal)
                                         registerReftypeParams symtab: symtab ctx: ctx fid: cf8
                                         emitFnBody symtab: symtab ctx: ctx op: am8.operation fid: cf8 buf: buf
                                         buf.append "}\n\n"
@@ -15570,7 +15673,7 @@ emitExprFormYield: function {symtab: zenv.ZSymbolTable ctx: Ctx value: Node aid:
         lp1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
         buf.append lp1.stringview
         av9: "(*__borrow_\{nm})".string
-        ctx.aliases.set key: nm.string value: av9
+        nvSet xs: ctx.aliases name: nm.stringview val: av9.stringview
     } else {
         lp2: "\{ind}\{ct9} \{nm} = this->_resume_input;\n"
         buf.append lp2.stringview
@@ -15684,8 +15787,8 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
     # the receiver param gets a `*` and its name is recorded so the body emits
     # `c->field`. Reset for this method (names must not leak into other bodies).
     ctx.ptrVars = (List String)
-    ctx.aliases = (Map String value: String)
-    ctx.narrowBox = (Map String value: String)
+    ctx.aliases = (List NameVal)
+    ctx.narrowBox = (List NameVal)
     encIsClass: false
     if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.CLASS then {
         encIsClass = true
@@ -15773,8 +15876,8 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
         buf.append "}\n\n"
     }
     ctx.ptrVars = (List String)
-    ctx.aliases = (Map String value: String)
-    ctx.narrowBox = (Map String value: String)
+    ctx.aliases = (List NameVal)
+    ctx.narrowBox = (List NameVal)
 }
 
 # emitMonoNative -- a native fragment substituting z_StringView and (when
