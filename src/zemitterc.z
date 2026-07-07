@@ -2131,21 +2131,6 @@ collectionValueCallRhs: function {n: Node} out bool is {
 # A no-arg method call (the child resolves to a FUNCTION) returns an owned value
 # and is NOT a borrow. (Map.get returns an owned Option, handled elsewhere;
 # `.copy` / `.string` / `.take` are owned and handled before this check.)
-resolveShellTid: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
-    duo: definedInUnitOf symtab: symtab tid: tid
-    match (
-        duo
-    ) case some then {
-        return tid
-    } case none then {}
-    nm: typeNameOfReg9 symtab: symtab tid: tid
-    rr: resolveTypeIdByName symtab: symtab ctx: ctx name: nm.stringview
-    if rr > 0 then {
-        return rr
-    }
-    return tid
-}
-
 funcBorrowFlag: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     if tid == 0 then {
         return false
@@ -4397,7 +4382,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                         av9 = emitExpr symtab: symtab ctx: ctx n: a.operation
                     }
                     pRaw9: fpIds.get i: slot9b
-                    ppid9: resolveShellTid symtab: symtab ctx: ctx tid: pRaw9
+                    ppid9: pRaw9
                     pptt9: symtab.reg.typetypeOf typeId: ppid9
                     isProtoP9: false
                     if pptt9 == ztypes.ztypetype.PROTOCOL then {
@@ -4408,7 +4393,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                     }
                     if isProtoP9 then {
                         aRaw9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: a.operation)
-                        aTid9: resolveShellTid symtab: symtab ctx: ctx tid: aRaw9
+                        aTid9: aRaw9
                         aTT9: symtab.reg.typetypeOf typeId: aTid9
                         aConc9: false
                         if aTT9 == ztypes.ztypetype.CLASS then {
@@ -4948,7 +4933,6 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 }
             }
             bstamp = chaseColMono symtab: symtab tid: bstamp
-            bstamp = canonicalColId symtab: symtab ctx: ctx tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
             if rtt == ztypes.ztypetype.PROTOCOL then {
                 isPMn9: true
@@ -5304,7 +5288,6 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         # path). Resolve the List mono from the base node and emit the call.
         nlid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
         nlid9 = chaseColMono symtab: symtab tid: nlid9
-        nlid9 = canonicalColId symtab: symtab ctx: ctx tid: nlid9
         nlomn9: monoOriginName symtab: symtab tid: nlid9
         if (originIsTid symtab: symtab tid: nlid9 originTid: ctx.strOriginTid) then {
             nstrcb9: symtab.reg.cnameOf tid: nlid9
@@ -6428,7 +6411,7 @@ emitCallStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData i
     ce: emitCallValue symtab: symtab ctx: ctx call: call
     flushArgHoists ctx: ctx ind: ind tmp: tmp buf: buf
     dcrtid9: stampIdOf symtab: symtab nid: call.nodeid.u64
-    dcsh9: resolveShellTid symtab: symtab ctx: ctx tid: dcrtid9
+    dcsh9: dcrtid9
     dcftid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: call.callable)
     dcnm9: typeNameOfReg9 symtab: symtab tid: dcsh9
     dctt9: symtab.reg.typetypeOf typeId: dcsh9
@@ -8769,27 +8752,6 @@ isCollectionOriginTid: function {ctx: Ctx originTid: u64} out bool is {
     return false
 }
 
-# canonicalColId -- a collection mono is global and uniquely named, so a field
-# shell or duplicate stamp (de.field) resolves to the emitted mono id by name.
-# Bypasses the definedInUnit guard fieldMonoId/typeRefC use for cross-unit USER
-# types (io.Reader vs Reader) -- collections have no such ambiguity, so a
-# field-access receiver builds the same _iterate/_pop cname as a local variable.
-canonicalColId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
-    tn: typeNameOfReg9 symtab: symtab tid: tid
-    rid: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
-    duo: definedInUnitOf symtab: symtab tid: tid
-    hasU9: false
-    match (
-        duo
-    ) case some then {
-        hasU9 = true
-    } case none then {}
-    if hasU9 == false when rid > 0 then {
-        return rid
-    }
-    return tid
-}
-
 # cTypeForNameTid -- like cTypeForName, but a user type SHADOWING a scalar (its
 # tid is defined in a user unit) emits its struct (typeRefC), not the by-name C
 # scalar. For collection-mono VAL_T/KEY_T/ELEM_T where the element/key/value tid
@@ -8882,23 +8844,6 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
     if tn.stringview == "this" when thisTid > 0 then {
         cid = thisTid
         tn = typeNameOfReg9 symtab: symtab tid: cid
-    } else {
-        # only canonicalize a SHELL (no defining unit) by name; a fully-registered
-        # type is used directly, so a cross-unit same-name type (io.Reader vs a
-        # main-unit Reader) is not re-resolved to the main unit's.
-        hasUnit9: false
-        duo0: definedInUnitOf symtab: symtab tid: tid
-        match (
-            duo0
-        ) case some then {
-            hasUnit9 = true
-        } case none then {}
-        if (hasUnit9) == false then {
-            rid9: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
-            if rid9 > 0 then {
-                cid = rid9
-            }
-        }
     }
     cmid9: chaseColMono symtab: symtab tid: cid
     if cmid9 != cid then {
@@ -10031,7 +9976,7 @@ emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node fid: u64 buf: 
                     # Set/Map _destroy frees the container as a heap pointer (would need
                     # &name); none exist in the self-host.
                     if (isHeapPtrCollection symtab: symtab ctx: ctx tid: ppid9) == false then {
-                        pcm9: fieldMonoId symtab: symtab ctx: ctx tid: ppid9
+                        pcm9: chaseColMono symtab: symtab tid: ppid9
                         puse9: pcm9
                         if (symtab.reg.hasDestructorName typeId: pcm9) == false then {
                             prbn9: resolveTypeIdByName symtab: symtab ctx: ctx name: ptnm9.stringview
@@ -11220,7 +11165,7 @@ mapValFreeStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx valName: StringView
         return "\{ctx.strC}_free(&\{slot});".string
     }
     if valTid > 0 then {
-        vmid: fieldMonoId symtab: symtab ctx: ctx tid: valTid
+        vmid: chaseColMono symtab: symtab tid: valTid
         needs: false
         if (symtab.reg.hasDestructorName typeId: vmid) then {
             needs = true
@@ -11675,28 +11620,8 @@ cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} o
 
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
 # embedded by value); a struct field of one is a pointer, freed without `&`.
-# fieldMonoId -- resolve a field/param type id to its real collection-mono id.
-# A field child is often a fresh SHELL id (named after the type, no defining
-# unit); `typeRefC` resolves it by name, and so must any origin/destructor query
-# (else monoOriginName of the shell is "" and a Map/List field looks scalar).
-fieldMonoId: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
-    cid: tid
-    duo: definedInUnitOf symtab: symtab tid: tid
-    match (
-        duo
-    ) case some then {} case none then {
-        tn: typeNameOfReg9 symtab: symtab tid: tid
-        rid: resolveTypeIdByName symtab: symtab ctx: ctx name: tn.stringview
-        if rid > 0 then {
-            cid = rid
-        }
-    }
-    return (chaseColMono symtab: symtab tid: cid)
-}
-
 isHeapPtrCollection: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
-    cm: fieldMonoId symtab: symtab ctx: ctx tid: tid
-    onm: monoOriginName symtab: symtab tid: cm
+    cm: chaseColMono symtab: symtab tid: tid
     if (originIsTid symtab: symtab tid: cm originTid: ctx.mapOriginTid) then {
         return true
     }
@@ -11717,7 +11642,7 @@ cliClassIsComposite: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out 
     fn0: fnames.length
     for fi < fn0 loop {
         fid: fids.get i: fi
-        cm: fieldMonoId symtab: symtab ctx: ctx tid: fid
+        cm: chaseColMono symtab: symtab tid: fid
         onm: monoOriginName symtab: symtab tid: cm
         if (originIsTid symtab: symtab tid: cm originTid: ctx.listOriginTid) then {
             return true
@@ -12408,7 +12333,7 @@ monoDependsOnUser: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 user
     en: elems.length
     for ei < en loop {
         eid: elems.get i: ei
-        ceid: fieldMonoId symtab: symtab ctx: ctx tid: eid
+        ceid: chaseColMono symtab: symtab tid: eid
         if (userList.contains item: ceid) then {
             return true
         }
@@ -12462,7 +12387,7 @@ userDefnRefsUnemitted: function {symtab: zenv.ZSymbolTable ctx: Ctx typeId: u64 
     fn: fids.length
     for fi < fn loop {
         fid: fids.get i: fi
-        cfid: fieldMonoId symtab: symtab ctx: ctx tid: fid
+        cfid: chaseColMono symtab: symtab tid: fid
         skip: isHeapPtrCollection symtab: symtab ctx: ctx tid: fid
         if skip == false then {
             if (idSetHas s: group id: cfid) then {
@@ -12489,7 +12414,7 @@ monoLateDepsMet: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 group:
     en: elems.length
     for ei < en loop {
         eid: elems.get i: ei
-        ceid: fieldMonoId symtab: symtab ctx: ctx tid: eid
+        ceid: chaseColMono symtab: symtab tid: eid
         if (idSetHas s: group id: ceid) then {
             if (idSetHas s: emitted id: ceid) == false then {
                 return false
@@ -14972,7 +14897,7 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
                 ds: "    \{ctx.strC}_free(&p->\{fname});\n"
                 buf.append ds.stringview
             } else {
-                fmid9: fieldMonoId symtab: symtab ctx: ctx tid: fid
+                fmid9: chaseColMono symtab: symtab tid: fid
                 fneeds9: false
                 if (symtab.reg.hasDestructorName typeId: fmid9) then {
                     fneeds9 = true
@@ -15241,7 +15166,7 @@ emitCliCompositeClass: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 nam
             ds: "    \{ctx.strC}_free(&p->\{dfn});\n"
             buf.append ds.stringview
         } else {
-            dcm: fieldMonoId symtab: symtab ctx: ctx tid: dfi
+            dcm: chaseColMono symtab: symtab tid: dfi
             dneeds9: false
             if (symtab.reg.hasDestructorName typeId: dcm) then {
                 dneeds9 = true
