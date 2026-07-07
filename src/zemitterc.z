@@ -2851,7 +2851,12 @@ emitUnionCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
             ) case namedoperation then {
                 if (got) == false then {
                     got = true
-                    av = emitExpr symtab: symtab ctx: ctx n: a.operation
+                    # an interpolated payload builds via a self-contained
+                    # statement expression (emitExpr cannot emit the chain)
+                    av = emitInterpArgExpr symtab: symtab ctx: ctx n: a.operation
+                    if av.length == 0 then {
+                        av = emitExpr symtab: symtab ctx: ctx n: a.operation
+                    }
                 }
             } else {}
         }
@@ -2909,7 +2914,12 @@ emitVariantCtorCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
                 ) case namedoperation then {
                     if (ogot9) == false then {
                         ogot9 = true
-                        oav9 = emitExpr symtab: symtab ctx: ctx n: oa9.operation
+                        # an interpolated payload builds via a self-contained
+                        # statement expression (emitExpr cannot emit the chain)
+                        oav9 = emitInterpArgExpr symtab: symtab ctx: ctx n: oa9.operation
+                        if oav9.length == 0 then {
+                            oav9 = emitExpr symtab: symtab ctx: ctx n: oa9.operation
+                        }
                     }
                 } else {}
             }
@@ -6449,9 +6459,17 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
             ldo9: "\{ind}do {\n"
             buf.append ldo9.stringview
             indd9: "\{ind}    "
+            # the block is its own break target: a break inside frees the
+            # block's owned temps (since these marks) and lands after the
+            # block, not on an enclosing loop's label
+            sdoId9: pushLoopLabel ctx: ctx tmp: tmp
+            sfL9: tmp.frees.length
+            slL9: tmp.listFrees.length
             emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: indd9.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: sfL9 lL: slL9 buf: buf
             lwh9: "\{ind}} while (0);\n"
             buf.append lwh9.stringview
+            popLoopLabel ctx: ctx id: sdoId9 ind: ind buf: buf
         } else {
             emitBodyNode symtab: symtab ctx: ctx n: n.statement ind: ind tmp: tmp buf: buf
         }
@@ -6772,6 +6790,28 @@ emitStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: StringView t
         }
         lc2: "\{ind}\{nm2} = \{rv2};\n"
         buf.append lc2.stringview
+        # a `<obj>.field.take` RHS moved the field out as a shallow struct
+        # copy: zero the field lvalue so the owner's destructor does not
+        # double-free the payload (mirrors the binding case; fn-typed fields
+        # are POD references and move nothing).
+        rftFn9: false
+        rftnid9: nodeIdOf9 n: n.value
+        if rftnid9 > 0 then {
+            rftst9: stampIdOf symtab: symtab nid: rftnid9
+            if rftst9 > 0 then {
+                if (symtab.reg.typetypeOf typeId: rftst9) == ztypes.ztypetype.FUNCTION then {
+                    rftFn9 = true
+                }
+            }
+        }
+        if (isFieldTake n: n.value) when rftFn9 == false then {
+            rfct9: "\{ctx.strC}_t".string
+            if (stampIdOf symtab: symtab nid: rtnid9) != ctx.strTid then {
+                rfct9 = typeRefC symtab: symtab ctx: ctx tid: rtsid9 thisTid: 0
+            }
+            rftz9: "\{ind}\{rv2} = (\{rfct9}){0};\n"
+            buf.append rftz9.stringview
+        }
         # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
         # are consumed by it -- invalidate each moved source so its scope-exit
         # free no-ops (mirrors the binding case; disjoint from the bare-local
@@ -7515,14 +7555,25 @@ emitDoBindValue: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node nm: String
             l1: "\{ind}do {\n"
             buf.append l1.stringview
             ind2: "\{ind}    "
+            # the block is its own break target: a break inside frees the
+            # block's owned temps (since these marks) and lands after the
+            # block, not on an enclosing loop's label
+            doId9: pushLoopLabel ctx: ctx tmp: tmp
+            fLd9: tmp.frees.length
+            lLd9: tmp.listFrees.length
             emitBranchAssignOptional symtab: symtab ctx: ctx n: n.statement target: nm someTag: someTag.stringview ind: ind2.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fLd9 lL: lLd9 buf: buf
             l2: "\{ind}} while (0);\n"
             buf.append l2.stringview
+            popLoopLabel ctx: ctx id: doId9 ind: ind buf: buf
         } else {
             l3: "\{ind}{\n"
             buf.append l3.stringview
             ind3: "\{ind}    "
+            fLe9: tmp.frees.length
+            lLe9: tmp.listFrees.length
             emitBranchAssign symtab: symtab ctx: ctx n: n.statement target: nm ind: ind3.stringview tmp: tmp buf: buf
+            flushBlockFrees ctx: ctx tmp: tmp fL: fLe9 lL: lLe9 buf: buf
             l4: "\{ind}}\n"
             buf.append l4.stringview
         }
