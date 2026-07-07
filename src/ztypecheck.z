@@ -1899,8 +1899,7 @@ resolveTyperefShellMarked: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegist
 # default (mirrors the reference's `not is_heap_allocated` guard), so they are NOT
 # matched here -- only user class/union types defined in this unit.
 nameIsInUnitReftype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView} out bool is {
-    rkey: "\{unitName}.\{name}".string
-    rr: resolvedByKey ty: ty reg: reg key: rkey
+    rr: resolveUnitChild ty: ty reg: reg unitName: unitName name: name
     match (
         rr
     ) case some then {
@@ -3545,7 +3544,7 @@ descendNamed: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry units: Lis
     } else {}
     ty.suppressSigStamp = sup9
     if classified9 == false then {
-        ro9: resolvedByKey ty: ty reg: reg key: ("\{defUnit}.\{name}".string)
+        ro9: resolveUnitChild ty: ty reg: reg unitName: defUnit name: name
         return (optU64Or o: ro9 d: 0)
     }
     return tid9
@@ -6446,7 +6445,7 @@ respecialize: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: 
 # no children; their cloned method children land with the class-mono slice.
 mintMono: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainName: StringView name: StringView templateId: u64 subs: (Map String value: u64) idSubs: (Map u64 value: u64) fallbackArg: u64} out u64 is {
     kn: name.string
-    got: resolvedByKey ty: ty reg: reg key: ("system.\{name}".string)
+    got: resolveSystemChild ty: ty reg: reg name: name
     match (
         got
     ) case some then {
@@ -12309,7 +12308,7 @@ checkGenericCall: function {st: zenv.ZSymbolTable unitName: StringView unitBody:
     }
     wasNew: false
     nk: mname.string
-    ngot: resolvedByKey ty: st.typing reg: st.reg key: ("system.\{mname}".string)
+    ngot: resolveSystemChild ty: st.typing reg: st.reg name: mname.stringview
     match (
         ngot
     ) case some then {
@@ -14227,6 +14226,40 @@ walkLookupTyperef: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry curre
 # childOf (during-resolution reads) or non-type binding keys. The read path off
 # the flat map (Stage A). Free fn (not a ZTyping method) so smoke-built low-level
 # modules never pull in .split.
+# resolveUnitChild -- the (unit, name) form of resolvedByKey's two-segment
+# walk: no composed key, no split. resolveSystemChild probes the cached
+# system unit root with no allocation at all.
+resolveUnitChild: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry unitName: StringView name: StringView} out optionval u64 is {
+    ro: reg.unitNameTid.get key: unitName.string
+    match (
+        ro
+    ) case some then {
+        co: ty.childOf parentTypeId: ro name: name
+        match (
+            co
+        ) case some then {
+            return (optionval.some co)
+        } case none then {}
+    } case none then {}
+    # miss: the composed-key path follows unit-level aliases and lays the
+    # unit->alias edge, so the next probe resolves through childOf above
+    ck9: "\{unitName}.\{name}".string
+    return (resolvedByKey ty: ty reg: reg key: ck9)
+}
+
+resolveSystemChild: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry name: StringView} out optionval u64 is {
+    if ty.systemUnitTid > 0 then {
+        co: ty.childOf parentTypeId: ty.systemUnitTid name: name
+        match (
+            co
+        ) case some then {
+            return (optionval.some co)
+        } case none then {}
+    }
+    ck9: "system.\{name}".string
+    return (resolvedByKey ty: ty reg: reg key: ck9)
+}
+
 childOfWalk: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry key: String} out optionval u64 is {
     cur: 0.u64
     started: false
@@ -14329,14 +14362,13 @@ shellScalarName: function {name: StringView} out bool is {
 # from `unit`: the unit-local key, the system key, the walk list, then the
 # registry-wide cross-unit scan. 0 when nothing resolves.
 shellResolveByName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry fromUnit: StringView name: StringView} out u64 is {
-    k1: "\{fromUnit}.\{name}".string
-    r1: resolvedByKey ty: ty reg: reg key: k1
+    r1: resolveUnitChild ty: ty reg: reg unitName: fromUnit name: name
     match (
         r1
     ) case some then {
         return r1
     } case none then {}
-    r2: resolvedByKey ty: ty reg: reg key: ("system.\{name}".string)
+    r2: resolveSystemChild ty: ty reg: reg name: name
     match (
         r2
     ) case some then {
@@ -14463,6 +14495,14 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
     # resolution (lowerGenerators pre-resolves system.Iterator/optionval when a
     # generator is present), so childOf-at-mint always sees a populated unit root.
     registerUnitRoots ty: st.typing reg: st.reg program: program
+    {
+        sysUo9: st.reg.unitNameTid.get key: "system".string
+        match (
+            sysUo9
+        ) case some then {
+            st.typing.systemUnitTid = sysUo9
+        } case none then {}
+    }
     declareCanonicalType ty: st.typing reg: st.reg defUnit: "system" name: "never" typetype: ztypes.ztypetype.NEVER
     declareCanonicalType ty: st.typing reg: st.reg defUnit: "system" name: "null" typetype: ztypes.ztypetype.NULL
     populatePrelude ty: st.typing reg: st.reg program: program
