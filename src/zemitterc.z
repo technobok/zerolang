@@ -12438,12 +12438,24 @@ monoIsLate: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 userList: L
     return (monoDependsOnUser symtab: symtab ctx: ctx monoId: monoId userList: userList seen: seen)
 }
 
+# idSetHas -- membership in a Map-u64-bool id set.
+idSetHas: function {s: (Map u64 value: bool) id: u64} out bool is {
+    got: s.get key: id
+    match (
+        got
+    ) case some then {
+        return got
+    } case none then {
+        return false
+    }
+}
+
 # userDefnRefsUnemitted -- does the user type have a by-value field whose type is
 # in groupList but not yet in emittedList? Map/Set fields are heap pointers in the
 # port (fwd-decl suffices) so they impose no ordering edge; a UNION is boxed so it
 # is never dragged by its own arms. Passing an empty emittedList answers the plain
 # "references any group member" question used by the late-type closure.
-userDefnRefsUnemitted: function {symtab: zenv.ZSymbolTable ctx: Ctx typeId: u64 groupList: List u64 emittedList: List u64} out bool is {
+userDefnRefsUnemitted: function {symtab: zenv.ZSymbolTable ctx: Ctx typeId: u64 group: (Map u64 value: bool) emitted: (Map u64 value: bool)} out bool is {
     tt: symtab.reg.typetypeOf typeId: typeId
     if tt == ztypes.ztypetype.UNION then {
         return false
@@ -12462,8 +12474,8 @@ userDefnRefsUnemitted: function {symtab: zenv.ZSymbolTable ctx: Ctx typeId: u64 
         cfid: fieldMonoId symtab: symtab ctx: ctx tid: fid
         skip: isHeapPtrCollection symtab: symtab ctx: ctx tid: fid
         if skip == false then {
-            if (groupList.contains item: cfid) then {
-                if (emittedList.contains item: cfid) == false then {
+            if (idSetHas s: group id: cfid) then {
+                if (idSetHas s: emitted id: cfid) == false then {
                     return true
                 }
             }
@@ -12475,7 +12487,7 @@ userDefnRefsUnemitted: function {symtab: zenv.ZSymbolTable ctx: Ctx typeId: u64 
 
 # monoLateDepsMet -- every late-group member the mono references by value is
 # already emitted (so the mono can be emitted now).
-monoLateDepsMet: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 groupList: List u64 emittedList: List u64 seen: List u64} out bool is {
+monoLateDepsMet: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 group: (Map u64 value: bool) emitted: (Map u64 value: bool) seen: List u64} out bool is {
     if (seen.contains item: monoId) then {
         return true
     }
@@ -12487,14 +12499,14 @@ monoLateDepsMet: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 groupL
     for ei < en loop {
         eid: elems.get i: ei
         ceid: fieldMonoId symtab: symtab ctx: ctx tid: eid
-        if (groupList.contains item: ceid) then {
-            if (emittedList.contains item: ceid) == false then {
+        if (idSetHas s: group id: ceid) then {
+            if (idSetHas s: emitted id: ceid) == false then {
                 return false
             }
         }
         emo: monoOriginName symtab: symtab tid: ceid
         if emo.length > 0 then {
-            if (monoLateDepsMet symtab: symtab ctx: ctx monoId: ceid groupList: groupList emittedList: emittedList seen: seen) == false then {
+            if (monoLateDepsMet symtab: symtab ctx: ctx monoId: ceid group: group emitted: emitted seen: seen) == false then {
                 return false
             }
         }
@@ -12943,8 +12955,17 @@ emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir:
     collectLateMonosKind symtab: symtab ctx: ctx kind: "List" userList: userList acc: lateGroup last: last
     collectLateMonosKind symtab: symtab ctx: ctx kind: "Set" userList: userList acc: lateGroup last: last
     collectLateMonosKind symtab: symtab ctx: ctx kind: "Map" userList: userList acc: lateGroup last: last
+    # membership id-set mirroring lateGroup (the list keeps emission order)
+    lateSet: (Map u64 value: bool)
+    li0: 0.u64
+    ln0: lateGroup.length
+    for li0 < ln0 loop {
+        lv0: lateGroup.get i: li0
+        lateSet.set key: lv0 value: true
+        li0 = li0 + 1
+    }
     # closure: a user struct embedding a late-group member by value is late too
-    emptyList: (List u64)
+    emptySet: (Map u64 value: bool)
     changed: true
     for changed loop {
         changed = false
@@ -12952,9 +12973,10 @@ emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir:
         un: userList.length
         for ui < un loop {
             uid: userList.get i: ui
-            if (lateGroup.contains item: uid) == false then {
-                if (userDefnRefsUnemitted symtab: symtab ctx: ctx typeId: uid groupList: lateGroup emittedList: emptyList) then {
+            if (idSetHas s: lateSet id: uid) == false then {
+                if (userDefnRefsUnemitted symtab: symtab ctx: ctx typeId: uid group: lateSet emitted: emptySet) then {
                     lateGroup.append uid.u64
+                    lateSet.set key: uid value: true
                     changed = true
                 }
             }
@@ -12967,13 +12989,13 @@ emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir:
     n0: userList.length
     for e0 < n0 loop {
         uid0: userList.get i: e0
-        if (lateGroup.contains item: uid0) == false then {
+        if (idSetHas s: lateSet id: uid0) == false then {
             emitUserTypeById symtab: symtab ctx: ctx tid: uid0 buf: buf
         }
         e0 = e0 + 1
     }
     # fixpoint: emit late monos + late-user structs in dependency order
-    emittedList: (List u64)
+    emittedSet: (Map u64 value: bool)
     totalPend: lateGroup.length
     emittedCount: 0.u64
     done: false
@@ -12984,20 +13006,20 @@ emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir:
         pn: lateGroup.length
         for pi < pn loop {
             x: lateGroup.get i: pi
-            if (emittedList.contains item: x) == false then {
+            if (idSetHas s: emittedSet id: x) == false then {
                 xorigin: monoOriginName symtab: symtab tid: x
                 if xorigin.length > 0 then {
                     seen: (List u64)
-                    if (monoLateDepsMet symtab: symtab ctx: ctx monoId: x groupList: lateGroup emittedList: emittedList seen: seen) then {
+                    if (monoLateDepsMet symtab: symtab ctx: ctx monoId: x group: lateSet emitted: emittedSet seen: seen) then {
                         emitMonoById symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: x buf: buf
-                        emittedList.append x.u64
+                        emittedSet.set key: x value: true
                         emittedCount = emittedCount + 1
                         progressed = true
                     }
                 } else {
-                    if (userDefnRefsUnemitted symtab: symtab ctx: ctx typeId: x groupList: lateGroup emittedList: emittedList) == false then {
+                    if (userDefnRefsUnemitted symtab: symtab ctx: ctx typeId: x group: lateSet emitted: emittedSet) == false then {
                         emitUserTypeById symtab: symtab ctx: ctx tid: x buf: buf
-                        emittedList.append x.u64
+                        emittedSet.set key: x value: true
                         emittedCount = emittedCount + 1
                         progressed = true
                     }
@@ -13019,14 +13041,14 @@ emitUserStructsOrdered: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir:
         f1: lateGroup.length
         for f0 < f1 loop {
             x2: lateGroup.get i: f0
-            if (emittedList.contains item: x2) == false then {
+            if (idSetHas s: emittedSet id: x2) == false then {
                 xo2: monoOriginName symtab: symtab tid: x2
                 if xo2.length > 0 then {
                     emitMonoById symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: x2 buf: buf
                 } else {
                     emitUserTypeById symtab: symtab ctx: ctx tid: x2 buf: buf
                 }
-                emittedList.append x2.u64
+                emittedSet.set key: x2 value: true
             }
             f0 = f0 + 1
         }
