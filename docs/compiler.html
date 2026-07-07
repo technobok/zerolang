@@ -137,6 +137,8 @@ Table of Contents</div>
 </li>
 <li><a href="#unrecoverable-errors">Unrecoverable Errors</a>
 </li>
+<li><a href="#collection-choice">Collection Choice</a>
+</li>
 <li><a href="#stamp-driven-emission">Stamp-Driven Emission</a>
 </li>
 </ul>
@@ -657,7 +659,20 @@ function" diagnostics in callers that panic on every path.</p>
 <p>Source location (<code>.z</code> file + line) is intentionally not included
 in the <code>zpanic:</code> output; the panic message text itself is the
 post-mortem link back to the emitting site.</p>
-<h3 id="stamp-driven-emission"><a href="#stamp-driven-emission">9.4. Stamp-Driven Emission</a></h3>
+<h3 id="collection-choice"><a href="#collection-choice">9.4. Collection Choice</a></h3>
+<p>Compiler data structures follow a measured policy. Large id-keyed tables
+(node stamps, child edges, registries) are <code>Map u64</code> -- the emitted maps
+hash integers with one splitmix64 block and cache per-entry hashes, so id
+probes are cheap at any size. Small, per-instance state (the emitter's
+narrowing/alias lists, scan-sized child buckets) uses <strong>assoc-lists /
+linear row scans</strong>: at a handful of entries a StringView compare loop beats
+a map probe, which must allocate an owned key String and SipHash it.
+Structures that grow past a threshold switch representation at the
+crossing (a child bucket builds its byName index only past
+<code>bucketScanMax</code> rows). Hot String-keyed lookups are avoided outright:
+resolution goes through interned ids and two-argument (unit, name) probes
+rather than composed "unit.name" key strings.</p>
+<h3 id="stamp-driven-emission"><a href="#stamp-driven-emission">9.5. Stamp-Driven Emission</a></h3>
 <p>The emitter is a mechanical typed-AST-to-C pass: it reads what the type
 checker stamped and compares by id, never re-resolving names. An atom
 reference carries <code>atomVariableId</code> (a local) or <code>atomUnitDefId</code> (a

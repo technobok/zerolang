@@ -650,6 +650,21 @@ Source location (#~".z" file + line) is intentionally not included
 in the #~"zpanic:" output; the panic message text itself is the
 post-mortem link back to the emitting site.
 
+#---: Collection Choice
+
+Compiler data structures follow a measured policy. Large id-keyed tables
+(node stamps, child edges, registries) are #~"Map u64" -- the emitted maps
+hash integers with one splitmix64 block and cache per-entry hashes, so id
+probes are cheap at any size. Small, per-instance state (the emitter's
+narrowing/alias lists, scan-sized child buckets) uses #b:"assoc-lists /
+linear row scans": at a handful of entries a StringView compare loop beats
+a map probe, which must allocate an owned key String and SipHash it.
+Structures that grow past a threshold switch representation at the
+crossing (a child bucket builds its byName index only past
+#~"bucketScanMax" rows). Hot String-keyed lookups are avoided outright:
+resolution goes through interned ids and two-argument (unit, name) probes
+rather than composed "unit.name" key strings.
+
 #---: Stamp-Driven Emission
 
 The emitter is a mechanical typed-AST-to-C pass: it reads what the type
