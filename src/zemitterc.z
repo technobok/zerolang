@@ -347,6 +347,35 @@ substituteAll: function {text: String needle: StringView repl: StringView} out S
     return buf
 }
 
+# readTemplateCached -- the raw text of a runtime template file, read once
+# per emit and cached by path. "" when the file is missing -- callers treat
+# an empty read as the missing-template path.
+readTemplateCached: function {ctx: Ctx path: StringView} out String is {
+    cached9: "".string
+    hit9: false
+    {
+        got: ctx.tmplCache.get key: path.string
+        match (
+            got
+        ) case some then {
+            cached9 = got.copy
+            hit9 = true
+        } case none then {}
+    }
+    if hit9 then {
+        return cached9
+    }
+    txt: "".string
+    rd: io.readText path: path
+    match (
+        rd
+    ) case ok then {
+        txt = rd.take
+    } case err then {}
+    ctx.tmplCache.set key: path.string value: txt.copy
+    return txt
+}
+
 # loadFragment -- read a runtime fragment and substitute the canonical
 # z_StringView / z_String names with the registry's id-based ones
 # (StringView first: z_String is its prefix).
@@ -691,6 +720,7 @@ Ctx: class {
     genHasValue: bool
     emittedUserTypes: (Map u64 value: bool)
     fwdDeclaredTypes: (Map u64 value: bool)
+    tmplCache: (Map String value: String)
     argHoistNames: (List String)
     argHoistVals: (List String)
     argHoistTypes: (List String)
@@ -10193,7 +10223,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     litTexts: (List String)
     collectUnitLiterals program: program ids: litIds texts: litTexts
     rm: mn.copy
-    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool) strTid: strId svTid: svId strOriginTid: strOriginTid arrayOriginTid: arrayOriginTid listOriginTid: listOriginTid listViewOriginTid: listViewOriginTid mapOriginTid: mapOriginTid setOriginTid: setOriginTid mapEntryOriginTid: mapEntryOriginTid listIterOriginTid: listIterOriginTid setIterOriginTid: setIterOriginTid mapKeyIterOriginTid: mapKeyIterOriginTid mapItemIterOriginTid: mapItemIterOriginTid optionOriginTid: optionOriginTid optionViewOriginTid: optionViewOriginTid resultOriginTid: resultOriginTid)
+    ctx: (Ctx mainName: mn realMain: rm strC: strC svC: svC litIds: litIds usedLits: (Map u64 value: bool) constVals: (Map String value: String) needs: (Map String value: bool) methodReturns: (Map String value: String) dataElems: (Map String value: String) dataConst: (Map String value: String) ptrVars: (List String) aliases: (Map String value: String) narrowBox: (Map String value: String) narrowTid: (Map String value: u64) genActive: false genYieldCount: 0 genYieldNext: 0 genWrap: "".string genSomeTag: "".string genNoneTag: "".string genHasValue: false emittedUserTypes: (Map u64 value: bool) fwdDeclaredTypes: (Map u64 value: bool) tmplCache: (Map String value: String) argHoistNames: (List String) argHoistVals: (List String) argHoistTypes: (List String) argHoistDtors: (List String) argHoistRaw: (List String) argHoistCtr: 0 breakLabels: (List u64) breakLabelCtr: 0 breakLabelUsed: (Map u64 value: bool) breakFreesMarks: (List u64) breakListMarks: (List u64) borrowedVars: (Map String value: bool) strTid: strId svTid: svId strOriginTid: strOriginTid arrayOriginTid: arrayOriginTid listOriginTid: listOriginTid listViewOriginTid: listViewOriginTid mapOriginTid: mapOriginTid setOriginTid: setOriginTid mapEntryOriginTid: mapEntryOriginTid listIterOriginTid: listIterOriginTid setIterOriginTid: setIterOriginTid mapKeyIterOriginTid: mapKeyIterOriginTid mapItemIterOriginTid: mapItemIterOriginTid optionOriginTid: optionOriginTid optionViewOriginTid: optionViewOriginTid resultOriginTid: resultOriginTid)
     fillConstVals program: program symtab: symtab ctx: ctx
     fillMethodReturns program: program symtab: symtab ctx: ctx
     fillDataElems program: program symtab: symtab ctx: ctx
@@ -10499,10 +10529,8 @@ emitArrayMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
         eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    for (int _i = 0; _i < \{lenStr.stringview}; _i++) { if (a.data[_i] != b.data[_i]) return false; }\n    return true;\n}\n".string
     } case none then {}
     p: "\{runtimeDir}/z_array.c.tmpl"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
         t3: applyTmpl text: t2 key: "LEN" val: lenStr.stringview
@@ -10510,8 +10538,6 @@ emitArrayMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVi
         t5: applyTmpl text: t4 key: "EQ_BODY" val: eqBody.stringview
         buf.append t5.stringview
         buf.append "\n"
-    } case err then {
-        return
     }
 }
 
@@ -10608,10 +10634,11 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
     ect0: typeRefC symtab: symtab ctx: ctx tid: eid thisTid: 0
     ect: ctypeOrI64 s: ect0.stringview
     p: "\{runtimeDir}/z_List.c.tmpl"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length == 0 then {
+        return
+    }
+    {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
         delems9: "".string
@@ -10635,8 +10662,6 @@ emitListMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringVie
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringview
         buf.append t4.stringview
         buf.append "\n"
-    } case err then {
-        return
     }
     co: symtab.typing.childOf parentTypeId: monoId name: "contains"
     match (
@@ -10764,15 +10789,13 @@ emitListViewMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: Strin
     ect0: typeRefC symtab: symtab ctx: ctx tid: eid thisTid: 0
     ect: ctypeOrI64 s: ect0.stringview
     p: "\{runtimeDir}/z_ListView.c.tmpl"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
         buf.append t2.stringview
         buf.append "\n"
-    } case err then {}
+    }
 }
 
 # listviewMethods -- the _listview cast + _extendView companions when a
@@ -11132,10 +11155,8 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
     freeItemDup: setFreeItemDup isStr: isStr strC: ctx.strC.stringview
     freeItemDel: setFreeItemDel isStr: isStr strC: ctx.strC.stringview
     p: "\{runtimeDir}/z_Set.c.tmpl"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length > 0 then {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
         t3: applyTmpl text: t2 key: "ITEM_T" val: itemT.stringview
@@ -11149,8 +11170,6 @@ emitSetMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         t9: applyTmpl text: t8 key: "SETITER" val: si.stringview
         buf.append t9.stringview
         buf.append "\n"
-    } case err then {
-        return
     }
 }
 
@@ -11231,7 +11250,7 @@ mapValFreeStmt: function {symtab: zenv.ZSymbolTable ctx: Ctx valName: StringView
 # emitted only when those iterator monos were minted. Their OptionView returns
 # (OptionView_<K>, OptionView_MapEntry_<K>_<V>) are defined by the earlier
 # OptionView leg.
-emitMapIters: function {symtab: zenv.ZSymbolTable monoId: u64 runtimeDir: StringView nm: StringView keyName: StringView valName: StringView keyT: StringView valT: StringView buf: String.borrow} is {
+emitMapIters: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 runtimeDir: StringView nm: StringView keyName: StringView valName: StringView keyT: StringView valT: StringView buf: String.borrow} is {
     miiId: monoMethodReturn symtab: symtab monoId: monoId mname: "iterateItems"
     if miiId == 0 then {
         miiNameF: "MapItemIter_\{keyName}_\{valName}"
@@ -11291,10 +11310,8 @@ emitMapIters: function {symtab: zenv.ZSymbolTable monoId: u64 runtimeDir: String
     ove: cbaseNoPrefix tid: oveId name: oveName.stringview
     oveu: cUpperOf text: oveName.stringview
     pi: "\{runtimeDir}/z_MapIter.c.tmpl"
-    rawi: io.readText path: pi.stringview
-    match (
-        rawi
-    ) case ok then {
+    rawi: readTemplateCached ctx: ctx path: pi.stringview
+    if rawi.length > 0 then {
         i1: applyTmpl text: rawi key: "NAME" val: nm
         i2: applyTmpl text: i1 key: "KEY_T" val: keyT
         i3: applyTmpl text: i2 key: "VAL_T" val: valT
@@ -11307,7 +11324,7 @@ emitMapIters: function {symtab: zenv.ZSymbolTable monoId: u64 runtimeDir: String
         i10: applyTmpl text: i9 key: "OPTIONVIEW_ENTRY_TAG" val: oveu.stringview
         buf.append i10.stringview
         buf.append "\n"
-    } case err then {}
+    }
 }
 
 # emitMapMono -- substitute z_Map.c.tmpl for a Map instance (compact-dict +
@@ -11456,10 +11473,11 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         removeBody9 = "    z_\{rmWrap9}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU9}_TAG_NONE;\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU9}_TAG_SOME;\n    \{valT}* _box = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n    *_box = _this->entries[idx].value;\n    _r.data = _box;\n\{delTail9}    return _r;"
     }
     p: "\{runtimeDir}/z_Map.c.tmpl"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length == 0 then {
+        return
+    }
+    {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringview
         t2: applyTmpl text: t1 key: "MACRO" val: mcr.stringview
         t3: applyTmpl text: t2 key: "KEY_T" val: keyT.stringview
@@ -11476,10 +11494,8 @@ emitMapMono: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView
         t15: applyTmpl text: t14 key: "REMOVE_BODY" val: removeBody9.stringview
         buf.append t15.stringview
         buf.append "\n"
-    } case err then {
-        return
     }
-    emitMapIters symtab: symtab monoId: monoId runtimeDir: runtimeDir nm: nm.stringview keyName: keyName.stringview valName: valName.stringview keyT: keyT.stringview valT: valT.stringview buf: buf
+    emitMapIters symtab: symtab ctx: ctx monoId: monoId runtimeDir: runtimeDir nm: nm.stringview keyName: keyName.stringview valName: valName.stringview keyT: keyT.stringview valT: valT.stringview buf: buf
 }
 
 # emitMonos -- emit every collection-mono instance in the registry (List
@@ -15880,10 +15896,8 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
 # mono is non-empty) the canonical z_{mono} to the mono's id-based cname.
 emitMonoNative: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView frag: StringView mono: StringView buf: String.borrow} is {
     p: "\{runtimeDir}/natives/\{frag}.inc"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length > 0 then {
         scv: ctx.svC.copy
         cur: substituteAll text: raw needle: "z_StringView" repl: scv.stringview
         if mono.length > 0 then {
@@ -15900,7 +15914,7 @@ emitMonoNative: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringV
         }
         buf.append cur.stringview
         buf.append "\n"
-    } case err then {}
+    }
 }
 
 # emitParseNative -- a parse fragment, substituting the canonical
@@ -15915,17 +15929,15 @@ emitParseNative: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: String
     } case none then {}
     mc: cnameOf tid: mid name: mono
     p: "\{runtimeDir}/natives/\{frag}.inc"
-    raw: io.readText path: p.stringview
-    match (
-        raw
-    ) case ok then {
+    raw: readTemplateCached ctx: ctx path: p.stringview
+    if raw.length > 0 then {
         cn: "z_\{mono}"
         s1: substituteAll text: raw needle: cn.stringview repl: mc.stringview
         scv: ctx.svC.copy
         s2: substituteAll text: s1 needle: "z_StringView" repl: scv.stringview
         buf.append s2.stringview
         buf.append "\n"
-    } case err then {}
+    }
 }
 
 # emitCodepointsNatives -- the CpIter struct + codepoints factory + call,
