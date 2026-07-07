@@ -545,17 +545,17 @@ entry point. Each section is collected separately and assembled at the end.
 
 #---: C Name Generation
 
-Every C identifier is computed once, by the type checker, and stored on the
-entity it names: a type's #~"cname" / #~"cnameBase", a variable's
-#~"ZTyping.variableCname", and the protocol/facet helper names on the
-#~"ZConformance" entity. The emitter only #b:"reads" these stored names (or
-composes a sibling helper from #~"cnameBase"); it never derives a #~"z_"
-identifier itself. The two shared, canonical manglers #~"mangleFuncName" and
-#~"mangleVarName" (in #~"src/ztypes.z") handle the residual sites that carry
-only a name string: natives, constant and data symbols, for-loop bindings, and
-synthesised wrapper parameters. This separation is enforced by
-#~"bootstrap-lint" ratchets that pin both the inline z-identifier derivations
-and the emitter-local name manglers in #~"src/zemitterc.z" at zero.
+A type's C name is composed #b:"once, at mint": #~"ztypes.composeCname"
+fills #~"ZType.cname" inside #~"newType", and the emitter reads it back
+through #~"reg.cnameOf". Names are never reassigned after mint, so the
+stored cname cannot go stale. Sites that name a #b:"composed" symbol (a
+dotted member flattening, a #~"{mono}.{fn}" method instance) call the
+shared composer explicitly with that composed name. Variable names go
+through #~"ztypes.mangleVarName" (C-keyword mangling of the emitted
+identifier only); function symbols through #~"ztypes.mangleFuncName".
+The #~"emitter-guard" Makefile ratchet (run by #~"make ci") pins the
+emitter's remaining by-name resolution and name-derivation sites at
+their current floors so new ones cannot creep in.
 
 #--: Id-based naming
 
@@ -574,12 +574,13 @@ not-yet-applied step.
 
 The hand-written runtime (#~"src/runtime/*.inc" / #~"*.c.tmpl" /
 #~"src/runtime/natives/") is authored with the #b:"canonical" type spelling
-#~"z_<Name>". A single #~"substituteAll" pass over the emitted
-output rewrites each canonical spelling to the id-named #~"cnameBase" recorded
-in #~"ZTyping.canonicalCnameBase" (longest-canonical first, so #~"z_String"
-is rewritten after #~"z_StringView"). Emitter-generated code already carries
-id-named names, so the pass is a no-op there; pure-C helpers (#~"z_panic",
-#~"z_xmalloc", #~"z_siphash_*") have no entry and are untouched.
+#~"z_<Name>". Each fragment/template is read once per emit (cached by path
+in #~"Ctx.tmplCache") and rewritten with per-fragment #~"substituteAll"
+passes to the id-named cnames it references -- #~"z_StringView" before
+#~"z_String" (prefix order), plus each fragment's own canonical names
+(collection monos, #~"z_CpIter", parse-result monos). Pure-C helpers
+(#~"z_panic", #~"z_xmalloc", #~"z_siphash_*") have no canonical entry and
+are untouched.
 
 #---: Type Emission
 
@@ -646,18 +647,26 @@ analysis eliminate any "control may reach end of non-void
 function" diagnostics in callers that panic on every path.
 
 Source location (#~".z" file + line) is intentionally not included
-in the #~"zpanic:" output; the SQL #~"ast_nodes ↔ emitted_lines"
-source map is the authoritative post-mortem debugging link.
+in the #~"zpanic:" output; the panic message text itself is the
+post-mortem link back to the emitting site.
 
-#---: Code Deduplication
+#---: Stamp-Driven Emission
 
-Monomorphized methods are deduplicated using AST content hashing. During
-monomorphization, each cloned method body is hashed (SHA-256 over the typed
-AST structure). If two methods produce the same hash, the second becomes an
-alias of the first. The emitter reads these aliases and emits C preprocessor
-#~"#define" directives instead of duplicate function bodies. This is
-particularly useful for numeric generics where method bodies may be identical
-across different numeric parameter values.
+The emitter is a mechanical typed-AST-to-C pass: it reads what the type
+checker stamped and compares by id, never re-resolving names. An atom
+reference carries #~"atomVariableId" (a local) or #~"atomUnitDefId" (a
+unit definition); a call carries its #~"callKind", which routes
+constructions to their owning handler ahead of the probe chain. Child
+edges (#~"childTypeById") are canonicalized at the end of typechecking
+(#~"canonicalizeShellChildren"), so a field or parameter type id is the
+real defining type, not a name-minted shell. Ownership, mono-origin and
+String/StringView tests compare enum values and cached canonical ids
+(#~"childOwnershipIs", #~"originIsTid", #~"ctx.strTid" / #~"svTid").
+The residual by-name sites -- generic-template re-emission, the
+probe-chain fallbacks -- are counted and pinned by #~"emitter-guard".
+Internal impossibilities (an unresolvable typedef base, an unspellable
+field type) #b:"panic" with a #~"zemitterc:" message instead of
+emitting a silent fallback type.
 
 #--: Bootstrapping & self-hosting
 

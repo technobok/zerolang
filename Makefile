@@ -19,7 +19,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard
+.PHONY: check test ci build clean style-lint style-lint-fast zc install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard
 
 # check -- the fast pre-commit gate: the parse/token style checks over src/*.z.
 check: style-lint-fast
@@ -51,6 +51,7 @@ test: bin/zc
 ci: bin/zc
 	$(MAKE) --no-print-directory style-lint
 	$(MAKE) --no-print-directory shadow-guard
+	$(MAKE) --no-print-directory emitter-guard
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
@@ -193,6 +194,40 @@ shadow-guard:
 	  exit 1; \
 	fi; \
 	echo "shadow-guard OK: cTypeOf name:=$$n1 (<=18)  cTypeForName symtab:=$$n2 (<=2)"
+
+# emitter-guard -- ratchet against name-resolution creep in the C emitter. The
+# de-lookup arc drove these to their current floors: the emitter reads
+# typechecker stamps and canonical ids; every remaining by-name resolution is a
+# counted residual (template re-emission, probe-chain legs). A rising count
+# means a new name-resolved site -- resolve from stamps/ids instead, or lower
+# the baseline when a residual is legitimately removed.
+emitter-guard:
+	@e1=$$(grep -c 'ztypecheck.resolvedByKey' src/zemitterc.z); \
+	e2=$$(grep -c 'ztypecheck.walkLookupTyperef' src/zemitterc.z); \
+	e3=$$(grep -c 'resolveTypeIdByName' src/zemitterc.z); \
+	e4=$$(grep -c 'userFnId' src/zemitterc.z); \
+	e5=$$(grep -c 'childOwnershipText' src/zemitterc.z); \
+	e6=$$(grep -c 'typeNameOfReg9' src/zemitterc.z); \
+	e7=$$(grep -c 'ztypes.mangleVarName' src/zemitterc.z); \
+	e8=$$(grep -cF 'io.readText' src/zemitterc.z); \
+	e9=$$(grep -c 'monoOriginName' src/zemitterc.z); \
+	fail=0; \
+	if [ "$$e1" -gt 23 ]; then echo "emitter-guard FAIL: ztypecheck.resolvedByKey = $$e1 (baseline 23)"; fail=1; fi; \
+	if [ "$$e2" -gt 5 ]; then echo "emitter-guard FAIL: ztypecheck.walkLookupTyperef = $$e2 (baseline 5)"; fail=1; fi; \
+	if [ "$$e3" -gt 37 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 37)"; fail=1; fi; \
+	if [ "$$e4" -gt 39 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 39)"; fail=1; fi; \
+	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
+	if [ "$$e6" -gt 122 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 122)"; fail=1; fi; \
+	if [ "$$e7" -gt 22 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 22)"; fail=1; fi; \
+	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
+	if [ "$$e9" -gt 61 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 61)"; fail=1; fi; \
+	if [ "$$fail" = "1" ]; then \
+	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
+	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
+	  echo "  reg.cnameOf instead of resolving by name."; \
+	  exit 1; \
+	fi; \
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
 
 clean:
 	rm -rf $(BUILDDIR) bin
