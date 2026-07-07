@@ -14249,6 +14249,149 @@ resolvedByKey: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry key: Stri
     return (optionval.none u64)
 }
 
+# shellScalarName -- a shell named like a C scalar stays a shell: the
+# emitter spells those by NAME (cTypeOf) before any canonicalization, so
+# rebinding them would change shadow semantics. Mirrors cTypeOf's set.
+shellScalarName: function {name: StringView} out bool is {
+    if name == "i8" then { return true }
+    if name == "i16" then { return true }
+    if name == "i32" then { return true }
+    if name == "i64" then { return true }
+    if name == "u8" then { return true }
+    if name == "u16" then { return true }
+    if name == "u32" then { return true }
+    if name == "u64" then { return true }
+    if name == "i128" then { return true }
+    if name == "u128" then { return true }
+    if name == "f32" then { return true }
+    if name == "f64" then { return true }
+    if name == "bool" then { return true }
+    if name == "literal_int" then { return true }
+    return false
+}
+
+# shellResolveByName -- the emitter's shell resolution order for `name` seen
+# from `unit`: the unit-local key, the system key, the walk list, then the
+# registry-wide cross-unit scan. 0 when nothing resolves.
+shellResolveByName: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry fromUnit: StringView name: StringView} out u64 is {
+    k1: "\{fromUnit}.\{name}".string
+    r1: resolvedByKey ty: ty reg: reg key: k1
+    match (
+        r1
+    ) case some then {
+        return r1
+    } case none then {}
+    r2: resolvedByKey ty: ty reg: reg key: ("system.\{name}".string)
+    match (
+        r2
+    ) case some then {
+        return r2
+    } case none then {}
+    r3: walkLookupTyperef ty: ty reg: reg currentUnit: fromUnit base: name
+    match (
+        r3
+    ) case some then {
+        return r3
+    } case none then {}
+    unames9: (List String)
+    with uit9: reg.unitNameTid.iterateItems do for ue9: uit9 loop {
+        uk9: ue9.key.copy
+        unames9.append uk9
+    }
+    found9: 0.u64
+    ui9: 0.u64
+    for ui9 < unames9.length loop {
+        if found9 == 0 then {
+            un9: unames9.get i: ui9
+            k9: "\{un9}.\{name}".string
+            r9: resolvedByKey ty: ty reg: reg key: k9
+            match (
+                r9
+            ) case some then {
+                found9 = r9
+            } case none then {}
+        }
+        ui9 = ui9 + 1
+    }
+    return found9
+}
+
+# canonicalizeShellChildren -- rebind every childTypeById edge whose value is
+# a SHELL id (a name-minted reference with no defining unit) to the canonical
+# type, resolved in the edge's parent's defining unit with the emitter's
+# resolution order. Runs post-resolution so the emitter reads canonical child
+# ids and never re-resolves a child by name.
+canonicalizeShellChildren: function {st: zenv.ZSymbolTable mainName: StringView} is {
+    ri9: 0.u64
+    rn9: st.typing.typeChild.length
+    for ri9 < rn9 loop {
+        row: st.typing.typeChild.get i: ri9
+        cto9: 0.u64
+        {
+            ctoO9: st.typing.childTypeById.get key: row.childNameId
+            match (
+                ctoO9
+            ) case some then {
+                cto9 = ctoO9
+            } case none then {}
+        }
+        ok9: cto9 > 0
+        if ok9 when (st.reg.typetypeOf typeId: cto9) == ztypes.ztypetype.GENERIC_PARAM then {
+            ok9 = false
+        }
+        if ok9 then {
+            duo9: st.typing.definedInUnit.get key: cto9
+            match (
+                duo9
+            ) case some then {
+                ok9 = false
+            } case none then {}
+        }
+        if ok9 then {
+            pu9: mainName.string
+            {
+                puo9: st.typing.definedInUnit.get key: row.parentTypeId
+                match (
+                    puo9
+                ) case some then {
+                    pu9 = puo9.copy
+                } case none then {}
+            }
+            nm9: regTypeNameOf reg: st.reg tid: cto9
+            if (shellScalarName name: nm9.stringview) then {
+                nm9 = "".string
+            }
+            {
+                aco9: st.typing.asConstClone.get key: cto9
+                match (
+                    aco9
+                ) case some then {
+                    if aco9 then {
+                        nm9 = "".string
+                    }
+                } case none then {}
+            }
+            {
+                tso9: st.typing.typeofShell.get key: cto9
+                match (
+                    tso9
+                ) case some then {
+                    nm9 = "".string
+                } case none then {}
+            }
+            if nm9.length > 0 then {
+                rid9: shellResolveByName ty: st.typing reg: st.reg fromUnit: pu9.stringview name: nm9.stringview
+                if rid9 > 0 when rid9 != cto9 then {
+                    setc9: rid9
+                    st.typing.childTypeById.set key: row.childNameId value: setc9
+                }
+            }
+        }
+        ri9 = ri9 + 1
+    }
+}
+
+
 typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} out zenv.ZSymbolTable is {
     ty: ztyping.newTyping
     match (
@@ -14295,6 +14438,11 @@ typecheck: function {program: Node reg: ztypes.ZTypeRegistry.take full: bool} ou
             stampCtorDefaults st: st unitName: program.mainUnitName.stringview
         } else {}
         foldLiteralStamps st: st program: program
+        match (
+            program
+        ) case program then {
+            canonicalizeShellChildren st: st mainName: program.mainUnitName.stringview
+        } else {}
     }
     return st
 }
