@@ -30,10 +30,12 @@ ZTypeChild: class {
 }
 
 # Per-parent row-index bucket: append-order indices into ZTyping.typeChild for
-# one parentTypeId. A derived accelerator (not dumped) that makes child-name
-# resolution and child counting a per-parent scan, not a whole-list scan.
+# one parentTypeId, plus a childName -> childNameId map over the same rows. A
+# derived accelerator (not dumped): name resolution is a map get, ordered
+# iteration and child counting walk the row indices.
 ChildBucket: class {
-    rows: (List u64)
+    rows:   (List u64)
+    byName: (Map String value: u64)
 }
 
 # One edge of the generic-args table: a (parent, param-name) link. The
@@ -262,13 +264,12 @@ ZTyping: class {
         match (
             b
         ) case some then {
-            ridx: b.rows.iterate
-            for ri: ridx loop {
-                row: this.typeChild.get i: ri
-                if row.childName.stringview == name then {
-                    return (optionval.some row.childNameId)
-                }
-            }
+            got: b.byName.get key: name.string
+            match (
+                got
+            ) case some then {
+                return (optionval.some got)
+            } case none then {}
         } case none then {}
         return (optionval.none u64)
     }
@@ -293,8 +294,16 @@ ZTyping: class {
         }
     }
 
-    # Record a new typeChild row index under its parent's bucket (get-or-create).
+    # Record a new typeChild row index under its parent's bucket (get-or-create),
+    # and the row's name -> childNameId link in the bucket's map.
     pushChildIndex: function {:this parentTypeId: u64 rowIdx: u64} is {
+        bn9: "".string
+        bnid9: 0.u64
+        {
+            row: this.typeChild.get i: rowIdx
+            bn9 = row.childName.copy
+            bnid9 = row.childNameId
+        }
         needNew9: false
         {
             b: this.childIndex.get key: parentTypeId
@@ -302,13 +311,15 @@ ZTyping: class {
                 b
             ) case some then {
                 b.rows.append rowIdx
+                b.byName.set key: bn9.copy value: bnid9
             } case none then {
                 needNew9 = true
             }
         }
         if needNew9 then {
-            nb: (ChildBucket rows: (List u64))
+            nb: (ChildBucket rows: (List u64) byName: (Map String value: u64))
             nb.rows.append rowIdx
+            nb.byName.set key: bn9.take value: bnid9
             this.childIndex.set key: parentTypeId value: nb
         }
     }
