@@ -33,6 +33,11 @@ ZTypeChild: class {
 # one parentTypeId, plus a childName -> childNameId map over the same rows. A
 # derived accelerator (not dumped): name resolution is a map get, ordered
 # iteration and child counting walk the row indices.
+# Buckets up to this many rows resolve names by a linear row scan (no owned
+# key, no hash); larger buckets (unit roots) switch to the byName index,
+# backfilled at the crossing.
+bucketScanMax: 16
+
 ChildBucket: class {
     rows:   (List u64)
     byName: (Map String value: u64)
@@ -130,7 +135,6 @@ ZTyping: class {
 
     # child-name id minting (ztyping-local id space)
     nextChildId: u64
-    childIdMemo: (Map String value: u64)
     # base type name -> resolved builtin tid (currentUnit ""); an
     # unresolved 0 is never stored so later resolution can still fill it
     builtinTidMemo: (Map String value: u64)
@@ -243,9 +247,10 @@ ZTyping: class {
 
     # Monotonic child-name id for (parentTypeId, name), minted from the
     # local counter and memoized so repeat calls return the same id.
+    # The existing edge's id when the bucket has one, else a fresh mint (the
+    # caller appends the row right after, so repeats resolve via the bucket).
     childIdFor: function {:this parentTypeId: u64 name: StringView} out u64 is {
-        memokey: "\{parentTypeId}:\{name}".string
-        existing: this.childIdMemo.get key: memokey.copy
+        existing: this.childNameIdOf parentTypeId: parentTypeId name: name
         match (
             existing
         ) case some then {
@@ -253,24 +258,34 @@ ZTyping: class {
         } case none then {
             newId: this.nextChildId
             this.nextChildId = this.nextChildId + 1
-            stored: newId
-            this.childIdMemo.set key: memokey.take value: stored
             return newId
         }
     }
 
     # Resolve the childNameId of an existing (parent, name) edge.
+    # Small buckets scan their rows (StringView compares, no allocation);
+    # large buckets probe the byName index.
     childNameIdOf: function {:this parentTypeId: u64 name: StringView} out optionval u64 is {
         b: this.childIndex.get key: parentTypeId
         match (
             b
         ) case some then {
-            got: b.byName.get key: name.string
-            match (
-                got
-            ) case some then {
-                return (optionval.some got)
-            } case none then {}
+            if b.rows.length <= bucketScanMax then {
+                ridx: b.rows.iterate
+                for ri: ridx loop {
+                    row: this.typeChild.get i: ri
+                    if row.childName.stringview == name then {
+                        return (optionval.some row.childNameId)
+                    }
+                }
+            } else {
+                got: b.byName.get key: name.string
+                match (
+                    got
+                ) case some then {
+                    return (optionval.some got)
+                } case none then {}
+            }
         } case none then {}
         return (optionval.none u64)
     }
@@ -297,14 +312,9 @@ ZTyping: class {
 
     # Record a new typeChild row index under its parent's bucket (get-or-create),
     # and the row's name -> childNameId link in the bucket's map.
+    # The byName index stays empty while the bucket is scan-sized; the first
+    # append past bucketScanMax backfills it, and later appends keep it filled.
     pushChildIndex: function {:this parentTypeId: u64 rowIdx: u64} is {
-        bn9: "".string
-        bnid9: 0.u64
-        {
-            row: this.typeChild.get i: rowIdx
-            bn9 = row.childName.copy
-            bnid9 = row.childNameId
-        }
         needNew9: false
         {
             b: this.childIndex.get key: parentTypeId
@@ -312,7 +322,18 @@ ZTyping: class {
                 b
             ) case some then {
                 b.rows.append rowIdx
-                b.byName.set key: bn9.copy value: bnid9
+                if b.rows.length > bucketScanMax then {
+                    if b.rows.length == bucketScanMax + 1 then {
+                        bri9: b.rows.iterate
+                        for bi9: bri9 loop {
+                            brow9: this.typeChild.get i: bi9
+                            b.byName.set key: brow9.childName.copy value: brow9.childNameId
+                        }
+                    } else {
+                        nrow9: this.typeChild.get i: rowIdx
+                        b.byName.set key: nrow9.childName.copy value: nrow9.childNameId
+                    }
+                }
             } case none then {
                 needNew9 = true
             }
@@ -320,7 +341,6 @@ ZTyping: class {
         if needNew9 then {
             nb: (ChildBucket rows: (List u64) byName: (Map String value: u64))
             nb.rows.append rowIdx
-            nb.byName.set key: bn9.take value: bnid9
             this.childIndex.set key: parentTypeId value: nb
         }
     }
@@ -761,7 +781,6 @@ newTyping: function {} out ZTyping is {
         walkedMethodOwners: (Map String value: bool)
         mainMemberIndex: (Map String value: u64)
         nextChildId: 0
-        childIdMemo: (Map String value: u64)
         builtinTidMemo: (Map String value: u64)
         typeChild: (List ZTypeChild)
         childIndex: (Map u64 value: ChildBucket)
