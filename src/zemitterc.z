@@ -2362,20 +2362,43 @@ colRecvRef: function {ctx: Ctx bn: StringView} out String is {
     return "&\{bn}"
 }
 
-emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    mn: dottedChildText n: call.callable
+# emitCollectionMethodCall -- the collection method handlers behind ONE
+# receiver computation: the receiver expression and its chased mono id are
+# computed once, then the origin tid picks the array/List/Set/Map handler.
+# "" when the receiver is not a collection mono (or the call is not dotted).
+emitCollectionMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
     if bn.length == 0 then {
         return "".string
     }
+    mn: dottedChildText n: call.callable
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
-    if (originIsTid symtab: symtab tid: bt originTid: ctx.listOriginTid) == false then {
-        if (originIsTid symtab: symtab tid: bt originTid: ctx.listViewOriginTid) == false then {
-            return "".string
-        }
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.arrayOriginTid) then {
+        return (emitArrayMethodCall symtab: symtab ctx: ctx call: call mnv: mn.stringview bnv: bn.stringview bt: bt)
     }
-    btn: typeNameOfReg9 symtab: symtab tid: bt
+    isList9: false
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.listOriginTid) then {
+        isList9 = true
+    }
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.listViewOriginTid) then {
+        isList9 = true
+    }
+    if isList9 then {
+        return (emitListMethodCall symtab: symtab ctx: ctx call: call mnv: mn.stringview bnv: bn.stringview bt: bt)
+    }
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.setOriginTid) then {
+        return (emitSetMethodCall symtab: symtab ctx: ctx call: call mnv: mn.stringview bnv: bn.stringview bt: bt)
+    }
+    if (originIsTid symtab: symtab tid: bt originTid: ctx.mapOriginTid) then {
+        return (emitMapMethodCall symtab: symtab ctx: ctx call: call mnv: mn.stringview bnv: bn.stringview bt: bt)
+    }
+    return "".string
+}
+
+emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData mnv: StringView bnv: StringView bt: u64} out String is {
+    mn: mnv.string
+    bn: bnv.string
     cb: symtab.reg.cnameOf tid: bt
     recvR9: colRecvRef ctx: ctx bn: bn.stringview
     if mn.stringview == "append" then {
@@ -2425,18 +2448,9 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
 # emitArrayMethodCall -- `.get i:` / `.set i: val:` on a fixed-size array mono
 # receiver (a value type). get takes the receiver by value; set by address (it
 # returns the previous element). "" when the receiver isn't an array mono.
-emitArrayMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    mn: dottedChildText n: call.callable
-    bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
-    if bn.length == 0 then {
-        return "".string
-    }
-    brid9: dottedReceiverStampId symtab: symtab callable: call.callable
-    bt: chaseColMono symtab: symtab tid: brid9
-    if (originIsTid symtab: symtab tid: bt originTid: ctx.arrayOriginTid) == false then {
-        return "".string
-    }
-    btn: typeNameOfReg9 symtab: symtab tid: bt
+emitArrayMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData mnv: StringView bnv: StringView bt: u64} out String is {
+    mn: mnv.string
+    bn: bnv.string
     cb: symtab.reg.cnameOf tid: bt
     if mn.stringview == "get" then {
         vi: listArg symtab: symtab ctx: ctx call: call label: "i"
@@ -2454,18 +2468,9 @@ emitArrayMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
 # emitSetMethodCall -- an arg-taking method on a Set-mono receiver (a heap
 # pointer, so the receiver passes directly without `&`). "" when not a Set
 # call; the no-arg `.length`/`.iterate` reads ride the dottedpath leg.
-emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
-    mn: dottedChildText n: call.callable
-    if bn.length == 0 then {
-        return "".string
-    }
-    brid9: dottedReceiverStampId symtab: symtab callable: call.callable
-    bt: chaseColMono symtab: symtab tid: brid9
-    if (originIsTid symtab: symtab tid: bt originTid: ctx.setOriginTid) == false then {
-        return "".string
-    }
-    btn: typeNameOfReg9 symtab: symtab tid: bt
+emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData mnv: StringView bnv: StringView bt: u64} out String is {
+    mn: mnv.string
+    bn: bnv.string
     cb: symtab.reg.cnameOf tid: bt
     if mn.stringview == "add" then {
         v: colArg symtab: symtab ctx: ctx call: call label: "item" consumes: true
@@ -2488,18 +2493,9 @@ emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
 # emitMapMethodCall -- an arg-taking method on a Map-mono receiver (a heap
 # pointer). set/get/has/delete pass the pointer directly; "" otherwise. The
 # no-arg `.length`/`.capacity` reads ride the dottedpath leg.
-emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
-    mn: dottedChildText n: call.callable
-    if bn.length == 0 then {
-        return "".string
-    }
-    brid9: dottedReceiverStampId symtab: symtab callable: call.callable
-    bt: chaseColMono symtab: symtab tid: brid9
-    if (originIsTid symtab: symtab tid: bt originTid: ctx.mapOriginTid) == false then {
-        return "".string
-    }
-    btn: typeNameOfReg9 symtab: symtab tid: bt
+emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData mnv: StringView bnv: StringView bt: u64} out String is {
+    mn: mnv.string
+    bn: bnv.string
     cb: symtab.reg.cnameOf tid: bt
     if mn.stringview == "set" then {
         vk: colArg symtab: symtab ctx: ctx call: call label: "key" consumes: true
@@ -4242,21 +4238,9 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if sam9.length > 0 then {
         return sam9
     }
-    amc9: emitArrayMethodCall symtab: symtab ctx: ctx call: call
-    if amc9.length > 0 then {
-        return amc9
-    }
-    lmc: emitListMethodCall symtab: symtab ctx: ctx call: call
-    if lmc.length > 0 then {
-        return lmc
-    }
-    smc: emitSetMethodCall symtab: symtab ctx: ctx call: call
-    if smc.length > 0 then {
-        return smc
-    }
-    mmc: emitMapMethodCall symtab: symtab ctx: ctx call: call
-    if mmc.length > 0 then {
-        return mmc
+    colc9: emitCollectionMethodCall symtab: symtab ctx: ctx call: call
+    if colc9.length > 0 then {
+        return colc9
     }
     tdq: emitTypedefCreateCall symtab: symtab ctx: ctx call: call
     if tdq.length > 0 then {
