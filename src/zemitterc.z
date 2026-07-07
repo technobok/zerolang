@@ -1293,10 +1293,18 @@ isStringy: function {name: StringView} out bool is {
     return false
 }
 
+# isStringyTid -- the id form of isStringy: tid is canonical String or StringView.
+isStringyTid: function {ctx: Ctx tid: u64} out bool is {
+    if tid == ctx.strTid then {
+        return true
+    }
+    return tid == ctx.svTid
+}
+
 # svValueForm -- a String/StringView operand as a by-value StringView C
-# expression (Strings view-convert via a compound literal).
-svValueForm: function {ctx: Ctx expr: StringView tname: StringView} out String is {
-    if tname == "String" then {
+# expression (a String operand view-converts via a compound literal).
+svValueForm: function {ctx: Ctx expr: StringView isStr: bool} out String is {
+    if isStr then {
         acc: ".".string
         if (isPtrVar ctx: ctx name: expr) then {
             acc = "->".string
@@ -1413,8 +1421,9 @@ svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         dpm: atomTextOf n: n.child
         if dpm.stringview == "stringview" then {
             pe: emitExpr symtab: symtab ctx: ctx n: n.parent
-            pt: stampNameOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
-            sv: svValueForm ctx: ctx expr: pe.stringview tname: pt.stringview
+            ptid9: stampIdOf symtab: symtab nid: (nodeIdOf9 n: n.parent)
+            pIsStr9: ptid9 == ctx.strTid
+            sv: svValueForm ctx: ctx expr: pe.stringview isStr: pIsStr9
             a3: "&\{sv}"
             return a3
         }
@@ -1429,29 +1438,29 @@ svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
 emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     bn: dottedBaseAtom n: call.callable
     mn: dottedChildText n: call.callable
-    bt: "".string
+    btid: 0.u64
     if bn.length == 0 then {
         # nested/projected base (el.text.stringview.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
         rsid9: dottedReceiverStampId symtab: symtab callable: call.callable
-        bTy9: typeNameOfReg9 symtab: symtab tid: rsid9
-        if (isStringy name: bTy9.stringview) then {
+        if (isStringyTid ctx: ctx tid: rsid9) then {
             bn = emitDottedReceiver symtab: symtab ctx: ctx callable: call.callable
-            bt = bTy9
+            btid = rsid9
         } else {
             return "".string
         }
     } else {
         bnid: dottedBaseNodeId n: call.callable
-        bt = stampNameOf symtab: symtab nid: bnid
+        btid = stampIdOf symtab: symtab nid: bnid
         # C-keyword-mangle the simple-atom receiver for emission (the bn.length==0
         # leg already routes through emitDottedReceiver). bn is emission-only below.
         bn = ztypes.mangleVarName name: bn.stringview
     }
-    if (isStringy name: bt.stringview) when mn.stringview == "compare" then {
+    btIsStr9: btid == ctx.strTid
+    if (isStringyTid ctx: ctx tid: btid) when mn.stringview == "compare" then {
         # compare maps to the by-value cmp in the base fragment
-        bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
+        bf: svValueForm ctx: ctx expr: bn.stringview isStr: btIsStr9
         cargs: "".string
         citer: call.arguments.iterate
         for ca: citer loop {
@@ -1460,7 +1469,8 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
             ) case namedoperation then {
                 cae: emitExpr symtab: symtab ctx: ctx n: ca.operation
                 cat: stampNameDeep symtab: symtab n: ca.operation
-                caf: svValueForm ctx: ctx expr: cae.stringview tname: cat.stringview
+                caIsStr9: cat.stringview == "String"
+                caf: svValueForm ctx: ctx expr: cae.stringview isStr: caIsStr9
                 if cargs.length == 0 then {
                     cargs.append caf.stringview
                 }
@@ -1469,7 +1479,7 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return ce
     }
-    if (isStringy name: bt.stringview) when mn.stringview == "split" then {
+    if (isStringyTid ctx: ctx tid: btid) when mn.stringview == "split" then {
         needsAdd ctx: ctx name: "sv_split"
         sepx9: "".string
         with siter9: call.arguments.iterate do for sa9: siter9 loop {
@@ -1491,19 +1501,19 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         es9: "\{ctx.svC}_split(&\{bn}, \{sepx9})"
         return es9
     }
-    if (isStringy name: bt.stringview) when mn.stringview == "lines" then {
+    if (isStringyTid ctx: ctx tid: btid) when mn.stringview == "lines" then {
         needsAdd ctx: ctx name: "sv_lines"
         el9: "\{ctx.svC}_lines(&\{bn})"
         return el9
     }
-    if (isStringy name: bt.stringview) when (isSvParseNative name: mn.stringview) then {
-        bfp9: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
+    if (isStringyTid ctx: ctx tid: btid) when (isSvParseNative name: mn.stringview) then {
+        bfp9: svValueForm ctx: ctx expr: bn.stringview isStr: btIsStr9
         needsAdd ctx: ctx name: mn.stringview
         epn9: "\{ctx.svC}_\{mn}(&\{bfp9})"
         return epn9
     }
-    if (isStringy name: bt.stringview) when (isSvArgNative name: mn.stringview) then {
-        bf: svValueForm ctx: ctx expr: bn.stringview tname: bt.stringview
+    if (isStringyTid ctx: ctx tid: btid) when (isSvArgNative name: mn.stringview) then {
+        bf: svValueForm ctx: ctx expr: bn.stringview isStr: btIsStr9
         needsAdd ctx: ctx name: mn.stringview
         argx: "".string
         with aiter9: call.arguments.iterate do for a9: aiter9 loop {
@@ -1539,7 +1549,7 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         ea9: "\{ctx.svC}_\{mn}(&\{bn}, \{argx})"
         return ea9
     }
-    if bt.stringview == "StringView" then {
+    if btid == ctx.svTid then {
         if (isSvSimpleNative name: mn.stringview) then {
             needsAdd ctx: ctx name: mn.stringview
             args: "".string
@@ -2652,7 +2662,7 @@ emitInterpArgForParam: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node fid:
             retx = "&\{nmH}"
         }
     } else {
-        retx = svValueForm ctx: ctx expr: nmH.stringview tname: "String"
+        retx = svValueForm ctx: ctx expr: nmH.stringview isStr: true
     }
     ctx.argHoistVals.append sx
     ctx.argHoistTypes.append "\{ctx.strC}_t".string
@@ -4559,7 +4569,7 @@ emitStringMethod: function {ctx: Ctx recv: StringView recvIsPtr: bool mn: String
         return "\{recv}.capacity"
     }
     if mn == "stringview" then {
-        return (svValueForm ctx: ctx expr: recv tname: "String")
+        return (svValueForm ctx: ctx expr: recv isStr: true)
     }
     if mn == "shrink" then {
         if recvIsPtr then {
@@ -5272,7 +5282,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             ptn9: stampNameOf symtab: symtab nid: ppid9
             if (stampIdOf symtab: symtab nid: ppid9) == ctx.strTid then {
                 pbv9: emitExpr symtab: symtab ctx: ctx n: n.parent
-                sv9: svValueForm ctx: ctx expr: pbv9.stringview tname: "String"
+                sv9: svValueForm ctx: ctx expr: pbv9.stringview isStr: true
                 return sv9
             }
             if (stampIdOf symtab: symtab nid: ppid9) == ctx.svTid then {
@@ -5295,7 +5305,8 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         }
         if (isStringy name: nptn9.stringview) when (isSvParseNative name: mn2.stringview) then {
             needsAdd ctx: ctx name: mn2.stringview
-            pnv9: svValueForm ctx: ctx expr: base9.stringview tname: nptn9.stringview
+            npIsStr9: nptn9.stringview == "String"
+            pnv9: svValueForm ctx: ctx expr: base9.stringview isStr: npIsStr9
             epnv9: "\{ctx.svC}_\{mn2}(&\{pnv9})"
             return epnv9
         }
@@ -5464,8 +5475,10 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             if (isStringy name: lt.stringview) then {
                 rt: stampNameDeep symtab: symtab n: n.rhs
-                lf: svValueForm ctx: ctx expr: l.stringview tname: lt.stringview
-                rf: svValueForm ctx: ctx expr: r.stringview tname: rt.stringview
+                ltIsStr9: lt.stringview == "String"
+                rtIsStr9: rt.stringview == "String"
+                lf: svValueForm ctx: ctx expr: l.stringview isStr: ltIsStr9
+                rf: svValueForm ctx: ctx expr: r.stringview isStr: rtIsStr9
                 if op.stringview == "==" then {
                     eq1: "\{ctx.svC}_eq(\{lf}, \{rf})"
                     return eq1
