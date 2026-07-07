@@ -1263,20 +1263,6 @@ isStringy: function {name: StringView} out bool is {
     return false
 }
 
-# isStringyTid -- the id form of isStringy: tid is canonical String or StringView.
-isStringyTid: function {ctx: Ctx tid: u64} out bool is {
-    if tid == 0 then {
-        return false
-    }
-    if tid == ctx.strTid then {
-        return true
-    }
-    if tid == ctx.svTid then {
-        return true
-    }
-    return false
-}
-
 # svValueForm -- a String/StringView operand as a by-value StringView C
 # expression (Strings view-convert via a compound literal).
 svValueForm: function {ctx: Ctx expr: StringView tname: StringView} out String is {
@@ -2350,7 +2336,6 @@ emitListMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
     }
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
-    omn: monoOriginName symtab: symtab tid: bt
     if (originIsTid symtab: symtab tid: bt originTid: ctx.listOriginTid) == false then {
         if (originIsTid symtab: symtab tid: bt originTid: ctx.listViewOriginTid) == false then {
             return "".string
@@ -2414,7 +2399,6 @@ emitArrayMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
     }
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
-    ao9: monoOriginName symtab: symtab tid: bt
     if (originIsTid symtab: symtab tid: bt originTid: ctx.arrayOriginTid) == false then {
         return "".string
     }
@@ -2444,7 +2428,6 @@ emitSetMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     }
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
-    omn: monoOriginName symtab: symtab tid: bt
     if (originIsTid symtab: symtab tid: bt originTid: ctx.setOriginTid) == false then {
         return "".string
     }
@@ -2479,7 +2462,6 @@ emitMapMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     }
     brid9: dottedReceiverStampId symtab: symtab callable: call.callable
     bt: chaseColMono symtab: symtab tid: brid9
-    omn: monoOriginName symtab: symtab tid: bt
     if (originIsTid symtab: symtab tid: bt originTid: ctx.mapOriginTid) == false then {
         return "".string
     }
@@ -8855,7 +8837,6 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         bxinner9: typeRefC symtab: symtab ctx: ctx tid: bxeid9 thisTid: 0
         return "\{bxinner9}*"
     }
-    omn9: monoOriginName symtab: symtab tid: cid
     if (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: cid)) then {
         cc9: cnameOf tid: cid name: tn.stringview
         ct9: "\{cc9}_t"
@@ -9551,13 +9532,13 @@ emitUnitMonoInstances: function {symtab: zenv.ZSymbolTable ctx: Ctx templateName
     }
 }
 
-emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+# emitFnsPass -- one declOnly-parameterized sweep over every emittable file
+# unit, routing generic template units to their mono instances and plain units
+# to emitFnsIn. ctx.mainName is rebound to each unit for the duration.
+emitFnsPass: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx declOnly: bool buf: String.borrow} is {
     match (
         program
     ) case program then {
-        # every file unit's fn DECLARATIONS first, then every file unit's
-        # DEFINITIONS -- a main-unit body may call a dep-unit fn declared
-        # earlier (and vice versa).
         with uiter: program.units.iterate do for u: uiter loop {
             match (
                 u
@@ -9567,32 +9548,23 @@ emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
                     sm: ctx.mainName.copy
                     ctx.mainName = un.copy
                     if (isGenericTemplateUnitOp op: u.operation) then {
-                        emitUnitMonoInstances symtab: symtab ctx: ctx templateName: un.stringview templateUnitOp: u.operation declOnly: true buf: buf
+                        emitUnitMonoInstances symtab: symtab ctx: ctx templateName: un.stringview templateUnitOp: u.operation declOnly: declOnly buf: buf
                     } else {
-                        emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation declOnly: true buf: buf
+                        emitFnsIn symtab: symtab ctx: ctx mainOp: u.operation declOnly: declOnly buf: buf
                     }
                     ctx.mainName = sm
                 }
             } else {}
         }
-        with uiter2: program.units.iterate do for u2: uiter2 loop {
-            match (
-                u2
-            ) case namedoperation then {
-                un2: unitLabel9 o: u2.name
-                if (isEmittableFileUnit name: un2.stringview) then {
-                    sm2: ctx.mainName.copy
-                    ctx.mainName = un2.copy
-                    if (isGenericTemplateUnitOp op: u2.operation) then {
-                        emitUnitMonoInstances symtab: symtab ctx: ctx templateName: un2.stringview templateUnitOp: u2.operation declOnly: false buf: buf
-                    } else {
-                        emitFnsIn symtab: symtab ctx: ctx mainOp: u2.operation declOnly: false buf: buf
-                    }
-                    ctx.mainName = sm2
-                }
-            } else {}
-        }
     } else {}
+}
+
+emitFns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    # every file unit's fn DECLARATIONS first, then every file unit's
+    # DEFINITIONS -- a main-unit body may call a dep-unit fn declared
+    # earlier (and vice versa).
+    emitFnsPass program: program symtab: symtab ctx: ctx declOnly: true buf: buf
+    emitFnsPass program: program symtab: symtab ctx: ctx declOnly: false buf: buf
 }
 
 # emitFnMonoInstances -- emit the monomorphized instances of a generic free
@@ -9684,69 +9656,46 @@ emitFnsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx mainOp: Node declOnly: b
             di = di + 1
         }
         wn: idxs.length
-        if declOnly then {
-            wi: 0.u64
-            for wi < wn loop {
-                nm2: names.get i: wi
-                didx: idxs.get i: wi
-                dm2: mainOp.body.get i: didx
-                match (
-                    dm2
-                ) case namedoperation then {
-                    fid: userFnId symtab: symtab ctx: ctx name: nm2.stringview
-                    isGenFn9: false
-                    if fid > 0 then {
-                        if (isGenericType symtab: symtab tid: fid) then {
-                            if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.FUNCTION then {
-                                isGenFn9 = true
-                            }
+        wi: 0.u64
+        for wi < wn loop {
+            nm2: names.get i: wi
+            didx: idxs.get i: wi
+            dm2: mainOp.body.get i: didx
+            match (
+                dm2
+            ) case namedoperation then {
+                fid: userFnId symtab: symtab ctx: ctx name: nm2.stringview
+                isGenFn9: false
+                if fid > 0 then {
+                    if (isGenericType symtab: symtab tid: fid) then {
+                        if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.FUNCTION then {
+                            isGenFn9 = true
                         }
                     }
-                    if isGenFn9 then {
-                        emitFnMonoInstances symtab: symtab ctx: ctx templateFnId: fid templateFnOp: dm2.operation declOnly: true buf: buf
-                    } else {
-                        sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
+                }
+                if isGenFn9 then {
+                    emitFnMonoInstances symtab: symtab ctx: ctx templateFnId: fid templateFnOp: dm2.operation declOnly: declOnly buf: buf
+                } else {
+                    sig: fnSignature symtab: symtab ctx: ctx name: nm2.stringview fid: fid op: dm2.operation
+                    if declOnly then {
                         ld: "\{sig};\n"
                         buf.append ld.stringview
-                    }
-                } else {}
-                wi = wi + 1
-            }
-            buf.append "\n"
-        } else {
-            wj: 0.u64
-            for wj < wn loop {
-                bidx: idxs.get i: wj
-                nm3: names.get i: wj
-                bm2: mainOp.body.get i: bidx
-                match (
-                    bm2
-                ) case namedoperation then {
-                    fid2: userFnId symtab: symtab ctx: ctx name: nm3.stringview
-                    isGenFn8: false
-                    if fid2 > 0 then {
-                        if (isGenericType symtab: symtab tid: fid2) then {
-                            if (symtab.reg.typetypeOf typeId: fid2) == ztypes.ztypetype.FUNCTION then {
-                                isGenFn8 = true
-                            }
-                        }
-                    }
-                    if isGenFn8 then {
-                        emitFnMonoInstances symtab: symtab ctx: ctx templateFnId: fid2 templateFnOp: bm2.operation declOnly: false buf: buf
                     } else {
-                        sig2: fnSignature symtab: symtab ctx: ctx name: nm3.stringview fid: fid2 op: bm2.operation
-                        lo: "\{sig2} {\n"
+                        lo: "\{sig} {\n"
                         buf.append lo.stringview
                         ctx.ptrVars = (List String)
                         ctx.aliases = (Map String value: String)
                         ctx.narrowBox = (Map String value: String)
-                        registerReftypeParams symtab: symtab ctx: ctx fid: fid2
-                        emitFnBody symtab: symtab ctx: ctx op: bm2.operation fid: fid2 buf: buf
+                        registerReftypeParams symtab: symtab ctx: ctx fid: fid
+                        emitFnBody symtab: symtab ctx: ctx op: dm2.operation fid: fid buf: buf
                         buf.append "}\n\n"
                     }
-                } else {}
-                wj = wj + 1
-            }
+                }
+            } else {}
+            wi = wi + 1
+        }
+        if declOnly then {
+            buf.append "\n"
         }
     } else {}
 }
@@ -11597,35 +11546,6 @@ ioFileLive: function {symtab: zenv.ZSymbolTable ctx: Ctx} out bool is {
     return false
 }
 
-# ioClassReferenced -- a reachable io/os/cli class named `name`.
-ioClassReferenced: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out bool is {
-    last: symtab.reg.nextTypeId
-    ti: 1.u64
-    for ti < last loop {
-        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
-            tn: typeNameOfReg9 symtab: symtab tid: ti
-            if tn.stringview == name then {
-                duo: definedInUnitOf symtab: symtab tid: ti
-                match (
-                    duo
-                ) case some then {
-                    if duo.stringview == "io" then {
-                        return true
-                    }
-                    if duo.stringview == "os" then {
-                        return true
-                    }
-                    if duo.stringview == "cli" then {
-                        return true
-                    }
-                } case none then {}
-            }
-        }
-        ti = ti + 1
-    }
-    return false
-}
-
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
 cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64 is {
     last: symtab.reg.nextTypeId
@@ -12124,22 +12044,6 @@ preEmitEmbeddedTypes: function {symtab: zenv.ZSymbolTable ctx: Ctx ids: List u64
         maybePreEmitElem symtab: symtab ctx: ctx eid: eidv buf: buf
         pi = pi + 1
     }
-}
-
-# preEmitColUserType -- pre-emit a collection element/key/value user-type struct
-# (resolved by name) before the collection mono that embeds it by value. A Map or
-# Set entry stores its value/key/element BY VALUE, so the user type's full struct
-# must precede the mono. No-op for system/mono/generic types (maybePreEmitElem
-# filters them); idempotent via ctx.emittedUserTypes.
-preEmitColUserType: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView buf: String.borrow} is {
-    if name.length == 0 then {
-        return
-    }
-    tid: resolveTypeIdByName symtab: symtab ctx: ctx name: name
-    if tid == 0 then {
-        return
-    }
-    maybePreEmitElem symtab: symtab ctx: ctx eid: tid buf: buf
 }
 
 # isFwdDeclared -- the type was forward-declared by emitMainFwdDecls, so its
@@ -13028,7 +12932,6 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     # them first (before any user struct / collection mono that references them).
     tstr9: 0.u64
     for tstr9 < last loop {
-        snm9: monoOriginName symtab: symtab tid: tstr9
         if (originIsTid symtab: symtab tid: tstr9 originTid: ctx.strOriginTid) then {
             emitStrMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tstr9 buf: buf
         }
@@ -15016,18 +14919,6 @@ emitStructDestructor: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 name
         fi = fi + 1
     }
     buf.append "}\n\n"
-}
-
-# lockFieldIsProtocol -- a `.lock` field whose locked type is a protocol stores
-# the protocol fat pointer BY VALUE (the borrow lives in its data); a class-typed
-# `.lock` stores a pointer to the container.
-lockFieldIsProtocol: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
-    ftn: typeNameOfReg9 symtab: symtab tid: fid
-    ftid: resolveTypeIdByName symtab: symtab ctx: ctx name: ftn.stringview
-    if ftid > 0 when (symtab.reg.typetypeOf typeId: ftid) == ztypes.ztypetype.PROTOCOL then {
-        return true
-    }
-    return false
 }
 
 # lockFieldIsReftypePtr -- a `.lock` field is stored as a pointer to its container
