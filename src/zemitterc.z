@@ -5469,7 +5469,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 } case none then {}
             }
         }
-        if (pathIsPointer symtab: symtab ctx: ctx n: n.parent) then {
+        # a Map/Set-typed base is a heap pointer regardless of how it was
+        # reached (a field path fails pathIsPointer's lock-field test)
+        nstPtr9: pathIsPointer symtab: symtab ctx: ctx n: n.parent
+        if nstPtr9 == false then {
+            nstPtr9 = isHeapPtrCollection symtab: symtab ctx: ctx tid: nlid9
+        }
+        if nstPtr9 then {
             ep9: "\{base9}->\{mn2}"
             return ep9
         } else {
@@ -5762,6 +5768,8 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
             l7: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
             buf.append l7.stringview
         } else if tn.stringview == "StringView" then {
+            # by-value operand today; a pointer-passed SV would need the
+            # String leg's accessor treatment below
             lsv: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.length);\n"
             buf.append lsv.stringview
         } else if tn.stringview == "String" then {
@@ -5777,7 +5785,14 @@ emitInterpPart: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node sN: u64 ind
                 isAtomP = true
             }
             if isAtomP then {
-                lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+                # a borrowed String param is a pointer (isBorrowStringParam
+                # registers the raw name); compound bases (map-entry deref,
+                # owned struct field) have an0 == "" and keep the value form
+                sAcc9: ".".string
+                if an0.length > 0 when (isPtrVar ctx: ctx name: an0.stringview) then {
+                    sAcc9 = "->".string
+                }
+                lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc9}data, \{val}\{sAcc9}size);\n"
                 buf.append lss.stringview
             } else {
                 # owned call result: hoist, append, free
