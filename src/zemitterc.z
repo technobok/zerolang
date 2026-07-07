@@ -8414,17 +8414,23 @@ isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView t
 registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is {
     pNames: (List String)
     pIds: (List u64)
-    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-        if tc.parentTypeId == fid then {
-            cto: symtab.typing.childTypeById.get key: tc.childNameId
-            match (
-                cto
-            ) case some then {
-                nm: tc.childName.copy
-                pNames.append nm
-                pIds.append cto
-            } case none then {}
-        }
+    {
+        b2: symtab.typing.childIndex.get key: fid
+        match (
+            b2
+        ) case some then {
+            with rit2: b2.rows.iterate do for ri2: rit2 loop {
+                tc: symtab.typing.typeChild.get i: ri2
+                cto: symtab.typing.childTypeById.get key: tc.childNameId
+                match (
+                    cto
+                ) case some then {
+                    nm: tc.childName.copy
+                    pNames.append nm
+                    pIds.append cto
+                } case none then {}
+            }
+        } case none then {}
     }
     ri: 0.u64
     rn: pNames.length
@@ -8524,18 +8530,24 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
     params: "".string
     cNames: (List String)
     cIds: (List u64)
-    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-        if tc.parentTypeId == fid then {
-            cto: symtab.typing.childTypeById.get key: tc.childNameId
-            match (
-                cto
-            ) case some then {
-                cn0: tc.childName.copy
-                cNames.append cn0
-                cid2: cto
-                cIds.append cid2
-            } case none then {}
-        }
+    {
+        b3: symtab.typing.childIndex.get key: fid
+        match (
+            b3
+        ) case some then {
+            with rit3: b3.rows.iterate do for ri3: rit3 loop {
+                tc: symtab.typing.typeChild.get i: ri3
+                cto: symtab.typing.childTypeById.get key: tc.childNameId
+                match (
+                    cto
+                ) case some then {
+                    cn0: tc.childName.copy
+                    cNames.append cn0
+                    cid2: cto
+                    cIds.append cid2
+                } case none then {}
+            }
+        } case none then {}
     }
     pi: 0.u64
     pn: cNames.length
@@ -8884,8 +8896,12 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
 # variantArms -- a variant's arm names and payload ids in order
 # (non-FUNCTION children, the tag child excluded).
 variantArms: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
-    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-        if tc.parentTypeId == tid then {
+    b1: symtab.typing.childIndex.get key: tid
+    match (
+        b1
+    ) case some then {
+        with rit1: b1.rows.iterate do for ri1: rit1 loop {
+            tc: symtab.typing.typeChild.get i: ri1
             cto: symtab.typing.childTypeById.get key: tc.childNameId
             match (
                 cto
@@ -8900,7 +8916,7 @@ variantArms: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids
                 }
             } case none then {}
         }
-    }
+    } case none then {}
 }
 
 # variantTag -- the C tag constant for an arm.
@@ -8944,14 +8960,32 @@ isConformanceMarker: function {conf: List ztypes.ZConformance tid: u64 name: Str
 # recFieldLists -- a record type's field names and type ids in order
 # (non-FUNCTION children, conformance markers excluded).
 recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
-    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-        if tc.parentTypeId == tid then {
+    parentFn0: false
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.FUNCTION then {
+        parentFn0 = true
+    }
+    # this type's conformance-marker labels, collected once (the per-field
+    # probe below is a scan over these few names, not the whole table)
+    mkNames0: (List String)
+    if parentFn0 == false then {
+        with cfit0: symtab.typing.conformance.iterate do for crow0: cfit0 loop {
+            if crow0.implTypeId == tid then {
+                mkNames0.append crow0.label.copy
+            }
+        }
+    }
+    b0: symtab.typing.childIndex.get key: tid
+    match (
+        b0
+    ) case some then {
+        with rit0: b0.rows.iterate do for ri0: rit0 loop {
+            tc: symtab.typing.typeChild.get i: ri0
             cto: symtab.typing.childTypeById.get key: tc.childNameId
             match (
                 cto
             ) case some then {
                 includeFld0: false
-                if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.FUNCTION then {
+                if parentFn0 then {
                     includeFld0 = true
                 } else {
                     fptrFld0: false
@@ -8973,7 +9007,17 @@ recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String i
                                 isConst0 = aco0
                             } case none then {}
                             if isConst0 == false then {
-                                if (isConformanceMarker conf: symtab.typing.conformance tid: tid name: tc.childName.stringview) == false then {
+                                isMk0: false
+                                mi0: 0.u64
+                                mn0: mkNames0.length
+                                for mi0 < mn0 loop {
+                                    mv0: mkNames0.get i: mi0
+                                    if mv0.stringview == tc.childName.stringview then {
+                                        isMk0 = true
+                                    }
+                                    mi0 = mi0 + 1
+                                }
+                                if isMk0 == false then {
                                     includeFld0 = true
                                 }
                             }
@@ -8988,7 +9032,7 @@ recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String i
                 }
             } case none then {}
         }
-    }
+    } case none then {}
 }
 
 typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
@@ -13374,8 +13418,12 @@ isProtocolDef9: function {n: Node} out bool is {
 # protoChildMethods -- a protocol's spec-method children (FUNCTION children,
 # excluding the synth create/borrow), names + ids in registration order.
 protoChildMethods: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
-    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-        if tc.parentTypeId == tid then {
+    b4: symtab.typing.childIndex.get key: tid
+    match (
+        b4
+    ) case some then {
+        with rit4: b4.rows.iterate do for ri4: rit4 loop {
+            tc: symtab.typing.typeChild.get i: ri4
             cto: symtab.typing.childTypeById.get key: tc.childNameId
             match (
                 cto
@@ -13396,7 +13444,7 @@ protoChildMethods: function {symtab: zenv.ZSymbolTable tid: u64 names: List Stri
                 }
             } case none then {}
         }
-    }
+    } case none then {}
 }
 
 # methodRetCtype -- a method's C return type via the registry returnTypeId
