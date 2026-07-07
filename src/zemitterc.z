@@ -13039,379 +13039,337 @@ emitMonos: function {symtab: zenv.ZSymbolTable ctx: Ctx runtimeDir: StringView b
     buildUserTypeList symtab: symtab ctx: ctx acc: userListM
     emitCliFwdDecls symtab: symtab ctx: ctx buf: buf
     emitMainFwdDecls symtab: symtab ctx: ctx buf: buf
+    # one classification sweep over the registry fills the per-category
+    # worklists; the category loops below emit in the original sequence.
+    # Every predicate reads only registry/typing state (immutable during
+    # emission); the io-wrapper needsHas gate stays at emission time.
+    wStr9: (List u64)
+    wBox9: (List u64)
+    wIoUnion9: (List u64)
+    wCliLeaf9: (List u64)
+    wSysVar9: (List u64)
+    wSysRec9: (List u64)
+    wValMono9: (List u64)
+    wOptRes9: (List u64)
+    wUgUnion9: (List u64)
+    wOptView9: (List u64)
+    wArr9: (List u64)
+    wListView9: (List u64)
+    wList9: (List u64)
+    wSet9: (List u64)
+    wMap9: (List u64)
+    wCliComp9: (List u64)
+    wProto9: (List u64)
+    wIoWrap9: (List u64)
+    wUgRec9: (List u64)
+    tcl9: 0.u64
+    for tcl9 < last loop {
+        tv9: tcl9
+        tt9: symtab.reg.typetypeOf typeId: tcl9
+        onm9: monoOriginName symtab: symtab tid: tcl9
+        gen9: isGenericType symtab: symtab tid: tcl9
+        isMono9: onm9.length > 0
+        inIo9: false
+        inCli9: false
+        {
+            duo9: definedInUnitOf symtab: symtab tid: tcl9
+            match (
+                duo9
+            ) case some then {
+                if duo9.stringview == "io" then { inIo9 = true }
+                if duo9.stringview == "os" then { inIo9 = true }
+                if duo9.stringview == "cli" then {
+                    inIo9 = true
+                    inCli9 = true
+                }
+            } case none then {}
+        }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.strOriginTid) then {
+            wStr9.append tv9
+        }
+        if (isBoxTid symtab: symtab tid: tcl9) then {
+            wBox9.append tv9
+        }
+        if tt9 == ztypes.ztypetype.UNION then {
+            if isMono9 == false when gen9 == false when inIo9 then {
+                wIoUnion9.append tv9
+            }
+        }
+        if tt9 == ztypes.ztypetype.CLASS then {
+            if isMono9 == false when gen9 == false then {
+                if inCli9 then {
+                    if (cliClassIsComposite symtab: symtab ctx: ctx tid: tcl9) then {
+                        wCliComp9.append tv9
+                    } else {
+                        wCliLeaf9.append tv9
+                    }
+                }
+                if inIo9 then {
+                    wnm9: typeNameOfReg9 symtab: symtab tid: tcl9
+                    if wnm9.stringview != "File" then {
+                        wIoWrap9.append tv9
+                    }
+                }
+            }
+        }
+        if tt9 == ztypes.ztypetype.VARIANT then {
+            if isMono9 == false when gen9 == false then {
+                if (definedInNonMain symtab: symtab ctx: ctx tid: tcl9) then {
+                    wSysVar9.append tv9
+                }
+            }
+        }
+        if tt9 == ztypes.ztypetype.RECORD then {
+            if isMono9 == false when gen9 == false when inIo9 then {
+                wSysRec9.append tv9
+            }
+        }
+        isValMono9: false
+        if onm9.stringview == "optionval" then { isValMono9 = true }
+        if onm9.stringview == "resultval" then { isValMono9 = true }
+        if isValMono9 then {
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tcl9 userList: userListM) == false then {
+                wValMono9.append tv9
+            }
+        }
+        isOptRes9: false
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.optionOriginTid) then { isOptRes9 = true }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.resultOriginTid) then { isOptRes9 = true }
+        if isOptRes9 then {
+            wOptRes9.append tv9
+        }
+        if isMono9 when tt9 == ztypes.ztypetype.UNION then {
+            ugu9: true
+            if isOptRes9 then { ugu9 = false }
+            if ugu9 when isValMono9 then { ugu9 = false }
+            if ugu9 when (originIsTid symtab: symtab tid: tcl9 originTid: ctx.optionViewOriginTid) then { ugu9 = false }
+            if ugu9 when (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: tcl9)) then { ugu9 = false }
+            if ugu9 then {
+                wUgUnion9.append tv9
+            }
+        }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.optionViewOriginTid) then {
+            wOptView9.append tv9
+        }
+        isColKind9: false
+        colDst9: 0.u64
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.arrayOriginTid) then {
+            isColKind9 = true
+            colDst9 = 1
+        }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.listViewOriginTid) then {
+            isColKind9 = true
+            colDst9 = 2
+        }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.listOriginTid) then {
+            isColKind9 = true
+            colDst9 = 3
+        }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.setOriginTid) then {
+            isColKind9 = true
+            colDst9 = 4
+        }
+        if (originIsTid symtab: symtab tid: tcl9 originTid: ctx.mapOriginTid) then {
+            isColKind9 = true
+            colDst9 = 5
+        }
+        if isColKind9 then {
+            if (monoIsLate symtab: symtab ctx: ctx monoId: tcl9 userList: userListM) == false then {
+                if colDst9 == 1 then { wArr9.append tv9 }
+                if colDst9 == 2 then { wListView9.append tv9 }
+                if colDst9 == 3 then { wList9.append tv9 }
+                if colDst9 == 4 then { wSet9.append tv9 }
+                if colDst9 == 5 then { wMap9.append tv9 }
+            }
+        }
+        if tt9 == ztypes.ztypetype.PROTOCOL then {
+            if gen9 == false then {
+                if (definedInNonMain symtab: symtab ctx: ctx tid: tcl9) then {
+                    wProto9.append tv9
+                }
+            }
+        }
+        if isMono9 then {
+            ugr9: false
+            if tt9 == ztypes.ztypetype.RECORD then { ugr9 = true }
+            if tt9 == ztypes.ztypetype.CLASS then { ugr9 = true }
+            if ugr9 when (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: tcl9)) then { ugr9 = false }
+            if ugr9 when (originIsTid symtab: symtab tid: tcl9 originTid: ctx.arrayOriginTid) then { ugr9 = false }
+            if ugr9 when (originIsTid symtab: symtab tid: tcl9 originTid: ctx.strOriginTid) then { ugr9 = false }
+            if ugr9 when (isBoxTid symtab: symtab tid: tcl9) then { ugr9 = false }
+            if ugr9 then {
+                wUgRec9.append tv9
+            }
+        }
+        tcl9 = tcl9 + 1
+    }
     # str valtype monos are leaf PODs that user records embed by value, so emit
     # them first (before any user struct / collection mono that references them).
     tstr9: 0.u64
-    for tstr9 < last loop {
-        if (originIsTid symtab: symtab tid: tstr9 originTid: ctx.strOriginTid) then {
-            emitStrMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tstr9 buf: buf
-        }
+    for tstr9 < wStr9.length loop {
+        strId9: wStr9.get i: tstr9
+        emitStrMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: strId9 buf: buf
         tstr9 = tstr9 + 1
     }
     # builtin Box monos (heap pointers): destructor-only, leaf -- emit early.
     tbox9: 0.u64
-    for tbox9 < last loop {
-        if (isBoxTid symtab: symtab tid: tbox9) then {
-            emitBoxMono symtab: symtab ctx: ctx monoId: tbox9 buf: buf
-        }
+    for tbox9 < wBox9.length loop {
+        boxId9: wBox9.get i: tbox9
+        emitBoxMono symtab: symtab ctx: ctx monoId: boxId9 buf: buf
         tbox9 = tbox9 + 1
     }
     # reachable non-mono system UNIONs (IoError) -- the error payload of the
     # Result monos; emit before them so the mono destructors can call IoError's.
     tsu: 0.u64
-    for tsu < last loop {
-        if (symtab.reg.typetypeOf typeId: tsu) == ztypes.ztypetype.UNION then {
-            iuo: monoOriginName symtab: symtab tid: tsu
-            iugen: isGenericType symtab: symtab tid: tsu
-            if iuo.length == 0 when iugen == false then {
-                iduo: definedInUnitOf symtab: symtab tid: tsu
-                isIoUnit: false
-                match (
-                    iduo
-                ) case some then {
-                    if iduo.stringview == "io" then {
-                        isIoUnit = true
-                    }
-                    if iduo.stringview == "os" then {
-                        isIoUnit = true
-                    }
-                    if iduo.stringview == "cli" then {
-                        isIoUnit = true
-                    }
-                } case none then {}
-                if isIoUnit then {
-                    iun: typeNameOfReg9 symtab: symtab tid: tsu
-                    emitUnionMono symtab: symtab ctx: ctx tid: tsu name: iun.stringview buf: buf
-                }
-            }
-        }
+    for tsu < wIoUnion9.length loop {
+        iuId9: wIoUnion9.get i: tsu
+        iun: typeNameOfReg9 symtab: symtab tid: iuId9
+        emitUnionMono symtab: symtab ctx: ctx tid: iuId9 name: iun.stringview buf: buf
         tsu = tsu + 1
     }
     emitIoFileClass symtab: symtab ctx: ctx buf: buf
     # reachable cli LEAF classes (FlagDef/OptionDef/PositionalDef) -- pure-string
     # classes the List monos below embed; emitted before those monos.
     tclf: 0.u64
-    for tclf < last loop {
-        if (symtab.reg.typetypeOf typeId: tclf) == ztypes.ztypetype.CLASS then {
-            clfgen: isGenericType symtab: symtab tid: tclf
-            clfmo: monoOriginName symtab: symtab tid: tclf
-            if clfmo.length == 0 when clfgen == false then {
-                clfduo: definedInUnitOf symtab: symtab tid: tclf
-                isCliLeaf: false
-                match (
-                    clfduo
-                ) case some then {
-                    if clfduo.stringview == "cli" then {
-                        isCliLeaf = true
-                    }
-                } case none then {}
-                if isCliLeaf when (cliClassIsComposite symtab: symtab ctx: ctx tid: tclf) then {
-                    isCliLeaf = false
-                }
-                if isCliLeaf then {
-                    clfn: typeNameOfReg9 symtab: symtab tid: tclf
-                    emitOneRecord symtab: symtab ctx: ctx tid: tclf name: clfn.stringview buf: buf
-                }
-            }
-        }
+    for tclf < wCliLeaf9.length loop {
+        clfId9: wCliLeaf9.get i: tclf
+        clfn: typeNameOfReg9 symtab: symtab tid: clfId9
+        emitOneRecord symtab: symtab ctx: ctx tid: clfId9 name: clfn.stringview buf: buf
         tclf = tclf + 1
     }
     # reachable non-mono system VARIANTs (parseerror, seekorigin, ...) --
     # payloads of the variant monos / used directly.
     tsv: 0.u64
-    for tsv < last loop {
-        if (symtab.reg.typetypeOf typeId: tsv) == ztypes.ztypetype.VARIANT then {
-            svo: monoOriginName symtab: symtab tid: tsv
-            svgen: isGenericType symtab: symtab tid: tsv
-            if svo.length == 0 when svgen == false then {
-                svu: definedInNonMain symtab: symtab ctx: ctx tid: tsv
-                if svu then {
-                    svn: typeNameOfReg9 symtab: symtab tid: tsv
-                    emitOneVariant symtab: symtab ctx: ctx tid: tsv name: svn.stringview buf: buf
-                }
-            }
-        }
+    for tsv < wSysVar9.length loop {
+        svId9: wSysVar9.get i: tsv
+        svn: typeNameOfReg9 symtab: symtab tid: svId9
+        emitOneVariant symtab: symtab ctx: ctx tid: svId9 name: svn.stringview buf: buf
         tsv = tsv + 1
     }
     # reachable non-mono system RECORDs (filestat) -- the ok payload of a Result
     # mono; after its filekind variant, before the Result monos that box it.
     tsr: 0.u64
-    for tsr < last loop {
-        if (symtab.reg.typetypeOf typeId: tsr) == ztypes.ztypetype.RECORD then {
-            sro: monoOriginName symtab: symtab tid: tsr
-            srgen: isGenericType symtab: symtab tid: tsr
-            if sro.length == 0 when srgen == false then {
-                rduo: definedInUnitOf symtab: symtab tid: tsr
-                isIoR: false
-                match (
-                    rduo
-                ) case some then {
-                    if rduo.stringview == "io" then {
-                        isIoR = true
-                    }
-                    if rduo.stringview == "os" then {
-                        isIoR = true
-                    }
-                    if rduo.stringview == "cli" then {
-                        isIoR = true
-                    }
-                } case none then {}
-                if isIoR then {
-                    srn: typeNameOfReg9 symtab: symtab tid: tsr
-                    emitOneRecord symtab: symtab ctx: ctx tid: tsr name: srn.stringview buf: buf
-                }
-            }
-        }
+    for tsr < wSysRec9.length loop {
+        srId9: wSysRec9.get i: tsr
+        srn: typeNameOfReg9 symtab: symtab tid: srId9
+        emitOneRecord symtab: symtab ctx: ctx tid: srId9 name: srn.stringview buf: buf
         tsr = tsr + 1
     }
     # optionval + resultval variant monos -- iterators/collection-gets /
     # parsers return them by value (payloads now resolvable).
     tido: 0.u64
-    for tido < last loop {
-        oonm: monoOriginName symtab: symtab tid: tido
-        isVm: false
-        if oonm.stringview == "optionval" then { isVm = true }
-        if oonm.stringview == "resultval" then { isVm = true }
-        if isVm then {
-            if (monoIsLate symtab: symtab ctx: ctx monoId: tido userList: userListM) == false then {
-                oovn: typeNameOfReg9 symtab: symtab tid: tido
-                emitOneVariant symtab: symtab ctx: ctx tid: tido name: oovn.stringview buf: buf
-            }
-        }
+    for tido < wValMono9.length loop {
+        vmId9: wValMono9.get i: tido
+        oovn: typeNameOfReg9 symtab: symtab tid: vmId9
+        emitOneVariant symtab: symtab ctx: ctx tid: vmId9 name: oovn.stringview buf: buf
         tido = tido + 1
     }
     # Option union monos (tag + void* data heap payload) -- reftype
     # option returns (string strip/split, map get over reftype).
     tiu: 0.u64
-    for tiu < last loop {
-        uonm: monoOriginName symtab: symtab tid: tiu
-        isUM: false
-        if (originIsTid symtab: symtab tid: tiu originTid: ctx.optionOriginTid) then {
-            isUM = true
-        }
-        if (originIsTid symtab: symtab tid: tiu originTid: ctx.resultOriginTid) then {
-            isUM = true
-        }
-        if isUM then {
-            uvn: typeNameOfReg9 symtab: symtab tid: tiu
-            emitUnionMono symtab: symtab ctx: ctx tid: tiu name: uvn.stringview buf: buf
-        }
+    for tiu < wOptRes9.length loop {
+        orId9: wOptRes9.get i: tiu
+        uvn: typeNameOfReg9 symtab: symtab tid: orId9
+        emitUnionMono symtab: symtab ctx: ctx tid: orId9 name: uvn.stringview buf: buf
         tiu = tiu + 1
     }
     # user generic UNION monos (e.g. MyOption<i64>): struct + tags via
-    # emitUnionMono. The tug9 sweep handles only RECORD/CLASS; system
+    # emitUnionMono. The wUgRec9 list handles only RECORD/CLASS; system
     # option/result monos are handled above.
     tugu9: 0.u64
-    for tugu9 < last loop {
-        uguo9: monoOriginName symtab: symtab tid: tugu9
-        isUGU9: false
-        if uguo9.length > 0 when (symtab.reg.typetypeOf typeId: tugu9) == ztypes.ztypetype.UNION then {
-            isUGU9 = true
-        }
-        if isUGU9 when (originIsTid symtab: symtab tid: tugu9 originTid: ctx.optionOriginTid) then {
-            isUGU9 = false
-        }
-        if isUGU9 when (originIsTid symtab: symtab tid: tugu9 originTid: ctx.resultOriginTid) then {
-            isUGU9 = false
-        }
-        if isUGU9 when uguo9.stringview == "optionval" then {
-            isUGU9 = false
-        }
-        if isUGU9 when uguo9.stringview == "resultval" then {
-            isUGU9 = false
-        }
-        if isUGU9 when (originIsTid symtab: symtab tid: tugu9 originTid: ctx.optionViewOriginTid) then {
-            isUGU9 = false
-        }
-        if isUGU9 when (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: tugu9)) then {
-            isUGU9 = false
-        }
-        if isUGU9 then {
-            uguvn9: typeNameOfReg9 symtab: symtab tid: tugu9
-            emitUnionMono symtab: symtab ctx: ctx tid: tugu9 name: uguvn9.stringview buf: buf
-        }
+    for tugu9 < wUgUnion9.length loop {
+        uguId9: wUgUnion9.get i: tugu9
+        uguvn9: typeNameOfReg9 symtab: symtab tid: uguId9
+        emitUnionMono symtab: symtab ctx: ctx tid: uguId9 name: uguvn9.stringview buf: buf
         tugu9 = tugu9 + 1
     }
     # OptionView structs -- the borrowed-view option every collection
     # iterator yields; emitted before the collections that reference it.
     tiov: 0.u64
-    for tiov < last loop {
-        oovnm: monoOriginName symtab: symtab tid: tiov
-        if (originIsTid symtab: symtab tid: tiov originTid: ctx.optionViewOriginTid) then {
-            emitOptionViewMono symtab: symtab ctx: ctx monoId: tiov buf: buf
-        }
+    for tiov < wOptView9.length loop {
+        ovId9: wOptView9.get i: tiov
+        emitOptionViewMono symtab: symtab ctx: ctx monoId: ovId9 buf: buf
         tiov = tiov + 1
     }
     # ListView structs next -- a List's listview companion references
     # the ListView struct by value.
     tarr9: 0.u64
-    for tarr9 < last loop {
-        anm9: monoOriginName symtab: symtab tid: tarr9
-        if (originIsTid symtab: symtab tid: tarr9 originTid: ctx.arrayOriginTid) then {
-            if (monoIsLate symtab: symtab ctx: ctx monoId: tarr9 userList: userListM) == false then {
-                emitArrayMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tarr9 buf: buf
-            }
-        }
+    for tarr9 < wArr9.length loop {
+        arrId9: wArr9.get i: tarr9
+        emitArrayMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: arrId9 buf: buf
         tarr9 = tarr9 + 1
     }
     tid: 0.u64
-    for tid < last loop {
-        onm: monoOriginName symtab: symtab tid: tid
-        if (originIsTid symtab: symtab tid: tid originTid: ctx.listViewOriginTid) then {
-            if (monoIsLate symtab: symtab ctx: ctx monoId: tid userList: userListM) == false then {
-                emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid buf: buf
-            }
-        }
+    for tid < wListView9.length loop {
+        lvId9: wListView9.get i: tid
+        emitListViewMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: lvId9 buf: buf
         tid = tid + 1
     }
     tid2: 0.u64
-    for tid2 < last loop {
-        onm2: monoOriginName symtab: symtab tid: tid2
-        if (originIsTid symtab: symtab tid: tid2 originTid: ctx.listOriginTid) then {
-            if (monoIsLate symtab: symtab ctx: ctx monoId: tid2 userList: userListM) == false then {
-                emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tid2 buf: buf
-            }
-        }
+    for tid2 < wList9.length loop {
+        liId9: wList9.get i: tid2
+        emitListMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: liId9 buf: buf
         tid2 = tid2 + 1
     }
     # Set monos last -- the compact-dict + SetIter; needs its element's
     # OptionView (above) already defined.
     tset: 0.u64
-    for tset < last loop {
-        snm: monoOriginName symtab: symtab tid: tset
-        if (originIsTid symtab: symtab tid: tset originTid: ctx.setOriginTid) then {
-            if (monoIsLate symtab: symtab ctx: ctx monoId: tset userList: userListM) == false then {
-                emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tset buf: buf
-            }
-        }
+    for tset < wSet9.length loop {
+        seId9: wSet9.get i: tset
+        emitSetMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: seId9 buf: buf
         tset = tset + 1
     }
     # Map monos -- the compact-dict over key+value; get's return optionval
     # (emitted above) supplies the value type.
     tmap: 0.u64
-    for tmap < last loop {
-        mnm: monoOriginName symtab: symtab tid: tmap
-        if (originIsTid symtab: symtab tid: tmap originTid: ctx.mapOriginTid) then {
-            if (monoIsLate symtab: symtab ctx: ctx monoId: tmap userList: userListM) == false then {
-                emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: tmap buf: buf
-            }
-        }
+    for tmap < wMap9.length loop {
+        maId9: wMap9.get i: tmap
+        emitMapMono symtab: symtab ctx: ctx runtimeDir: runtimeDir monoId: maId9 buf: buf
         tmap = tmap + 1
     }
     # reachable cli COMPOSITE classes (Spec/Parsed) -- after the List/Map monos
     # they embed; Parsed was forward-declared above for the Result mono destroy.
     tclc: 0.u64
-    for tclc < last loop {
-        if (symtab.reg.typetypeOf typeId: tclc) == ztypes.ztypetype.CLASS then {
-            clcgen: isGenericType symtab: symtab tid: tclc
-            clcmo: monoOriginName symtab: symtab tid: tclc
-            if clcmo.length == 0 when clcgen == false then {
-                clcduo: definedInUnitOf symtab: symtab tid: tclc
-                isCliComp: false
-                match (
-                    clcduo
-                ) case some then {
-                    if clcduo.stringview == "cli" then {
-                        isCliComp = true
-                    }
-                } case none then {}
-                if isCliComp when (cliClassIsComposite symtab: symtab ctx: ctx tid: tclc) then {} else {
-                    isCliComp = false
-                }
-                if isCliComp then {
-                    clcn: typeNameOfReg9 symtab: symtab tid: tclc
-                    fwd9: false
-                    if clcn.stringview == "Parsed" then {
-                        fwd9 = true
-                    }
-                    emitCliCompositeClass symtab: symtab ctx: ctx tid: tclc name: clcn.stringview fwdDeclared: fwd9 buf: buf
-                }
-            }
+    for tclc < wCliComp9.length loop {
+        clcId9: wCliComp9.get i: tclc
+        clcn: typeNameOfReg9 symtab: symtab tid: clcId9
+        fwd9: false
+        if clcn.stringview == "Parsed" then {
+            fwd9 = true
         }
+        emitCliCompositeClass symtab: symtab ctx: ctx tid: clcId9 name: clcn.stringview fwdDeclared: fwd9 buf: buf
         tclc = tclc + 1
     }
     # reachable system PROTOCOLs (Reader/Writer/Closer/Seeker) -- emitted after
     # the collection monos their vtable function-pointer signatures reference.
     tsp: 0.u64
-    for tsp < last loop {
-        if (symtab.reg.typetypeOf typeId: tsp) == ztypes.ztypetype.PROTOCOL then {
-            spgen: isGenericType symtab: symtab tid: tsp
-            if (spgen) == false then {
-                if (definedInNonMain symtab: symtab ctx: ctx tid: tsp) then {
-                    spn: typeNameOfReg9 symtab: symtab tid: tsp
-                    emitOneProtocol symtab: symtab ctx: ctx tid: tsp name: spn.stringview buf: buf
-                }
-            }
-        }
+    for tsp < wProto9.length loop {
+        spId9: wProto9.get i: tsp
+        spn: typeNameOfReg9 symtab: symtab tid: spId9
+        emitOneProtocol symtab: symtab ctx: ctx tid: spId9 name: spn.stringview buf: buf
         tsp = tsp + 1
     }
     # reachable io wrapper CLASSes (BufWriter/BufReader/TextWriter/TextReader) --
     # after the protocols their .lock fields hold. File has its own emitter.
+    # The needsHas gate stays here (needs may accrue during emission).
     tsc: 0.u64
-    for tsc < last loop {
-        if (symtab.reg.typetypeOf typeId: tsc) == ztypes.ztypetype.CLASS then {
-            scgen: isGenericType symtab: symtab tid: tsc
-            scmo: monoOriginName symtab: symtab tid: tsc
-            if scmo.length == 0 when scgen == false then {
-                scn: typeNameOfReg9 symtab: symtab tid: tsc
-                cduo: definedInUnitOf symtab: symtab tid: tsc
-                isIoC: false
-                match (
-                    cduo
-                ) case some then {
-                    if cduo.stringview == "io" then {
-                        isIoC = true
-                    }
-                    if cduo.stringview == "os" then {
-                        isIoC = true
-                    }
-                    if cduo.stringview == "cli" then {
-                        isIoC = true
-                    }
-                } case none then {}
-                if isIoC when scn.stringview == "File" then {
-                    isIoC = false
-                }
-                unb9: "io_uses_\{scn}".string
-                if isIoC when (needsHas ctx: ctx name: unb9.stringview) then {
-                    emitOneRecord symtab: symtab ctx: ctx tid: tsc name: scn.stringview buf: buf
-                }
-            }
+    for tsc < wIoWrap9.length loop {
+        scId9: wIoWrap9.get i: tsc
+        scn: typeNameOfReg9 symtab: symtab tid: scId9
+        unb9: "io_uses_\{scn}".string
+        if (needsHas ctx: ctx name: unb9.stringview) then {
+            emitOneRecord symtab: symtab ctx: ctx tid: scId9 name: scn.stringview buf: buf
         }
         tsc = tsc + 1
     }
     # user generic class/record monos (e.g. Box<i64>): RECORD/CLASS monos whose
     # origin is a user generic type. The collection / array / str / option / box
-    # monos are handled by their own sweeps; emit the rest via emitOneRecord.
+    # monos are handled by their own worklists; emit the rest via emitOneRecord.
     tug9: 0.u64
-    for tug9 < last loop {
-        ugo9: monoOriginName symtab: symtab tid: tug9
-        ugUser9: false
-        if ugo9.length > 0 then {
-            ugtt9: symtab.reg.typetypeOf typeId: tug9
-            if ugtt9 == ztypes.ztypetype.RECORD then {
-                ugUser9 = true
-            }
-            if ugtt9 == ztypes.ztypetype.CLASS then {
-                ugUser9 = true
-            }
-        }
-        if ugUser9 when (isCollectionOriginTid ctx: ctx originTid: (originTidOf symtab: symtab tid: tug9)) then {
-            ugUser9 = false
-        }
-        if ugUser9 when (originIsTid symtab: symtab tid: tug9 originTid: ctx.arrayOriginTid) then {
-            ugUser9 = false
-        }
-        if ugUser9 when (originIsTid symtab: symtab tid: tug9 originTid: ctx.strOriginTid) then {
-            ugUser9 = false
-        }
-        if ugUser9 when (isBoxTid symtab: symtab tid: tug9) then {
-            ugUser9 = false
-        }
-        if ugUser9 then {
-            ugnm9: typeNameOfReg9 symtab: symtab tid: tug9
-            emitOneRecord symtab: symtab ctx: ctx tid: tug9 name: ugnm9.stringview buf: buf
-        }
+    for tug9 < wUgRec9.length loop {
+        ugId9: wUgRec9.get i: tug9
+        ugnm9: typeNameOfReg9 symtab: symtab tid: ugId9
+        emitOneRecord symtab: symtab ctx: ctx tid: ugId9 name: ugnm9.stringview buf: buf
         tug9 = tug9 + 1
     }
 }
