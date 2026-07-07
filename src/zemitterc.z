@@ -1192,14 +1192,13 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                 if collMove9 then { isTake9 = true }
                 lbl9: unitLabel9 o: a9.name
                 if lbl9.length > 0 then {
-                    own9: symtab.typing.childOwnershipText parentTypeId: ftid9 name: lbl9.stringview
-                    if own9.stringview == "TAKE" then {
+                    if (symtab.typing.childOwnershipIs parentTypeId: ftid9 name: lbl9.stringview own: ztypes.zparamownership.TAKE) then {
                         isTake9 = true
                     }
-                    if own9.stringview == "BORROW" then {
+                    if (symtab.typing.childOwnershipIs parentTypeId: ftid9 name: lbl9.stringview own: ztypes.zparamownership.BORROW) then {
                         isTake9 = false
                     }
-                    if own9.stringview == "LOCK" then {
+                    if (symtab.typing.childOwnershipIs parentTypeId: ftid9 name: lbl9.stringview own: ztypes.zparamownership.LOCK) then {
                         isTake9 = false
                     }
                 } else {
@@ -1216,8 +1215,7 @@ emitCallTakeInvalidations: function {symtab: zenv.ZSymbolTable ctx: Ctx call: za
                     pidx9: posI9 + off9
                     if pidx9 < pnames9.length then {
                         pn9: pnames9.get i: pidx9
-                        pown9: symtab.typing.childOwnershipText parentTypeId: ftid9 name: pn9.stringview
-                        if pown9.stringview == "TAKE" then {
+                        if (symtab.typing.childOwnershipIs parentTypeId: ftid9 name: pn9.stringview own: ztypes.zparamownership.TAKE) then {
                             isTake9 = true
                         }
                     }
@@ -1833,14 +1831,14 @@ methodOwnerId: function {symtab: zenv.ZSymbolTable ctx: Ctx rtid: u64 mn: String
 
 # hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
 # non-lvalue temporary (e.g. a `Map.get` Option result) handed to a borrow param
-# (ownText != "TAKE") is freed by neither side. Hoist it into a temp registered
+# (not paramTake) is freed by neither side. Hoist it into a temp registered
 # for scope-exit destroy (mirrors the by-ref `&`-hoist) and return the temp name;
 # "" when no hoist is needed. `av` is borrowed -- the caller keeps ownership.
-hoistBorrowValArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u64 ownText: StringView} out String is {
+hoistBorrowValArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u64 paramTake: bool} out String is {
     if (isNonLvalueArg s: av) == false then {
         return "".string
     }
-    if ownText == "TAKE" then {
+    if paramTake then {
         return "".string
     }
     vrid: pid
@@ -1976,9 +1974,9 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                     # a non-TAKE class arg passes by pointer (mirrors the method
                     # signature); isReftypeParam resolves a cross-unit class shell that
                     # a bare typetypeOf==CLASS check misses.
-                    pown9: symtab.typing.childOwnershipText parentTypeId: mco9 name: pname9.stringview
+                    pTake9: symtab.typing.childOwnershipIs parentTypeId: mco9 name: pname9.stringview own: ztypes.zparamownership.TAKE
                     isRef9: false
-                    if pown9.stringview != "TAKE" then {
+                    if pTake9 == false then {
                         if (isReftypeParam symtab: symtab ctx: ctx tid: pid9) then {
                             isRef9 = true
                         }
@@ -2049,7 +2047,7 @@ emitInstanceMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.
                     } else {
                         vbhm9: "".string
                         if (ptra9) == false when (usedInterp9) == false then {
-                            vbhm9 = hoistBorrowValArg symtab: symtab ctx: ctx av: av9.stringview pid: pid9 ownText: pown9.stringview
+                            vbhm9 = hoistBorrowValArg symtab: symtab ctx: ctx av: av9.stringview pid: pid9 paramTake: pTake9
                         }
                         if vbhm9.length > 0 then {
                             args.append vbhm9.stringview
@@ -2633,9 +2631,8 @@ emitInterpArgForParam: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node fid:
     if sx.length == 0 then {
         return "".string
     }
-    own: symtab.typing.childOwnershipText parentTypeId: fid name: pname
     isTake: false
-    if pid == ctx.strTid when own.stringview == "TAKE" then {
+    if pid == ctx.strTid when (symtab.typing.childOwnershipIs parentTypeId: fid name: pname own: ztypes.zparamownership.TAKE) then {
         isTake = true
     }
     hn: ctx.argHoistCtr
@@ -3638,8 +3635,7 @@ emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
                     byref9: false
                     argRef9: "".string
                     ptra9: false
-                    ownC9: symtab.typing.childOwnershipText parentTypeId: gmf9 name: fpnO9.stringview
-                    if ownC9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
+                    if (symtab.typing.childOwnershipIs parentTypeId: gmf9 name: fpnO9.stringview own: ztypes.zparamownership.TAKE) == false when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
                         ptra9 = true
                     } else {
                         if (isBorrowStringParam symtab: symtab fid: gmf9 pname: fpnO9.stringview pid: fpid9) then {
@@ -3746,8 +3742,7 @@ emitUnitMethodCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Call
                     byref9: false
                     argRef9: "".string
                     ptra9: false
-                    ownC9: symtab.typing.childOwnershipText parentTypeId: fid9 name: fpnO9.stringview
-                    if ownC9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
+                    if (symtab.typing.childOwnershipIs parentTypeId: fid9 name: fpnO9.stringview own: ztypes.zparamownership.TAKE) == false when (isReftypeParam symtab: symtab ctx: ctx tid: fpid9) then {
                         ptra9 = true
                     } else {
                         if (isBorrowStringParam symtab: symtab fid: fid9 pname: fpnO9.stringview pid: fpid9) then {
@@ -3847,8 +3842,7 @@ emitCrossUnitFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.Cal
                     byref8: false
                     argRef8: "".string
                     ptra8: false
-                    ownC8: symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
-                    if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                    if (symtab.typing.childOwnershipIs parentTypeId: fid name: fpnO8.stringview own: ztypes.zparamownership.TAKE) == false when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
                         ptra8 = true
                     } else {
                         if (isBorrowStringParam symtab: symtab fid: fid pname: fpnO8.stringview pid: fpid8) then {
@@ -4433,8 +4427,8 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                         fpid8: fpIds.get i: slot9b
                         fpnO8: fpNames.get i: slot9b
                         ptra8: false
-                        ownC8: symtab.typing.childOwnershipText parentTypeId: fid name: fpnO8.stringview
-                        if ownC8.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
+                        pTake8: symtab.typing.childOwnershipIs parentTypeId: fid name: fpnO8.stringview own: ztypes.zparamownership.TAKE
+                        if pTake8 == false when (isReftypeParam symtab: symtab ctx: ctx tid: fpid8) then {
                             ptra8 = true
                         } else {
                             if (isBorrowStringParam symtab: symtab fid: fid pname: fpnO8.stringview pid: fpid8) then {
@@ -4453,7 +4447,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                             }
                         }
                         if (ptra8) == false then {
-                            vbh8 = hoistBorrowValArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8 ownText: ownC8.stringview
+                            vbh8 = hoistBorrowValArg symtab: symtab ctx: ctx av: av9.stringview pid: fpid8 paramTake: pTake8
                         }
                     }
                     finalS9: "".string
@@ -8436,14 +8430,10 @@ isBorrowStringParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringV
     if ptn9.stringview != "String" then {
         return false
     }
-    own9: symtab.typing.childOwnershipText parentTypeId: fid name: pname
-    if own9.stringview == "BORROW" then {
+    if (symtab.typing.childOwnershipIs parentTypeId: fid name: pname own: ztypes.zparamownership.BORROW) then {
         return true
     }
-    if own9.stringview == "LOCK" then {
-        return true
-    }
-    return false
+    return (symtab.typing.childOwnershipIs parentTypeId: fid name: pname own: ztypes.zparamownership.LOCK)
 }
 
 # registerReftypeParams -- add a top-level function's reftype (class/union)
@@ -8453,8 +8443,7 @@ isBorrowStringParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringV
 # param is passed BY POINTER (Set_t*) and its arg (a Set/Map local/field, also a
 # pointer) is passed directly -- unlike a by-value List param which needs &.
 isSetMapPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView tid: u64} out bool is {
-    own: symtab.typing.childOwnershipText parentTypeId: fid name: pname
-    if own.stringview == "TAKE" then {
+    if (symtab.typing.childOwnershipIs parentTypeId: fid name: pname own: ztypes.zparamownership.TAKE) then {
         return false
     }
     cid: tid
@@ -8485,8 +8474,7 @@ isSetMapPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView
 # POINTER so the callee's append/pop/set persist to the caller. A `.take` List is
 # moved by value; Set/Map monos are already heap pointers (no extra `*`).
 isListPtrParam: function {symtab: zenv.ZSymbolTable fid: u64 pname: StringView tid: u64} out bool is {
-    own: symtab.typing.childOwnershipText parentTypeId: fid name: pname
-    if own.stringview == "TAKE" then {
+    if (symtab.typing.childOwnershipIs parentTypeId: fid name: pname own: ztypes.zparamownership.TAKE) then {
         return false
     }
     cid: tid
@@ -8539,8 +8527,7 @@ registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is
         rpid: pIds.get i: ri
         rpn: pNames.get i: ri
         regp9: false
-        ownR9: symtab.typing.childOwnershipText parentTypeId: fid name: rpn.stringview
-        if ownR9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: rpid) then {
+        if (symtab.typing.childOwnershipIs parentTypeId: fid name: rpn.stringview own: ztypes.zparamownership.TAKE) == false when (isReftypeParam symtab: symtab ctx: ctx tid: rpid) then {
             regp9 = true
         } else {
             if (isBorrowStringParam symtab: symtab fid: fid pname: rpn.stringview pid: rpid) then {
@@ -8657,8 +8644,7 @@ fnSignature: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView fid: 
         pid: cIds.get i: pi
         ct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0
         ptrp9: false
-        ownF9: symtab.typing.childOwnershipText parentTypeId: fid name: pname.stringview
-        if ownF9.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
+        if (symtab.typing.childOwnershipIs parentTypeId: fid name: pname.stringview own: ztypes.zparamownership.TAKE) == false when (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
             ptrp9 = true
         } else {
             if (isBorrowStringParam symtab: symtab fid: fid pname: pname.stringview pid: pid) then {
@@ -10046,8 +10032,7 @@ emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node fid: u64 buf: 
         for pj9 < pn9 loop {
             ppn9: pnames9.get i: pj9
             ppid9: pids9.get i: pj9
-            pown9: symtab.typing.childOwnershipText parentTypeId: fid name: ppn9.stringview
-            if pown9.stringview == "TAKE" then {
+            if (symtab.typing.childOwnershipIs parentTypeId: fid name: ppn9.stringview own: ztypes.zparamownership.TAKE) then {
                 ptnm9: typeNameOfReg9 symtab: symtab tid: ppid9
                 pmn9: ztypes.mangleVarName name: ppn9.stringview
                 if ppid9 == ctx.strTid then {
@@ -12709,8 +12694,7 @@ fnptrRetTypeC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out String
 fnptrParamTypeC: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64 pname: StringView pid: u64} out String is {
     ct: typeRefC symtab: symtab ctx: ctx tid: pid thisTid: 0
     ptrp: false
-    ownF: symtab.typing.childOwnershipText parentTypeId: fid name: pname
-    if ownF.stringview != "TAKE" when (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
+    if (symtab.typing.childOwnershipIs parentTypeId: fid name: pname own: ztypes.zparamownership.TAKE) == false when (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
         ptrp = true
     } else {
         if (isBorrowStringParam symtab: symtab fid: fid pname: pname pid: pid) then {
@@ -15835,9 +15819,8 @@ emitOneMethod: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 thisTid9: u
                 # borrow-default whose ownership a cross-unit shell records as "none")
                 # -> pass by pointer. A `.take` (owning) class param stays by value:
                 # a create/meta_create moves it into the struct.
-                own9: symtab.typing.childOwnershipText parentTypeId: mid name: pname.stringview
                 giveptr9: false
-                if own9.stringview != "TAKE" then {
+                if (symtab.typing.childOwnershipIs parentTypeId: mid name: pname.stringview own: ztypes.zparamownership.TAKE) == false then {
                     if (isReftypeParam symtab: symtab ctx: ctx tid: pid) then {
                         giveptr9 = true
                     }
