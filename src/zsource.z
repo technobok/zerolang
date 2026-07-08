@@ -725,6 +725,155 @@ Analysis: class {
         }
     }
 
+    # checkRedundantParens -- L007: a paren wrapping an ENTIRE `if` condition, when the condition
+    # does not require it. A named-argument-call condition needs the parens (its args are greedy and
+    # would swallow `then`), detected as a top-level colon inside the paren; those and sub-expression
+    # precedence parens are left alone. Removes the `(` and `)`.
+    checkRedundantParens: function {:this} is {
+        srcOwned: this.source.copy
+        sv: srcOwned.stringview
+        toks: tokenize.scan source: srcOwned.copy
+        lineStart: lineStartIndex src: sv
+        srcLines: linesOf src: sv
+        m: toks.length
+        i: 0.u64
+        for i < m loop {
+            t: toks.get i: i
+            isIf: false
+            match (
+                t.toktype
+            ) case IF then {
+                isIf = true
+            } else {
+            }
+            if isIf then {
+                fs: i + 1
+                fsScan: true
+                for fsScan loop {
+                    if fs >= m then {
+                        fsScan = false
+                    } else {
+                        tf: toks.get i: fs
+                        tv: false
+                        match (
+                            tf.toktype
+                        ) case WS then {
+                            tv = true
+                        } case EOL then {
+                            tv = true
+                        } case COMMENT then {
+                            tv = true
+                        } else {
+                        }
+                        if tv then {
+                            fs = fs + 1
+                        } else {
+                            fsScan = false
+                        }
+                    }
+                }
+                isOpen: false
+                if fs < m then {
+                    tf2: toks.get i: fs
+                    match (
+                        tf2.toktype
+                    ) case PARENOPEN then {
+                        isOpen = true
+                    } else {
+                    }
+                }
+                if isOpen then {
+                    depth: 1.u64
+                    j: fs + 1
+                    matchIdx: m
+                    hasColon: false
+                    mScan: true
+                    for mScan loop {
+                        if j >= m then {
+                            mScan = false
+                        } else {
+                            tj: toks.get i: j
+                            kind: 0.u32
+                            match (
+                                tj.toktype
+                            ) case PARENOPEN then {
+                                kind = 1
+                            } case PARENCLOSE then {
+                                kind = 2
+                            } case COLON then {
+                                kind = 3
+                            } else {
+                            }
+                            if kind == 1 then {
+                                depth = depth + 1
+                            } else if kind == 2 then {
+                                depth = depth - 1
+                                if depth == 0 then {
+                                    matchIdx = j
+                                    mScan = false
+                                }
+                            } else if kind == 3 then {
+                                if depth == 1 then {
+                                    hasColon = true
+                                }
+                            }
+                            if mScan then {
+                                j = j + 1
+                            }
+                        }
+                    }
+                    thenOk: false
+                    if matchIdx < m then {
+                        ns: matchIdx + 1
+                        nScan: true
+                        for nScan loop {
+                            if ns >= m then {
+                                nScan = false
+                            } else {
+                                tn: toks.get i: ns
+                                tv2: false
+                                match (
+                                    tn.toktype
+                                ) case WS then {
+                                    tv2 = true
+                                } case EOL then {
+                                    tv2 = true
+                                } case COMMENT then {
+                                    tv2 = true
+                                } else {
+                                }
+                                if tv2 then {
+                                    ns = ns + 1
+                                } else {
+                                    nScan = false
+                                }
+                            }
+                        }
+                        if ns < m then {
+                            tn2: toks.get i: ns
+                            match (
+                                tn2.toktype
+                            ) case THEN then {
+                                thenOk = true
+                            } else {
+                            }
+                        }
+                    }
+                    if thenOk when (hasColon == false) then {
+                        to: toks.get i: fs
+                        tc: toks.get i: matchIdx
+                        oStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: to.lineno colno: to.colno
+                        cStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: tc.lineno colno: tc.colno
+                        this.warn code: "L007" msg: "redundant parentheses around the condition".string line: to.lineno col: to.colno width: 1
+                        this.edits.append (zfix.Edit byteLo: oStart byteHi: (oStart + 1) replacement: "".string)
+                        this.edits.append (zfix.Edit byteLo: cStart byteHi: (cStart + 1) replacement: "".string)
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+
     # runFastChecks -- the fast-tier passes: parse-error/AST rules over `n`, then the token and
     # line rules over the source.
     runFastChecks: function {:this n: Node} is {
@@ -734,6 +883,7 @@ Analysis: class {
         this.checkFinalNewline
         this.checkColonSpacing
         this.checkBlankLines
+        this.checkRedundantParens
     }
 
     # sortEditsInPlace -- reorder the collected edits by byteLo so the applier and the diff
