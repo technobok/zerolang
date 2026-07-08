@@ -365,6 +365,112 @@ Analysis: class {
         }
     }
 
+    # checkColonSpacing -- W003 token tier: exactly one space after a `:` when a value follows
+    # on the same line. The `:label` shorthand (a colon immediately before a LABELPRE, e.g.
+    # `:this`) and a colon at end of line (value continues below) are left alone. Walks the raw
+    # token stream, so colons inside strings and comments are never touched.
+    checkColonSpacing: function {:this} is {
+        srcOwned: this.source.copy
+        sv: srcOwned.stringview
+        toks: tokenize.scan source: srcOwned.copy
+        lineStart: lineStartIndex src: sv
+        srcLines: linesOf src: sv
+        m: toks.length
+        i: 0.u64
+        for i < m loop {
+            t: toks.get i: i
+            isColon: false
+            match (
+                t.toktype
+            ) case COLON then {
+                isColon = true
+            } else {
+            }
+            if isColon then {
+                cl: t.lineno
+                cc: t.colno
+                shorthand: false
+                if (i + 1) < m then {
+                    t1: toks.get i: (i + 1)
+                    match (
+                        t1.toktype
+                    ) case LABELPRE then {
+                        shorthand = true
+                    } else {
+                    }
+                }
+                if (shorthand) == false then {
+                    j: i + 1
+                    foundNxt: false
+                    nxtContent: false
+                    nl: 0.u32
+                    nc: 0.u32
+                    for j < m loop {
+                        tj: toks.get i: j
+                        isWs: false
+                        isTerm: false
+                        match (
+                            tj.toktype
+                        ) case WS then {
+                            isWs = true
+                        } case EOL then {
+                            isTerm = true
+                        } case EOF then {
+                            isTerm = true
+                        } case COMMENT then {
+                            isTerm = true
+                        } case PARENCLOSE then {
+                            isTerm = true
+                        } case BRACECLOSE then {
+                            isTerm = true
+                        } case SEMICOLON then {
+                            isTerm = true
+                        } else {
+                        }
+                        if isWs then {
+                            j = j + 1
+                        } else {
+                            foundNxt = true
+                            nl = tj.lineno
+                            nc = tj.colno
+                            nxtContent = (isTerm) == false
+                            break
+                        }
+                    }
+                    if foundNxt when nxtContent when (nl == cl) then {
+                        colByteStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: cl colno: cc
+                        colEnd: colByteStart + 1
+                        valStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: nl colno: nc
+                        doFix: false
+                        if valStart == colEnd then {
+                            doFix = true
+                        } else if valStart == (colEnd + 1) then {
+                            bo: sv.byteAt i: colEnd
+                            issp: false
+                            match (
+                                bo
+                            ) case some then {
+                                if bo == 32 then {
+                                    issp = true
+                                }
+                            } case none then {
+                            }
+                            if (issp) == false then {
+                                doFix = true
+                            }
+                        } else if valStart > colEnd then {
+                            doFix = true
+                        }
+                        if doFix then {
+                            this.warnFix code: "W003" msg: "expected a single space after `:`".string line: cl col: cc width: 1 lo: colEnd hi: valStart repl: " ".string
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+
     # walk -- traversal collecting embedded parse errors as diagnostics, recursing
     # every child (all 29 arms, mirroring zast.printNodeCanonical).
     walk: function {:this n: Node} is {
@@ -536,6 +642,100 @@ byteToLine: function {lineStart: (List u64).borrow off: u64 nLines: u64} out u64
     return r
 }
 
+# colToByteInLine -- byte offset within `lineText` of the 1-based codepoint column `colno`.
+# Token columns are codepoint-based (multibyte-aware); this walks the line's bytes, consuming
+# one codepoint (a lead byte plus its 0x80..0xBF continuations) per column. ASCII: colno - 1.
+colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
+    if colno <= 1 then {
+        return 0.u64
+    }
+    target: (colno - 1).u64
+    n: lineText.length
+    b: 0.u64
+    cp: 0.u64
+    for cp < target loop {
+        if b >= n then {
+            break
+        }
+        b = b + 1
+        cont: true
+        for cont loop {
+            if b >= n then {
+                cont = false
+            } else {
+                nb: lineText.byteAt i: b
+                isC: false
+                match (
+                    nb
+                ) case some then {
+                    if nb >= 128 when (nb < 192) then {
+                        isC = true
+                    }
+                } case none then {
+                }
+                if isC then {
+                    b = b + 1
+                } else {
+                    cont = false
+                }
+            }
+        }
+        cp = cp + 1
+    }
+    return b
+}
+
+# tokByteStart -- absolute byte offset of a token from its 1-based (lineno, colno): the line's
+# start offset plus the codepoint-column converted to a byte column.
+tokByteStart: function {lineStart: (List u64).borrow srcLines: (List String).borrow lineno: u32 colno: u32} out u64 is {
+    li: (lineno - 1).u64
+    if li >= srcLines.length then {
+        return 0.u64
+    }
+    base: lineStart.get i: li
+    lt: srcLines.get i: li
+    return base + (colToByteInLine lineText: lt.stringview colno: colno)
+}
+
+# sortEdits -- a new edit list ordered by byteLo (ascending, stable for ties). applyEdits and
+# renderDiff require sorted, non-overlapping input; each rule emits its own edits in order but
+# they interleave across rules, so a global sort is run once all rules have contributed.
+sortEdits: function {edits: (List zfix.Edit).borrow} out (List zfix.Edit) is {
+    result: (List zfix.Edit)
+    n: edits.length
+    used: (List bool)
+    p: 0.u64
+    for p < n loop {
+        used.append false
+        p = p + 1
+    }
+    k: 0.u64
+    for k < n loop {
+        best: n
+        bestLo: 0.u64
+        i: 0.u64
+        for i < n loop {
+            u: used.get i: i
+            if (u) == false then {
+                e: edits.get i: i
+                if best == n then {
+                    best = i
+                    bestLo = e.byteLo
+                } else if e.byteLo < bestLo then {
+                    best = i
+                    bestLo = e.byteLo
+                }
+            }
+            i = i + 1
+        }
+        be: edits.get i: best
+        result.append (zfix.Edit byteLo: be.byteLo byteHi: be.byteHi replacement: be.replacement.copy)
+        used.set i: best val: true
+        k = k + 1
+    }
+    return result
+}
+
 # emitDiffHunk -- append one zero-context unified-diff hunk to `buf` for the cluster of edits
 # [cStart, cEnd) spanning old lines [clLo, clHi]. The new-side block is the old bytes with the
 # cluster's edits applied, so the hunk exactly reflects the formatted output. Returns the
@@ -654,6 +854,9 @@ analyzeFile: function {path: String.take} out Analysis is {
         a.checkForWhile
         a.checkTrailingWs
         a.checkFinalNewline
+        a.checkColonSpacing
+        sortedEdits: sortEdits edits: a.edits
+        a.edits = sortedEdits
         return a
     } case err then {
         a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
