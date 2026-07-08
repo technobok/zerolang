@@ -1,0 +1,158 @@
+#doc.lang: en
+
+#//: Zerolang Linter and Formatter Reference
+
+#doc.title: zl — Zerolang Linter & Formatter
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-07-08
+#doc.version: 0.1.0
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: zl — Zerolang Linter & Formatter Reference
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Synopsis
+
+#code: """
+  zl lint    [--full] [--src DIR] [--system DIR] <files...>
+  zl fmt     [--check | --stdout | --diff] [--full] <files...>
+  zl explain <code>
+  """
+
+
+#--: Description
+
+#~"zl" is the zerolang linter and formatter — a ruff-inspired tool, and a
+separate binary from #~"zc" so the compiler stays lean. It builds on the same
+front-end the compiler uses (#~"lib/system/zlexer.z", #~"zparser.z",
+#~"zast.z"), exposed publicly as the #~"tokenize" and #~"ast" preview APIs.
+
+One engine drives both verbs. Rules emit #_*"diagnostics"; a diagnostic may
+carry a #_*"fix" — a set of byte-range edits over the original source.
+#b:"lint" reports; #b:"fmt" applies the #_*"safe" fixes. Because both share one
+rule registry, the linter and formatter can never drift.
+
+#--: The validity guarantee
+
+#~"zl" edits #_+"only" code that parses. Both verbs default to lex + parse of a
+single file — no typecheck — so they are fast enough to run on save. The gate
+is a clean parse; a file with a parse error is reported and left
+byte-for-byte untouched. Every applied fix is re-parsed to confirm the result
+still parses before it is written. This is the gofmt/ruff model: a whitespace
+edit on parseable source is safe even when the file has a type error.
+
+The minority of type-dependent rules run only under #~"--full", which
+additionally builds the project graph and typechecks (whole-program, and so
+much slower). #~"--src DIR" and #~"--system DIR" locate the project for that
+pass; they default to #~"." and #~"lib/system".
+
+
+#--: Commands
+
+#ul:
+  [#*: #b:"lint" #~"<files...>" — report diagnostics for each file. Exits
+    non-zero if any diagnostic is found. #~"--full" additionally runs the
+    typecheck-tier rules.]
+  [#*: #b:"fmt" #~"<files...>" — apply the safe fixes and write each file in
+    place. A file with a parse error is refused and left unchanged.]
+  [#*: #b:"explain" #~"<code>" — print the registry entry for a rule code, for
+    example #~"zl explain L003".]
+
+#~"zc lint" and #~"zc fmt" are thin shims that exec #~"bin/zl" with the same
+arguments, so the two tools never diverge.
+
+#--: fmt flags
+
+#ul:
+  [#*: #~"--check" — exit non-zero and name each file that would change; write
+    nothing. For CI.]
+  [#*: #~"--stdout" — write the formatted result to stdout instead of in place
+    (a lossless, byte-exact filter).]
+  [#*: #~"--diff" — print a unified diff of the changes; write nothing.]
+  [#*: #~"--full" — also apply the typecheck-tier fixes (needs #~"--src" /
+    #~"--system").]
+
+#~"--check", #~"--stdout" and #~"--diff" are mutually exclusive.
+
+
+#--: Rules
+
+Lint codes are #~"L###"; whitespace/layout codes are #~"W###". Each rule
+declares a #_*"tier" — #b:"token" and #b:"parse" run on the fast path;
+#b:"typecheck" runs only under #~"--full".
+
+#ul:
+  [#*: #b:"L001" #_*"empty-else" — an #~"else { }" clause with an empty body.
+    (parse)]
+  [#*: #b:"L002" #_*"empty-then" — a single-condition clause with an empty
+    #~"then { }" body. (parse)]
+  [#*: #b:"L003" #_*"elide-name" — a built-in template's first argument names
+    its primary parameter (redundant). (parse)]
+  [#*: #b:"L004" #_*"for-while" — a redundant #~"for" before a bare #~"while"
+    condition. (token)]
+  [#*: #b:"L005" #_*"redundant-suffix" — a numeric literal suffix that matches
+    the type its context already pins (e.g. #~"return 0.u64" in a #~"u64"
+    function). The fix removes the suffix. (typecheck, #~"--full" only)]
+  [#*: #b:"W001" #_*"trailing-whitespace" — trailing whitespace on a line.
+    (token)]
+  [#*: #b:"W002" #_*"final-newline" — a non-empty file that does not end with a
+    newline. (token)]
+  [#*: #b:"W003" #_*"colon-spacing" — a #~":" followed by a value on the same
+    line must have exactly one space after it; missing or extra spaces (and
+    column alignment, which the styleguide forbids) are normalized. The
+    #~":label" shorthand and a colon at end of line are left alone. (token)]
+  [#*: #b:"W004" #_*"blank-lines" — three or more consecutive blank lines
+    collapse to one. (token)]
+
+
+#--: Formatter semantics
+
+#~"zl fmt" is an #_+"autofixer, not a canonicalizer". It makes targeted
+byte-range edits; every untouched byte — comments, the author's layout — is
+preserved verbatim. There is no line reflow or wrapping. Two valid files that
+trip no rule may legitimately differ.
+
+The result is #_*"idempotent": running #~"zl fmt" twice produces no further
+change. Formatting is #_*"semantics-preserving": the whole compiler formats to
+a byte-identical emitted C.
+
+#--: Why not operator or comma spacing
+
+Zerolang has #_+"no comma token" — a comma is a lexical error, so there is
+nothing for a comma rule to act on. The numeric and comparison operators are
+#_+"ordinary identifiers": #~"a+b" lexes as the single identifier #~"a+b", not
+as #~"a" #~"+" #~"b". Inserting spaces there would change the token stream and
+so the meaning, which a formatter must never do. Only the colon — a genuine
+structural token — is safely spaced (#b:"W003"). See #~"docs/styleguide.pdoc"
+for the identifier-spacing rule this follows.
+
+
+#--: Integration
+
+#ul:
+  [#*: #~"make check" — #~"bin/zl lint" over the tool + compiler sources and
+    the relocated front-end (the fast tier).]
+  [#*: #~"make style-lint" — adds #~"bin/zl lint --full" (the suffix rule) and
+    #~"bin/zl fmt --check".]
+
+The rule catalogue lives in #~"src/zrule.z"; the analysis facade and rule
+implementations in #~"src/zsource.z"; the diagnostic renderer in
+#~"src/zdiag.z"; the edit applier in #~"src/zfix.z"; the CLI in #~"src/zl.z".

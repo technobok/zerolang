@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>zl &#x2014; Zerolang Linter &amp; Formatter</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-07-08">
+<meta name="version" content="0.1.0">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="zl-zerolang-linter-formatter-reference"><a href="#zl-zerolang-linter-formatter-reference">zl &#x2014; Zerolang Linter &amp; Formatter Reference</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#zl-zerolang-linter-formatter-reference">zl &#x2014; Zerolang Linter &amp; Formatter Reference</a>
+<ul>
+<li><a href="#synopsis">Synopsis</a>
+</li>
+<li><a href="#description">Description</a>
+</li>
+<li><a href="#the-validity-guarantee">The validity guarantee</a>
+</li>
+<li><a href="#commands">Commands</a>
+</li>
+<li><a href="#fmt-flags">fmt flags</a>
+</li>
+<li><a href="#rules">Rules</a>
+</li>
+<li><a href="#formatter-semantics">Formatter semantics</a>
+</li>
+<li><a href="#why-not-operator-or-comma-spacing">Why not operator or comma spacing</a>
+</li>
+<li><a href="#integration">Integration</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="synopsis"><a href="#synopsis">1. Synopsis</a></h2>
+<pre><code>zl lint    [--full] [--src DIR] [--system DIR] &lt;files...&gt;
+zl fmt     [--check | --stdout | --diff] [--full] &lt;files...&gt;
+zl explain &lt;code&gt;</code></pre>
+<h2 id="description"><a href="#description">2. Description</a></h2>
+<p><code>zl</code> is the zerolang linter and formatter &#x2014; a ruff-inspired tool, and a
+separate binary from <code>zc</code> so the compiler stays lean. It builds on the same
+front-end the compiler uses (<code>lib/system/zlexer.z</code>, <code>zparser.z</code>,
+<code>zast.z</code>), exposed publicly as the <code>tokenize</code> and <code>ast</code> preview APIs.</p>
+<p>One engine drives both verbs. Rules emit <em><strong>diagnostics</strong></em>; a diagnostic may
+carry a <em><strong>fix</strong></em> &#x2014; a set of byte-range edits over the original source.
+<strong>lint</strong> reports; <strong>fmt</strong> applies the <em><strong>safe</strong></em> fixes. Because both share one
+rule registry, the linter and formatter can never drift.</p>
+<h2 id="the-validity-guarantee"><a href="#the-validity-guarantee">3. The validity guarantee</a></h2>
+<p><code>zl</code> edits only code that parses. Both verbs default to lex + parse of a
+single file &#x2014; no typecheck &#x2014; so they are fast enough to run on save. The gate
+is a clean parse; a file with a parse error is reported and left
+byte-for-byte untouched. Every applied fix is re-parsed to confirm the result
+still parses before it is written. This is the gofmt/ruff model: a whitespace
+edit on parseable source is safe even when the file has a type error.</p>
+<p>The minority of type-dependent rules run only under <code>--full</code>, which
+additionally builds the project graph and typechecks (whole-program, and so
+much slower). <code>--src DIR</code> and <code>--system DIR</code> locate the project for that
+pass; they default to <code>.</code> and <code>lib/system</code>.</p>
+<h2 id="commands"><a href="#commands">4. Commands</a></h2>
+<ul>
+<li><strong>lint</strong> <code>&lt;files...&gt;</code> &#x2014; report diagnostics for each file. Exits
+non-zero if any diagnostic is found. <code>--full</code> additionally runs the
+typecheck-tier rules.</li>
+<li><strong>fmt</strong> <code>&lt;files...&gt;</code> &#x2014; apply the safe fixes and write each file in
+place. A file with a parse error is refused and left unchanged.</li>
+<li><strong>explain</strong> <code>&lt;code&gt;</code> &#x2014; print the registry entry for a rule code, for
+example <code>zl explain L003</code>.</li>
+</ul>
+<p><code>zc lint</code> and <code>zc fmt</code> are thin shims that exec <code>bin/zl</code> with the same
+arguments, so the two tools never diverge.</p>
+<h2 id="fmt-flags"><a href="#fmt-flags">5. fmt flags</a></h2>
+<ul>
+<li><code>--check</code> &#x2014; exit non-zero and name each file that would change; write
+nothing. For CI.</li>
+<li><code>--stdout</code> &#x2014; write the formatted result to stdout instead of in place
+(a lossless, byte-exact filter).</li>
+<li><code>--diff</code> &#x2014; print a unified diff of the changes; write nothing.</li>
+<li><code>--full</code> &#x2014; also apply the typecheck-tier fixes (needs <code>--src</code> /
+<code>--system</code>).</li>
+</ul>
+<p><code>--check</code>, <code>--stdout</code> and <code>--diff</code> are mutually exclusive.</p>
+<h2 id="rules"><a href="#rules">6. Rules</a></h2>
+<p>Lint codes are <code>L###</code>; whitespace/layout codes are <code>W###</code>. Each rule
+declares a <em><strong>tier</strong></em> &#x2014; <strong>token</strong> and <strong>parse</strong> run on the fast path;
+<strong>typecheck</strong> runs only under <code>--full</code>.</p>
+<ul>
+<li><strong>L001</strong> <em><strong>empty-else</strong></em> &#x2014; an <code>else { }</code> clause with an empty body.
+(parse)</li>
+<li><strong>L002</strong> <em><strong>empty-then</strong></em> &#x2014; a single-condition clause with an empty
+<code>then { }</code> body. (parse)</li>
+<li><strong>L003</strong> <em><strong>elide-name</strong></em> &#x2014; a built-in template's first argument names
+its primary parameter (redundant). (parse)</li>
+<li><strong>L004</strong> <em><strong>for-while</strong></em> &#x2014; a redundant <code>for</code> before a bare <code>while</code>
+condition. (token)</li>
+<li><strong>L005</strong> <em><strong>redundant-suffix</strong></em> &#x2014; a numeric literal suffix that matches
+the type its context already pins (e.g. <code>return 0.u64</code> in a <code>u64</code>
+function). The fix removes the suffix. (typecheck, <code>--full</code> only)</li>
+<li><strong>W001</strong> <em><strong>trailing-whitespace</strong></em> &#x2014; trailing whitespace on a line.
+(token)</li>
+<li><strong>W002</strong> <em><strong>final-newline</strong></em> &#x2014; a non-empty file that does not end with a
+newline. (token)</li>
+<li><strong>W003</strong> <em><strong>colon-spacing</strong></em> &#x2014; a <code>:</code> followed by a value on the same
+line must have exactly one space after it; missing or extra spaces (and
+column alignment, which the styleguide forbids) are normalized. The
+<code>:label</code> shorthand and a colon at end of line are left alone. (token)</li>
+<li><strong>W004</strong> <em><strong>blank-lines</strong></em> &#x2014; three or more consecutive blank lines
+collapse to one. (token)</li>
+</ul>
+<h2 id="formatter-semantics"><a href="#formatter-semantics">7. Formatter semantics</a></h2>
+<p><code>zl fmt</code> is an autofixer, not a canonicalizer. It makes targeted
+byte-range edits; every untouched byte &#x2014; comments, the author's layout &#x2014; is
+preserved verbatim. There is no line reflow or wrapping. Two valid files that
+trip no rule may legitimately differ.</p>
+<p>The result is <em><strong>idempotent</strong></em>: running <code>zl fmt</code> twice produces no further
+change. Formatting is <em><strong>semantics-preserving</strong></em>: the whole compiler formats to
+a byte-identical emitted C.</p>
+<h2 id="why-not-operator-or-comma-spacing"><a href="#why-not-operator-or-comma-spacing">8. Why not operator or comma spacing</a></h2>
+<p>Zerolang has no comma token &#x2014; a comma is a lexical error, so there is
+nothing for a comma rule to act on. The numeric and comparison operators are
+ordinary identifiers: <code>a+b</code> lexes as the single identifier <code>a+b</code>, not
+as <code>a</code> <code>+</code> <code>b</code>. Inserting spaces there would change the token stream and
+so the meaning, which a formatter must never do. Only the colon &#x2014; a genuine
+structural token &#x2014; is safely spaced (<strong>W003</strong>). See <code>docs/styleguide.pdoc</code>
+for the identifier-spacing rule this follows.</p>
+<h2 id="integration"><a href="#integration">9. Integration</a></h2>
+<ul>
+<li><code>make check</code> &#x2014; <code>bin/zl lint</code> over the tool + compiler sources and
+the relocated front-end (the fast tier).</li>
+<li><code>make style-lint</code> &#x2014; adds <code>bin/zl lint --full</code> (the suffix rule) and
+<code>bin/zl fmt --check</code>.</li>
+</ul>
+<p>The rule catalogue lives in <code>src/zrule.z</code>; the analysis facade and rule
+implementations in <code>src/zsource.z</code>; the diagnostic renderer in
+<code>src/zdiag.z</code>; the edit applier in <code>src/zfix.z</code>; the CLI in <code>src/zl.z</code>.</p>
+</main>
+</body>
+</html>

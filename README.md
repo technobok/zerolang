@@ -137,10 +137,10 @@ cc -std=c17 -o zc bootstrap/zc.c
 
 The gates are self-contained — they need only the compiler and a C toolchain
 (no Python, no shell). The test runner and linter are themselves zerolang
-programs (`src/ztestrunner.z`, `src/zlint.z`):
+programs (`src/ztestrunner.z`, `src/zl.z`):
 
 ```bash
-make check             # fast style lint (zc lint) over src/*.z
+make check             # fast style lint (zl) over src + front-end
 make test              # compile + run the example/corpus programs, check output
 make ci                # full gate: style-lint + corpus (--heavy) + seed bootstrap
 make test-bootstrap    # rebuild the compiler from the seed, check the fixpoint

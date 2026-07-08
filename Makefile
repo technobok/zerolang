@@ -21,19 +21,24 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: check test ci build clean style-lint style-lint-fast zc zl install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard
 
-# check -- the fast pre-commit gate: the parse/token style checks over src/*.z.
+# ZLSCOPE -- the files the zl gate lints/formats: the tool + compiler sources and the
+# relocated front-end. The stdlib proper (io/os/collections/system/cli/core) is not gated
+# (it carries pre-existing first-arg-elision labels that were never enforced).
+ZLSCOPE := src/*.z lib/system/zlexer.z lib/system/zparser.z lib/system/zast.z lib/system/zvfs.z lib/system/tokenize.z lib/system/ast.z
+
+# check -- the fast pre-commit gate: the parse/token/whitespace rules over the zl scope.
 check: style-lint-fast
 
-# Style ratchets over src/*.z, enforced by the self-hosted linter `zc lint`
-# (src/zlint.z). style-lint-fast is the parse/token-only set (empty-clause,
-# first-arg-elision, for-while); fast, runs in `check`. style-lint adds the
-# typecheck-based redundant-suffix check (slower; run pre-push). See
-# docs/styleguide.pdoc.
-style-lint-fast: bin/zc
-	bin/zc lint --src src --system lib/system --empty-only --check --check-elide --check-for-while
+# Style gate, enforced by the self-hosted `zl` linter/formatter (src/zl.z). style-lint-fast is
+# the fast tier (empty clauses, first-arg elision, for-while, trailing whitespace, final
+# newline, colon and blank-line spacing); it runs in `check`. style-lint adds the typecheck-
+# tier redundant-suffix rule and a formatter check (slower; run pre-push). See docs/zl.pdoc.
+style-lint-fast: bin/zl
+	bin/zl lint $(ZLSCOPE)
 
-style-lint: bin/zc
-	bin/zc lint --src src --system lib/system --check --check-elide --check-for-while
+style-lint: bin/zl
+	bin/zl lint --full --src src --system lib/system $(ZLSCOPE)
+	bin/zl fmt --check $(ZLSCOPE)
 
 # test -- build the compiler + the self-hosted test runner (src/ztestrunner.z),
 # then run the fast corpus gate (run/leak/error/dump/smoke/differential kinds,
@@ -96,8 +101,9 @@ zc: bin/zc
 
 # bin/zl -- the zerolang linter + formatter (src/zl.z), built on the shared
 # front-end via the compiler. A separate binary from zc so the compiler stays
-# lean; zl links the front-end + (later) typecheck, but never the emitter.
-bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard lib/system/*.z)
+# lean; zl links the front-end + typecheck (for --full's suffix rule), but never
+# the emitter.
+bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zl --src src --system lib/system --emit-c out/zl.c
 	$(CC) $(CFLAGS) -o bin/zl out/zl.c
