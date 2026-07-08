@@ -203,6 +203,10 @@ Analysis: class {
     lineStart: (List u64)
     diags: (List zdiag.Diagnostic)
     edits: (List zfix.Edit)
+    wrapWidth: u32
+    wrapSkip: u64
+    wrapFound: bool
+    wrapStart: u64
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
@@ -454,6 +458,99 @@ Analysis: class {
         }
     }
 
+    # tryWrapCall -- wrap mode (--line-length): if this over-long single-line call has >= 2 named
+    # args and starts at/after wrapSkip, emit the wrap edits (one arg per line at base+4; a `(` is
+    # added when the call is bare) and set wrapFound. Only the first such call per pass is wrapped;
+    # wrapSource's re-parse gate + fixpoint handle discards and the rest.
+    tryWrapCall: function {:this arguments: List Node line: u32 col: u32} is {
+        if line.u64 == this.wrapStart then {
+            return
+        }
+        ac: arguments.length
+        if ac < 2 then {
+            return
+        }
+        lidx: (line - 1).u64
+        if lidx >= this.lines.length then {
+            return
+        }
+        lnt: this.lines.get i: lidx
+        cw: codepointLen s: lnt.stringview
+        if cw <= this.wrapWidth.u64 then {
+            return
+        }
+        if (hasHash line: lnt.stringview) then {
+            return
+        }
+        cs: tokByteStart lineStart: this.lineStart srcLines: this.lines lineno: line colno: col
+        ok: true
+        with vit: arguments.iterate do for arg: vit loop {
+            match (
+                arg
+            ) case namedoperation then {
+                if arg.lineno != line then {
+                    ok = false
+                }
+                anm: optName o: arg.name
+                if anm.length == 0 then {
+                    ok = false
+                }
+            } else {
+                ok = false
+            }
+        }
+        if ok == false then {
+            return
+        }
+        base: leadingSpaces line: lnt.stringview
+        srcOwned: this.source.copy
+        srcv: srcOwned.stringview
+        bare: true
+        if cs > 0 then {
+            pb: srcv.byteAt i: (cs - 1)
+            match (
+                pb
+            ) case some then {
+                if pb == 40 then {
+                    bare = false
+                }
+            } case none then {
+            }
+        }
+        lsb: this.lineStart.get i: lidx
+        contentEnd: lsb + (rstripLen line: lnt.stringview)
+        ind4: nlIndent n: (base + 4)
+        ind0: nlIndent n: base
+        if bare then {
+            this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
+        }
+        with ait: arguments.iterate do for arg: ait loop {
+            match (
+                arg
+            ) case namedoperation then {
+                as9: tokByteStart lineStart: this.lineStart srcLines: this.lines lineno: arg.lineno colno: arg.colno
+                ap9: as9
+                match (
+                    arg.operation
+                ) case labelvalue then {
+                    ap9 = as9 - 1
+                } else {
+                }
+                ws9: wsRunStart src: srcv from: ap9
+                this.edits.append (zfix.Edit byteLo: ws9 byteHi: ap9 replacement: ind4.copy)
+            } else {
+            }
+        }
+        if bare then {
+            clo: "\{ind0})".string
+            this.edits.append (zfix.Edit byteLo: contentEnd byteHi: contentEnd replacement: clo)
+        } else {
+            this.edits.append (zfix.Edit byteLo: (contentEnd - 1) byteHi: (contentEnd - 1) replacement: ind0.copy)
+        }
+        this.wrapFound = true
+        this.wrapStart = line.u64
+    }
+
     # checkForWhile -- L004 token tier: a `for` immediately followed by `while`.
     # Re-tokenizes the source (parse-free; immune to strings and comments).
     checkForWhile: function {:this} is {
@@ -648,8 +745,12 @@ Analysis: class {
             this.walk n: n.parent
             this.walk n: n.child
         } case call then {
-            this.checkElide callable: n.callable arguments: n.arguments
-            this.checkCollapseName arguments: n.arguments
+            if this.wrapWidth > 0 then {
+                this.tryWrapCall arguments: n.arguments line: n.lineno col: n.colno
+            } else {
+                this.checkElide callable: n.callable arguments: n.arguments
+                this.checkCollapseName arguments: n.arguments
+            }
             this.walk n: n.callable
             ait: n.arguments.iterate
             for arg: ait loop {
@@ -1730,13 +1831,13 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
     ) case ok then {
         root: ast.parseSource source: rd.copy
         lines: linesOf src: rd.stringview
-        a: (Analysis path: path.copy source: rd.take :lines lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: rd.take :lines lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit) wrapWidth: 0 wrapSkip: 0 wrapFound: false wrapStart: 0)
         a.runFastChecks n: root
         a.checkLineLength width: lineLength
         a.sortEditsInPlace
         return a
     } case err then {
-        a: (Analysis path: path.copy source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit) wrapWidth: 0 wrapSkip: 0 wrapFound: false wrapStart: 0)
         d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
         a.diags.append d
         return a
@@ -1753,7 +1854,7 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
     ) case ok then {
         root: ast.parseSource source: rd.copy
         lines: linesOf src: rd.stringview
-        a: (Analysis path: path.copy source: rd.take :lines lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: rd.take :lines lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit) wrapWidth: 0 wrapSkip: 0 wrapFound: false wrapStart: 0)
         a.runFastChecks n: root
         un: unitNameOf path: a.path.stringview
         a.checkSuffix :srcdir :systemdir uname: un.stringview
@@ -1761,7 +1862,7 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
         a.sortEditsInPlace
         return a
     } case err then {
-        a: (Analysis path: path.copy source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit) wrapWidth: 0 wrapSkip: 0 wrapFound: false wrapStart: 0)
         d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
         a.diags.append d
         return a
@@ -1805,8 +1906,136 @@ codepointLen: function {s: StringView} out u64 is {
 # sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`
 # uses it to confirm an edited buffer is still valid before writing it out.
 sourceParses: function {source: String.take} out bool is {
-    a: (Analysis path: "".string source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+    a: (Analysis path: "".string source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit) wrapWidth: 0 wrapSkip: 0 wrapFound: false wrapStart: 0)
     root: ast.parseSource :source
     a.walk n: root
     return a.parseErrorCount == 0
+}
+
+# nlIndent -- a newline followed by `n` spaces (the wrap indent unit).
+nlIndent: function {n: u64} out String is {
+    s: "\n".string
+    i: 0.u64
+    for i < n loop {
+        s.appendByte b: 32
+        i = i + 1
+    }
+    return s
+}
+
+# leadingSpaces -- count of leading space bytes on a line.
+leadingSpaces: function {line: StringView} out u64 is {
+    n: 0.u64
+    for n < line.length loop {
+        bo: line.byteAt i: n
+        sp: false
+        match (
+            bo
+        ) case some then {
+            if bo == 32 then {
+                sp = true
+            }
+        } case none then {
+        }
+        if sp == false then {
+            return n
+        }
+        n = n + 1
+    }
+    return n
+}
+
+# rstripLen -- byte length of a line excluding trailing spaces and tabs.
+rstripLen: function {line: StringView} out u64 is {
+    n: line.length
+    for n > 0 loop {
+        bo: line.byteAt i: (n - 1)
+        ws: false
+        match (
+            bo
+        ) case some then {
+            if bo == 32 then {
+                ws = true
+            }
+            if bo == 9 then {
+                ws = true
+            }
+        } case none then {
+        }
+        if ws == false then {
+            return n
+        }
+        n = n - 1
+    }
+    return 0
+}
+
+# wsRunStart -- start byte of the whitespace run ending just before `from`.
+wsRunStart: function {src: StringView from: u64} out u64 is {
+    n: from
+    for n > 0 loop {
+        bo: src.byteAt i: (n - 1)
+        ws: false
+        match (
+            bo
+        ) case some then {
+            if bo == 32 then {
+                ws = true
+            }
+            if bo == 9 then {
+                ws = true
+            }
+        } case none then {
+        }
+        if ws == false then {
+            return n
+        }
+        n = n - 1
+    }
+    return n
+}
+
+# hasHash -- true if the line contains a `#` (a comment; wrapping skips such lines).
+hasHash: function {line: StringView} out bool is {
+    n: 0.u64
+    for n < line.length loop {
+        bo: line.byteAt i: n
+        match (
+            bo
+        ) case some then {
+            if bo == 35 then {
+                return true
+            }
+        } case none then {
+        }
+        n = n + 1
+    }
+    return false
+}
+
+# wrapSource -- fixpoint auto-wrap of over-long named-arg calls under --line-length. Each pass wraps
+# the first over-long single-line call (adding parens when bare), re-parses, and discards a wrap that
+# would not parse (skipping past it); loops until no wrappable call remains.
+wrapSource: function {source: StringView lineLength: u32} out String is {
+    cur: source.string
+    guard: 0.u64
+    for guard < 40 loop {
+        guard = guard + 1
+        rd: cur.copy
+        a: (Analysis path: "".string source: rd.copy lines: (linesOf src: rd.stringview) lineStart: (lineStartIndex src: rd.stringview) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit) wrapWidth: lineLength wrapSkip: 0 wrapFound: false wrapStart: 0)
+        root: ast.parseSource source: rd.copy
+        a.walk n: root
+        if a.wrapFound == false then {
+            break
+        }
+        se: sortEdits edits: a.edits
+        cand: zfix.applyEdits source: cur.stringview edits: se
+        cok: sourceParses source: cand.copy
+        if cok then {
+            cur = cand
+        } else {
+            break
+        }
+    }
+    return cur
 }
