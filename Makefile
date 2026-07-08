@@ -95,13 +95,13 @@ bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
 zc: bin/zc
 
 # Standalone dump binaries (the Python-free golden regeneration path; the
-# dumper logic lives in src/zlexer.z and src/zparser.z).
-out/zlexer: bin/zc $(wildcard src/zlexer.z) $(wildcard lib/system/*.z)
+# dumper logic lives in lib/system/zlexer.z and lib/system/zparser.z).
+out/zlexer: bin/zc $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c
 
-out/zparser: bin/zc $(wildcard src/zparser.z) $(wildcard src/zlexer.z) $(wildcard src/zast.z) $(wildcard src/zvfs.z) $(wildcard lib/system/*.z)
+out/zparser: bin/zc $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser --src src --system lib/system --emit-c $(BUILDDIR)/zparser.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c
