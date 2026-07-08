@@ -1,0 +1,45 @@
+# zfix -- text edits for the formatter. An Edit replaces source[byteLo, byteHi)
+# with `replacement`; a diagnostic may carry a list of them as its fix. The
+# applier splices edits into the ORIGINAL source in one left-to-right pass, so
+# every untouched byte -- comments, the user's layout -- is preserved verbatim.
+# Edits must be sorted by byteLo and non-overlapping; out-of-order or overlapping
+# edits are skipped defensively. Callers re-parse the result to confirm it still
+# parses before writing it out.
+
+Edit: class {
+    byteLo:      u64
+    byteHi:      u64
+    replacement: String
+}
+
+# appendRange -- append source[lo, hi) to buf, byte by byte (no O(1) sub view
+# exists on StringView yet; a native could replace this loop later).
+appendRange: function {buf: String src: StringView lo: u64 hi: u64} is {
+    i: lo
+    for i < hi loop {
+        bo: src.byteAt i: i
+        match (
+            bo
+        ) case some then {
+            buf.appendByte b: bo
+        } case none then {
+        }
+        i = i + 1
+    }
+}
+
+# applyEdits -- splice `edits` into `source`, returning the new text.
+applyEdits: function {source: StringView edits: (List Edit)} out String is {
+    buf: "".string
+    prev: 0.u64
+    n: source.length
+    with it: edits.iterate do for e: it loop {
+        if e.byteLo >= prev when (e.byteHi <= n) when (e.byteLo <= e.byteHi) then {
+            appendRange buf: buf src: source lo: prev hi: e.byteLo
+            buf.append e.replacement.stringview
+            prev = e.byteHi
+        }
+    }
+    appendRange buf: buf src: source lo: prev hi: n
+    return buf
+}
