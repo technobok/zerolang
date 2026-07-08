@@ -1770,6 +1770,109 @@ emitDiffHunk: function {buf: String source: StringView edits: (List zfix.Edit).b
     return (newDelta + newCount.i64) - oldCount.i64
 }
 
+# byteAtLine -- byte offset of line `k`'s start, or `srcLen` when `k` is one past the last line.
+byteAtLine: function {starts: (List u64).borrow srcLen: u64 k: u64} out u64 is {
+    if k >= starts.length then {
+        return srcLen
+    }
+    return (starts.get i: k)
+}
+
+# lineDiffEdits -- edits transforming `old` into `new`, one per changed line-block, shaped for
+# renderDiff. fmt + wrap never reorder lines, so an in-order two-pointer with a bounded diagonal-band
+# resync finds correct (within the window, minimal) blocks; applyEdits(old, result) == new.
+lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) is {
+    oldLines: linesOf src: old
+    newLines: linesOf src: new
+    oldStarts: lineStartIndex src: old
+    newStarts: lineStartIndex src: new
+    m: oldLines.length
+    n: newLines.length
+    oldLen: old.length
+    newLen: new.length
+    edits: (List zfix.Edit)
+    i: 0.u64
+    p: 0.u64
+    for true loop {
+        if i >= m when (p >= n) then {
+            break
+        }
+        matched: false
+        if i < m when (p < n) then {
+            oi: oldLines.get :i
+            pj9: newLines.get i: p
+            if oi.stringview == pj9.stringview then {
+                matched = true
+            }
+        }
+        if matched then {
+            i = i + 1
+            p = p + 1
+        } else {
+            i2: m
+            p2: n
+            found: false
+            t: 1.u64
+            for t <= 256 loop {
+                if found then {
+                    break
+                }
+                a: 0.u64
+                for a <= t loop {
+                    if found then {
+                        break
+                    }
+                    b: t - a
+                    ii: i + a
+                    pp: p + b
+                    if ii < m when (pp < n) then {
+                        oa: oldLines.get i: ii
+                        pb9: newLines.get i: pp
+                        if oa.stringview == pb9.stringview then {
+                            i2 = ii
+                            p2 = pp
+                            found = true
+                        }
+                    }
+                    a = a + 1
+                }
+                t = t + 1
+            }
+            if found == false then {
+                we: i + 256
+                if we > m then {
+                    we = m
+                }
+                wf: p + 256
+                if wf > n then {
+                    wf = n
+                }
+                i2 = we
+                p2 = wf
+            }
+            lo: byteAtLine starts: oldStarts srcLen: oldLen k: i
+            hi: byteAtLine starts: oldStarts srcLen: oldLen k: i2
+            nlo: byteAtLine starts: newStarts srcLen: newLen k: p
+            nhi: byteAtLine starts: newStarts srcLen: newLen k: p2
+            repl: "".string
+            zfix.appendRange buf: repl src: new lo: nlo hi: nhi
+            doEmit: false
+            if hi > lo then {
+                doEmit = true
+            }
+            if nhi > nlo then {
+                doEmit = true
+            }
+            if doEmit then {
+                edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
+            }
+            i = i2
+            p = p2
+        }
+    }
+    return edits
+}
+
 # renderDiff -- a git-style unified diff (zero context) of `source` -> the formatted result,
 # driven by `edits` (assumed sorted by byteLo). Adjacent edits touching the same or
 # neighbouring lines share a hunk. Empty when there are no edits.
