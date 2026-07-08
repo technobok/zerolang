@@ -21,24 +21,29 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: check test ci build clean style-lint style-lint-fast zc zl install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard
 
-# ZLSCOPE -- the files the zl gate lints/formats: the tool + compiler sources and the
-# relocated front-end. The stdlib proper (io/os/collections/system/cli/core) is not gated
-# (it carries pre-existing first-arg-elision labels that were never enforced).
+# ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
+# front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
+# pre-existing first-arg-elision labels that were never enforced).
 ZLSCOPE := src/*.z lib/system/zlexer.z lib/system/zparser.z lib/system/zast.z lib/system/zvfs.z lib/system/tokenize.z lib/system/ast.z
+# FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
+# elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.
+FMTSCOPE := src/*.z lib/system/*.z examples/*.z
 
-# check -- the fast pre-commit gate: the parse/token/whitespace rules over the zl scope.
+# check -- the fast pre-commit gate: the parse/token/whitespace rules, plus a repo-wide
+# formatter check.
 check: style-lint-fast
 
 # Style gate, enforced by the self-hosted `zl` linter/formatter (src/zl.z). style-lint-fast is
 # the fast tier (empty clauses, first-arg elision, for-while, trailing whitespace, final
-# newline, colon and blank-line spacing); it runs in `check`. style-lint adds the typecheck-
-# tier redundant-suffix rule and a formatter check (slower; run pre-push). See docs/zl.pdoc.
+# newline, colon and blank-line spacing) plus `zl fmt --check`; it runs in `check`. style-lint
+# adds the typecheck-tier redundant-suffix rule (slower; run pre-push). See docs/zl.pdoc.
 style-lint-fast: bin/zl
 	bin/zl lint $(ZLSCOPE)
+	bin/zl fmt --check $(FMTSCOPE)
 
 style-lint: bin/zl
 	bin/zl lint --full --src src --system lib/system $(ZLSCOPE)
-	bin/zl fmt --check $(ZLSCOPE)
+	bin/zl fmt --check $(FMTSCOPE)
 
 # test -- build the compiler + the self-hosted test runner (src/ztestrunner.z),
 # then run the fast corpus gate (run/leak/error/dump/smoke/differential kinds,
