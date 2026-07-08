@@ -54,8 +54,8 @@ pathsEqual: function {a: List String b: List String} out bool is {
     n: a.length
     i: 0.u64
     for i < n loop {
-        av: a.get i: i
-        bv: b.get i: i
+        av: a.get :i
+        bv: b.get :i
         if av.stringview != bv.stringview then {
             return false
         }
@@ -73,8 +73,8 @@ isPrefix: function {p: List String whole: List String} out bool is {
     }
     i: 0.u64
     for i < pn loop {
-        pv: p.get i: i
-        wv: whole.get i: i
+        pv: p.get :i
+        wv: whole.get :i
         if pv.stringview != wv.stringview then {
             return false
         }
@@ -94,8 +94,8 @@ pathsOverlap: function {a: List String b: List String} out bool is {
     }
     i: 0.u64
     for i < n loop {
-        av: a.get i: i
-        bv: b.get i: i
+        av: a.get :i
+        bv: b.get :i
         if av.stringview != bv.stringview then {
             return false
         }
@@ -263,7 +263,7 @@ ZSymbolTable: class {
                 parentId = (optionval.some prev.scopeId)
             }
             seq: this.seqCounter
-            this.scopeLog.append (ZScopeLogRow scopeId: sid parentId: parentId kind: tkind name: top.name.copy openedAtSeq: seq)
+            this.scopeLog.append (ZScopeLogRow scopeId: sid :parentId kind: tkind name: top.name.copy openedAtSeq: seq)
             this.seqCounter = this.seqCounter + 1
         }
     }
@@ -455,7 +455,7 @@ ZSymbolTable: class {
     # --- entry insertion ---
 
     define: function {:this name: StringView ztypeId: u64} is {
-        e: this.reg.newEntry name: name ztypeId: ztypeId isDefinition: true
+        e: this.reg.newEntry :name :ztypeId isDefinition: true
         this.entries.append e
     }
 
@@ -475,7 +475,7 @@ ZSymbolTable: class {
         this.typing.variableBorrowOrigin.set key: var.variableId value: bo
         so: optStrOrEmpty o: var.synthOrigin
         this.typing.variableSynthOrigin.set key: var.variableId value: so
-        e: this.reg.newEntry name: name ztypeId: var.ztypeId isDefinition: true
+        e: this.reg.newEntry :name ztypeId: var.ztypeId isDefinition: true
         e.varId = (optionval.some var.variableId)
         this.entries.append e
     }
@@ -564,13 +564,13 @@ ZSymbolTable: class {
     # --- invalidation (take) ---
 
     invalidate: function {:this name: StringView loc: optionval ztypes.zsrcpos} out bool is {
-        idxOpt: this.effectiveIndex name: name
+        idxOpt: this.effectiveIndex :name
         match (
             idxOpt
         ) case some then {
             e: this.entries.get i: idxOpt
             zt: e.ztypeId
-            te: this.reg.newEntry name: name ztypeId: zt isDefinition: false
+            te: this.reg.newEntry :name ztypeId: zt isDefinition: false
             te.isTaken = true
             te.takenAt = loc
             this.entries.append te
@@ -646,7 +646,7 @@ ZSymbolTable: class {
 
     # Remove the innermost taken record for `name` (match/case restore).
     clearTaken: function {:this name: StringView} is {
-        kOpt: this.takenIndex name: name
+        kOpt: this.takenIndex :name
         match (
             kOpt
         ) case some then {
@@ -678,7 +678,7 @@ ZSymbolTable: class {
     }
 
     setTakenLocation: function {:this name: StringView loc: ztypes.zsrcpos} is {
-        kOpt: this.takenIndex name: name
+        kOpt: this.takenIndex :name
         match (
             kOpt
         ) case some then {
@@ -950,7 +950,7 @@ ZSymbolTable: class {
     # union; only the subtype name is recorded.
     narrow: function {:this name: StringView toTypeId: u64 subtypeName: StringView shadow: bool} is {
         originalTypeId: toTypeId
-        idxOpt: this.effectiveIndex name: name
+        idxOpt: this.effectiveIndex :name
         match (
             idxOpt
         ) case some then {
@@ -998,7 +998,7 @@ ZSymbolTable: class {
             origOpt = (optionval.some oc)
         }
 
-        e: this.reg.newEntry name: name ztypeId: entryZtype isDefinition: false
+        e: this.reg.newEntry :name ztypeId: entryZtype isDefinition: false
         e.narrowedSubtype = nsName
         e.narrowedSubtypeId = nsId
         e.originalZtypeId = origOpt
@@ -1039,7 +1039,7 @@ ZSymbolTable: class {
         }
 
         newExcl: (Set String)
-        this.collectExcluded name: name into: newExcl
+        this.collectExcluded :name into: newExcl
         newExcl.add item: subtypeName.string
 
         remainIdx: (List u64)
@@ -1069,7 +1069,7 @@ ZSymbolTable: class {
                 cid: this.typing.childIdFor parentTypeId: fullTypeId name: narrowedSub.stringview
                 nsId = (optionval.some cid)
             }
-            e: this.reg.newEntry name: name ztypeId: fullTypeId isDefinition: false
+            e: this.reg.newEntry :name ztypeId: fullTypeId isDefinition: false
             e.narrowedSubtype = narrowedSub.copy
             e.narrowedSubtypeId = nsId
             eit: newExcl.iterate
@@ -1084,7 +1084,7 @@ ZSymbolTable: class {
 
     # Copy the current exclusion set for `name` into `into`.
     collectExcluded: function {:this name: StringView into: Set String} is {
-        idxOpt: this.effectiveIndex name: name
+        idxOpt: this.effectiveIndex :name
         match (
             idxOpt
         ) case some then {
@@ -1107,7 +1107,7 @@ ZSymbolTable: class {
                 if e.name.stringview == name then {
                     if e.isDefinition then {
                         zt: e.ztypeId
-                        re: this.reg.newEntry name: name ztypeId: zt isDefinition: false
+                        re: this.reg.newEntry :name ztypeId: zt isDefinition: false
                         this.entries.append re
                         done = true
                     }
@@ -1119,13 +1119,13 @@ ZSymbolTable: class {
 
     isExcluded: function {:this name: StringView subtypeName: StringView} out bool is {
         tmp: (Set String)
-        this.collectExcluded name: name into: tmp
+        this.collectExcluded :name into: tmp
         q: subtypeName.string
         return (tmp.has item: q)
     }
 
     getSubtypeName: function {:this name: StringView} out String is {
-        idxOpt: this.effectiveIndex name: name
+        idxOpt: this.effectiveIndex :name
         match (
             idxOpt
         ) case some then {
@@ -1256,8 +1256,8 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         entryDump: (List ZEntryDumpRow)
         unreachableDump: (Set u64)
         seqCounter: 0
-        reg: reg
-        typing: typing)
+        :reg
+        :typing)
 }
 
 # --- smoke harness ---
@@ -1277,7 +1277,7 @@ main: function is {
     ty.setChild parentTypeId: tResult childName: "err" childTypeId: tErr
     ty.setChild parentTypeId: tResult childName: "none" childTypeId: tNone
 
-    st: newSymbolTable reg: reg typing: ty
+    st: newSymbolTable :reg typing: ty
 
     print "=== scopes ==="
     s0: st.push name: "func"
@@ -1291,12 +1291,12 @@ main: function is {
     st.define name: "MyType" ztypeId: tResult
 
     print "=== lookup ==="
-    smokeLookup st: st name: "x"
-    smokeLookup st: st name: "y"
-    smokeLookup st: st name: "MyType"
-    smokeLookup st: st name: "z"
-    smokeVarId st: st name: "x"
-    smokeVarId st: st name: "MyType"
+    smokeLookup :st name: "x"
+    smokeLookup :st name: "y"
+    smokeLookup :st name: "MyType"
+    smokeLookup :st name: "z"
+    smokeVarId :st name: "x"
+    smokeVarId :st name: "MyType"
 
     print "=== live owned vars ==="
     live: st.getLiveOwnedVars
@@ -1343,9 +1343,9 @@ main: function is {
 
     print "=== invalidate ==="
     loc: (optionval.some (ztypes.zsrcpos fsno: 0 lineno: 12 colno: 4))
-    inv: st.invalidate name: "y" loc: loc
+    inv: st.invalidate name: "y" :loc
     print "invalidate y -> \{boolText inv}"
-    smokeLookup st: st name: "y"
+    smokeLookup :st name: "y"
     tl: st.getTakenLocation name: "y"
     match (
         tl
@@ -1365,17 +1365,17 @@ main: function is {
     }
     st.clearTaken name: "y"
     print "after clearTaken:"
-    smokeLookup st: st name: "y"
+    smokeLookup :st name: "y"
 
     print "=== narrowing ==="
     vr: st.reg.newVariable ztypeId: tResult ownership: ztypes.zownership.OWNED
     st.defineVar name: "r" var: vr
     st.narrow name: "r" toTypeId: tResult subtypeName: "ok" shadow: true
-    smokeLookup st: st name: "r"
+    smokeLookup :st name: "r"
     print "subtype r -> \{st.getSubtypeName name: "r"}"
     st.resetNarrowing name: "r"
     print "after reset subtype r -> \{st.getSubtypeName name: "r"}"
-    smokeLookup st: st name: "r"
+    smokeLookup :st name: "r"
 
     print "=== exclude ==="
     st.exclude name: "r" subtypeName: "ok" fullTypeId: tResult
@@ -1390,7 +1390,7 @@ main: function is {
 
     print "=== all names ==="
     names: st.allNames
-    dumpNames names: names
+    dumpNames :names
 
     print "=== scope log + pop ==="
     s1: st.push name: "inner"
@@ -1399,7 +1399,7 @@ main: function is {
     print "after pop depth=\{st.depth}"
     st.pop
     print "after pop depth=\{st.depth}"
-    dumpScopeLog st: st
+    dumpScopeLog :st
 }
 
 smokeLockState: function {o: optionval ztypes.zlockstate} out String is {
@@ -1413,12 +1413,12 @@ smokeLockState: function {o: optionval ztypes.zlockstate} out String is {
 }
 
 smokeLookup: function {st: ZSymbolTable name: StringView} is {
-    r: st.lookup name: name
+    r: st.lookup :name
     print "lookup \{name} -> \{optU64Text r}"
 }
 
 smokeVarId: function {st: ZSymbolTable name: StringView} is {
-    r: st.lookupVarId name: name
+    r: st.lookupVarId :name
     print "varId \{name} -> \{optU64Text r}"
 }
 

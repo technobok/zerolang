@@ -254,7 +254,7 @@ StringProvider: class {
             childpath: "\{parent_node.path}/\{name}".string
             empty: "".string
             newid: this.appendNode fpath: childpath.take k: nodekind.notfound c: empty.take
-            this.addChild parentid: parent name: name childid: newid.u32
+            this.addChild parentid: parent :name childid: newid.u32
             return newid
         }
     }
@@ -370,7 +370,7 @@ FSProvider: class {
 
     walk: function {:this name: StringView parent: u32} out u32 is {
         pn: this.pathtable.get i: parent.u64
-        rel: joinPath parent: pn.path.stringview name: name
+        rel: joinPath parent: pn.path.stringview :name
         # Cache lookup first; repeat walks short-circuit here.
         cached: this.pathcache.get key: rel.copy
         match (
@@ -400,7 +400,7 @@ FSProvider: class {
                     k = nodekind.notfound
                 }
             } case err then {}
-            newid: this.appendPath fpath: rel.copy k: k
+            newid: this.appendPath fpath: rel.copy :k
             this.pathcache.set key: rel.take value: newid.u32
             return newid
         }
@@ -562,11 +562,11 @@ ZVfs: class {
         # entrytable on a cache miss).
         mi: this._extractMount dentryid: parent
         if mi.is_mount then {
-            r1: this.walk parent: mi.first name: name
+            r1: this.walk parent: mi.first :name
             if mi.has_second then {
                 r1_nf: this._dentryIsNotFound dentryid: r1
                 if r1_nf then {
-                    r2: this.walk parent: mi.second name: name
+                    r2: this.walk parent: mi.second :name
                     this.walk_cache.set key: cachekey.take value: r2.u32
                     return r2
                 }
@@ -596,7 +596,7 @@ ZVfs: class {
         }
         # ask provider
         box: this.providers.get i: ppid.u64
-        newnid: box.p.walk name: name parent: pnid
+        newnid: box.p.walk :name parent: pnid
         kind: box.p.stat item: newnid
         # construct new dentry
         newd: dentry.notfound (notfounddata parentid: parent providerid: ppid nodeid: newnid)
@@ -643,12 +643,12 @@ ZVfs: class {
         n: this.entrytable.entries.length
         i: 0.u64
         for i < n loop {
-            e: this.entrytable.entries.get i: i
+            e: this.entrytable.entries.get :i
             match (
                 e
             ) case file then {
                 outIds.append i.u32
-                nm: this.file_names.get i: i
+                nm: this.file_names.get :i
                 outPaths.append nm.copy
             } case root then {
             } case notfound then {
@@ -713,7 +713,7 @@ ZVfs: class {
         i: names.length
         for i > 0 loop {
             i = i - 1
-            nm: names.get i: i
+            nm: names.get :i
             out_str.append s: "/"
             out_str.append s: nm.stringview
         }
@@ -823,7 +823,7 @@ ZVfs: class {
     # files are tiny); streaming readline awaits the io stdlib's
     # TextReader.
     getline: function {:this dentryid: u32 lineno: u64} out Option String is {
-        r: this.open dentryid: dentryid
+        r: this.open :dentryid
         match (
             r
         ) case ok then {
@@ -874,16 +874,16 @@ ZVfs: class {
     # overwritten so future walks route to the new mount (mirrors
     # Python's `parent.cache[name] = newunionid`.
     bind: function {:this parentid: u32 name: StringView newid: u32 kind: bindkind} out u32 is {
-        old: this.walk parent: parentid name: name
-        md: mountdata parentid: parentid first: 0 second: 0 has_second: false
+        old: this.walk parent: parentid :name
+        md: mountdata :parentid first: 0 second: 0 has_second: false
         match (
             kind
         ) case instead then {
-            md = mountdata parentid: parentid first: newid second: 0 has_second: false
+            md = mountdata :parentid first: newid second: 0 has_second: false
         } case before then {
-            md = mountdata parentid: parentid first: newid second: old has_second: true
+            md = mountdata :parentid first: newid second: old has_second: true
         } case after then {
-            md = mountdata parentid: parentid first: old second: newid has_second: true
+            md = mountdata :parentid first: old second: newid has_second: true
         }
         new_dentry: dentry.mount md
         new_id: this.entrytable.append entry: new_dentry
@@ -950,7 +950,7 @@ tokenizeLine: function {line: StringView} out List String is {
 # is unreachable in practice.
 
 parseU32at: function {tokens: List String i: u64} out u32 is {
-    s: tokens.get i: i
+    s: tokens.get :i
     sv: s.stringview
     r: sv.parseU64
     match (
@@ -978,9 +978,9 @@ dispatchEntry: function {tokens: List String table: DentryTable} is {
     }
     if arm == "notfound" then {
         if n != 5 then panic "entry notfound expects 3 args"
-        pid: parseU32at tokens: tokens i: 2
-        prv: parseU32at tokens: tokens i: 3
-        nid: parseU32at tokens: tokens i: 4
+        pid: parseU32at :tokens i: 2
+        prv: parseU32at :tokens i: 3
+        nid: parseU32at :tokens i: 4
         e: dentry.notfound (notfounddata parentid: pid providerid: prv nodeid: nid)
         idx: table.append entry: e
         print "\{idx}"
@@ -988,9 +988,9 @@ dispatchEntry: function {tokens: List String table: DentryTable} is {
     }
     if arm == "file" then {
         if n != 5 then panic "entry file expects 3 args"
-        pid: parseU32at tokens: tokens i: 2
-        prv: parseU32at tokens: tokens i: 3
-        nid: parseU32at tokens: tokens i: 4
+        pid: parseU32at :tokens i: 2
+        prv: parseU32at :tokens i: 3
+        nid: parseU32at :tokens i: 4
         e: dentry.file (filedata parentid: pid providerid: prv nodeid: nid)
         idx: table.append entry: e
         print "\{idx}"
@@ -998,9 +998,9 @@ dispatchEntry: function {tokens: List String table: DentryTable} is {
     }
     if arm == "directory" then {
         if n != 5 then panic "entry directory expects 3 args"
-        pid: parseU32at tokens: tokens i: 2
-        prv: parseU32at tokens: tokens i: 3
-        nid: parseU32at tokens: tokens i: 4
+        pid: parseU32at :tokens i: 2
+        prv: parseU32at :tokens i: 3
+        nid: parseU32at :tokens i: 4
         e: dentry.directory (dirdata parentid: pid providerid: prv nodeid: nid)
         idx: table.append entry: e
         print "\{idx}"
@@ -1008,14 +1008,14 @@ dispatchEntry: function {tokens: List String table: DentryTable} is {
     }
     if arm == "mount" then {
         if n != 6 then panic "entry mount expects 4 args"
-        pid: parseU32at tokens: tokens i: 2
-        first: parseU32at tokens: tokens i: 3
-        second: parseU32at tokens: tokens i: 4
+        pid: parseU32at :tokens i: 2
+        first: parseU32at :tokens i: 3
+        second: parseU32at :tokens i: 4
         hassec_str: tokens.get i: 5
         hassec_sv: hassec_str.stringview
         hassec: false
         if hassec_sv == "true" then hassec = true
-        e: dentry.mount (mountdata parentid: pid first: first second: second has_second: hassec)
+        e: dentry.mount (mountdata parentid: pid :first :second has_second: hassec)
         idx: table.append entry: e
         print "\{idx}"
         return
@@ -1029,9 +1029,9 @@ dispatchEntry: function {tokens: List String table: DentryTable} is {
 dispatchDump: function {tokens: List String table: DentryTable} is {
     n: tokens.length
     if n != 2 then panic "dump expects 1 arg"
-    id: parseU32at tokens: tokens i: 1
+    id: parseU32at :tokens i: 1
     e: table.entries.get i: id.u64
-    printEntry id: id e: e
+    printEntry :id :e
 }
 
 # Verb: provider <kind>. Constructs a provider of the named
@@ -1074,12 +1074,12 @@ dispatchProvider: function {tokens: List String providers: ProviderTable} is {
 dispatchWalk: function {tokens: List String providers: ProviderTable} is {
     n: tokens.length
     if n != 4 then panic "walk expects 3 args"
-    pid: parseU32at tokens: tokens i: 1
+    pid: parseU32at :tokens i: 1
     name_str: tokens.get i: 2
     name_sv: name_str.stringview
-    parent: parseU32at tokens: tokens i: 3
+    parent: parseU32at :tokens i: 3
     box: providers.providers.get i: pid.u64
-    nid: box.p.walk name: name_sv parent: parent
+    nid: box.p.walk name: name_sv :parent
     print "\{nid}"
 }
 
@@ -1089,10 +1089,10 @@ dispatchWalk: function {tokens: List String providers: ProviderTable} is {
 dispatchStat: function {tokens: List String providers: ProviderTable} is {
     n: tokens.length
     if n != 3 then panic "stat expects 2 args"
-    pid: parseU32at tokens: tokens i: 1
-    item: parseU32at tokens: tokens i: 2
+    pid: parseU32at :tokens i: 1
+    item: parseU32at :tokens i: 2
     box: providers.providers.get i: pid.u64
-    k: box.p.stat item: item
+    k: box.p.stat :item
     match (
         k
     ) case dir then {
@@ -1110,10 +1110,10 @@ dispatchStat: function {tokens: List String providers: ProviderTable} is {
 dispatchPath: function {tokens: List String providers: ProviderTable} is {
     n: tokens.length
     if n != 3 then panic "path expects 2 args"
-    pid: parseU32at tokens: tokens i: 1
-    item: parseU32at tokens: tokens i: 2
+    pid: parseU32at :tokens i: 1
+    item: parseU32at :tokens i: 2
     box: providers.providers.get i: pid.u64
-    s: box.p.path item: item
+    s: box.p.path :item
     print s
 }
 
@@ -1124,7 +1124,7 @@ dispatchPath: function {tokens: List String providers: ProviderTable} is {
 dispatchAddFile: function {tokens: List String providers: ProviderTable} is {
     n: tokens.length
     if n != 4 then panic "addFile expects 3 args"
-    pid: parseU32at tokens: tokens i: 1
+    pid: parseU32at :tokens i: 1
     fpath_str: tokens.get i: 2
     content_str: tokens.get i: 3
     box: providers.providers.get i: pid.u64
@@ -1183,10 +1183,10 @@ printOpenResult: function {r: OpenResult.take} is {
 dispatchOpen: function {tokens: List String providers: ProviderTable} is {
     n: tokens.length
     if n != 3 then panic "open expects 2 args"
-    pid: parseU32at tokens: tokens i: 1
-    item: parseU32at tokens: tokens i: 2
+    pid: parseU32at :tokens i: 1
+    item: parseU32at :tokens i: 2
     box: providers.providers.get i: pid.u64
-    r: box.p.open item: item
+    r: box.p.open :item
     printOpenResult r: r.take
 }
 
@@ -1239,7 +1239,7 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
     }
     if sub == "walk" then {
         if n != 4 then panic "vfs walk expects 2 args (parentid name)"
-        pid: parseU32at tokens: tokens i: 2
+        pid: parseU32at :tokens i: 2
         name_str: tokens.get i: 3
         name_sv: name_str.stringview
         did: vfs.walk parent: pid name: name_sv
@@ -1248,7 +1248,7 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
     }
     if sub == "stat" then {
         if n != 3 then panic "vfs stat expects 1 arg (dentryid)"
-        did: parseU32at tokens: tokens i: 2
+        did: parseU32at :tokens i: 2
         k: vfs.arm dentryid: did
         match (
             k
@@ -1263,29 +1263,29 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
     }
     if sub == "path" then {
         if n != 3 then panic "vfs path expects 1 arg (dentryid)"
-        did: parseU32at tokens: tokens i: 2
+        did: parseU32at :tokens i: 2
         s: vfs.path dentryid: did
         print s
         return
     }
     if sub == "pathfromprovider" then {
         if n != 3 then panic "vfs pathfromprovider expects 1 arg (dentryid)"
-        did: parseU32at tokens: tokens i: 2
+        did: parseU32at :tokens i: 2
         s: vfs.pathfromprovider dentryid: did
         print s
         return
     }
     if sub == "open" then {
         if n != 3 then panic "vfs open expects 1 arg (dentryid)"
-        did: parseU32at tokens: tokens i: 2
+        did: parseU32at :tokens i: 2
         r: vfs.open dentryid: did
         printOpenResult r: r.take
         return
     }
     if sub == "getline" then {
         if n != 4 then panic "vfs getline expects 2 args (dentryid lineno)"
-        did: parseU32at tokens: tokens i: 2
-        ln_u32: parseU32at tokens: tokens i: 3
+        did: parseU32at :tokens i: 2
+        ln_u32: parseU32at :tokens i: 3
         ln: ln_u32.u64
         opt: vfs.getline dentryid: did lineno: ln
         match (
@@ -1299,7 +1299,7 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
     }
     if sub == "bindroot" then {
         if n != 4 then panic "vfs bindroot expects 2 args (newid kind)"
-        newid: parseU32at tokens: tokens i: 2
+        newid: parseU32at :tokens i: 2
         kind_str: tokens.get i: 3
         kind_sv: kind_str.stringview
         kind: bindkind.instead
@@ -1312,16 +1312,16 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
         } else {
             panic "vfs bindroot: unknown kind (instead/before/after)"
         }
-        did: vfs.bindRoot newid: newid kind: kind
+        did: vfs.bindRoot :newid :kind
         print "\{did}"
         return
     }
     if sub == "bind" then {
         if n != 6 then panic "vfs bind expects 4 args (parentid name newid kind)"
-        pid: parseU32at tokens: tokens i: 2
+        pid: parseU32at :tokens i: 2
         name_str: tokens.get i: 3
         name_sv: name_str.stringview
-        newid: parseU32at tokens: tokens i: 4
+        newid: parseU32at :tokens i: 4
         kind_str: tokens.get i: 5
         kind_sv: kind_str.stringview
         kind: bindkind.instead
@@ -1334,7 +1334,7 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
         } else {
             panic "vfs bind: unknown kind (instead/before/after)"
         }
-        did: vfs.bind parentid: pid name: name_sv newid: newid kind: kind
+        did: vfs.bind parentid: pid name: name_sv :newid :kind
         print "\{did}"
         return
     }
@@ -1342,44 +1342,44 @@ dispatchVfs: function {tokens: List String vfs: ZVfs} is {
 }
 
 dispatchLine: function {line: StringView table: DentryTable providers: ProviderTable vfs: ZVfs} is {
-    tokens: tokenizeLine line: line
+    tokens: tokenizeLine :line
     if tokens.length == 0 then return
     verb_str: tokens.get i: 0
     verb: verb_str.stringview
     if verb == "entry" then {
-        dispatchEntry tokens: tokens table: table
+        dispatchEntry :tokens :table
         return
     }
     if verb == "dump" then {
-        dispatchDump tokens: tokens table: table
+        dispatchDump :tokens :table
         return
     }
     if verb == "provider" then {
-        dispatchProvider tokens: tokens providers: providers
+        dispatchProvider :tokens :providers
         return
     }
     if verb == "walk" then {
-        dispatchWalk tokens: tokens providers: providers
+        dispatchWalk :tokens :providers
         return
     }
     if verb == "stat" then {
-        dispatchStat tokens: tokens providers: providers
+        dispatchStat :tokens :providers
         return
     }
     if verb == "path" then {
-        dispatchPath tokens: tokens providers: providers
+        dispatchPath :tokens :providers
         return
     }
     if verb == "addFile" then {
-        dispatchAddFile tokens: tokens providers: providers
+        dispatchAddFile :tokens :providers
         return
     }
     if verb == "open" then {
-        dispatchOpen tokens: tokens providers: providers
+        dispatchOpen :tokens :providers
         return
     }
     if verb == "vfs" then {
-        dispatchVfs tokens: tokens vfs: vfs
+        dispatchVfs :tokens :vfs
         return
     }
     panic "unknown verb"
@@ -1395,7 +1395,7 @@ runScript: function {text: String table: DentryTable providers: ProviderTable vf
                 fb_opt
             ) case some then {
                 if fb_opt != 35 then {
-                    dispatchLine line: trimmed table: table providers: providers vfs: vfs
+                    dispatchLine line: trimmed :table :providers :vfs
                 }
             } case none then {}
         }
@@ -1417,7 +1417,7 @@ main: function is {
         providers: ProviderTable providers: (List ProviderBox)
         vtable: DentryTable entries: (List dentry)
         vfs: ZVfs providers: (List ProviderBox) entrytable: vtable file_names: (List String) walk_cache: (Map String value: u32) rootid: 0
-        runScript text: r.take table: table providers: providers vfs: vfs
+        runScript text: r.take :table :providers :vfs
     } case err then {
         io.eprintln "zvfs: could not read script file"
         os.exit code: 1

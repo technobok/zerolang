@@ -182,7 +182,7 @@ isValidUnitName: function {name: StringView} out bool is {
             b
         ) case some then {
             isFirst: i == 0
-            bad: unitNameCharBad b: b first: isFirst
+            bad: unitNameCharBad :b first: isFirst
             if bad then return false
         } case none then {
             return false
@@ -250,7 +250,7 @@ Parser: class {
 
     # Build an error node located at `tok`.
     mkError: function {:this tok: zlexer.Token code: zast.err msg: String.take} out Node is {
-        return (Node.error (zast.ErrorData nodeid: this.nextId lineno: tok.lineno colno: tok.colno width: tok.tokstr.length.u32 err: code msg: msg fsno: tok.fsno note: "".string hint: "".string))
+        return (Node.error (zast.ErrorData nodeid: this.nextId lineno: tok.lineno colno: tok.colno width: tok.tokstr.length.u32 err: code :msg fsno: tok.fsno note: "".string hint: "".string))
     }
 
     # True when `node` is an `error` arm (propagate malformed sub-results).
@@ -326,11 +326,11 @@ Parser: class {
     parseAtom: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match t.toktype case PARENOPEN then {
-            return (this.parseAtomExpr lex: lex)
+            return (this.parseAtomExpr :lex)
         } case REFID then {
-            return (this.parseAtomId lex: lex)
+            return (this.parseAtomId :lex)
         } case STRBEG then {
-            return (this.parseAtomString lex: lex)
+            return (this.parseAtomString :lex)
         } else {
             return (this.mkError tok: t code: zast.err.BADREFERENCE msg: "Expected an atom".string)
         }
@@ -349,9 +349,9 @@ Parser: class {
 
     # acceptAtom -> Option boundary over parseAtom.
     acceptAtom: function {:this lex: zlexer.Lexer} out Option Node is {
-        la: this.atomLookahead lex: lex
+        la: this.atomLookahead :lex
         if la then {
-            n: this.parseAtom lex: lex
+            n: this.parseAtom :lex
             return (Option.some n)
         } else {
             return (Option.none Node)
@@ -367,13 +367,13 @@ Parser: class {
         startTok: lex.peek
         sLine: startTok.lineno
         sCol: startTok.colno
-        node: this.parseAtom lex: lex
-        nIsErr: this.isError node: node
+        node: this.parseAtom :lex
+        nIsErr: this.isError :node
         if nIsErr then return node
         nx: lex.peek
         nxIsDot: nx.toktype == zlexer.TT.DOT
         if nxIsDot then {
-            return (this.parsePathTail lex: lex parent: node startLine: sLine startCol: sCol)
+            return (this.parsePathTail :lex parent: node startLine: sLine startCol: sCol)
         }
         return node
     }
@@ -390,8 +390,8 @@ Parser: class {
             idOpt: lex.accept tt: zlexer.TT.REFID
             match idOpt case some then {
                 child: Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: idOpt.lineno colno: idOpt.colno name: idOpt.tokstr.copy)
-                np: Node.dottedpath (zast.DottedPathData nodeid: this.nextId lineno: startLine colno: startCol parent: parent child: child)
-                return (this.parsePathTail lex: lex parent: np startLine: startLine startCol: startCol)
+                np: Node.dottedpath (zast.DottedPathData nodeid: this.nextId lineno: startLine colno: startCol :parent :child)
+                return (this.parsePathTail :lex parent: np :startLine :startCol)
             } case none then {
                 bad: lex.acceptAny
                 err: this.mkError tok: bad code: zast.err.BADPATH msg: "Expected ID after dot".string
@@ -402,9 +402,9 @@ Parser: class {
 
     # acceptPath -> Option boundary over parsePath.
     acceptPath: function {:this lex: zlexer.Lexer} out Option Node is {
-        la: this.atomLookahead lex: lex
+        la: this.atomLookahead :lex
         if la then {
-            return (Option.some (this.parsePath lex: lex))
+            return (Option.some (this.parsePath :lex))
         } else {
             return (Option.none Node)
         }
@@ -422,7 +422,7 @@ Parser: class {
         } case some then {
             prevFilter: lex.filterEolState
             lex.setFilterEol enabled: true
-            expr: this.parseExpression lex: lex
+            expr: this.parseExpression :lex
             isErr: this.isError node: expr
             if isErr then {
                 lex.setFilterEol enabled: prevFilter
@@ -469,9 +469,9 @@ Parser: class {
                     return (this.mkError tok: bt code: zast.err.BADSTRING msg: "Expected open brace after backslash in string interpolation".string)
                 }
                 lex.advance
-                eLook: this.exprLookahead lex: lex
+                eLook: this.exprLookahead :lex
                 if eLook then {
-                    expr: this.parseExpression lex: lex
+                    expr: this.parseExpression :lex
                     eErr: this.isError node: expr
                     if eErr then return expr
                     parts.append expr
@@ -484,8 +484,8 @@ Parser: class {
                     bad: lex.peek
                     return (this.mkError tok: bad code: zast.err.BADEXPRESSION msg: "Bad expression in string interpolation".string)
                 }
-            } else if (isStrChunkTok tt: tt) then {
-                ck: chunkKindOf tt: tt
+            } else if (isStrChunkTok :tt) then {
+                ck: chunkKindOf :tt
                 chunk: Node.stringchunk (zast.StringChunkData nodeid: this.nextId lineno: t.lineno colno: t.colno text: t.tokstr.copy chunkKind: ck)
                 parts.append chunk
                 lex.advance
@@ -494,7 +494,7 @@ Parser: class {
                 return (this.mkError tok: bad code: zast.err.BADSTRING msg: "Unexpected token in string literal".string)
             }
         }
-        stripped: this.stripStringWhitespace parts: parts
+        stripped: this.stripStringWhitespace :parts
         return (Node.atomstring (zast.AtomStringData nodeid: this.nextId lineno: fLine colno: fCol stringparts: stripped))
     }
 
@@ -513,7 +513,7 @@ Parser: class {
         stop1: false
         for i < origLen loop {
             if (stop1) == false then {
-                el: parts.get i: i
+                el: parts.get :i
                 c: partClass n: el
                 if c == 1 then {
                     startIdx = i + 1
@@ -688,19 +688,19 @@ Parser: class {
     # mkBinop / mkCall / mkNamedOp / mkLabelValue: id-allocating node
     # constructors for the operations layer. Children move in.
     mkBinop: function {:this lhs: Node.take operator: Node.take rhs: Node.take line: u32 col: u32} out Node is {
-        return (Node.binop (zast.BinOpData nodeid: this.nextId lineno: line colno: col lhs: lhs operator: operator rhs: rhs))
+        return (Node.binop (zast.BinOpData nodeid: this.nextId lineno: line colno: col :lhs :operator :rhs))
     }
 
     mkCall: function {:this callable: Node.take arguments: (List Node).take line: u32 col: u32} out Node is {
-        return (Node.call (zast.CallData nodeid: this.nextId lineno: line colno: col callable: callable arguments: arguments))
+        return (Node.call (zast.CallData nodeid: this.nextId lineno: line colno: col :callable :arguments))
     }
 
     mkNamedOp: function {:this name: (Option String).take operation: Node.take line: u32 col: u32} out Node is {
-        return (Node.namedoperation (zast.NamedOperationData nodeid: this.nextId lineno: line colno: col name: name operation: operation))
+        return (Node.namedoperation (zast.NamedOperationData nodeid: this.nextId lineno: line colno: col :name :operation))
     }
 
     mkLabelValue: function {:this line: u32 col: u32 name: String.take} out Node is {
-        return (Node.labelvalue (zast.LabelValueData nodeid: this.nextId lineno: line colno: col name: name))
+        return (Node.labelvalue (zast.LabelValueData nodeid: this.nextId lineno: line colno: col :name))
     }
 
     # Greedily collect operand/operator paths in source order. Stops at
@@ -709,9 +709,9 @@ Parser: class {
     # dispatching on the count).
     operationPaths: function {:this lex: zlexer.Lexer} out List Node is {
         paths: (List Node)
-        for (this.atomLookahead lex: lex) loop {
-            node: this.parsePath lex: lex
-            errored: this.isError node: node
+        for (this.atomLookahead :lex) loop {
+            node: this.parsePath :lex
+            errored: this.isError :node
             paths.append node
             if errored then break
         }
@@ -725,7 +725,7 @@ Parser: class {
     foldStack: function {:this stack: (List Node).take nextTok: zlexer.Token} out Node is {
         acc: stack.pop
         sp: zast.posOf n: acc
-        return (this.foldBinopTail stack: stack acc: acc line: sp.line col: sp.col nextTok: nextTok)
+        return (this.foldBinopTail :stack :acc line: sp.line col: sp.col :nextTok)
     }
 
     foldBinopTail: function {:this stack: (List Node).take acc: Node.take line: u32 col: u32 nextTok: zlexer.Token} out Node is {
@@ -737,8 +737,8 @@ Parser: class {
                 return (this.mkError tok: nextTok code: zast.err.BADEXPRESSION msg: "Expected an operand for the right hand side of operation".string)
             }
             rhs: stack.pop
-            nb: this.mkBinop lhs: acc operator: op rhs: rhs line: line col: col
-            return (this.foldBinopTail stack: stack acc: nb line: line col: col nextTok: nextTok)
+            nb: this.mkBinop lhs: acc operator: op :rhs :line :col
+            return (this.foldBinopTail :stack acc: nb :line :col :nextTok)
         } else {
             return (this.mkError tok: nextTok code: zast.err.BADEXPRESSION msg: "Expected an operator (single identifier)".string)
         }
@@ -748,12 +748,12 @@ Parser: class {
     # drain). A single path returns itself.
     foldBinop: function {:this paths: (List Node).take nextTok: zlexer.Token} out Node is {
         stack: this.reverseStack src: paths
-        return (this.foldStack stack: stack nextTok: nextTok)
+        return (this.foldStack :stack :nextTok)
     }
 
     # reverseNodes wrapper as a method, for `this.`-prefixed calls.
     reverseStack: function {src: (List Node).take} out List Node is {
-        return (reverseNodes src: src)
+        return (reverseNodes :src)
     }
 
     # ( term binop ) form: callable + one unnamed folded argument, with
@@ -765,14 +765,14 @@ Parser: class {
         cp: zast.posOf n: callable
         args: (List Node)
         if stack.length > 0 then {
-            argNode: this.foldStack stack: stack nextTok: lex.peek
+            argNode: this.foldStack :stack nextTok: lex.peek
             argIsErr: this.isError node: argNode
             if argIsErr then return argNode
             ap: zast.posOf n: argNode
             uarg: this.mkNamedOp name: (Option.none String) operation: argNode line: ap.line col: ap.col
             args.append uarg
         }
-        return (this.mkCall callable: callable arguments: args line: cp.line col: cp.col)
+        return (this.mkCall :callable arguments: args line: cp.line col: cp.col)
     }
 
     # call = callable path + arguments. The first unnamed argument is the
@@ -784,7 +784,7 @@ Parser: class {
         cp: zast.posOf n: callable
         args: (List Node)
         if stack.length > 0 then {
-            argNode: this.foldStack stack: stack nextTok: lex.peek
+            argNode: this.foldStack :stack nextTok: lex.peek
             argIsErr: this.isError node: argNode
             if argIsErr then return argNode
             argIsOp: this.isOperationArm node: argNode
@@ -807,13 +807,13 @@ Parser: class {
                     bad: lex.acceptAny
                     return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Duplicate argument name".string)
                 }
-                vpaths: this.operationPaths lex: lex
+                vpaths: this.operationPaths :lex
                 vlen: vpaths.length
                 if vlen == 0 then {
                     bad: lex.acceptAny
                     return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected an Operation after label".string)
                 }
-                val: this.operationFromPaths paths: vpaths lex: lex
+                val: this.operationFromPaths paths: vpaths :lex
                 vIsErr: this.isError node: val
                 if vIsErr then return val
                 no: this.mkNamedOp name: (Option.some noName) operation: val line: vLine col: vCol
@@ -841,7 +841,7 @@ Parser: class {
                 }
             }
         }
-        return (this.mkCall callable: callable arguments: args line: cp.line col: cp.col)
+        return (this.mkCall :callable arguments: args line: cp.line col: cp.col)
     }
 
     # Bare operation core: dispatch a non-empty path list. Odd count ->
@@ -857,18 +857,18 @@ Parser: class {
         twiceHalf: half * 2
         even: twiceHalf == n
         if even then {
-            return (this.acceptTermBinopCall paths: paths lex: lex)
+            return (this.acceptTermBinopCall :paths :lex)
         }
-        return (this.foldBinop paths: paths nextTok: lex.peek)
+        return (this.foldBinop :paths nextTok: lex.peek)
     }
 
     # operation: binop | ( term binop ). Top-level Option boundary; no
     # named arguments. none means no paths were found.
     acceptOperation: function {:this lex: zlexer.Lexer} out Option Node is {
-        paths: this.operationPaths lex: lex
+        paths: this.operationPaths :lex
         n: paths.length
         if n == 0 then return (Option.none Node)
-        return (Option.some (this.operationFromPaths paths: paths lex: lex))
+        return (Option.some (this.operationFromPaths :paths :lex))
     }
 
     # parseTyperefOperation -- a parameter / return type parsed as a grammar
@@ -880,7 +880,7 @@ Parser: class {
     # so operationPaths stops at the label and they still need parentheses.
     # Mirrors Python `_accept_typeref_operation`.
     parseTyperefOperation: function {:this lex: zlexer.Lexer} out Node is {
-        paths: this.operationPaths lex: lex
+        paths: this.operationPaths :lex
         n: paths.length
         if n == 0 then {
             bad: lex.peek
@@ -888,8 +888,8 @@ Parser: class {
         }
         half: n / 2
         isCall: (half * 2) == n
-        node: this.operationFromPaths paths: paths lex: lex
-        nerr: this.isError node: node
+        node: this.operationFromPaths :paths :lex
+        nerr: this.isError :node
         if nerr then return node
         if isCall then {
             return (this.wrapExpression inner: node)
@@ -915,16 +915,16 @@ Parser: class {
         twiceHalf: half * 2
         even: twiceHalf == n
         if even then {
-            return (this.acceptCall lex: lex paths: paths)
+            return (this.acceptCall :lex :paths)
         }
         nIsOne: n == 1
         if nIsOne then {
             labelNext: this.tokIsLabel tok: pk
             if labelNext then {
-                return (this.acceptCall lex: lex paths: paths)
+                return (this.acceptCall :lex :paths)
             }
         }
-        return (this.foldBinop paths: paths nextTok: pk)
+        return (this.foldBinop :paths nextTok: pk)
     }
 
     # operation-or-call: top-level Option boundary over the bare core;
@@ -932,7 +932,7 @@ Parser: class {
     acceptOperationOrCall: function {:this paths: (List Node).take lex: zlexer.Lexer} out Option Node is {
         n0: paths.length
         if n0 == 0 then return (Option.none Node)
-        return (Option.some (this.operationOrCallFromPaths paths: paths lex: lex))
+        return (Option.some (this.operationOrCallFromPaths :paths :lex))
     }
 
     # Does an expression start at the current token? Control-flow forms
@@ -954,7 +954,7 @@ Parser: class {
         } case YIELD then {
             return true
         } else {
-            return (this.atomLookahead lex: lex)
+            return (this.atomLookahead :lex)
         }
     }
 
@@ -997,7 +997,7 @@ Parser: class {
         } case LABELPRE then {
             return true
         } else {
-            return (this.exprLookahead lex: lex)
+            return (this.exprLookahead :lex)
         }
     }
 
@@ -1022,9 +1022,9 @@ Parser: class {
             lblTok: lex.acceptAny
             nm: lblTok.tokstr.copy
             lex.accept tt: zlexer.TT.EOL
-            eLook: this.exprLookahead lex: lex
+            eLook: this.exprLookahead :lex
             if eLook then {
-                expr: this.parseExpression lex: lex
+                expr: this.parseExpression :lex
                 eErr: this.isError node: expr
                 if eErr then return expr
                 asgn: Node.assignment (zast.AssignmentData nodeid: this.nextId lineno: sLine colno: sCol name: nm value: expr)
@@ -1034,7 +1034,7 @@ Parser: class {
                 return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Expected expression for assignment statement".string)
             }
         }
-        expr: this.parseExpression lex: lex
+        expr: this.parseExpression :lex
         eErr: this.isError node: expr
         if eErr then return expr
         return (Node.statementline (zast.StatementLineData nodeid: this.nextId lineno: sLine colno: sCol statementline: expr))
@@ -1054,12 +1054,12 @@ Parser: class {
             lex.setFilterEol enabled: false
             statements: (List Node)
             for true loop {
-                for (this.atSeparator lex: lex) loop {
+                for (this.atSeparator :lex) loop {
                     lex.advance
                 }
-                la: this.blocklineLookahead lex: lex
+                la: this.blocklineLookahead :lex
                 if la then {
-                    sl: this.parseBlockline lex: lex
+                    sl: this.parseBlockline :lex
                     slErr: this.isError node: sl
                     if slErr then {
                         lex.setFilterEol enabled: prevFilter
@@ -1073,15 +1073,15 @@ Parser: class {
             lex.setFilterEol enabled: prevFilter
             closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
             match closeOpt case some then {
-                return (Node.statement (zast.StatementData nodeid: this.nextId lineno: sLine colno: sCol statements: statements))
+                return (Node.statement (zast.StatementData nodeid: this.nextId lineno: sLine colno: sCol :statements))
             } case none then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Expected closing brace for statement body".string)
             }
         } case none then {
-            la: this.blocklineLookahead lex: lex
+            la: this.blocklineLookahead :lex
             if la then {
-                sl: this.parseBlockline lex: lex
+                sl: this.parseBlockline :lex
                 slErr: this.isError node: sl
                 if slErr then return sl
                 one: (List Node)
@@ -1098,7 +1098,7 @@ Parser: class {
         startTok: lex.peek
         sLine: startTok.lineno
         sCol: startTok.colno
-        blk: this.acceptBlock lex: lex
+        blk: this.acceptBlock :lex
         bErr: this.isError node: blk
         if bErr then return blk
         return (Node.doexpr (zast.DoData nodeid: this.nextId lineno: sLine colno: sCol statement: blk))
@@ -1113,11 +1113,11 @@ Parser: class {
         sLine: t.lineno
         sCol: t.colno
         if t.toktype == zlexer.TT.BRACEOPEN then {
-            return (this.acceptBlock lex: lex)
+            return (this.acceptBlock :lex)
         }
-        eLook: this.exprLookahead lex: lex
+        eLook: this.exprLookahead :lex
         if eLook then {
-            expr: this.parseExpression lex: lex
+            expr: this.parseExpression :lex
             eErr: this.isError node: expr
             if eErr then return expr
             sl: Node.statementline (zast.StatementLineData nodeid: this.nextId lineno: sLine colno: sCol statementline: expr)
@@ -1140,29 +1140,29 @@ Parser: class {
         if tt == zlexer.TT.WHEN then {
             lex.advance
             lex.accept tt: zlexer.TT.EOL
-            vpaths: this.operationPaths lex: lex
+            vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation (condition) for 'if'".string)
             }
-            cond: this.operationFromPaths paths: vpaths lex: lex
+            cond: this.operationFromPaths paths: vpaths :lex
             cErr: this.isError node: cond
             if cErr then return cond
             cp: zast.posOf n: cond
             no: this.mkNamedOp name: (Option.none String) operation: cond line: cp.line col: cp.col
             conditions.append no
-            return (this.ifClausesTail lex: lex clauses: clauses conditions: conditions clauseLine: clauseLine clauseCol: clauseCol ifLine: ifLine ifCol: ifCol)
+            return (this.ifClausesTail :lex :clauses :conditions :clauseLine :clauseCol :ifLine :ifCol)
         }
         if tt == zlexer.TT.THEN then {
             lex.advance
-            stmt: this.acceptPrimaryExpression lex: lex
+            stmt: this.acceptPrimaryExpression :lex
             sErr: this.isError node: stmt
             if sErr then return stmt
-            clause: Node.ifclause (zast.IfClauseData nodeid: this.nextId lineno: clauseLine colno: clauseCol conditions: conditions statement: stmt)
+            clause: Node.ifclause (zast.IfClauseData nodeid: this.nextId lineno: clauseLine colno: clauseCol :conditions statement: stmt)
             clauses.append clause
             nextTok: lex.peek
-            return (this.ifClausesTail lex: lex clauses: clauses conditions: (List Node) clauseLine: nextTok.lineno clauseCol: nextTok.colno ifLine: ifLine ifCol: ifCol)
+            return (this.ifClausesTail :lex :clauses conditions: (List Node) clauseLine: nextTok.lineno clauseCol: nextTok.colno :ifLine :ifCol)
         }
         cn: conditions.length
         if cn != 0 then {
@@ -1170,12 +1170,12 @@ Parser: class {
         }
         if tt == zlexer.TT.ELSE then {
             lex.advance
-            estmt: this.acceptPrimaryExpression lex: lex
+            estmt: this.acceptPrimaryExpression :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
-            return (Node.ifexpr (zast.IfData nodeid: this.nextId lineno: ifLine colno: ifCol clauses: clauses elseclause: (Option.some estmt)))
+            return (Node.ifexpr (zast.IfData nodeid: this.nextId lineno: ifLine colno: ifCol :clauses elseclause: (Option.some estmt)))
         }
-        return (Node.ifexpr (zast.IfData nodeid: this.nextId lineno: ifLine colno: ifCol clauses: clauses elseclause: (Option.none Node)))
+        return (Node.ifexpr (zast.IfData nodeid: this.nextId lineno: ifLine colno: ifCol :clauses elseclause: (Option.none Node)))
     }
 
     # if-expression -> "if" op { "when" op }* "then" primary
@@ -1191,13 +1191,13 @@ Parser: class {
             clauseStart: lex.peek
             cLine: clauseStart.lineno
             cCol: clauseStart.colno
-            vpaths: this.operationPaths lex: lex
+            vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation (condition) for 'if'".string)
             }
-            cond: this.operationFromPaths paths: vpaths lex: lex
+            cond: this.operationFromPaths paths: vpaths :lex
             cErr: this.isError node: cond
             if cErr then return cond
             cp: zast.posOf n: cond
@@ -1205,7 +1205,7 @@ Parser: class {
             conditions: (List Node)
             conditions.append no
             clauses: (List Node)
-            return (this.ifClausesTail lex: lex clauses: clauses conditions: conditions clauseLine: cLine clauseCol: cCol ifLine: ifLine ifCol: ifCol)
+            return (this.ifClausesTail :lex :clauses :conditions clauseLine: cLine clauseCol: cCol :ifLine :ifCol)
         }
     }
 
@@ -1230,12 +1230,12 @@ Parser: class {
                 isThen: tk.toktype == zlexer.TT.THEN
                 if isThen then {
                     lex.advance
-                    body: this.acceptPrimaryExpression lex: lex
+                    body: this.acceptPrimaryExpression :lex
                     bErr: this.isError node: body
                     if bErr then return body
                     clause: Node.caseclause (zast.CaseClauseData nodeid: this.nextId lineno: cLine colno: cCol name: nm matcharm: armNode statement: body)
                     clauses.append clause
-                    return (this.caseClausesTail lex: lex subject: subject clauses: clauses mLine: mLine mCol: mCol)
+                    return (this.caseClausesTail :lex :subject :clauses :mLine :mCol)
                 } else {
                     bad: lex.acceptAny
                     return (this.mkError tok: bad code: zast.err.BADCASE msg: "Expected then keyword for case".string)
@@ -1247,12 +1247,12 @@ Parser: class {
         }
         elseOpt: lex.accept tt: zlexer.TT.ELSE
         match elseOpt case some then {
-            estmt: this.acceptPrimaryExpression lex: lex
+            estmt: this.acceptPrimaryExpression :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
-            return (Node.caseexpr (zast.CaseData nodeid: this.nextId lineno: mLine colno: mCol subject: subject clauses: clauses elseclause: (Option.some estmt)))
+            return (Node.caseexpr (zast.CaseData nodeid: this.nextId lineno: mLine colno: mCol :subject :clauses elseclause: (Option.some estmt)))
         } case none then {
-            return (Node.caseexpr (zast.CaseData nodeid: this.nextId lineno: mLine colno: mCol subject: subject clauses: clauses elseclause: (Option.none Node)))
+            return (Node.caseexpr (zast.CaseData nodeid: this.nextId lineno: mLine colno: mCol :subject :clauses elseclause: (Option.none Node)))
         }
     }
 
@@ -1272,17 +1272,17 @@ Parser: class {
             return (this.mkError tok: startTok code: zast.err.BADEXPRESSION msg: "Expected match".string)
         } case some then {
             lex.accept tt: zlexer.TT.ON
-            spaths: this.operationPaths lex: lex
+            spaths: this.operationPaths :lex
             sn: spaths.length
             if sn == 0 then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation for match (subject)".string)
             }
-            subject: this.operationFromPaths paths: spaths lex: lex
+            subject: this.operationFromPaths paths: spaths :lex
             sErr: this.isError node: subject
             if sErr then return subject
             clauses: (List Node)
-            return (this.caseClausesTail lex: lex subject: subject clauses: clauses mLine: mLine mCol: mCol)
+            return (this.caseClausesTail :lex :subject :clauses :mLine :mCol)
         }
     }
 
@@ -1298,13 +1298,13 @@ Parser: class {
         if tt == zlexer.TT.WHILE then {
             lex.advance
             lex.accept tt: zlexer.TT.EOL
-            vpaths: this.operationPaths lex: lex
+            vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation (condition) for for".string)
             }
-            op: this.operationFromPaths paths: vpaths lex: lex
+            op: this.operationFromPaths paths: vpaths :lex
             oErr: this.isError node: op
             if oErr then return op
             if hasBody then {
@@ -1314,7 +1314,7 @@ Parser: class {
                 no: this.mkNamedOp name: (Option.none String) operation: op line: cp.line col: cp.col
                 conditions.append no
             }
-            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: body hasBody: hasBody bound: bound forLine: forLine forCol: forCol)
+            return (this.forClausesTail :lex :conditions :postconditions :body :hasBody :bound :forLine :forCol)
         }
         if tt == zlexer.TT.LABEL then {
             if hasBody then {
@@ -1326,18 +1326,18 @@ Parser: class {
             lblTok: lex.acceptAny
             nm: lblTok.tokstr.copy
             lex.accept tt: zlexer.TT.EOL
-            vpaths: this.operationPaths lex: lex
+            vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.EXPECTEDOP msg: "Expected operation for for binding label".string)
             }
-            op: this.operationFromPaths paths: vpaths lex: lex
+            op: this.operationFromPaths paths: vpaths :lex
             oErr: this.isError node: op
             if oErr then return op
             no: this.mkNamedOp name: (Option.some nm) operation: op line: lblTok.lineno col: lblTok.colno
             conditions.append no
-            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: body hasBody: hasBody bound: true forLine: forLine forCol: forCol)
+            return (this.forClausesTail :lex :conditions :postconditions :body :hasBody bound: true :forLine :forCol)
         }
         if tt == zlexer.TT.LOOP then {
             if hasBody then {
@@ -1345,20 +1345,20 @@ Parser: class {
                 return (this.mkError tok: bad code: zast.err.BADFOR msg: "Duplicate loop".string)
             }
             lex.advance
-            stmt: this.acceptPrimaryExpression lex: lex
+            stmt: this.acceptPrimaryExpression :lex
             sErr: this.isError node: stmt
             if sErr then return stmt
-            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: (Option.some stmt) hasBody: true bound: bound forLine: forLine forCol: forCol)
+            return (this.forClausesTail :lex :conditions :postconditions body: (Option.some stmt) hasBody: true :bound :forLine :forCol)
         }
         empty: conditions.length == 0
         if empty then {
             if hasBody then {
-                return (Node.forexpr (zast.ForData nodeid: this.nextId lineno: forLine colno: forCol conditions: conditions body: body postconditions: postconditions))
+                return (Node.forexpr (zast.ForData nodeid: this.nextId lineno: forLine colno: forCol :conditions :body :postconditions))
             }
             bad: lex.acceptAny
             return (this.mkError tok: bad code: zast.err.BADFOR msg: "Require at least one condition or a loop for for".string)
         }
-        return (Node.forexpr (zast.ForData nodeid: this.nextId lineno: forLine colno: forCol conditions: conditions body: body postconditions: postconditions))
+        return (Node.forexpr (zast.ForData nodeid: this.nextId lineno: forLine colno: forCol :conditions :body :postconditions))
     }
 
     # for-expression -> "for" [op] { "while" op } [ label op ] { "while" op }
@@ -1377,18 +1377,18 @@ Parser: class {
         } case some then {
             conditions: (List Node)
             postconditions: (List Node)
-            paths: this.operationPaths lex: lex
+            paths: this.operationPaths :lex
             n: paths.length
             if n == 0 then {
-                return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: (Option.none Node) hasBody: false bound: false forLine: forLine forCol: forCol)
+                return (this.forClausesTail :lex :conditions :postconditions body: (Option.none Node) hasBody: false bound: false :forLine :forCol)
             }
-            op: this.operationFromPaths paths: paths lex: lex
+            op: this.operationFromPaths :paths :lex
             oErr: this.isError node: op
             if oErr then return op
             cp: zast.posOf n: op
             no: this.mkNamedOp name: (Option.none String) operation: op line: cp.line col: cp.col
             conditions.append no
-            return (this.forClausesTail lex: lex conditions: conditions postconditions: postconditions body: (Option.none Node) hasBody: false bound: false forLine: forLine forCol: forCol)
+            return (this.forClausesTail :lex :conditions :postconditions body: (Option.none Node) hasBody: false bound: false :forLine :forCol)
         }
     }
 
@@ -1408,13 +1408,13 @@ Parser: class {
             if isLabel then {
                 lblTok: lex.acceptAny
                 nm: lblTok.tokstr.copy
-                vpaths: this.operationPaths lex: lex
+                vpaths: this.operationPaths :lex
                 n: vpaths.length
                 if n == 0 then {
                     bad: lex.peek
                     return (this.mkError tok: bad code: zast.err.EXPECTEDEXP msg: "Expected operation for with value".string)
                 }
-                op: this.operationFromPaths paths: vpaths lex: lex
+                op: this.operationFromPaths paths: vpaths :lex
                 oErr: this.isError node: op
                 if oErr then return op
                 value: this.wrapExpression inner: op
@@ -1423,10 +1423,10 @@ Parser: class {
                     bad: lex.peek
                     return (this.mkError tok: bad code: zast.err.EXPECTEDEXP msg: "Expected do after with definition".string)
                 } case some then {
-                    body: this.parseExpression lex: lex
+                    body: this.parseExpression :lex
                     bErr: this.isError node: body
                     if bErr then return body
-                    return (Node.withexpr (zast.WithData nodeid: this.nextId lineno: wLine colno: wCol name: nm value: value body: body))
+                    return (Node.withexpr (zast.WithData nodeid: this.nextId lineno: wLine colno: wCol name: nm :value :body))
                 }
             }
             bad: lex.acceptAny
@@ -1484,9 +1484,9 @@ Parser: class {
                             }
                             datanames.append checkName
                             opName: lblTok.tokstr.copy
-                            la: this.atomLookahead lex: lex
+                            la: this.atomLookahead :lex
                             if la then {
-                                pathNode: this.parsePath lex: lex
+                                pathNode: this.parsePath :lex
                                 pErr: this.isError node: pathNode
                                 if pErr then return pathNode
                                 no: this.mkNamedOp name: (Option.some opName) operation: pathNode line: lblTok.lineno col: lblTok.colno
@@ -1496,9 +1496,9 @@ Parser: class {
                                 return (this.mkError tok: bad code: zast.err.BADDATA msg: "Expected term after data label".string)
                             }
                         } else {
-                            la: this.atomLookahead lex: lex
+                            la: this.atomLookahead :lex
                             if la then {
-                                pathNode: this.parsePath lex: lex
+                                pathNode: this.parsePath :lex
                                 pErr: this.isError node: pathNode
                                 if pErr then return pathNode
                                 cp: zast.posOf n: pathNode
@@ -1521,18 +1521,18 @@ Parser: class {
                     }
                     outOpt: lex.accept tt: zlexer.TT.OUT
                     match outOpt case some then {
-                        la: this.atomLookahead lex: lex
+                        la: this.atomLookahead :lex
                         if la then {
-                            typeNode: this.parsePath lex: lex
+                            typeNode: this.parsePath :lex
                             tErr: this.isError node: typeNode
                             if tErr then return typeNode
-                            return (Node.datablock (zast.DataBlockData nodeid: this.nextId lineno: dLine colno: dCol elements: elements outType: (Option.some typeNode)))
+                            return (Node.datablock (zast.DataBlockData nodeid: this.nextId lineno: dLine colno: dCol :elements outType: (Option.some typeNode)))
                         } else {
                             bad: lex.acceptAny
                             return (this.mkError tok: bad code: zast.err.BADDATA msg: "Expected type reference after out".string)
                         }
                     } case none then {
-                        return (Node.datablock (zast.DataBlockData nodeid: this.nextId lineno: dLine colno: dCol elements: elements outType: (Option.none Node)))
+                        return (Node.datablock (zast.DataBlockData nodeid: this.nextId lineno: dLine colno: dCol :elements outType: (Option.none Node)))
                     }
                 }
             }
@@ -1558,7 +1558,7 @@ Parser: class {
             if nested then {
                 return (this.mkError tok: startTok code: zast.err.BADSTATEMENT msg: "yield is not allowed inside a nested function literal".string)
             }
-            body: this.parseExpression lex: lex
+            body: this.parseExpression :lex
             bErr: this.isError node: body
             if bErr then return body
             return (Node.yieldexpr (zast.YieldExprData nodeid: this.nextId lineno: startTok.lineno colno: startTok.colno expr: body))
@@ -1577,7 +1577,7 @@ Parser: class {
         lhs: paths.pop
         lhsErr: this.isError node: lhs
         if lhsErr then return lhs
-        rhs: this.parseExpression lex: lex
+        rhs: this.parseExpression :lex
         rErr: this.isError node: rhs
         if rErr then return rhs
         return (Node.reassignment (zast.ReassignmentData nodeid: this.nextId lineno: startLine colno: startCol topath: lhs value: rhs))
@@ -1594,12 +1594,12 @@ Parser: class {
         lhs: paths.pop
         lhsErr: this.isError node: lhs
         if lhsErr then return lhs
-        la: this.atomLookahead lex: lex
+        la: this.atomLookahead :lex
         if la then {
-            rhs: this.parsePath lex: lex
+            rhs: this.parsePath :lex
             rErr: this.isError node: rhs
             if rErr then return rhs
-            return (Node.swapstmt (zast.SwapStmtData nodeid: this.nextId lineno: startLine colno: startCol lhs: lhs rhs: rhs))
+            return (Node.swapstmt (zast.SwapStmtData nodeid: this.nextId lineno: startLine colno: startCol :lhs :rhs))
         } else {
             bad: lex.acceptAny
             return (this.mkError tok: bad code: zast.err.BADSTATEMENT msg: "Swap requires a right hand side".string)
@@ -1650,9 +1650,9 @@ Parser: class {
                         }
                         names.append nm
                         opName: lblTok.tokstr.copy
-                        la: this.atomLookahead lex: lex
+                        la: this.atomLookahead :lex
                         if la then {
-                            pathNode: this.parseTyperefOperation lex: lex
+                            pathNode: this.parseTyperefOperation :lex
                             pErr: this.isError node: pathNode
                             if pErr then {
                                 params.append pathNode
@@ -1694,12 +1694,12 @@ Parser: class {
                 return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate out".string)
             }
             lex.advance
-            la: this.atomLookahead lex: lex
+            la: this.atomLookahead :lex
             if la then {
-                rt: this.parseTyperefOperation lex: lex
+                rt: this.parseTyperefOperation :lex
                 rErr: this.isError node: rt
                 if rErr then return rt
-                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.some rt) body: body gotIn: gotIn hasOut: true hasIs: hasIs isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
+                return (this.functionClausesTail :lex :parameters :asItems returntype: (Option.some rt) :body :gotIn hasOut: true :hasIs :isNative :hasAs :startLine :startCol)
             } else {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected type reference for out".string)
@@ -1712,12 +1712,12 @@ Parser: class {
             lex.advance
             natOpt: lex.accept tt: zlexer.TT.NATIVE
             match natOpt case some then {
-                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: body gotIn: gotIn hasOut: hasOut hasIs: true isNative: true hasAs: hasAs startLine: startLine startCol: startCol)
+                return (this.functionClausesTail :lex :parameters :asItems :returntype :body :gotIn :hasOut hasIs: true isNative: true :hasAs :startLine :startCol)
             } case none then {
-                stmt: this.acceptBlock lex: lex
+                stmt: this.acceptBlock :lex
                 sErr: this.isError node: stmt
                 if sErr then return stmt
-                return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: returntype body: (Option.some stmt) gotIn: gotIn hasOut: hasOut hasIs: true isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
+                return (this.functionClausesTail :lex :parameters :asItems :returntype body: (Option.some stmt) :gotIn :hasOut hasIs: true :isNative :hasAs :startLine :startCol)
             }
         }
         if tt == zlexer.TT.AS then {
@@ -1725,7 +1725,7 @@ Parser: class {
                 return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate as".string)
             }
             lex.advance
-            ab: this.getObjectBody lex: lex
+            ab: this.getObjectBody :lex
             an: ab.length
             if an > 0 then {
                 last: ab.pop
@@ -1733,14 +1733,14 @@ Parser: class {
                 if le then return last
                 ab.append last
             }
-            return (this.functionClausesTail lex: lex parameters: parameters asItems: ab returntype: returntype body: body gotIn: gotIn hasOut: hasOut hasIs: hasIs isNative: isNative hasAs: true startLine: startLine startCol: startCol)
+            return (this.functionClausesTail :lex :parameters asItems: ab :returntype :body :gotIn :hasOut :hasIs :isNative hasAs: true :startLine :startCol)
         }
         if tt == zlexer.TT.IN then {
             if gotIn then {
                 return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Duplicate in".string)
             }
             lex.advance
-            pb: this.acceptParamBlock lex: lex
+            pb: this.acceptParamBlock :lex
             pn: pb.length
             if pn > 0 then {
                 last: pb.pop
@@ -1748,9 +1748,9 @@ Parser: class {
                 if le then return last
                 pb.append last
             }
-            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: returntype body: body gotIn: true hasOut: hasOut hasIs: hasIs isNative: isNative hasAs: hasAs startLine: startLine startCol: startCol)
+            return (this.functionClausesTail :lex parameters: pb :asItems :returntype :body gotIn: true :hasOut :hasIs :isNative :hasAs :startLine :startCol)
         }
-        return (Node.functiondef (zast.FunctionData nodeid: this.nextId lineno: startLine colno: startCol returntype: returntype parameters: parameters body: body isNative: isNative asItems: asItems))
+        return (Node.functiondef (zast.FunctionData nodeid: this.nextId lineno: startLine colno: startCol :returntype :parameters :body :isNative :asItems))
     }
 
     # Body of acceptFunctionDefinition after `function` is consumed. A
@@ -1762,7 +1762,7 @@ Parser: class {
         pk: lex.peek
         isBrace: pk.toktype == zlexer.TT.BRACEOPEN
         if isBrace then {
-            pb: this.acceptParamBlock lex: lex
+            pb: this.acceptParamBlock :lex
             pn: pb.length
             if pn > 0 then {
                 last: pb.pop
@@ -1770,9 +1770,9 @@ Parser: class {
                 if le then return last
                 pb.append last
             }
-            return (this.functionClausesTail lex: lex parameters: pb asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: true hasOut: false hasIs: false isNative: false hasAs: false startLine: startLine startCol: startCol)
+            return (this.functionClausesTail :lex parameters: pb :asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: true hasOut: false hasIs: false isNative: false hasAs: false :startLine :startCol)
         }
-        return (this.functionClausesTail lex: lex parameters: parameters asItems: asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: false hasOut: false hasIs: false isNative: false hasAs: false startLine: startLine startCol: startCol)
+        return (this.functionClausesTail :lex :parameters :asItems returntype: (Option.none Node) body: (Option.none Node) gotIn: false hasOut: false hasIs: false isNative: false hasAs: false :startLine :startCol)
     }
 
     # Parse a function definition whose `function` keyword the caller has
@@ -1783,7 +1783,7 @@ Parser: class {
     parseFunctionDefinition: function {:this lex: zlexer.Lexer startTok: zlexer.Token} out Node is {
         lex.advance
         this.functionBodyDepth = this.functionBodyDepth + 1
-        inner: this.functionDefinitionInner lex: lex startLine: startTok.lineno startCol: startTok.colno
+        inner: this.functionDefinitionInner :lex startLine: startTok.lineno startCol: startTok.colno
         this.functionBodyDepth = this.functionBodyDepth - 1
         return inner
     }
@@ -1794,7 +1794,7 @@ Parser: class {
         startTok: lex.peek
         isFunc: startTok.toktype == zlexer.TT.FUNCTION
         if isFunc then {
-            return (Option.some (this.parseFunctionDefinition lex: lex startTok: startTok))
+            return (Option.some (this.parseFunctionDefinition :lex :startTok))
         }
         return (Option.none Node)
     }
@@ -1817,7 +1817,7 @@ Parser: class {
             return items
         } case some then {
             for true loop {
-                for (this.atEol lex: lex) loop {
+                for (this.atEol :lex) loop {
                     lex.advance
                 }
                 pk: lex.peek
@@ -1849,7 +1849,7 @@ Parser: class {
                         names.append nm
                         opName: lblTok.tokstr.copy
                         lex.accept tt: zlexer.TT.EOL
-                        member: this.objectBodyMember lex: lex
+                        member: this.objectBodyMember :lex
                         mErr: this.isError node: member
                         if mErr then {
                             items.append member
@@ -1880,23 +1880,23 @@ Parser: class {
         t: lex.peek
         tt: t.toktype
         if tt == zlexer.TT.FUNCTION then {
-            return (this.parseFunctionDefinition lex: lex startTok: t)
+            return (this.parseFunctionDefinition :lex startTok: t)
         }
         if tt == zlexer.TT.UNIT then {
-            return (this.parseUnitDefinition lex: lex startTok: t)
+            return (this.parseUnitDefinition :lex startTok: t)
         }
-        inlineTypedef: isInlineTypedefTok tt: tt
+        inlineTypedef: isInlineTypedefTok :tt
         if inlineTypedef then {
             bad: lex.acceptAny
             return (this.mkError tok: bad code: zast.err.BADITEM msg: "Inline type definition is not allowed here; define it at unit level and reference it by name".string)
         }
-        paths: this.operationPaths lex: lex
+        paths: this.operationPaths :lex
         n: paths.length
         if n == 0 then {
             bad: lex.acceptAny
             return (this.mkError tok: bad code: zast.err.BADITEM msg: "Expected a function or expression for item".string)
         }
-        return (this.operationFromPaths paths: paths lex: lex)
+        return (this.operationFromPaths :paths :lex)
     }
 
     # type-definition dispatcher: unit / function / the six item-definition
@@ -1907,43 +1907,43 @@ Parser: class {
     acceptTypeDefinition: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match t.toktype case UNIT then {
-            return (this.parseUnitDefinition lex: lex startTok: t)
+            return (this.parseUnitDefinition :lex startTok: t)
         } case FUNCTION then {
-            return (this.parseFunctionDefinition lex: lex startTok: t)
+            return (this.parseFunctionDefinition :lex startTok: t)
         } case RECORD then {
-            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.RECORD)
+            return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.RECORD)
         } case CLASS then {
-            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.CLASS)
+            return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.CLASS)
         } case VARIANT then {
-            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.VARIANT)
+            return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.VARIANT)
         } case UNION then {
-            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.UNION)
+            return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.UNION)
         } case PROTOCOL then {
-            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.PROTOCOL)
+            return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.PROTOCOL)
         } case FACET then {
-            return (this.parseItemDefinition lex: lex startTok: t kind: zast.nodetype.FACET)
+            return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.FACET)
         } case IF then {
-            ifn: this.acceptIfExpression lex: lex
+            ifn: this.acceptIfExpression :lex
             iErr: this.isError node: ifn
             if iErr then return ifn
             return (this.wrapExpression inner: ifn)
         } case MATCH then {
-            mexpr: this.acceptMatchExpression lex: lex
+            mexpr: this.acceptMatchExpression :lex
             mErr: this.isError node: mexpr
             if mErr then return mexpr
             return (this.wrapExpression inner: mexpr)
         } case DATA then {
-            dn: this.acceptDataDefinition lex: lex
+            dn: this.acceptDataDefinition :lex
             dErr: this.isError node: dn
             if dErr then return dn
             return (this.wrapExpression inner: dn)
         } else {
-            paths: this.operationPaths lex: lex
+            paths: this.operationPaths :lex
             n: paths.length
             if n == 0 then {
                 return (this.mkError tok: t code: zast.err.EXPECTEDTYPEDEF msg: "Expected a type definition or expression".string)
             }
-            return (this.operationFromPaths paths: paths lex: lex)
+            return (this.operationFromPaths :paths :lex)
         }
     }
 
@@ -1958,7 +1958,7 @@ Parser: class {
         prevFilter: lex.filterEolState
         lex.setFilterEol enabled: false
         for true loop {
-            for (this.atEol lex: lex) loop {
+            for (this.atEol :lex) loop {
                 lex.advance
             }
             pk: lex.peek
@@ -1993,7 +1993,7 @@ Parser: class {
                     opName: lblTok.tokstr.copy
                     lex.accept tt: zlexer.TT.EOL
                     lex.setFilterEol enabled: true
-                    defNode: this.acceptTypeDefinition lex: lex
+                    defNode: this.acceptTypeDefinition :lex
                     lex.setFilterEol enabled: false
                     dErr: this.isError node: defNode
                     if dErr then {
@@ -2023,7 +2023,7 @@ Parser: class {
             bad: lex.peek
             return (this.mkError tok: bad code: zast.err.BADARGUMENT msg: "Expected open brace for unit body".string)
         } case some then {
-            body: this.acceptUnitBody lex: lex
+            body: this.acceptUnitBody :lex
             bn: body.length
             if bn > 0 then {
                 last: body.pop
@@ -2036,7 +2036,7 @@ Parser: class {
                 bad: lex.peek
                 return (this.mkError tok: bad code: zast.err.BADUNIT msg: "Expected closing brace at end of unit".string)
             } case some then {
-                return (Node.unitdef (zast.UnitData nodeid: this.nextId lineno: startTok.lineno colno: startTok.colno body: body))
+                return (Node.unitdef (zast.UnitData nodeid: this.nextId lineno: startTok.lineno colno: startTok.colno :body))
             }
         }
     }
@@ -2049,7 +2049,7 @@ Parser: class {
         lex.advance
         isItems: (List Node)
         asItems: (List Node)
-        return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: asItems isNative: false hasIs: false hasAs: false kind: kind startLine: startTok.lineno startCol: startTok.colno)
+        return (this.acceptItemBodiesTail :lex :isItems :asItems isNative: false hasIs: false hasAs: false :kind startLine: startTok.lineno startCol: startTok.colno)
     }
 
     # Reorderable `is { ... }` / `as { ... }` / `is native` / bare `native`
@@ -2070,9 +2070,9 @@ Parser: class {
             lex.advance
             natOpt: lex.accept tt: zlexer.TT.NATIVE
             match natOpt case some then {
-                return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: asItems isNative: true hasIs: hasIs hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+                return (this.acceptItemBodiesTail :lex :isItems :asItems isNative: true :hasIs :hasAs :kind :startLine :startCol)
             } case none then {
-                ib: this.getObjectBody lex: lex
+                ib: this.getObjectBody :lex
                 ibn: ib.length
                 if ibn > 0 then {
                     last: ib.pop
@@ -2080,7 +2080,7 @@ Parser: class {
                     if le then return last
                     ib.append last
                 }
-                return (this.acceptItemBodiesTail lex: lex isItems: ib asItems: asItems isNative: isNative hasIs: true hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+                return (this.acceptItemBodiesTail :lex isItems: ib :asItems :isNative hasIs: true :hasAs :kind :startLine :startCol)
             }
         }
         if tt == zlexer.TT.NATIVE then {
@@ -2089,7 +2089,7 @@ Parser: class {
             if isNative then noBodyYet = false
             if noBodyYet then {
                 lex.advance
-                return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: asItems isNative: true hasIs: hasIs hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+                return (this.acceptItemBodiesTail :lex :isItems :asItems isNative: true :hasIs :hasAs :kind :startLine :startCol)
             }
         }
         if tt == zlexer.TT.AS then {
@@ -2097,7 +2097,7 @@ Parser: class {
                 return (this.mkError tok: t code: zast.err.BADITEM msg: "Duplicate as clause".string)
             }
             lex.advance
-            ab: this.getObjectBody lex: lex
+            ab: this.getObjectBody :lex
             abn: ab.length
             if abn > 0 then {
                 last: ab.pop
@@ -2105,14 +2105,14 @@ Parser: class {
                 if le then return last
                 ab.append last
             }
-            return (this.acceptItemBodiesTail lex: lex isItems: isItems asItems: ab isNative: isNative hasIs: hasIs hasAs: true kind: kind startLine: startLine startCol: startCol)
+            return (this.acceptItemBodiesTail :lex :isItems asItems: ab :isNative :hasIs hasAs: true :kind :startLine :startCol)
         }
         if tt == zlexer.TT.BRACEOPEN then {
             noBodyYet: true
             if hasIs then noBodyYet = false
             if isNative then noBodyYet = false
             if noBodyYet then {
-                ib: this.getObjectBody lex: lex
+                ib: this.getObjectBody :lex
                 ibn: ib.length
                 if ibn > 0 then {
                     last: ib.pop
@@ -2120,14 +2120,14 @@ Parser: class {
                     if le then return last
                     ib.append last
                 }
-                return (this.acceptItemBodiesTail lex: lex isItems: ib asItems: asItems isNative: isNative hasIs: true hasAs: hasAs kind: kind startLine: startLine startCol: startCol)
+                return (this.acceptItemBodiesTail :lex isItems: ib :asItems :isNative hasIs: true :hasAs :kind :startLine :startCol)
             }
         }
         hasBody: false
         if hasIs then hasBody = true
         if isNative then hasBody = true
         if hasBody then {
-            return (Node.objectdef (zast.ObjectDefData nodeid: this.nextId lineno: startLine colno: startCol kind: kind isItems: isItems asItems: asItems isNative: isNative))
+            return (Node.objectdef (zast.ObjectDefData nodeid: this.nextId lineno: startLine colno: startCol :kind :isItems :asItems :isNative))
         }
         return (this.mkError tok: t code: zast.err.BADARGUMENT msg: "Expected open brace or native for item body".string)
     }
@@ -2135,73 +2135,73 @@ Parser: class {
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         match t.toktype case IF then {
-            ifn: this.acceptIfExpression lex: lex
+            ifn: this.acceptIfExpression :lex
             iErr: this.isError node: ifn
             if iErr then return ifn
             return (this.wrapExpression inner: ifn)
         } case FOR then {
-            forn: this.acceptForExpression lex: lex
+            forn: this.acceptForExpression :lex
             fErr: this.isError node: forn
             if fErr then return forn
             return (this.wrapExpression inner: forn)
         } case MATCH then {
-            mexpr: this.acceptMatchExpression lex: lex
+            mexpr: this.acceptMatchExpression :lex
             mErr: this.isError node: mexpr
             if mErr then return mexpr
             return (this.wrapExpression inner: mexpr)
         } case DATA then {
-            dn: this.acceptDataDefinition lex: lex
+            dn: this.acceptDataDefinition :lex
             dErr: this.isError node: dn
             if dErr then return dn
             return (this.wrapExpression inner: dn)
         } case WITH then {
-            wn: this.acceptWithExpression lex: lex
+            wn: this.acceptWithExpression :lex
             wErr: this.isError node: wn
             if wErr then return wn
             return (this.wrapExpression inner: wn)
         } case BRACEOPEN then {
-            blk: this.acceptBareblock lex: lex
+            blk: this.acceptBareblock :lex
             bErr: this.isError node: blk
             if bErr then return blk
             return (this.wrapExpression inner: blk)
         } case YIELD then {
-            yn: this.acceptYieldExpression lex: lex
+            yn: this.acceptYieldExpression :lex
             yErr: this.isError node: yn
             if yErr then return yn
             return (this.wrapExpression inner: yn)
         } else {
-            paths: this.operationPaths lex: lex
+            paths: this.operationPaths :lex
             n: paths.length
             if n == 0 then {
                 return (this.mkError tok: t code: zast.err.BADEXPRESSION msg: "Expected an expression".string)
             }
             eqOpt: lex.accept tt: zlexer.TT.EQUALS
             match eqOpt case some then {
-                ra: this.buildReassignment paths: paths lex: lex startLine: t.lineno startCol: t.colno
+                ra: this.buildReassignment :paths :lex startLine: t.lineno startCol: t.colno
                 raErr: this.isError node: ra
                 if raErr then return ra
                 return (this.wrapExpression inner: ra)
             } case none then {
                 swOpt: lex.accept tt: zlexer.TT.SWAP
                 match swOpt case some then {
-                    sw: this.buildSwap paths: paths lex: lex startLine: t.lineno startCol: t.colno
+                    sw: this.buildSwap :paths :lex startLine: t.lineno startCol: t.colno
                     swErr: this.isError node: sw
                     if swErr then return sw
                     return (this.wrapExpression inner: sw)
                 } case none then {
-                    inner: this.operationOrCallFromPaths paths: paths lex: lex
+                    inner: this.operationOrCallFromPaths :paths :lex
                     ierr: this.isError node: inner
                     if ierr then return inner
-                    return (this.wrapExpression inner: inner)
+                    return (this.wrapExpression :inner)
                 }
             }
         }
     }
 
     acceptExpression: function {:this lex: zlexer.Lexer} out Option Node is {
-        la: this.exprLookahead lex: lex
+        la: this.exprLookahead :lex
         if la then {
-            return (Option.some (this.parseExpression lex: lex))
+            return (Option.some (this.parseExpression :lex))
         } else {
             return (Option.none Node)
         }
@@ -2282,7 +2282,7 @@ Parser: class {
             }
             this.fileSegs.append (FileSeg startId: segStart9 endId: this.nextNodeId fsno: fsid)
             ewBindNames scope: outNames items: body
-            raw: collectExterns body: body
+            raw: collectExterns :body
             dirid: vfs.walk parent: parentid name: unitname.stringview
             dkind: vfs.arm dentryid: dirid
             hasSubdir: false
@@ -2300,7 +2300,7 @@ Parser: class {
                     handled: false
                     if hasSubdir then {
                         subNames: (List String)
-                        sub: this.loadUnit vfs: vfs parentid: dirid unitname: rname coreNames: coreNames outBody: body outExterns: raw outNames: subNames
+                        sub: this.loadUnit :vfs parentid: dirid unitname: rname :coreNames outBody: body outExterns: raw outNames: subNames
                         subErr: this.isError node: sub
                         if subErr then {
                             nf: this.isFileNotFound node: sub
@@ -2316,7 +2316,7 @@ Parser: class {
                     }
                 }
             }
-            root: Node.unitdef (zast.UnitData nodeid: this.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
+            root: Node.unitdef (zast.UnitData nodeid: this.nextId lineno: firstTok.lineno colno: firstTok.colno :body)
             outBody.append (this.mkNamedOp name: (Option.some unitname.copy) operation: root line: firstTok.lineno col: firstTok.colno)
             return (Node.atomid (zast.AtomIdData nodeid: this.nextId lineno: 0 colno: 0 name: "ok".string))
         }
@@ -2333,7 +2333,7 @@ Parser: class {
         coreNames: (List String)
         coreNamesOut: (List String)
         coreExterns: (List String)
-        coreRes: this.loadUnit vfs: vfs parentid: rootid unitname: "core".string coreNames: coreNames outBody: units outExterns: coreExterns outNames: coreNamesOut
+        coreRes: this.loadUnit :vfs parentid: rootid unitname: "core".string :coreNames outBody: units outExterns: coreExterns outNames: coreNamesOut
         coreErr: this.isError node: coreRes
         coreOk: false
         if coreErr then {
@@ -2356,7 +2356,7 @@ Parser: class {
         loadQueue.append mainUnitName.copy
         ceIt: coreExterns.iterate
         for ce: ceIt loop {
-            enqueueUnit queue: loadQueue defNames: defNames name: ce.copy
+            enqueueUnit queue: loadQueue :defNames name: ce.copy
         }
         for loadQueue.length > 0 loop {
             name: loadQueue.pop
@@ -2364,7 +2364,7 @@ Parser: class {
             if (already) == false then {
                 unitExterns: (List String)
                 throwNames: (List String)
-                res: this.loadUnit vfs: vfs parentid: rootid unitname: name coreNames: coreNames outBody: units outExterns: unitExterns outNames: throwNames
+                res: this.loadUnit :vfs parentid: rootid unitname: name :coreNames outBody: units outExterns: unitExterns outNames: throwNames
                 rErr: this.isError node: res
                 if rErr then {
                     nf: this.isFileNotFound node: res
@@ -2377,12 +2377,12 @@ Parser: class {
                     defNames.append name.copy
                     eIt: unitExterns.iterate
                     for e: eIt loop {
-                        enqueueUnit queue: loadQueue defNames: defNames name: e.copy
+                        enqueueUnit queue: loadQueue :defNames name: e.copy
                     }
                 }
             }
         }
-        return (Node.program (zast.ProgramData nodeid: this.nextId lineno: 1 colno: 1 units: units mainUnitName: mainUnitName.copy))
+        return (Node.program (zast.ProgramData nodeid: this.nextId lineno: 1 colno: 1 :units mainUnitName: mainUnitName.copy))
     }
 }
 
@@ -2436,7 +2436,7 @@ ewBindOneName: function {scope: List String item: Node} is {
     match (
         item
     ) case namedoperation then {
-        ewBindOptName scope: scope o: item.name
+        ewBindOptName :scope o: item.name
     } else {
     }
 }
@@ -2446,7 +2446,7 @@ ewBindOneName: function {scope: List String item: Node} is {
 ewBindNames: function {scope: List String items: List Node} is {
     it: items.iterate
     for el: it loop {
-        ewBindOneName scope: scope item: el
+        ewBindOneName :scope item: el
     }
 }
 
@@ -2462,7 +2462,7 @@ ewWalkOpt: function {externs: List String scope: List String o: Option Node} is 
     match (
         o
     ) case some then {
-        ewWalk externs: externs scope: scope node: o
+        ewWalk :externs :scope node: o
     } case none then {
     }
 }
@@ -2471,7 +2471,7 @@ ewWalkOpt: function {externs: List String scope: List String o: Option Node} is 
 ewWalkList: function {externs: List String scope: List String items: List Node} is {
     it: items.iterate
     for el: it loop {
-        ewWalk externs: externs scope: scope node: el
+        ewWalk :externs :scope node: el
     }
 }
 
@@ -2483,9 +2483,9 @@ ewWalkLine: function {externs: List String scope: List String line: Node} is {
     match (
         line
     ) case statementline then {
-        ewWalkStmtInner externs: externs scope: scope inner: line.statementline
+        ewWalkStmtInner :externs :scope inner: line.statementline
     } else {
-        ewWalkStmtInner externs: externs scope: scope inner: line
+        ewWalkStmtInner :externs :scope inner: line
     }
 }
 
@@ -2495,16 +2495,16 @@ ewWalkStmtInner: function {externs: List String scope: List String inner: Node} 
     match (
         inner
     ) case assignment then {
-        ewWalk externs: externs scope: scope node: inner.value
+        ewWalk :externs :scope node: inner.value
         scope.append inner.name.copy
     } case reassignment then {
-        ewWalk externs: externs scope: scope node: inner.topath
-        ewWalk externs: externs scope: scope node: inner.value
+        ewWalk :externs :scope node: inner.topath
+        ewWalk :externs :scope node: inner.value
     } case swapstmt then {
-        ewWalk externs: externs scope: scope node: inner.lhs
-        ewWalk externs: externs scope: scope node: inner.rhs
+        ewWalk :externs :scope node: inner.lhs
+        ewWalk :externs :scope node: inner.rhs
     } else {
-        ewWalk externs: externs scope: scope node: inner
+        ewWalk :externs :scope node: inner
     }
 }
 
@@ -2515,10 +2515,10 @@ ewWalkForCond: function {externs: List String scope: List String cond: Node} is 
     match (
         cond
     ) case namedoperation then {
-        ewWalk externs: externs scope: scope node: cond.operation
-        ewBindOptName scope: scope o: cond.name
+        ewWalk :externs :scope node: cond.operation
+        ewBindOptName :scope o: cond.name
     } else {
-        ewWalk externs: externs scope: scope node: cond
+        ewWalk :externs :scope node: cond
     }
 }
 
@@ -2530,104 +2530,104 @@ ewWalk: function {externs: List String scope: List String node: Node} is {
         node
     ) case error then {
     } case atomid then {
-        ewEmit externs: externs scope: scope name: node.name.copy
+        ewEmit :externs :scope name: node.name.copy
     } case labelvalue then {
     } case stringchunk then {
     } case binop then {
-        ewWalk externs: externs scope: scope node: node.lhs
-        ewWalk externs: externs scope: scope node: node.operator
-        ewWalk externs: externs scope: scope node: node.rhs
+        ewWalk :externs :scope node: node.lhs
+        ewWalk :externs :scope node: node.operator
+        ewWalk :externs :scope node: node.rhs
     } case atomstring then {
-        ewWalkList externs: externs scope: scope items: node.stringparts
+        ewWalkList :externs :scope items: node.stringparts
     } case dottedpath then {
-        ewWalk externs: externs scope: scope node: node.parent
+        ewWalk :externs :scope node: node.parent
     } case call then {
-        ewWalk externs: externs scope: scope node: node.callable
-        ewWalkList externs: externs scope: scope items: node.arguments
+        ewWalk :externs :scope node: node.callable
+        ewWalkList :externs :scope items: node.arguments
     } case typeofexpr then {
-        ewWalk externs: externs scope: scope node: node.source
+        ewWalk :externs :scope node: node.source
     } case namedoperation then {
-        ewWalk externs: externs scope: scope node: node.operation
+        ewWalk :externs :scope node: node.operation
     } case datablock then {
-        ewWalkList externs: externs scope: scope items: node.elements
-        ewWalkOpt externs: externs scope: scope o: node.outType
+        ewWalkList :externs :scope items: node.elements
+        ewWalkOpt :externs :scope o: node.outType
     } case yieldexpr then {
-        ewWalk externs: externs scope: scope node: node.expr
+        ewWalk :externs :scope node: node.expr
     } case statement then {
         base: scope.length
         sit: node.statements.iterate
         for line: sit loop {
-            ewWalkLine externs: externs scope: scope line: line
+            ewWalkLine :externs :scope :line
         }
-        ewTruncate scope: scope n: base
+        ewTruncate :scope n: base
     } case statementline then {
-        ewWalk externs: externs scope: scope node: node.statementline
+        ewWalk :externs :scope node: node.statementline
     } case assignment then {
-        ewWalk externs: externs scope: scope node: node.value
+        ewWalk :externs :scope node: node.value
     } case reassignment then {
-        ewWalk externs: externs scope: scope node: node.topath
-        ewWalk externs: externs scope: scope node: node.value
+        ewWalk :externs :scope node: node.topath
+        ewWalk :externs :scope node: node.value
     } case swapstmt then {
-        ewWalk externs: externs scope: scope node: node.lhs
-        ewWalk externs: externs scope: scope node: node.rhs
+        ewWalk :externs :scope node: node.lhs
+        ewWalk :externs :scope node: node.rhs
     } case expression then {
-        ewWalk externs: externs scope: scope node: node.expression
+        ewWalk :externs :scope node: node.expression
     } case ifexpr then {
-        ewWalkList externs: externs scope: scope items: node.clauses
-        ewWalkOpt externs: externs scope: scope o: node.elseclause
+        ewWalkList :externs :scope items: node.clauses
+        ewWalkOpt :externs :scope o: node.elseclause
     } case ifclause then {
-        ewWalkList externs: externs scope: scope items: node.conditions
-        ewWalk externs: externs scope: scope node: node.statement
+        ewWalkList :externs :scope items: node.conditions
+        ewWalk :externs :scope node: node.statement
     } case forexpr then {
         base: scope.length
         fit: node.conditions.iterate
         for fc: fit loop {
-            ewWalkForCond externs: externs scope: scope cond: fc
+            ewWalkForCond :externs :scope cond: fc
         }
-        ewWalkOpt externs: externs scope: scope o: node.body
-        ewWalkList externs: externs scope: scope items: node.postconditions
-        ewTruncate scope: scope n: base
+        ewWalkOpt :externs :scope o: node.body
+        ewWalkList :externs :scope items: node.postconditions
+        ewTruncate :scope n: base
     } case doexpr then {
-        ewWalk externs: externs scope: scope node: node.statement
+        ewWalk :externs :scope node: node.statement
     } case withexpr then {
         base: scope.length
-        ewWalk externs: externs scope: scope node: node.value
+        ewWalk :externs :scope node: node.value
         scope.append node.name.copy
-        ewWalk externs: externs scope: scope node: node.body
-        ewTruncate scope: scope n: base
+        ewWalk :externs :scope node: node.body
+        ewTruncate :scope n: base
     } case caseexpr then {
-        ewWalk externs: externs scope: scope node: node.subject
-        ewWalkList externs: externs scope: scope items: node.clauses
-        ewWalkOpt externs: externs scope: scope o: node.elseclause
+        ewWalk :externs :scope node: node.subject
+        ewWalkList :externs :scope items: node.clauses
+        ewWalkOpt :externs :scope o: node.elseclause
     } case caseclause then {
-        ewWalk externs: externs scope: scope node: node.statement
+        ewWalk :externs :scope node: node.statement
     } case functiondef then {
         base: scope.length
-        ewBindNames scope: scope items: node.parameters
-        ewBindNames scope: scope items: node.asItems
-        ewWalkOpt externs: externs scope: scope o: node.returntype
-        ewWalkList externs: externs scope: scope items: node.parameters
-        ewWalkOpt externs: externs scope: scope o: node.body
-        ewWalkList externs: externs scope: scope items: node.asItems
-        ewTruncate scope: scope n: base
+        ewBindNames :scope items: node.parameters
+        ewBindNames :scope items: node.asItems
+        ewWalkOpt :externs :scope o: node.returntype
+        ewWalkList :externs :scope items: node.parameters
+        ewWalkOpt :externs :scope o: node.body
+        ewWalkList :externs :scope items: node.asItems
+        ewTruncate :scope n: base
     } case objectdef then {
         base: scope.length
         scope.append "this".string
         scope.append "type".string
         scope.append "meta".string
-        ewBindNames scope: scope items: node.isItems
-        ewBindNames scope: scope items: node.asItems
-        ewWalkList externs: externs scope: scope items: node.isItems
-        ewWalkList externs: externs scope: scope items: node.asItems
-        ewTruncate scope: scope n: base
+        ewBindNames :scope items: node.isItems
+        ewBindNames :scope items: node.asItems
+        ewWalkList :externs :scope items: node.isItems
+        ewWalkList :externs :scope items: node.asItems
+        ewTruncate :scope n: base
     } case unitdef then {
         base: scope.length
         scope.append "this".string
         scope.append "type".string
         scope.append "meta".string
-        ewBindNames scope: scope items: node.body
-        ewWalkList externs: externs scope: scope items: node.body
-        ewTruncate scope: scope n: base
+        ewBindNames :scope items: node.body
+        ewWalkList :externs :scope items: node.body
+        ewTruncate :scope n: base
     } case program then {
     }
 }
@@ -2642,8 +2642,8 @@ collectExterns: function {body: List Node} out List String is {
     scope.append "this".string
     scope.append "type".string
     scope.append "meta".string
-    ewBindNames scope: scope items: body
-    ewWalkList externs: externs scope: scope items: body
+    ewBindNames :scope items: body
+    ewWalkList :externs :scope items: body
     return externs
 }
 
@@ -2682,7 +2682,7 @@ runOp: function {label: StringView src: String.take} is {
     tk: zlexer.Tokenizer.create source: src fsno: 0
     lx: zlexer.Lexer.create lexer: tk
     paths: p.operationPaths lex: lx
-    r: p.acceptOperationOrCall paths: paths lex: lx
+    r: p.acceptOperationOrCall :paths lex: lx
     match r case some then {
         zast.printNode r
     } case none then {
@@ -2845,7 +2845,7 @@ main: function is {
             rootid: vfs.registerFS rootpath: dir.copy parentpath: "".string
             vfs.rootid = rootid
             p: Parser.create
-            prog: p.parse vfs: vfs rootid: rootid mainUnitName: mainName
+            prog: p.parse :vfs :rootid mainUnitName: mainName
             zast.printNodeCanonical prog
         } else {
             path: argv.get i: 1
@@ -2858,7 +2858,7 @@ main: function is {
                 lx: zlexer.Lexer.create lexer: tk
                 firstTok: lx.peek
                 body: p.acceptUnitBody lex: lx
-                root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno body: body)
+                root: Node.unitdef (zast.UnitData nodeid: p.nextId lineno: firstTok.lineno colno: firstTok.colno :body)
                 zast.printNodeCanonical root
             } case err then {
                 io.eprintln "zparser: could not read source file"

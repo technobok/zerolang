@@ -87,7 +87,7 @@ isElseIfWrap: function {n: Node} out bool is {
             res: false
             it: n.statements.iterate
             for sl: it loop {
-                res = slIsIf sl: sl
+                res = slIsIf :sl
             }
             return res
         }
@@ -200,6 +200,7 @@ Analysis: class {
     path: String
     source: String
     lines: (List String)
+    lineStart: (List u64)
     diags: (List zdiag.Diagnostic)
     edits: (List zfix.Edit)
 } as {
@@ -240,7 +241,7 @@ Analysis: class {
     # warnFix -- append a WARNING diagnostic AND its single safe fix edit (a
     # replacement of source[lo, hi) with `repl`). Used by the format rules.
     warnFix: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32 lo: u64 hi: u64 repl: String.take} is {
-        this.warn code: code msg: msg line: line col: col width: width
+        this.warn :code :msg :line :col :width
         this.edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
     }
 
@@ -282,7 +283,7 @@ Analysis: class {
         srcLen: sv.length
         i: 0.u64
         for i < nLines loop {
-            ln: lls.get i: i
+            ln: lls.get :i
             blank: (trailingWsLen ln: ln.stringview) == ln.length
             if blank then {
                 e: i + 1
@@ -307,7 +308,7 @@ Analysis: class {
                     if e < nLines then {
                         hi = lineStart.get i: e
                     }
-                    this.warnFix code: "W004" msg: "too many consecutive blank lines".string line: (i + 2).u32 col: 1 width: 1 lo: lo hi: hi repl: "".string
+                    this.warnFix code: "W004" msg: "too many consecutive blank lines".string line: (i + 2).u32 col: 1 width: 1 :lo :hi repl: "".string
                 }
                 i = e
             } else {
@@ -328,13 +329,13 @@ Analysis: class {
     # warn -- append a WARNING lint diagnostic (fast tier: no fsno; the single-file
     # reporter resolves the source line from the line table).
     warn: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
-        d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.WARNING fsno: 0 lineno: line colno: col width: width msg: msg note: "".string hint: "".string)
+        d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.WARNING fsno: 0 lineno: line colno: col :width :msg note: "".string hint: "".string)
         this.diags.append d
     }
 
     # info -- append an advisory INFO diagnostic (does not fail the gate; carries no fix).
     info: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
-        d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.INFO fsno: 0 lineno: line colno: col width: width msg: msg note: "".string hint: "".string)
+        d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.INFO fsno: 0 lineno: line colno: col :width :msg note: "".string hint: "".string)
         this.diags.append d
     }
 
@@ -425,6 +426,34 @@ Analysis: class {
         }
     }
 
+    # checkCollapseName -- L006: a named argument `name: name` whose label equals its bare-atom
+    # value collapses to the `:name` shorthand (same atomVariableId stamp -- codegen-neutral once
+    # the emitter treats labelvalue == atomid). Fires on atomid values only, so it is idempotent:
+    # a `:name` parses to a labelvalue and atomName returns "".
+    checkCollapseName: function {:this arguments: List Node} is {
+        if this.lineStart.length == 0 then {
+            return
+        }
+        aiter: arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                label: optName o: a.name
+                val: atomName n: a.operation
+                lsv: label.stringview
+                vsv: val.stringview
+                if lsv.length > 0 when vsv.length > 0 when lsv == vsv then {
+                    lo9: tokByteStart lineStart: this.lineStart srcLines: this.lines lineno: a.lineno colno: a.colno
+                    vi9: nodeInfoOf n: a.operation
+                    hi9: tokByteStart lineStart: this.lineStart srcLines: this.lines lineno: vi9.line colno: vi9.col
+                    this.warnFix code: "L006" msg: "redundant label repeating its value; use the :name shorthand".string line: a.lineno col: a.colno width: (lsv.length).u32 lo: lo9 hi: hi9 repl: ":".string
+                }
+            } else {
+            }
+        }
+    }
+
     # checkForWhile -- L004 token tier: a `for` immediately followed by `while`.
     # Re-tokenizes the source (parse-free; immune to strings and comments).
     checkForWhile: function {:this} is {
@@ -437,7 +466,7 @@ Analysis: class {
         prevFor: false
         i: 0.u64
         for i < m loop {
-            t: toks.get i: i
+            t: toks.get :i
             match (
                 t.toktype
             ) case WS then {
@@ -447,7 +476,7 @@ Analysis: class {
                 prevFor = true
             } case WHILE then {
                 if prevFor then {
-                    whileStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: t.lineno colno: t.colno
+                    whileStart: tokByteStart :lineStart :srcLines lineno: t.lineno colno: t.colno
                     condStart: whileStart + t.tokstr.length
                     foundCond: false
                     j: i + 1
@@ -471,7 +500,7 @@ Analysis: class {
                             if triv then {
                                 j = j + 1
                             } else {
-                                condStart = tokByteStart lineStart: lineStart srcLines: srcLines lineno: tj.lineno colno: tj.colno
+                                condStart = tokByteStart :lineStart :srcLines lineno: tj.lineno colno: tj.colno
                                 foundCond = true
                                 scanning = false
                             }
@@ -502,7 +531,7 @@ Analysis: class {
         m: toks.length
         i: 0.u64
         for i < m loop {
-            t: toks.get i: i
+            t: toks.get :i
             isColon: false
             match (
                 t.toktype
@@ -562,9 +591,9 @@ Analysis: class {
                         }
                     }
                     if foundNxt when nxtContent when (nl == cl) then {
-                        colByteStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: cl colno: cc
+                        colByteStart: tokByteStart :lineStart :srcLines lineno: cl colno: cc
                         colEnd: colByteStart + 1
-                        valStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: nl colno: nc
+                        valStart: tokByteStart :lineStart :srcLines lineno: nl colno: nc
                         doFix: false
                         if valStart == colEnd then {
                             doFix = true
@@ -620,6 +649,7 @@ Analysis: class {
             this.walk n: n.child
         } case call then {
             this.checkElide callable: n.callable arguments: n.arguments
+            this.checkCollapseName arguments: n.arguments
             this.walk n: n.callable
             ait: n.arguments.iterate
             for arg: ait loop {
@@ -738,7 +768,7 @@ Analysis: class {
         m: toks.length
         i: 0.u64
         for i < m loop {
-            t: toks.get i: i
+            t: toks.get :i
             isIf: false
             match (
                 t.toktype
@@ -862,8 +892,8 @@ Analysis: class {
                     if thenOk when (hasColon == false) then {
                         to: toks.get i: fs
                         tc: toks.get i: matchIdx
-                        oStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: to.lineno colno: to.colno
-                        cStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: tc.lineno colno: tc.colno
+                        oStart: tokByteStart :lineStart :srcLines lineno: to.lineno colno: to.colno
+                        cStart: tokByteStart :lineStart :srcLines lineno: tc.lineno colno: tc.colno
                         this.warn code: "L007" msg: "redundant parentheses around the condition".string line: to.lineno col: to.colno width: 1
                         this.edits.append (zfix.Edit byteLo: oStart byteHi: (oStart + 1) replacement: "".string)
                         this.edits.append (zfix.Edit byteLo: cStart byteHi: (cStart + 1) replacement: "".string)
@@ -877,7 +907,8 @@ Analysis: class {
     # runFastChecks -- the fast-tier passes: parse-error/AST rules over `n`, then the token and
     # line rules over the source.
     runFastChecks: function {:this n: Node} is {
-        this.walk n: n
+        this.lineStart = lineStartIndex src: this.source.stringview
+        this.walk :n
         this.checkForWhile
         this.checkTrailingWs
         this.checkFinalNewline
@@ -900,25 +931,25 @@ Analysis: class {
         sv: srcOwned.stringview
         lineStart: lineStartIndex src: sv
         srcLines: linesOf src: sv
-        byteStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: ln colno: col
+        byteStart: tokByteStart :lineStart :srcLines lineno: ln colno: col
         lo: byteStart
         if byteStart > 0 then {
             lo = byteStart - 1
         }
         hi: byteStart + tname.length
-        this.warnFix code: "L005" msg: "redundant numeric suffix `.\{tname}`".string line: ln col: col width: tname.length.u32 lo: lo hi: hi repl: "".string
+        this.warnFix code: "L005" msg: "redundant numeric suffix `.\{tname}`".string line: ln :col width: tname.length.u32 :lo :hi repl: "".string
     }
 
     # sufBinop -- a binop operand whose numeric suffix the other (non-literal, same-type)
     # operand makes redundant.
     sufBinop: function {:this lhs: Node rhs: Node uname: StringView st: zenv.ZSymbolTable} is {
         ls: operandSuffix n: lhs
-        if ls.tname.length > 0 when (isAnchor n: rhs tname: ls.tname.stringview st: st) then {
-            this.emitSuf uname: uname ln: ls.line col: ls.col tname: ls.tname.stringview
+        if ls.tname.length > 0 when (isAnchor n: rhs tname: ls.tname.stringview :st) then {
+            this.emitSuf :uname ln: ls.line col: ls.col tname: ls.tname.stringview
         }
         rs: operandSuffix n: rhs
-        if rs.tname.length > 0 when (isAnchor n: lhs tname: rs.tname.stringview st: st) then {
-            this.emitSuf uname: uname ln: rs.line col: rs.col tname: rs.tname.stringview
+        if rs.tname.length > 0 when (isAnchor n: lhs tname: rs.tname.stringview :st) then {
+            this.emitSuf :uname ln: rs.line col: rs.col tname: rs.tname.stringview
         }
     }
 
@@ -926,9 +957,9 @@ Analysis: class {
     sufReassign: function {:this topath: Node value: Node uname: StringView st: zenv.ZSymbolTable} is {
         vs: operandSuffix n: value
         if vs.tname.length > 0 then {
-            tn: typeNameOfNode n: topath st: st
+            tn: typeNameOfNode n: topath :st
             if tn.length > 0 when (tn.stringview == vs.tname.stringview) then {
-                this.emitSuf uname: uname ln: vs.line col: vs.col tname: vs.tname.stringview
+                this.emitSuf :uname ln: vs.line col: vs.col tname: vs.tname.stringview
             }
         }
     }
@@ -947,9 +978,9 @@ Analysis: class {
                     match (
                         pto
                     ) case some then {
-                        ptn: nameOfTypeId tid: pto st: st
+                        ptn: nameOfTypeId tid: pto :st
                         if ptn.stringview == s9.tname.stringview then {
-                            this.emitSuf uname: uname ln: s9.line col: s9.col tname: s9.tname.stringview
+                            this.emitSuf :uname ln: s9.line col: s9.col tname: s9.tname.stringview
                         }
                     } case none then {}
                 }
@@ -965,12 +996,12 @@ Analysis: class {
         ) case namedoperation then {
             s9: operandSuffix n: arg.operation
             if s9.tname.length > 0 when (s9.tname.stringview == rtName) then {
-                this.emitSuf uname: uname ln: s9.line col: s9.col tname: s9.tname.stringview
+                this.emitSuf :uname ln: s9.line col: s9.col tname: s9.tname.stringview
             }
         } else {
             s8: operandSuffix n: arg
             if s8.tname.length > 0 when (s8.tname.stringview == rtName) then {
-                this.emitSuf uname: uname ln: s8.line col: s8.col tname: s8.tname.stringview
+                this.emitSuf :uname ln: s8.line col: s8.col tname: s8.tname.stringview
             }
         }
     }
@@ -990,11 +1021,11 @@ Analysis: class {
             } else {}
         } case none then {}
         if isRet then {
-            rtName: typeNameOfOpt o: funcret st: st
+            rtName: typeNameOfOpt o: funcret :st
             if rtName.length > 0 then {
                 ait: arguments.iterate
                 for a: ait loop {
-                    this.sufNamedArgReturn arg: a rtName: rtName.stringview uname: uname
+                    this.sufNamedArgReturn arg: a rtName: rtName.stringview :uname
                 }
             }
         } else {
@@ -1005,7 +1036,7 @@ Analysis: class {
             ) case some then {
                 ait: arguments.iterate
                 for a: ait loop {
-                    this.sufNamedArg arg: a calleeType: co uname: uname st: st
+                    this.sufNamedArg arg: a calleeType: co :uname :st
                 }
             } case none then {}
         }
@@ -1021,121 +1052,121 @@ Analysis: class {
         } case labelvalue then {
         } case stringchunk then {
         } case binop then {
-            this.sufBinop lhs: n.lhs rhs: n.rhs uname: uname st: st
-            this.walkSuf n: n.lhs uname: uname st: st funcret: funcret
-            this.walkSuf n: n.operator uname: uname st: st funcret: funcret
-            this.walkSuf n: n.rhs uname: uname st: st funcret: funcret
+            this.sufBinop lhs: n.lhs rhs: n.rhs :uname :st
+            this.walkSuf n: n.lhs :uname :st :funcret
+            this.walkSuf n: n.operator :uname :st :funcret
+            this.walkSuf n: n.rhs :uname :st :funcret
         } case atomstring then {
             iter: n.stringparts.iterate
             for part: iter loop {
-                this.walkSuf n: part uname: uname st: st funcret: funcret
+                this.walkSuf n: part :uname :st :funcret
             }
         } case dottedpath then {
-            this.walkSuf n: n.parent uname: uname st: st funcret: funcret
-            this.walkSuf n: n.child uname: uname st: st funcret: funcret
+            this.walkSuf n: n.parent :uname :st :funcret
+            this.walkSuf n: n.child :uname :st :funcret
         } case call then {
-            this.sufCall callNid: n.nodeid callable: n.callable arguments: n.arguments uname: uname st: st funcret: funcret
-            this.walkSuf n: n.callable uname: uname st: st funcret: funcret
+            this.sufCall callNid: n.nodeid callable: n.callable arguments: n.arguments :uname :st :funcret
+            this.walkSuf n: n.callable :uname :st :funcret
             argiter: n.arguments.iterate
             for arg: argiter loop {
-                this.walkSuf n: arg uname: uname st: st funcret: funcret
+                this.walkSuf n: arg :uname :st :funcret
             }
         } case typeofexpr then {
-            this.walkSuf n: n.source uname: uname st: st funcret: funcret
+            this.walkSuf n: n.source :uname :st :funcret
         } case namedoperation then {
-            this.walkSuf n: n.operation uname: uname st: st funcret: funcret
+            this.walkSuf n: n.operation :uname :st :funcret
         } case datablock then {
             eiter: n.elements.iterate
             for el: eiter loop {
-                this.walkSuf n: el uname: uname st: st funcret: funcret
+                this.walkSuf n: el :uname :st :funcret
             }
-            this.walkSufOpt o: n.outType uname: uname st: st funcret: funcret
+            this.walkSufOpt o: n.outType :uname :st :funcret
         } case yieldexpr then {
-            this.walkSuf n: n.expr uname: uname st: st funcret: funcret
+            this.walkSuf n: n.expr :uname :st :funcret
         } case statement then {
             siter: n.statements.iterate
             for sln: siter loop {
-                this.walkSuf n: sln uname: uname st: st funcret: funcret
+                this.walkSuf n: sln :uname :st :funcret
             }
         } case statementline then {
-            this.walkSuf n: n.statementline uname: uname st: st funcret: funcret
+            this.walkSuf n: n.statementline :uname :st :funcret
         } case assignment then {
-            this.walkSuf n: n.value uname: uname st: st funcret: funcret
+            this.walkSuf n: n.value :uname :st :funcret
         } case reassignment then {
-            this.sufReassign topath: n.topath value: n.value uname: uname st: st
-            this.walkSuf n: n.topath uname: uname st: st funcret: funcret
-            this.walkSuf n: n.value uname: uname st: st funcret: funcret
+            this.sufReassign topath: n.topath value: n.value :uname :st
+            this.walkSuf n: n.topath :uname :st :funcret
+            this.walkSuf n: n.value :uname :st :funcret
         } case swapstmt then {
-            this.walkSuf n: n.lhs uname: uname st: st funcret: funcret
-            this.walkSuf n: n.rhs uname: uname st: st funcret: funcret
+            this.walkSuf n: n.lhs :uname :st :funcret
+            this.walkSuf n: n.rhs :uname :st :funcret
         } case expression then {
-            this.walkSuf n: n.expression uname: uname st: st funcret: funcret
+            this.walkSuf n: n.expression :uname :st :funcret
         } case ifexpr then {
             clit: n.clauses.iterate
             for cl: clit loop {
-                this.walkSuf n: cl uname: uname st: st funcret: funcret
+                this.walkSuf n: cl :uname :st :funcret
             }
-            this.walkSufOpt o: n.elseclause uname: uname st: st funcret: funcret
+            this.walkSufOpt o: n.elseclause :uname :st :funcret
         } case ifclause then {
             coit: n.conditions.iterate
             for co: coit loop {
-                this.walkSuf n: co uname: uname st: st funcret: funcret
+                this.walkSuf n: co :uname :st :funcret
             }
-            this.walkSuf n: n.statement uname: uname st: st funcret: funcret
+            this.walkSuf n: n.statement :uname :st :funcret
         } case forexpr then {
             fcit: n.conditions.iterate
             for fc: fcit loop {
-                this.walkSuf n: fc uname: uname st: st funcret: funcret
+                this.walkSuf n: fc :uname :st :funcret
             }
-            this.walkSufOpt o: n.body uname: uname st: st funcret: funcret
+            this.walkSufOpt o: n.body :uname :st :funcret
             fpit: n.postconditions.iterate
             for fp: fpit loop {
-                this.walkSuf n: fp uname: uname st: st funcret: funcret
+                this.walkSuf n: fp :uname :st :funcret
             }
         } case doexpr then {
-            this.walkSuf n: n.statement uname: uname st: st funcret: funcret
+            this.walkSuf n: n.statement :uname :st :funcret
         } case withexpr then {
-            this.walkSuf n: n.value uname: uname st: st funcret: funcret
-            this.walkSuf n: n.body uname: uname st: st funcret: funcret
+            this.walkSuf n: n.value :uname :st :funcret
+            this.walkSuf n: n.body :uname :st :funcret
         } case caseexpr then {
-            this.walkSuf n: n.subject uname: uname st: st funcret: funcret
+            this.walkSuf n: n.subject :uname :st :funcret
             ccit: n.clauses.iterate
             for cc: ccit loop {
-                this.walkSuf n: cc uname: uname st: st funcret: funcret
+                this.walkSuf n: cc :uname :st :funcret
             }
-            this.walkSufOpt o: n.elseclause uname: uname st: st funcret: funcret
+            this.walkSufOpt o: n.elseclause :uname :st :funcret
         } case caseclause then {
-            this.walkSuf n: n.matcharm uname: uname st: st funcret: funcret
-            this.walkSuf n: n.statement uname: uname st: st funcret: funcret
+            this.walkSuf n: n.matcharm :uname :st :funcret
+            this.walkSuf n: n.statement :uname :st :funcret
         } case functiondef then {
-            this.walkSufOpt o: n.returntype uname: uname st: st funcret: n.returntype
+            this.walkSufOpt o: n.returntype :uname :st funcret: n.returntype
             piter: n.parameters.iterate
             for pm: piter loop {
-                this.walkSuf n: pm uname: uname st: st funcret: n.returntype
+                this.walkSuf n: pm :uname :st funcret: n.returntype
             }
-            this.walkSufOpt o: n.body uname: uname st: st funcret: n.returntype
+            this.walkSufOpt o: n.body :uname :st funcret: n.returntype
             faiter: n.asItems.iterate
             for fam: faiter loop {
-                this.walkSuf n: fam uname: uname st: st funcret: n.returntype
+                this.walkSuf n: fam :uname :st funcret: n.returntype
             }
         } case objectdef then {
             oiiter: n.isItems.iterate
             for oim: oiiter loop {
-                this.walkSuf n: oim uname: uname st: st funcret: funcret
+                this.walkSuf n: oim :uname :st :funcret
             }
             oaiter: n.asItems.iterate
             for oam: oaiter loop {
-                this.walkSuf n: oam uname: uname st: st funcret: funcret
+                this.walkSuf n: oam :uname :st :funcret
             }
         } case unitdef then {
             ubiter: n.body.iterate
             for ubm: ubiter loop {
-                this.walkSuf n: ubm uname: uname st: st funcret: funcret
+                this.walkSuf n: ubm :uname :st :funcret
             }
         } case program then {
             puiter: n.units.iterate
             for pum: puiter loop {
-                this.walkSuf n: pum uname: uname st: st funcret: funcret
+                this.walkSuf n: pum :uname :st :funcret
             }
         }
     }
@@ -1145,7 +1176,7 @@ Analysis: class {
         match (
             o
         ) case some then {
-            this.walkSuf n: o uname: uname st: st funcret: funcret
+            this.walkSuf n: o :uname :st :funcret
         } case none then {}
     }
 
@@ -1157,7 +1188,7 @@ Analysis: class {
         ) case program then {
             uiter: prog.units.iterate
             for u: uiter loop {
-                this.lintSuffixNamedOp namedOp: u mainName: mn.stringview uname: uname st: st
+                this.lintSuffixNamedOp namedOp: u mainName: mn.stringview :uname :st
             }
         } else {}
     }
@@ -1169,7 +1200,7 @@ Analysis: class {
         ) case namedoperation then {
             un: optName o: namedOp.name
             if un.stringview == mainName then {
-                this.walkSuf n: namedOp.operation uname: uname st: st funcret: (Option.none Node)
+                this.walkSuf n: namedOp.operation :uname :st funcret: (Option.none Node)
             }
         } else {}
     }
@@ -1185,14 +1216,14 @@ Analysis: class {
         vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
         rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
         p: zparser.Parser.create
-        prog: p.parse vfs: vfs rootid: rootid mainUnitName: uname.string
+        prog: p.parse :vfs :rootid mainUnitName: uname.string
         match (
             prog
         ) case error then {
         } else {
             reg: ztypes.newRegistry
-            st: ztypecheck.typecheck program: prog reg: reg full: true
-            this.lintSuffixUnit prog: prog uname: uname st: st
+            st: ztypecheck.typecheck program: prog :reg full: true
+            this.lintSuffixUnit :prog :uname :st
         }
     }
 }
@@ -1276,7 +1307,7 @@ isNonDec: function {s: StringView} out bool is {
 # literalFitsBase -- the literal value fits its base's default type (i64 for decimal, u64 for
 # non-decimal). A literal that overflows the default keeps its suffix (load-bearing).
 literalFitsBase: function {numstr: StringView} out bool is {
-    pv: ztypes.parseLiteralValue numstr: numstr
+    pv: ztypes.parseLiteralValue :numstr
     if pv.ok == false then { return false }
     if pv.isFloat then { return true }
     if (isNonDec s: numstr) then { return true }
@@ -1344,12 +1375,12 @@ nameOfTypeId: function {tid: u64 st: zenv.ZSymbolTable} out String is {
 
 # typeNameOfNode -- the resolved type name of a node ("" when unresolved).
 typeNameOfNode: function {n: Node st: zenv.ZSymbolTable} out String is {
-    info: nodeInfoOf n: n
+    info: nodeInfoOf :n
     to: st.typing.nodeType.get key: info.id.u64
     match (
         to
     ) case some then {
-        return (nameOfTypeId tid: to st: st)
+        return (nameOfTypeId tid: to :st)
     } case none then {
         return "".string
     }
@@ -1360,7 +1391,7 @@ typeNameOfOpt: function {o: Option Node st: zenv.ZSymbolTable} out String is {
     match (
         o
     ) case some then {
-        return (typeNameOfNode n: o st: st)
+        return (typeNameOfNode n: o :st)
     } case none then {
         return "".string
     }
@@ -1369,7 +1400,7 @@ typeNameOfOpt: function {o: Option Node st: zenv.ZSymbolTable} out String is {
 # isAnchor -- the node is a concrete non-literal value of numeric type `tname`, a genuine
 # type anchor that makes a same-type literal suffix redundant.
 isAnchor: function {n: Node tname: StringView st: zenv.ZSymbolTable} out bool is {
-    info: nodeInfoOf n: n
+    info: nodeInfoOf :n
     nid: info.id.u64
     to: st.typing.nodeType.get key: nid
     match (
@@ -1392,7 +1423,7 @@ isAnchor: function {n: Node tname: StringView st: zenv.ZSymbolTable} out bool is
         if zhit9 == false then { return false }
         if zlit9 then { return false }
         if (znm9.stringview == tname) == false then { return false }
-        if (isNodeConst nid: nid st: st) then { return false }
+        if (isNodeConst :nid :st) then { return false }
         return true
     } case none then {
         return false
@@ -1421,11 +1452,11 @@ unitNameOf: function {path: StringView} out String is {
         i: slashOpt + 1
         n: path.length
         for i < n loop {
-            b: path.byteAt i: i
+            b: path.byteAt :i
             match (
                 b
             ) case some then {
-                r.appendByte b: b
+                r.appendByte :b
             } case none then {
             }
             i = i + 1
@@ -1458,7 +1489,7 @@ linesOf: function {src: StringView} out (List String) is {
 lineStartIndex: function {src: StringView} out (List u64) is {
     ls: (List u64)
     off: 0.u64
-    lls: linesOf src: src
+    lls: linesOf :src
     with it: lls.iterate do for ln: it loop {
         ls.append off
         off = off + ln.length + 1
@@ -1472,7 +1503,7 @@ byteToLine: function {lineStart: (List u64).borrow off: u64 nLines: u64} out u64
     r: 0.u64
     i: 0.u64
     for i < nLines loop {
-        v: lineStart.get i: i
+        v: lineStart.get :i
         if v <= off then {
             r = i
         } else {
@@ -1535,7 +1566,7 @@ tokByteStart: function {lineStart: (List u64).borrow srcLines: (List String).bor
     }
     base: lineStart.get i: li
     lt: srcLines.get i: li
-    return base + (colToByteInLine lineText: lt.stringview colno: colno)
+    return base + (colToByteInLine lineText: lt.stringview :colno)
 }
 
 # sortEdits -- a new edit list ordered by byteLo (ascending, stable for ties). applyEdits and
@@ -1557,9 +1588,9 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out (List zfix.Edit) is {
         bestHi: 0.u64
         i: 0.u64
         for i < n loop {
-            u: used.get i: i
+            u: used.get :i
             if (u) == false then {
-                e: edits.get i: i
+                e: edits.get :i
                 take: false
                 if best == n then {
                     take = true
@@ -1661,11 +1692,11 @@ renderDiff: function {path: StringView source: StringView edits: (List zfix.Edit
     clHi: 0.u64
     i: 0.u64
     for i < m loop {
-        e: edits.get i: i
-        lo: byteToLine lineStart: lineStart off: e.byteLo nLines: nLines
+        e: edits.get :i
+        lo: byteToLine :lineStart off: e.byteLo :nLines
         hi: lo
         if e.byteHi > e.byteLo then {
-            hi = byteToLine lineStart: lineStart off: (e.byteHi - 1) nLines: nLines
+            hi = byteToLine :lineStart off: (e.byteHi - 1) :nLines
         }
         if (cActive) == false then {
             cActive = true
@@ -1677,7 +1708,7 @@ renderDiff: function {path: StringView source: StringView edits: (List zfix.Edit
                 clHi = hi
             }
         } else {
-            newDelta = emitDiffHunk buf: buf source: source edits: edits cStart: cStart cEnd: i clLo: clLo clHi: clHi lineStart: lineStart srcLines: srcLines newDelta: newDelta
+            newDelta = emitDiffHunk :buf :source :edits :cStart cEnd: i :clLo :clHi :lineStart :srcLines :newDelta
             cStart = i
             clLo = lo
             clHi = hi
@@ -1685,7 +1716,7 @@ renderDiff: function {path: StringView source: StringView edits: (List zfix.Edit
         i = i + 1
     }
     if cActive then {
-        newDelta = emitDiffHunk buf: buf source: source edits: edits cStart: cStart cEnd: m clLo: clLo clHi: clHi lineStart: lineStart srcLines: srcLines newDelta: newDelta
+        newDelta = emitDiffHunk :buf :source :edits :cStart cEnd: m :clLo :clHi :lineStart :srcLines :newDelta
     }
     return buf
 }
@@ -1699,13 +1730,13 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
     ) case ok then {
         root: ast.parseSource source: rd.copy
         lines: linesOf src: rd.stringview
-        a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: rd.take :lines lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         a.runFastChecks n: root
         a.checkLineLength width: lineLength
         a.sortEditsInPlace
         return a
     } case err then {
-        a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
         a.diags.append d
         return a
@@ -1722,15 +1753,15 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
     ) case ok then {
         root: ast.parseSource source: rd.copy
         lines: linesOf src: rd.stringview
-        a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: rd.take :lines lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         a.runFastChecks n: root
         un: unitNameOf path: a.path.stringview
-        a.checkSuffix srcdir: srcdir systemdir: systemdir uname: un.stringview
+        a.checkSuffix :srcdir :systemdir uname: un.stringview
         a.checkLineLength width: lineLength
         a.sortEditsInPlace
         return a
     } case err then {
-        a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a: (Analysis path: path.copy source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
         a.diags.append d
         return a
@@ -1741,9 +1772,9 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
 # the full (typecheck) tier under --full (which also needs the project src/system dirs).
 analyzeFileTiered: function {path: String.take full: bool srcdir: StringView systemdir: StringView lineLength: u32} out Analysis is {
     if full then {
-        return (analyzeFileFull path: path srcdir: srcdir systemdir: systemdir lineLength: lineLength)
+        return (analyzeFileFull :path :srcdir :systemdir :lineLength)
     }
-    return (analyzeFile path: path lineLength: lineLength)
+    return (analyzeFile :path :lineLength)
 }
 
 # codepointLen -- number of Unicode codepoints in `s` (UTF-8 continuation bytes 0x80..0xBF are not
@@ -1774,8 +1805,8 @@ codepointLen: function {s: StringView} out u64 is {
 # sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`
 # uses it to confirm an edited buffer is still valid before writing it out.
 sourceParses: function {source: String.take} out bool is {
-    a: (Analysis path: "".string source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
-    root: ast.parseSource source: source
+    a: (Analysis path: "".string source: "".string lines: (List String) lineStart: (List u64) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+    root: ast.parseSource :source
     a.walk n: root
     return a.parseErrorCount == 0
 }
