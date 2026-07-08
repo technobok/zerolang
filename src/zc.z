@@ -450,6 +450,37 @@ buildExe: function {cc: StringView tempC: StringView exe: StringView release: bo
     return rc
 }
 
+# runZlShim -- trigger the standalone zl linter/formatter. `zc lint`/`zc fmt` are
+# thin shims: locate the `zl` binary alongside this executable in bin/, forward the
+# remaining arguments, inherit stdio (empty out/err paths) so its output reaches the
+# terminal, and propagate its exit code.
+runZlShim: function {verb: StringView argv: (List String).borrow} out i32 is {
+    ep: os.exePath
+    zlpath: "".string
+    match (
+        ep
+    ) case ok then {
+        d: dirname p: ep.stringview
+        zlpath = joinPath a: d.stringview b: "zl"
+    } case err then {
+        em: "zc \{verb}: cannot locate the zl binary (executable path unavailable)"
+        io.eprintln em.stringview
+        return 2
+    }
+    args: (List String)
+    args.append from: zlpath.copy
+    args.append from: verb.string
+    i: 2.u64
+    n: argv.length
+    for i < n loop {
+        a: (argv.get i: i).copy
+        args.append from: a
+        i = i + 1
+    }
+    rc: os.spawn argv: args cwd: "" outPath: "" errPath: "" timeoutSecs: 0
+    return rc
+}
+
 # writeOut -- write content to a file path, or stdout when the path is "-".
 writeOut: function {target: StringView content: StringView what: StringView} is {
     if target == "-" then {
@@ -573,6 +604,10 @@ main: function is {
             os.exit code: 2
         }
         os.exit code: 0
+    }
+    if (arg1.stringview == "fmt") then {
+        rc: runZlShim verb: "fmt" argv: argv
+        os.exit code: rc
     }
 
     sub: "".string
