@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang Standard Library -- tokenize</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-07-08">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="tokenize"><a href="#tokenize">tokenize</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#tokenize">tokenize</a>
+<ul>
+<li><a href="#overview">Overview</a>
+</li>
+<li><a href="#index">Index</a>
+</li>
+<li><a href="#tokenizer">tokenizer</a>
+</li>
+<li><a href="#token">token</a>
+</li>
+<li><a href="#tt">tt</a>
+</li>
+<li><a href="#scan">scan</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="overview"><a href="#overview">1. Overview</a></h2>
+<p>The <code>tokenize</code> unit exposes the compiler's own lexer as a public
+API -- the analogue of Python's <code>tokenize</code> module. It turns
+zerolang source text into a stream of <code>Token</code> values classified
+by a <code>TT</code> tag. The stream is <strong>lossless</strong>: it includes the
+whitespace, comment, and end-of-line trivia tokens the parser
+discards, so a formatter or source-rewriter can reconstruct exact
+layout.</p>
+<p><strong>Stability: preview.</strong> This surface ships alongside the <code>zl</code>
+linter/formatter and may change. It is a thin re-export of the
+compiler front-end (<code>lib/system/zlexer.z</code>); the raw
+<code>zlexer.Tokenizer</code> carries additional internal state.</p>
+<p>Accessed via qualified names only -- <code>tokenize.scan ...</code>,
+<code>tokenize.Tokenizer.create ...</code>.</p>
+<h2 id="index"><a href="#index">2. Index</a></h2>
+<p><strong>Types</strong></p>
+<ul>
+<li><a href="#tokenizer"><strong>Tokenizer</strong> -- <code>class as { create: function {source: String.take fsno: u32} out this  ...  token: function {:this} out Token }</code></a></li>
+<li><a href="#token"><strong>Token</strong> -- <code>class { toktype: TT  tokstr: String  fsno: u32  lineno: u32  colno: u32  tokenid: u64 }</code></a></li>
+<li><a href="#tt"><strong>TT</strong> -- <code>variant { ...one arm per token kind: WS, EOL, COMMENT, EOF, FOR, WHILE, keywords, IDENT, literals, punctuation... }</code></a></li>
+</ul>
+<p><strong>Functions</strong></p>
+<ul>
+<li><a href="#scan"><strong>tokenize.scan</strong> -- <code>function {source: String.take} out (List Token)</code></a></li>
+</ul>
+<h2 id="tokenizer"><a href="#tokenizer">3. tokenizer</a></h2>
+<pre><code class="language-zerolang">  Tokenizer: class as {
+      create: function {source: String.take fsno: u32} out this
+      token:  function {:this} out Token
+  }</code></pre>
+<p>The raw scanner. <code>create</code> takes ownership of the <code>source</code>
+string and a file number <code>fsno</code> (used only to stamp emitted
+tokens for diagnostics -- pass <code>0</code> for a standalone buffer).
+Each call to <code>token</code> returns the next <code>Token</code>, including
+<code>WS</code> / <code>COMMENT</code> / <code>EOL</code> trivia, terminated by an <code>EOF</code>
+token that repeats if called again.</p>
+<pre><code class="language-zerolang">  tk: tokenize.Tokenizer.create source: src.copy fsno: 0
+  for true loop {
+      t: tk.token
+      match (t.toktype) case EOF then break else {}
+      # ... inspect t ...
+  }</code></pre>
+<p>Most callers want <code>scan</code> (below) rather than driving the
+tokenizer by hand.</p>
+<h2 id="token"><a href="#token">4. token</a></h2>
+<pre><code class="language-zerolang">  Token: class {
+      toktype: TT
+      tokstr:  String
+      fsno:    u32
+      lineno:  u32
+      colno:   u32
+      tokenid: u64
+  }</code></pre>
+<p>One lexical token. <code>toktype</code> is its <code>TT</code> classification;
+<code>tokstr</code> is the exact source slice (so a <code>WS</code> token's
+<code>tokstr</code> is the run of spaces, a <code>COMMENT</code> token's is the
+comment text). <code>lineno</code> / <code>colno</code> are 1-based; the token's
+byte width is <code>tokstr.length</code>.</p>
+<h2 id="tt"><a href="#tt">5. tt</a></h2>
+<p><code>TT</code> is a <code>variant</code> with one arm per token kind. Trivia arms
+<code>WS</code>, <code>COMMENT</code>, and <code>EOL</code> carry the between-token layout;
+<code>EOF</code> terminates the stream. The remaining arms classify
+keywords, identifiers, literals, and punctuation. Match on it to
+dispatch:</p>
+<pre><code class="language-zerolang">  match (t.toktype)
+  case WS then {}
+  case COMMENT then {}
+  case EOF then { done = true }
+  else { ... }</code></pre>
+<h2 id="scan"><a href="#scan">6. scan</a></h2>
+<pre><code class="language-zerolang">  scan: function {source: String.take} out (List Token)</code></pre>
+<p>Tokenize <code>source</code> into its full raw token stream -- whitespace,
+comments, and EOL trivia included -- terminated by the <code>EOF</code>
+token. The one-call convenience over <code>Tokenizer</code>.</p>
+<pre><code class="language-zerolang">  toks: tokenize.scan source: src.copy
+  print "tokens: \{toks.length}"</code></pre>
+</main>
+</body>
+</html>

@@ -1,0 +1,160 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: ast
+
+#doc.title: Zerolang Standard Library -- ast
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-07-08
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: ast
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The #~"ast" unit exposes the compiler's parser and syntax-tree
+types as a public API -- the analogue of Python's #~"ast" module.
+#~"ast.parseSource" turns a source string into a #~"Node" tree,
+entirely in memory; #~"ast.Parser" drives a full cross-unit parse
+against a #~"zvfs.ZVfs".
+
+#b:"Stability: preview." This surface ships alongside the #~"zl"
+linter/formatter and may change. It is a thin re-export of the
+compiler front-end (#~"lib/system/zparser.z", #~"lib/system/zast.z");
+the type checker is #b:"not" exposed -- #~"parseSource" is purely
+syntactic and does not resolve names or types.
+
+Accessed via qualified names only -- #~"ast.parseSource ...",
+#~"ast.Parser.create".
+
+
+#--: Index
+
+#p: #b:"Parsing"
+
+#ul:
+  [#*: #> to=parsesource: #b:"ast.parseSource" -- #~"function {source: String.take} out Node"]
+  [#*: #> to=parser: #b:"Parser" -- #~"class as { create: function out this  parse: function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node }"]
+
+#p: #b:"Tree"
+
+#ul:
+  [#*: #> to=node: #b:"Node" -- #~"variant { ...29 arms: program, unitdef, functiondef, objectdef, call, binop, ifexpr, statement, error, ... }"]
+  [#*: #> to=pos: #b:"nodepos" -- #~"record { line: u32  col: u32 }"]
+  [#*: #> to=pos: #b:"posOf" -- #~"function {n: Node} out nodepos"]
+
+#p: #b:"Errors"
+
+#ul:
+  [#*: #> to=errors: #b:"ErrorData" -- #~"class { nodeid: u32  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }"]
+  [#*: #> to=errors: #b:"err" -- #~"variant { ...one arm per error kind }"]
+  [#*: #> to=errors: #b:"errCode" -- #~"function {c: err} out u32"]
+
+
+#--: parsesource
+
+#code language=zerolang: """
+  parseSource: function {source: String.take} out Node
+"""
+
+Parse a single source string into a unit #~"Node", in memory --
+no #~"ZVfs", no filesystem, no type checking. The result is a
+#~"Node.unitdef" wrapping the parsed top-level definitions.
+
+A #b:"syntax error does not fail" the call: the parser embeds a
+#~"Node.error" arm at the point of failure and keeps going, so a
+tool can report every error in one pass. Walk the tree and collect
+the #~"error" arms to find them.
+
+#code language=zerolang: """
+  root: ast.parseSource source: src.copy
+  match (root) case unitdef then { print "parsed" } else {}
+"""
+
+
+#--: parser
+
+#code language=zerolang: """
+  Parser: class as {
+      create: function out this
+      parse:  function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node
+  }
+"""
+
+The full parser. #~"parse" loads #~"mainUnitName" and every unit
+it references from the #~"vfs" and returns a #~"Node.program"
+spanning them all -- the entry point the compiler itself uses.
+Use this (rather than #~"parseSource") when the input references
+other units and cross-file positions must resolve.
+
+
+#--: node
+
+#~"Node" is the syntax-tree #~"variant" -- 29 arms covering
+definitions (#~"program", #~"unitdef", #~"functiondef",
+#~"objectdef"), expressions (#~"call", #~"binop", #~"atomid",
+#~"dottedpath", #~"atomstring", ...), control flow (#~"ifexpr",
+#~"forexpr", #~"caseexpr", #~"withexpr", ...), statements
+(#~"statement", #~"assignment", #~"reassignment", ...), and
+#~"error". Every arm carries #~"lineno" / #~"colno". Match on it
+to dispatch:
+
+#code language=zerolang: """
+  match (n)
+  case call then { ... n.callable ... n.arguments ... }
+  case binop then { ... n.lhs ... n.operator ... n.rhs ... }
+  case error then { ... n.msg ... n.err ... }
+  else {}
+"""
+
+
+#--: pos
+
+#code language=zerolang: """
+  nodepos: record { line: u32  col: u32 }
+  posOf:   function {n: Node} out nodepos
+"""
+
+#~"posOf" returns the source position of an #b:"operand-position"
+node (the arms that appear inside expressions). Definition,
+statement, and clause arms are not operand-position and return
+#~"(0, 0)" -- read their #~"lineno" / #~"colno" fields directly
+instead.
+
+
+#--: errors
+
+#code language=zerolang: """
+  ErrorData: class {
+      nodeid: u32  lineno: u32  colno: u32  width: u32
+      err: err  msg: String  fsno: u32  note: String  hint: String
+  }
+  errCode: function {c: err} out u32
+"""
+
+The payload of a #~"Node.error" arm. #~"msg" is the human
+message; #~"err" is the classifying #~"variant" and #~"errCode"
+maps it to its numeric #~"E####" code (parser/syntax errors are
+#~"E0001".. #~"E0099"). #~"lineno" / #~"colno" / #~"width" locate
+and underline the offending span.

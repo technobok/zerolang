@@ -1,0 +1,147 @@
+#doc.lang: en
+
+#//: Zerolang Standard Library: tokenize
+
+#doc.title: Zerolang Standard Library -- tokenize
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-07-08
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: tokenize
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Overview
+
+The #~"tokenize" unit exposes the compiler's own lexer as a public
+API -- the analogue of Python's #~"tokenize" module. It turns
+zerolang source text into a stream of #~"Token" values classified
+by a #~"TT" tag. The stream is #b:"lossless": it includes the
+whitespace, comment, and end-of-line trivia tokens the parser
+discards, so a formatter or source-rewriter can reconstruct exact
+layout.
+
+#b:"Stability: preview." This surface ships alongside the #~"zl"
+linter/formatter and may change. It is a thin re-export of the
+compiler front-end (#~"lib/system/zlexer.z"); the raw
+#~"zlexer.Tokenizer" carries additional internal state.
+
+Accessed via qualified names only -- #~"tokenize.scan ...",
+#~"tokenize.Tokenizer.create ...".
+
+
+#--: Index
+
+#p: #b:"Types"
+
+#ul:
+  [#*: #> to=tokenizer: #b:"Tokenizer" -- #~"class as { create: function {source: String.take fsno: u32} out this  ...  token: function {:this} out Token }"]
+  [#*: #> to=token: #b:"Token" -- #~"class { toktype: TT  tokstr: String  fsno: u32  lineno: u32  colno: u32  tokenid: u64 }"]
+  [#*: #> to=tt: #b:"TT" -- #~"variant { ...one arm per token kind: WS, EOL, COMMENT, EOF, FOR, WHILE, keywords, IDENT, literals, punctuation... }"]
+
+#p: #b:"Functions"
+
+#ul:
+  [#*: #> to=scan: #b:"tokenize.scan" -- #~"function {source: String.take} out (List Token)"]
+
+
+#--: tokenizer
+
+#code language=zerolang: """
+  Tokenizer: class as {
+      create: function {source: String.take fsno: u32} out this
+      token:  function {:this} out Token
+  }
+"""
+
+The raw scanner. #~"create" takes ownership of the #~"source"
+string and a file number #~"fsno" (used only to stamp emitted
+tokens for diagnostics -- pass #~"0" for a standalone buffer).
+Each call to #~"token" returns the next #~"Token", including
+#~"WS" / #~"COMMENT" / #~"EOL" trivia, terminated by an #~"EOF"
+token that repeats if called again.
+
+#code language=zerolang: """
+  tk: tokenize.Tokenizer.create source: src.copy fsno: 0
+  for true loop {
+      t: tk.token
+      match (t.toktype) case EOF then break else {}
+      # ... inspect t ...
+  }
+"""
+
+Most callers want #~"scan" (below) rather than driving the
+tokenizer by hand.
+
+
+#--: token
+
+#code language=zerolang: """
+  Token: class {
+      toktype: TT
+      tokstr:  String
+      fsno:    u32
+      lineno:  u32
+      colno:   u32
+      tokenid: u64
+  }
+"""
+
+One lexical token. #~"toktype" is its #~"TT" classification;
+#~"tokstr" is the exact source slice (so a #~"WS" token's
+#~"tokstr" is the run of spaces, a #~"COMMENT" token's is the
+comment text). #~"lineno" / #~"colno" are 1-based; the token's
+byte width is #~"tokstr.length".
+
+
+#--: tt
+
+#~"TT" is a #~"variant" with one arm per token kind. Trivia arms
+#~"WS", #~"COMMENT", and #~"EOL" carry the between-token layout;
+#~"EOF" terminates the stream. The remaining arms classify
+keywords, identifiers, literals, and punctuation. Match on it to
+dispatch:
+
+#code language=zerolang: """
+  match (t.toktype)
+  case WS then {}
+  case COMMENT then {}
+  case EOF then { done = true }
+  else { ... }
+"""
+
+
+#--: scan
+
+#code language=zerolang: """
+  scan: function {source: String.take} out (List Token)
+"""
+
+Tokenize #~"source" into its full raw token stream -- whitespace,
+comments, and EOL trivia included -- terminated by the #~"EOF"
+token. The one-call convenience over #~"Tokenizer".
+
+#code language=zerolang: """
+  toks: tokenize.scan source: src.copy
+  print "tokens: \{toks.length}"
+"""
