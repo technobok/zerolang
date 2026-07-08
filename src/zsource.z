@@ -234,6 +234,34 @@ Analysis: class {
         }
     }
 
+    # checkForWhile -- L004 token tier: a `for` immediately followed by `while`.
+    # Re-tokenizes the source (parse-free; immune to strings and comments).
+    checkForWhile: function {:this} is {
+        tk: zlexer.Tokenizer.create source: this.source.copy fsno: 0
+        prevFor: false
+        looping: true
+        for looping loop {
+            t: tk.token
+            match (
+                t.toktype
+            ) case WS then {
+            } case EOL then {
+            } case COMMENT then {
+            } case FOR then {
+                prevFor = true
+            } case WHILE then {
+                if prevFor then {
+                    this.warn code: "L004" msg: "redundant `for` before a bare `while` condition".string line: t.lineno col: t.colno width: t.tokstr.length.u32
+                }
+                prevFor = false
+            } case EOF then {
+                looping = false
+            } else {
+                prevFor = false
+            }
+        }
+    }
+
     # walk -- traversal collecting embedded parse errors as diagnostics, recursing
     # every child (all 29 arms, mirroring zast.printNodeCanonical).
     walk: function {:this n: Node} is {
@@ -385,6 +413,7 @@ analyzeFile: function {path: String.take} out Analysis is {
         lines: linesOf src: rd.stringview
         a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic))
         a.walk n: root
+        a.checkForWhile
         return a
     } case err then {
         a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic))
