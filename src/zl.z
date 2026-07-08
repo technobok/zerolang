@@ -61,11 +61,30 @@ runFmt: function {paths: (List String).borrow} out i32 is {
     rc: 0.i32
     with pit: paths.iterate do for p: pit loop {
         a: zsource.analyzeFile path: p.copy
-        if a.diags.length > 0 then {
+        if a.parseErrorCount > 0 then {
             reportAnalysis a: a
-            msg: "zl fmt: \{p} has errors; not formatting"
+            msg: "zl fmt: \{p} has parse errors; not formatting"
             io.eprintln msg.stringview
             rc = 1
+        } else if a.edits.length > 0 then {
+            newsrc: zfix.applyEdits source: a.source.stringview edits: a.edits
+            if (zsource.sourceParses source: newsrc.copy) then {
+                wr: io.writeText path: a.path.stringview content: newsrc.stringview
+                match (
+                    wr
+                ) case ok then {
+                    fm: "formatted \{p}"
+                    print fm.stringview
+                } case err then {
+                    ew: "zl fmt: could not write \{p}"
+                    io.eprintln ew.stringview
+                    rc = 1
+                }
+            } else {
+                eb: "zl fmt: a fix would break \{p}; skipped"
+                io.eprintln eb.stringview
+                rc = 1
+            }
         }
     }
     return rc

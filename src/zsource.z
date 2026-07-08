@@ -141,12 +141,115 @@ optName: function {o: Option String} out String is {
     }
 }
 
+# trailingWsLen -- number of trailing ASCII-whitespace bytes (space, tab, CR) in
+# `ln`. Computed by hand (StringView.trimEnd's native is not emitted).
+trailingWsLen: function {ln: StringView} out u64 is {
+    n: ln.length
+    k: 0.u64
+    keep: true
+    for keep loop {
+        if k >= n then {
+            keep = false
+        } else {
+            bo: ln.byteAt i: (n - 1 - k)
+            isws: false
+            match (
+                bo
+            ) case some then {
+                if bo == 32 then {
+                    isws = true
+                }
+                if bo == 9 then {
+                    isws = true
+                }
+                if bo == 13 then {
+                    isws = true
+                }
+            } case none then {
+            }
+            if isws then {
+                k = k + 1
+            } else {
+                keep = false
+            }
+        }
+    }
+    return k
+}
+
+# endsWithNewline -- true if `src` is empty or its last byte is a newline.
+endsWithNewline: function {src: StringView} out bool is {
+    n: src.length
+    if n == 0 then {
+        return true
+    }
+    bo: src.byteAt i: (n - 1)
+    match (
+        bo
+    ) case some then {
+        if bo == 10 then {
+            return true
+        }
+        return false
+    } case none then {
+        return true
+    }
+}
+
 Analysis: class {
     path:   String
     source: String
     lines:  (List String)
     diags:  (List zdiag.Diagnostic)
+    edits:  (List zfix.Edit)
 } as {
+    # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
+    # parse errors. The fmt parse gate refuses any file with a non-zero count.
+    parseErrorCount: function {:this} out u64 is {
+        c: 0.u64
+        with it: this.diags.iterate do for d: it loop {
+            match (
+                d.sev
+            ) case ERROR then {
+                c = c + 1
+            } else {
+            }
+        }
+        return c
+    }
+
+    # warnFix -- append a WARNING diagnostic AND its single safe fix edit (a
+    # replacement of source[lo, hi) with `repl`). Used by the format rules.
+    warnFix: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32 lo: u64 hi: u64 repl: String.take} is {
+        this.warn code: code msg: msg line: line col: col width: width
+        this.edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
+    }
+
+    # checkTrailingWs -- W001: trailing whitespace on a line. Byte-exact from line
+    # byte-lengths (independent of the codepoint-based column).
+    checkTrailingWs: function {:this} is {
+        lls: linesOf src: this.source.stringview
+        off: 0.u64
+        lno: 1.u32
+        with it: lls.iterate do for ln: it loop {
+            llen: ln.length
+            twl: trailingWsLen ln: ln.stringview
+            if twl > 0 then {
+                keptLen: llen - twl
+                this.warnFix code: "W001" msg: "trailing whitespace".string line: lno col: (keptLen + 1).u32 width: twl.u32 lo: (off + keptLen) hi: (off + llen) repl: "".string
+            }
+            off = off + llen + 1
+            lno = lno + 1
+        }
+    }
+
+    # checkFinalNewline -- W002: a non-empty file that does not end in a newline.
+    checkFinalNewline: function {:this} is {
+        n: this.source.length
+        if n > 0 when ((endsWithNewline src: this.source.stringview) == false) then {
+            this.warnFix code: "W002" msg: "file does not end with a newline".string line: 0 col: 0 width: 0 lo: n hi: n repl: "\n".string
+        }
+    }
     # walkOpt -- recurse into an optional child node when present.
     walkOpt: function {:this o: Option Node} is {
         match (
@@ -411,14 +514,25 @@ analyzeFile: function {path: String.take} out Analysis is {
     ) case ok then {
         root: ast.parseSource source: rd.copy
         lines: linesOf src: rd.stringview
-        a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic))
+        a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         a.walk n: root
         a.checkForWhile
+        a.checkTrailingWs
+        a.checkFinalNewline
         return a
     } case err then {
-        a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic))
+        a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
         a.diags.append d
         return a
     }
+}
+
+# sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`
+# uses it to confirm an edited buffer is still valid before writing it out.
+sourceParses: function {source: String.take} out bool is {
+    a: (Analysis path: "".string source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+    root: ast.parseSource source: source
+    a.walk n: root
+    return a.parseErrorCount == 0
 }
