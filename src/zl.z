@@ -15,6 +15,7 @@ printUsage: function is {
     io.eprintln "fmt flags:"
     io.eprintln "  --check   exit non-zero if any file needs formatting; write nothing"
     io.eprintln "  --stdout  print the formatted result instead of writing in place"
+    io.eprintln "  --diff    print a unified diff of the changes; write nothing"
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
@@ -84,13 +85,23 @@ writeStdout: function {s: StringView} is {
 # parse errors (reported, left untouched). Modes: default writes valid changes in place;
 # `--check` reports files that would change and exits non-zero without writing; `--stdout`
 # prints the formatted result (lossless, no in-place write).
-runFmt: function {paths: (List String).borrow check: bool stdout: bool} out i32 is {
+runFmt: function {paths: (List String).borrow check: bool stdout: bool diff: bool} out i32 is {
     if paths.length == 0 then {
         io.eprintln "zl fmt: no input files"
         return 2
     }
-    if check when stdout then {
-        io.eprintln "zl fmt: --check and --stdout are mutually exclusive"
+    modes: 0.u32
+    if check then {
+        modes = modes + 1
+    }
+    if stdout then {
+        modes = modes + 1
+    }
+    if diff then {
+        modes = modes + 1
+    }
+    if modes > 1 then {
+        io.eprintln "zl fmt: --check, --stdout and --diff are mutually exclusive"
         return 2
     }
     rc: 0.i32
@@ -121,6 +132,12 @@ runFmt: function {paths: (List String).borrow check: bool stdout: bool} out i32 
                 rc = 1
             } else if stdout then {
                 writeStdout s: newsrc.stringview
+            } else if diff then {
+                if hasEdits then {
+                    dtext: zsource.renderDiff path: a.path.stringview source: a.source.stringview edits: a.edits
+                    writeStdout s: dtext.stringview
+                    rc = 1
+                }
             } else if check then {
                 if hasEdits then {
                     wf: "would reformat \{p}"
@@ -173,6 +190,7 @@ main: function is {
     paths: (List String)
     fCheck: false
     fStdout: false
+    fDiff: false
     i: 2.u64
     for i < n loop {
         arg: (argv.get i: i).copy
@@ -181,6 +199,8 @@ main: function is {
             fCheck = true
         } else if av == "--stdout" then {
             fStdout = true
+        } else if av == "--diff" then {
+            fDiff = true
         } else if (av.startsWith prefix: "-") then {
             eu: "zl: unknown flag \{av}"
             io.eprintln eu.stringview
@@ -196,7 +216,7 @@ main: function is {
         os.exit code: rc
     }
     if sv == "fmt" then {
-        rc: runFmt paths: paths check: fCheck stdout: fStdout
+        rc: runFmt paths: paths check: fCheck stdout: fStdout diff: fDiff
         os.exit code: rc
     }
     if sv == "explain" then {

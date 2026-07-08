@@ -505,6 +505,141 @@ linesOf: function {src: StringView} out (List String) is {
     return ls
 }
 
+# lineStartIndex -- byte offset of each line's first byte, one entry per line (matching
+# linesOf). Extends the W001 `off += len + 1` accumulator; converts token/edit positions to
+# byte offsets and back without depending on the tokenizer's escape-decoded widths.
+lineStartIndex: function {src: StringView} out (List u64) is {
+    ls: (List u64)
+    off: 0.u64
+    lls: linesOf src: src
+    with it: lls.iterate do for ln: it loop {
+        ls.append off
+        off = off + ln.length + 1
+    }
+    return ls
+}
+
+# byteToLine -- the 0-based index of the line containing byte `off`: the largest i with
+# lineStart[i] <= off. lineStart ascends, so the scan stops at the first line past off.
+byteToLine: function {lineStart: (List u64).borrow off: u64 nLines: u64} out u64 is {
+    r: 0.u64
+    i: 0.u64
+    for i < nLines loop {
+        v: lineStart.get i: i
+        if v <= off then {
+            r = i
+        } else {
+            break
+        }
+        i = i + 1
+    }
+    return r
+}
+
+# emitDiffHunk -- append one zero-context unified-diff hunk to `buf` for the cluster of edits
+# [cStart, cEnd) spanning old lines [clLo, clHi]. The new-side block is the old bytes with the
+# cluster's edits applied, so the hunk exactly reflects the formatted output. Returns the
+# running new-minus-old line delta for the next hunk's + start.
+emitDiffHunk: function {buf: String source: StringView edits: (List zfix.Edit).borrow cStart: u64 cEnd: u64 clLo: u64 clHi: u64 lineStart: (List u64).borrow srcLines: (List String).borrow newDelta: i64} out i64 is {
+    nLines: srcLines.length
+    srcLen: source.length
+    oldCount: (clHi - clLo) + 1
+    aByte: lineStart.get i: clLo
+    bByte: srcLen
+    if (clHi + 1) < nLines then {
+        bByte = lineStart.get i: (clHi + 1)
+    }
+    newBlock: "".string
+    prev: aByte
+    j: cStart
+    for j < cEnd loop {
+        e: edits.get i: j
+        zfix.appendRange buf: newBlock src: source lo: prev hi: e.byteLo
+        newBlock.append e.replacement.stringview
+        prev = e.byteHi
+        j = j + 1
+    }
+    zfix.appendRange buf: newBlock src: source lo: prev hi: bByte
+    newLines: (List String)
+    if newBlock.length > 0 then {
+        newLines = linesOf src: newBlock.stringview
+    }
+    newCount: newLines.length
+    newStart: (clLo.i64 + newDelta) + 1
+    hh: "@@ -\{clLo + 1},\{oldCount} +\{newStart},\{newCount} @@\n"
+    buf.append hh.stringview
+    oi: clLo
+    for oi <= clHi loop {
+        ol: srcLines.get i: oi
+        dm: "-\{ol}\n"
+        buf.append dm.stringview
+        oi = oi + 1
+    }
+    if (clHi + 1) == nLines when ((endsWithNewline src: source) == false) then {
+        buf.append "\\ No newline at end of file\n".stringview
+    }
+    with nit: newLines.iterate do for nl: nit loop {
+        pm: "+\{nl}\n"
+        buf.append pm.stringview
+    }
+    if newBlock.length > 0 when ((endsWithNewline src: newBlock.stringview) == false) then {
+        buf.append "\\ No newline at end of file\n".stringview
+    }
+    return (newDelta + newCount.i64) - oldCount.i64
+}
+
+# renderDiff -- a git-style unified diff (zero context) of `source` -> the formatted result,
+# driven by `edits` (assumed sorted by byteLo). Adjacent edits touching the same or
+# neighbouring lines share a hunk. Empty when there are no edits.
+renderDiff: function {path: StringView source: StringView edits: (List zfix.Edit).borrow} out String is {
+    buf: "".string
+    m: edits.length
+    if m == 0 then {
+        return buf
+    }
+    lineStart: lineStartIndex src: source
+    srcLines: linesOf src: source
+    nLines: srcLines.length
+
+    hdr: "--- \{path}\n+++ \{path}\n"
+    buf.append hdr.stringview
+
+    newDelta: 0.i64
+    cActive: false
+    cStart: 0.u64
+    clLo: 0.u64
+    clHi: 0.u64
+    i: 0.u64
+    for i < m loop {
+        e: edits.get i: i
+        lo: byteToLine lineStart: lineStart off: e.byteLo nLines: nLines
+        hi: lo
+        if e.byteHi > e.byteLo then {
+            hi = byteToLine lineStart: lineStart off: (e.byteHi - 1) nLines: nLines
+        }
+        if (cActive) == false then {
+            cActive = true
+            cStart = i
+            clLo = lo
+            clHi = hi
+        } else if lo <= (clHi + 1) then {
+            if hi > clHi then {
+                clHi = hi
+            }
+        } else {
+            newDelta = emitDiffHunk buf: buf source: source edits: edits cStart: cStart cEnd: i clLo: clLo clHi: clHi lineStart: lineStart srcLines: srcLines newDelta: newDelta
+            cStart = i
+            clLo = lo
+            clHi = hi
+        }
+        i = i + 1
+    }
+    if cActive then {
+        newDelta = emitDiffHunk buf: buf source: source edits: edits cStart: cStart cEnd: m clLo: clLo clHi: clHi lineStart: lineStart srcLines: srcLines newDelta: newDelta
+    }
+    return buf
+}
+
 # analyzeFile -- fast-tier analysis of one file: read, fast-parse (no VFS/typecheck),
 # build the line table, and collect parse-error diagnostics.
 analyzeFile: function {path: String.take} out Analysis is {
