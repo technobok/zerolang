@@ -6,6 +6,141 @@
 
 Node: zast.Node
 
+# ---- AST query helpers for the parse-tier rules (behaviour-preserving port of
+# the original zc lint helpers) ----
+
+# atomName -- the identifier name of an atomid node, else "".
+atomName: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.copy
+    } else {
+        return "".string
+    }
+}
+
+# isStatementArm -- the node is a braced `{ ... }` statement block.
+isStatementArm: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# isEmptyBlock -- a statement block with no statement lines (`{}`).
+isEmptyBlock: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        return n.statements.length == 0
+    } else {
+        return false
+    }
+}
+
+# stmtPos -- the source position of a statement block.
+stmtPos: function {n: Node} out zast.nodepos is {
+    match (
+        n
+    ) case statement then {
+        return (zast.nodepos line: n.lineno col: n.colno)
+    } else {
+        return (zast.nodepos line: 0 col: 0)
+    }
+}
+
+# isIfArm -- the node is an `if` (through an `expression` wrapper).
+isIfArm: function {n: Node} out bool is {
+    match (
+        n
+    ) case ifexpr then {
+        return true
+    } case expression then {
+        return (isIfArm n: n.expression)
+    } else {
+        return false
+    }
+}
+
+# slIsIf -- a statement line wrapping an `if`.
+slIsIf: function {sl: Node} out bool is {
+    match (
+        sl
+    ) case statementline then {
+        return (isIfArm n: sl.statementline)
+    } else {
+        return false
+    }
+}
+
+# isElseIfWrap -- the else clause is the synthetic block an `else if` chain parses
+# to (a single statement line wrapping an `if`), not a real braced `else { ... }`.
+isElseIfWrap: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        if n.statements.length == 1 then {
+            res: false
+            it: n.statements.iterate
+            for sl: it loop {
+                res = slIsIf sl: sl
+            }
+            return res
+        }
+        return false
+    } else {
+        return false
+    }
+}
+
+# primaryGenericParam -- the elidable first parameter name of a built-in template,
+# or "" when `name` is not such a template. Index 0 only.
+primaryGenericParam: function {name: StringView} out String is {
+    if name == "List" then {
+        return "of".string
+    }
+    if name == "Set" then {
+        return "of".string
+    }
+    if name == "array" then {
+        return "of".string
+    }
+    if name == "Map" then {
+        return "key".string
+    }
+    if name == "option" then {
+        return "t".string
+    }
+    if name == "optionval" then {
+        return "t".string
+    }
+    if name == "Option" then {
+        return "t".string
+    }
+    if name == "OptionView" then {
+        return "t".string
+    }
+    if name == "Result" then {
+        return "t".string
+    }
+    return "".string
+}
+
+# optName -- an (Option String) as an owned String ("" when none).
+optName: function {o: Option String} out String is {
+    match (
+        o
+    ) case some then {
+        return o.string
+    } case none then {
+        return "".string
+    }
+}
+
 Analysis: class {
     path:   String
     source: String
@@ -19,6 +154,83 @@ Analysis: class {
         ) case some then {
             this.walk n: o
         } case none then {
+        }
+    }
+
+    # warn -- append a WARNING lint diagnostic (fast tier: no fsno; the single-file
+    # reporter resolves the source line from the line table).
+    warn: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
+        d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.WARNING fsno: 0 lineno: line colno: col width: width msg: msg note: "".string hint: "".string)
+        this.diags.append d
+    }
+
+    # checkEmpty -- L001 empty `else {}` and, for a backwards single-condition `if`,
+    # the empty `then {}` (via checkEmptyThen). Receives an ifexpr's else + clauses.
+    checkEmpty: function {:this elseOpt: Option Node clauses: List Node} is {
+        match (
+            elseOpt
+        ) case some then {
+            if (isEmptyBlock n: elseOpt) then {
+                p: stmtPos n: elseOpt
+                this.warn code: "L001" msg: "empty `else { }` clause".string line: p.line col: p.col width: 2
+            } else if (isStatementArm n: elseOpt) when (clauses.length == 1) then {
+                if (isElseIfWrap n: elseOpt) == false then {
+                    citer: clauses.iterate
+                    for c0: citer loop {
+                        this.checkEmptyThen clause: c0
+                    }
+                }
+            }
+        } case none then {
+        }
+    }
+
+    # checkEmptyThen -- L002 a single-condition clause whose `then {}` is empty.
+    checkEmptyThen: function {:this clause: Node} is {
+        match (
+            clause
+        ) case ifclause then {
+            if (isEmptyBlock n: clause.statement) when (clause.conditions.length == 1) then {
+                p: stmtPos n: clause.statement
+                this.warn code: "L002" msg: "empty `then { }` clause".string line: p.line col: p.col width: 2
+            }
+        } else {
+        }
+    }
+
+    # checkElide -- L003 a built-in template call whose first argument carries its
+    # primary parameter name. Receives the narrowed callable + argument list.
+    checkElide: function {:this callable: Node arguments: List Node} is {
+        cn: atomName n: callable
+        if cn.length == 0 then {
+            return
+        }
+        primary: primaryGenericParam name: cn.stringview
+        if primary.length == 0 then {
+            return
+        }
+        idx: 0.u64
+        aiter: arguments.iterate
+        for a: aiter loop {
+            if idx == 0 then {
+                this.checkElideFirst arg: a primary: primary.stringview
+            }
+            idx = idx + 1
+        }
+    }
+
+    # checkElideFirst -- flag the first generic argument when its label is the
+    # template's primary parameter name.
+    checkElideFirst: function {:this arg: Node primary: StringView} is {
+        match (
+            arg
+        ) case namedoperation then {
+            an: optName o: arg.name
+            if an.stringview == primary then {
+                w: primary.length + 1
+                this.warn code: "L003" msg: "redundant `\{primary}:` label on a built-in template's first argument".string line: arg.lineno col: arg.colno width: w.u32
+            }
+        } else {
         }
     }
 
@@ -46,6 +258,7 @@ Analysis: class {
             this.walk n: n.parent
             this.walk n: n.child
         } case call then {
+            this.checkElide callable: n.callable arguments: n.arguments
             this.walk n: n.callable
             ait: n.arguments.iterate
             for arg: ait loop {
@@ -81,6 +294,7 @@ Analysis: class {
         } case expression then {
             this.walk n: n.expression
         } case ifexpr then {
+            this.checkEmpty elseOpt: n.elseclause clauses: n.clauses
             clit: n.clauses.iterate
             for cl: clit loop {
                 this.walk n: cl

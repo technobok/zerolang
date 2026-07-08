@@ -97,7 +97,7 @@ zc: bin/zc
 # bin/zl -- the zerolang linter + formatter (src/zl.z), built on the shared
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + (later) typecheck, but never the emitter.
-bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard lib/system/*.z)
+bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zl --src src --system lib/system --emit-c out/zl.c
 	$(CC) $(CFLAGS) -o bin/zl out/zl.c

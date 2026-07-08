@@ -1,0 +1,68 @@
+# zrule -- the zl rule catalogue. Metadata for every lint/format rule: a stable
+# code, a name, the analysis tier it needs (TOKEN/PARSE run on the fast path;
+# TYPECHECK runs only under --full), a default severity, whether it is on by
+# default, and its fix safety. The check logic lives with the traversal (zsource
+# for AST rules, the token pass for token rules); this unit is the catalogue that
+# drives `zl explain`, listing, and (Phase 4) config selection.
+
+tier: variant {
+    TOKEN:     null
+    PARSE:     null
+    TYPECHECK: null
+} as { tag: u8.tag }
+
+fixkind: variant {
+    NONE:   null
+    SAFE:   null
+    UNSAFE: null
+} as { tag: u8.tag }
+
+RuleInfo: class {
+    id:        u32
+    code:      String
+    name:      String
+    rtier:     tier
+    sev:       zdiag.severity
+    defaultOn: bool
+    fix:       fixkind
+    summary:   String
+}
+
+# addRules -- append the rule catalogue to `rs`, id-ordered. The first five mirror
+# the checks absorbed from the original zc lint. Fill-by-reference (out-param
+# style, like zparser.loadUnit): a 0-arg function returning `List RuleInfo` is not
+# auto-called in a binding by the current compiler, so callers pass their list in.
+addRules: function {rs: (List RuleInfo)} is {
+    rs.append (RuleInfo id: 1 code: "L001".string name: "empty-else".string rtier: tier.PARSE sev: zdiag.severity.WARNING defaultOn: true fix: fixkind.NONE summary: "an `else { }` clause with an empty body".string)
+    rs.append (RuleInfo id: 2 code: "L002".string name: "empty-then".string rtier: tier.PARSE sev: zdiag.severity.WARNING defaultOn: true fix: fixkind.NONE summary: "a single-condition clause with an empty `then { }` body".string)
+    rs.append (RuleInfo id: 3 code: "L003".string name: "elide-name".string rtier: tier.PARSE sev: zdiag.severity.WARNING defaultOn: true fix: fixkind.SAFE summary: "a built-in template's first argument names its primary parameter (redundant)".string)
+    rs.append (RuleInfo id: 4 code: "L004".string name: "for-while".string rtier: tier.TOKEN sev: zdiag.severity.WARNING defaultOn: true fix: fixkind.SAFE summary: "a redundant `for` before a bare `while` condition".string)
+    rs.append (RuleInfo id: 5 code: "L005".string name: "redundant-suffix".string rtier: tier.TYPECHECK sev: zdiag.severity.WARNING defaultOn: true fix: fixkind.SAFE summary: "a numeric literal suffix that matches its inferred type (redundant)".string)
+}
+
+# explain -- print the catalogue entry for a code. Returns 0 on success, 2 when
+# the code is unknown.
+explain: function {code: StringView} out i32 is {
+    rs: (List RuleInfo)
+    addRules rs: rs
+    with it: rs.iterate do for r: it loop {
+        if r.code.stringview == code then {
+            line: "\{r.code}  \{r.name}\n  \{r.summary}"
+            print line.stringview
+            return 0
+        }
+    }
+    eln: "zl explain: unknown code \{code}"
+    io.eprintln eln.stringview
+    return 2
+}
+
+# printList -- one line per rule (code, name) for a future `zl rules`.
+printList: function is {
+    rs: (List RuleInfo)
+    addRules rs: rs
+    with it: rs.iterate do for r: it loop {
+        line: "\{r.code}  \{r.name}"
+        print line.stringview
+    }
+}
