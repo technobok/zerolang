@@ -218,6 +218,25 @@ Analysis: class {
         return c
     }
 
+    # failCount -- diagnostics that fail the gate: everything except advisory INFO. `zl lint` exits
+    # non-zero on a non-zero count, so INFO rules (line-length) report without failing.
+    failCount: function {:this} out u64 is {
+        c: 0.u64
+        with it: this.diags.iterate do for d: it loop {
+            isInfo: false
+            match (
+                d.sev
+            ) case INFO then {
+                isInfo = true
+            } else {
+            }
+            if (isInfo) == false then {
+                c = c + 1
+            }
+        }
+        return c
+    }
+
     # warnFix -- append a WARNING diagnostic AND its single safe fix edit (a
     # replacement of source[lo, hi) with `repl`). Used by the format rules.
     warnFix: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32 lo: u64 hi: u64 repl: String.take} is {
@@ -311,6 +330,29 @@ Analysis: class {
     warn: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
         d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.WARNING fsno: 0 lineno: line colno: col width: width msg: msg note: "".string hint: "".string)
         this.diags.append d
+    }
+
+    # info -- append an advisory INFO diagnostic (does not fail the gate; carries no fix).
+    info: function {:this code: StringView msg: String.take line: u32 col: u32 width: u32} is {
+        d: (zdiag.Diagnostic code: code.string sev: zdiag.severity.INFO fsno: 0 lineno: line colno: col width: width msg: msg note: "".string hint: "".string)
+        this.diags.append d
+    }
+
+    # checkLineLength -- W005 (advisory): a line wider than `width` codepoints. INFO severity, so it
+    # reports but never fails the gate; runs only when a width is set (--line-length). No fix.
+    checkLineLength: function {:this width: u32} is {
+        if width == 0 then {
+            return
+        }
+        lls: linesOf src: this.source.stringview
+        lno: 1.u32
+        with it: lls.iterate do for ln: it loop {
+            cl: codepointLen s: ln.stringview
+            if cl > width.u64 then {
+                this.info code: "W005" msg: "line exceeds \{width} columns (\{cl})".string line: lno col: (width + 1) width: 1
+            }
+            lno = lno + 1
+        }
     }
 
     # checkEmpty -- L001 empty `else {}` and, for a backwards single-condition `if`,
@@ -1500,7 +1542,7 @@ renderDiff: function {path: StringView source: StringView edits: (List zfix.Edit
 
 # analyzeFile -- fast-tier analysis of one file: read, fast-parse (no VFS/typecheck),
 # build the line table, and collect parse-error diagnostics.
-analyzeFile: function {path: String.take} out Analysis is {
+analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
     rd: io.readText path: path.stringview
     match (
         rd
@@ -1509,6 +1551,7 @@ analyzeFile: function {path: String.take} out Analysis is {
         lines: linesOf src: rd.stringview
         a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
         a.runFastChecks n: root
+        a.checkLineLength width: lineLength
         a.sortEditsInPlace
         return a
     } case err then {
@@ -1522,7 +1565,7 @@ analyzeFile: function {path: String.take} out Analysis is {
 # analyzeFileFull -- fast-tier analysis plus the typecheck-tier suffix rule (L005). Builds the
 # project VFS from `srcdir`/`systemdir` and typechecks this file's unit so the suffix check has
 # resolved types. Slower than analyzeFile; only the --full path calls it.
-analyzeFileFull: function {path: String.take srcdir: StringView systemdir: StringView} out Analysis is {
+analyzeFileFull: function {path: String.take srcdir: StringView systemdir: StringView lineLength: u32} out Analysis is {
     rd: io.readText path: path.stringview
     match (
         rd
@@ -1533,6 +1576,7 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
         a.runFastChecks n: root
         un: unitNameOf path: a.path.stringview
         a.checkSuffix srcdir: srcdir systemdir: systemdir uname: un.stringview
+        a.checkLineLength width: lineLength
         a.sortEditsInPlace
         return a
     } case err then {
@@ -1545,11 +1589,36 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
 
 # analyzeFileTiered -- analyze one file at the requested tier: the fast tier by default, or
 # the full (typecheck) tier under --full (which also needs the project src/system dirs).
-analyzeFileTiered: function {path: String.take full: bool srcdir: StringView systemdir: StringView} out Analysis is {
+analyzeFileTiered: function {path: String.take full: bool srcdir: StringView systemdir: StringView lineLength: u32} out Analysis is {
     if full then {
-        return (analyzeFileFull path: path srcdir: srcdir systemdir: systemdir)
+        return (analyzeFileFull path: path srcdir: srcdir systemdir: systemdir lineLength: lineLength)
     }
-    return (analyzeFile path: path)
+    return (analyzeFile path: path lineLength: lineLength)
+}
+
+# codepointLen -- number of Unicode codepoints in `s` (UTF-8 continuation bytes 0x80..0xBF are not
+# counted); the display "column" length for the line-length rule.
+codepointLen: function {s: StringView} out u64 is {
+    n: s.length
+    c: 0.u64
+    b: 0.u64
+    for b < n loop {
+        bo: s.byteAt i: b
+        cont: false
+        match (
+            bo
+        ) case some then {
+            if bo >= 128 when (bo < 192) then {
+                cont = true
+            }
+        } case none then {
+        }
+        if (cont) == false then {
+            c = c + 1
+        }
+        b = b + 1
+    }
+    return c
 }
 
 # sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`
