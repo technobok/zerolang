@@ -250,6 +250,52 @@ Analysis: class {
             this.warnFix code: "W002" msg: "file does not end with a newline".string line: 0 col: 0 width: 0 lo: n hi: n repl: "\n".string
         }
     }
+
+    # checkBlankLines -- W004: collapse a run of 3 or more consecutive blank lines (empty or
+    # whitespace-only) to a single blank line, deleting the extras. Byte-exact from the line
+    # start index; runs of two or fewer are left alone.
+    checkBlankLines: function {:this} is {
+        srcOwned: this.source.copy
+        sv: srcOwned.stringview
+        lls: linesOf src: sv
+        lineStart: lineStartIndex src: sv
+        nLines: lls.length
+        srcLen: sv.length
+        i: 0.u64
+        for i < nLines loop {
+            ln: lls.get i: i
+            blank: (trailingWsLen ln: ln.stringview) == ln.length
+            if blank then {
+                e: i + 1
+                scanning: true
+                for scanning loop {
+                    if e >= nLines then {
+                        scanning = false
+                    } else {
+                        le: lls.get i: e
+                        lblank: (trailingWsLen ln: le.stringview) == le.length
+                        if lblank then {
+                            e = e + 1
+                        } else {
+                            scanning = false
+                        }
+                    }
+                }
+                runLen: e - i
+                if runLen >= 3 then {
+                    lo: lineStart.get i: (i + 1)
+                    hi: srcLen
+                    if e < nLines then {
+                        hi = lineStart.get i: e
+                    }
+                    this.warnFix code: "W004" msg: "too many consecutive blank lines".string line: (i + 2).u32 col: 1 width: 1 lo: lo hi: hi repl: "".string
+                }
+                i = e
+            } else {
+                i = i + 1
+            }
+        }
+    }
     # walkOpt -- recurse into an optional child node when present.
     walkOpt: function {:this o: Option Node} is {
         match (
@@ -713,17 +759,24 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out (List zfix.Edit) is {
     for k < n loop {
         best: n
         bestLo: 0.u64
+        bestHi: 0.u64
         i: 0.u64
         for i < n loop {
             u: used.get i: i
             if (u) == false then {
                 e: edits.get i: i
+                take: false
                 if best == n then {
-                    best = i
-                    bestLo = e.byteLo
+                    take = true
                 } else if e.byteLo < bestLo then {
+                    take = true
+                } else if e.byteLo == bestLo when (e.byteHi > bestHi) then {
+                    take = true
+                }
+                if take then {
                     best = i
                     bestLo = e.byteLo
+                    bestHi = e.byteHi
                 }
             }
             i = i + 1
@@ -754,9 +807,11 @@ emitDiffHunk: function {buf: String source: StringView edits: (List zfix.Edit).b
     j: cStart
     for j < cEnd loop {
         e: edits.get i: j
-        zfix.appendRange buf: newBlock src: source lo: prev hi: e.byteLo
-        newBlock.append e.replacement.stringview
-        prev = e.byteHi
+        if e.byteLo >= prev when (e.byteLo <= e.byteHi) then {
+            zfix.appendRange buf: newBlock src: source lo: prev hi: e.byteLo
+            newBlock.append e.replacement.stringview
+            prev = e.byteHi
+        }
         j = j + 1
     }
     zfix.appendRange buf: newBlock src: source lo: prev hi: bByte
@@ -855,6 +910,7 @@ analyzeFile: function {path: String.take} out Analysis is {
         a.checkTrailingWs
         a.checkFinalNewline
         a.checkColonSpacing
+        a.checkBlankLines
         sortedEdits: sortEdits edits: a.edits
         a.edits = sortedEdits
         return a
