@@ -646,6 +646,573 @@ Analysis: class {
             }
         }
     }
+
+    # runFastChecks -- the fast-tier passes: parse-error/AST rules over `n`, then the token and
+    # line rules over the source.
+    runFastChecks: function {:this n: Node} is {
+        this.walk n: n
+        this.checkForWhile
+        this.checkTrailingWs
+        this.checkFinalNewline
+        this.checkColonSpacing
+        this.checkBlankLines
+    }
+
+    # sortEditsInPlace -- reorder the collected edits by byteLo so the applier and the diff
+    # renderer see sorted, overlap-resolvable input.
+    sortEditsInPlace: function {:this} is {
+        se: sortEdits edits: this.edits
+        this.edits = se
+    }
+
+    # emitSuf -- L005: a redundant numeric suffix. The safe fix removes the `.` and the type
+    # name (e.g. `5.i32` -> `5`); the context already pins the type.
+    emitSuf: function {:this uname: StringView ln: u32 col: u32 tname: StringView} is {
+        srcOwned: this.source.copy
+        sv: srcOwned.stringview
+        lineStart: lineStartIndex src: sv
+        srcLines: linesOf src: sv
+        byteStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: ln colno: col
+        lo: byteStart
+        if byteStart > 0 then {
+            lo = byteStart - 1
+        }
+        hi: byteStart + tname.length
+        this.warnFix code: "L005" msg: "redundant numeric suffix `.\{tname}`".string line: ln col: col width: tname.length.u32 lo: lo hi: hi repl: "".string
+    }
+
+    # sufBinop -- a binop operand whose numeric suffix the other (non-literal, same-type)
+    # operand makes redundant.
+    sufBinop: function {:this lhs: Node rhs: Node uname: StringView st: zenv.ZSymbolTable} is {
+        ls: operandSuffix n: lhs
+        if ls.tname.length > 0 when (isAnchor n: rhs tname: ls.tname.stringview st: st) then {
+            this.emitSuf uname: uname ln: ls.line col: ls.col tname: ls.tname.stringview
+        }
+        rs: operandSuffix n: rhs
+        if rs.tname.length > 0 when (isAnchor n: lhs tname: rs.tname.stringview st: st) then {
+            this.emitSuf uname: uname ln: rs.line col: rs.col tname: rs.tname.stringview
+        }
+    }
+
+    # sufReassign -- a reassignment value whose suffix the target's type fixes.
+    sufReassign: function {:this topath: Node value: Node uname: StringView st: zenv.ZSymbolTable} is {
+        vs: operandSuffix n: value
+        if vs.tname.length > 0 then {
+            tn: typeNameOfNode n: topath st: st
+            if tn.length > 0 when (tn.stringview == vs.tname.stringview) then {
+                this.emitSuf uname: uname ln: vs.line col: vs.col tname: vs.tname.stringview
+            }
+        }
+    }
+
+    # sufNamedArg -- a named call/constructor argument whose suffix the parameter / field type
+    # fixes.
+    sufNamedArg: function {:this arg: Node calleeType: u64 uname: StringView st: zenv.ZSymbolTable} is {
+        match (
+            arg
+        ) case namedoperation then {
+            an: optName o: arg.name
+            if an.length > 0 then {
+                s9: operandSuffix n: arg.operation
+                if s9.tname.length > 0 then {
+                    pto: st.typing.childOf parentTypeId: calleeType name: an.stringview
+                    match (
+                        pto
+                    ) case some then {
+                        ptn: nameOfTypeId tid: pto st: st
+                        if ptn.stringview == s9.tname.stringview then {
+                            this.emitSuf uname: uname ln: s9.line col: s9.col tname: s9.tname.stringview
+                        }
+                    } case none then {}
+                }
+            }
+        } else {}
+    }
+
+    # sufNamedArgReturn -- a return value whose suffix the enclosing function's return type
+    # fixes.
+    sufNamedArgReturn: function {:this arg: Node rtName: StringView uname: StringView} is {
+        match (
+            arg
+        ) case namedoperation then {
+            s9: operandSuffix n: arg.operation
+            if s9.tname.length > 0 when (s9.tname.stringview == rtName) then {
+                this.emitSuf uname: uname ln: s9.line col: s9.col tname: s9.tname.stringview
+            }
+        } else {
+            s8: operandSuffix n: arg
+            if s8.tname.length > 0 when (s8.tname.stringview == rtName) then {
+                this.emitSuf uname: uname ln: s8.line col: s8.col tname: s8.tname.stringview
+            }
+        }
+    }
+
+    # sufCall -- redundant suffixes in a call: a `return` uses the enclosing function's return
+    # type; otherwise each named argument's parameter type.
+    sufCall: function {:this callNid: u32 callable: Node arguments: List Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
+        ck: st.typing.callKind.get key: callNid.u64
+        isRet: false
+        match (
+            ck
+        ) case some then {
+            match (
+                ck
+            ) case RETURN then {
+                isRet = true
+            } else {}
+        } case none then {}
+        if isRet then {
+            rtName: typeNameOfOpt o: funcret st: st
+            if rtName.length > 0 then {
+                ait: arguments.iterate
+                for a: ait loop {
+                    this.sufNamedArgReturn arg: a rtName: rtName.stringview uname: uname
+                }
+            }
+        } else {
+            cInfo: nodeInfoOf n: callable
+            co: st.typing.nodeType.get key: cInfo.id.u64
+            match (
+                co
+            ) case some then {
+                ait: arguments.iterate
+                for a: ait loop {
+                    this.sufNamedArg arg: a calleeType: co uname: uname st: st
+                }
+            } case none then {}
+        }
+    }
+
+    # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
+    # the enclosing function's return type for `return`s.
+    walkSuf: function {:this n: Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
+        match (
+            n
+        ) case error then {
+        } case atomid then {
+        } case labelvalue then {
+        } case stringchunk then {
+        } case binop then {
+            this.sufBinop lhs: n.lhs rhs: n.rhs uname: uname st: st
+            this.walkSuf n: n.lhs uname: uname st: st funcret: funcret
+            this.walkSuf n: n.operator uname: uname st: st funcret: funcret
+            this.walkSuf n: n.rhs uname: uname st: st funcret: funcret
+        } case atomstring then {
+            iter: n.stringparts.iterate
+            for part: iter loop {
+                this.walkSuf n: part uname: uname st: st funcret: funcret
+            }
+        } case dottedpath then {
+            this.walkSuf n: n.parent uname: uname st: st funcret: funcret
+            this.walkSuf n: n.child uname: uname st: st funcret: funcret
+        } case call then {
+            this.sufCall callNid: n.nodeid callable: n.callable arguments: n.arguments uname: uname st: st funcret: funcret
+            this.walkSuf n: n.callable uname: uname st: st funcret: funcret
+            argiter: n.arguments.iterate
+            for arg: argiter loop {
+                this.walkSuf n: arg uname: uname st: st funcret: funcret
+            }
+        } case typeofexpr then {
+            this.walkSuf n: n.source uname: uname st: st funcret: funcret
+        } case namedoperation then {
+            this.walkSuf n: n.operation uname: uname st: st funcret: funcret
+        } case datablock then {
+            eiter: n.elements.iterate
+            for el: eiter loop {
+                this.walkSuf n: el uname: uname st: st funcret: funcret
+            }
+            this.walkSufOpt o: n.outType uname: uname st: st funcret: funcret
+        } case yieldexpr then {
+            this.walkSuf n: n.expr uname: uname st: st funcret: funcret
+        } case statement then {
+            siter: n.statements.iterate
+            for sln: siter loop {
+                this.walkSuf n: sln uname: uname st: st funcret: funcret
+            }
+        } case statementline then {
+            this.walkSuf n: n.statementline uname: uname st: st funcret: funcret
+        } case assignment then {
+            this.walkSuf n: n.value uname: uname st: st funcret: funcret
+        } case reassignment then {
+            this.sufReassign topath: n.topath value: n.value uname: uname st: st
+            this.walkSuf n: n.topath uname: uname st: st funcret: funcret
+            this.walkSuf n: n.value uname: uname st: st funcret: funcret
+        } case swapstmt then {
+            this.walkSuf n: n.lhs uname: uname st: st funcret: funcret
+            this.walkSuf n: n.rhs uname: uname st: st funcret: funcret
+        } case expression then {
+            this.walkSuf n: n.expression uname: uname st: st funcret: funcret
+        } case ifexpr then {
+            clit: n.clauses.iterate
+            for cl: clit loop {
+                this.walkSuf n: cl uname: uname st: st funcret: funcret
+            }
+            this.walkSufOpt o: n.elseclause uname: uname st: st funcret: funcret
+        } case ifclause then {
+            coit: n.conditions.iterate
+            for co: coit loop {
+                this.walkSuf n: co uname: uname st: st funcret: funcret
+            }
+            this.walkSuf n: n.statement uname: uname st: st funcret: funcret
+        } case forexpr then {
+            fcit: n.conditions.iterate
+            for fc: fcit loop {
+                this.walkSuf n: fc uname: uname st: st funcret: funcret
+            }
+            this.walkSufOpt o: n.body uname: uname st: st funcret: funcret
+            fpit: n.postconditions.iterate
+            for fp: fpit loop {
+                this.walkSuf n: fp uname: uname st: st funcret: funcret
+            }
+        } case doexpr then {
+            this.walkSuf n: n.statement uname: uname st: st funcret: funcret
+        } case withexpr then {
+            this.walkSuf n: n.value uname: uname st: st funcret: funcret
+            this.walkSuf n: n.body uname: uname st: st funcret: funcret
+        } case caseexpr then {
+            this.walkSuf n: n.subject uname: uname st: st funcret: funcret
+            ccit: n.clauses.iterate
+            for cc: ccit loop {
+                this.walkSuf n: cc uname: uname st: st funcret: funcret
+            }
+            this.walkSufOpt o: n.elseclause uname: uname st: st funcret: funcret
+        } case caseclause then {
+            this.walkSuf n: n.matcharm uname: uname st: st funcret: funcret
+            this.walkSuf n: n.statement uname: uname st: st funcret: funcret
+        } case functiondef then {
+            this.walkSufOpt o: n.returntype uname: uname st: st funcret: n.returntype
+            piter: n.parameters.iterate
+            for pm: piter loop {
+                this.walkSuf n: pm uname: uname st: st funcret: n.returntype
+            }
+            this.walkSufOpt o: n.body uname: uname st: st funcret: n.returntype
+            faiter: n.asItems.iterate
+            for fam: faiter loop {
+                this.walkSuf n: fam uname: uname st: st funcret: n.returntype
+            }
+        } case objectdef then {
+            oiiter: n.isItems.iterate
+            for oim: oiiter loop {
+                this.walkSuf n: oim uname: uname st: st funcret: funcret
+            }
+            oaiter: n.asItems.iterate
+            for oam: oaiter loop {
+                this.walkSuf n: oam uname: uname st: st funcret: funcret
+            }
+        } case unitdef then {
+            ubiter: n.body.iterate
+            for ubm: ubiter loop {
+                this.walkSuf n: ubm uname: uname st: st funcret: funcret
+            }
+        } case program then {
+            puiter: n.units.iterate
+            for pum: puiter loop {
+                this.walkSuf n: pum uname: uname st: st funcret: funcret
+            }
+        }
+    }
+
+    # walkSufOpt -- run the suffix check on an optional child node.
+    walkSufOpt: function {:this o: Option Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
+        match (
+            o
+        ) case some then {
+            this.walkSuf n: o uname: uname st: st funcret: funcret
+        } case none then {}
+    }
+
+    # lintSuffixUnit -- run the suffix check over a typechecked program's main unit.
+    lintSuffixUnit: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable} is {
+        mn: mainUnitNameOf program: prog
+        match (
+            prog
+        ) case program then {
+            uiter: prog.units.iterate
+            for u: uiter loop {
+                this.lintSuffixNamedOp namedOp: u mainName: mn.stringview uname: uname st: st
+            }
+        } else {}
+    }
+
+    # lintSuffixNamedOp -- run the suffix check on the main unit only.
+    lintSuffixNamedOp: function {:this namedOp: Node mainName: StringView uname: StringView st: zenv.ZSymbolTable} is {
+        match (
+            namedOp
+        ) case namedoperation then {
+            un: optName o: namedOp.name
+            if un.stringview == mainName then {
+                this.walkSuf n: namedOp.operation uname: uname st: st funcret: (Option.none Node)
+            }
+        } else {}
+    }
+
+    # checkSuffix -- L005 (typecheck tier): build the project VFS, parse this file's unit in the
+    # project, typecheck, and walk the typed tree for redundant numeric suffixes. A missing
+    # dependency (in-project parse error) skips the check silently.
+    checkSuffix: function {:this srcdir: StringView systemdir: StringView uname: StringView} is {
+        vfs: zvfs.ZVfs providers: (List zvfs.ProviderBox) entrytable: (zvfs.DentryTable entries: (List zvfs.dentry)) file_names: (List String) walk_cache: (Map String value: u32) rootid: 0
+        vfs.registerNull
+        systemid: vfs.registerFS rootpath: systemdir.string parentpath: "".string
+        srcid: vfs.registerFS rootpath: srcdir.string parentpath: "".string
+        vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
+        rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+        p: zparser.Parser.create
+        prog: p.parse vfs: vfs rootid: rootid mainUnitName: uname.string
+        match (
+            prog
+        ) case error then {
+        } else {
+            reg: ztypes.newRegistry
+            st: ztypecheck.typecheck program: prog reg: reg full: true
+            this.lintSuffixUnit prog: prog uname: uname st: st
+        }
+    }
+}
+
+# ---- L005 redundant-suffix helpers (typecheck tier; run only under --full) ----
+
+# nodeinfo -- a node's synthetic id and source position.
+nodeinfo: record {
+    id:   u32
+    line: u32
+    col:  u32
+}
+
+# nodeInfoOf -- the id and source position of any AST node.
+nodeInfoOf: function {n: Node} out nodeinfo is {
+    match (
+        n
+    ) case error then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case atomid then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case labelvalue then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case stringchunk then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case binop then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case atomstring then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case dottedpath then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case call then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case typeofexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case namedoperation then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case datablock then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case yieldexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case statement then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case statementline then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case assignment then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case reassignment then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case swapstmt then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case expression then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case ifexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case ifclause then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case forexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case doexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case withexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case caseexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case caseclause then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case functiondef then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case objectdef then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case unitdef then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case program then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    }
+}
+
+# isNumericTypeName -- a name in the numeric-type set the suffix check ranges over.
+isNumericTypeName: function {name: StringView} out bool is {
+    if name == "i8" then { return true }
+    if name == "i16" then { return true }
+    if name == "i32" then { return true }
+    if name == "i64" then { return true }
+    if name == "i128" then { return true }
+    if name == "u8" then { return true }
+    if name == "u16" then { return true }
+    if name == "u32" then { return true }
+    if name == "u64" then { return true }
+    if name == "u128" then { return true }
+    if name == "c8" then { return true }
+    if name == "c32" then { return true }
+    if name == "f32" then { return true }
+    if name == "f64" then { return true }
+    if name == "f128" then { return true }
+    return false
+}
+
+# isNonDec -- a literal lexeme in hex / binary / octal form.
+isNonDec: function {s: StringView} out bool is {
+    if (s.startsWith prefix: "0x") then { return true }
+    if (s.startsWith prefix: "0X") then { return true }
+    if (s.startsWith prefix: "0b") then { return true }
+    if (s.startsWith prefix: "0B") then { return true }
+    if (s.startsWith prefix: "0o") then { return true }
+    if (s.startsWith prefix: "0O") then { return true }
+    return false
+}
+
+# literalFitsBase -- the literal value fits its base's default type (i64 for decimal, u64 for
+# non-decimal). A literal that overflows the default keeps its suffix (load-bearing).
+literalFitsBase: function {numstr: StringView} out bool is {
+    pv: ztypes.parseLiteralValue numstr: numstr
+    if pv.ok == false then { return false }
+    if pv.isFloat then { return true }
+    if (isNonDec s: numstr) then { return true }
+    iMax: 9223372036854775807.u64
+    return pv.ival <= iMax
+}
+
+# sufrec -- a candidate suffix: the suffix type name ("" when not a candidate) and the
+# position of the suffix's type token.
+sufrec: class {
+    tname: String
+    line:  u32
+    col:   u32
+}
+
+# operandSuffix -- peel an `expression` wrapper and report whether the operand is a redundant
+# -suffix dotted path, with the type token's position.
+operandSuffix: function {n: Node} out sufrec is {
+    match (
+        n
+    ) case expression then {
+        return (operandSuffix n: n.expression)
+    } case dottedpath then {
+        cn: atomName n: n.child
+        if (isNumericTypeName name: cn.stringview) == false then {
+            return (sufrec tname: "".string line: 0 col: 0)
+        }
+        pn: atomName n: n.parent
+        if pn.length == 0 then {
+            return (sufrec tname: "".string line: 0 col: 0)
+        }
+        if (literalFitsBase numstr: pn.stringview) == false then {
+            return (sufrec tname: "".string line: 0 col: 0)
+        }
+        ci: nodeInfoOf n: n.child
+        return (sufrec tname: cn line: ci.line col: ci.col)
+    } else {
+        return (sufrec tname: "".string line: 0 col: 0)
+    }
+}
+
+# isNodeConst -- the node carries a compile-time const value.
+isNodeConst: function {nid: u64 st: zenv.ZSymbolTable} out bool is {
+    res: false
+    it: st.typing.nodeConst.iterate
+    for row: it loop {
+        if row.nodeid == nid then {
+            res = true
+        }
+    }
+    return res
+}
+
+# nameOfTypeId -- the registered type's name for a type id ("" when absent).
+nameOfTypeId: function {tid: u64 st: zenv.ZSymbolTable} out String is {
+    zo: st.reg.typeById.get key: tid
+    match (
+        zo
+    ) case some then {
+        return zo.name.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# typeNameOfNode -- the resolved type name of a node ("" when unresolved).
+typeNameOfNode: function {n: Node st: zenv.ZSymbolTable} out String is {
+    info: nodeInfoOf n: n
+    to: st.typing.nodeType.get key: info.id.u64
+    match (
+        to
+    ) case some then {
+        return (nameOfTypeId tid: to st: st)
+    } case none then {
+        return "".string
+    }
+}
+
+# typeNameOfOpt -- the resolved type name of an optional node ("" when absent).
+typeNameOfOpt: function {o: Option Node st: zenv.ZSymbolTable} out String is {
+    match (
+        o
+    ) case some then {
+        return (typeNameOfNode n: o st: st)
+    } case none then {
+        return "".string
+    }
+}
+
+# isAnchor -- the node is a concrete non-literal value of numeric type `tname`, a genuine
+# type anchor that makes a same-type literal suffix redundant.
+isAnchor: function {n: Node tname: StringView st: zenv.ZSymbolTable} out bool is {
+    info: nodeInfoOf n: n
+    nid: info.id.u64
+    to: st.typing.nodeType.get key: nid
+    match (
+        to
+    ) case some then {
+        zhit9: false
+        zlit9: false
+        znm9: "".string
+        {
+            zo: st.reg.typeById.get key: to
+            match (
+                zo
+            ) case some then {
+                zhit9 = true
+                if zo.isLiteral then { zlit9 = true }
+                znm9 = zo.name.copy
+            } case none then {
+            }
+        }
+        if zhit9 == false then { return false }
+        if zlit9 then { return false }
+        if (znm9.stringview == tname) == false then { return false }
+        if (isNodeConst nid: nid st: st) then { return false }
+        return true
+    } case none then {
+        return false
+    }
+}
+
+# mainUnitNameOf -- the program's main unit name.
+mainUnitNameOf: function {program: Node} out String is {
+    match (
+        program
+    ) case program then {
+        return program.mainUnitName.copy
+    } else {
+        return "".string
+    }
+}
+
+# unitNameOf -- a file path's unit name: the final path segment without the ".z" suffix.
+unitNameOf: function {path: StringView} out String is {
+    base: path.string
+    slashOpt: path.lastIndexOf needle: "/"
+    match (
+        slashOpt
+    ) case some then {
+        r: "".string
+        i: slashOpt + 1
+        n: path.length
+        for i < n loop {
+            b: path.byteAt i: i
+            match (
+                b
+            ) case some then {
+                r.appendByte b: b
+            } case none then {
+            }
+            i = i + 1
+        }
+        base = r
+    } case none then {
+    }
+    sfx: base.stringview.stripSuffix s: ".z"
+    match (
+        sfx
+    ) case some then {
+        return sfx.string
+    } case none then {
+        return base.copy
+    }
 }
 
 # linesOf -- split source into a 1-based-addressable list of lines (newlines stripped).
@@ -693,7 +1260,7 @@ byteToLine: function {lineStart: (List u64).borrow off: u64 nLines: u64} out u64
 # one codepoint (a lead byte plus its 0x80..0xBF continuations) per column. ASCII: colno - 1.
 colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
     if colno <= 1 then {
-        return 0.u64
+        return 0
     }
     target: (colno - 1).u64
     n: lineText.length
@@ -736,7 +1303,7 @@ colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
 tokByteStart: function {lineStart: (List u64).borrow srcLines: (List String).borrow lineno: u32 colno: u32} out u64 is {
     li: (lineno - 1).u64
     if li >= srcLines.length then {
-        return 0.u64
+        return 0
     }
     base: lineStart.get i: li
     lt: srcLines.get i: li
@@ -905,14 +1472,8 @@ analyzeFile: function {path: String.take} out Analysis is {
         root: ast.parseSource source: rd.copy
         lines: linesOf src: rd.stringview
         a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
-        a.walk n: root
-        a.checkForWhile
-        a.checkTrailingWs
-        a.checkFinalNewline
-        a.checkColonSpacing
-        a.checkBlankLines
-        sortedEdits: sortEdits edits: a.edits
-        a.edits = sortedEdits
+        a.runFastChecks n: root
+        a.sortEditsInPlace
         return a
     } case err then {
         a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
@@ -920,6 +1481,39 @@ analyzeFile: function {path: String.take} out Analysis is {
         a.diags.append d
         return a
     }
+}
+
+# analyzeFileFull -- fast-tier analysis plus the typecheck-tier suffix rule (L005). Builds the
+# project VFS from `srcdir`/`systemdir` and typechecks this file's unit so the suffix check has
+# resolved types. Slower than analyzeFile; only the --full path calls it.
+analyzeFileFull: function {path: String.take srcdir: StringView systemdir: StringView} out Analysis is {
+    rd: io.readText path: path.stringview
+    match (
+        rd
+    ) case ok then {
+        root: ast.parseSource source: rd.copy
+        lines: linesOf src: rd.stringview
+        a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        a.runFastChecks n: root
+        un: unitNameOf path: a.path.stringview
+        a.checkSuffix srcdir: srcdir systemdir: systemdir uname: un.stringview
+        a.sortEditsInPlace
+        return a
+    } case err then {
+        a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic) edits: (List zfix.Edit))
+        d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
+        a.diags.append d
+        return a
+    }
+}
+
+# analyzeFileTiered -- analyze one file at the requested tier: the fast tier by default, or
+# the full (typecheck) tier under --full (which also needs the project src/system dirs).
+analyzeFileTiered: function {path: String.take full: bool srcdir: StringView systemdir: StringView} out Analysis is {
+    if full then {
+        return (analyzeFileFull path: path srcdir: srcdir systemdir: systemdir)
+    }
+    return (analyzeFile path: path)
 }
 
 # sourceParses -- true if `source` parses with no embedded parse errors. `zl fmt`

@@ -16,6 +16,8 @@ printUsage: function is {
     io.eprintln "  --check   exit non-zero if any file needs formatting; write nothing"
     io.eprintln "  --stdout  print the formatted result instead of writing in place"
     io.eprintln "  --diff    print a unified diff of the changes; write nothing"
+    io.eprintln "lint flags:"
+    io.eprintln "  --full    also run typecheck-tier rules (--src DIR --system DIR set the project)"
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
@@ -37,14 +39,14 @@ reportAnalysis: function {a: zsource.Analysis.borrow} is {
 }
 
 # runLint -- fast-tier lint over each target file. Exit 1 if any diagnostics.
-runLint: function {paths: (List String).borrow} out i32 is {
+runLint: function {paths: (List String).borrow full: bool srcdir: StringView systemdir: StringView} out i32 is {
     if paths.length == 0 then {
         io.eprintln "zl lint: no input files"
         return 2
     }
     total: 0.u64
     with pit: paths.iterate do for p: pit loop {
-        a: zsource.analyzeFile path: p.copy
+        a: zsource.analyzeFileTiered path: p.copy full: full srcdir: srcdir systemdir: systemdir
         reportAnalysis a: a
         total = total + a.diags.length
     }
@@ -85,7 +87,7 @@ writeStdout: function {s: StringView} is {
 # parse errors (reported, left untouched). Modes: default writes valid changes in place;
 # `--check` reports files that would change and exits non-zero without writing; `--stdout`
 # prints the formatted result (lossless, no in-place write).
-runFmt: function {paths: (List String).borrow check: bool stdout: bool diff: bool} out i32 is {
+runFmt: function {paths: (List String).borrow check: bool stdout: bool diff: bool full: bool srcdir: StringView systemdir: StringView} out i32 is {
     if paths.length == 0 then {
         io.eprintln "zl fmt: no input files"
         return 2
@@ -106,7 +108,7 @@ runFmt: function {paths: (List String).borrow check: bool stdout: bool diff: boo
     }
     rc: 0.i32
     with pit: paths.iterate do for p: pit loop {
-        a: zsource.analyzeFile path: p.copy
+        a: zsource.analyzeFileTiered path: p.copy full: full srcdir: srcdir systemdir: systemdir
         if a.parseErrorCount > 0 then {
             reportAnalysis a: a
             msg: "zl fmt: \{p} has parse errors; not formatting"
@@ -191,6 +193,9 @@ main: function is {
     fCheck: false
     fStdout: false
     fDiff: false
+    fFull: false
+    srcdir: ".".string
+    systemdir: "lib/system".string
     i: 2.u64
     for i < n loop {
         arg: (argv.get i: i).copy
@@ -201,6 +206,24 @@ main: function is {
             fStdout = true
         } else if av == "--diff" then {
             fDiff = true
+        } else if av == "--full" then {
+            fFull = true
+        } else if av == "--src" then {
+            if (i + 1) < n then {
+                i = i + 1
+                srcdir = (argv.get i: i).copy
+            } else {
+                io.eprintln "zl: --src needs a directory"
+                os.exit code: 2
+            }
+        } else if av == "--system" then {
+            if (i + 1) < n then {
+                i = i + 1
+                systemdir = (argv.get i: i).copy
+            } else {
+                io.eprintln "zl: --system needs a directory"
+                os.exit code: 2
+            }
         } else if (av.startsWith prefix: "-") then {
             eu: "zl: unknown flag \{av}"
             io.eprintln eu.stringview
@@ -212,11 +235,11 @@ main: function is {
     }
 
     if sv == "lint" then {
-        rc: runLint paths: paths
+        rc: runLint paths: paths full: fFull srcdir: srcdir.stringview systemdir: systemdir.stringview
         os.exit code: rc
     }
     if sv == "fmt" then {
-        rc: runFmt paths: paths check: fCheck stdout: fStdout diff: fDiff
+        rc: runFmt paths: paths check: fCheck stdout: fStdout diff: fDiff full: fFull srcdir: srcdir.stringview systemdir: systemdir.stringview
         os.exit code: rc
     }
     if sv == "explain" then {
