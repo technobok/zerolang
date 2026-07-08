@@ -1120,25 +1120,30 @@ emitNarrowedTakeZero: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node ind: 
 # implicitTakeSource -- the C source local of a bare reftype/String atom arg
 # (alias-resolved); "" for a type/fn definition reference or any non-atom shape.
 # The source of an implicit ownership move (no explicit `.take`).
+implicitTakeSourceName: function {symtab: zenv.ZSymbolTable ctx: Ctx nm: StringView} out String is {
+    rid: resolveTypeIdByName symtab: symtab ctx: ctx name: nm
+    if rid > 0 then {
+        rtt9: symtab.reg.typetypeOf typeId: rid
+        if rtt9 != ztypes.ztypetype.FUNCTION then {
+            return "".string
+        }
+        mfn9: userFnId symtab: symtab ctx: ctx name: nm
+        if mfn9 > 0 then {
+            return "".string
+        }
+    }
+    return (takeSourceResolve ctx: ctx name: nm)
+}
+
 implicitTakeSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
     match (
         n
     ) case expression then {
         return (implicitTakeSource symtab: symtab ctx: ctx n: n.expression)
     } case atomid then {
-        nm: n.name.stringview
-        rid: resolveTypeIdByName symtab: symtab ctx: ctx name: nm
-        if rid > 0 then {
-            rtt9: symtab.reg.typetypeOf typeId: rid
-            if rtt9 != ztypes.ztypetype.FUNCTION then {
-                return "".string
-            }
-            mfn9: userFnId symtab: symtab ctx: ctx name: nm
-            if mfn9 > 0 then {
-                return "".string
-            }
-        }
-        return (takeSourceResolve ctx: ctx name: nm)
+        return (implicitTakeSourceName symtab: symtab ctx: ctx nm: n.name.stringview)
+    } case labelvalue then {
+        return (implicitTakeSourceName symtab: symtab ctx: ctx nm: n.name.stringview)
     } else {
         return "".string
     }
@@ -1517,6 +1522,10 @@ svArgAddr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         an: n.name.stringview
         a2: "&\{an}"
         return a2
+    } case labelvalue then {
+        anl: n.name.stringview
+        a2l: "&\{anl}"
+        return a2l
     } case dottedpath then {
         dpm: atomTextOf n: n.child
         if dpm.stringview == "stringview" then {
@@ -4667,6 +4676,13 @@ emitStringMethod: function {ctx: Ctx recv: StringView recvIsPtr: bool mn: String
     return "".string
 }
 
+# emitLocalAtomName -- a local variable's C spelling: alias-resolved then
+# C-mangled. Shared by the atomid and labelvalue (:name shorthand) value legs.
+emitLocalAtomName: function {ctx: Ctx name: StringView} out String is {
+    acv: aliasResolve ctx: ctx name: name
+    return (ztypes.mangleVarName name: acv.stringview)
+}
+
 # emitExpr -- the C expression text for a node (calls inline; the scalar
 # examples carry no order-sensitive multi-call arguments).
 emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
@@ -4695,8 +4711,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         match (
             avo9
         ) case some then {
-            acv9: aliasResolve ctx: ctx name: av
-            return (ztypes.mangleVarName name: acv9.stringview)
+            return (emitLocalAtomName ctx: ctx name: av)
         } case none then {}
         ac: av.string
         cgo: ctx.constVals.get key: ac
@@ -4753,11 +4768,9 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 return "\{fbcn9}()"
             }
         }
-        ac2: aliasResolve ctx: ctx name: av
-        return (ztypes.mangleVarName name: ac2.stringview)
+        return (emitLocalAtomName ctx: ctx name: av)
     } case labelvalue then {
-        lvn9: n.name.stringview
-        return (aliasResolve ctx: ctx name: lvn9)
+        return (emitLocalAtomName ctx: ctx name: n.name.stringview)
     } case dottedpath then {
         dpUb9: atomTextOf n: n.parent
         if (symtab.reg.isUnitName name: dpUb9.stringview) when (isEmittableFileUnit name: dpUb9.stringview) then {
@@ -5825,6 +5838,8 @@ nodeIdOf9: function {n: Node} out u64 is {
     ) case expression then {
         return n.nodeid.u64
     } case atomid then {
+        return n.nodeid.u64
+    } case labelvalue then {
         return n.nodeid.u64
     } case call then {
         return n.nodeid.u64
