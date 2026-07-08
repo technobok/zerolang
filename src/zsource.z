@@ -386,11 +386,16 @@ Analysis: class {
     # checkForWhile -- L004 token tier: a `for` immediately followed by `while`.
     # Re-tokenizes the source (parse-free; immune to strings and comments).
     checkForWhile: function {:this} is {
-        tk: zlexer.Tokenizer.create source: this.source.copy fsno: 0
+        srcOwned: this.source.copy
+        sv: srcOwned.stringview
+        toks: tokenize.scan source: srcOwned.copy
+        lineStart: lineStartIndex src: sv
+        srcLines: linesOf src: sv
+        m: toks.length
         prevFor: false
-        looping: true
-        for looping loop {
-            t: tk.token
+        i: 0.u64
+        for i < m loop {
+            t: toks.get i: i
             match (
                 t.toktype
             ) case WS then {
@@ -400,14 +405,45 @@ Analysis: class {
                 prevFor = true
             } case WHILE then {
                 if prevFor then {
-                    this.warn code: "L004" msg: "redundant `for` before a bare `while` condition".string line: t.lineno col: t.colno width: t.tokstr.length.u32
+                    whileStart: tokByteStart lineStart: lineStart srcLines: srcLines lineno: t.lineno colno: t.colno
+                    condStart: whileStart + t.tokstr.length
+                    foundCond: false
+                    j: i + 1
+                    scanning: true
+                    for scanning loop {
+                        if j >= m then {
+                            scanning = false
+                        } else {
+                            tj: toks.get i: j
+                            triv: false
+                            match (
+                                tj.toktype
+                            ) case WS then {
+                                triv = true
+                            } case EOL then {
+                                triv = true
+                            } case COMMENT then {
+                                triv = true
+                            } else {
+                            }
+                            if triv then {
+                                j = j + 1
+                            } else {
+                                condStart = tokByteStart lineStart: lineStart srcLines: srcLines lineno: tj.lineno colno: tj.colno
+                                foundCond = true
+                                scanning = false
+                            }
+                        }
+                    }
+                    if foundCond then {
+                        this.warnFix code: "L004" msg: "redundant `while`: a for loop's leading condition omits `while`".string line: t.lineno col: t.colno width: t.tokstr.length.u32 lo: whileStart hi: condStart repl: "".string
+                    }
                 }
                 prevFor = false
-            } case EOF then {
-                looping = false
             } else {
                 prevFor = false
             }
+            i = i + 1
         }
     }
 
