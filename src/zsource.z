@@ -1,0 +1,181 @@
+# zsource -- the analysis facade for zl. Fast tier: read + fast-parse a single
+# file (no VFS, no typecheck), build a 1-based line table, and collect any
+# embedded parse errors as ERROR diagnostics. The Analysis carries what the
+# reporter and (later) the fixer need. A full tier (project VFS + typecheck) is
+# added in Phase 2 for type-dependent rules.
+
+Node: zast.Node
+
+Analysis: class {
+    path:   String
+    source: String
+    lines:  (List String)
+    diags:  (List zdiag.Diagnostic)
+} as {
+    # walkOpt -- recurse into an optional child node when present.
+    walkOpt: function {:this o: Option Node} is {
+        match (
+            o
+        ) case some then {
+            this.walk n: o
+        } case none then {
+        }
+    }
+
+    # walk -- traversal collecting embedded parse errors as diagnostics, recursing
+    # every child (all 29 arms, mirroring zast.printNodeCanonical).
+    walk: function {:this n: Node} is {
+        match (
+            n
+        ) case error then {
+            d: (zdiag.errorDiag errv: n.err fsno: n.fsno lineno: n.lineno colno: n.colno width: n.width msg: n.msg.copy note: n.note.copy hint: n.hint.copy)
+            this.diags.append d
+        } case atomid then {
+        } case labelvalue then {
+        } case stringchunk then {
+        } case binop then {
+            this.walk n: n.lhs
+            this.walk n: n.operator
+            this.walk n: n.rhs
+        } case atomstring then {
+            spit: n.stringparts.iterate
+            for part: spit loop {
+                this.walk n: part
+            }
+        } case dottedpath then {
+            this.walk n: n.parent
+            this.walk n: n.child
+        } case call then {
+            this.walk n: n.callable
+            ait: n.arguments.iterate
+            for arg: ait loop {
+                this.walk n: arg
+            }
+        } case typeofexpr then {
+            this.walk n: n.source
+        } case namedoperation then {
+            this.walk n: n.operation
+        } case datablock then {
+            elit: n.elements.iterate
+            for el: elit loop {
+                this.walk n: el
+            }
+            this.walkOpt o: n.outType
+        } case yieldexpr then {
+            this.walk n: n.expr
+        } case statement then {
+            stit: n.statements.iterate
+            for stln: stit loop {
+                this.walk n: stln
+            }
+        } case statementline then {
+            this.walk n: n.statementline
+        } case assignment then {
+            this.walk n: n.value
+        } case reassignment then {
+            this.walk n: n.topath
+            this.walk n: n.value
+        } case swapstmt then {
+            this.walk n: n.lhs
+            this.walk n: n.rhs
+        } case expression then {
+            this.walk n: n.expression
+        } case ifexpr then {
+            clit: n.clauses.iterate
+            for cl: clit loop {
+                this.walk n: cl
+            }
+            this.walkOpt o: n.elseclause
+        } case ifclause then {
+            coit: n.conditions.iterate
+            for co: coit loop {
+                this.walk n: co
+            }
+            this.walk n: n.statement
+        } case forexpr then {
+            fcit: n.conditions.iterate
+            for fc: fcit loop {
+                this.walk n: fc
+            }
+            this.walkOpt o: n.body
+            fpit: n.postconditions.iterate
+            for fp: fpit loop {
+                this.walk n: fp
+            }
+        } case doexpr then {
+            this.walk n: n.statement
+        } case withexpr then {
+            this.walk n: n.value
+            this.walk n: n.body
+        } case caseexpr then {
+            this.walk n: n.subject
+            ccit: n.clauses.iterate
+            for cc: ccit loop {
+                this.walk n: cc
+            }
+            this.walkOpt o: n.elseclause
+        } case caseclause then {
+            this.walk n: n.matcharm
+            this.walk n: n.statement
+        } case functiondef then {
+            this.walkOpt o: n.returntype
+            pmit: n.parameters.iterate
+            for pm: pmit loop {
+                this.walk n: pm
+            }
+            this.walkOpt o: n.body
+            fait: n.asItems.iterate
+            for fam: fait loop {
+                this.walk n: fam
+            }
+        } case objectdef then {
+            isit: n.isItems.iterate
+            for oim: isit loop {
+                this.walk n: oim
+            }
+            asit: n.asItems.iterate
+            for oam: asit loop {
+                this.walk n: oam
+            }
+        } case unitdef then {
+            udit: n.body.iterate
+            for ubm: udit loop {
+                this.walk n: ubm
+            }
+        } case program then {
+            puit: n.units.iterate
+            for pum: puit loop {
+                this.walk n: pum
+            }
+        }
+    }
+}
+
+# linesOf -- split source into a 1-based-addressable list of lines (newlines stripped).
+linesOf: function {src: StringView} out (List String) is {
+    ls: (List String)
+    with it: src.lines do for ln: it loop {
+        ls.append ln.string
+    }
+    return ls
+}
+
+# analyzeFile -- fast-tier analysis of one file: read, fast-parse (no VFS/typecheck),
+# build the line table, and collect parse-error diagnostics.
+analyzeFile: function {path: String.take} out Analysis is {
+    rd: io.readText path: path.stringview
+    match (
+        rd
+    ) case ok then {
+        root: ast.parseSource source: rd.copy
+        lines: linesOf src: rd.stringview
+        a: (Analysis path: path.copy source: rd.take lines: lines diags: (List zdiag.Diagnostic))
+        a.walk n: root
+        return a
+    } case err then {
+        a: (Analysis path: path.copy source: "".string lines: (List String) diags: (List zdiag.Diagnostic))
+        d: (zdiag.errorDiag errv: zast.err.IOERROR fsno: 0 lineno: 0 colno: 0 width: 0 msg: "could not read file".string note: "".string hint: "".string)
+        a.diags.append d
+        return a
+    }
+}

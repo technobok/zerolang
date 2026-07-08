@@ -1,0 +1,123 @@
+# zl -- the zerolang linter + formatter (preview). A separate binary from the
+# compiler: `zl lint <files>` reports diagnostics, `zl fmt <files>` applies safe
+# fixes. Both default to the fast tier (lex + parse, no typecheck) for run-on-save
+# speed; the parse gate refuses to edit a file that does not parse. See docs/zl.pdoc.
+#
+# Phase 1: the CLI skeleton + parse gate + diagnostic rendering. The rule engine
+# (Phase 2) and the fix applier (Phase 3) plug into this.
+
+printUsage: function is {
+    io.eprintln "usage: zl <command> [files...]"
+    io.eprintln "commands:"
+    io.eprintln "  lint <files>   report diagnostics"
+    io.eprintln "  fmt  <files>   apply safe fixes (refuses files with parse errors)"
+    io.eprintln "  explain <code> describe a lint code"
+}
+
+# reportAnalysis -- render every collected diagnostic for one file to stderr,
+# rustc-style, reusing the file's line table for the source snippet.
+reportAnalysis: function {a: zsource.Analysis.borrow} is {
+    with dit: a.diags.iterate do for d: dit loop {
+        srcLine: "".string
+        hasLine: false
+        if d.lineno > 0 then {
+            idx: d.lineno - 1
+            if idx.u64 < a.lines.length then {
+                srcLine = (a.lines.get i: idx.u64).copy
+                hasLine = true
+            }
+        }
+        block: (zdiag.render d: d path: a.path.stringview srcLine: srcLine.stringview hasLine: hasLine)
+        io.eprintln block.stringview
+    }
+}
+
+# runLint -- fast-tier lint over each target file. Exit 1 if any diagnostics.
+runLint: function {paths: (List String).borrow} out i32 is {
+    if paths.length == 0 then {
+        io.eprintln "zl lint: no input files"
+        return 2
+    }
+    total: 0.u64
+    with pit: paths.iterate do for p: pit loop {
+        a: zsource.analyzeFile path: p.copy
+        reportAnalysis a: a
+        total = total + a.diags.length
+    }
+    if total > 0 then {
+        return 1
+    }
+    return 0
+}
+
+# runFmt -- fast-tier format over each target file. Phase 1 is the parse gate only:
+# a file with parse errors is reported and left untouched; a clean file is a no-op
+# until the fix rules land (Phase 3).
+runFmt: function {paths: (List String).borrow} out i32 is {
+    if paths.length == 0 then {
+        io.eprintln "zl fmt: no input files"
+        return 2
+    }
+    rc: 0.i32
+    with pit: paths.iterate do for p: pit loop {
+        a: zsource.analyzeFile path: p.copy
+        if a.diags.length > 0 then {
+            reportAnalysis a: a
+            msg: "zl fmt: \{p} has errors; not formatting"
+            io.eprintln msg.stringview
+            rc = 1
+        }
+    }
+    return rc
+}
+
+main: function is {
+    argv: os.args
+    n: argv.length
+    if n < 2 then {
+        printUsage
+        os.exit code: 2
+    }
+    sub: (argv.get i: 1).copy
+    sv: sub.stringview
+
+    if sv == "-h" then {
+        printUsage
+        os.exit code: 0
+    }
+    if sv == "--help" then {
+        printUsage
+        os.exit code: 0
+    }
+    if sv == "help" then {
+        printUsage
+        os.exit code: 0
+    }
+
+    paths: (List String)
+    i: 2.u64
+    for i < n loop {
+        a: (argv.get i: i).copy
+        if (a.stringview.startsWith prefix: "-") == false then {
+            paths.append a
+        }
+        i = i + 1
+    }
+
+    if sv == "lint" then {
+        rc: runLint paths: paths
+        os.exit code: rc
+    }
+    if sv == "fmt" then {
+        rc: runFmt paths: paths
+        os.exit code: rc
+    }
+    if sv == "explain" then {
+        io.eprintln "zl explain: not yet implemented"
+        os.exit code: 2
+    }
+
+    io.eprintln "zl: unknown command"
+    printUsage
+    os.exit code: 2
+}
