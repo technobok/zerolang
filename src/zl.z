@@ -7,11 +7,14 @@
 # (Phase 2) and the fix applier (Phase 3) plug into this.
 
 printUsage: function is {
-    io.eprintln "usage: zl <command> [files...]"
+    io.eprintln "usage: zl <command> [flags] [files...]"
     io.eprintln "commands:"
     io.eprintln "  lint <files>   report diagnostics"
     io.eprintln "  fmt  <files>   apply safe fixes (refuses files with parse errors)"
     io.eprintln "  explain <code> describe a lint code"
+    io.eprintln "fmt flags:"
+    io.eprintln "  --check   exit non-zero if any file needs formatting; write nothing"
+    io.eprintln "  --stdout  print the formatted result instead of writing in place"
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
@@ -50,12 +53,44 @@ runLint: function {paths: (List String).borrow} out i32 is {
     return 0
 }
 
-# runFmt -- fast-tier format over each target file. Phase 1 is the parse gate only:
-# a file with parse errors is reported and left untouched; a clean file is a no-op
-# until the fix rules land (Phase 3).
-runFmt: function {paths: (List String).borrow} out i32 is {
+# writeStdout -- emit `s` to stdout as exact bytes. Unlike `print` (which appends a
+# newline) this is a lossless filter: the output matches the in-place write byte for
+# byte, so `--stdout` and the default writer never diverge.
+writeStdout: function {s: StringView} is {
+    b: Bytes
+    i: 0.u64
+    n: s.length
+    for i < n loop {
+        bo: s.byteAt i: i
+        match (
+            bo
+        ) case some then {
+            b.append from: bo
+        } case none then {
+        }
+        i = i + 1
+    }
+    bv: ByteView.borrow from: b.listview
+    w: io.stdout
+    wr: w.write from: bv
+    match (
+        wr
+    ) case ok then {
+    } case err then {
+    }
+}
+
+# runFmt -- fast-tier format over each target file. The parse gate refuses files with
+# parse errors (reported, left untouched). Modes: default writes valid changes in place;
+# `--check` reports files that would change and exits non-zero without writing; `--stdout`
+# prints the formatted result (lossless, no in-place write).
+runFmt: function {paths: (List String).borrow check: bool stdout: bool} out i32 is {
     if paths.length == 0 then {
         io.eprintln "zl fmt: no input files"
+        return 2
+    }
+    if check when stdout then {
+        io.eprintln "zl fmt: --check and --stdout are mutually exclusive"
         return 2
     }
     rc: 0.i32
@@ -65,25 +100,47 @@ runFmt: function {paths: (List String).borrow} out i32 is {
             reportAnalysis a: a
             msg: "zl fmt: \{p} has parse errors; not formatting"
             io.eprintln msg.stringview
+            if stdout then {
+                writeStdout s: a.source.stringview
+            }
             rc = 1
-        } else if a.edits.length > 0 then {
-            newsrc: zfix.applyEdits source: a.source.stringview edits: a.edits
-            if (zsource.sourceParses source: newsrc.copy) then {
-                wr: io.writeText path: a.path.stringview content: newsrc.stringview
-                match (
-                    wr
-                ) case ok then {
-                    fm: "formatted \{p}"
-                    print fm.stringview
-                } case err then {
-                    ew: "zl fmt: could not write \{p}"
-                    io.eprintln ew.stringview
+        } else {
+            hasEdits: a.edits.length > 0
+            newsrc: a.source.copy
+            valid: true
+            if hasEdits then {
+                newsrc = zfix.applyEdits source: a.source.stringview edits: a.edits
+                valid = zsource.sourceParses source: newsrc.copy
+            }
+            if (hasEdits) when (valid == false) then {
+                eb: "zl fmt: a fix would break \{p}; skipped"
+                io.eprintln eb.stringview
+                if stdout then {
+                    writeStdout s: a.source.stringview
+                }
+                rc = 1
+            } else if stdout then {
+                writeStdout s: newsrc.stringview
+            } else if check then {
+                if hasEdits then {
+                    wf: "would reformat \{p}"
+                    print wf.stringview
                     rc = 1
                 }
             } else {
-                eb: "zl fmt: a fix would break \{p}; skipped"
-                io.eprintln eb.stringview
-                rc = 1
+                if hasEdits then {
+                    wr: io.writeText path: a.path.stringview content: newsrc.stringview
+                    match (
+                        wr
+                    ) case ok then {
+                        fm: "formatted \{p}"
+                        print fm.stringview
+                    } case err then {
+                        ew: "zl fmt: could not write \{p}"
+                        io.eprintln ew.stringview
+                        rc = 1
+                    }
+                }
             }
         }
     }
@@ -114,11 +171,22 @@ main: function is {
     }
 
     paths: (List String)
+    fCheck: false
+    fStdout: false
     i: 2.u64
     for i < n loop {
-        a: (argv.get i: i).copy
-        if (a.stringview.startsWith prefix: "-") == false then {
-            paths.append a
+        arg: (argv.get i: i).copy
+        av: arg.stringview
+        if av == "--check" then {
+            fCheck = true
+        } else if av == "--stdout" then {
+            fStdout = true
+        } else if (av.startsWith prefix: "-") then {
+            eu: "zl: unknown flag \{av}"
+            io.eprintln eu.stringview
+            os.exit code: 2
+        } else {
+            paths.append arg
         }
         i = i + 1
     }
@@ -128,7 +196,7 @@ main: function is {
         os.exit code: rc
     }
     if sv == "fmt" then {
-        rc: runFmt paths: paths
+        rc: runFmt paths: paths check: fCheck stdout: fStdout
         os.exit code: rc
     }
     if sv == "explain" then {
