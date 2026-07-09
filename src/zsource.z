@@ -207,6 +207,7 @@ Analysis: class {
     wrapSkip: u64
     wrapFound: bool
     wrapStart: u64
+    delimClose: (Map u64 value: u64)
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
@@ -609,23 +610,21 @@ Analysis: class {
         }
         lsb: this.lineStart.get i: lidx
         contentEnd: lsb + (rstripLen line: lnt.stringview)
+        ind4: nlIndent n: (base + 4)
+        ind0: nlIndent n: base
+        closePos: contentEnd
+        clo: "\{ind0})".string
         if bare == false then {
-            lastb: srcv.byteAt i: (contentEnd - 1)
-            isClose: false
+            coff: this.delimClose.get key: (cs - 1)
             match (
-                lastb
+                coff
             ) case some then {
-                if lastb == 41 then {
-                    isClose = true
-                }
+                closePos = coff
+                clo = ind0.copy
             } case none then {
-            }
-            if isClose == false then {
                 return
             }
         }
-        ind4: nlIndent n: (base + 4)
-        ind0: nlIndent n: base
         if bare then {
             this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
         }
@@ -651,16 +650,119 @@ Analysis: class {
             } else {
             }
         }
-        if bare then {
-            clo: "\{ind0})".string
-            this.edits.append (zfix.Edit byteLo: contentEnd byteHi: contentEnd replacement: clo)
-        } else {
-            this.edits.append (zfix.Edit
-                byteLo: (contentEnd - 1)
-                byteHi: (contentEnd - 1)
-                replacement: ind0.copy
-            )
+        this.edits.append (zfix.Edit byteLo: closePos byteHi: closePos replacement: clo)
+        this.wrapFound = true
+        this.wrapStart = line.u64
+    }
+
+    # tryWrapParams -- wrap mode: an over-long single-line function signature with >= 2 params breaks
+    # its `{ }` param block onto one-param-per-line (the `{ }` already filters eol). Same batch/fixpoint
+    # bookkeeping as tryWrapCall; the close `}` is located via the delimiter map, not line-end.
+    tryWrapParams: function {:this parameters: List Node line: u32} is {
+        if line.u64 == this.wrapStart then {
+            return
         }
+        pc: parameters.length
+        if pc < 2 then {
+            return
+        }
+        lidx: (line - 1).u64
+        if lidx >= this.lines.length then {
+            return
+        }
+        lnt: this.lines.get i: lidx
+        cw: codepointLen s: lnt.stringview
+        if cw <= this.wrapWidth.u64 then {
+            return
+        }
+        if (hasHash line: lnt.stringview) then {
+            return
+        }
+        ok: true
+        with vit: parameters.iterate do for pm: vit loop {
+            match (
+                pm
+            ) case namedoperation then {
+                if pm.lineno != line then {
+                    ok = false
+                }
+            } else {
+                ok = false
+            }
+        }
+        if ok == false then {
+            return
+        }
+        base: leadingSpaces line: lnt.stringview
+        srcOwned: this.source.copy
+        srcv: srcOwned.stringview
+        p0node: parameters.get i: 0
+        p0: 0.u64
+        havep0: false
+        match (
+            p0node
+        ) case namedoperation then {
+            p0 = (tokByteStart
+                lineStart: this.lineStart
+                srcLines: this.lines
+                lineno: p0node.lineno
+                colno: p0node.colno
+            )
+            havep0 = true
+        } else {
+        }
+        if havep0 == false then {
+            return
+        }
+        obrace: (wsRunStart src: srcv from: p0) - 1
+        bchk: srcv.byteAt i: obrace
+        isBrace: false
+        match (
+            bchk
+        ) case some then {
+            if bchk == 123 then {
+                isBrace = true
+            }
+        } case none then {
+        }
+        if isBrace == false then {
+            return
+        }
+        coff: this.delimClose.get key: obrace
+        closeB: 0.u64
+        match (
+            coff
+        ) case some then {
+            closeB = coff
+        } case none then {
+            return
+        }
+        ind4: nlIndent n: (base + 4)
+        ind0: nlIndent n: base
+        with ait: parameters.iterate do for pm: ait loop {
+            match (
+                pm
+            ) case namedoperation then {
+                ps9: (tokByteStart
+                    lineStart: this.lineStart
+                    srcLines: this.lines
+                    lineno: pm.lineno
+                    colno: pm.colno
+                )
+                pp9: ps9
+                match (
+                    pm.operation
+                ) case labelvalue then {
+                    pp9 = ps9 - 1
+                } else {
+                }
+                ws9: wsRunStart src: srcv from: pp9
+                this.edits.append (zfix.Edit byteLo: ws9 byteHi: pp9 replacement: ind4.copy)
+            } else {
+            }
+        }
+        wsC: wsRunStart src: srcv from: closeB
+        this.edits.append (zfix.Edit byteLo: wsC byteHi: closeB replacement: ind0.copy)
         this.wrapFound = true
         this.wrapStart = line.u64
     }
@@ -970,6 +1072,9 @@ Analysis: class {
             this.walk n: n.matcharm
             this.walk n: n.statement
         } case functiondef then {
+            if this.wrapWidth > 0 then {
+                this.tryWrapParams parameters: n.parameters line: n.lineno
+            }
             this.walkOpt o: n.returntype
             pmit: n.parameters.iterate
             for pm: pmit loop {
@@ -1842,7 +1947,12 @@ colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
 
 # tokByteStart -- absolute byte offset of a token from its 1-based (lineno, colno): the line's
 # start offset plus the codepoint-column converted to a byte column.
-tokByteStart: function {lineStart: (List u64).borrow srcLines: (List String).borrow lineno: u32 colno: u32} out u64 is {
+tokByteStart: function {
+    lineStart: (List u64).borrow
+    srcLines: (List String).borrow
+    lineno: u32
+    colno: u32
+} out u64 is {
     li: (lineno - 1).u64
     if li >= srcLines.length then {
         return 0
@@ -1906,7 +2016,18 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out (List zfix.Edit) is {
 # [cStart, cEnd) spanning old lines [clLo, clHi]. The new-side block is the old bytes with the
 # cluster's edits applied, so the hunk exactly reflects the formatted output. Returns the
 # running new-minus-old line delta for the next hunk's + start.
-emitDiffHunk: function {buf: String source: StringView edits: (List zfix.Edit).borrow cStart: u64 cEnd: u64 clLo: u64 clHi: u64 lineStart: (List u64).borrow srcLines: (List String).borrow newDelta: i64} out i64 is {
+emitDiffHunk: function {
+    buf: String
+    source: StringView
+    edits: (List zfix.Edit).borrow
+    cStart: u64
+    cEnd: u64
+    clLo: u64
+    clHi: u64
+    lineStart: (List u64).borrow
+    srcLines: (List String).borrow
+    newDelta: i64
+} out i64 is {
     nLines: srcLines.length
     srcLen: source.length
     oldCount: (clHi - clLo) + 1
@@ -2062,7 +2183,11 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
 # renderDiff -- a git-style unified diff (zero context) of `source` -> the formatted result,
 # driven by `edits` (assumed sorted by byteLo). Adjacent edits touching the same or
 # neighbouring lines share a hunk. Empty when there are no edits.
-renderDiff: function {path: StringView source: StringView edits: (List zfix.Edit).borrow} out String is {
+renderDiff: function {
+    path: StringView
+    source: StringView
+    edits: (List zfix.Edit).borrow
+} out String is {
     buf: "".string
     m: edits.length
     if m == 0 then {
@@ -2153,6 +2278,7 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
             wrapSkip: 0
             wrapFound: false
             wrapStart: 0
+            delimClose: (Map u64 value: u64)
         )
         a.runFastChecks n: root
         a.checkLineLength width: lineLength
@@ -2170,6 +2296,7 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
             wrapSkip: 0
             wrapFound: false
             wrapStart: 0
+            delimClose: (Map u64 value: u64)
         )
         d: (zdiag.errorDiag
             errv: zast.err.IOERROR
@@ -2189,7 +2316,12 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
 # analyzeFileFull -- fast-tier analysis plus the typecheck-tier suffix rule (L005). Builds the
 # project VFS from `srcdir`/`systemdir` and typechecks this file's unit so the suffix check has
 # resolved types. Slower than analyzeFile; only the --full path calls it.
-analyzeFileFull: function {path: String.take srcdir: StringView systemdir: StringView lineLength: u32} out Analysis is {
+analyzeFileFull: function {
+    path: String.take
+    srcdir: StringView
+    systemdir: StringView
+    lineLength: u32
+} out Analysis is {
     rd: io.readText path: path.stringview
     match (
         rd
@@ -2207,6 +2339,7 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
             wrapSkip: 0
             wrapFound: false
             wrapStart: 0
+            delimClose: (Map u64 value: u64)
         )
         a.runFastChecks n: root
         un: unitNameOf path: a.path.stringview
@@ -2226,6 +2359,7 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
             wrapSkip: 0
             wrapFound: false
             wrapStart: 0
+            delimClose: (Map u64 value: u64)
         )
         d: (zdiag.errorDiag
             errv: zast.err.IOERROR
@@ -2244,7 +2378,13 @@ analyzeFileFull: function {path: String.take srcdir: StringView systemdir: Strin
 
 # analyzeFileTiered -- analyze one file at the requested tier: the fast tier by default, or
 # the full (typecheck) tier under --full (which also needs the project src/system dirs).
-analyzeFileTiered: function {path: String.take full: bool srcdir: StringView systemdir: StringView lineLength: u32} out Analysis is {
+analyzeFileTiered: function {
+    path: String.take
+    full: bool
+    srcdir: StringView
+    systemdir: StringView
+    lineLength: u32
+} out Analysis is {
     if full then {
         return (analyzeFileFull :path :srcdir :systemdir :lineLength)
     }
@@ -2290,6 +2430,7 @@ sourceParses: function {source: String.take} out bool is {
         wrapSkip: 0
         wrapFound: false
         wrapStart: 0
+        delimClose: (Map u64 value: u64)
     )
     root: ast.parseSource :source
     a.walk n: root
@@ -2397,6 +2538,47 @@ hasHash: function {line: StringView} out bool is {
     return false
 }
 
+# fillDelimMap -- fill `m` with open-byte -> matching close-byte for every () and {} pair, from the
+# String-literal and interpolation delimiters are distinct token kinds, so they are never counted.
+fillDelimMap: function {
+    src: StringView
+    lineStart: (List u64).borrow
+    srcLines: (List String).borrow
+    m: (Map u64 value: u64)
+} is {
+    toks: tokenize.scan source: src.string
+    nt: toks.length
+    stack: (List u64)
+    i: 0.u64
+    for i < nt loop {
+        t: toks.get :i
+        kind: 0.u32
+        match (
+            t.toktype
+        ) case PARENOPEN then {
+            kind = 1
+        } case BRACEOPEN then {
+            kind = 1
+        } case PARENCLOSE then {
+            kind = 2
+        } case BRACECLOSE then {
+            kind = 2
+        } else {
+        }
+        if kind == 1 then {
+            b: tokByteStart :lineStart :srcLines lineno: t.lineno colno: t.colno
+            stack.append b
+        } else if kind == 2 then {
+            if stack.length > 0 then {
+                ob: stack.pop
+                cb: tokByteStart :lineStart :srcLines lineno: t.lineno colno: t.colno
+                m.set key: ob value: cb
+            }
+        }
+        i = i + 1
+    }
+}
+
 # wrapSource -- fixpoint auto-wrap of over-long named-arg calls under --line-length. Each pass wraps
 # the first over-long single-line call (adding parens when bare), re-parses, and discards a wrap that
 # would not parse (skipping past it); loops until no wrappable call remains.
@@ -2417,8 +2599,10 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
             wrapSkip: 0
             wrapFound: false
             wrapStart: 0
+            delimClose: (Map u64 value: u64)
         )
         root: ast.parseSource source: rd.copy
+        fillDelimMap src: rd.stringview lineStart: a.lineStart srcLines: a.lines m: a.delimClose
         a.walk n: root
         if a.wrapFound == false then {
             break
