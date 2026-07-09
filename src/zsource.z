@@ -208,6 +208,7 @@ Analysis: class {
     wrapFound: bool
     wrapStart: u64
     delimClose: (Map u64 value: u64)
+    wrapGroups: (List u64)
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
@@ -625,6 +626,7 @@ Analysis: class {
                 return
             }
         }
+        this.wrapGroups.append this.edits.length
         if bare then {
             this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
         }
@@ -739,6 +741,7 @@ Analysis: class {
         }
         ind4: nlIndent n: (base + 4)
         ind0: nlIndent n: base
+        this.wrapGroups.append this.edits.length
         with ait: parameters.iterate do for pm: ait loop {
             match (
                 pm
@@ -2279,6 +2282,7 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            wrapGroups: (List u64)
         )
         a.runFastChecks n: root
         a.checkLineLength width: lineLength
@@ -2297,6 +2301,7 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            wrapGroups: (List u64)
         )
         d: (zdiag.errorDiag
             errv: zast.err.IOERROR
@@ -2340,6 +2345,7 @@ analyzeFileFull: function {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            wrapGroups: (List u64)
         )
         a.runFastChecks n: root
         un: unitNameOf path: a.path.stringview
@@ -2360,6 +2366,7 @@ analyzeFileFull: function {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            wrapGroups: (List u64)
         )
         d: (zdiag.errorDiag
             errv: zast.err.IOERROR
@@ -2431,6 +2438,7 @@ sourceParses: function {source: String.take} out bool is {
         wrapFound: false
         wrapStart: 0
         delimClose: (Map u64 value: u64)
+        wrapGroups: (List u64)
     )
     root: ast.parseSource :source
     a.walk n: root
@@ -2600,6 +2608,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            wrapGroups: (List u64)
         )
         root: ast.parseSource source: rd.copy
         fillDelimMap src: rd.stringview lineStart: a.lineStart srcLines: a.lines m: a.delimClose
@@ -2613,7 +2622,42 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
         if cok then {
             cur = cand
         } else {
-            break
+            good: (List zfix.Edit)
+            ng: a.wrapGroups.length
+            gi: 0.u64
+            for gi < ng loop {
+                gstart: a.wrapGroups.get i: gi
+                gend: a.edits.length
+                if (gi + 1) < ng then {
+                    gend = a.wrapGroups.get i: (gi + 1)
+                }
+                added: 0.u64
+                k: gstart
+                for k < gend loop {
+                    e9: a.edits.get i: k
+                    good.append (zfix.Edit
+                        byteLo: e9.byteLo
+                        byteHi: e9.byteHi
+                        replacement: e9.replacement.copy
+                    )
+                    added = added + 1
+                    k = k + 1
+                }
+                cnd2: zfix.applyEdits source: cur.stringview edits: good
+                bad9: (sourceParses source: cnd2.copy) == false
+                if bad9 then {
+                    j: 0.u64
+                    for j < added loop {
+                        pd9: good.pop
+                        j = j + 1
+                    }
+                }
+                gi = gi + 1
+            }
+            if good.length == 0 then {
+                break
+            }
+            cur = zfix.applyEdits source: cur.stringview edits: good
         }
     }
     return cur
