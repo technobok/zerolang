@@ -1,0 +1,57 @@
+# collreturn.z -- free functions returning Map/Set by value (heap-pointer collections).
+# Regression: out (Map ...) / out (Set ...) on a FREE function emitted a by-value
+# return and a value-zero move-invalidation on a pointer local -- both invalid C.
+
+Box: class {
+    m: (Map key: i64 value: i64)
+}
+
+buildMap: function {n: i64} out (Map key: i64 value: i64) is {
+    m: (Map key: i64 value: i64)
+    m.set key: n value: 100
+    m.set key: 7 value: 200
+    m.set key: 8 value: 300
+    return m
+}
+
+buildSet: function {n: i64} out (Set of: i64) is {
+    s: (Set of: i64)
+    s.add item: n
+    s.add item: 5
+    s.add item: 6
+    return s
+}
+
+# non-trivial return with an owned local to clean up -- drives fix #2's return path
+pickTwo: function {n: i64} out (Map key: i64 value: i64) is {
+    scratch: (Map key: i64 value: i64)
+    scratch.set key: n value: n
+    return (buildMap :n)
+}
+
+main: function is {
+    m: buildMap n: 3
+    print "map length: \{m.length}"
+    r: m.get key: 7
+    match r case some then { print "map has 7" } case none then { print "map no 7" }
+
+    s: buildSet n: 4
+    print "set length: \{s.length}"
+    print "set has 4: \{s.has item: 4}"
+
+    t: pickTwo n: 6
+    print "picked length: \{t.length}"
+
+    m2: buildMap n: 9
+    m2 = m
+    print "moved map length: \{m2.length}"
+
+    s2: buildSet n: 1
+    s2 = s
+    print "moved set length: \{s2.length}"
+
+    box: Box m: (buildMap n: 2)
+    taken: buildMap n: 1
+    taken = box.m.take
+    print "taken length: \{taken.length}"
+}

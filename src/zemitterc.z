@@ -7020,6 +7020,9 @@ emitCallStmt: function {
                             rtid9: stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)
                             retCt9: typeRefC :symtab :ctx tid: rtid9 thisTid: 0
                             isPtr9: ctEndsWithStar ct: retCt9.stringview
+                            if (isHeapPtrCollection :symtab :ctx tid: rtid9) then {
+                                isPtr9 = true
+                            }
                             trivial9: isBareCName s: rv.stringview
                             hoist9: false
                             if (trivial9 == false) when (isPtr9 == false) when (retCt9.size > 0) then {
@@ -7540,12 +7543,17 @@ emitStmt: function {
             }
         }
         if (isFieldTake n: n.value) when rftFn9 == false then {
-            rfct9: "\{ctx.strC}_t".string
-            if (stampIdOf :symtab nid: rtnid9) != ctx.strTid then {
-                rfct9 = typeRefC :symtab :ctx tid: rtsid9 thisTid: 0
+            if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
+                rftzh9: "\{ind}\{rv2} = NULL;\n"
+                buf.append rftzh9.stringview
+            } else {
+                rfct9: "\{ctx.strC}_t".string
+                if (stampIdOf :symtab nid: rtnid9) != ctx.strTid then {
+                    rfct9 = typeRefC :symtab :ctx tid: rtsid9 thisTid: 0
+                }
+                rftz9: "\{ind}\{rv2} = (\{rfct9}){0};\n"
+                buf.append rftz9.stringview
             }
-            rftz9: "\{ind}\{rv2} = (\{rfct9}){0};\n"
-            buf.append rftz9.stringview
         }
         # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
         # are consumed by it -- invalidate each moved source so its scope-exit
@@ -7562,17 +7570,22 @@ emitStmt: function {
             znid9: nodeIdOf9 n: n.value
             zid9: stampIdOf :symtab nid: znid9
             znm9: stampNameOf :symtab nid: znid9
-            zct9: "".string
-            if (stampIdOf :symtab nid: znid9) == ctx.strTid then {
-                zct9 = "\{ctx.strC}_t"
+            if (isHeapPtrCollection :symtab :ctx tid: zid9) then {
+                zinvh9: "\{ind}\{zsrc9} = NULL;\n"
+                buf.append zinvh9.stringview
             } else {
-                if (symtab.reg.hasDestructorName typeId: zid9) then {
-                    zct9 = typeRefC :symtab :ctx tid: zid9 thisTid: 0
+                zct9: "".string
+                if (stampIdOf :symtab nid: znid9) == ctx.strTid then {
+                    zct9 = "\{ctx.strC}_t"
+                } else {
+                    if (symtab.reg.hasDestructorName typeId: zid9) then {
+                        zct9 = typeRefC :symtab :ctx tid: zid9 thisTid: 0
+                    }
                 }
-            }
-            if zct9.length > 0 then {
-                zinv9: "\{ind}\{zsrc9} = (\{zct9}){0};\n"
-                buf.append zinv9.stringview
+                if zct9.length > 0 then {
+                    zinv9: "\{ind}\{zsrc9} = (\{zct9}){0};\n"
+                    buf.append zinv9.stringview
+                }
             }
         }
     } case swapstmt then {
@@ -9622,6 +9635,15 @@ fnSignature: function {
             if rtr9.length > 0 then {
                 ret = rtr9
             }
+        }
+    }
+    if ret.stringview != "void" then {
+        retColId9: fnReturnTidOf :symtab tid: fid
+        if retColId9 == 0 then {
+            retColId9 = fnReturnTypeId :symtab :op
+        }
+        if retColId9 > 0 when (isHeapPtrCollection :symtab :ctx tid: retColId9) then {
+            ret = "\{ret}*"
         }
     }
     params: "".string
