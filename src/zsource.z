@@ -86,9 +86,7 @@ isElseIfWrap: function {n: Node} out bool is {
         if n.statements.length == 1 then {
             res: false
             it: n.statements.iterate
-            for sl: it loop {
-                res = slIsIf :sl
-            }
+            for sl: it loop res = slIsIf :sl
             return res
         }
         return false
@@ -97,36 +95,94 @@ isElseIfWrap: function {n: Node} out bool is {
     }
 }
 
+# debraceEligible -- the inner node of a single-statement clause body is a simple
+# statement that de-braces safely: a call (including return/break/yield), a
+# reassignment, a swap, a binop, a dotted path, or a bare atom -- never a binding
+# `x: y`, a control-flow construct, or a data block.
+debraceEligible: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (debraceEligible n: n.expression)
+    } case call then {
+        return true
+    } case reassignment then {
+        return true
+    } case swapstmt then {
+        return true
+    } case binop then {
+        return true
+    } case dottedpath then {
+        return true
+    } case atomid then {
+        return true
+    } case yieldexpr then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# clauseBodiesOnLine -- every then-body and the else-body of an `if` sit on the
+# construct's start line `ln` (the whole `if ... else` is a one-liner).
+clauseBodiesOnLine: function {clauses: (List Node) elseOpt: (Option Node) ln: u32} out bool is {
+    ok: true
+    cit: clauses.iterate
+    for cl: cit loop {
+        match (
+            cl
+        ) case ifclause then {
+            p: stmtPos n: cl.statement
+            if p.line != ln then ok = false
+        } else {
+        }
+    }
+    match (
+        elseOpt
+    ) case some then {
+        pe: stmtPos n: elseOpt
+        if pe.line != ln then ok = false
+    } case none then {
+    }
+    return ok
+}
+
+# caseBodiesOnLine -- every arm-body and the else-body of a `match` sit on the
+# construct's start line `ln` (the whole `match` is a one-liner).
+caseBodiesOnLine: function {clauses: (List Node) elseOpt: (Option Node) ln: u32} out bool is {
+    ok: true
+    cit: clauses.iterate
+    for cl: cit loop {
+        match (
+            cl
+        ) case caseclause then {
+            p: stmtPos n: cl.statement
+            if p.line != ln then ok = false
+        } else {
+        }
+    }
+    match (
+        elseOpt
+    ) case some then {
+        pe: stmtPos n: elseOpt
+        if pe.line != ln then ok = false
+    } case none then {
+    }
+    return ok
+}
+
 # primaryGenericParam -- the elidable first parameter name of a built-in template,
 # or "" when `name` is not such a template. Index 0 only.
 primaryGenericParam: function {name: StringView} out String is {
-    if name == "List" then {
-        return "of".string
-    }
-    if name == "Set" then {
-        return "of".string
-    }
-    if name == "array" then {
-        return "of".string
-    }
-    if name == "Map" then {
-        return "key".string
-    }
-    if name == "option" then {
-        return "t".string
-    }
-    if name == "optionval" then {
-        return "t".string
-    }
-    if name == "Option" then {
-        return "t".string
-    }
-    if name == "OptionView" then {
-        return "t".string
-    }
-    if name == "Result" then {
-        return "t".string
-    }
+    if name == "List" then return "of".string
+    if name == "Set" then return "of".string
+    if name == "array" then return "of".string
+    if name == "Map" then return "key".string
+    if name == "option" then return "t".string
+    if name == "optionval" then return "t".string
+    if name == "Option" then return "t".string
+    if name == "OptionView" then return "t".string
+    if name == "Result" then return "t".string
     return "".string
 }
 
@@ -156,15 +212,9 @@ trailingWsLen: function {ln: StringView} out u64 is {
             match (
                 bo
             ) case some then {
-                if bo == 32 then {
-                    isws = true
-                }
-                if bo == 9 then {
-                    isws = true
-                }
-                if bo == 13 then {
-                    isws = true
-                }
+                if bo == 32 then isws = true
+                if bo == 9 then isws = true
+                if bo == 13 then isws = true
             } case none then {
             }
             if isws then {
@@ -180,16 +230,12 @@ trailingWsLen: function {ln: StringView} out u64 is {
 # endsWithNewline -- true if `src` is empty or its last byte is a newline.
 endsWithNewline: function {src: StringView} out bool is {
     n: src.length
-    if n == 0 then {
-        return true
-    }
+    if n == 0 then return true
     bo: src.byteAt i: (n - 1)
     match (
         bo
     ) case some then {
-        if bo == 10 then {
-            return true
-        }
+        if bo == 10 then return true
         return false
     } case none then {
         return true
@@ -208,6 +254,8 @@ Analysis: class {
     wrapFound: bool
     wrapStart: u64
     delimClose: (Map u64 value: u64)
+    fastToks: (List tokenize.Token)
+    funcDepth: u64
     wrapGroups: (List u64)
 } as {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
@@ -237,9 +285,7 @@ Analysis: class {
                 isInfo = true
             } else {
             }
-            if (isInfo) == false then {
-                c = c + 1
-            }
+            if (isInfo) == false then c = c + 1
         }
         return c
     }
@@ -329,9 +375,7 @@ Analysis: class {
                 if runLen >= 3 then {
                     lo: lineStart.get i: (i + 1)
                     hi: srcLen
-                    if e < nLines then {
-                        hi = lineStart.get i: e
-                    }
+                    if e < nLines then hi = lineStart.get i: e
                     (this.warnFix
                         code: "W004"
                         msg: "too many consecutive blank lines".string
@@ -395,9 +439,7 @@ Analysis: class {
     # checkLineLength -- W005 (advisory): a line wider than `width` codepoints. INFO severity, so it
     # reports but never fails the gate; runs only when a width is set (--line-length). No fix.
     checkLineLength: function {:this width: u32} is {
-        if width == 0 then {
-            return
-        }
+        if width == 0 then return
         lls: linesOf src: this.source.stringview
         lno: 1.u32
         with it: lls.iterate do for ln: it loop {
@@ -433,9 +475,7 @@ Analysis: class {
             } else if (isStatementArm n: elseOpt) when (clauses.length == 1) then {
                 if (isElseIfWrap n: elseOpt) == false then {
                     citer: clauses.iterate
-                    for c0: citer loop {
-                        this.checkEmptyThen clause: c0
-                    }
+                    for c0: citer loop this.checkEmptyThen clause: c0
                 }
             }
         } case none then {
@@ -465,19 +505,13 @@ Analysis: class {
     # primary parameter name. Receives the narrowed callable + argument list.
     checkElide: function {:this callable: Node arguments: List Node} is {
         cn: atomName n: callable
-        if cn.length == 0 then {
-            return
-        }
+        if cn.length == 0 then return
         primary: primaryGenericParam name: cn.stringview
-        if primary.length == 0 then {
-            return
-        }
+        if primary.length == 0 then return
         idx: 0.u64
         aiter: arguments.iterate
         for a: aiter loop {
-            if idx == 0 then {
-                this.checkElideFirst arg: a primary: primary.stringview
-            }
+            if idx == 0 then this.checkElideFirst arg: a primary: primary.stringview
             idx = idx + 1
         }
     }
@@ -508,9 +542,7 @@ Analysis: class {
     # the emitter treats labelvalue == atomid). Fires on atomid values only, so it is idempotent:
     # a `:name` parses to a labelvalue and atomName returns "".
     checkCollapseName: function {:this arguments: List Node} is {
-        if this.lineStart.length == 0 then {
-            return
-        }
+        if this.lineStart.length == 0 then return
         aiter: arguments.iterate
         for a: aiter loop {
             match (
@@ -555,45 +587,29 @@ Analysis: class {
     # added when the call is bare) and set wrapFound. Only the first such call per pass is wrapped;
     # wrapSource's re-parse gate + fixpoint handle discards and the rest.
     tryWrapCall: function {:this arguments: List Node line: u32 col: u32} is {
-        if line.u64 == this.wrapStart then {
-            return
-        }
+        if line.u64 == this.wrapStart then return
         ac: arguments.length
-        if ac < 2 then {
-            return
-        }
+        if ac < 2 then return
         lidx: (line - 1).u64
-        if lidx >= this.lines.length then {
-            return
-        }
+        if lidx >= this.lines.length then return
         lnt: this.lines.get i: lidx
         cw: codepointLen s: lnt.stringview
-        if cw <= this.wrapWidth.u64 then {
-            return
-        }
-        if (hasHash line: lnt.stringview) then {
-            return
-        }
+        if cw <= this.wrapWidth.u64 then return
+        if (hasHash line: lnt.stringview) then return
         cs: tokByteStart lineStart: this.lineStart srcLines: this.lines lineno: line colno: col
         ok: true
         with vit: arguments.iterate do for arg: vit loop {
             match (
                 arg
             ) case namedoperation then {
-                if arg.lineno != line then {
-                    ok = false
-                }
+                if arg.lineno != line then ok = false
                 anm: optName o: arg.name
-                if anm.length == 0 then {
-                    ok = false
-                }
+                if anm.length == 0 then ok = false
             } else {
                 ok = false
             }
         }
-        if ok == false then {
-            return
-        }
+        if ok == false then return
         base: leadingSpaces line: lnt.stringview
         srcOwned: this.source.copy
         srcv: srcOwned.stringview
@@ -603,9 +619,7 @@ Analysis: class {
             match (
                 pb
             ) case some then {
-                if pb == 40 then {
-                    bare = false
-                }
+                if pb == 40 then bare = false
             } case none then {
             }
         }
@@ -627,9 +641,7 @@ Analysis: class {
             }
         }
         this.wrapGroups.append this.edits.length
-        if bare then {
-            this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
-        }
+        if bare then this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
         with ait: arguments.iterate do for arg: ait loop {
             match (
                 arg
@@ -661,40 +673,26 @@ Analysis: class {
     # its `{ }` param block onto one-param-per-line (the `{ }` already filters eol). Same batch/fixpoint
     # bookkeeping as tryWrapCall; the close `}` is located via the delimiter map, not line-end.
     tryWrapParams: function {:this parameters: List Node line: u32} is {
-        if line.u64 == this.wrapStart then {
-            return
-        }
+        if line.u64 == this.wrapStart then return
         pc: parameters.length
-        if pc < 2 then {
-            return
-        }
+        if pc < 2 then return
         lidx: (line - 1).u64
-        if lidx >= this.lines.length then {
-            return
-        }
+        if lidx >= this.lines.length then return
         lnt: this.lines.get i: lidx
         cw: codepointLen s: lnt.stringview
-        if cw <= this.wrapWidth.u64 then {
-            return
-        }
-        if (hasHash line: lnt.stringview) then {
-            return
-        }
+        if cw <= this.wrapWidth.u64 then return
+        if (hasHash line: lnt.stringview) then return
         ok: true
         with vit: parameters.iterate do for pm: vit loop {
             match (
                 pm
             ) case namedoperation then {
-                if pm.lineno != line then {
-                    ok = false
-                }
+                if pm.lineno != line then ok = false
             } else {
                 ok = false
             }
         }
-        if ok == false then {
-            return
-        }
+        if ok == false then return
         base: leadingSpaces line: lnt.stringview
         srcOwned: this.source.copy
         srcv: srcOwned.stringview
@@ -713,23 +711,17 @@ Analysis: class {
             havep0 = true
         } else {
         }
-        if havep0 == false then {
-            return
-        }
+        if havep0 == false then return
         obrace: (wsRunStart src: srcv from: p0) - 1
         bchk: srcv.byteAt i: obrace
         isBrace: false
         match (
             bchk
         ) case some then {
-            if bchk == 123 then {
-                isBrace = true
-            }
+            if bchk == 123 then isBrace = true
         } case none then {
         }
-        if isBrace == false then {
-            return
-        }
+        if isBrace == false then return
         coff: this.delimClose.get key: obrace
         closeB: 0.u64
         match (
@@ -933,17 +925,11 @@ Analysis: class {
                             match (
                                 bo
                             ) case some then {
-                                if bo == 32 then {
-                                    issp = true
-                                }
+                                if bo == 32 then issp = true
                             } case none then {
                             }
-                            if (issp) == false then {
-                                doFix = true
-                            }
-                        } else if valStart > colEnd then {
-                            doFix = true
-                        }
+                            if (issp) == false then doFix = true
+                        } else if valStart > colEnd then doFix = true
                         if doFix then {
                             (this.warnFix
                                 code: "W003"
@@ -989,9 +975,7 @@ Analysis: class {
             this.walk n: n.rhs
         } case atomstring then {
             spit: n.stringparts.iterate
-            for part: spit loop {
-                this.walk n: part
-            }
+            for part: spit loop this.walk n: part
         } case dottedpath then {
             this.walk n: n.parent
             this.walk n: n.child
@@ -1004,26 +988,20 @@ Analysis: class {
             }
             this.walk n: n.callable
             ait: n.arguments.iterate
-            for arg: ait loop {
-                this.walk n: arg
-            }
+            for arg: ait loop this.walk n: arg
         } case typeofexpr then {
             this.walk n: n.source
         } case namedoperation then {
             this.walk n: n.operation
         } case datablock then {
             elit: n.elements.iterate
-            for el: elit loop {
-                this.walk n: el
-            }
+            for el: elit loop this.walk n: el
             this.walkOpt o: n.outType
         } case yieldexpr then {
             this.walk n: n.expr
         } case statement then {
             stit: n.statements.iterate
-            for stln: stit loop {
-                this.walk n: stln
-            }
+            for stln: stit loop this.walk n: stln
         } case statementline then {
             this.walk n: n.statementline
         } case assignment then {
@@ -1038,75 +1016,56 @@ Analysis: class {
             this.walk n: n.expression
         } case ifexpr then {
             this.checkEmpty elseOpt: n.elseclause clauses: n.clauses
+            this.checkBracesIf clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
             clit: n.clauses.iterate
-            for cl: clit loop {
-                this.walk n: cl
-            }
+            for cl: clit loop this.walk n: cl
             this.walkOpt o: n.elseclause
         } case ifclause then {
             coit: n.conditions.iterate
-            for co: coit loop {
-                this.walk n: co
-            }
+            for co: coit loop this.walk n: co
             this.walk n: n.statement
         } case forexpr then {
+            this.checkBracesFor bodyOpt: n.body
             fcit: n.conditions.iterate
-            for fc: fcit loop {
-                this.walk n: fc
-            }
+            for fc: fcit loop this.walk n: fc
             this.walkOpt o: n.body
             fpit: n.postconditions.iterate
-            for fp: fpit loop {
-                this.walk n: fp
-            }
+            for fp: fpit loop this.walk n: fp
         } case doexpr then {
             this.walk n: n.statement
         } case withexpr then {
             this.walk n: n.value
             this.walk n: n.body
         } case caseexpr then {
+            this.checkBracesMatch clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
             this.walk n: n.subject
             ccit: n.clauses.iterate
-            for cc: ccit loop {
-                this.walk n: cc
-            }
+            for cc: ccit loop this.walk n: cc
             this.walkOpt o: n.elseclause
         } case caseclause then {
             this.walk n: n.matcharm
             this.walk n: n.statement
         } case functiondef then {
-            if this.wrapWidth > 0 then {
-                this.tryWrapParams parameters: n.parameters line: n.lineno
-            }
+            if this.wrapWidth > 0 then this.tryWrapParams parameters: n.parameters line: n.lineno
             this.walkOpt o: n.returntype
             pmit: n.parameters.iterate
-            for pm: pmit loop {
-                this.walk n: pm
-            }
+            for pm: pmit loop this.walk n: pm
+            this.funcDepth = this.funcDepth + 1
             this.walkOpt o: n.body
+            this.funcDepth = this.funcDepth - 1
             fait: n.asItems.iterate
-            for fam: fait loop {
-                this.walk n: fam
-            }
+            for fam: fait loop this.walk n: fam
         } case objectdef then {
             isit: n.isItems.iterate
-            for oim: isit loop {
-                this.walk n: oim
-            }
+            for oim: isit loop this.walk n: oim
             asit: n.asItems.iterate
-            for oam: asit loop {
-                this.walk n: oam
-            }
+            for oam: asit loop this.walk n: oam
         } case unitdef then {
             udit: n.body.iterate
-            for ubm: udit loop {
-                this.walk n: ubm
-            }
+            for ubm: udit loop this.walk n: ubm
         } case program then {
             puit: n.units.iterate
-            for pum: puit loop {
-                this.walk n: pum
-            }
+            for pum: puit loop this.walk n: pum
         }
     }
 
@@ -1114,6 +1073,218 @@ Analysis: class {
     # does not require it. A named-argument-call condition needs the parens (its args are greedy and
     # would swallow `then`), detected as a top-level colon inside the paren; those and sub-expression
     # precedence parens are left alone. Removes the `(` and `)`.
+    # tryDebrace -- L008: strip the `{ }` around a single-statement clause `body`
+    # when it de-braces safely and the result fits on one line. `collapse` is true
+    # for a terminal single-clause body (for-loop, if-without-else), which may pull
+    # a multi-line body onto the keyword line; false for a multi-clause construct
+    # already proven to sit on one line, where stripping only shortens it.
+    tryDebrace: function {:this body: Node collapse: bool} is {
+        match (
+            body
+        ) case statement then {
+            if body.statements.length != 1 then return
+            sl0: body.statements.get i: 0
+            match (
+                sl0
+            ) case statementline then {
+                if (debraceEligible n: sl0.statementline) == false then return
+                srcOwned: this.source.copy
+                srcv: srcOwned.stringview
+                openByte: (tokByteStart
+                    lineStart: this.lineStart
+                    srcLines: this.lines
+                    lineno: body.lineno
+                    colno: body.colno
+                )
+                ob: srcv.byteAt i: openByte
+                isBrace: false
+                match (
+                    ob
+                ) case some then {
+                    if ob == 123 then isBrace = true
+                } case none then {
+                }
+                if isBrace == false then return
+                coff: this.delimClose.get key: openByte
+                closeByte: 0.u64
+                match (
+                    coff
+                ) case some then {
+                    closeByte = coff
+                } case none then {
+                    return
+                }
+                if (this.bracesBlocked :openByte :closeByte) then return
+                firstInner: (tokByteStart
+                    lineStart: this.lineStart
+                    srcLines: this.lines
+                    lineno: sl0.lineno
+                    colno: sl0.colno
+                )
+                tailStart: wsRunStartNL src: srcv from: closeByte
+                cEndLine: (byteToLine
+                    lineStart: this.lineStart
+                    off: (tailStart - 1)
+                    nLines: this.lines.length
+                ) + 1
+                if sl0.lineno.u64 != cEndLine then return
+                closeLine: (byteToLine
+                    lineStart: this.lineStart
+                    off: closeByte
+                    nLines: this.lines.length
+                ) + 1
+                sameLine: body.lineno.u64 == closeLine
+                doStrip: false
+                if collapse == false then {
+                    doStrip = true
+                } else if sameLine then {
+                    doStrip = true
+                } else {
+                    limit: 100.u64
+                    if this.wrapWidth > 0 then limit = this.wrapWidth.u64
+                    resultLen: (body.colno.u64 - 1) + (tailStart - firstInner)
+                    if resultLen <= limit then doStrip = true
+                }
+                if doStrip == false then return
+                (this.warn
+                    code: "L008"
+                    msg: "redundant braces around a single-statement body".string
+                    line: body.lineno
+                    col: body.colno
+                    width: 1
+                )
+                this.edits.append (zfix.Edit
+                    byteLo: openByte
+                    byteHi: firstInner
+                    replacement: "".string
+                )
+                this.edits.append (zfix.Edit
+                    byteLo: tailStart
+                    byteHi: (closeByte + 1)
+                    replacement: "".string
+                )
+            } else {
+            }
+        } else {
+        }
+    }
+
+    # bracesBlocked -- true when the token span strictly between the open and close
+    # brace bytes holds a top-level colon (a labelled call or binding, which cannot
+    # lose its braces) or a comment (which a one-line collapse would swallow).
+    bracesBlocked: function {:this openByte: u64 closeByte: u64} out bool is {
+        m: this.fastToks.length
+        depth: 0.i64
+        blocked: false
+        i: 0.u64
+        for i < m loop {
+            t: this.fastToks.get :i
+            tb: (tokByteStart
+                lineStart: this.lineStart
+                srcLines: this.lines
+                lineno: t.lineno
+                colno: t.colno
+            )
+            if tb >= closeByte then break
+            if tb > openByte then {
+                match (
+                    t.toktype
+                ) case PARENOPEN then {
+                    depth = depth + 1
+                } case BRACEOPEN then {
+                    depth = depth + 1
+                } case PARENCLOSE then {
+                    depth = depth - 1
+                } case BRACECLOSE then {
+                    depth = depth - 1
+                } case COLON then {
+                    if depth == 0 then blocked = true
+                } case COMMENT then {
+                    blocked = true
+                } else {
+                }
+            }
+            i = i + 1
+        }
+        return blocked
+    }
+
+    # checkBracesIf -- L008 entry for an `if`: a terminal single-clause `if ... then`
+    # (no else) may collapse its then-body; an `if` with an else or extra clauses
+    # de-braces only when the whole construct already sits on one line. Unit-level
+    # `if`s (funcDepth == 0) keep their braces -- braceless branches are unsafe where
+    # EOL filtering is on.
+    checkBracesIf: function {:this clauses: (List Node) elseOpt: (Option Node) ln: u32} is {
+        if this.funcDepth == 0 then return
+        hasElse: false
+        match (
+            elseOpt
+        ) case some then {
+            hasElse = true
+        } case none then {
+        }
+        if (hasElse == false) when (clauses.length == 1) then {
+            c0: clauses.get i: 0
+            match (
+                c0
+            ) case ifclause then {
+                this.tryDebrace body: c0.statement collapse: true
+            } else {
+            }
+            return
+        }
+        if (clauseBodiesOnLine :clauses :elseOpt :ln) == false then return
+        cit: clauses.iterate
+        for cl: cit loop {
+            match (
+                cl
+            ) case ifclause then {
+                this.tryDebrace body: cl.statement collapse: false
+            } else {
+            }
+        }
+        match (
+            elseOpt
+        ) case some then {
+            this.tryDebrace body: elseOpt collapse: false
+        } case none then {
+        }
+    }
+
+    # checkBracesMatch -- L008 entry for a `match`: always multi-clause, so its arm
+    # and else braces are stripped only when the whole match already sits on one line.
+    checkBracesMatch: function {:this clauses: (List Node) elseOpt: (Option Node) ln: u32} is {
+        if this.funcDepth == 0 then return
+        if (caseBodiesOnLine :clauses :elseOpt :ln) == false then return
+        cit: clauses.iterate
+        for cl: cit loop {
+            match (
+                cl
+            ) case caseclause then {
+                this.tryDebrace body: cl.statement collapse: false
+            } else {
+            }
+        }
+        match (
+            elseOpt
+        ) case some then {
+            this.tryDebrace body: elseOpt collapse: false
+        } case none then {
+        }
+    }
+
+    # checkBracesFor -- L008 entry for a `for ... loop`: a terminal single-clause
+    # body that may collapse onto the loop header.
+    checkBracesFor: function {:this bodyOpt: (Option Node)} is {
+        if this.funcDepth == 0 then return
+        match (
+            bodyOpt
+        ) case some then {
+            this.tryDebrace body: bodyOpt collapse: true
+        } case none then {
+        }
+    }
+
     checkRedundantParens: function {:this} is {
         srcOwned: this.source.copy
         sv: srcOwned.stringview
@@ -1198,13 +1369,9 @@ Analysis: class {
                                     mScan = false
                                 }
                             } else if kind == 3 then {
-                                if depth == 1 then {
-                                    hasColon = true
-                                }
+                                if depth == 1 then hasColon = true
                             }
-                            if mScan then {
-                                j = j + 1
-                            }
+                            if mScan then j = j + 1
                         }
                     }
                     thenOk: false
@@ -1277,6 +1444,12 @@ Analysis: class {
     # line rules over the source.
     runFastChecks: function {:this n: Node} is {
         this.lineStart = lineStartIndex src: this.source.stringview
+        this.delimClose = (buildDelimMap
+            src: this.source.stringview
+            lineStart: this.lineStart
+            srcLines: this.lines
+        )
+        this.fastToks = tokenize.scan source: this.source.copy
         this.walk :n
         this.checkForWhile
         this.checkTrailingWs
@@ -1302,9 +1475,7 @@ Analysis: class {
         srcLines: linesOf src: sv
         byteStart: tokByteStart :lineStart :srcLines lineno: ln colno: col
         lo: byteStart
-        if byteStart > 0 then {
-            lo = byteStart - 1
-        }
+        if byteStart > 0 then lo = byteStart - 1
         hi: byteStart + tname.length
         (this.warnFix
             code: "L005"
@@ -1402,9 +1573,7 @@ Analysis: class {
             rtName: typeNameOfOpt o: funcret :st
             if rtName.length > 0 then {
                 ait: arguments.iterate
-                for a: ait loop {
-                    this.sufNamedArgReturn arg: a rtName: rtName.stringview :uname
-                }
+                for a: ait loop this.sufNamedArgReturn arg: a rtName: rtName.stringview :uname
             }
         } else {
             cInfo: nodeInfoOf n: callable
@@ -1413,9 +1582,7 @@ Analysis: class {
                 co
             ) case some then {
                 ait: arguments.iterate
-                for a: ait loop {
-                    this.sufNamedArg arg: a calleeType: co :uname :st
-                }
+                for a: ait loop this.sufNamedArg arg: a calleeType: co :uname :st
             } case none then {}
         }
     }
@@ -1436,9 +1603,7 @@ Analysis: class {
             this.walkSuf n: n.rhs :uname :st :funcret
         } case atomstring then {
             iter: n.stringparts.iterate
-            for part: iter loop {
-                this.walkSuf n: part :uname :st :funcret
-            }
+            for part: iter loop this.walkSuf n: part :uname :st :funcret
         } case dottedpath then {
             this.walkSuf n: n.parent :uname :st :funcret
             this.walkSuf n: n.child :uname :st :funcret
@@ -1453,26 +1618,20 @@ Analysis: class {
             )
             this.walkSuf n: n.callable :uname :st :funcret
             argiter: n.arguments.iterate
-            for arg: argiter loop {
-                this.walkSuf n: arg :uname :st :funcret
-            }
+            for arg: argiter loop this.walkSuf n: arg :uname :st :funcret
         } case typeofexpr then {
             this.walkSuf n: n.source :uname :st :funcret
         } case namedoperation then {
             this.walkSuf n: n.operation :uname :st :funcret
         } case datablock then {
             eiter: n.elements.iterate
-            for el: eiter loop {
-                this.walkSuf n: el :uname :st :funcret
-            }
+            for el: eiter loop this.walkSuf n: el :uname :st :funcret
             this.walkSufOpt o: n.outType :uname :st :funcret
         } case yieldexpr then {
             this.walkSuf n: n.expr :uname :st :funcret
         } case statement then {
             siter: n.statements.iterate
-            for sln: siter loop {
-                this.walkSuf n: sln :uname :st :funcret
-            }
+            for sln: siter loop this.walkSuf n: sln :uname :st :funcret
         } case statementline then {
             this.walkSuf n: n.statementline :uname :st :funcret
         } case assignment then {
@@ -1488,26 +1647,18 @@ Analysis: class {
             this.walkSuf n: n.expression :uname :st :funcret
         } case ifexpr then {
             clit: n.clauses.iterate
-            for cl: clit loop {
-                this.walkSuf n: cl :uname :st :funcret
-            }
+            for cl: clit loop this.walkSuf n: cl :uname :st :funcret
             this.walkSufOpt o: n.elseclause :uname :st :funcret
         } case ifclause then {
             coit: n.conditions.iterate
-            for co: coit loop {
-                this.walkSuf n: co :uname :st :funcret
-            }
+            for co: coit loop this.walkSuf n: co :uname :st :funcret
             this.walkSuf n: n.statement :uname :st :funcret
         } case forexpr then {
             fcit: n.conditions.iterate
-            for fc: fcit loop {
-                this.walkSuf n: fc :uname :st :funcret
-            }
+            for fc: fcit loop this.walkSuf n: fc :uname :st :funcret
             this.walkSufOpt o: n.body :uname :st :funcret
             fpit: n.postconditions.iterate
-            for fp: fpit loop {
-                this.walkSuf n: fp :uname :st :funcret
-            }
+            for fp: fpit loop this.walkSuf n: fp :uname :st :funcret
         } case doexpr then {
             this.walkSuf n: n.statement :uname :st :funcret
         } case withexpr then {
@@ -1516,9 +1667,7 @@ Analysis: class {
         } case caseexpr then {
             this.walkSuf n: n.subject :uname :st :funcret
             ccit: n.clauses.iterate
-            for cc: ccit loop {
-                this.walkSuf n: cc :uname :st :funcret
-            }
+            for cc: ccit loop this.walkSuf n: cc :uname :st :funcret
             this.walkSufOpt o: n.elseclause :uname :st :funcret
         } case caseclause then {
             this.walkSuf n: n.matcharm :uname :st :funcret
@@ -1526,33 +1675,21 @@ Analysis: class {
         } case functiondef then {
             this.walkSufOpt o: n.returntype :uname :st funcret: n.returntype
             piter: n.parameters.iterate
-            for pm: piter loop {
-                this.walkSuf n: pm :uname :st funcret: n.returntype
-            }
+            for pm: piter loop this.walkSuf n: pm :uname :st funcret: n.returntype
             this.walkSufOpt o: n.body :uname :st funcret: n.returntype
             faiter: n.asItems.iterate
-            for fam: faiter loop {
-                this.walkSuf n: fam :uname :st funcret: n.returntype
-            }
+            for fam: faiter loop this.walkSuf n: fam :uname :st funcret: n.returntype
         } case objectdef then {
             oiiter: n.isItems.iterate
-            for oim: oiiter loop {
-                this.walkSuf n: oim :uname :st :funcret
-            }
+            for oim: oiiter loop this.walkSuf n: oim :uname :st :funcret
             oaiter: n.asItems.iterate
-            for oam: oaiter loop {
-                this.walkSuf n: oam :uname :st :funcret
-            }
+            for oam: oaiter loop this.walkSuf n: oam :uname :st :funcret
         } case unitdef then {
             ubiter: n.body.iterate
-            for ubm: ubiter loop {
-                this.walkSuf n: ubm :uname :st :funcret
-            }
+            for ubm: ubiter loop this.walkSuf n: ubm :uname :st :funcret
         } case program then {
             puiter: n.units.iterate
-            for pum: puiter loop {
-                this.walkSuf n: pum :uname :st :funcret
-            }
+            for pum: puiter loop this.walkSuf n: pum :uname :st :funcret
         }
     }
 
@@ -1572,9 +1709,7 @@ Analysis: class {
             prog
         ) case program then {
             uiter: prog.units.iterate
-            for u: uiter loop {
-                this.lintSuffixNamedOp namedOp: u mainName: mn.stringview :uname :st
-            }
+            for u: uiter loop this.lintSuffixNamedOp namedOp: u mainName: mn.stringview :uname :st
         } else {}
     }
 
@@ -1666,32 +1801,32 @@ nodeInfoOf: function {n: Node} out nodeinfo is {
 
 # isNumericTypeName -- a name in the numeric-type set the suffix check ranges over.
 isNumericTypeName: function {name: StringView} out bool is {
-    if name == "i8" then { return true }
-    if name == "i16" then { return true }
-    if name == "i32" then { return true }
-    if name == "i64" then { return true }
-    if name == "i128" then { return true }
-    if name == "u8" then { return true }
-    if name == "u16" then { return true }
-    if name == "u32" then { return true }
-    if name == "u64" then { return true }
-    if name == "u128" then { return true }
-    if name == "c8" then { return true }
-    if name == "c32" then { return true }
-    if name == "f32" then { return true }
-    if name == "f64" then { return true }
-    if name == "f128" then { return true }
+    if name == "i8" then return true
+    if name == "i16" then return true
+    if name == "i32" then return true
+    if name == "i64" then return true
+    if name == "i128" then return true
+    if name == "u8" then return true
+    if name == "u16" then return true
+    if name == "u32" then return true
+    if name == "u64" then return true
+    if name == "u128" then return true
+    if name == "c8" then return true
+    if name == "c32" then return true
+    if name == "f32" then return true
+    if name == "f64" then return true
+    if name == "f128" then return true
     return false
 }
 
 # isNonDec -- a literal lexeme in hex / binary / octal form.
 isNonDec: function {s: StringView} out bool is {
-    if (s.startsWith prefix: "0x") then { return true }
-    if (s.startsWith prefix: "0X") then { return true }
-    if (s.startsWith prefix: "0b") then { return true }
-    if (s.startsWith prefix: "0B") then { return true }
-    if (s.startsWith prefix: "0o") then { return true }
-    if (s.startsWith prefix: "0O") then { return true }
+    if (s.startsWith prefix: "0x") then return true
+    if (s.startsWith prefix: "0X") then return true
+    if (s.startsWith prefix: "0b") then return true
+    if (s.startsWith prefix: "0B") then return true
+    if (s.startsWith prefix: "0o") then return true
+    if (s.startsWith prefix: "0O") then return true
     return false
 }
 
@@ -1699,9 +1834,9 @@ isNonDec: function {s: StringView} out bool is {
 # non-decimal). A literal that overflows the default keeps its suffix (load-bearing).
 literalFitsBase: function {numstr: StringView} out bool is {
     pv: ztypes.parseLiteralValue :numstr
-    if pv.ok == false then { return false }
-    if pv.isFloat then { return true }
-    if (isNonDec s: numstr) then { return true }
+    if pv.ok == false then return false
+    if pv.isFloat then return true
+    if (isNonDec s: numstr) then return true
     iMax: 9223372036854775807.u64
     return pv.ival <= iMax
 }
@@ -1727,9 +1862,7 @@ operandSuffix: function {n: Node} out sufrec is {
             return (sufrec tname: "".string line: 0 col: 0)
         }
         pn: atomName n: n.parent
-        if pn.length == 0 then {
-            return (sufrec tname: "".string line: 0 col: 0)
-        }
+        if pn.length == 0 then return (sufrec tname: "".string line: 0 col: 0)
         if (literalFitsBase numstr: pn.stringview) == false then {
             return (sufrec tname: "".string line: 0 col: 0)
         }
@@ -1745,9 +1878,7 @@ isNodeConst: function {nid: u64 st: zenv.ZSymbolTable} out bool is {
     res: false
     it: st.typing.nodeConst.iterate
     for row: it loop {
-        if row.nodeid == nid then {
-            res = true
-        }
+        if row.nodeid == nid then res = true
     }
     return res
 }
@@ -1806,15 +1937,15 @@ isAnchor: function {n: Node tname: StringView st: zenv.ZSymbolTable} out bool is
                 zo
             ) case some then {
                 zhit9 = true
-                if zo.isLiteral then { zlit9 = true }
+                if zo.isLiteral then zlit9 = true
                 znm9 = zo.name.copy
             } case none then {
             }
         }
-        if zhit9 == false then { return false }
-        if zlit9 then { return false }
-        if (znm9.stringview == tname) == false then { return false }
-        if (isNodeConst :nid :st) then { return false }
+        if zhit9 == false then return false
+        if zlit9 then return false
+        if (znm9.stringview == tname) == false then return false
+        if (isNodeConst :nid :st) then return false
         return true
     } case none then {
         return false
@@ -1868,9 +1999,7 @@ unitNameOf: function {path: StringView} out String is {
 # linesOf -- split source into a 1-based-addressable list of lines (newlines stripped).
 linesOf: function {src: StringView} out (List String) is {
     ls: (List String)
-    with it: src.lines do for ln: it loop {
-        ls.append ln.string
-    }
+    with it: src.lines do for ln: it loop ls.append ln.string
     return ls
 }
 
@@ -1909,17 +2038,13 @@ byteToLine: function {lineStart: (List u64).borrow off: u64 nLines: u64} out u64
 # Token columns are codepoint-based (multibyte-aware); this walks the line's bytes, consuming
 # one codepoint (a lead byte plus its 0x80..0xBF continuations) per column. ASCII: colno - 1.
 colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
-    if colno <= 1 then {
-        return 0
-    }
+    if colno <= 1 then return 0
     target: (colno - 1).u64
     n: lineText.length
     b: 0.u64
     cp: 0.u64
     for cp < target loop {
-        if b >= n then {
-            break
-        }
+        if b >= n then break
         b = b + 1
         cont: true
         for cont loop {
@@ -1931,9 +2056,7 @@ colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
                 match (
                     nb
                 ) case some then {
-                    if nb >= 128 when (nb < 192) then {
-                        isC = true
-                    }
+                    if nb >= 128 when (nb < 192) then isC = true
                 } case none then {
                 }
                 if isC then {
@@ -1957,9 +2080,7 @@ tokByteStart: function {
     colno: u32
 } out u64 is {
     li: (lineno - 1).u64
-    if li >= srcLines.length then {
-        return 0
-    }
+    if li >= srcLines.length then return 0
     base: lineStart.get i: li
     lt: srcLines.get i: li
     return base + (colToByteInLine lineText: lt.stringview :colno)
@@ -1992,9 +2113,7 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out (List zfix.Edit) is {
                     take = true
                 } else if e.byteLo < bestLo then {
                     take = true
-                } else if e.byteLo == bestLo when (e.byteHi > bestHi) then {
-                    take = true
-                }
+                } else if e.byteLo == bestLo when (e.byteHi > bestHi) then take = true
                 if take then {
                     best = i
                     bestLo = e.byteLo
@@ -2036,9 +2155,7 @@ emitDiffHunk: function {
     oldCount: (clHi - clLo) + 1
     aByte: lineStart.get i: clLo
     bByte: srcLen
-    if (clHi + 1) < nLines then {
-        bByte = lineStart.get i: (clHi + 1)
-    }
+    if (clHi + 1) < nLines then bByte = lineStart.get i: (clHi + 1)
     newBlock: "".string
     prev: aByte
     j: cStart
@@ -2053,9 +2170,7 @@ emitDiffHunk: function {
     }
     zfix.appendRange buf: newBlock src: source lo: prev hi: bByte
     newLines: (List String)
-    if newBlock.length > 0 then {
-        newLines = linesOf src: newBlock.stringview
-    }
+    if newBlock.length > 0 then newLines = linesOf src: newBlock.stringview
     newCount: newLines.length
     newStart: (clLo.i64 + newDelta) + 1
     hh: "@@ -\{clLo + 1},\{oldCount} +\{newStart},\{newCount} @@\n"
@@ -2082,9 +2197,7 @@ emitDiffHunk: function {
 
 # byteAtLine -- byte offset of line `k`'s start, or `srcLen` when `k` is one past the last line.
 byteAtLine: function {starts: (List u64).borrow srcLen: u64 k: u64} out u64 is {
-    if k >= starts.length then {
-        return srcLen
-    }
+    if k >= starts.length then return srcLen
     return (starts.get i: k)
 }
 
@@ -2104,16 +2217,12 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
     i: 0.u64
     p: 0.u64
     for true loop {
-        if i >= m when (p >= n) then {
-            break
-        }
+        if i >= m when (p >= n) then break
         matched: false
         if i < m when (p < n) then {
             oi: oldLines.get :i
             pj9: newLines.get i: p
-            if oi.stringview == pj9.stringview then {
-                matched = true
-            }
+            if oi.stringview == pj9.stringview then matched = true
         }
         if matched then {
             i = i + 1
@@ -2124,14 +2233,10 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
             found: false
             t: 1.u64
             for t <= 256 loop {
-                if found then {
-                    break
-                }
+                if found then break
                 a: 0.u64
                 for a <= t loop {
-                    if found then {
-                        break
-                    }
+                    if found then break
                     b: t - a
                     ii: i + a
                     pp: p + b
@@ -2150,13 +2255,9 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
             }
             if found == false then {
                 we: i + 256
-                if we > m then {
-                    we = m
-                }
+                if we > m then we = m
                 wf: p + 256
-                if wf > n then {
-                    wf = n
-                }
+                if wf > n then wf = n
                 i2 = we
                 p2 = wf
             }
@@ -2167,15 +2268,9 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
             repl: "".string
             zfix.appendRange buf: repl src: new lo: nlo hi: nhi
             doEmit: false
-            if hi > lo then {
-                doEmit = true
-            }
-            if nhi > nlo then {
-                doEmit = true
-            }
-            if doEmit then {
-                edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
-            }
+            if hi > lo then doEmit = true
+            if nhi > nlo then doEmit = true
+            if doEmit then edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
             i = i2
             p = p2
         }
@@ -2193,9 +2288,7 @@ renderDiff: function {
 } out String is {
     buf: "".string
     m: edits.length
-    if m == 0 then {
-        return buf
-    }
+    if m == 0 then return buf
     lineStart: lineStartIndex src: source
     srcLines: linesOf src: source
     nLines: srcLines.length
@@ -2213,18 +2306,14 @@ renderDiff: function {
         e: edits.get :i
         lo: byteToLine :lineStart off: e.byteLo :nLines
         hi: lo
-        if e.byteHi > e.byteLo then {
-            hi = byteToLine :lineStart off: (e.byteHi - 1) :nLines
-        }
+        if e.byteHi > e.byteLo then hi = byteToLine :lineStart off: (e.byteHi - 1) :nLines
         if (cActive) == false then {
             cActive = true
             cStart = i
             clLo = lo
             clHi = hi
         } else if lo <= (clHi + 1) then {
-            if hi > clHi then {
-                clHi = hi
-            }
+            if hi > clHi then clHi = hi
         } else {
             newDelta = (emitDiffHunk
                 :buf
@@ -2282,6 +2371,8 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            fastToks: (List tokenize.Token)
+            funcDepth: 0
             wrapGroups: (List u64)
         )
         a.runFastChecks n: root
@@ -2301,6 +2392,8 @@ analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            fastToks: (List tokenize.Token)
+            funcDepth: 0
             wrapGroups: (List u64)
         )
         d: (zdiag.errorDiag
@@ -2345,6 +2438,8 @@ analyzeFileFull: function {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            fastToks: (List tokenize.Token)
+            funcDepth: 0
             wrapGroups: (List u64)
         )
         a.runFastChecks n: root
@@ -2366,6 +2461,8 @@ analyzeFileFull: function {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            fastToks: (List tokenize.Token)
+            funcDepth: 0
             wrapGroups: (List u64)
         )
         d: (zdiag.errorDiag
@@ -2392,9 +2489,7 @@ analyzeFileTiered: function {
     systemdir: StringView
     lineLength: u32
 } out Analysis is {
-    if full then {
-        return (analyzeFileFull :path :srcdir :systemdir :lineLength)
-    }
+    if full then return (analyzeFileFull :path :srcdir :systemdir :lineLength)
     return (analyzeFile :path :lineLength)
 }
 
@@ -2410,14 +2505,10 @@ codepointLen: function {s: StringView} out u64 is {
         match (
             bo
         ) case some then {
-            if bo >= 128 when (bo < 192) then {
-                cont = true
-            }
+            if bo >= 128 when (bo < 192) then cont = true
         } case none then {
         }
-        if (cont) == false then {
-            c = c + 1
-        }
+        if (cont) == false then c = c + 1
         b = b + 1
     }
     return c
@@ -2438,6 +2529,8 @@ sourceParses: function {source: String.take} out bool is {
         wrapFound: false
         wrapStart: 0
         delimClose: (Map u64 value: u64)
+        fastToks: (List tokenize.Token)
+        funcDepth: 0
         wrapGroups: (List u64)
     )
     root: ast.parseSource :source
@@ -2465,14 +2558,10 @@ leadingSpaces: function {line: StringView} out u64 is {
         match (
             bo
         ) case some then {
-            if bo == 32 then {
-                sp = true
-            }
+            if bo == 32 then sp = true
         } case none then {
         }
-        if sp == false then {
-            return n
-        }
+        if sp == false then return n
         n = n + 1
     }
     return n
@@ -2487,23 +2576,40 @@ rstripLen: function {line: StringView} out u64 is {
         match (
             bo
         ) case some then {
-            if bo == 32 then {
-                ws = true
-            }
-            if bo == 9 then {
-                ws = true
-            }
+            if bo == 32 then ws = true
+            if bo == 9 then ws = true
         } case none then {
         }
-        if ws == false then {
-            return n
-        }
+        if ws == false then return n
         n = n - 1
     }
     return 0
 }
 
 # wsRunStart -- start byte of the whitespace run ending just before `from`.
+# wsRunStartNL -- like wsRunStart but also swallows newline bytes: the start of
+# the whitespace-and-newline run ending at `from`. Collapses the indentation and
+# line break between a single-statement body and its closing brace.
+wsRunStartNL: function {src: StringView from: u64} out u64 is {
+    n: from
+    for n > 0 loop {
+        bo: src.byteAt i: (n - 1)
+        ws: false
+        match (
+            bo
+        ) case some then {
+            if bo == 32 then ws = true
+            if bo == 9 then ws = true
+            if bo == 10 then ws = true
+            if bo == 13 then ws = true
+        } case none then {
+        }
+        if ws == false then return n
+        n = n - 1
+    }
+    return n
+}
+
 wsRunStart: function {src: StringView from: u64} out u64 is {
     n: from
     for n > 0 loop {
@@ -2512,17 +2618,11 @@ wsRunStart: function {src: StringView from: u64} out u64 is {
         match (
             bo
         ) case some then {
-            if bo == 32 then {
-                ws = true
-            }
-            if bo == 9 then {
-                ws = true
-            }
+            if bo == 32 then ws = true
+            if bo == 9 then ws = true
         } case none then {
         }
-        if ws == false then {
-            return n
-        }
+        if ws == false then return n
         n = n - 1
     }
     return n
@@ -2536,9 +2636,7 @@ hasHash: function {line: StringView} out bool is {
         match (
             bo
         ) case some then {
-            if bo == 35 then {
-                return true
-            }
+            if bo == 35 then return true
         } case none then {
         }
         n = n + 1
@@ -2610,14 +2708,14 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
             wrapFound: false
             wrapStart: 0
             delimClose: (Map u64 value: u64)
+            fastToks: (List tokenize.Token)
+            funcDepth: 0
             wrapGroups: (List u64)
         )
         root: ast.parseSource source: rd.copy
         a.delimClose = buildDelimMap src: rd.stringview lineStart: a.lineStart srcLines: a.lines
         a.walk n: root
-        if a.wrapFound == false then {
-            break
-        }
+        if a.wrapFound == false then break
         se: sortEdits edits: a.edits
         cand: zfix.applyEdits source: cur.stringview edits: se
         cok: sourceParses source: cand.copy
@@ -2630,9 +2728,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
             for gi < ng loop {
                 gstart: a.wrapGroups.get i: gi
                 gend: a.edits.length
-                if (gi + 1) < ng then {
-                    gend = a.wrapGroups.get i: (gi + 1)
-                }
+                if (gi + 1) < ng then gend = a.wrapGroups.get i: (gi + 1)
                 added: 0.u64
                 k: gstart
                 for k < gend loop {
@@ -2656,9 +2752,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
                 }
                 gi = gi + 1
             }
-            if good.length == 0 then {
-                break
-            }
+            if good.length == 0 then break
             cur = zfix.applyEdits source: cur.stringview edits: good
         }
     }
