@@ -16,6 +16,7 @@ printUsage: function is {
     io.eprintln "  --check   exit non-zero if any file needs formatting; write nothing"
     io.eprintln "  --stdout  print the formatted result instead of writing in place"
     io.eprintln "  --diff    print a unified diff of the changes; write nothing"
+    io.eprintln "  --line-length N  wrap over-long named-arg calls at N columns (default 100; 0 off)"
     io.eprintln "lint flags:"
     io.eprintln "  --full    also run typecheck-tier rules (--src DIR --system DIR set the project)"
     io.eprintln "  --line-length N  report lines over N columns (advisory; default off)"
@@ -144,7 +145,11 @@ runFmt: function {paths: (List String).borrow check: bool stdout: bool diff: boo
                 } else if diff then {
                     if changed then {
                         de9: zsource.lineDiffEdits old: a.source.stringview new: newsrc.stringview
-                        dtext: zsource.renderDiff path: a.path.stringview source: a.source.stringview edits: de9
+                        dtext: (zsource.renderDiff
+                            path: a.path.stringview
+                            source: a.source.stringview
+                            edits: de9
+                        )
                         writeStdout s: dtext.stringview
                         rc = 1
                     }
@@ -206,6 +211,7 @@ main: function is {
     srcdir: ".".string
     systemdir: "lib/system".string
     lineLength: 0.u32
+    llSet: false
     i: 2.u64
     for i < n loop {
         arg: (argv.get :i).copy
@@ -244,6 +250,7 @@ main: function is {
                     llPv
                 ) case ok then {
                     lineLength = llPv.u32
+                    llSet = true
                 } case err then {
                     io.eprintln "zl: --line-length needs a number"
                     os.exit code: 2
@@ -263,11 +270,29 @@ main: function is {
     }
 
     if sv == "lint" then {
-        rc: runLint :paths full: fFull srcdir: srcdir.stringview systemdir: systemdir.stringview :lineLength
+        rc: (runLint
+            :paths
+            full: fFull
+            srcdir: srcdir.stringview
+            systemdir: systemdir.stringview
+            :lineLength
+        )
         os.exit code: rc
     }
     if sv == "fmt" then {
-        rc: runFmt :paths check: fCheck stdout: fStdout diff: fDiff full: fFull srcdir: srcdir.stringview systemdir: systemdir.stringview :lineLength
+        if llSet == false then {
+            lineLength = 100
+        }
+        rc: (runFmt
+            :paths
+            check: fCheck
+            stdout: fStdout
+            diff: fDiff
+            full: fFull
+            srcdir: srcdir.stringview
+            systemdir: systemdir.stringview
+            :lineLength
+        )
         os.exit code: rc
     }
     if sv == "explain" then {
