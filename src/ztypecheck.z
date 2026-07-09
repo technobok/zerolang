@@ -722,8 +722,15 @@ resolveNamedType: function {
         if b0 >= 48 when b0 <= 57 then isnum = true
     } case none then {}
     if isnum then {
-        if name.contains "." then return (reg.newType name: "f64" typetype: ztypes.ztypetype.RECORD)
-        return (reg.newType name: "i64" typetype: ztypes.ztypetype.RECORD)
+        # A numeric-literal name types as the literal's DEFAULT scalar (system
+        # i64/f64) -- it is not a name reference, so a unit-local scalar shadow
+        # must not capture it. Pre-index (defNodeIndexBuilt false) keeps the
+        # named-shell fallback.
+        dn7: "i64"
+        if name.contains "." then dn7 = "f64"
+        sid7: descendNamed :ty :reg :units defUnit: "system" name: dn7
+        if sid7 > 0 then return sid7
+        return (reg.newType name: dn7 typetype: ztypes.ztypetype.RECORD)
     }
     if thisName.length > 0 then {
         etk7: "\{unitName}.\{thisName}".string
@@ -4846,12 +4853,9 @@ stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
             ido: st.typing.pendingDefaultId.get key: nd
             idv: optU64Or o: ido d: 0
             if idv > 0 then {
-                rm2: resolveChildPayload :st :unitName cid: idv
-                if rm2 > 0 then {
-                    nd2: nodes.get i: di
-                    setd2: rm2
-                    st.typing.nodeType.set key: nd2 value: setd2
-                }
+                nd2: nodes.get i: di
+                setd2: idv
+                st.typing.nodeType.set key: nd2 value: setd2
             } else {
                 nd3: nodes.get i: di
                 ngo: st.typing.pendingDefaultName.get key: nd3
@@ -10307,7 +10311,7 @@ checkDotted: function {
             st.typing.nodeType.set key: dp.nodeid.u64 value: setcc
             return mo
         }
-        rm: resolveChildPayload :st :unitName cid: mo
+        rm: mo
         result: 0.u64
         result = rm
         # Reading a protocol-typed conformance member projects a borrow of
@@ -11500,7 +11504,7 @@ comparisonCoerceTarget: function {
             match (
                 ppo9
             ) case some then {
-                return (resolveChildPayload :st :unitName cid: ppo9)
+                return ppo9
             } case none then {
             }
         }
@@ -12327,7 +12331,7 @@ walkCallArgsHoist: function {
                                 width: pn.length.u32
                             )
                         } else {
-                            ptid9: resolveChildPayload :st :unitName cid: pcidX9
+                            ptid9: pcidX9
                             if ptid9 > 0 when vt > 0 then {
                                 if (typesCompatible :st :unitName a: vt b: ptid9) == false then {
                                     skipMM9: false
@@ -12418,7 +12422,7 @@ walkCallArgsHoist: function {
                             d: 0
                         )
                         if cpidP9 > 0 then {
-                            ptidP9: resolveChildPayload :st :unitName cid: cpidP9
+                            ptidP9: cpidP9
                             if ptidP9 > 0 when vt > 0 then {
                                 if (typesCompatible :st :unitName a: vt b: ptidP9) == false then {
                                     skipP9: false
@@ -12471,7 +12475,7 @@ walkCallArgsHoist: function {
                         match (
                             po
                         ) case some then {
-                            pt = resolveChildPayload :st :unitName cid: po
+                            pt = po
                         } case none then {
                         }
                     }
@@ -13409,16 +13413,13 @@ checkCall: function {
                                         )
                                         upid: optU64Or o: upo d: 0
                                         if upid > 0 then {
-                                            upt: resolveChildPayload :st :unitName cid: upid
-                                            if upt > 0 then {
-                                                uiid: innermostNodeId n: arg2.operation
-                                                if uiid > 0 then {
-                                                    setup: upt
-                                                    (st.typing.nodeType.set
-                                                        key: uiid.u64
-                                                        value: setup
-                                                    )
-                                                }
+                                            uiid: innermostNodeId n: arg2.operation
+                                            if uiid > 0 then {
+                                                setup: upid
+                                                (st.typing.nodeType.set
+                                                    key: uiid.u64
+                                                    value: setup
+                                                )
                                             }
                                         }
                                     }
@@ -14047,21 +14048,6 @@ sumSubtypeNames: function {st: zenv.ZSymbolTable sid: u64} out List String is {
     return arms
 }
 
-# resolveChildPayload -- a sum-type arm child resolves through a NULL-unit
-# reference shell; re-resolve it by name to the real type so arm-body stamps
-# survive the dump's unit filter. A child that already carries a defining unit
-# is canonical: trust its id directly (re-resolving by name would collapse it
-# onto a caller-unit shadow). Falls back to the shell id.
-resolveChildPayload: function {st: zenv.ZSymbolTable unitName: StringView cid: u64} out u64 is {
-    if (st.typing.definedInUnit.has key: cid) then return cid
-    cn: typeNameOf :st tid: cid
-    if cn.length == 0 then return cid
-    return (optU64Or
-        o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: cn.stringview)
-        d: cid
-    )
-}
-
 # lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
 lastStmtTypeOpt: function {st: zenv.ZSymbolTable bodyOpt: Option Node} out u64 is {
     match (
@@ -14141,10 +14127,9 @@ checkCase: function {
                 match (
                     po
                 ) case some then {
-                    rp: resolveChildPayload :st :unitName cid: po
                     (st.narrow
                         name: targetName.stringview
-                        toTypeId: rp
+                        toTypeId: po
                         subtypeName: armName.stringview
                         shadow: true
                     )
