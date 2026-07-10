@@ -691,6 +691,8 @@ Ctx: class {
     breakLabelUsed: (Map u64 value: bool)
     breakFreesMarks: (List u64)
     breakListMarks: (List u64)
+    breakLabelCleanup: (List String)
+    breakLabelCleanupVar: (List String)
     borrowedVars: (Map String value: bool)
     strTid: u64
     svTid: u64
@@ -1893,6 +1895,10 @@ pushLoopLabel: function {ctx: Ctx tmp: TmpCtr isDo: bool} out u64 is {
     ctx.breakLabelIsDo.append isDoC9
     ctx.breakFreesMarks.append tmp.frees.length
     ctx.breakListMarks.append tmp.listFrees.length
+    cl9: "".string
+    ctx.breakLabelCleanup.append cl9
+    cv9: "".string
+    ctx.breakLabelCleanupVar.append cv9
     return ctx.breakLabelCtr - 1
 }
 
@@ -1916,6 +1922,10 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
     if ctx.breakFreesMarks.length > 0 then {
         ctx.breakFreesMarks.pop
         ctx.breakListMarks.pop
+    }
+    if ctx.breakLabelCleanup.length > 0 then {
+        dcl9: ctx.breakLabelCleanup.pop
+        dcv9: ctx.breakLabelCleanupVar.pop
     }
     uo: ctx.breakLabelUsed.get key: id
     match (
@@ -6943,6 +6953,14 @@ emitStmt: function {
                 emitBreakFrees :ctx :tmp :ind :buf
                 if ctx.breakLabels.length > 0 then {
                     bid9: ctx.breakLabels.get i: (ctx.breakLabels.length - 1)
+                    # an owned-payload loop's per-iteration dtor: the jump
+                    # skips the fall-through line, so emit its copy here (a
+                    # do-block entry carries an empty cleanup).
+                    bcl9: ctx.breakLabelCleanup.get i: (ctx.breakLabels.length - 1)
+                    if bcl9.length > 0 then {
+                        lbc9: "\{ind}\{bcl9}"
+                        buf.append lbc9.stringview
+                    }
                     lbkg9: "\{ind}goto __zbrk_\{bid9};\n"
                     buf.append lbkg9.stringview
                     ubk9: true
@@ -6973,6 +6991,11 @@ emitStmt: function {
                     }
                     if inDo9 when hasLoop9 then {
                         emitContinueFrees :ctx :tmp idx: loopIdx9 :ind :buf
+                        ccl9: ctx.breakLabelCleanup.get i: loopIdx9
+                        if ccl9.length > 0 then {
+                            lcc9: "\{ind}\{ccl9}"
+                            buf.append lcc9.stringview
+                        }
                         cid9: ctx.breakLabels.get i: loopIdx9
                         lcg9: "\{ind}goto __zcont_\{cid9};\n"
                         buf.append lcg9.stringview
@@ -6980,6 +7003,15 @@ emitStmt: function {
                         ctx.contLabelUsed.set key: cid9 value: ucn9
                     } else {
                         emitBreakFrees :ctx :tmp :ind :buf
+                        if ctx.breakLabelCleanup.length > 0 then {
+                            pcl0: (ctx.breakLabelCleanup.get
+                                i: (ctx.breakLabelCleanup.length - 1)
+                            )
+                            if pcl0.length > 0 then {
+                                lpc9: "\{ind}\{pcl0}"
+                                buf.append lpc9.stringview
+                            }
+                        }
                         lct9: "\{ind}continue;\n"
                         buf.append lct9.stringview
                     }
@@ -8012,6 +8044,22 @@ emitObjIterFor: function {
                 }
             }
             lidO: pushLoopLabel :ctx :tmp isDo: false
+            # owned payloads register a per-iteration cleanup line with the
+            # loop entry: continue/break/return jump past the fall-through
+            # dtor line below, so the jump sites emit this copy instead.
+            payCleanup9: "".string
+            if (originIsTid :symtab tid: ovid originTid: ctx.optionOriginTid) then {
+                pfree9: payloadDestructor :symtab :ctx tid: ovid arm: "some"
+                if pfree9.length > 0 then payCleanup9 = "\{pfree9}(&\{lbl});\n"
+            }
+            if payCleanup9.length > 0 then {
+                ecl9: ctx.breakLabelCleanup.pop
+                pcl9: payCleanup9.copy
+                ctx.breakLabelCleanup.append pcl9
+                ecv9: ctx.breakLabelCleanupVar.pop
+                pcv9: lbl.copy
+                ctx.breakLabelCleanupVar.append pcv9
+            }
             l0: "\{ind}while (1) {\n"
             buf.append l0.stringview
             l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv9});\n"
@@ -8063,12 +8111,9 @@ emitObjIterFor: function {
             fLO9: tmp.frees.length
             lLO9: tmp.listFrees.length
             emitBodyOpt :symtab :ctx o: m.body ind: ind2.stringview :tmp :buf
-            if (originIsTid :symtab tid: ovid originTid: ctx.optionOriginTid) then {
-                freeFn: payloadDestructor :symtab :ctx tid: ovid arm: "some"
-                if freeFn.length > 0 then {
-                    l3od: "\{ind}    \{freeFn}(&\{lbl});\n"
-                    buf.append l3od.stringview
-                }
+            if payCleanup9.length > 0 then {
+                l3od: "\{ind}    \{payCleanup9}"
+                buf.append l3od.stringview
             }
             flushBlockFrees :ctx :tmp fL: fLO9 lL: lLO9 :buf
             indO9: "\{ind}    "
@@ -10154,6 +10199,27 @@ emitReturnCleanup: function {
         if keepL then buf.append stmt9.stringview
         li9 = li9 + 1
     }
+    # a return exits every enclosing loop: emit each owned-payload loop's
+    # per-iteration cleanup (empty for plain loops and do entries), unless
+    # the payload is part of the return value or a non-owning alias.
+    ci9: 0.u64
+    cn9: ctx.breakLabelCleanup.length
+    for ci9 < cn9 loop {
+        ccl0: ctx.breakLabelCleanup.get i: ci9
+        ccv0: ctx.breakLabelCleanupVar.get i: ci9
+        if ccl0.length > 0 then {
+            keepC: true
+            if keepRefd then {
+                if (refsLocal expr: retExpr name: ccv0.stringview) then keepC = false
+            }
+            if (nvHas xs: ctx.aliases name: ccv0.stringview) then keepC = false
+            if keepC then {
+                lcr9: "\{ind}\{ccl0}"
+                buf.append lcr9.stringview
+            }
+        }
+        ci9 = ci9 + 1
+    }
 }
 
 emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node fid: u64 buf: String.borrow} is {
@@ -10405,6 +10471,8 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         breakLabelUsed: (Map u64 value: bool)
         breakFreesMarks: (List u64)
         breakListMarks: (List u64)
+        breakLabelCleanup: (List String)
+        breakLabelCleanupVar: (List String)
         borrowedVars: (Map String value: bool)
         strTid: strId
         svTid: svId
