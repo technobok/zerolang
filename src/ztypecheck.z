@@ -1722,6 +1722,9 @@ returnParamTid: function {reg: ztypes.ZTypeRegistry enclKey: StringView o: Optio
         o
     ) case some then {
         bn: atomName n: o
+        # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
+        # base name through the peeled parent.
+        if bn.length == 0 then bn = markerPeeledBase n: o
         if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
             po: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
             match (
@@ -1797,6 +1800,20 @@ partialReturnTid: function {
     return 0
 }
 
+# markerPeeledBase -- the base atom name under a strip-marker dotted path
+# (`of.take` -> "of"); "" for any other shape.
+markerPeeledBase: function {n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        mcn3: atomName n: n.child
+        if (isStripMarker name: mcn3.stringview) then return (atomName n: n.parent)
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
 # stampGenericParamRef -- a return typeref naming one of the enclosing
 # template's generic params stamps the unit's generic-param type directly
 # (generic params live outside the name-resolution table).
@@ -1810,6 +1827,10 @@ stampGenericParamRef: function {
         o
     ) case some then {
         bn: atomName n: o
+        # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
+        # base name through the peeled parent; the marker dp wears the stamp,
+        # matching recordTyperef's convention for concrete marked returns.
+        if bn.length == 0 then bn = markerPeeledBase n: o
         if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
             gpt3: 0.u64
             gpo3: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
@@ -1824,6 +1845,29 @@ stampGenericParamRef: function {
             gnid3: nodeId n: o
             gpv3b: gpt3
             ty.nodeType.set key: gnid3.u64 value: gpv3b
+        }
+    } case none then {}
+}
+
+# recordGenericMarkerReturn -- a marker-suffixed generic-param return
+# (`out of.take` / `out of.borrow`) records its peeled base name at the
+# dotted node (pendingTyperef) so the mono-return substitution finds it:
+# the plain-atom leg records inside recordTyperef, while the marker leg
+# only resolution-stamps.
+recordGenericMarkerReturn: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    enclKey: StringView
+    o: Option Node
+} is {
+    match (
+        o
+    ) case some then {
+        mpb3: markerPeeledBase n: o
+        if mpb3.length > 0 when (reg.isGenericParamOf typeKey: enclKey name: mpb3.stringview) then {
+            mnid3: nodeId n: o
+            recordNodeName :ty :unitName name: mpb3.stringview nid: mnid3.u64
         }
     } case none then {}
 }
@@ -2471,6 +2515,13 @@ resolveFunction: function {
     recordReturnType :ty :reg :units :unitName :thisName o: fnode.returntype
     recordFuncReturnNode :ty :fid o: fnode.returntype
     stampGenericParamRef :ty :reg enclKey: enclKey.stringview o: fnode.returntype
+    (recordGenericMarkerReturn
+        :ty
+        :reg
+        :unitName
+        enclKey: enclKey.stringview
+        o: fnode.returntype
+    )
     rpt4: 0.u64
     if isgen then rpt4 = returnParamTid :reg enclKey: fnKey9.stringview o: fnode.returntype
     if rpt4 == 0 then rpt4 = returnParamTid :reg enclKey: enclKey.stringview o: fnode.returntype
@@ -10661,6 +10712,8 @@ checkAssignment: function {
         }
         if own == ztypes.zownership.BORROWED then {
             lfsA9: isViewFamilyTid :st tid: vt
+            if st.typing.pendingBorrowShared then lfsA9 = true
+            st.typing.pendingBorrowShared = false
             (installBorrowLocks
                 :st
                 src: bsrc
@@ -10898,6 +10951,8 @@ checkWith: function {
         st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {
             lfsW9: isViewFamilyTid :st tid: vt
+            if st.typing.pendingBorrowShared then lfsW9 = true
+            st.typing.pendingBorrowShared = false
             (installBorrowLocks
                 :st
                 src: btgt
@@ -11836,6 +11891,7 @@ drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
     for st.typing.pendingBorrowPath.length > 0 loop {
         pd: st.typing.pendingBorrowPath.pop
     }
+    st.typing.pendingBorrowShared = false
 }
 
 takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
@@ -11847,7 +11903,9 @@ takePendingBorrow: function {st: zenv.ZSymbolTable dst: List String} is {
         dst.append ec
         i = i + 1
     }
+    sh9: st.typing.pendingBorrowShared
     drainPendingBorrow :st
+    st.typing.pendingBorrowShared = sh9
 }
 
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
@@ -13116,6 +13174,7 @@ checkCall: function {
                                     sgc: segB.copy
                                     st.typing.pendingBorrowPath.append sgc
                                 }
+                                st.typing.pendingBorrowShared = true
                                 pushedB = true
                             } case none then {}
                         }
@@ -13123,6 +13182,7 @@ checkCall: function {
                             drainPendingBorrow :st
                             mlrc: mlr.copy
                             st.typing.pendingBorrowPath.append mlrc
+                            st.typing.pendingBorrowShared = true
                         }
                     }
                     # A view-typed result (OptionView from Map.get, ...) is a
@@ -13580,6 +13640,7 @@ checkCall: function {
                     drainPendingBorrow :st
                     lrc: lockRoot.copy
                     st.typing.pendingBorrowPath.append lrc
+                    st.typing.pendingBorrowShared = true
                 }
             }
         } else {
