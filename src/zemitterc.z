@@ -7535,12 +7535,33 @@ emitMatchElse: function {
 # emitBranchAssignOptional -- emit a do-block-with-break body, wrapping the final
 # value in the optional's `some` arm (tag + data.some); a `break` reached first
 # leaves the result at its pre-set `none` tag.
+# emitOptionalAssign -- the some-arm assignment for a break-carrying do value:
+# inline for a valtype optionval (payC ""), a malloc'd box for a reftype
+# Option payload.
+emitOptionalAssign: function {
+    target: StringView
+    someTag: StringView
+    payC: StringView
+    vx: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    if payC.length > 0 then {
+        lb: "\{ind}\{target}.tag = \{someTag};\n\{ind}{ \{payC}* _zb = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_zb = \{vx}; \{target}.data = _zb; }\n"
+        buf.append lb.stringview
+    } else {
+        la: "\{ind}\{target}.tag = \{someTag};\n\{ind}\{target}.data.some = \{vx};\n"
+        buf.append la.stringview
+    }
+}
+
 emitBranchAssignOptional: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     n: Node
     target: StringView
     someTag: StringView
+    payC: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -7554,8 +7575,8 @@ emitBranchAssignOptional: function {
             sx: n.statements.get i: si
             if si + 1 == cnt then {
                 vx: emitExpr :symtab :ctx n: sx
-                la: "\{ind}\{target}.tag = \{someTag};\n\{ind}\{target}.data.some = \{vx};\n"
-                buf.append la.stringview
+                emitOptionalAssign :target :someTag :payC vx: vx.stringview :ind :buf
+                emitValueTakeInvalidations :symtab :ctx n: sx :ind :buf
             } else {
                 emitStmt :symtab :ctx n: sx :ind :tmp :buf
             }
@@ -7563,8 +7584,8 @@ emitBranchAssignOptional: function {
         }
     } else {
         vx2: emitExpr :symtab :ctx :n
-        la2: "\{ind}\{target}.tag = \{someTag};\n\{ind}\{target}.data.some = \{vx2};\n"
-        buf.append la2.stringview
+        emitOptionalAssign :target :someTag :payC vx: vx2.stringview :ind :buf
+        emitValueTakeInvalidations :symtab :ctx :n :ind :buf
     }
 }
 
@@ -7593,8 +7614,24 @@ emitDoBindValue: function {
         if (ztypecheck.blockHasBreak n: n.statement) then {
             noneTag: variantTag :symtab :tid arm: "none"
             someTag: variantTag :symtab :tid arm: "some"
+            # a reftype value wraps in Option: the payload lives in a
+            # malloc'd box, none carries NULL data, and the local owns the
+            # box (scope-exit destroy).
+            boxedC9: "".string
+            if (originIsTid :symtab :tid originTid: ctx.optionOriginTid) then {
+                boxedC9 = armPayloadC :symtab :ctx :tid arm: "some"
+            }
             l0: "\{ind}\{nm}.tag = \{noneTag};\n"
             buf.append l0.stringview
+            if boxedC9.length > 0 then {
+                l0b: "\{ind}\{nm}.data = NULL;\n"
+                buf.append l0b.stringview
+                dcb9: symtab.reg.cnameOf :tid
+                ldf9: "    \{dcb9}_destroy(&\{nm});\n"
+                ldfs9: ldf9.copy
+                tmp.listFrees.append ldfs9
+                tmp.listFreeVars.append nm.string
+            }
             l1: "\{ind}do {\n"
             buf.append l1.stringview
             ind2: "\{ind}    "
@@ -7610,6 +7647,7 @@ emitDoBindValue: function {
                 n: n.statement
                 target: nm
                 someTag: someTag.stringview
+                payC: boxedC9.stringview
                 ind: ind2.stringview
                 :tmp
                 :buf
@@ -7619,6 +7657,15 @@ emitDoBindValue: function {
             buf.append l2.stringview
             popLoopLabel :ctx id: doId9 :ind :buf
         } else {
+            # an owned destructible block value is destroyed at scope exit
+            # (the binding path returns before its own registration).
+            if (symtab.reg.hasDestructorName typeId: tid) then {
+                pdcb9: symtab.reg.cnameOf :tid
+                pldf9: "    \{pdcb9}_destroy(&\{nm});\n"
+                pldfs9: pldf9.copy
+                tmp.listFrees.append pldfs9
+                tmp.listFreeVars.append nm.string
+            }
             l3: "\{ind}{\n"
             buf.append l3.stringview
             ind3: "\{ind}    "
@@ -8263,6 +8310,7 @@ emitBranchAssign: function {
                 vx: emitExpr :symtab :ctx n: sx
                 la: "\{ind}\{target} = \{vx};\n"
                 buf.append la.stringview
+                emitValueTakeInvalidations :symtab :ctx n: sx :ind :buf
             } else {
                 emitStmt :symtab :ctx n: sx :ind :tmp :buf
             }
@@ -8272,6 +8320,7 @@ emitBranchAssign: function {
         vx2: emitExpr :symtab :ctx :n
         la2: "\{ind}\{target} = \{vx2};\n"
         buf.append la2.stringview
+        emitValueTakeInvalidations :symtab :ctx :n :ind :buf
     }
 }
 
