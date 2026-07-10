@@ -1211,6 +1211,12 @@ emitCallTakeInvalidations: function {
     if mmn9.stringview == "append" then collMove9 = true
     if mmn9.stringview == "insert" then collMove9 = true
     if mmn9.stringview == "push" then collMove9 = true
+    if collMove9 then {
+        # The collection-move rule is for container elements; String.append
+        # borrows its StringLike arg (byte copy), it never moves it.
+        rcm9: chaseColMono :symtab tid: (dottedReceiverStampId :symtab callable: call.callable)
+        if rcm9 == ctx.strTid then collMove9 = false
+    }
     posI9: 0.u64
     aiter9: call.arguments.iterate
     for a9: aiter9 loop {
@@ -1751,6 +1757,8 @@ emitStringArgMethod: function {
     recvAddr: "&\{recvExpr}"
     if rptr then recvAddr = "\{recvExpr}"
     argval: "".string
+    argTid9: 0.u64
+    argPtr9: false
     with aiter: call.arguments.iterate do for a: aiter loop {
         match (
             a
@@ -1758,10 +1766,21 @@ emitStringArgMethod: function {
             if argval.length == 0 then {
                 av: emitExpr :symtab :ctx n: a.operation
                 argval = av
+                argTid9 = stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)
+                argPtr9 = pathIsPointer :symtab :ctx n: a.operation
             }
         } else {}
     }
     if mn.stringview == "append" then {
+        # The StringLike arg lowers to (data, length) by its concrete type:
+        # an owned String reads .data/.size (through the pointer for a
+        # borrowed param); a StringView reads .data/.length.
+        if argTid9 == ctx.strTid then {
+            aacc9: "."
+            if argPtr9 then aacc9 = "->"
+            rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc9}data, (\{argval})\{aacc9}size)"
+            return rapps
+        }
         rapp: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).length)"
         return rapp
     }
