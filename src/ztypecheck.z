@@ -7545,6 +7545,7 @@ mintMono: function {
         } case none then {}
     }
     listTplT5: builtinTidT :ty :reg base: "List"
+    monoNeedsDtor9: false
     ci: 0.u64
     cn3: cNames.length
     for ci < cn3 loop {
@@ -7636,7 +7637,23 @@ mintMono: function {
         if deep5 == false then {
             ty.setChild parentTypeId: mid childName: chName.stringview childTypeId: target
         }
+        if (reg.typetypeOf typeId: chId) != ztypes.ztypetype.FUNCTION then {
+            if (ty.isChildLockField
+                parentTypeId: templateId
+                name: chName.stringview
+            ) == false then {
+                if (reg.hasDestructorName typeId: target) then monoNeedsDtor9 = true
+            }
+        }
         ci = ci + 1
+    }
+    # A user generic CLASS whose SUBSTITUTED fields are destructible carries
+    # an auto-destructor, exactly like its non-generic counterpart (the
+    # builtin-template list above cannot see through substitution; without
+    # this, `class { val: t }` with t=String leaks its payload).
+    if tt == ztypes.ztypetype.CLASS when monoNeedsDtor9 when (reg.hasDestructorName typeId: mid) == false then {
+        mdnU9: "\{name}_destroy"
+        reg.setDestructorName typeId: mid name: mdnU9.stringview
     }
     # RECORD instances: numeric-param fields synthesize from their declared
     # constraint (size: u64.generic -> a u64 child) when no field references
@@ -10431,6 +10448,13 @@ checkDotted: function {
         return result
     } case none then {
         if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.GENERIC_PARAM then {
+            # `.copy` is an ownership primitive, not a constrained member:
+            # every instantiation copies, so a generic-param receiver types
+            # it t -> t (the per-instance clone emits the concrete copy).
+            if cn.stringview == "copy" then {
+                stampGate :st nid: dp.nodeid tid: bt
+                return bt
+            }
             btn9x: typeNameOf :st tid: bt
             mgp9: "type parameter '\{btn9x}' has no member '\{cn}' (its constraint provides none)"
             (addError
@@ -12803,6 +12827,39 @@ callableDottedResult: function {
     }
 }
 
+# returnedBareFieldName -- `return <base>.<field>` where the member is a
+# non-FUNCTION field whose type is a reftype or a generic param: the bare
+# read escapes a shallow copy of storage the owner still frees (and a
+# generic param may instantiate to one). Returns the field name for the
+# diagnostic; "" when the return shape is fine.
+returnedBareFieldName: function {st: zenv.ZSymbolTable n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (returnedBareFieldName :st n: n.expression)
+    } case dottedpath then {
+        bfc9: atomName n: n.child
+        if bfc9.length == 0 then return "".string
+        if (isStripMarker name: bfc9.stringview) then return "".string
+        bfp9: nodeId n: n.parent
+        bft9: optU64Or o: (st.typing.nodeType.get key: bfp9.u64) d: 0
+        if bft9 == 0 then return "".string
+        bfo9: st.typing.childOf parentTypeId: bft9 name: bfc9.stringview
+        match (
+            bfo9
+        ) case some then {
+            if (st.reg.typetypeOf typeId: bfo9) == ztypes.ztypetype.FUNCTION then return "".string
+            if (st.reg.typetypeOf typeId: bfo9) == ztypes.ztypetype.GENERIC_PARAM then return (bfc9.copy)
+            if (typeIsReftype :st tid: bfo9) then return (bfc9.copy)
+            return "".string
+        } case none then {
+            return "".string
+        }
+    } else {
+        return "".string
+    }
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -12830,6 +12887,22 @@ checkCall: function {
                 arg
             ) case namedoperation then {
                 argT9: checkValue :st :unitName :unitBody node: arg.operation
+                bfn9: returnedBareFieldName :st n: arg.operation
+                if st.typing.currentReturnsBorrow then bfn9 = "".string
+                if bfn9.length > 0 then {
+                    mbf9: "Cannot return field '\{bfn9}' as a bare read — the owner still frees it; return '\{bfn9}.copy' (duplicate) or '\{bfn9}.take' (move out)"
+                    bfid9: nodeId n: arg.operation
+                    bfln9: nodeLine n: arg.operation
+                    bfcl9: nodeCol n: arg.operation
+                    (addError
+                        :st
+                        nodeid: bfid9
+                        lineno: bfln9
+                        colno: bfcl9
+                        e: zast.err.OWNERERROR
+                        msg: mbf9
+                    )
+                }
                 expR9: st.typing.currentReturnTypeId
                 if expR9 > 0 when argT9 > 0 then {
                     if (typesCompatible :st :unitName a: argT9 b: expR9) == false then {
@@ -14967,8 +15040,14 @@ checkFunctionBody: function {
             crt9: 0.u64
             if fitid9 > 0 then crt9 = optU64Or o: (methodReturnOf :st mid: fitid9) d: 0
             st.typing.currentReturnTypeId = crt9
+            prevRb9: st.typing.currentReturnsBorrow
+            st.typing.currentReturnsBorrow = (optBoolOr
+                o: (st.typing.funcReturnsBorrow.get key: fitid9)
+                d: false
+            )
             walkBody :st :unitName :unitBody bodyOpt: defn.body
             st.typing.currentReturnTypeId = prevRet9
+            st.typing.currentReturnsBorrow = prevRb9
             # Implicit-return coercion: a literal-typed last statement takes
             # the function's concrete return type, stamped on the statement
             # line (the node the reference coerces by id).

@@ -677,6 +677,7 @@ Ctx: class {
     genNoneTag: String
     genPayC: String
     genHasValue: bool
+    curThisTid: u64
     emittedUserTypes: (Map u64 value: bool)
     fwdDeclaredTypes: (Map u64 value: bool)
     tmplCache: (Map String value: String)
@@ -4819,6 +4820,49 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         mnc0: atomTextOf n: n.child
         ccbc9: emitCrossUnitBareCreate :symtab :ctx parent: n.parent child: mnc0.stringview
         if ccbc9.length > 0 then return ccbc9
+        if mnc0.stringview == "copy" then {
+            # `.copy` on a generic-param field inside a clone body: the node
+            # carries no concrete stamp, so resolve the field's SUBSTITUTED
+            # type through the current receiver mono. Only the clone-resolved
+            # case is claimed here -- concrete receivers keep their legs.
+            cvp9: stampIdOf :symtab nid: (nodeIdOf9 n: n.parent)
+            cvgen9: cvp9 == 0
+            if (symtab.reg.typetypeOf typeId: cvp9) == ztypes.ztypetype.GENERIC_PARAM then cvgen9 = true
+            cvres9: false
+            if cvgen9 then {
+                cvb9: dottedBaseAtom n: n.parent
+                cvf9: dottedChildText n: n.parent
+                if cvb9.stringview == "this" when ctx.curThisTid > 0 when cvf9.length > 0 then {
+                    cvr9: (optU64Or9
+                        o: (symtab.typing.childOf
+                            parentTypeId: ctx.curThisTid
+                            name: cvf9.stringview
+                        )
+                    )
+                    if cvr9 > 0 then {
+                        cvp9 = cvr9
+                        cvres9 = true
+                    }
+                }
+            }
+            if cvres9 then {
+                cvtt9: symtab.reg.typetypeOf typeId: cvp9
+                cvref9: false
+                if cvtt9 == ztypes.ztypetype.CLASS then cvref9 = true
+                if cvtt9 == ztypes.ztypetype.UNION then cvref9 = true
+                if cvtt9 == ztypes.ztypetype.PROTOCOL then cvref9 = true
+                if cvp9 == ctx.strTid then cvref9 = true
+                if (cvref9) == false when (symtab.reg.hasDestructorName typeId: cvp9) == false then {
+                    return (emitExpr :symtab :ctx n: n.parent)
+                }
+                if cvp9 == ctx.strTid then {
+                    cvpv9: emitExpr :symtab :ctx n: n.parent
+                    if (isNonLvalueArg s: cvpv9.stringview) == false then {
+                        return "\{ctx.strC}_copy(&\{cvpv9})"
+                    }
+                }
+            }
+        }
         if mnc0.stringview == "string" then {
             scl: bindLitIndex :symtab :ctx n: n.parent
             if scl > 0 then {
@@ -5649,7 +5693,11 @@ interpBaseIsOwnedStructField: function {symtab: zenv.ZSymbolTable n: Node} out b
         bnid: atomNodeId9 n: n.parent
         bt: stampIdOf :symtab nid: bnid
         bo: monoOriginName :symtab tid: bt
-        if bo.length != 0 then return false
+        # a user-generic mono owns its fields once it carries a destructor;
+        # other monos (views, collections) keep the owned-call-result legs
+        if bo.length != 0 then {
+            if (symtab.reg.hasDestructorName typeId: bt) == false then return false
+        }
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: false
         if btt == ztypes.ztypetype.RECORD then isUC = true
@@ -10638,6 +10686,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         genNoneTag: "".string
         genPayC: "".string
         genHasValue: false
+        curThisTid: 0
         emittedUserTypes: (Map u64 value: bool)
         fwdDeclaredTypes: (Map u64 value: bool)
         tmplCache: (Map String value: String)
@@ -15729,7 +15778,9 @@ emitClassMonoMethods: function {
                                         ctx.aliases = (List NameVal)
                                         ctx.narrowBox = (List NameVal)
                                         registerReftypeParams :symtab :ctx fid: cf8
+                                        ctx.curThisTid = t8
                                         emitFnBody :symtab :ctx op: am8.operation fid: cf8 :buf
+                                        ctx.curThisTid = 0
                                         buf.append "}\n\n"
                                     }
                                 }
@@ -16236,7 +16287,9 @@ emitOneMethod: function {
         buf.append lo.stringview
         isGen9: setupGenCtx :symtab :ctx :mid :op
         if isGen9 then emitGenPrologue :ctx :buf
+        ctx.curThisTid = thisTid9
         emitFnBody :symtab :ctx :op fid: mid :buf
+        ctx.curThisTid = 0
         if isGen9 then {
             emitGenEpilogue :ctx :buf
             ctx.genActive = false
