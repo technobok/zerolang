@@ -309,18 +309,17 @@ substituteAll: function {text: String needle: StringView repl: StringView} out S
     pos: 0.u64
     total: text.length
     for pos < total loop {
-        remv: (text.stringview from: pos to: total)
+        remv: (text.substring from: pos to: total)
         fo: remv.indexOf :needle
         match (
             fo
         ) case some then {
-            pre: (text.stringview from: pos to: pos + fo)
+            pre: (remv.substring from: 0 to: fo)
             buf.append pre
             buf.append repl
             pos = pos + fo + needle.length
         } case none then {
-            tail: (text.stringview from: pos to: total)
-            buf.append tail
+            buf.append remv
             pos = total
         }
     }
@@ -1516,6 +1515,28 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         }
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return ce
+    }
+    if mn.stringview == "substring" then {
+        fromA9: ctorArgByLabel :symtab :ctx :call label: "from"
+        toA9: ctorArgByLabel :symtab :ctx :call label: "to"
+        if fromA9.length > 0 when toA9.length > 0 then {
+            recvp9: "".string
+            if btid == ctx.svTid then {
+                recvp9 = "&\{bn}"
+            } else { if btIsStr9 then {
+                bfs9: svValueForm :ctx expr: bn.stringview isStr: true
+                recvp9 = "&\{bfs9}"
+            } else {
+                sacc9: ".".string
+                if (isPtrVar :ctx name: bn.stringview) then sacc9 = "->".string
+                recvp9 = "&((\{ctx.svC}_t){ \{bn}\{sacc9}data, \{bn}\{sacc9}len })"
+            } }
+            if recvp9.length > 0 then {
+                needsAdd :ctx name: "substring"
+                esb9: "\{ctx.svC}_substring(\{recvp9}, \{fromA9}, \{toA9})"
+                return esb9
+            }
+        }
     }
     if (isStringyTid :ctx tid: btid) when mn.stringview == "split" then {
         needsAdd :ctx name: "sv_split"
@@ -5832,72 +5853,6 @@ stringviewOfBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
     }
 }
 
-# svSliceBaseAtom -- the base atom name of a `<atom>.stringview` projection over
-# a String value (the base of a `from:/to:` slice), else "".
-svSliceBaseAtom: function {symtab: zenv.ZSymbolTable n: Node} out String is {
-    match (
-        n
-    ) case expression then {
-        return (svSliceBaseAtom :symtab n: n.expression)
-    } case dottedpath then {
-        mc: atomTextOf n: n.child
-        if mc.stringview != "stringview" then return "".string
-        ba: atomTextOf n: n.parent
-        if ba.length == 0 then return "".string
-        bpid: nodeIdOf9 n: n.parent
-        btn: stampNameOf :symtab nid: bpid
-        if (stampIdOf :symtab nid: bpid) == (builtinTid :symtab base: "String") then return ba
-        bsid9: stampIdOf :symtab nid: bpid
-        bso9: monoOriginName :symtab tid: bsid9
-        strT9: builtinTid :symtab base: "str"
-        if (originIsTid :symtab tid: bsid9 originTid: strT9) then return ba
-        return "".string
-    } else {
-        return "".string
-    }
-}
-
-# emitSvSliceBinding -- a `nm: (<atom>.stringview from: A to: B)` StringView slice
-# binding: a bounds-check then `(SV){ base.data + A, B - A }`. The base is a
-# String (`.size`/`.data`, `->` for a borrow-pointer param). Returns true if
-# handled. Mirrors the reference _emit_stringview_value with from/to present.
-emitSvSliceBinding: function {
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
-    n: Node
-    nm: StringView
-    ind: StringView
-    buf: String.borrow
-} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (emitSvSliceBinding :symtab :ctx n: n.expression :nm :ind :buf)
-    } case call then {
-        cab: svSliceBaseAtom :symtab n: n.callable
-        if cab.length == 0 then return false
-        if (ctorHasLabel call: n label: "from") == false then return false
-        if (ctorHasLabel call: n label: "to") == false then return false
-        sacc: ".".string
-        if (isPtrVar :ctx name: cab.stringview) then sacc = "->".string
-        baseCa: aliasResolve :ctx name: cab.stringview
-        baseC: ztypes.mangleVarName name: baseCa.stringview
-        bsid9: dottedReceiverStampId :symtab callable: n.callable
-        bstn9: typeNameOfReg9 :symtab tid: bsid9
-        lenF9: "size".string
-        if bstn9.stringview != "String" then lenF9 = "len".string
-        fromV: ctorArgByLabel :symtab :ctx call: n label: "from"
-        toV: ctorArgByLabel :symtab :ctx call: n label: "to"
-        bchk: "\{ind}if ((uint64_t)\{fromV} > \{baseC}\{sacc}\{lenF9} || (uint64_t)\{toV} > \{baseC}\{sacc}\{lenF9} || (uint64_t)\{fromV} > (uint64_t)\{toV}) z_panic(\"stringview: bounds error\");\n"
-        buf.append bchk.stringview
-        slc: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ \{baseC}\{sacc}data + (uint64_t)\{fromV}, (uint64_t)\{toV} - (uint64_t)\{fromV} };\n"
-        buf.append slc.stringview
-        return true
-    } else {
-        return false
-    }
-}
-
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
 stringCopyLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
     match (
@@ -6486,7 +6441,6 @@ emitStmt: function {
                 buf.append lsv4.stringview
                 return
             }
-            if (emitSvSliceBinding :symtab :ctx n: n.value nm: nm.stringview :ind :buf) then return
             vx: emitExpr :symtab :ctx n: n.value
             flushArgHoists :ctx :ind :tmp :buf
             if (vx.stringview.startsWith prefix: "/*") then {
@@ -10454,6 +10408,7 @@ emitNeededNatives: function {
         f0: loadFragment path: p0.stringview svC: sc0.stringview strC: tc0.stringview
         buf.append f0.stringview
     }
+    emitNativeIf :ctx need: "substring" frag: "_Z_SV_SUBSTRING" :runtimeDir :buf
     emitNativeIf :ctx need: "trim" frag: "_Z_SV_TRIM" :runtimeDir :buf
     emitNativeIf :ctx need: "trimStart" frag: "_Z_SV_TRIM_START" :runtimeDir :buf
     emitNativeIf :ctx need: "trimEnd" frag: "_Z_SV_TRIM_END" :runtimeDir :buf
@@ -10586,7 +10541,7 @@ emitNativeIf: function {
 cbaseNoPrefix: function {tid: u64 name: StringView} out String is {
     full: cnameOf :tid :name
     fl: full.length
-    rest: (full.stringview from: 2.u64 to: fl)
+    rest: (full.substring from: 2 to: fl)
     return rest.string
 }
 
@@ -11181,7 +11136,7 @@ monoMethodReturn: function {symtab: zenv.ZSymbolTable monoId: u64 mname: StringV
 # (a bare StringView receiver mis-resolves `from:/to:` to a .create).
 monoElemName: function {full: String prefixLen: u64} out String is {
     fl: full.length
-    rest: (full.stringview from: prefixLen to: fl)
+    rest: (full.substring from: prefixLen to: fl)
     return rest.string
 }
 
@@ -11327,7 +11282,7 @@ emitSetMono: function {
 mapKeyName: function {full: String vlen: u64} out String is {
     fl: full.length
     endx: fl - vlen - 1
-    rest: (full.stringview from: 4.u64 to: endx)
+    rest: (full.substring from: 4 to: endx)
     return rest.string
 }
 
