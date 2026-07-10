@@ -1561,6 +1561,7 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                             sph9: (hoistBorrowValArg
                                 :symtab
                                 :ctx
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: sa9.operation)
                                 av: sxe9.stringview
                                 pid: ctx.strTid
                                 paramTake: false
@@ -1607,6 +1608,7 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                             sxh9: (hoistBorrowValArg
                                 :symtab
                                 :ctx
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a9.operation)
                                 av: sx9.stringview
                                 pid: ctx.strTid
                                 paramTake: false
@@ -1660,6 +1662,7 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                             svh9: (hoistBorrowValArg
                                 :symtab
                                 :ctx
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
                                 av: sv9.stringview
                                 pid: ctx.strTid
                                 paramTake: false
@@ -1798,6 +1801,7 @@ emitStringArgMethod: function {
     if rptr then recvAddr = "\{recvExpr}"
     argval: "".string
     argTid9: 0.u64
+    argBor9: false
     argPtr9: false
     with aiter: call.arguments.iterate do for a: aiter loop {
         match (
@@ -1806,6 +1810,7 @@ emitStringArgMethod: function {
             if argval.length == 0 then {
                 av: emitExpr :symtab :ctx n: a.operation
                 argval = av
+                argBor9 = hoistExprIsBorrowRooted :symtab :ctx n: a.operation
                 argTid9 = stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)
                 argPtr9 = pathIsPointer :symtab :ctx n: a.operation
             }
@@ -1822,6 +1827,7 @@ emitStringArgMethod: function {
                 av: argval.stringview
                 pid: ctx.strTid
                 paramTake: false
+                isBorrow: argBor9
             )
             if aph9.length > 0 then argval = aph9
             aacc9: "."
@@ -1979,6 +1985,7 @@ hoistBorrowValArg: function {
     av: StringView
     pid: u64
     paramTake: bool
+    isBorrow: bool
 } out String is {
     if (isNonLvalueArg s: av) == false then return "".string
     if paramTake then return "".string
@@ -2002,6 +2009,9 @@ hoistBorrowValArg: function {
     vcb: symtab.reg.cnameOf tid: vrid
     vdt: "    \{vcb}_destroy(&\{vnmh});\n"
     if isStrH9 then vdt = "    \{ctx.strC}_free(&\{vnmh});\n"
+    # a borrow-returning call result is a shared view: hoist for
+    # lvalue-ness only, never destroy
+    if isBorrow then vdt = "".string
     avc: av.string
     ctx.argHoistVals.append avc
     ctx.argHoistTypes.append vcty.copy
@@ -2089,6 +2099,7 @@ emitInstanceMethodCall: function {
                         )
                     }
                     av9: "".string
+                    avBor9: false
                     usedInterp9: false
                     if iiVal9.length > 0 then {
                         av9 = iiVal9
@@ -2096,9 +2107,13 @@ emitInstanceMethodCall: function {
                         if (isLbl9b) == false then posIdx9 = posIdx9 + 1
                     } else {
                         av9 = ctorArgByLabel :symtab :ctx :call label: pname9.stringview
+                        avBor9 = ctorArgIsBorrow :symtab :ctx :call label: pname9.stringview
                         if (isLbl9b) == false then {
                             pv9: ctorArgByPosition :symtab :ctx :call idx: posIdx9
-                            if pv9.length > 0 then av9 = pv9
+                            if pv9.length > 0 then {
+                                av9 = pv9
+                                avBor9 = ctorArgIsBorrowPos :symtab :ctx :call idx: posIdx9
+                            }
                             posIdx9 = posIdx9 + 1
                         }
                     }
@@ -2153,9 +2168,9 @@ emitInstanceMethodCall: function {
                             hcty9: typeRefC :symtab :ctx tid: pid9 thisTid: 0
                             htyc9: hcty9.copy
                             hdt9: "".string
-                            if isStrBorrow9 then {
+                            if isStrBorrow9 when (avBor9) == false then {
                                 hdt9 = "    \{ctx.strC}_free(&\{nmH9});\n"
-                            } else {
+                            } else if (avBor9) == false then {
                                 hrid9: pid9
                                 hduo9: definedInUnitOf :symtab tid: pid9
                                 match (
@@ -2189,6 +2204,7 @@ emitInstanceMethodCall: function {
                                 av: av9.stringview
                                 pid: pid9
                                 paramTake: pTake9
+                                isBorrow: avBor9
                             )
                         }
                         if vbhm9.length > 0 then {
@@ -2262,6 +2278,27 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     ) case some then {
         return g9
     } case none then {
+        return false
+    }
+}
+
+# hoistExprIsBorrowRooted -- the hoisted expression's ROOT is a
+# borrow-returning call (an element get and any field chain off it): the
+# hoist is a shared view and must not register a free. Field chains off
+# NAMED bases keep their existing legs untouched (a destructor-less box's
+# field interp-free is load-bearing today).
+hoistExprIsBorrowRooted: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (hoistExprIsBorrowRooted :symtab :ctx n: n.expression)
+    } case statementline then {
+        return (hoistExprIsBorrowRooted :symtab :ctx n: n.statementline)
+    } case call then {
+        return (callRhsIsBorrow :symtab :ctx call: n)
+    } case dottedpath then {
+        return (hoistExprIsBorrowRooted :symtab :ctx n: n.parent)
+    } else {
         return false
     }
 }
@@ -2709,7 +2746,9 @@ emitColInterpArg: function {
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     nmH: "_ah\{hn}"
     hdt: "".string
-    if (consumes) == false then hdt = "    \{ctx.strC}_free(&\{nmH});\n"
+    if (consumes) == false when (hoistExprIsBorrowRooted :symtab :ctx :n) == false then {
+        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
+    }
     retx: nmH.copy
     ctx.argHoistVals.append sx
     ctx.argHoistTypes.append "\{ctx.strC}_t"
@@ -3375,6 +3414,53 @@ emitRecordCtor: function {
     return e0
 }
 
+# ctorArgIsBorrow / ctorArgIsBorrowPos -- bindingRhsIsBorrow over the
+# argument ctorArgByLabel / ctorArgByPosition would emit: a hoisted
+# borrow-returning result must not register a destroy.
+ctorArgIsBorrow: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    label: StringView
+} out bool is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then return (hoistExprIsBorrowRooted
+                :symtab
+                :ctx
+                n: a.operation
+            )
+        } else {}
+    }
+    return false
+}
+
+ctorArgIsBorrowPos: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    idx: u64
+} out bool is {
+    seen9: 0.u64
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.length == 0 then {
+                if seen9 == idx then return (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
+                seen9 = seen9 + 1
+            }
+        } else {}
+    }
+    return false
+}
+
 ctorArgByLabel: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -3635,7 +3721,13 @@ emitMetaCreateCall: function {
 # base is a unit name; the function's shared id lives in resolved["{unit}.{fn}"],
 # so emit z_t{id}_{fn}(args) with the same reftype-by-ref arg handling as a bare
 # free-function call. "" when the callee is not a cross-unit function.
-emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u64} out String is {
+emitByrefArg: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    av: StringView
+    pid: u64
+    isBorrow: bool
+} out String is {
     if (isNonLvalueArg s: av) == false then return "&\{av}"
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
@@ -3653,7 +3745,7 @@ emitByrefArg: function {symtab: zenv.ZSymbolTable ctx: Ctx av: StringView pid: u
     } case some then {}
     htn: typeNameOfReg9 :symtab tid: hrid
     hdt: "".string
-    if hrid == ctx.strTid then {
+    if isBorrow then {} else if hrid == ctx.strTid then {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     } else {
         if (symtab.reg.hasDestructorName typeId: hrid) then {
@@ -3753,7 +3845,13 @@ emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
                     if ptra9 then {
                         if (isPtrVar :ctx name: av9.stringview) == false then {
                             byref9 = true
-                            argRef9 = emitByrefArg :symtab :ctx av: av9.stringview pid: fpid9
+                            argRef9 = (emitByrefArg
+                                :symtab
+                                :ctx
+                                av: av9.stringview
+                                pid: fpid9
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a9.operation)
+                            )
                         }
                     }
                     finalS9g: av9.copy
@@ -3864,7 +3962,13 @@ emitUnitMethodCall: function {
                     if ptra9 then {
                         if (isPtrVar :ctx name: av9.stringview) == false then {
                             byref9 = true
-                            argRef9 = emitByrefArg :symtab :ctx av: av9.stringview pid: fpid9
+                            argRef9 = (emitByrefArg
+                                :symtab
+                                :ctx
+                                av: av9.stringview
+                                pid: fpid9
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a9.operation)
+                            )
                         }
                     }
                     finalS9g: av9.copy
@@ -3968,7 +4072,13 @@ emitCrossUnitFnCall: function {
                     if ptra8 then {
                         if (isPtrVar :ctx name: av9.stringview) == false then {
                             byref8 = true
-                            argRef8 = emitByrefArg :symtab :ctx av: av9.stringview pid: fpid8
+                            argRef8 = (emitByrefArg
+                                :symtab
+                                :ctx
+                                av: av9.stringview
+                                pid: fpid8
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
+                            )
                         }
                     }
                     finalS9c: av9.copy
@@ -4459,7 +4569,13 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                         if ptra8 then {
                             if (isPtrVar :ctx name: av9.stringview) == false then {
                                 byref8 = true
-                                argRef8 = emitByrefArg :symtab :ctx av: av9.stringview pid: fpid8
+                                argRef8 = (emitByrefArg
+                                :symtab
+                                :ctx
+                                av: av9.stringview
+                                pid: fpid8
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
+                            )
                             }
                         }
                         if (ptra8) == false then {
@@ -4469,6 +4585,7 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                                 av: av9.stringview
                                 pid: fpid8
                                 paramTake: pTake8
+                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
                             )
                         }
                     }
@@ -5608,6 +5725,16 @@ emitInterpPart: function {
                 if an0.length > 0 when (isPtrVar :ctx name: an0.stringview) then sAcc9 = "->".string
                 lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc9}data, \{val}\{sAcc9}size);\n"
                 buf.append lss.stringview
+            } else if (hoistExprIsBorrowRooted :symtab :ctx :n) then {
+                # borrow-returning call result (a shared element view): hoist
+                # for single evaluation and append -- the container owns the
+                # storage, so no free (the MapEntry exemption, generalized by
+                # the declared signature).
+                hN: tmp.next
+                lh0: "\{ind}\{ctx.strC}_t _h\{hN} = \{val};\n"
+                buf.append lh0.stringview
+                lh1: "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{hN}.data, _h\{hN}.size);\n"
+                buf.append lh1.stringview
             } else {
                 # owned call result: hoist, append, free
                 hN: tmp.next
@@ -14107,7 +14234,14 @@ fileFromArgCoerce: function {
             fl9: unitLabel9 o: fa9.name
             if fl9.stringview == "from" then {
                 if (stampIdOf :symtab nid: (nodeIdOf9 n: fa9.operation)) == ctx.strTid then {
-                    fh9: hoistBorrowValArg :symtab :ctx :av pid: ctx.strTid paramTake: false
+                    fh9: (hoistBorrowValArg
+                        :symtab
+                        :ctx
+                        :av
+                        pid: ctx.strTid
+                        paramTake: false
+                        isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: fa9.operation)
+                    )
                     fb9: av.string
                     if fh9.length > 0 then fb9 = fh9
                     return (svValueForm :ctx expr: fb9.stringview isStr: true)
@@ -14416,6 +14550,7 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
                     av: av.stringview
                     pid: ctx.strTid
                     paramTake: false
+                    isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
                 )
                 if ioh9.length > 0 then av = ioh9
                 iosv9: svValueForm :ctx expr: av.stringview isStr: true
