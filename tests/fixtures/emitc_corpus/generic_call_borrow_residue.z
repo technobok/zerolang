@@ -1,0 +1,54 @@
+# generic_call_borrow_residue.z -- a generic native call whose argument is a
+# view projection (full.stringview) must bind its OWNED result without
+# borrowing the argument's source: checkGenericCall drains the projection's
+# pending borrow. The distilled zvfs shape: two methods with the same local
+# names, the first with a nested match on the result's payload field --
+# without the drain, the first method's residue makes the second's identical
+# statement fail E0200 ("lock on 'full' held by 'sr'").
+Reg: class {
+    n: u32
+} as {
+    check: function {:this rootpath: String.take parentpath: String.take} out u32 is {
+        full: "\{rootpath.stringview}/\{parentpath.stringview}"
+        sr: io.stat full.stringview
+        match (
+            sr
+        ) case ok then {
+            match (
+                sr.kind
+            ) case dir then {
+            } case file then {
+                panic "not a directory"
+            } case symlink then {
+                panic "not a directory"
+            } case other then {
+                panic "not a directory"
+            }
+        } case err then {}
+        return 1
+    }
+}
+
+Walker: class {
+    rootpath: String
+} as {
+    walk: function {:this name: StringView} out u32 is {
+        full: "\{this.rootpath.stringview}/\{name}"
+        sr: io.stat full.stringview
+        match (
+            sr
+        ) case ok then {
+            return 1
+        } case err then {
+            return 0
+        }
+    }
+}
+
+main: function is {
+    r: Reg n: 0
+    a: r.check rootpath: "/tmp".string parentpath: ".".string
+    w: Walker rootpath: "/tmp".string
+    b: w.walk name: "."
+    print "a=\{a} b=\{b}"
+}
