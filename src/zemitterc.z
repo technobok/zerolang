@@ -673,6 +673,7 @@ Ctx: class {
     genWrap: String
     genSomeTag: String
     genNoneTag: String
+    genPayC: String
     genHasValue: bool
     emittedUserTypes: (Map u64 value: bool)
     fwdDeclaredTypes: (Map u64 value: bool)
@@ -7976,19 +7977,38 @@ emitObjIterFor: function {
             mN: tmp.next
             itCb9: cnameOf tid: itid name: itn.stringview
             iterRecv9: "".string
+            ownGit9: false
             if bareFnId9 > 0 then {
                 bcn9: symtab.reg.cnameOf tid: bareFnId9
                 lgh9: "\{ind}\{itCb9}_t _git\{mN} = \{bcn9}();\n"
                 buf.append lgh9.stringview
                 iterRecv9 = "_git\{mN}"
+                ownGit9 = true
             } else {
                 ivex9: emitExpr :symtab :ctx n: c0.operation
                 if (isForIterCall n: c0.operation) then {
                     lgi9: "\{ind}\{itCb9}_t _git\{mN} = \{ivex9};\n"
                     buf.append lgi9.stringview
                     iterRecv9 = "_git\{mN}"
+                    ownGit9 = true
                 } else {
                     iterRecv9 = ivex9
+                }
+            }
+            # the loop owns the iterator instance: register its destroy for the
+            # enclosing block's flush (and the return path), freeing owned
+            # captured params. Registered BEFORE the loop label so break /
+            # continue inside the loop never free the live instance.
+            if ownGit9 then {
+                if (symtab.reg.hasDestructorName typeId: itid) when (structDestroyNontrivial
+                    :symtab
+                    :ctx
+                    tid: itid
+                ) then {
+                    gdt9: "    \{itCb9}_destroy(&_git\{mN});\n"
+                    tmp.listFrees.append gdt9
+                    gdn9: "_git\{mN}"
+                    tmp.listFreeVars.append gdn9
                 }
             }
             lidO: pushLoopLabel :ctx :tmp isDo: false
@@ -10367,6 +10387,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         genWrap: "".string
         genSomeTag: "".string
         genNoneTag: "".string
+        genPayC: "".string
         genHasValue: false
         emittedUserTypes: (Map u64 value: bool)
         fwdDeclaredTypes: (Map u64 value: bool)
@@ -15018,9 +15039,35 @@ isRecordDef9: function {n: Node} out bool is {
     }
 }
 
+# structDestroyNontrivial -- the type's destructor frees at least one field.
+# Mirrors emitStructDestructor's per-field tests (String, destructible
+# aggregate, heap-ptr collection; `.lock` fields never free). Gates call-site
+# destroys for loop-owned iterator instances: an all-borrowed iterator has
+# nothing to free and keeps its emission unchanged.
+structDestroyNontrivial: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    fnames: (List String)
+    fids: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids
+    fi: 0.u64
+    fn0: fnames.length
+    for fi < fn0 loop {
+        fname: fnames.get i: fi
+        fid: fids.get i: fi
+        if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) == false then {
+            if fid == ctx.strTid then return true
+            fmid9: chaseColMono :symtab tid: fid
+            if (symtab.reg.hasDestructorName typeId: fmid9) then return true
+            if (isHeapPtrCollection :symtab :ctx tid: fid) then return true
+        }
+        fi = fi + 1
+    }
+    return false
+}
+
 # emitStructDestructor -- a record/class destructor freeing each heap-owning
 # field: String fields via the String free, aggregate fields with a destructor
 # recursively; scalars are skipped. Emitted only when the type has a destructor.
+# structDestroyNontrivial mirrors the per-field tests below -- keep them in sync.
 emitStructDestructor: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -15625,6 +15672,13 @@ setupGenCtx: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 op: Node} out
     ctx.genWrap = "\{rc}_t"
     ctx.genSomeTag = "Z_\{ru}_TAG_SOME"
     ctx.genNoneTag = "Z_\{ru}_TAG_NONE"
+    # a reftype element wraps in Option: the yield leg boxes the payload
+    # (emitOptionalAssign's malloc'd-box shape); valtype wrappers stay inline.
+    gp9: "".string
+    if (originIsTid :symtab tid: rid originTid: ctx.optionOriginTid) then {
+        gp9 = armPayloadC :symtab :ctx tid: rid arm: "some"
+    }
+    ctx.genPayC = gp9
     hasVal9: false
     match (
         op
@@ -15754,10 +15808,15 @@ emitYieldStmt: function {
     buf.append ls.stringview
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
     buf.append lw.stringview
-    lg: "\{ind}_ry_\{k}.tag = \{ctx.genSomeTag};\n"
-    buf.append lg.stringview
-    ld: "\{ind}_ry_\{k}.data.some = \{ve};\n"
-    buf.append ld.stringview
+    tgt9: "_ry_\{k}"
+    (emitOptionalAssign
+        target: tgt9.stringview
+        someTag: ctx.genSomeTag.stringview
+        payC: ctx.genPayC.stringview
+        vx: ve.stringview
+        :ind
+        :buf
+    )
     lr: "\{ind}return _ry_\{k};\n"
     buf.append lr.stringview
     ll: "L_resume_\{k}:;\n"
