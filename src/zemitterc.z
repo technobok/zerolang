@@ -812,8 +812,7 @@ nvSet: function {xs: List NameVal name: StringView val: StringView} is {
     i9: 0.u64
     n9: xs.length
     for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then {
+        if (xs.get i: i9).name.stringview == name then {
             xs.set i: i9 val: (NameVal name: name.string val: val.string)
             return
         }
@@ -827,8 +826,7 @@ nvRemove: function {xs: List NameVal name: StringView} is {
     i9: 0.u64
     n9: xs.length
     for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then {
+        if (xs.get i: i9).name.stringview == name then {
             last9: xs.pop
             if i9 + 1 < n9 then xs.set i: i9 val: last9
             return
@@ -852,8 +850,7 @@ ntSet: function {xs: List NameTid name: StringView tid: u64} is {
     i9: 0.u64
     n9: xs.length
     for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then {
+        if (xs.get i: i9).name.stringview == name then {
             xs.set i: i9 val: (NameTid name: name.string :tid)
             return
         }
@@ -866,8 +863,7 @@ ntRemove: function {xs: List NameTid name: StringView} is {
     i9: 0.u64
     n9: xs.length
     for i9 < n9 loop {
-        e9: xs.get i: i9
-        if e9.name.stringview == name then {
+        if (xs.get i: i9).name.stringview == name then {
             last9: xs.pop
             if i9 + 1 < n9 then xs.set i: i9 val: last9
             return
@@ -2272,8 +2268,9 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
 
 # callRhsIsBorrow -- the call-shaped leg of bindingRhsIsBorrow: the callee's
 # declared return carries the `.borrow` marker (funcReturnsBorrow, recorded
-# from the signature), or the call is a List/ListView element `get` (a shallow
-# element view; its declaration does not carry the marker yet).
+# from the signature). Dotted method calls whose callable stamp missed probe
+# the receiver mono's method child -- fully signature-driven (List/ListView
+# element gets arrive here through their declared `out of.borrow`).
 callRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out bool is {
     cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
     if (funcBorrowFlag :symtab tid: cstid9) then return true
@@ -2283,12 +2280,11 @@ callRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
         if (funcBorrowFlag :symtab tid: ufid9) then return true
     }
     ch: dottedChildText n: call.callable
-    if ch.stringview != "get" then return false
+    if ch.length == 0 then return false
     rid: dottedReceiverStampId :symtab callable: call.callable
     rid = chaseColMono :symtab tid: rid
-    if (originIsTid :symtab tid: rid originTid: ctx.listOriginTid) then return true
-    if (originIsTid :symtab tid: rid originTid: ctx.listViewOriginTid) then return true
-    return false
+    mfid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: rid name: ch.stringview)
+    return (funcBorrowFlag :symtab tid: mfid9)
 }
 
 bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {

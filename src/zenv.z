@@ -345,9 +345,8 @@ ZSymbolTable: class {
         n: this.scopes.length
         if n == 0 then return 0
         topIdx: n - 1
-        top: this.scopes.get i: topIdx
-        topId: top.scopeId
-        start: top.entryStart
+        topId: (this.scopes.get i: topIdx).scopeId
+        start: (this.scopes.get i: topIdx).entryStart
         endIdx: this.entries.length
 
         # Snapshot this scope's entries before truncation so the SQL dump can
@@ -560,8 +559,7 @@ ZSymbolTable: class {
         match (
             idxOpt
         ) case some then {
-            e: this.entries.get i: idxOpt
-            zt: e.ztypeId
+            zt: (this.entries.get i: idxOpt).ztypeId
             te: this.reg.newEntry :name ztypeId: zt isDefinition: false
             te.isTaken = true
             te.takenAt = loc
@@ -697,7 +695,11 @@ ZSymbolTable: class {
     }
 
     formatLockConflict: function {:this reqPath: List String reqType: ztypes.zlockstate existingType: ztypes.zlockstate existingPath: List String existingHolder: ztypes.zlockholder} out String is {
-        rootStr: reqPath.get i: 0
+        rootStr: "".string
+        {
+            r0: reqPath.get i: 0
+            rootStr = r0.copy
+        }
         rootView: rootStr.stringview
         reqKind: zlockstateNameLower reqType
         heldKind: zlockstateNameLower existingType
@@ -724,7 +726,11 @@ ZSymbolTable: class {
     # receiver + arg locks under one identity without self-conflict.
     tryLock: function {:this path: List String lockType: ztypes.zlockstate holder: ztypes.zlockholder hasSelfHolder: bool selfHolder: ztypes.zlockholder} out String is {
         if path.length == 0 then return "".string
-        rootStr: path.get i: 0
+        rootStr: "".string
+        {
+            r0: path.get i: 0
+            rootStr = r0.copy
+        }
         rootView: rootStr.stringview
         varOpt: this.lookupVarId name: rootView
         hasVar: false
@@ -736,6 +742,8 @@ ZSymbolTable: class {
         if hasVar == false then return "".string
 
         idempotent: false
+        conflictAt: 0.u64
+        conflictFound: false
         ne: this.entries.length
         j: ne
         for j > 0 loop {
@@ -755,13 +763,12 @@ ZSymbolTable: class {
                             reqPath: path
                         )
                         if conflict then {
-                            return (this.formatLockConflict
-                                reqPath: path
-                                reqType: lockType
-                                existingType: e.lockType
-                                existingPath: e.lockPath
-                                existingHolder: e.lockHolder
-                            )
+                            # the formatting method takes `this` exclusively:
+                            # remember the index, format after the element
+                            # view ends.
+                            conflictAt = j2
+                            conflictFound = true
+                            break
                         }
                     }
                     same: pathsEqual a: e.lockPath b: path
@@ -775,6 +782,27 @@ ZSymbolTable: class {
                 }
             }
             j = j - 1
+        }
+        if conflictFound then {
+            cType9: ztypes.zlockstate.EXCLUSIVE
+            cPath9: (List String)
+            cHolder9: (ztypes.zlockholder kind: ztypes.zlockholderkind.VAR id: 0)
+            {
+                ce9: this.entries.get i: conflictAt
+                cType9 = ce9.lockType
+                cHolder9 = ce9.lockHolder
+                with cpit9: ce9.lockPath.iterate do for cseg9: cpit9 loop {
+                    csc9: cseg9.copy
+                    cPath9.append csc9
+                }
+            }
+            return (this.formatLockConflict
+                reqPath: path
+                reqType: lockType
+                existingType: cType9
+                existingPath: cPath9
+                existingHolder: cHolder9
+            )
         }
         if idempotent then return "".string
 
@@ -843,7 +871,11 @@ ZSymbolTable: class {
     # Holder of an EXCLUSIVE lock prefix-overlapping `path`, or none.
     findExclusiveLock: function {:this path: List String} out optionval ztypes.zlockholder is {
         if path.length == 0 then return (optionval.none ztypes.zlockholder)
-        rootStr: path.get i: 0
+        rootStr: "".string
+        {
+            r0: path.get i: 0
+            rootStr = r0.copy
+        }
         rootView: rootStr.stringview
         ne: this.entries.length
         j: ne
@@ -866,7 +898,11 @@ ZSymbolTable: class {
     # Any lock (SHARED or EXCLUSIVE) prefix-overlapping `path`?
     isPathLocked: function {:this path: List String} out bool is {
         if path.length == 0 then return false
-        rootStr: path.get i: 0
+        rootStr: "".string
+        {
+            r0: path.get i: 0
+            rootStr = r0.copy
+        }
         rootView: rootStr.stringview
         ne: this.entries.length
         j: ne
@@ -1054,10 +1090,9 @@ ZSymbolTable: class {
         for j > 0 loop {
             if done == false then {
                 j2: j - 1
-                e: this.entries.get i: j2
-                if e.name.stringview == name then {
-                    if e.isDefinition then {
-                        zt: e.ztypeId
+                if (this.entries.get i: j2).name.stringview == name then {
+                    if (this.entries.get i: j2).isDefinition then {
+                        zt: (this.entries.get i: j2).ztypeId
                         re: this.reg.newEntry :name ztypeId: zt isDefinition: false
                         this.entries.append re
                         done = true
@@ -1395,8 +1430,8 @@ dumpScopeLog: function {st: ZSymbolTable} is {
     n: st.scopeLog.length
     k: 0.u64
     for k < n loop {
+        closed: st.closeSeqOf scopeId: (st.scopeLog.get i: k).scopeId
         row: st.scopeLog.get i: k
-        closed: st.closeSeqOf scopeId: row.scopeId
         print "  log scope=\{row.scopeId} parent=\{optU64Text row.parentId} kind=\{ztypes.zscopekindName row.kind} name=\{row.name} opened=\{row.openedAtSeq} closed=\{optU64Text closed}"
         k = k + 1
     }

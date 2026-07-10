@@ -1800,6 +1800,38 @@ partialReturnTid: function {
     return 0
 }
 
+# returnIsIteratorTid -- the resolved return type belongs to an iterator
+# family (ListIter/SetIter/MapKeyIter/MapItemIter or a generator's synth
+# iterator `.call`... the collection families by generic origin). Iterator
+# borrows stay EXCLUSIVE (many SHARED views XOR one writer XOR one
+# exclusive iterator); other returned borrows are read-views and lock
+# SHARED.
+returnIsIteratorTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
+    if tid == 0 then return false
+    org9: 0.u64
+    {
+        tz9: st.reg.typeById.get key: tid
+        match (
+            tz9
+        ) case some then {
+            go9: tz9.genericOriginId
+            match (
+                go9
+            ) case some then {
+                org9 = go9
+            } case none then {}
+        } case none then {}
+    }
+    probe9: tid
+    if org9 > 0 then probe9 = org9
+    pn9: typeNameOf :st tid: probe9
+    if pn9.stringview == "ListIter" then return true
+    if pn9.stringview == "SetIter" then return true
+    if pn9.stringview == "MapKeyIter" then return true
+    if pn9.stringview == "MapItemIter" then return true
+    return false
+}
+
 # markerPeeledBase -- the base atom name under a strip-marker dotted path
 # (`of.take` -> "of"); "" for any other shape.
 markerPeeledBase: function {n: Node} out String is {
@@ -6839,16 +6871,19 @@ runUnitMonoWalks: function {
     n9: st.typing.pendingUnitWalk.length
     i9: 0.u64
     for i9 < n9 loop {
-        rec: st.typing.pendingUnitWalk.get i: i9
-        rmid: rec.monoId
+        rmid: (st.typing.pendingUnitWalk.get i: i9).monoId
         if rmid == monoId then {
-            rqv: rec.qualified.stringview
-            rqual: rqv.string
-            rgv: rec.gpName.stringview
-            rgp: rgv.string
-            rmv: rec.monoName.stringview
-            rmn: rmv.string
-            raid: rec.argId
+            rqual: "".string
+            rgp: "".string
+            rmn: "".string
+            raid: 0.u64
+            {
+                rec: st.typing.pendingUnitWalk.get i: i9
+                rqual = rec.qualified.copy
+                rgp = rec.gpName.copy
+                rmn = rec.monoName.copy
+                raid = rec.argId
+            }
             sn: "unitgeneric:\{rmn}"
             st.push name: sn.stringview
             st.define name: rgp.stringview ztypeId: raid
@@ -6859,7 +6894,7 @@ runUnitMonoWalks: function {
                 :st
                 :unitName
                 defName: rqual.stringview
-                defn: rec.fn
+                defn: (st.typing.pendingUnitWalk.get i: i9).fn
                 thisName: ""
                 :unitBody
                 depUnits: ed8
@@ -10368,8 +10403,17 @@ checkDotted: function {
                             st.typing.pendingBorrowPath.append tec
                             ti = ti + 1
                         }
+                        if (returnIsIteratorTid :st tid: result) == false then {
+                            st.typing.pendingBorrowShared = true
+                        }
+                    } else {
+                        drainPendingBorrow :st
                     }
                 } case none then {
+                    # an owning auto-call (`.copy` / `.string` / user methods)
+                    # consumes any receiver-evaluation borrow residue (the get
+                    # in `(xs.get i).copy` must not flow to the binding).
+                    drainPendingBorrow :st
                 }
             } case none then {
                 # A no-`out` METHOD auto-call resolves to null (the
@@ -13095,8 +13139,7 @@ checkCall: function {
                         rtupC: (List String)
                         methodReceiverTuple n: call.callable dst: rtupC
                         if rtupC.length > 1 then {
-                            rt0: rtupC.get i: 0
-                            rvoN: st.lookupVarId name: rt0.stringview
+                            rvoN: st.lookupVarId name: (rtupC.get i: 0).stringview
                             match (
                                 rvoN
                             ) case some then {
@@ -13153,6 +13196,11 @@ checkCall: function {
                             }
                         }
                     }
+                    # receiver/argument evaluation may leave a pending borrow
+                    # (an inner marked-return call, e.g. the get in
+                    # `(xs.get i).copy`): an owning outer call consumes it --
+                    # only the push blocks below re-establish one.
+                    drainPendingBorrow :st
                     xroot: st.typing.lastLockParamRoot.copy
                     if xroot.length > 0 then {
                         st.typing.lastLockParamRoot = "".string
@@ -13164,8 +13212,7 @@ checkCall: function {
                         methodReceiverTuple n: call.callable dst: rtupB
                         pushedB: false
                         if rtupB.length > 0 then {
-                            rb0: rtupB.get i: 0
-                            rvoB: st.lookupVarId name: rb0.stringview
+                            rvoB: st.lookupVarId name: (rtupB.get i: 0).stringview
                             match (
                                 rvoB
                             ) case some then {
@@ -13174,7 +13221,9 @@ checkCall: function {
                                     sgc: segB.copy
                                     st.typing.pendingBorrowPath.append sgc
                                 }
-                                st.typing.pendingBorrowShared = true
+                                if (returnIsIteratorTid :st tid: mres) == false then {
+                                    st.typing.pendingBorrowShared = true
+                                }
                                 pushedB = true
                             } case none then {}
                         }
@@ -13182,7 +13231,9 @@ checkCall: function {
                             drainPendingBorrow :st
                             mlrc: mlr.copy
                             st.typing.pendingBorrowPath.append mlrc
-                            st.typing.pendingBorrowShared = true
+                            if (returnIsIteratorTid :st tid: mres) == false then {
+                                st.typing.pendingBorrowShared = true
+                            }
                         }
                     }
                     # A view-typed result (OptionView from Map.get, ...) is a
@@ -13195,8 +13246,7 @@ checkCall: function {
                             rtupV: (List String)
                             methodReceiverTuple n: call.callable dst: rtupV
                             if rtupV.length > 0 then {
-                                rv0: rtupV.get i: 0
-                                rvb9: st.lookupVarId name: rv0.stringview
+                                rvb9: st.lookupVarId name: (rtupV.get i: 0).stringview
                                 match (
                                     rvb9
                                 ) case some then {
@@ -13626,7 +13676,9 @@ checkCall: function {
                 } case none then {
                 }
                 # A `.borrow`-marked return borrows from the lock parameter's
-                # argument: report the source for the binding site.
+                # argument: report the source for the binding site. Argument
+                # evaluation residue drains first (owning calls consume it).
+                drainPendingBorrow :st
                 xroot2: st.typing.lastLockParamRoot.copy
                 if xroot2.length > 0 then {
                     st.typing.lastLockParamRoot = "".string
@@ -13640,7 +13692,9 @@ checkCall: function {
                     drainPendingBorrow :st
                     lrc: lockRoot.copy
                     st.typing.pendingBorrowPath.append lrc
-                    st.typing.pendingBorrowShared = true
+                    if (returnIsIteratorTid :st tid: result) == false then {
+                        st.typing.pendingBorrowShared = true
+                    }
                 }
             }
         } else {
@@ -15808,6 +15862,7 @@ lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unit
             }
             bi = bi + 1
         }
+        stagedCls: (List Node)
         ci: 0.u64
         cn: cIdx.length
         for ci < cn loop {
@@ -15847,12 +15902,18 @@ lowerGeneratorsInUnit: function {ty: ztyping.ZTyping ids: zgenerator.GenIds unit
                     uel2.operation = fac
                     cls: lowOpt.synthClass.take
                     clsN: zgenerator.mkNamedOp :ids line: 0 col: 0 name: sname.stringview op: cls
-                    unitdef.body.append clsN
+                    stagedCls.append clsN
                 } case none then {
                 }
             } else {
             }
             ci = ci + 1
+        }
+        # staged synth classes append after the loop: uel2's element view
+        # ends with each iteration, and the list must not grow under it.
+        for stagedCls.length > 0 loop {
+            sc0: stagedCls.pop
+            unitdef.body.append sc0
         }
         # method generators: each object definition's members lower the
         # same way, named {Type}_{method}_iter, with the receiver context.
