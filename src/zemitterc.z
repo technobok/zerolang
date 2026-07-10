@@ -2270,6 +2270,27 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     }
 }
 
+# callRhsIsBorrow -- the call-shaped leg of bindingRhsIsBorrow: the callee's
+# declared return carries the `.borrow` marker (funcReturnsBorrow, recorded
+# from the signature), or the call is a List/ListView element `get` (a shallow
+# element view; its declaration does not carry the marker yet).
+callRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out bool is {
+    cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
+    if (funcBorrowFlag :symtab tid: cstid9) then return true
+    cnm9: atomTextOf n: call.callable
+    if cnm9.length > 0 then {
+        ufid9: userFnId :symtab :ctx name: cnm9.stringview
+        if (funcBorrowFlag :symtab tid: ufid9) then return true
+    }
+    ch: dottedChildText n: call.callable
+    if ch.stringview != "get" then return false
+    rid: dottedReceiverStampId :symtab callable: call.callable
+    rid = chaseColMono :symtab tid: rid
+    if (originIsTid :symtab tid: rid originTid: ctx.listOriginTid) then return true
+    if (originIsTid :symtab tid: rid originTid: ctx.listViewOriginTid) then return true
+    return false
+}
+
 bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
     match (
         n
@@ -2278,21 +2299,7 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
     } case statementline then {
         return (bindingRhsIsBorrow :symtab :ctx n: n.statementline)
     } case call then {
-        cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: n.callable)
-        if (funcBorrowFlag :symtab tid: cstid9) then return true
-        cnm9: atomTextOf n: n.callable
-        if cnm9.length > 0 then {
-            ufid9: userFnId :symtab :ctx name: cnm9.stringview
-            if (funcBorrowFlag :symtab tid: ufid9) then return true
-        }
-        ch: dottedChildText n: n.callable
-        if ch.stringview != "get" then return false
-        rid: dottedReceiverStampId :symtab callable: n.callable
-        rid = chaseColMono :symtab tid: rid
-        omn: monoOriginName :symtab tid: rid
-        if (originIsTid :symtab tid: rid originTid: ctx.listOriginTid) then return true
-        if (originIsTid :symtab tid: rid originTid: ctx.listViewOriginTid) then return true
-        return false
+        return (callRhsIsBorrow :symtab :ctx call: n)
     } case dottedpath then {
         ch9: atomTextOf n: n.child
         bnm9: atomTextOf n: n.parent
@@ -6176,6 +6183,51 @@ emitStringReturnValue: function {
 }
 
 # emitCallStmt -- one call-shaped statement: return / print / a plain call.
+# emitDiscardedResult -- a statement-position call (explicit, dotted auto-call,
+# or bare-atom auto-call) whose result is discarded: when the stamped result
+# type is an owned destructible value (String / class / union) and the RHS is
+# not a borrow by the declared signature (bindingRhsIsBorrow: funcReturnsBorrow
+# markers, container element views), bind the result to a temp and destroy it.
+# Emits `expr;` alone otherwise.
+emitDiscardedResult: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    isBorrow: bool
+    ce: StringView
+    rtid: u64
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    dctt9: symtab.reg.typetypeOf typeId: rtid
+    dcnm9: typeNameOfReg9 :symtab tid: rtid
+    dcdrop9: false
+    if (symtab.reg.hasDestructorName typeId: rtid) when isBorrow == false then {
+        if rtid == ctx.strTid then dcdrop9 = true
+        if dctt9 == ztypes.ztypetype.CLASS then dcdrop9 = true
+        if dctt9 == ztypes.ztypetype.UNION then dcdrop9 = true
+    }
+    if dcdrop9 when (isNonLvalueArg s: ce) then {
+        dctn9: tmp.next
+        dctnm9: "_c\{dctn9}"
+        dcct9: "\{ctx.strC}_t"
+        dcfree9: "\{ind}\{ctx.strC}_free(&\{dctnm9});\n"
+        if rtid != ctx.strTid then {
+            dcct9 = typeRefC :symtab :ctx tid: rtid thisTid: 0
+            dccb9: cnameOf tid: rtid name: dcnm9.stringview
+            dcref9: "&\{dctnm9}"
+            if (ctEndsWithStar ct: dcct9.stringview) then dcref9 = "\{dctnm9}"
+            dcfree9 = "\{ind}\{dccb9}_destroy(\{dcref9});\n"
+        }
+        dcdecl9: "\{ind}\{dcct9} \{dctnm9} = \{ce};\n"
+        buf.append dcdecl9.stringview
+        buf.append dcfree9.stringview
+    } else {
+        lc: "\{ind}\{ce};\n"
+        buf.append lc.stringview
+    }
+}
+
 emitCallStmt: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -6301,38 +6353,16 @@ emitCallStmt: function {
     ce: emitCallValue :symtab :ctx :call
     flushArgHoists :ctx :ind :tmp :buf
     dcrtid9: stampIdOf :symtab nid: call.nodeid.u64
-    dcsh9: dcrtid9
-    dcftid9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
-    dcnm9: typeNameOfReg9 :symtab tid: dcsh9
-    dctt9: symtab.reg.typetypeOf typeId: dcsh9
-    dcdrop9: false
-    if (symtab.reg.hasDestructorName typeId: dcsh9) when (funcBorrowFlag
+    (emitDiscardedResult
         :symtab
-        tid: dcftid9
-    ) == false then {
-        if dcsh9 == ctx.strTid then dcdrop9 = true
-        if dctt9 == ztypes.ztypetype.CLASS then dcdrop9 = true
-        if dctt9 == ztypes.ztypetype.UNION then dcdrop9 = true
-    }
-    if dcdrop9 when (isNonLvalueArg s: ce.stringview) then {
-        dctn9: tmp.next
-        dctnm9: "_c\{dctn9}"
-        dcct9: "\{ctx.strC}_t"
-        dcfree9: "\{ind}\{ctx.strC}_free(&\{dctnm9});\n"
-        if dcsh9 != ctx.strTid then {
-            dcct9 = typeRefC :symtab :ctx tid: dcrtid9 thisTid: 0
-            dccb9: cnameOf tid: dcsh9 name: dcnm9.stringview
-            dcref9: "&\{dctnm9}"
-            if (ctEndsWithStar ct: dcct9.stringview) then dcref9 = "\{dctnm9}"
-            dcfree9 = "\{ind}\{dccb9}_destroy(\{dcref9});\n"
-        }
-        dcdecl9: "\{ind}\{dcct9} \{dctnm9} = \{ce};\n"
-        buf.append dcdecl9.stringview
-        buf.append dcfree9.stringview
-    } else {
-        lc: "\{ind}\{ce};\n"
-        buf.append lc.stringview
-    }
+        :ctx
+        isBorrow: (callRhsIsBorrow :symtab :ctx :call)
+        ce: ce.stringview
+        rtid: dcrtid9
+        :ind
+        :tmp
+        :buf
+    )
     emitCallTakeInvalidations :symtab :ctx :call :ind :buf
 }
 
@@ -6931,8 +6961,17 @@ emitStmt: function {
                 lud9: "\{ind}/* zemitterc: unhandled statement */\n"
                 buf.append lud9.stringview
             } else {
-                dss9: "\{ind}\{de9};\n"
-                buf.append dss9.stringview
+                drtid9: stampIdOf :symtab nid: (nodeIdOf9 :n)
+                (emitDiscardedResult
+                    :symtab
+                    :ctx
+                    isBorrow: (bindingRhsIsBorrow :symtab :ctx :n)
+                    ce: de9.stringview
+                    rtid: drtid9
+                    :ind
+                    :tmp
+                    :buf
+                )
             }
             return
         }
@@ -6943,8 +6982,17 @@ emitStmt: function {
         if ffid9 > 0 when (symtab.reg.typetypeOf typeId: ffid9) == ztypes.ztypetype.FUNCTION then {
             fce9: emitExpr :symtab :ctx :n
             if (fce9.stringview.startsWith prefix: "/*") == false then {
-                fcss9: "\{ind}\{fce9};\n"
-                buf.append fcss9.stringview
+                artid9: stampIdOf :symtab nid: (nodeIdOf9 :n)
+                (emitDiscardedResult
+                    :symtab
+                    :ctx
+                    isBorrow: (bindingRhsIsBorrow :symtab :ctx :n)
+                    ce: fce9.stringview
+                    rtid: artid9
+                    :ind
+                    :tmp
+                    :buf
+                )
                 return
             }
         }
