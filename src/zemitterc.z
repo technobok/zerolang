@@ -13832,6 +13832,34 @@ fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is 
     return 0
 }
 
+# fileFromArgCoerce -- the emitted `from:` argument of a file-method call,
+# projected to a by-value view when the arg is an owned String (TextWriter's
+# StringLike param; ByteView args pass through unchanged). A non-lvalue
+# String temp hoists for scope-exit free.
+fileFromArgCoerce: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    av: StringView
+} out String is {
+    with fiter9: call.arguments.iterate do for fa9: fiter9 loop {
+        match (
+            fa9
+        ) case namedoperation then {
+            fl9: unitLabel9 o: fa9.name
+            if fl9.stringview == "from" then {
+                if (stampIdOf :symtab nid: (nodeIdOf9 n: fa9.operation)) == ctx.strTid then {
+                    fh9: hoistBorrowValArg :symtab :ctx :av pid: ctx.strTid paramTake: false
+                    fb9: av.string
+                    if fh9.length > 0 then fb9 = fh9
+                    return (svValueForm :ctx expr: fb9.stringview isStr: true)
+                }
+            }
+        } else {}
+    }
+    return av.string
+}
+
 # emitFileMethodCall -- a File method (close/read/write/seek/flush), native,
 # taking the receiver by pointer and collection args (Bytes/ByteView) by
 # pointer. "" for any non-File receiver.
@@ -13866,7 +13894,8 @@ emitFileMethodCall: function {
     if mn.stringview == "flush" then return "\{fc}_flush(\{recvExpr})"
     if mn.stringview == "write" then {
         fv: ctorArgByLabel :symtab :ctx :call label: "from"
-        return "\{fc}_write(\{recvExpr}, &\{fv})"
+        fvc: fileFromArgCoerce :symtab :ctx :call av: fv.stringview
+        return "\{fc}_write(\{recvExpr}, &\{fvc})"
     }
     if mn.stringview == "read" then {
         iv: ctorArgByLabel :symtab :ctx :call label: "into"
@@ -13880,7 +13909,8 @@ emitFileMethodCall: function {
     }
     if mn.stringview == "writeLine" then {
         wlv: ctorArgByLabel :symtab :ctx :call label: "from"
-        return "\{fc}_writeLine(\{recvExpr}, &\{wlv})"
+        wlc: fileFromArgCoerce :symtab :ctx :call av: wlv.stringview
+        return "\{fc}_writeLine(\{recvExpr}, &\{wlc})"
     }
     return "".string
 }
