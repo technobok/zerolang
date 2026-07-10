@@ -457,6 +457,8 @@ collectLiterals: function {n: Node ids: List u64 texts: List String} is {
         collectLiterals n: n.body :ids :texts
     } case doexpr then {
         collectLiterals n: n.statement :ids :texts
+    } case yieldexpr then {
+        collectLiterals n: n.expr :ids :texts
     } case forexpr then {
         fiter: n.conditions.iterate
         for f: fiter loop collectLiterals n: f :ids :texts
@@ -3382,7 +3384,13 @@ ctorArgByLabel: function {
             a
         ) case namedoperation then {
             an: unitLabel9 o: a.name
-            if an.stringview == label then return (emitExpr :symtab :ctx n: a.operation)
+            if an.stringview == label then {
+                # an interpolated argument builds via a self-contained statement
+                # expression (emitExpr cannot emit the chain)
+                iv9: emitInterpArgExpr :symtab :ctx n: a.operation
+                if iv9.length > 0 then return iv9
+                return (emitExpr :symtab :ctx n: a.operation)
+            }
         } else {}
     }
     return "0".string
@@ -3405,7 +3413,11 @@ ctorArgByPosition: function {
         ) case namedoperation then {
             an: unitLabel9 o: a.name
             if an.length == 0 then {
-                if seen9 == idx then return (emitExpr :symtab :ctx n: a.operation)
+                if seen9 == idx then {
+                    ip9: emitInterpArgExpr :symtab :ctx n: a.operation
+                    if ip9.length > 0 then return ip9
+                    return (emitExpr :symtab :ctx n: a.operation)
+                }
                 seen9 = seen9 + 1
             }
         } else {}
@@ -15871,7 +15883,10 @@ emitYieldStmt: function {
 } is {
     k: ctx.genYieldNext
     ctx.genYieldNext = k + 1
-    ve: emitExpr :symtab :ctx n: yd.expr
+    # an interpolated yield value builds via a self-contained statement
+    # expression (emitExpr cannot emit the chain)
+    ve: emitInterpArgExpr :symtab :ctx n: yd.expr
+    if ve.length == 0 then ve = emitExpr :symtab :ctx n: yd.expr
     ls: "\{ind}this->state = \{k};\n"
     buf.append ls.stringview
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
