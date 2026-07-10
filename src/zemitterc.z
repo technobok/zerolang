@@ -684,6 +684,8 @@ Ctx: class {
     argHoistRaw: (List String)
     argHoistCtr: u64
     breakLabels: (List u64)
+    breakLabelIsDo: (List bool)
+    contLabelUsed: (Map u64 value: bool)
     breakLabelCtr: u64
     breakLabelUsed: (Map u64 value: bool)
     breakFreesMarks: (List u64)
@@ -1882,17 +1884,34 @@ flushArgHoists: function {ctx: Ctx ind: StringView tmp: TmpCtr buf: String.borro
 # A zerolang `break` inside the loop emits `goto __zbrk_<id>`: a bare C `break`
 # would only leave an enclosing match->switch, not the loop. The label is
 # emitted after the loop by popLoopLabel, but only if a break referenced it.
-pushLoopLabel: function {ctx: Ctx tmp: TmpCtr} out u64 is {
+pushLoopLabel: function {ctx: Ctx tmp: TmpCtr isDo: bool} out u64 is {
     id: ctx.breakLabelCtr
     ctx.breakLabelCtr = id + 1
     ctx.breakLabels.append id
+    isDoC9: isDo
+    ctx.breakLabelIsDo.append isDoC9
     ctx.breakFreesMarks.append tmp.frees.length
     ctx.breakListMarks.append tmp.listFrees.length
     return ctx.breakLabelCtr - 1
 }
 
+# emitContLabel -- the loop-body continue target: a `continue` inside a
+# do{}while(0) wrapper jumps here (past the wrapper, before the loop's
+# closing brace so the increment/condition re-evaluates). Emitted only
+# when a continue referenced it.
+emitContLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
+    uo: ctx.contLabelUsed.get key: id
+    match (
+        uo
+    ) case some then {
+        lbl9: "\{ind}__zcont_\{id}: ;\n"
+        buf.append lbl9.stringview
+    } case none then {}
+}
+
 popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is {
     if ctx.breakLabels.length > 0 then ctx.breakLabels.pop
+    if ctx.breakLabelIsDo.length > 0 then ctx.breakLabelIsDo.pop
     if ctx.breakFreesMarks.length > 0 then {
         ctx.breakFreesMarks.pop
         ctx.breakListMarks.pop
@@ -6332,7 +6351,7 @@ emitStmt: function {
             # the block is its own break target: a break inside frees the
             # block's owned temps (since these marks) and lands after the
             # block, not on an enclosing loop's label
-            sdoId9: pushLoopLabel :ctx :tmp
+            sdoId9: pushLoopLabel :ctx :tmp isDo: true
             sfL9: tmp.frees.length
             slL9: tmp.listFrees.length
             emitBodyNode :symtab :ctx n: n.statement ind: indd9.stringview :tmp :buf
@@ -6798,7 +6817,7 @@ emitStmt: function {
         if (emitIntRangeFor :symtab :ctx m: n :ind :tmp :buf) then return
         # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
         if n.conditions.length == 0 when n.postconditions.length > 0 then {
-            lidDW: pushLoopLabel :ctx :tmp
+            lidDW: pushLoopLabel :ctx :tmp isDo: false
             ldw: "\{ind}do {\n"
             buf.append ldw.stringview
             ind2d: "\{ind}    "
@@ -6814,6 +6833,7 @@ emitStmt: function {
                 pcond.append pcv.stringview
             }
             if pcond.length == 0 then pcond.append "0"
+            emitContLabel :ctx id: lidDW ind: ind2d.stringview :buf
             lpw: "\{ind}} while (\{pcond});\n"
             buf.append lpw.stringview
             popLoopLabel :ctx id: lidDW :ind :buf
@@ -6823,7 +6843,7 @@ emitStmt: function {
         kiter: n.conditions.iterate
         for k: kiter loop emitForCond :symtab :ctx n: k :cond :ind :tmp :buf
         if cond.length == 0 then cond.append "0 /* zemitterc: unhandled loop header */"
-        lidW: pushLoopLabel :ctx :tmp
+        lidW: pushLoopLabel :ctx :tmp isDo: false
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
         ind2: "\{ind}    "
@@ -6831,6 +6851,7 @@ emitStmt: function {
         lLw9: tmp.listFrees.length
         emitBodyOpt :symtab :ctx o: n.body ind: ind2.stringview :tmp :buf
         flushBlockFrees :ctx :tmp fL: fLw9 lL: lLw9 :buf
+        emitContLabel :ctx id: lidW ind: ind2.stringview :buf
         lwc: "\{ind}}\n"
         buf.append lwc.stringview
         popLoopLabel :ctx id: lidW :ind :buf
@@ -6931,9 +6952,36 @@ emitStmt: function {
                 }
             } else {
                 if bkw9.stringview == "continue" then {
-                    emitBreakFrees :ctx :tmp :ind :buf
-                    lct9: "\{ind}continue;\n"
-                    buf.append lct9.stringview
+                    # inside a do{}while(0) block wrapper a C continue exits
+                    # the wrapper, not the loop: jump to the nearest LOOP
+                    # entry's __zcont label instead (frees since that loop).
+                    inDo9: false
+                    loopIdx9: 0.u64
+                    hasLoop9: false
+                    li9: ctx.breakLabelIsDo.length
+                    if li9 > 0 then {
+                        if (ctx.breakLabelIsDo.get i: (li9 - 1)) then inDo9 = true
+                        sj9: li9
+                        for sj9 > 0 loop {
+                            sj9 = sj9 - 1
+                            if (ctx.breakLabelIsDo.get i: sj9) == false when (hasLoop9) == false then {
+                                loopIdx9 = sj9
+                                hasLoop9 = true
+                            }
+                        }
+                    }
+                    if inDo9 when hasLoop9 then {
+                        emitContinueFrees :ctx :tmp idx: loopIdx9 :ind :buf
+                        cid9: ctx.breakLabels.get i: loopIdx9
+                        lcg9: "\{ind}goto __zcont_\{cid9};\n"
+                        buf.append lcg9.stringview
+                        ucn9: true
+                        ctx.contLabelUsed.set key: cid9 value: ucn9
+                    } else {
+                        emitBreakFrees :ctx :tmp :ind :buf
+                        lct9: "\{ind}continue;\n"
+                        buf.append lct9.stringview
+                    }
                 } else {
                     lu: "\{ind}/* zemitterc: unhandled statement */\n"
                     buf.append lu.stringview
@@ -7324,6 +7372,27 @@ emitBreakFrees: function {ctx: Ctx tmp: TmpCtr ind: StringView buf: String.borro
     }
 }
 
+# emitContinueFrees -- free the owned locals bound since the mark-stack entry
+# at `idx` (the targeted LOOP's entry) before a continue that jumps out of a
+# do-block wrapper. Non-destructive, mirroring emitBreakFrees.
+emitContinueFrees: function {ctx: Ctx tmp: TmpCtr idx: u64 ind: StringView buf: String.borrow} is {
+    fMark: ctx.breakFreesMarks.get i: idx
+    lMark: ctx.breakListMarks.get i: idx
+    i9: tmp.listFrees.length
+    for i9 > lMark loop {
+        i9 = i9 - 1
+        st9: tmp.listFrees.get i: i9
+        buf.append st9.stringview
+    }
+    j9: tmp.frees.length
+    for j9 > fMark loop {
+        j9 = j9 - 1
+        nm9: tmp.frees.get i: j9
+        ff0: "\{ind}\{ctx.strC}_free(&\{nm9});\n"
+        buf.append ff0.stringview
+    }
+}
+
 emitScalarClause: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -7532,7 +7601,7 @@ emitDoBindValue: function {
             # the block is its own break target: a break inside frees the
             # block's owned temps (since these marks) and lands after the
             # block, not on an enclosing loop's label
-            doId9: pushLoopLabel :ctx :tmp
+            doId9: pushLoopLabel :ctx :tmp isDo: true
             fLd9: tmp.frees.length
             lLd9: tmp.listFrees.length
             (emitBranchAssignOptional
@@ -7875,7 +7944,7 @@ emitObjIterFor: function {
                     iterRecv9 = ivex9
                 }
             }
-            lidO: pushLoopLabel :ctx :tmp
+            lidO: pushLoopLabel :ctx :tmp isDo: false
             l0: "\{ind}while (1) {\n"
             buf.append l0.stringview
             l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv9});\n"
@@ -7935,6 +8004,8 @@ emitObjIterFor: function {
                 }
             }
             flushBlockFrees :ctx :tmp fL: fLO9 lL: lLO9 :buf
+            indO9: "\{ind}    "
+            emitContLabel :ctx id: lidO ind: indO9.stringview :buf
             l9: "\{ind}}\n"
             buf.append l9.stringview
             popLoopLabel :ctx id: lidO :ind :buf
@@ -7968,11 +8039,12 @@ emitIntRangeFor: function {
         bound: rangeBoundExpr :symtab :ctx n: c0.operation
         if bound.length == 0 then return false
         fromx: rangeFromExpr :symtab :ctx n: c0.operation
-        lidR: pushLoopLabel :ctx :tmp
+        lidR: pushLoopLabel :ctx :tmp isDo: false
         lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
         emitBodyOpt :symtab :ctx o: m.body ind: ind2.stringview :tmp :buf
+        emitContLabel :ctx id: lidR ind: ind2.stringview :buf
         lc: "\{ind}}\n"
         buf.append lc.stringview
         popLoopLabel :ctx id: lidR :ind :buf
@@ -10257,6 +10329,8 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         argHoistRaw: (List String)
         argHoistCtr: 0
         breakLabels: (List u64)
+        breakLabelIsDo: (List bool)
+        contLabelUsed: (Map u64 value: bool)
         breakLabelCtr: 0
         breakLabelUsed: (Map u64 value: bool)
         breakFreesMarks: (List u64)
