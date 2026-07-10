@@ -10713,6 +10713,23 @@ checkAssignment: function {
 } is {
     drainPendingBorrow :st
     vt: checkValue :st :unitName :unitBody node: asgn.value
+    if vt == 0 then {
+        ubn9: unresolvedBareCallable :st :unitName n: asgn.value
+        if ubn9.length > 0 then {
+            ubm9: "Unknown reference '\{ubn9}'"
+            ubid9: nodeId n: asgn.value
+            ubln9: nodeLine n: asgn.value
+            ubcl9: nodeCol n: asgn.value
+            (addError
+                :st
+                nodeid: ubid9
+                lineno: ubln9
+                colno: ubcl9
+                e: zast.err.BADREFERENCE
+                msg: ubm9
+            )
+        }
+    }
     mvt: materialiseLiteral :st :unitName t: vt
     vt = mvt
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.NULL then {
@@ -12870,6 +12887,58 @@ returnedBareFieldName: function {st: zenv.ZSymbolTable n: Node} out String is {
         } case none then {
             return "".string
         }
+    } else {
+        return "".string
+    }
+}
+
+# unresolvedBareCallable -- the bare-atom callable name of a call-shaped
+# value that resolves to NOTHING (no local, no own-unit function, no system
+# name, no walkable type): the checker's silent args-walked fallthrough
+# otherwise leaves the binding untyped and the emitter prints a marker.
+unresolvedBareCallable: function {
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    n: Node
+} out String is {
+    match (
+        n
+    ) case expression then {
+        return (unresolvedBareCallable :st :unitName n: n.expression)
+    } case call then {
+        ubc9: atomName n: n.callable
+        if ubc9.length == 0 then return "".string
+        ubv9: st.lookupVarId name: ubc9.stringview
+        match (
+            ubv9
+        ) case some then {
+            return "".string
+        } case none then {}
+        ubk9: "\{unitName}.\{ubc9}"
+        ubr9: resolvedByKey ty: st.typing reg: st.reg key: ubk9
+        match (
+            ubr9
+        ) case some then {
+            return "".string
+        } case none then {}
+        ubw9: (walkLookupTyperef
+            ty: st.typing
+            reg: st.reg
+            currentUnit: unitName
+            base: ubc9.stringview
+        )
+        match (
+            ubw9
+        ) case some then {
+            return "".string
+        } case none then {}
+        ubs9: resolveSystemChild ty: st.typing reg: st.reg name: ubc9.stringview
+        match (
+            ubs9
+        ) case some then {
+            return "".string
+        } case none then {}
+        return (ubc9.copy)
     } else {
         return "".string
     }
