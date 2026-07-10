@@ -1551,7 +1551,23 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                     } else {
                         sxe9: emitExpr :symtab :ctx n: sa9.operation
                         sepx9.append "&"
-                        sepx9.append sxe9.stringview
+                        if (stampIdOf
+                            :symtab
+                            nid: (nodeIdOf9 n: sa9.operation)
+                        ) == ctx.strTid then {
+                            sph9: (hoistBorrowValArg
+                                :symtab
+                                :ctx
+                                av: sxe9.stringview
+                                pid: ctx.strTid
+                                paramTake: false
+                            )
+                            if sph9.length > 0 then sxe9 = sph9
+                            svsp9: svValueForm :ctx expr: sxe9.stringview isStr: true
+                            sepx9.append svsp9.stringview
+                        } else {
+                            sepx9.append sxe9.stringview
+                        }
                     }
                 }
             } else {}
@@ -1584,7 +1600,21 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                         argx.append av9.stringview
                     } else {
                         sx9: emitExpr :symtab :ctx n: a9.operation
-                        argx.append sx9.stringview
+                        if (stampIdOf :symtab nid: (nodeIdOf9 n: a9.operation)) == ctx.strTid then {
+                            sxh9: (hoistBorrowValArg
+                                :symtab
+                                :ctx
+                                av: sx9.stringview
+                                pid: ctx.strTid
+                                paramTake: false
+                            )
+                            if sxh9.length > 0 then sx9 = sxh9
+                            svx9: svValueForm :ctx expr: sx9.stringview isStr: true
+                            argx.append "&"
+                            argx.append svx9.stringview
+                        } else {
+                            argx.append sx9.stringview
+                        }
                     }
                 }
             } else {}
@@ -1623,7 +1653,21 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                     } else {
                         sv9: emitExpr :symtab :ctx n: a.operation
                         args.append ", "
-                        args.append sv9.stringview
+                        if (stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)) == ctx.strTid then {
+                            svh9: (hoistBorrowValArg
+                                :symtab
+                                :ctx
+                                av: sv9.stringview
+                                pid: ctx.strTid
+                                paramTake: false
+                            )
+                            if svh9.length > 0 then sv9 = svh9
+                            svv9: svValueForm :ctx expr: sv9.stringview isStr: true
+                            args.append "&"
+                            args.append svv9.stringview
+                        } else {
+                            args.append sv9.stringview
+                        }
                     }
                 } else {}
             }
@@ -1769,6 +1813,14 @@ emitStringArgMethod: function {
         # an owned String reads .data/.size (through the pointer for a
         # borrowed param); a StringView reads .data/.length.
         if argTid9 == ctx.strTid then {
+            aph9: (hoistBorrowValArg
+                :symtab
+                :ctx
+                av: argval.stringview
+                pid: ctx.strTid
+                paramTake: false
+            )
+            if aph9.length > 0 then argval = aph9
             aacc9: "."
             if argPtr9 then aacc9 = "->"
             rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc9}data, (\{argval})\{aacc9}size)"
@@ -1911,13 +1963,17 @@ hoistBorrowValArg: function {
         vrr: resolveTypeIdByName :symtab :ctx name: vtn.stringview
         if vrr > 0 then vrid = vrr
     } case some then {}
-    if (symtab.reg.hasDestructorName typeId: vrid) == false then return "".string
+    isStrH9: vrid == ctx.strTid
+    if (isStrH9) == false when (symtab.reg.hasDestructorName typeId: vrid) == false then {
+        return "".string
+    }
     vhn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnmh: "_ah\{vhn}"
     vcty: typeRefC :symtab :ctx tid: pid thisTid: 0
     vcb: symtab.reg.cnameOf tid: vrid
     vdt: "    \{vcb}_destroy(&\{vnmh});\n"
+    if isStrH9 then vdt = "    \{ctx.strC}_free(&\{vnmh});\n"
     avc: av.string
     ctx.argHoistVals.append avc
     ctx.argHoistTypes.append vcty.copy
@@ -14064,7 +14120,13 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
             } else {
                 args.append ", "
             }
-            args.append av.stringview
+            # a String arg to a StringLike io param passes as a by-value view
+            if (stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)) == ctx.strTid then {
+                iosv9: svValueForm :ctx expr: av.stringview isStr: true
+                args.append iosv9.stringview
+            } else {
+                args.append av.stringview
+            }
         } else {}
     }
     return "\{fname}(\{args})"
