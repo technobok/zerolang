@@ -14585,14 +14585,25 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
         match (
             a
         ) case namedoperation then {
-            av: emitExpr :symtab :ctx n: a.operation
+            # an interpolated argument builds into a hoisted owned temp
+            # (freed at the statement flush) and passes as its view
+            avh9: emitColInterpArg :symtab :ctx n: a.operation consumes: false
+            av: "".string
+            if avh9.length > 0 then {
+                av = svValueForm :ctx expr: avh9.stringview isStr: true
+            } else {
+                av = emitExpr :symtab :ctx n: a.operation
+            }
             if first then {
                 first = false
             } else {
                 args.append ", "
             }
             # a String arg to a StringLike io param passes as a by-value view
-            if (stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)) == ctx.strTid then {
+            if avh9.length == 0 when (stampIdOf
+                :symtab
+                nid: (nodeIdOf9 n: a.operation)
+            ) == ctx.strTid then {
                 ioh9: (hoistBorrowValArg
                     :symtab
                     :ctx
