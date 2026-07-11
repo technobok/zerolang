@@ -2354,33 +2354,39 @@ renderDiff: function {
 
 # analyzeFile -- fast-tier analysis of one file: read, fast-parse (no VFS/typecheck),
 # build the line table, and collect parse-error diagnostics.
+# analyzeSource -- the fast-tier analysis over IN-MEMORY source: the
+# read-then-analyze wrappers and zls's live editor buffers share it.
+analyzeSource: function {source: String.take path: String.take lineLength: u32} out Analysis is {
+    root: ast.parseSource source: source.copy
+    lines: linesOf src: source.stringview
+    a: (Analysis
+        path: path.copy
+        source: source.take
+        :lines
+        lineStart: (List u64)
+        diags: (List zdiag.Diagnostic)
+        edits: (List zfix.Edit)
+        wrapWidth: 0
+        wrapSkip: 0
+        wrapFound: false
+        wrapStart: 0
+        delimClose: (Map u64 value: u64)
+        fastToks: (List tokenize.Token)
+        funcDepth: 0
+        wrapGroups: (List u64)
+    )
+    a.runFastChecks n: root
+    a.checkLineLength width: lineLength
+    a.sortEditsInPlace
+    return a
+}
+
 analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
     rd: io.readText path: path.stringview
     match (
         rd
     ) case ok then {
-        root: ast.parseSource source: rd.copy
-        lines: linesOf src: rd.stringview
-        a: (Analysis
-            path: path.copy
-            source: rd.take
-            :lines
-            lineStart: (List u64)
-            diags: (List zdiag.Diagnostic)
-            edits: (List zfix.Edit)
-            wrapWidth: 0
-            wrapSkip: 0
-            wrapFound: false
-            wrapStart: 0
-            delimClose: (Map u64 value: u64)
-            fastToks: (List tokenize.Token)
-            funcDepth: 0
-            wrapGroups: (List u64)
-        )
-        a.runFastChecks n: root
-        a.checkLineLength width: lineLength
-        a.sortEditsInPlace
-        return a
+        return (analyzeSource source: rd.take path: path.copy :lineLength)
     } case err then {
         a: (Analysis
             path: path.copy
