@@ -1385,6 +1385,16 @@ dottedBaseNodeId: function {n: Node} out u64 is {
 # isSvParseNative -- a StringView parse native (parseF64/I64/U64) returning a
 # resultval. Dispatched via ctx.svC so the canonical StringView cname is used
 # (not a shell id stamped on a nested `.stringview` projection).
+# isSvNoArgNative -- no-arg StringView natives whose fragments must be
+# registered by the scanNeeds pre-pass: type-method bodies emit after
+# emitNeededNatives, so an in-body needsAdd comes too late to matter.
+isSvNoArgNative: function {name: StringView} out bool is {
+    if name == "count" then return true
+    if name == "codepoints" then return true
+    if name == "lines" then return true
+    return false
+}
+
 isSvParseNative: function {name: StringView} out bool is {
     if name == "parseF64" then return true
     if name == "parseI64" then return true
@@ -3855,8 +3865,27 @@ emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
                             )
                         }
                     }
+                    vbh9x: "".string
+                    if (ptra9) == false then {
+                        vbh9x = (hoistBorrowValArg
+                            :symtab
+                            :ctx
+                            av: av9.stringview
+                            pid: fpid9
+                            paramTake: (symtab.typing.childOwnershipIs
+                                parentTypeId: gmf9
+                                name: fpnO9.stringview
+                                own: ztypes.zparamownership.TAKE
+                            )
+                            isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a9.operation)
+                        )
+                    }
                     finalS9g: av9.copy
-                    if byref9 then finalS9g = argRef9.copy
+                    if byref9 then {
+                        finalS9g = argRef9.copy
+                    } else {
+                        if vbh9x.length > 0 then finalS9g = vbh9x.copy
+                    }
                     valBySlot9g.set key: slot9g value: finalS9g
                 }
             }
@@ -3972,8 +4001,27 @@ emitUnitMethodCall: function {
                             )
                         }
                     }
+                    vbh9x: "".string
+                    if (ptra9) == false then {
+                        vbh9x = (hoistBorrowValArg
+                            :symtab
+                            :ctx
+                            av: av9.stringview
+                            pid: fpid9
+                            paramTake: (symtab.typing.childOwnershipIs
+                                parentTypeId: fid9
+                                name: fpnO9.stringview
+                                own: ztypes.zparamownership.TAKE
+                            )
+                            isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a9.operation)
+                        )
+                    }
                     finalS9g: av9.copy
-                    if byref9 then finalS9g = argRef9.copy
+                    if byref9 then {
+                        finalS9g = argRef9.copy
+                    } else {
+                        if vbh9x.length > 0 then finalS9g = vbh9x.copy
+                    }
                     valBySlot9g.set key: slot9g value: finalS9g
                 }
             }
@@ -4050,6 +4098,7 @@ emitCrossUnitFnCall: function {
                     av9: emitExpr :symtab :ctx n: a.operation
                     byref8: false
                     argRef8: "".string
+                    vbh8c: "".string
                     ptra8: false
                     if (symtab.typing.childOwnershipIs
                         parentTypeId: fid
@@ -4082,8 +4131,26 @@ emitCrossUnitFnCall: function {
                             )
                         }
                     }
+                    if (ptra8) == false then {
+                        vbh8c = (hoistBorrowValArg
+                            :symtab
+                            :ctx
+                            av: av9.stringview
+                            pid: fpid8
+                            paramTake: (symtab.typing.childOwnershipIs
+                                parentTypeId: fid
+                                name: fpnO8.stringview
+                                own: ztypes.zparamownership.TAKE
+                            )
+                            isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
+                        )
+                    }
                     finalS9c: av9.copy
-                    if byref8 then finalS9c = argRef8.copy
+                    if byref8 then {
+                        finalS9c = argRef8.copy
+                    } else {
+                        if vbh8c.length > 0 then finalS9c = vbh8c.copy
+                    }
                     valBySlot9c.set key: slot9c value: finalS9c
                 }
             }
@@ -6902,6 +6969,14 @@ emitStmt: function {
         rtnid9: nodeIdOf9 n: n.topath
         rtsid9: stampIdOf :symtab nid: rtnid9
         rttn9: stampNameOf :symtab nid: rtnid9
+        # a collection-typedef lvalue (Bytes) stores and destroys as its
+        # chased underlying mono, exactly like the binding path
+        rtch9: chaseColMono :symtab tid: rtsid9
+        rtChased9: false
+        if rtch9 != rtsid9 then {
+            rtsid9 = rtch9
+            rtChased9 = true
+        }
         rdrop9: false
         if (stampIdOf :symtab nid: rtnid9) == ctx.strTid then {
             rdrop9 = true
@@ -6927,6 +7002,9 @@ emitStmt: function {
         } else {
             if (symtab.reg.hasDestructorName typeId: rtsid9) then {
                 rdcb9: cnameOf tid: rtsid9 name: rttn9.stringview
+                # the chased mono's registry cname is authoritative (the
+                # stamp name still says the typedef)
+                if rtChased9 then rdcb9 = symtab.reg.cnameOf tid: rtsid9
                 if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
                     rdoh9: "\{ind}\{rdcb9}_destroy(\{nm2});\n"
                     buf.append rdoh9.stringview
@@ -9774,6 +9852,7 @@ scanNeeds: function {ctx: Ctx n: Node} is {
         if (isSvArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvSimpleNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvParseNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
+        if (isSvNoArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         cjn0: atomTextOf n: n.callable
         if cjn0.stringview == "stringJoin" then needsAdd :ctx name: "coll_join"
         aiter2: n.arguments.iterate
@@ -9783,6 +9862,7 @@ scanNeeds: function {ctx: Ctx n: Node} is {
         if pdm9.stringview == "parseF64" then needsAdd :ctx name: "parseF64"
         if pdm9.stringview == "parseI64" then needsAdd :ctx name: "parseI64"
         if pdm9.stringview == "parseU64" then needsAdd :ctx name: "parseU64"
+        if (isSvNoArgNative name: pdm9.stringview) then needsAdd :ctx name: pdm9.stringview
         scanNeeds :ctx n: n.parent
     } case binop then {
         scanNeeds :ctx n: n.lhs
