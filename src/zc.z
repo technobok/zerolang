@@ -193,40 +193,6 @@ printVersion: function is {
     print "zc (zerolang) \{v9}\n"
 }
 
-# dirname -- everything before the last '/', or "." when there is none.
-dirname: function {p: StringView} out String is {
-    idxOpt: p.lastIndexOf needle: "/"
-    match (
-        idxOpt
-    ) case some then {
-        r: "".string
-        i: 0.u64
-        for i < idxOpt loop {
-            b: p.byteAt :i
-            match (
-                b
-            ) case some then {
-                r.appendByte :b
-            } case none then {}
-            i = i + 1
-        }
-        return r
-    } case none then {
-        return ".".string
-    }
-}
-
-# joinPath -- a/b, or just b when a is empty.
-joinPath: function {a: StringView b: StringView} out String is {
-    r: "".string
-    if a.length > 0 then {
-        r.append a
-        r.append "/"
-    }
-    r.append b
-    return r
-}
-
 # substr -- the bytes of p in [start, end) as a new String.
 substr: function {p: StringView start: u64 end: u64} out String is {
     r: "".string
@@ -265,77 +231,6 @@ stripDotZ: function {p: StringView} out String is {
     return p.string
 }
 
-# exeRoot -- the install root inferred from the executable: the parent of
-# its bin/ dir (dirname(dirname(exePath))). "" if exePath is unavailable.
-exeRoot: function out String is {
-    er: os.exePath
-    match (
-        er
-    ) case ok then {
-        d1: dirname p: er.stringview
-        d2: dirname p: d1.stringview
-        return d2
-    } case err then {
-        return "".string
-    }
-}
-
-# pickRuntimeUnder -- <root>/lib/runtime if it exists (installed tree),
-# else <root>/src/runtime (dev tree).
-pickRuntimeUnder: function {root: StringView} out String is {
-    libR: joinPath a: root b: "lib/runtime"
-    if (io.exists path: libR.stringview) then return libR
-    return (joinPath a: root b: "src/runtime")
-}
-
-# resolveSystemDir -- the stdlib dir by precedence: explicit flag >
-# $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
-resolveSystemDir: function {flagVal: StringView} out String is {
-    if flagVal.length > 0 then return flagVal.string
-    ev: os.env key: "ZEROLANG_SYSTEM"
-    match (
-        ev
-    ) case some then {
-        return ev.copy
-    } case none then {}
-    rv: os.env key: "ZEROLANG_ROOT"
-    match (
-        rv
-    ) case some then {
-        return (joinPath a: rv.stringview b: "lib/system")
-    } case none then {}
-    root: exeRoot
-    if root.length > 0 then {
-        cand: joinPath a: root.stringview b: "lib/system"
-        if (io.exists path: cand.stringview) then return cand
-    }
-    return "lib/system".string
-}
-
-# resolveRuntimeDir -- the runtime dir by the same precedence; the install
-# and dev trees differ (lib/runtime vs src/runtime), handled by pickRuntimeUnder.
-resolveRuntimeDir: function {flagVal: StringView} out String is {
-    if flagVal.length > 0 then return flagVal.string
-    ev: os.env key: "ZEROLANG_RUNTIME"
-    match (
-        ev
-    ) case some then {
-        return ev.copy
-    } case none then {}
-    rv: os.env key: "ZEROLANG_ROOT"
-    match (
-        rv
-    ) case some then {
-        return (pickRuntimeUnder root: rv.stringview)
-    } case none then {}
-    root: exeRoot
-    if root.length > 0 then {
-        rd: pickRuntimeUnder root: root.stringview
-        if (io.exists path: rd.stringview) then return rd
-    }
-    return "src/runtime".string
-}
-
 # pickCc -- the C compiler: --cc > $CC > <target>-gcc > cc.
 pickCc: function {ccFlag: StringView targetTriple: StringView} out String is {
     if ccFlag.length > 0 then return ccFlag.string
@@ -361,10 +256,10 @@ printEnv: function {
     ccFlag: StringView
     targetTriple: StringView
 } is {
-    sysd: resolveSystemDir flagVal: systemFlag
-    rund: resolveRuntimeDir flagVal: runtimeFlag
+    sysd: zcheck.resolveSystemDir flagVal: systemFlag
+    rund: zcheck.resolveRuntimeDir flagVal: runtimeFlag
     cc: pickCc :ccFlag :targetTriple
-    root: exeRoot
+    root: zcheck.exeRoot
     ver: zcVersion
     exep: "".string
     ep: os.exePath
@@ -460,8 +355,8 @@ runZlShim: function {verb: StringView argv: (List String).borrow} out i32 is {
     match (
         ep
     ) case ok then {
-        d: dirname p: ep.stringview
-        zlpath = joinPath a: d.stringview b: "zl"
+        d: zcheck.dirname p: ep.stringview
+        zlpath = zcheck.joinPath a: d.stringview b: "zl"
     } case err then {
         em: "zc \{verb}: cannot locate the zl binary (executable path unavailable)"
         io.eprintln em.stringview
@@ -749,15 +644,15 @@ main: function is {
         if (unitname.stringview.contains needle: "/") then isPath = true
         if isPath then {
             baseNoExt: stripDotZ p: unitname.stringview
-            d9: dirname p: baseNoExt.stringview
+            d9: zcheck.dirname p: baseNoExt.stringview
             bn9: baseName p: baseNoExt.stringview
             srcdir = d9
             unitname = bn9
         }
     }
 
-    systemdir: resolveSystemDir flagVal: systemFlag.stringview
-    runtimeDir: resolveRuntimeDir flagVal: runtimeFlag.stringview
+    systemdir: zcheck.resolveSystemDir flagVal: systemFlag.stringview
+    runtimeDir: zcheck.resolveRuntimeDir flagVal: runtimeFlag.stringview
 
     isDump: isDumpSql
     if isDumpCanon then isDump = true

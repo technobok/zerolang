@@ -1,0 +1,200 @@
+# zcheck -- the shared check-only compile service and project-layout
+# resolution. zc's build/emit pipeline resolves its directories through
+# the helpers here; zls (the language server) additionally calls `check`
+# per document change: it builds the project VFS -- with in-memory
+# overlays shadowing the source dir, so live editor buffers win over
+# disk -- parses the main unit, and typechecks every definition. The
+# caller reads diagnostics and stamps from the result; nothing here
+# prints or exits.
+
+Node: zast.Node
+
+# One check pass over one main unit. On a parse failure `prog` is the
+# parser's error node and `st` is none; otherwise `prog` is the program
+# root and `st` carries the symbol table whose `typing.errors` holds
+# `errorCount` batch-collected diagnostics. `vfs` and `parser` stay
+# alive so callers can map fsno -> path (provider `path:`) and
+# nodeid -> fsno (`parser.meta` fileSegs).
+CheckResult: class {
+    parseOk: bool
+    errorCount: u64
+    prog: Node
+    st: (Option zenv.ZSymbolTable)
+    vfs: zvfs.ZVfs
+    parser: zparser.Parser
+}
+
+# check -- parse + typecheck(full) `mainUnit` against `srcdir` layered
+# over `systemdir`. `overlays` maps root-relative file names (e.g.
+# "zparser.z") to live buffer text; when non-empty they are served by a
+# StringProvider bound in front of the source dir, shadowing disk.
+check: function {
+    srcdir: StringView
+    systemdir: StringView
+    mainUnit: StringView
+    overlays: (Map String value: String)
+} out CheckResult is {
+    vfs: (zvfs.ZVfs
+        providers: (List zvfs.ProviderBox)
+        entrytable: (zvfs.DentryTable entries: (List zvfs.dentry))
+        file_names: (List String)
+        walk_cache: (Map String value: u32)
+        rootid: 0
+    )
+    vfs.registerNull
+    systemid: vfs.registerFS rootpath: systemdir.string parentpath: "".string
+    srcid: vfs.registerFS rootpath: srcdir.string parentpath: "".string
+    vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
+    rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+    if overlays.length > 0 then {
+        ovid: vfs.registerString
+        {
+            # scope the provider borrow: bindRoot below needs the vfs
+            # exclusively
+            pidx: vfs.providers.length - 1
+            box: vfs.providers.get i: pidx
+            with oit: overlays.iterateItems do for e: oit loop {
+                fp: e.key.copy
+                ct: e.value.copy
+                box.p.addFile fpath: fp.take content: ct.take
+            }
+        }
+        rootid = vfs.bindRoot newid: ovid kind: zvfs.bindkind.before
+    }
+    p: zparser.Parser.create
+    prog: p.parse :vfs :rootid mainUnitName: mainUnit.string
+    isErr: false
+    match (
+        prog
+    ) case error then {
+        isErr = true
+    } else {}
+    if isErr then {
+        return (CheckResult
+            parseOk: false
+            errorCount: 0
+            :prog
+            st: (Option.none zenv.ZSymbolTable)
+            :vfs
+            parser: p
+        )
+    }
+    reg: ztypes.newRegistry
+    st: ztypecheck.typecheck program: prog :reg full: true
+    nerr: st.typing.errors.length
+    return (CheckResult
+        parseOk: true
+        errorCount: nerr
+        :prog
+        st: (Option.some st)
+        :vfs
+        parser: p
+    )
+}
+
+# ---- project-layout resolution (shared by zc and zls) --------------
+
+# dirname -- the path up to (excluding) the final "/", "." when none.
+dirname: function {p: StringView} out String is {
+    idxOpt: p.lastIndexOf needle: "/"
+    match (
+        idxOpt
+    ) case some then {
+        r: "".string
+        i: 0.u64
+        for i < idxOpt loop {
+            b: p.byteAt :i
+            match (
+                b
+            ) case some then {
+                r.appendByte :b
+            } case none then {}
+            i = i + 1
+        }
+        return r
+    } case none then {
+        return ".".string
+    }
+}
+
+# joinPath -- a/b, or just b when a is empty.
+joinPath: function {a: StringView b: StringView} out String is {
+    r: "".string
+    if a.length > 0 then {
+        r.append a
+        r.append "/"
+    }
+    r.append b
+    return r
+}
+
+# exeRoot -- the install root inferred from the executable: the parent of
+# the directory holding the binary.
+exeRoot: function out String is {
+    er: os.exePath
+    match (
+        er
+    ) case ok then {
+        d1: dirname p: er.stringview
+        d2: dirname p: d1.stringview
+        return d2
+    } case err then {
+        return "".string
+    }
+}
+
+# pickRuntimeUnder -- <root>/lib/runtime if it exists (installed tree),
+# else <root>/src/runtime (dev tree).
+pickRuntimeUnder: function {root: StringView} out String is {
+    libR: joinPath a: root b: "lib/runtime"
+    if (io.exists path: libR.stringview) then return libR
+    return (joinPath a: root b: "src/runtime")
+}
+
+# resolveSystemDir -- the stdlib dir by precedence: explicit flag >
+# $ZEROLANG_SYSTEM > $ZEROLANG_ROOT-relative > exePath-relative > cwd.
+resolveSystemDir: function {flagVal: StringView} out String is {
+    if flagVal.length > 0 then return flagVal.string
+    ev: os.env key: "ZEROLANG_SYSTEM"
+    match (
+        ev
+    ) case some then {
+        return ev.copy
+    } case none then {}
+    rv: os.env key: "ZEROLANG_ROOT"
+    match (
+        rv
+    ) case some then {
+        return (joinPath a: rv.stringview b: "lib/system")
+    } case none then {}
+    root: exeRoot
+    if root.length > 0 then {
+        cand: joinPath a: root.stringview b: "lib/system"
+        if (io.exists path: cand.stringview) then return cand
+    }
+    return "lib/system".string
+}
+
+# resolveRuntimeDir -- the runtime dir by the same precedence; the install
+# and dev trees differ (lib/runtime vs src/runtime), handled by pickRuntimeUnder.
+resolveRuntimeDir: function {flagVal: StringView} out String is {
+    if flagVal.length > 0 then return flagVal.string
+    ev: os.env key: "ZEROLANG_RUNTIME"
+    match (
+        ev
+    ) case some then {
+        return ev.copy
+    } case none then {}
+    rv: os.env key: "ZEROLANG_ROOT"
+    match (
+        rv
+    ) case some then {
+        return (pickRuntimeUnder root: rv.stringview)
+    } case none then {}
+    root: exeRoot
+    if root.length > 0 then {
+        rd: pickRuntimeUnder root: root.stringview
+        if (io.exists path: rd.stringview) then return rd
+    }
+    return "src/runtime".string
+}
