@@ -8671,6 +8671,11 @@ inferGenericConstruction: function {
     boundParams: (Set String)
     firstA: 0.u64
     primaryName: firstGenericParamName ty: st.typing reg: st.reg templateId: tplId
+    # the value-arg walk below is a DRY RUN for type inference: bracket its
+    # ownership effects (take overlays, borrow locks) so the real ctor walk
+    # re-checks from a clean slate — an explicit `.take` arg otherwise
+    # collides with its own inference pass.
+    infMark9: st.entriesMark
     argIdx: 0.u64
     with aiter: call.arguments.iterate do for arg: aiter loop {
         match (
@@ -8772,6 +8777,7 @@ inferGenericConstruction: function {
         }
         argIdx = argIdx + 1
     }
+    st.truncateEntries marker: infMark9
     paramsM: st.reg.genericParamNamesOf typeKey: tk.stringview
     firstMissing: "".string
     pmi: 0.u64
@@ -12586,7 +12592,9 @@ walkCallArgsHoist: function {
                             bvo
                         ) case some then {
                             if isTake then {
-                                if (isViewVar :st vid: bvo) then {
+                                # ANY borrowed binding refuses the move (the
+                                # view-family test predates element borrows)
+                                if (isBorrowedVar :st vid: bvo) then {
                                     bnc7: bn.copy
                                     mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
                                     aid7: nodeId n: arg.operation
