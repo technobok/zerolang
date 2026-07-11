@@ -2368,10 +2368,22 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
         bnm9: atomTextOf n: n.parent
         if (nvHas xs: ctx.narrowBox name: bnm9.stringview) then {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
-            # the subject's heap); an ownership builtin yields an owned value.
+            # the subject's heap); an ownership builtin yields an owned value, and so
+            # does a method auto-call (FUNCTION child) on the narrowed payload.
             if ch9.stringview == "take" then return false
             if ch9.stringview == "copy" then return false
             if ch9.stringview == "string" then return false
+            ntO2: ntGet xs: ctx.narrowTid name: bnm9.stringview
+            match (
+                ntO2
+            ) case some then {
+                ncc9: symtab.typing.childOf parentTypeId: ntO2 name: ch9.stringview
+                match (
+                    ncc9
+                ) case some then {
+                    if (symtab.reg.typetypeOf typeId: ncc9) == ztypes.ztypetype.FUNCTION then return false
+                } case none then {}
+            } case none then {}
             return true
         }
         ptid9: stampIdOf :symtab nid: (nodeIdOf9 n: n.parent)
@@ -4554,6 +4566,8 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if uic.length > 0 then return uic
     osc: emitOsCall :symtab :ctx :call
     if osc.length > 0 then return osc
+    netc9: emitNetCall :symtab :ctx :call
+    if netc9.length > 0 then return netc9
     scv9: emitStrConvCall :symtab :ctx :call
     if scv9.length > 0 then return scv9
     dc: emitDottedCall :symtab :ctx :call
@@ -5292,6 +5306,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     if sm9.length > 0 then return sm9
                 }
                 isFile9: false
+                isNetU9: false
                 fduo9: definedInUnitOf :symtab tid: bstamp
                 match (
                     fduo9
@@ -5299,17 +5314,28 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     if fduo9.stringview == "io" then isFile9 = true
                     if fduo9.stringview == "os" then isFile9 = true
                     if fduo9.stringview == "cli" then isFile9 = true
+                    if fduo9.stringview == "net" then {
+                        isFile9 = true
+                        isNetU9 = true
+                    }
                 } case none then {}
                 if isFile9 then {
                     isFN9: false
                     if mn2.stringview == "close" then isFN9 = true
                     if mn2.stringview == "flush" then isFN9 = true
                     if mn2.stringview == "readLine" then isFN9 = true
+                    if mn2.stringview == "accept" when isNetU9 then isFN9 = true
                     if isFN9 then {
                         ffc9: cnameOf tid: bstamp name: fbtn9.stringview
-                        needsAdd :ctx name: "io"
-                        ffn9: "io_file_\{mn2}"
-                        needsAdd :ctx name: ffn9.stringview
+                        ffcc9: ioCanonCname :symtab :ctx canon: fbtn9.stringview
+                        if ffcc9.length > 0 then ffc9 = ffcc9
+                        if isNetU9 then {
+                            needsAdd :ctx name: "net"
+                        } else {
+                            needsAdd :ctx name: "io"
+                            ffn9: "io_file_\{mn2}"
+                            needsAdd :ctx name: ffn9.stringview
+                        }
                         frecv9: "&\{bn2}"
                         if (isPtrVar :ctx name: bn2.stringview) then frecv9 = "\{bn2}"
                         return "\{ffc9}_\{mn2}(\{frecv9})"
@@ -10002,6 +10028,7 @@ scanNeeds: function {ctx: Ctx n: Node} is {
             oname0: "os_\{mn0}"
             needsAdd :ctx name: oname0.stringview
         }
+        if bn0.stringview == "net" when mn0.length > 0 then needsAdd :ctx name: "net"
         if (isSvArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvSimpleNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvParseNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
@@ -10831,6 +10858,10 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     buf.append "#include <pwd.h>\n"
     buf.append "#include <sys/wait.h>\n"
     buf.append "#include <signal.h>\n"
+    buf.append "#include <sys/socket.h>\n"
+    buf.append "#include <netinet/in.h>\n"
+    buf.append "#include <arpa/inet.h>\n"
+    buf.append "#include <poll.h>\n"
     if needsHash then {
         buf.append "#include <sys/random.h>\n"
         buf.append "#include <sys/syscall.h>\n"
@@ -11005,6 +11036,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     emitIoStdStreams :symtab :ctx buf: codeBuf
     emitRuntimeCli :symtab :ctx :runtimeDir buf: codeBuf
     emitRuntimeOs :symtab :ctx :runtimeDir buf: codeBuf
+    emitRuntimeNet :symtab :ctx :runtimeDir buf: codeBuf
     emitFnptrTypedefs :symtab :ctx buf: codeBuf
     emitUserStructsOrdered :symtab :ctx :runtimeDir buf: codeBuf
     emitRecordDefs :program :symtab :ctx buf: codeBuf
@@ -12362,6 +12394,9 @@ loadIoFragment: function {symtab: zenv.ZSymbolTable ctx: Ctx path: StringView} o
         canons.append "Result_File_IoError".string
         canons.append "Result_null_IoError".string
         canons.append "Result_u64_IoError".string
+        canons.append "Result_Listener_IoError".string
+        canons.append "Result_Conn_IoError".string
+        canons.append "Result_bool_IoError".string
         canons.append "Option_String".string
         canons.append "OptionView_String".string
         canons.append "ListView_u8".string
@@ -12381,6 +12416,8 @@ loadIoFragment: function {symtab: zenv.ZSymbolTable ctx: Ctx path: StringView} o
         canons.append "Closer".string
         canons.append "Seeker".string
         canons.append "File".string
+        canons.append "Listener".string
+        canons.append "Conn".string
         canons.append "Result_Parsed_CliError".string
         canons.append "Map_String_String".string
         canons.append "List_PositionalDef".string
@@ -12650,6 +12687,61 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
     buf.append l1.stringview
 }
 
+# emitNetFdClass -- one net fd-holder class ({ int32_t fd; bool closed } + a
+# close-once destructor), the net analogue of emitIoFileClass. The net runtime
+# fragments dereference the fields, so the body is pre-emitted here and the
+# type marked in ctx.emittedUserTypes so the ordered user-struct pass skips it
+# (that pass runs after the fragments -- too late).
+emitNetFdClass: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    name: StringView
+    buf: String.borrow
+} is {
+    last: symtab.reg.nextTypeId
+    fid: 0.u64
+    ti: 1.u64
+    for ti < last loop {
+        if fid == 0 then {
+            if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+                tn: typeNameOfReg9 :symtab tid: ti
+                duo9: definedInUnitOf :symtab tid: ti
+                match (
+                    duo9
+                ) case some then {
+                    if tn.stringview == name when duo9.stringview == "net" then fid = ti
+                } case none then {}
+            }
+        }
+        ti = ti + 1
+    }
+    if fid == 0 then return
+    ego9: ctx.emittedUserTypes.get key: fid
+    match (
+        ego9
+    ) case some then {
+        return
+    } case none then {}
+    ctx.emittedUserTypes.set key: fid.u64 value: true
+    fc: cnameOf tid: fid :name
+    if (isFwdDeclared :ctx tid: fid) then {
+        l0: "struct \{fc}_t {\n    int32_t fd;\n    bool closed;\n};\n"
+        buf.append l0.stringview
+    } else {
+        l0: "typedef struct {\n    int32_t fd;\n    bool closed;\n} \{fc}_t;\n"
+        buf.append l0.stringview
+    }
+    l1: "static void \{fc}_destroy(\{fc}_t* p) {\n    if (!p) return;\n    if (p->closed) return;\n    close(p->fd);\n    p->closed = true;\n}\n\n"
+    buf.append l1.stringview
+}
+
+# emitNetClasses -- the net fd-holder value reps (Listener/Conn), need-gated.
+emitNetClasses: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    if (needsHas :ctx name: "net") == false then return
+    emitNetFdClass :symtab :ctx name: "Listener" :buf
+    emitNetFdClass :symtab :ctx name: "Conn" :buf
+}
+
 # emitRuntimeSvIter -- the StringView split/lines iterator natives (Splitter +
 # LinesIter struct, builders, and .call). Need-gated; emitted after the monos so
 # Option_StringView (the .call yield) is already defined.
@@ -12829,6 +12921,23 @@ emitRuntimeOs: function {
     ioFragIf :symtab :ctx :runtimeDir need: "os_hostname" frag: "_Z_OS_HOSTNAME" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "os_exit" frag: "_Z_OS_EXIT" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "os_spawn" frag: "_Z_OS_SPAWN" :buf
+}
+
+# emitRuntimeNet -- the net runtime bodies (need-gated on any net use).
+emitRuntimeNet: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    runtimeDir: StringView
+    buf: String.borrow
+} is {
+    if (needsHas :ctx name: "net") == false then return
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_LISTEN" :buf
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_ACCEPT" :buf
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_CONNECT" :buf
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_CONN_READ" :buf
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_CONN_WRITE" :buf
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_CONN_CLOSE" :buf
+    ioFrag :symtab :ctx :runtimeDir frag: "_Z_NET_POLL" :buf
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -13968,6 +14077,7 @@ emitMonos: function {
         tsu = tsu + 1
     }
     emitIoFileClass :symtab :ctx :buf
+    emitNetClasses :symtab :ctx :buf
     # reachable cli LEAF classes (FlagDef/OptionDef/PositionalDef) -- pure-string
     # classes the List monos below embed; emitted before those monos.
     tclf: 0.u64
@@ -14399,10 +14509,29 @@ emitProtocolImpl: function {
             implMid = imo
         } case none then {}
         implMc: "".string
-        if (definedInNonMain :symtab :ctx tid: implTid) then {
+        # a fragment-backed stdlib impl's methods carry canon-named C
+        # symbols regardless of which unit is being emitted (the per-unit
+        # emission pass rebinds mainName, defeating the nonmain test)
+        implFrag9: false
+        {
+            fduW9: definedInUnitOf :symtab tid: implTid
+            match (
+                fduW9
+            ) case some then {
+                if fduW9.stringview == "io" then implFrag9 = true
+                if fduW9.stringview == "os" then implFrag9 = true
+                if fduW9.stringview == "cli" then implFrag9 = true
+                if fduW9.stringview == "net" then implFrag9 = true
+            } case none then {}
+        }
+        if implFrag9 then {
             implMc = "\{implBase}_\{mname}"
         } else {
-            implMc = (symtab.reg.cnameOf tid: implMid)
+            if (definedInNonMain :symtab :ctx tid: implTid) then {
+                implMc = "\{implBase}_\{mname}"
+            } else {
+                implMc = (symtab.reg.cnameOf tid: implMid)
+            }
         }
         retkw: "return ".string
         if ret.stringview == "void" then retkw = "".string
@@ -14506,6 +14635,7 @@ fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is 
         if duo9.stringview == "io" then isIoT9 = true
         if duo9.stringview == "os" then isIoT9 = true
         if duo9.stringview == "cli" then isIoT9 = true
+        if duo9.stringview == "net" then isIoT9 = true
     } case none then {}
     if isIoT9 then return tid
     return 0
@@ -14564,18 +14694,41 @@ emitFileMethodCall: function {
     if mn.stringview == "seek" then isFM = true
     if mn.stringview == "flush" then isFM = true
     if mn.stringview == "writeLine" then isFM = true
+    if mn.stringview == "accept" then isFM = true
     if (isFM) == false then return "".string
     bnid: dottedBaseNodeId n: call.callable
     fid: fileTypeIdOf :symtab :ctx nid: bnid
     if fid == 0 then return "".string
     fc: symtab.reg.cnameOf tid: fid
+    {
+        fcn9: typeNameOfReg9 :symtab tid: fid
+        fcc9: ioCanonCname :symtab :ctx canon: fcn9.stringview
+        if fcc9.length > 0 then fc = fcc9
+    }
     recv: aliasResolve :ctx name: bn.stringview
     recvC: ztypes.mangleVarName name: recv.stringview
     recvExpr: "&\{recvC}"
     if (isPtrVar :ctx name: recv.stringview) then recvExpr = recvC
-    needsAdd :ctx name: "io"
-    fmn: "io_file_\{mn}"
-    needsAdd :ctx name: fmn.stringview
+    isNet9: false
+    {
+        fduo9: definedInUnitOf :symtab tid: fid
+        match (
+            fduo9
+        ) case some then {
+            if fduo9.stringview == "net" then isNet9 = true
+        } case none then {}
+    }
+    if isNet9 then {
+        needsAdd :ctx name: "net"
+    } else {
+        needsAdd :ctx name: "io"
+        fmn: "io_file_\{mn}"
+        needsAdd :ctx name: fmn.stringview
+    }
+    if mn.stringview == "accept" then {
+        if (isNet9) == false then return "".string
+        return "\{fc}_accept(\{recvExpr})"
+    }
     if mn.stringview == "close" then return "\{fc}_close(\{recvExpr})"
     if mn.stringview == "flush" then return "\{fc}_flush(\{recvExpr})"
     if mn.stringview == "write" then {
@@ -14800,6 +14953,36 @@ emitOsCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
         } else {}
     }
     return "z_os_\{mn}(\{args})"
+}
+
+# emitNetCall -- the net unit's free natives (listen/connect/
+# pollReadable): scalar args, literal z_net_* symbols.
+emitNetCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+    bn: dottedBaseAtom n: call.callable
+    if bn.stringview != "net" then return "".string
+    mn: dottedChildText n: call.callable
+    isNetC: false
+    if mn.stringview == "listen" then isNetC = true
+    if mn.stringview == "connect" then isNetC = true
+    if mn.stringview == "pollReadable" then isNetC = true
+    if (isNetC) == false then return "".string
+    needsAdd :ctx name: "net"
+    args: "".string
+    first: true
+    with aiter: call.arguments.iterate do for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            av: emitExpr :symtab :ctx n: a.operation
+            if first then {
+                first = false
+            } else {
+                args.append ", "
+            }
+            args.append av.stringview
+        } else {}
+    }
+    return "z_net_\{mn}(\{args})"
 }
 
 emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {

@@ -1,0 +1,42 @@
+# net -- TCP sockets on localhost plus readiness polling: the transport
+# for tool daemons (zls --listen). The v1 surface is deliberately small:
+# a loopback listener, accept/connect producing bidirectional
+# connections that satisfy the io Reader/Writer protocols, and
+# poll-based readiness with a millisecond timeout. Connections close
+# explicitly (no RAII yet); double closes are safe no-ops.
+
+# listener -- a bound, listening TCP socket on 127.0.0.1.
+Listener: class {
+    fd: i32
+    closed: bool
+} as {
+    accept: function {:this} out (Result t: Conn e: IoError) is native
+    close: function {:this} out (Result t: null e: IoError) is native
+}
+
+# conn -- one bidirectional TCP connection. `read` appends up to `max`
+# bytes (0 read = the peer closed); `write` loops until every byte is
+# out.
+Conn: class {
+    fd: i32
+    closed: bool
+} as {
+    :Reader
+    :Writer
+    read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
+    write: function {:this from: ByteView} out (Result t: u64 e: IoError) is native
+    flush: function {:this} out (Result t: null e: IoError) is native
+    close: function {:this} out (Result t: null e: IoError) is native
+}
+
+# listen -- bind + listen on 127.0.0.1:<port> (SO_REUSEADDR, backlog 16).
+listen: function {port: u16} out (Result t: Listener e: IoError) is native
+
+# connect -- open a client connection to 127.0.0.1:<port>.
+connect: function {port: u16} out (Result t: Conn e: IoError) is native
+
+# pollReadable -- true when `fd` has readable data (or a hangup to
+# drain) within `timeoutMillis`; 0 polls without blocking. Works on
+# sockets and standard input (fd 0). An interrupted wait reports
+# not-readable rather than an error.
+pollReadable: function {fd: i32 timeoutMillis: i32} out (Result t: bool e: IoError) is native

@@ -1,0 +1,81 @@
+# net_loopback.z -- the net unit end to end in one process: listen on
+# loopback, connect, accept, poll for readiness, exchange bytes both
+# ways, close everything (SO_REUSEADDR makes reruns safe).
+
+main: function is {
+    lr: net.listen port: 49317
+    match (
+        lr
+    ) case ok then {
+        cr: net.connect port: 49317
+        match (
+            cr
+        ) case ok then {
+            ar: lr.accept
+            match (
+                ar
+            ) case ok then {
+                msg: Bytes
+                msg.append from: 112.u8
+                msg.append from: 105.u8
+                msg.append from: 110.u8
+                msg.append from: 103.u8
+                bv: ByteView.borrow from: msg.listview
+                wr: cr.write from: bv
+                match (
+                    wr
+                ) case ok then {
+                    print "sent=\{wr}"
+                } case err then {
+                    print "write failed"
+                }
+                pr: net.pollReadable fd: ar.fd timeoutMillis: 1000
+                match (
+                    pr
+                ) case ok then {
+                    print "readable=\{pr}"
+                } case err then {
+                    print "poll failed"
+                }
+                buf: Bytes
+                rr: ar.read into: buf max: 16
+                match (
+                    rr
+                ) case ok then {
+                    print "got=\{rr}"
+                } case err then {
+                    print "read failed"
+                }
+                b0: buf.get i: 0
+                print "first=\{b0}"
+                bv2: ByteView.borrow from: buf.listview
+                wr2: ar.write from: bv2
+                match (
+                    wr2
+                ) case ok then {
+                } case err then {
+                    print "echo failed"
+                }
+                buf2: Bytes
+                rr2: cr.read into: buf2 max: 16
+                match (
+                    rr2
+                ) case ok then {
+                    print "echo=\{rr2}"
+                } case err then {
+                    print "echo read failed"
+                }
+                ar.close
+                cr.close
+                lr.close
+                print "done"
+            } case err then {
+                print "accept failed"
+            }
+        } case err then {
+            print "connect failed"
+        }
+    } case err then {
+        print "listen failed"
+    }
+}
