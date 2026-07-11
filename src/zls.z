@@ -1,0 +1,807 @@
+# zls -- the zerolang language server (LSP 3.17 subset). Speaks
+# JSON-RPC 2.0 with Content-Length framing over stdio (`--stdio`, the
+# default) or a framed input file (`--replay`, the test harness's
+# transport; os.spawn cannot pipe a child's stdin while capturing its
+# output). Documents sync with full text; every didOpen/didChange runs
+# zcheck.check with the open buffers overlaid on disk and publishes
+# diagnostics. Positions negotiate utf-32 (matching the compiler's
+# codepoint columns) and fall back to utf-16 conversion.
+
+Value: json.Value
+Obj: json.Obj
+Arr: json.Arr
+
+# ---- small builders -------------------------------------------------
+
+newObj: function out Obj is {
+    return (Obj entries: (Map String value: Value) keys: (List String))
+}
+
+newArr: function out Arr is {
+    return (Arr items: (List Value))
+}
+
+# ---- uri <-> path ---------------------------------------------------
+
+hexNibble: function {b: u8} out i64 is {
+    if b >= 48 when b <= 57 then return (b - 48).i64
+    if b >= 97 when b <= 102 then return (b - 87).i64
+    if b >= 65 when b <= 70 then return (b - 55).i64
+    return -1
+}
+
+# uriToPath -- "file:///a/b%20c.z" -> "/a/b c.z". Non-file URIs return "".
+uriToPath: function {uri: StringView} out String is {
+    if (uri.startsWith "file://") == false then return "".string
+    r: "".string
+    i: 7.u64
+    n: uri.length
+    for i < n loop {
+        bo: uri.byteAt :i
+        match (
+            bo
+        ) case some then {
+            if bo == 37 when (i + 2) < n then {
+                h1: 0.i64
+                h2: 0.i64
+                b1: uri.byteAt i: i + 1
+                match (
+                    b1
+                ) case some then {
+                    h1 = hexNibble b: b1
+                } case none then {}
+                b2: uri.byteAt i: i + 2
+                match (
+                    b2
+                ) case some then {
+                    h2 = hexNibble b: b2
+                } case none then {}
+                if h1 >= 0 when h2 >= 0 then {
+                    r.appendByte b: ((h1 * 16) + h2).u8
+                    i = i + 2
+                } else {
+                    r.appendByte b: bo
+                }
+            } else {
+                r.appendByte b: bo
+            }
+        } case none then {}
+        i = i + 1
+    }
+    return r
+}
+
+# pathToUri -- absolute path -> file:// URI (no percent-encoding; the
+# workspace paths this serves are plain).
+pathToUri: function {path: StringView} out String is {
+    r: "file://".string
+    r.append path
+    return r
+}
+
+# relPathOf -- path relative to srcDir ("" when outside it).
+relPathOf: function {path: StringView srcDir: StringView} out String is {
+    if srcDir.length == 0 then return "".string
+    pre: srcDir.string
+    pre.append "/"
+    pv: pre.stringview
+    if path.startsWith pv then return (path.substring from: pre.length to: path.length).string
+    return "".string
+}
+
+# unitNameOf -- a path's unit name: final segment without ".z".
+unitNameOf: function {path: StringView} out String is {
+    start: 0.u64
+    so: path.lastIndexOf needle: "/"
+    match (
+        so
+    ) case some then {
+        start = so + 1
+    } case none then {}
+    stop: path.length
+    if path.endsWith ".z" then stop = stop - 2
+    r: "".string
+    i: start
+    for i < stop loop {
+        b: path.byteAt :i
+        match (
+            b
+        ) case some then {
+            r.appendByte :b
+        } case none then {}
+        i = i + 1
+    }
+    return r
+}
+
+# ---- position encoding ----------------------------------------------
+
+# encodedCol -- 1-based codepoint column -> 0-based column in the
+# negotiated encoding, measured over `lineText`. utf-32 columns equal
+# codepoint counts; utf-16 pays one extra unit per astral codepoint.
+encodedCol: function {lineText: StringView cpCol1: u32 utf32: bool} out u32 is {
+    if cpCol1 == 0 then return 0.u32
+    target: (cpCol1 - 1).u64
+    if utf32 then return (cpCol1 - 1).u32
+    units: 0.u32
+    idx: 0.u64
+    with cit: lineText.codepoints do for cp: cit loop {
+        if idx >= target then break
+        if cp >= 65536 then {
+            units = units + 2
+        } else {
+            units = units + 1
+        }
+        idx = idx + 1
+    }
+    # columns past the end of the line degrade to the line's width in
+    # units plus the shortfall (whitespace-only overhang)
+    if idx < target then units = units + (target - idx).u32
+    return units
+}
+
+# ---- json-rpc send --------------------------------------------------
+
+writeAll: function {s: StringView} is {
+    b: Bytes
+    i: 0.u64
+    n: s.length
+    for i < n loop {
+        bo: s.byteAt :i
+        match (
+            bo
+        ) case some then {
+            b.append from: bo
+        } case none then {}
+        i = i + 1
+    }
+    bv: ByteView.borrow from: b.listview
+    w: io.stdout
+    wr: w.write from: bv
+    match (
+        wr
+    ) case ok then {
+    } case err then {
+        io.eprintln "zls: stdout write failed"
+    }
+}
+
+frameAndSend: function {body: String} is {
+    blen: body.length
+    m: "Content-Length: \{blen}"
+    m.appendByte b: 13
+    m.appendByte b: 10
+    m.appendByte b: 13
+    m.appendByte b: 10
+    m.append body.stringview
+    writeAll s: m.stringview
+}
+
+sendResult: function {id: Value.take result: Value.take} is {
+    o: newObj
+    o.set key: "jsonrpc".string value: (Value.text "2.0".string)
+    o.set key: "id".string value: id
+    o.set key: "result".string value: result
+    root: (Value.object o)
+    body: json.serialize v: root
+    frameAndSend :body
+}
+
+sendError: function {id: Value.take code: i64 message: StringView} is {
+    e: newObj
+    e.set key: "code".string value: (Value.intval code)
+    e.set key: "message".string value: (Value.text message.string)
+    o: newObj
+    o.set key: "jsonrpc".string value: (Value.text "2.0".string)
+    o.set key: "id".string value: id
+    o.set key: "error".string value: (Value.object e)
+    root: (Value.object o)
+    body: json.serialize v: root
+    frameAndSend :body
+}
+
+sendNotification: function {method: StringView params: Value.take} is {
+    o: newObj
+    o.set key: "jsonrpc".string value: (Value.text "2.0".string)
+    o.set key: "method".string value: (Value.text method.string)
+    o.set key: "params".string value: params
+    root: (Value.object o)
+    body: json.serialize v: root
+    frameAndSend :body
+}
+
+# idValueOf -- the request id as a fresh Value (int, string, or null).
+idValueOf: function {msg: Value} out Value is {
+    f: json.at v: msg path: "id"
+    k: f.kind
+    match (
+        k
+    ) case intval then {
+        return (Value.intval f.i)
+    } case text then {
+        return (Value.text f.s.copy)
+    } else {
+        return Value.nul
+    }
+}
+
+# ---- header parsing -------------------------------------------------
+
+parseContentLength: function {line: StringView} out u64 is {
+    lower: line.toLowerAscii
+    lv: lower.stringview
+    if lv.startsWith "content-length:" then {
+        rest: lv.substring from: 15 to: lv.length
+        t: rest.trim
+        pr: t.parseU64
+        match (
+            pr
+        ) case ok then {
+            return pr
+        } case err then {
+            return 0.u64
+        }
+    }
+    return 0.u64
+}
+
+# ---- document + server ----------------------------------------------
+
+Document: class {
+    uri: String
+    path: String
+    relpath: String
+    text: String
+    version: i64
+}
+
+Server: class {
+    docs: (Map String value: Document)
+    srcDir: String
+    systemDir: String
+    srcFlag: String
+    sysFlag: String
+    encUtf32: bool
+    initialized: bool
+    shutdownReq: bool
+    running: bool
+    exitCode: i32
+    inbuf: Bytes
+    inpos: u64
+} as {
+    # ---- framed reader over the BufReader ----
+
+    needByte: function {:this rdr: io.Reader} out (optionval u8) is {
+        for this.inpos >= this.inbuf.length loop {
+            # drained: truncate in place (a fresh Bytes here would need a
+            # typedef-field reassign destroy the emitter does not wire yet)
+            for this.inbuf.length > 0 loop this.inbuf.pop
+            this.inpos = 0
+            rr: rdr.read into: this.inbuf max: 65536
+            match (
+                rr
+            ) case ok then {
+                if rr == 0 then return (optionval.none u8)
+            } case err then {
+                return (optionval.none u8)
+            }
+        }
+        b: this.inbuf.get i: this.inpos
+        this.inpos = this.inpos + 1
+        return (optionval.some b)
+    }
+
+    readHeaderLine: function {:this rdr: io.Reader} out (Option String) is {
+        line: "".string
+        for true loop {
+            bo: this.needByte :rdr
+            match (
+                bo
+            ) case some then {
+                if bo == 10 then {
+                    n9: line.length
+                    if n9 > 0 then {
+                        lv9: line.stringview
+                        lb9: lv9.byteAt i: n9 - 1
+                        match (
+                            lb9
+                        ) case some then {
+                            if lb9 == 13 then {
+                                s2: (lv9.substring from: 0 to: n9 - 1).string
+                                return (Option.some s2)
+                            }
+                        } case none then {}
+                    }
+                    return (Option.some line)
+                }
+                line.appendByte b: bo
+            } case none then {
+                return (Option.none String)
+            }
+        }
+    }
+
+    readBody: function {:this rdr: io.Reader n: u64} out (Option String) is {
+        body: "".string
+        body.reserve :n
+        i: 0.u64
+        for i < n loop {
+            bo: this.needByte :rdr
+            match (
+                bo
+            ) case some then {
+                body.appendByte b: bo
+            } case none then {
+                return (Option.none String)
+            }
+            i = i + 1
+        }
+        return (Option.some body)
+    }
+
+    # readMessage -- one framed JSON-RPC payload; none at end of input.
+    readMessage: function {:this rdr: io.Reader} out (Option String) is {
+        clen: 0.u64
+        for true loop {
+            lo: this.readHeaderLine :rdr
+            match (
+                lo
+            ) case some then {
+                if lo.length == 0 then break
+                lv: lo.stringview
+                c9: parseContentLength line: lv
+                if c9 > 0 then clen = c9
+            } case none then {
+                return (Option.none String)
+            }
+        }
+        if clen == 0 then {
+            io.eprintln "zls: message without Content-Length"
+            return (Option.none String)
+        }
+        return (this.readBody :rdr n: clen)
+    }
+
+    # ---- dispatch ----
+
+    handleMessage: function {:this msg: Value} is {
+        mo: json.textAt v: msg path: "method"
+        hasId: json.hasAt v: msg path: "id"
+        match (
+            mo
+        ) case some then {
+            mv: mo.stringview
+            if mv == "initialize" then {
+                this.handleInitialize :msg
+            } else if mv == "initialized" then {
+            } else if mv == "shutdown" then {
+                this.shutdownReq = true
+                idv: idValueOf :msg
+                sendResult id: idv result: Value.nul
+            } else if mv == "exit" then {
+                this.running = false
+                if this.shutdownReq == false then this.exitCode = 1
+            } else if mv == "textDocument/didOpen" then {
+                this.handleDidOpen :msg
+            } else if mv == "textDocument/didChange" then {
+                this.handleDidChange :msg
+            } else if mv == "textDocument/didClose" then {
+                this.handleDidClose :msg
+            } else {
+                if hasId then {
+                    idv2: idValueOf :msg
+                    sendError id: idv2 code: -32601 message: "method not found"
+                }
+            }
+        } case none then {
+            io.eprintln "zls: message without method"
+        }
+    }
+
+    handleInitialize: function {:this msg: Value} is {
+        # position encoding: utf-32 when the client offers it
+        i: 0.u64
+        for true loop {
+            pth: "params/capabilities/general/positionEncodings/\{i}"
+            f: json.at v: msg path: pth.stringview
+            k: f.kind
+            done9: false
+            match (
+                k
+            ) case text then {
+                if f.s.stringview == "utf-32" then this.encUtf32 = true
+            } else {
+                done9 = true
+            }
+            if done9 then break
+            i = i + 1
+        }
+        # workspace discovery: CLI flags > initializationOptions > rootUri
+        # auto-detect (zerolang repo layout) > cwd
+        rootPath: "".string
+        ro: json.textAt v: msg path: "params/rootUri"
+        match (
+            ro
+        ) case some then {
+            rootPath = uriToPath uri: ro.stringview
+        } case none then {}
+        sd: "".string
+        syd: "".string
+        if this.srcFlag.length > 0 then sd = this.srcFlag.copy
+        if this.sysFlag.length > 0 then syd = this.sysFlag.copy
+        io1: json.textAt v: msg path: "params/initializationOptions/srcDir"
+        match (
+            io1
+        ) case some then {
+            if sd.length == 0 then sd = io1.copy
+        } case none then {}
+        io2: json.textAt v: msg path: "params/initializationOptions/systemDir"
+        match (
+            io2
+        ) case some then {
+            if syd.length == 0 then syd = io2.copy
+        } case none then {}
+        if sd.length == 0 then {
+            if rootPath.length > 0 then {
+                candSys: zcheck.joinPath a: rootPath.stringview b: "lib/system"
+                candSrc: zcheck.joinPath a: rootPath.stringview b: "src"
+                hasSys: io.exists path: candSys.stringview
+                hasSrc: io.exists path: candSrc.stringview
+                if hasSys when hasSrc then {
+                    sd = candSrc.copy
+                    if syd.length == 0 then syd = candSys.copy
+                } else {
+                    sd = rootPath.copy
+                }
+            } else {
+                sd = ".".string
+            }
+        }
+        if syd.length == 0 then syd = zcheck.resolveSystemDir flagVal: ""
+        this.srcDir = sd
+        this.systemDir = syd
+        # response
+        caps: newObj
+        caps.set key: "textDocumentSync".string value: (Value.intval 1)
+        encName: "utf-16"
+        if this.encUtf32 then encName = "utf-32"
+        caps.set key: "positionEncoding".string value: (Value.text encName.string)
+        info: newObj
+        info.set key: "name".string value: (Value.text "zls".string)
+        info.set key: "version".string value: (Value.text "0.1.0".string)
+        res: newObj
+        res.set key: "capabilities".string value: (Value.object caps)
+        res.set key: "serverInfo".string value: (Value.object info)
+        idv: idValueOf :msg
+        resv: (Value.object res)
+        sendResult id: idv result: resv
+        this.initialized = true
+    }
+
+    # ---- document sync (full text) ----
+
+    handleDidOpen: function {:this msg: Value} is {
+        uo: json.textAt v: msg path: "params/textDocument/uri"
+        to: json.textAt v: msg path: "params/textDocument/text"
+        vo: json.intAt v: msg path: "params/textDocument/version"
+        ver: 0.i64
+        match (
+            vo
+        ) case some then {
+            ver = vo
+        } case none then {}
+        match (
+            uo
+        ) case some then {
+            match (
+                to
+            ) case some then {
+                pth: uriToPath uri: uo.stringview
+                rel: relPathOf path: pth.stringview srcDir: this.srcDir.stringview
+                d: (Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver)
+                key9: uo.copy
+                this.docs.set key: key9 value: d
+                this.recomputeFor uri: uo.stringview
+            } case none then {}
+        } case none then {}
+    }
+
+    handleDidChange: function {:this msg: Value} is {
+        uo: json.textAt v: msg path: "params/textDocument/uri"
+        to: json.textAt v: msg path: "params/contentChanges/0/text"
+        vo: json.intAt v: msg path: "params/textDocument/version"
+        match (
+            uo
+        ) case some then {
+            match (
+                to
+            ) case some then {
+                ku: uo.copy
+                rem: this.docs.remove key: ku
+                changed9: false
+                match (
+                    rem
+                ) case some then {
+                    ver9: rem.version
+                    match (
+                        vo
+                    ) case some then {
+                        ver9 = vo
+                    } case none then {}
+                    d: (Document
+                        uri: rem.uri.copy
+                        path: rem.path.copy
+                        relpath: rem.relpath.copy
+                        text: to.copy
+                        version: ver9
+                    )
+                    key9: uo.copy
+                    this.docs.set key: key9 value: d
+                    changed9 = true
+                } case none then {}
+                if changed9 then this.recomputeFor uri: uo.stringview
+            } case none then {}
+        } case none then {}
+    }
+
+    handleDidClose: function {:this msg: Value} is {
+        uo: json.textAt v: msg path: "params/textDocument/uri"
+        match (
+            uo
+        ) case some then {
+            ku: uo.copy
+            rem: this.docs.remove key: ku
+            match (
+                rem
+            ) case some then {
+            } case none then {}
+            # clear this uri's diagnostics
+            empty9: newArr
+            p9: newObj
+            p9.set key: "uri".string value: (Value.text uo.copy)
+            p9.set key: "diagnostics".string value: (Value.array empty9)
+            pv9: (Value.object p9)
+            sendNotification method: "textDocument/publishDiagnostics" params: pv9
+        } case none then {}
+    }
+
+    # ---- diagnostics ----
+
+    # recomputeFor -- run a full check with all open buffers overlaid,
+    # rooted at `uri`'s unit, and publish per-file diagnostics.
+    recomputeFor: function {:this uri: StringView} is {
+        if this.initialized == false then return
+        ov: (Map String value: String)
+        with dit: this.docs.iterateItems do for e: dit loop {
+            if e.value.relpath.length > 0 then {
+                k9: e.value.relpath.copy
+                v9: e.value.text.copy
+                ov.set key: k9 value: v9
+            }
+        }
+        mu: "".string
+        found9: false
+        {
+            ku: uri.string
+            dgo: this.docs.get key: ku
+            match (
+                dgo
+            ) case some then {
+                mu = unitNameOf path: dgo.path.stringview
+                found9 = true
+            } case none then {}
+        }
+        if found9 == false then return
+        r: (zcheck.check
+            srcdir: this.srcDir.stringview
+            systemdir: this.systemDir.stringview
+            mainUnit: mu.stringview
+            overlays: ov
+        )
+        rows: (List zcheck.diagrow)
+        msgs: (List String)
+        zcheck.diagsOf :r :rows :msgs
+        this.publishAll :r :rows :msgs
+    }
+
+    # publishAll -- one publishDiagnostics per open document: its
+    # matching rows (by provider path), or an empty list to clear.
+    publishAll: function {
+        :this
+        r: zcheck.CheckResult
+        rows: (List zcheck.diagrow)
+        msgs: (List String)
+    } is {
+        # resolve each row's provider path once (parallel to rows)
+        paths: (List String)
+        with rit: rows.iterate do for row: rit loop {
+            pp: "".string
+            if row.fsno > 0 then pp = r.vfs.pathfromprovider dentryid: row.fsno
+            paths.append pp
+        }
+        with dit: this.docs.iterateItems do for e: dit loop {
+            drel: e.value.relpath.copy
+            dfs: zcheck.joinPath a: this.srcDir.stringview b: drel.stringview
+            dov: "/".string
+            dov.append drel.stringview
+            durl: e.value.uri.copy
+            arr: newArr
+            nrows: rows.length
+            ri: 0.u64
+            for ri < nrows loop {
+                pv: paths.get i: ri
+                hit: false
+                if drel.length > 0 then {
+                    if pv.stringview == drel.stringview then hit = true
+                    if pv.stringview == dfs.stringview then hit = true
+                    if pv.stringview == dov.stringview then hit = true
+                }
+                if hit then {
+                    row: rows.get i: ri
+                    m: msgs.get i: ri
+                    lineText: "".string
+                    lt9: r.vfs.getline dentryid: row.fsno lineno: (row.lineno - 1).u64
+                    match (
+                        lt9
+                    ) case some then {
+                        lineText = lt9.copy
+                    } case none then {}
+                    dv: (diagValue
+                        :row
+                        msg: m.stringview
+                        lineText: lineText.stringview
+                        utf32: this.encUtf32
+                    )
+                    arr.items.append dv
+                }
+                ri = ri + 1
+            }
+            p9: newObj
+            p9.set key: "uri".string value: (Value.text durl)
+            p9.set key: "diagnostics".string value: (Value.array arr)
+            pv9: (Value.object p9)
+            sendNotification method: "textDocument/publishDiagnostics" params: pv9
+        }
+    }
+}
+
+# diagValue -- one LSP Diagnostic object from a flattened row.
+diagValue: function {
+    row: zcheck.diagrow
+    msg: StringView
+    lineText: StringView
+    utf32: bool
+} out Value is {
+    line0: 0.u32
+    if row.lineno > 0 then line0 = row.lineno - 1
+    c0: encodedCol :lineText cpCol1: row.colno :utf32
+    w9: row.width
+    if w9 == 0 then w9 = 1
+    c1: encodedCol :lineText cpCol1: row.colno + w9 :utf32
+    if c1 <= c0 then c1 = c0 + 1
+    st9: newObj
+    st9.set key: "line".string value: (Value.intval line0.i64)
+    st9.set key: "character".string value: (Value.intval c0.i64)
+    en9: newObj
+    en9.set key: "line".string value: (Value.intval line0.i64)
+    en9.set key: "character".string value: (Value.intval c1.i64)
+    rg9: newObj
+    rg9.set key: "start".string value: (Value.object st9)
+    rg9.set key: "end".string value: (Value.object en9)
+    code9: codeOf n: row.code
+    d9: newObj
+    d9.set key: "range".string value: (Value.object rg9)
+    d9.set key: "severity".string value: (Value.intval 1)
+    d9.set key: "code".string value: (Value.text code9)
+    d9.set key: "source".string value: (Value.text "zc".string)
+    d9.set key: "message".string value: (Value.text msg.string)
+    return (Value.object d9)
+}
+
+# codeOf -- "E" + zero-padded-4 error code.
+codeOf: function {n: u32} out String is {
+    r: "E".string
+    if n < 1000 then r.append "0"
+    if n < 100 then r.append "0"
+    if n < 10 then r.append "0"
+    cs: "\{n}"
+    r.append cs.stringview
+    return r
+}
+
+# ---- main ------------------------------------------------------------
+
+serve: function {srv: Server rdr: io.Reader} is {
+    for srv.running loop {
+        mo: srv.readMessage :rdr
+        match (
+            mo
+        ) case some then {
+            pr: json.parse source: mo.stringview
+            match (
+                pr
+            ) case ok then {
+                srv.handleMessage msg: pr
+            } case err then {
+                io.eprintln "zls: bad JSON payload"
+            }
+        } case none then {
+            srv.running = false
+        }
+    }
+}
+
+printUsage: function is {
+    io.eprintln "usage: zls [--stdio] [--replay <file>] [--src <dir>] [--system <dir>]"
+}
+
+main: function is {
+    argv: os.args
+    n: argv.length
+    replay: "".string
+    srcFlag: "".string
+    sysFlag: "".string
+    i: 1.u64
+    for i < n loop {
+        arg: (argv.get :i).copy
+        av: arg.stringview
+        if av == "--stdio" then {
+        } else if av == "--replay" then {
+            if (i + 1) < n then {
+                i = i + 1
+                replay = (argv.get :i).copy
+            }
+        } else if av == "--src" then {
+            if (i + 1) < n then {
+                i = i + 1
+                srcFlag = (argv.get :i).copy
+            }
+        } else if av == "--system" then {
+            if (i + 1) < n then {
+                i = i + 1
+                sysFlag = (argv.get :i).copy
+            }
+        } else if av == "--listen" then {
+            io.eprintln "zls: --listen is not implemented yet; use --stdio"
+            os.exit code: 2
+        } else if av == "--help" then {
+            printUsage
+            os.exit code: 0
+        } else {
+            io.eprintln "zls: unknown argument"
+            printUsage
+            os.exit code: 2
+        }
+        i = i + 1
+    }
+    ib: Bytes
+    srv: (Server
+        docs: (Map String value: Document)
+        srcDir: "".string
+        systemDir: "".string
+        :srcFlag
+        :sysFlag
+        encUtf32: false
+        initialized: false
+        shutdownReq: false
+        running: true
+        exitCode: 0
+        inbuf: ib
+        inpos: 0
+    )
+    if replay.length > 0 then {
+        fo: io.open path: replay.stringview mode: io.openmode.read
+        match (
+            fo
+        ) case ok then {
+            serve :srv rdr: fo
+        } case err then {
+            io.eprintln "zls: cannot open replay file"
+            os.exit code: 2
+        }
+    } else {
+        r: io.stdin
+        serve :srv rdr: r
+    }
+    os.exit code: srv.exitCode
+}

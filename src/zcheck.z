@@ -92,6 +92,94 @@ check: function {
     )
 }
 
+# ---- diagnostics flattening ----------------------------------------
+
+# diagrow -- one diagnostic's scalar fields. The rendered message text
+# (msg with note/hint folded in) rides in a parallel list, records
+# cannot hold reftypes.
+diagrow: record {
+    lineno: u32
+    colno: u32
+    width: u32
+    code: u32
+    fsno: u32
+}
+
+# diagsOf -- flatten a check's diagnostics into parallel lists: the
+# fail-fast parse error (when parseOk is false) plus every batch-
+# collected typecheck error. fsno 0 heals through the parser's
+# node->file segments, matching zc's errorMessage.
+diagsOf: function {r: CheckResult rows: (List diagrow) msgs: (List String)} is {
+    if r.parseOk == false then {
+        appendParseError n: r.prog :rows :msgs
+    }
+    diagsOfSt o: r.st :rows :msgs parser: r.parser
+}
+
+appendParseError: function {n: Node rows: (List diagrow) msgs: (List String)} is {
+    match (
+        n
+    ) case error then {
+        m: n.msg.copy
+        if n.note.length > 0 then {
+            m.appendByte b: 10
+            m.append "note: "
+            m.append n.note.stringview
+        }
+        if n.hint.length > 0 then {
+            m.appendByte b: 10
+            m.append "hint: "
+            m.append n.hint.stringview
+        }
+        rows.append (diagrow
+            lineno: n.lineno
+            colno: n.colno
+            width: n.width
+            code: (zast.errCode c: n.err)
+            fsno: n.fsno
+        )
+        msgs.append m
+    } else {}
+}
+
+diagsOfSt: function {
+    o: (Option zenv.ZSymbolTable)
+    rows: (List diagrow)
+    msgs: (List String)
+    parser: zparser.Parser
+} is {
+    match (
+        o
+    ) case some then {
+        with eit: o.typing.errors.iterate do for er: eit loop {
+            fno: er.fsno
+            if fno == 0 when er.nodeid > 0 then {
+                sf: parser.fsnoForNode nodeid: er.nodeid
+                if sf > 0 then fno = sf
+            }
+            m: er.msg.copy
+            if er.note.length > 0 then {
+                m.appendByte b: 10
+                m.append "note: "
+                m.append er.note.stringview
+            }
+            if er.hint.length > 0 then {
+                m.appendByte b: 10
+                m.append "hint: "
+                m.append er.hint.stringview
+            }
+            rows.append (diagrow
+                lineno: er.lineno
+                colno: er.colno
+                width: er.width
+                code: (zast.errCode c: er.err)
+                fsno: fno
+            )
+            msgs.append m
+        }
+    } case none then {}
+}
+
 # ---- project-layout resolution (shared by zc and zls) --------------
 
 # dirname -- the path up to (excluding) the final "/", "." when none.

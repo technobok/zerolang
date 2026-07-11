@@ -141,6 +141,83 @@ binArgv: function {bin: StringView argsFile: StringView} out List String is {
     return a
 }
 
+# frameLsp -- wrap each non-empty line of a .msgs transcript in LSP
+# Content-Length framing (the bytes zls reads on its --replay input).
+frameLsp: function {src: StringView} out String is {
+    out9: "".string
+    with it: src.lines do for ln: it loop {
+        if ln.length > 0 then {
+            n9: ln.length
+            h9: "Content-Length: \{n9}"
+            out9.append h9.stringview
+            out9.appendByte b: 13
+            out9.appendByte b: 10
+            out9.appendByte b: 13
+            out9.appendByte b: 10
+            out9.append ln
+        }
+    }
+    return out9
+}
+
+# deframeLsp -- zls output back to one JSON body per line. The server
+# emits the exact form "Content-Length: N\r\n\r\n<body>"; anything
+# else surfaces as a literal marker line so the diff fails loudly.
+deframeLsp: function {raw: StringView} out String is {
+    out9: "".string
+    pos: 0.u64
+    n: raw.length
+    for pos < n loop {
+        if pos + 16 > n then {
+            out9.append "<<deframe error: truncated header>>"
+            out9.appendByte b: 10
+            return out9
+        }
+        okHdr9: false
+        {
+            hd9: raw.substring from: pos to: pos + 16
+            if hd9 == "Content-Length: " then okHdr9 = true
+        }
+        if okHdr9 == false then {
+            out9.append "<<deframe error: bad prefix>>"
+            out9.appendByte b: 10
+            return out9
+        }
+        clen: 0.u64
+        i: pos + 16
+        for true loop {
+            bo: raw.byteAt :i
+            match (
+                bo
+            ) case some then {
+                if bo >= 48 when bo <= 57 then {
+                    clen = (clen * 10) + (bo.u64 - 48)
+                    i = i + 1
+                } else {
+                    break
+                }
+            } case none then {
+                break
+            }
+        }
+        i = i + 4
+        j: 0.u64
+        for j < clen loop {
+            bo2: raw.byteAt :i
+            match (
+                bo2
+            ) case some then {
+                out9.appendByte b: bo2
+            } case none then {}
+            i = i + 1
+            j = j + 1
+        }
+        out9.appendByte b: 10
+        pos = i
+    }
+    return out9
+}
+
 main: function is {
     argv: os.args
     n: argv.length
@@ -297,6 +374,119 @@ main: function is {
             }
         }
     }
+
+    # ---------------- LSP (framed transcript) cases ----------------
+    lspCases: "\{root.stringview}/tests/fixtures/lsp_cases"
+    lspGold: "\{root.stringview}/tests/fixtures/lsp_golden"
+    lspLs: io.listDir path: lspCases.stringview
+    match (
+        lspLs
+    ) case ok then {
+        zlsC9: "\{d.stringview}/zls_bin.c"
+        zlsB9: "\{d.stringview}/zls_bin"
+        srcD9: "\{root.stringview}/src"
+        za9: (zcArgv
+            zc: zc.stringview
+            name: "zls"
+            srcdir: srcD9.stringview
+            sys: sys.stringview
+            outc: zlsC9.stringview
+        )
+        ec9: (os.spawn
+            argv: za9
+            cwd: ""
+            outPath: "/dev/null"
+            errPath: "/dev/null"
+            timeoutSecs: 0
+        )
+        built9: false
+        if ec9 != 0 then {
+            print "FAIL(lsp) zls (zc)"
+            fails = fails + 1
+        } else {
+            ga9: (gccArgv
+                cc: cc.stringview
+                bin: zlsB9.stringview
+                csrc: zlsC9.stringview
+                asan: false
+            )
+            bc9: (os.spawn
+                argv: ga9
+                cwd: ""
+                outPath: "/dev/null"
+                errPath: "/dev/null"
+                timeoutSecs: 0
+            )
+            if bc9 != 0 then {
+                print "FAIL(lsp) zls (cc)"
+                fails = fails + 1
+            } else {
+                built9 = true
+            }
+        }
+        if built9 then {
+            names9: (List String)
+            with lit: lspLs.iterate do for fn9: lit loop {
+                fv0: fn9.stringview
+                keep9: false
+                if fv0.endsWith ".msgs" then keep9 = true
+                if fv0.endsWith ".raw" then keep9 = true
+                if keep9 then names9.append fn9.copy
+            }
+            names9.sort
+            with nit: names9.iterate do for cf9: nit loop {
+                cv9: cf9.stringview
+                isRaw9: false
+                if cv9.endsWith ".raw" then isRaw9 = true
+                ext9: 5.u64
+                if isRaw9 then ext9 = 4
+                nm9: (cv9.substring from: 0 to: cv9.length - ext9).string
+                cp9: "\{lspCases.stringview}/\{cv9}"
+                caseC9: slurp path: cp9.stringview
+                input9: "".string
+                if isRaw9 then {
+                    input9 = caseC9.copy
+                } else {
+                    input9 = frameLsp src: caseC9.stringview
+                }
+                inP9: "\{d.stringview}/lsp_\{nm9.stringview}.in"
+                wri9: io.writeText path: inP9.stringview content: input9.stringview
+                match (
+                    wri9
+                ) case ok then {} case err then {
+                    print "FAIL(lsp) \{nm9.stringview} (write input)"
+                    fails = fails + 1
+                }
+                outP9: "\{d.stringview}/lsp_\{nm9.stringview}.raw"
+                ba9: (List String)
+                ba9.append zlsB9.copy
+                ba9.append "--replay".string
+                ba9.append inP9.copy
+                rc9: (os.spawn
+                    argv: ba9
+                    cwd: ""
+                    outPath: outP9.stringview
+                    errPath: "/dev/null"
+                    :timeoutSecs
+                )
+                goldP9: "\{lspGold.stringview}/\{nm9.stringview}.out"
+                if (io.exists path: goldP9.stringview) == false then {
+                    skip = skip + 1
+                } else {
+                    rawOut9: slurp path: outP9.stringview
+                    norm9: deframeLsp raw: rawOut9.stringview
+                    goldC9: slurp path: goldP9.stringview
+                    sameOut9: norm9.stringview == goldC9.stringview
+                    if sameOut9 when rc9 == 0 then {
+                        passN = passN + 1
+                    } else {
+                        print "FAIL(lsp) \{nm9.stringview}"
+                        fails = fails + 1
+                    }
+                }
+            }
+        }
+    } case err then {}
 
     # ---------------- LEAK cases ----------------
     leakDirs: (List String)
