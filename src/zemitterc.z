@@ -1653,9 +1653,19 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
         ea9: "\{ctx.svC}_\{mn}(&\{bn}, \{argx})"
         return ea9
     }
-    if btid == ctx.svTid then {
+    svRecvOk9: false
+    if btid == ctx.svTid then svRecvOk9 = true
+    if btIsStr9 then svRecvOk9 = true
+    if svRecvOk9 then {
         if (isSvSimpleNative name: mn.stringview) then {
             needsAdd :ctx name: mn.stringview
+            # a String receiver projects to a view value, like the
+            # substring/parse legs (a StringView receiver is one already)
+            recvS9: "&\{bn}"
+            if btIsStr9 then {
+                bfs2: svValueForm :ctx expr: bn.stringview isStr: true
+                recvS9 = "&\{bfs2}"
+            }
             args: "".string
             aiter: call.arguments.iterate
             for a: aiter loop {
@@ -1688,7 +1698,7 @@ emitDottedCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData
                     }
                 } else {}
             }
-            e1: "\{ctx.svC}_\{mn}(&\{bn}\{args})"
+            e1: "\{ctx.svC}_\{mn}(\{recvS9}\{args})"
             return e1
         }
     }
@@ -2509,19 +2519,18 @@ emitCollectionMethodCall: function {
     mn: dottedChildText n: call.callable
     brid9: dottedReceiverStampId :symtab callable: call.callable
     bt: chaseColMono :symtab tid: brid9
-    if (originIsTid :symtab tid: bt originTid: ctx.arrayOriginTid) then {
-        return (emitArrayMethodCall :symtab :ctx :call :mn :bn :bt)
-    }
+    # classify by the mono's ORIGIN NAME (the graph-independent identity):
+    # a by-name-resolved origin tid can diverge from the mono's captured
+    # genericOriginId when extra units register their own List/Map shells
+    on9: monoOriginName :symtab tid: bt
+    ov9: on9.stringview
+    if ov9 == "array" then return (emitArrayMethodCall :symtab :ctx :call :mn :bn :bt)
     isList9: false
-    if (originIsTid :symtab tid: bt originTid: ctx.listOriginTid) then isList9 = true
-    if (originIsTid :symtab tid: bt originTid: ctx.listViewOriginTid) then isList9 = true
+    if ov9 == "List" then isList9 = true
+    if ov9 == "ListView" then isList9 = true
     if isList9 then return (emitListMethodCall :symtab :ctx :call :mn :bn :bt)
-    if (originIsTid :symtab tid: bt originTid: ctx.setOriginTid) then {
-        return (emitSetMethodCall :symtab :ctx :call :mn :bn :bt)
-    }
-    if (originIsTid :symtab tid: bt originTid: ctx.mapOriginTid) then {
-        return (emitMapMethodCall :symtab :ctx :call :mn :bn :bt)
-    }
+    if ov9 == "Set" then return (emitSetMethodCall :symtab :ctx :call :mn :bn :bt)
+    if ov9 == "Map" then return (emitMapMethodCall :symtab :ctx :call :mn :bn :bt)
     return "".string
 }
 

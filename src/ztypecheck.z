@@ -16454,6 +16454,105 @@ shellScalarName: function {name: StringView} out bool is {
 # shellResolveByName -- the emitter's shell resolution order for `name` seen
 # from `unit`: the unit-local key, the system key, the walk list, then the
 # registry-wide cross-unit scan. 0 when nothing resolves.
+# canonShellTid -- the canonical id for a SHELL stamp value, 0 to leave
+# the stamp alone. Mirrors canonicalizeShellChildren's shell detection
+# (no defining unit, not a generic param / scalar shell / as-const clone
+# / typeof shell); memoized per shell id.
+canonShellTid: function {
+    st: zenv.ZSymbolTable
+    cache9: (Map u64 value: u64)
+    tid: u64
+    mainName: StringView
+} out u64 is {
+    if tid == 0 then return 0
+    co9: cache9.get key: tid
+    match (
+        co9
+    ) case some then {
+        return co9
+    } case none then {}
+    res9: 0.u64
+    ok9: (st.reg.typetypeOf typeId: tid) != ztypes.ztypetype.GENERIC_PARAM
+    if ok9 then {
+        duo9: st.typing.definedInUnit.get key: tid
+        match (
+            duo9
+        ) case some then {
+            ok9 = false
+        } case none then {}
+    }
+    if ok9 then {
+        nm9: regTypeNameOf reg: st.reg :tid
+        if (shellScalarName name: nm9.stringview) then nm9 = "".string
+        aco9: st.typing.asConstClone.get key: tid
+        match (
+            aco9
+        ) case some then {
+            if aco9 then nm9 = "".string
+        } case none then {}
+        tso9: st.typing.typeofShell.get key: tid
+        match (
+            tso9
+        ) case some then {
+            nm9 = "".string
+        } case none then {}
+        if nm9.length > 0 then {
+            rid9: (shellResolveByName
+                ty: st.typing
+                reg: st.reg
+                fromUnit: mainName
+                name: nm9.stringview
+            )
+            if rid9 > 0 when rid9 != tid then res9 = rid9
+        }
+    }
+    kc9: tid
+    vc9: res9
+    cache9.set key: kc9 value: vc9
+    return res9
+}
+
+# canonicalizeShellNodeStamps -- checkBodies runs BEFORE the shell-child
+# canonicalization, so expression nodes typed through a then-shell edge
+# carry the shell id in nodeType (and memberOwnerTid): the emitter reads
+# receiver types from those stamps, and a shell has no origin/children
+# to dispatch on. Rebind them to the canonical type like the child edges.
+canonicalizeShellNodeStamps: function {st: zenv.ZSymbolTable mainName: StringView} is {
+    cache9: (Map u64 value: u64)
+    nids9: (List u64)
+    vals9: (List u64)
+    with it9: st.typing.nodeType.iterateItems do for e9: it9 loop {
+        rid9: canonShellTid :st :cache9 tid: e9.value :mainName
+        if rid9 > 0 then {
+            nids9.append e9.key
+            vals9.append rid9
+        }
+    }
+    i9: 0.u64
+    for i9 < nids9.length loop {
+        k9: nids9.get i: i9
+        v9: vals9.get i: i9
+        st.typing.nodeType.set key: k9 value: v9
+        i9 = i9 + 1
+    }
+    mnids9: (List u64)
+    mvals9: (List u64)
+    with mt9: st.typing.memberOwnerTid.iterateItems do for m9: mt9 loop {
+        rid2: canonShellTid :st :cache9 tid: m9.value :mainName
+        if rid2 > 0 then {
+            mnids9.append m9.key
+            mvals9.append rid2
+        }
+    }
+    j9: 0.u64
+    for j9 < mnids9.length loop {
+        k2: mnids9.get i: j9
+        v2: mvals9.get i: j9
+        st.typing.memberOwnerTid.set key: k2 value: v2
+        j9 = j9 + 1
+    }
+}
+
 shellResolveByName: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -16650,6 +16749,7 @@ typecheck: function {
             program
         ) case program then {
             canonicalizeShellChildren :st mainName: program.mainUnitName.stringview
+            canonicalizeShellNodeStamps :st mainName: program.mainUnitName.stringview
         } else {}
     }
     return st
