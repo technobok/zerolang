@@ -786,6 +786,20 @@ buildFactory: function {
     )
 }
 
+# isYieldValue -- the assignment RHS is a yield expression (through
+# expression wrappers): the expression-form `name: yield E`.
+isYieldValue: function {n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (isYieldValue n: n.expression)
+    } case yieldexpr then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # GenCross -- the crossing-locals walk state: yields passed so far, each
 # local's first-definition yield count, its maximum-use yield count, and
 # whether any reference sits inside a yielding loop (next iteration
@@ -796,6 +810,10 @@ GenCross: class {
     maxUse: (Map String value: u64)
     inLoop: (Map String value: bool)
     params: (Map String value: bool)
+    # `name: yield E` resume-input bindings: per-call borrowed aliases into
+    # the caller's storage -- NEVER promoted (a stored pointer would dangle
+    # across calls; the liveness rule already confines each to one window).
+    yieldBound: (Map String value: bool)
 }
 
 crossWalk: function {gc: GenCross n: Node inYieldLoop: bool} is {
@@ -808,6 +826,11 @@ crossWalk: function {gc: GenCross n: Node inYieldLoop: bool} is {
     } case assignment then {
         crossWalk :gc n: n.value :inYieldLoop
         anv: n.name.stringview
+        if (isYieldValue n: n.value) then {
+            ybk: anv.string
+            ybv: true
+            gc.yieldBound.set key: ybk value: ybv
+        }
         isP: optBoolOr2 o: (gc.params.get key: anv.string) d: false
         if (isP) == false then {
             seen: optU64Or2 o: (gc.firstDef.get key: anv.string) d: 18446744073709551615.u64
@@ -942,35 +965,20 @@ optBoolOr2: function {o: optionval bool d: bool} out bool is {
     }
 }
 
-# crossingLocals -- the locals whose def-to-use span crosses a yield (or
-# that live in a yielding loop): names appended to dst. Conservative;
-# parameters are excluded (they promote unconditionally).
+# crossingLocals -- EVERY generator-body local promotes: a resumable body
+# has no persistent stack frame, so a local surviving to any later flush
+# (scope exit, fn exit) would free garbage on a fresh frame. Fields live on
+# the instance; the synth class's auto-destructor owns their cleanup.
+# (Historically only yield-crossing/looped locals promoted -- the
+# non-crossing remainder was the fresh-frame free family.)
 crossingLocals: function {gc: GenCross dst: List String} is {
-    allKeys: (List String)
     with kit: gc.firstDef.iterate do for k0: kit loop {
         kv0: k0.stringview
-        kc0: kv0.string
-        allKeys.append kc0
-    }
-    ki: 0.u64
-    kn: allKeys.length
-    for ki < kn loop {
-        k1: allKeys.get i: ki
-        k1v: k1.stringview
-        k1o: k1v.string
-        defYc: optU64Or2 o: (gc.firstDef.get key: k1o) d: 0
-        k2o: k1v.string
-        useYc: optU64Or2 o: (gc.maxUse.get key: k2o) d: defYc
-        k3o: k1v.string
-        looped: optBoolOr2 o: (gc.inLoop.get key: k3o) d: false
-        crossing: false
-        if useYc > defYc then crossing = true
-        if looped then crossing = true
-        if crossing then {
-            k4o: k1v.string
-            dst.append k4o
+        yb0: optBoolOr2 o: (gc.yieldBound.get key: kv0.string) d: false
+        if (yb0) == false then {
+            kc0: kv0.string
+            dst.append kc0
         }
-        ki = ki + 1
     }
 }
 
@@ -2075,6 +2083,7 @@ lowerOne: function {
                 maxUse: (Map String value: u64)
                 inLoop: (Map String value: bool)
                 params: (Map String value: bool)
+                yieldBound: (Map String value: bool)
             )
             gi: 0.u64
             gn: pNames.length
