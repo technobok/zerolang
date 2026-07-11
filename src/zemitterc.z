@@ -5150,7 +5150,17 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     }
                 } case none then {}
             }
-            if (stampIdOf :symtab nid: bnid2) == ctx.svTid then {
+            bareSv9: (stampIdOf :symtab nid: bnid2) == ctx.svTid
+            bareStr9: (stampIdOf :symtab nid: bnid2) == ctx.strTid
+            if bareStr9 when (isSvNoArgNative name: mn2.stringview) then {
+                # String receivers project to a view for the no-arg SV
+                # natives, mirroring the chained/auto-call legs
+                needsAdd :ctx name: mn2.stringview
+                svfb9: svValueForm :ctx expr: bn2.stringview isStr: true
+                efb9: "\{ctx.svC}_\{mn2}(&\{svfb9})"
+                return efb9
+            }
+            if bareSv9 then {
                 if mn2.stringview == "length" then {
                     e2: "\{bn2}.length"
                     return e2
@@ -5335,6 +5345,22 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         # member auto-call: a CLASS method takes its receiver by
                         # pointer (&recv, or recv when already a ptrVar); a RECORD
                         # method takes it by value.
+                        # no-arg SV natives (count/codepoints/lines) have no
+                        # per-method C symbol: emit the canonical native over
+                        # the projected view (String or StringView receiver)
+                        if (isSvNoArgNative name: mn2.stringview) when (isStringyTid
+                            :ctx
+                            tid: bstamp
+                        ) then {
+                            needsAdd :ctx name: mn2.stringview
+                            svfa9: (svValueForm
+                                :ctx
+                                expr: bn2.stringview
+                                isStr: (bstamp == ctx.strTid)
+                            )
+                            ef9: "\{ctx.svC}_\{mn2}(&\{svfa9})"
+                            return ef9
+                        }
                         mc2: symtab.reg.cnameOf tid: mco
                         # `Type.create` -- the base is the type name itself, not
                         # an instance -- is a constructor/static call and takes no
@@ -5611,6 +5637,20 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     nmco9
                 ) case some then {
                     if (symtab.reg.typetypeOf typeId: nmco9) == ztypes.ztypetype.FUNCTION then {
+                        # no-arg SV natives on a nested stringy base: the
+                        # canonical native symbol, not the method-id cname
+                        if (isSvNoArgNative name: mn2.stringview) when (isStringyTid
+                            :ctx
+                            tid: nlid9
+                        ) then {
+                            needsAdd :ctx name: mn2.stringview
+                            svfn9: (svValueForm
+                                :ctx
+                                expr: base9.stringview
+                                isStr: nlid9 == ctx.strTid
+                            )
+                            return "\{ctx.svC}_\{mn2}(&\{svfn9})"
+                        }
                         nmc9: symtab.reg.cnameOf tid: nmco9
                         nrttM9: symtab.reg.typetypeOf typeId: nlidM9
                         nmrecv9: "\{base9}"
