@@ -4296,6 +4296,74 @@ emitCrossUnitExplicitCreate: function {
     return "".string
 }
 
+# outerBaseAtom -- the leftmost atom of a LEFT-nested three-segment
+# dotted path `(a.B).c`: "a". "" for shallower shapes.
+outerBaseAtom: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (outerBaseAtom n: n.expression)
+    } case dottedpath then {
+        return (dottedBaseAtom n: n.parent)
+    } else {
+        return "".string
+    }
+}
+
+# emitCrossUnitUnionCtor -- a three-segment qualified union-arm
+# construction (`json.Value.text s`): the in-unit form resolves the
+# union by bare name, so the qualified middle segment needs its own
+# leg, resolved through the defining unit's key like the create legs.
+emitCrossUnitUnionCtor: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+} out String is {
+    pbase: outerBaseAtom n: call.callable
+    ptype: dottedParentChild n: call.callable
+    if pbase.length == 0 then return "".string
+    if ptype.length == 0 then return "".string
+    arm9: dottedChildText n: call.callable
+    if arm9.length == 0 then return "".string
+    if arm9.stringview == "create" then return "".string
+    if arm9.stringview == "borrow" then return "".string
+    if (symtab.reg.isUnitName name: pbase.stringview) == false then return "".string
+    k: "\{pbase}.\{ptype}"
+    go: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: k
+    utid: 0.u64
+    match (
+        go
+    ) case some then {
+        utid = go
+    } case none then {}
+    if utid == 0 then return "".string
+    if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.UNION then return "".string
+    vc: symtab.reg.cnameOf tid: utid
+    tg: variantTag :symtab tid: utid arm: arm9.stringview
+    payC: armPayloadC :symtab :ctx tid: utid arm: arm9.stringview
+    if payC.length > 0 then {
+        av: "".string
+        got: false
+        aiter: call.arguments.iterate
+        for a: aiter loop {
+            match (
+                a
+            ) case namedoperation then {
+                if (got) == false then {
+                    got = true
+                    av = emitInterpArgExpr :symtab :ctx n: a.operation
+                    if av.length == 0 then av = emitExpr :symtab :ctx n: a.operation
+                }
+            } else {}
+        }
+        e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
+        return e
+    } else {
+        e2: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
+        return e2
+    }
+}
+
 emitCrossUnitCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
     base: dottedBaseAtom n: call.callable
     child: dottedChildText n: call.callable
@@ -4496,6 +4564,8 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if gfc9.length > 0 then return gfc9
     sam9: emitStringArgMethod :symtab :ctx :call
     if sam9.length > 0 then return sam9
+    xuc9: emitCrossUnitUnionCtor :symtab :ctx :call
+    if xuc9.length > 0 then return xuc9
     colc9: emitCollectionMethodCall :symtab :ctx :call
     if colc9.length > 0 then return colc9
     tdq: emitTypedefCreateCall :symtab :ctx :call
