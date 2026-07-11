@@ -301,6 +301,11 @@ Server: class {
     inbuf: Bytes
     inpos: u64
     transport: Transport
+    # true for stdio/tcp (coalesce an edit burst before rechecking); false
+    # for replay so every sync message publishes inline (goldens stay stable)
+    debounce: bool
+    # open-doc uris awaiting a coalesced recheck (interactive mode only)
+    dirty: (Map String value: bool)
     # last-good check per document uri: navigation answers from these
     # even while the live buffer is broken
     snapshots: (Map String value: zcheck.CheckResult)
@@ -555,7 +560,7 @@ Server: class {
                 d: (Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver)
                 key9: uo.copy
                 this.docs.set key: key9 value: d
-                this.recomputeFor uri: uo.stringview
+                this.syncDoc uri: uo.stringview
             } case none then {}
         } case none then {}
     }
@@ -587,7 +592,7 @@ Server: class {
                     this.docs.set key: key9 value: d
                     changed9 = true
                 } case none then {}
-                if changed9 then this.recomputeFor uri: uo.stringview
+                if changed9 then this.syncDoc uri: uo.stringview
             } case none then {}
         } case none then {}
     }
@@ -621,6 +626,51 @@ Server: class {
 
     # recomputeFor -- run a full check with all open buffers overlaid,
     # rooted at `uri`'s unit, and publish per-file diagnostics.
+    # ---- debounce ----
+
+    syncDoc: function {:this uri: StringView} is {
+        if this.debounce then this.markDirty :uri else this.recomputeFor :uri
+    }
+
+    markDirty: function {:this uri: StringView} is {
+        this.dirty.set key: uri.string value: true
+    }
+
+    hasDirty: function {:this} out bool is {
+        return (this.dirty.length > 0)
+    }
+
+    # flushDirty -- recheck every dirty document, then clear. The dirty uris
+    # are copied out first: recomputeFor locks `this`, which would conflict
+    # with a live iterator over this.dirty.
+    flushDirty: function {:this} is {
+        uris9: (List String)
+        with it: this.dirty.iterateItems do for e: it loop uris9.append e.key.copy
+        fresh: (Map String value: bool)
+        this.dirty = fresh
+        ui9: 0.u64
+        for ui9 < uris9.length loop {
+            u9: uris9.get i: ui9
+            this.recomputeFor uri: u9.stringview
+            ui9 = ui9 + 1
+        }
+    }
+
+    # inputQuiet -- true when no message is buffered and the input fd stays
+    # unreadable for `millis`. A buffered burst reports not-quiet at once.
+    inputQuiet: function {:this millis: i32} out bool is {
+        if this.inpos < this.inbuf.length then return false
+        pr9: net.pollReadable fd: (transportFd tp: this.transport) timeoutMillis: millis
+        match (
+            pr9
+        ) case ok then {
+            if pr9 then return false
+            return true
+        } case err then {
+            return true
+        }
+    }
+
     recomputeFor: function {:this uri: StringView} is {
         if this.initialized == false then return
         ov: (Map String value: String)
@@ -762,6 +812,7 @@ Server: class {
     # handleNav -- definition (mode 1), hover (mode 2), references
     # (mode 3): shared request decode + snapshot lookup.
     handleNav: function {:this msg: Value mode: u8} is {
+        if this.debounce when this.hasDirty then this.flushDirty
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         lo: json.intAt v: msg path: "params/position/line"
@@ -837,6 +888,7 @@ Server: class {
     }
 
     handleDocSymbol: function {:this msg: Value} is {
+        if this.debounce when this.hasDirty then this.flushDirty
         idv: idValueOf :msg
         uo: json.textAt v: msg path: "params/textDocument/uri"
         answered9: false
@@ -2257,6 +2309,11 @@ completionAnswer: function {
 
 # ---- main ------------------------------------------------------------
 
+# DEBOUNCE_MS -- interactive recheck coalescing window. A burst of edits
+# within this window collapses to one recheck; ~100 ms clears typical
+# inter-keystroke gaps while staying under the perception threshold.
+DEBOUNCE_MS: 100.i32
+
 serve: function {srv: Server} is {
     for srv.running loop {
         mo: srv.readMessage
@@ -2271,7 +2328,11 @@ serve: function {srv: Server} is {
             } case err then {
                 io.eprintln "zls: bad JSON payload"
             }
+            if srv.debounce when srv.hasDirty then {
+                if (srv.inputQuiet millis: DEBOUNCE_MS) then srv.flushDirty
+            }
         } case none then {
+            if srv.debounce when srv.hasDirty then srv.flushDirty
             srv.running = false
         }
     }
@@ -2339,6 +2400,8 @@ main: function is {
         inbuf: ib
         inpos: 0
         transport: (Transport.stdio)
+        debounce: true
+        dirty: (Map String value: bool)
         snapshots: (Map String value: zcheck.CheckResult)
     )
     if listenArg.length > 0 then {
@@ -2379,6 +2442,7 @@ main: function is {
             fo
         ) case ok then {
             srv.transport = (Transport.replay fo)
+            srv.debounce = false
             serve :srv
         } case err then {
             io.eprintln "zls: cannot open replay file"
