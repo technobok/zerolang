@@ -117,7 +117,7 @@ bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdi
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-bin/zls: bin/zc $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
+bin/zls: bin/zc $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zls --src src --system lib/system --emit-c out/zls.c
 	$(CC) $(CFLAGS) -o bin/zls out/zls.c

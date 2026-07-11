@@ -10,7 +10,6 @@
 Value: json.Value
 Obj: json.Obj
 Arr: json.Arr
-Node: zast.Node
 
 # ---- small builders -------------------------------------------------
 
@@ -88,31 +87,6 @@ relPathOf: function {path: StringView srcDir: StringView} out String is {
     pv: pre.stringview
     if path.startsWith pv then return (path.substring from: pre.length to: path.length).string
     return "".string
-}
-
-# unitNameOf -- a path's unit name: final segment without ".z".
-unitNameOf: function {path: StringView} out String is {
-    start: 0.u64
-    so: path.lastIndexOf needle: "/"
-    match (
-        so
-    ) case some then {
-        start = so + 1
-    } case none then {}
-    stop: path.length
-    if path.endsWith ".z" then stop = stop - 2
-    r: "".string
-    i: start
-    for i < stop loop {
-        b: path.byteAt :i
-        match (
-            b
-        ) case some then {
-            r.appendByte :b
-        } case none then {}
-        i = i + 1
-    }
-    return r
 }
 
 # ---- position encoding ----------------------------------------------
@@ -277,9 +251,8 @@ Server: class {
 
     needByte: function {:this rdr: io.Reader} out (optionval u8) is {
         for this.inpos >= this.inbuf.length loop {
-            # drained: truncate in place (a fresh Bytes here would need a
-            # typedef-field reassign destroy the emitter does not wire yet)
-            for this.inbuf.length > 0 loop this.inbuf.pop
+            fresh: Bytes
+            this.inbuf = fresh
             this.inpos = 0
             rr: rdr.read into: this.inbuf max: 65536
             match (
@@ -538,19 +511,13 @@ Server: class {
                 match (
                     rem
                 ) case some then {
-                    ver9: rem.version
+                    d: rem.take
+                    d.text = to.copy
                     match (
                         vo
                     ) case some then {
-                        ver9 = vo
+                        d.version = vo
                     } case none then {}
-                    d: (Document
-                        uri: rem.uri.copy
-                        path: rem.path.copy
-                        relpath: rem.relpath.copy
-                        text: to.copy
-                        version: ver9
-                    )
                     key9: uo.copy
                     this.docs.set key: key9 value: d
                     changed9 = true
@@ -603,7 +570,7 @@ Server: class {
             match (
                 dgo
             ) case some then {
-                mu = unitNameOf path: dgo.path.stringview
+                mu = zsource.unitNameOf path: dgo.path.stringview
                 found9 = true
             } case none then {}
         }
@@ -712,7 +679,6 @@ Server: class {
             if line0 >= 0 when ch0 >= 0 then {
                 dtext: "".string
                 drel: "".string
-                dunit: "".string
                 found9: false
                 {
                     ku: uo.copy
@@ -722,7 +688,6 @@ Server: class {
                     ) case some then {
                         dtext = dgo.text.copy
                         drel = dgo.relpath.copy
-                        dunit = unitNameOf path: dgo.path.stringview
                         found9 = true
                     } case none then {}
                 }
@@ -738,7 +703,6 @@ Server: class {
                             docUri: uo.stringview
                             srcDir: this.srcDir.stringview
                             docText: dtext.stringview
-                            docUnit: dunit.stringview
                             :line0
                             ch: ch0
                             utf32: this.encUtf32
@@ -769,7 +733,7 @@ Server: class {
                 match (
                     dgo
                 ) case some then {
-                    mu = unitNameOf path: dgo.path.stringview
+                    mu = zsource.unitNameOf path: dgo.path.stringview
                     dtext = dgo.text.copy
                     found9 = true
                 } case none then {}
@@ -846,25 +810,6 @@ codeOf: function {n: u32} out String is {
 # memberOwnerTid key; the name is the child atom's), 3 = binding name.
 # `pos` records every node's start for def-target positioning.
 
-# cpLenOf -- codepoint count of a short name (UTF-8 lead-byte scan).
-cpLenOf: function {s: StringView} out u32 is {
-    n9: 0.u32
-    i9: 0.u64
-    ln9: s.length
-    for i9 < ln9 loop {
-        b9: s.byteAt i: i9
-        match (
-            b9
-        ) case some then {
-            if b9 < 128 then {
-                n9 = n9 + 1
-            } else if b9 >= 192 then n9 = n9 + 1
-        } case none then {}
-        i9 = i9 + 1
-    }
-    return n9
-}
-
 spanrow: record {
     nodeid: u32
     line: u32
@@ -886,8 +831,8 @@ Spans: class {
     }
 
     addRow: function {:this id: u32 line: u32 col: u32 name: StringView kind: u8} is {
-        w9: cpLenOf s: name
-        this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w9 :kind)
+        w9: name.count
+        this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w9.u32 :kind)
         this.names.append name.string
     }
 
@@ -1383,36 +1328,6 @@ defNodeByKeyIn: function {
     }
 }
 
-# defKeyFor -- the def-finder key a bare callable name resolves to:
-# the document's own unit first, then core's prelude re-exports
-# (call-position callables carry no atom stamps; this mirrors the
-# emitter's name probe).
-defKeyFor: function {
-    o: (Option zenv.ZSymbolTable)
-    uname: StringView
-    name: StringView
-} out String is {
-    match (
-        o
-    ) case some then {
-        k1: "\{uname}.\{name}"
-        kc1: k1.copy
-        if (o.typing.defNodeUnitIdx.has key: kc1) then return k1
-        pn9: name.string
-        pg9: o.typing.preludeUnit.get key: pn9
-        match (
-            pg9
-        ) case some then {
-            k2: "\{pg9.stringview}.\{name}"
-            kc2: k2.copy
-            if (o.typing.defNodeUnitIdx.has key: kc2) then return k2
-        } case none then {}
-        return "".string
-    } case none then {
-        return "".string
-    }
-}
-
 # locationValue -- an LSP Location for a target node ({} miss -> nul).
 locationValue: function {
     snap: zcheck.CheckResult
@@ -1482,7 +1397,6 @@ navAnswer: function {
     docUri: StringView
     srcDir: StringView
     docText: StringView
-    docUnit: StringView
     line0: i64
     ch: i64
     utf32: bool
@@ -1545,39 +1459,9 @@ navAnswer: function {
     refVid: 0.u64
     refTid: 0.u64
     refOwner: 0.u64
-    refKey: "".string
-    refBind: 0.u64
     if bestKind == 1 then {
         refVid = useVarId o: snap.st nid: hnid
         if refVid == 0 then refTid = useUnitDef o: snap.st nid: hnid
-        if refVid == 0 when refTid == 0 then {
-            refKey = defKeyFor o: snap.st uname: docUnit name: hname.stringview
-        }
-        if refVid == 0 when refTid == 0 then {
-            if refKey.length == 0 then {
-                # native-receiver atoms carry no stamps: fall back to the
-                # nearest preceding same-name binding in this file
-                bl9: 0.u32
-                rk9: 0.u64
-                for rk9 < nr loop {
-                    rb: sp.rows.get i: rk9
-                    if rb.kind == 3 when rb.line <= l1u then {
-                        if rb.line > bl9 then {
-                            nmB: sp.names.get i: rk9
-                            if nmB.stringview == hname.stringview then {
-                                fsB: snap.parser.fsnoForNode nodeid: rb.nodeid
-                                ppB: snap.vfs.pathfromprovider dentryid: fsB
-                                if (pathMatches pv: ppB.stringview rel: docRel :srcDir) then {
-                                    bl9 = rb.line
-                                    refBind = rb.nodeid.u64
-                                }
-                            }
-                        }
-                    }
-                    rk9 = rk9 + 1
-                }
-            }
-        }
     }
     if bestKind == 2 then refOwner = memberOwnerOf o: snap.st nid: hnid
     if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
@@ -1639,41 +1523,6 @@ navAnswer: function {
             }
             return Value.nul
         }
-        if refBind > 0 then {
-            return (locationValue
-                :snap
-                :sp
-                nid: refBind
-                width: w9
-                :docRel
-                :docUri
-                :srcDir
-                :docText
-                :utf32
-            )
-        }
-        if refKey.length > 0 then {
-            dk9: (defNodeByKeyIn
-                o: snap.st
-                prog: snap.prog
-                key: refKey.stringview
-                member: ""
-            )
-            if dk9 > 0 then {
-                return (locationValue
-                    :snap
-                    :sp
-                    nid: dk9
-                    width: w9
-                    :docRel
-                    :docUri
-                    :srcDir
-                    :docText
-                    :utf32
-                )
-            }
-            return Value.nul
-        }
         return Value.nul
     }
 
@@ -1699,23 +1548,6 @@ navAnswer: function {
             if (memberOwnerOf o: snap.st nid: n2) == refOwner then {
                 nm2: sp.names.get i: rj
                 if nm2.stringview == hname.stringview then add9 = true
-            }
-        }
-        if refKey.length > 0 when row2.kind == 1 then {
-            nm3: sp.names.get i: rj
-            if nm3.stringview == hname.stringview then {
-                if (useVarId o: snap.st nid: n2) == 0 then {
-                    if (useUnitDef o: snap.st nid: n2) == 0 then add9 = true
-                }
-            }
-        }
-        if refBind > 0 then {
-            if n2 == refBind then add9 = true
-            if row2.kind == 1 then {
-                nm4: sp.names.get i: rj
-                if nm4.stringview == hname.stringview then {
-                    if (useVarId o: snap.st nid: n2) == 0 then add9 = true
-                }
             }
         }
         if add9 then {
@@ -1814,8 +1646,8 @@ symbolOf: function {m: zast.Node docText: StringView utf32: bool arr: Arr} is {
         k9: symbolKindOf op: m.operation
         lt9: docLine text: docText lineno: m.lineno
         c0: encodedCol lineText: lt9.stringview cpCol1: m.colno :utf32
-        wname9: cpLenOf s: lb9.stringview
-        c1: encodedCol lineText: lt9.stringview cpCol1: m.colno + wname9 :utf32
+        wname9: lb9.stringview.count
+        c1: encodedCol lineText: lt9.stringview cpCol1: m.colno + wname9.u32 :utf32
         if c1 <= c0 then c1 = c0 + 1
         line0: 0.i64
         if m.lineno > 0 then line0 = (m.lineno - 1).i64
