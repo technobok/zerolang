@@ -2278,13 +2278,15 @@ serve: function {srv: Server} is {
 }
 
 printUsage: function is {
-    io.eprintln "usage: zls [--stdio] [--replay <file>] [--src <dir>] [--system <dir>]"
+    io.eprintln "usage: zls [--stdio] [--replay <file>] [--listen <port>]"
+    io.eprintln "           [--src <dir>] [--system <dir>]"
 }
 
 main: function is {
     argv: os.args
     n: argv.length
     replay: "".string
+    listenArg: "".string
     srcFlag: "".string
     sysFlag: "".string
     i: 1.u64
@@ -2308,8 +2310,10 @@ main: function is {
                 sysFlag = (argv.get :i).copy
             }
         } else if av == "--listen" then {
-            io.eprintln "zls: --listen is not implemented yet; use --stdio"
-            os.exit code: 2
+            if (i + 1) < n then {
+                i = i + 1
+                listenArg = (argv.get :i).copy
+            }
         } else if av == "--help" then {
             printUsage
             os.exit code: 0
@@ -2337,7 +2341,39 @@ main: function is {
         transport: (Transport.stdio)
         snapshots: (Map String value: zcheck.CheckResult)
     )
-    if replay.length > 0 then {
+    if listenArg.length > 0 then {
+        pr9: listenArg.stringview.parseU64
+        match (
+            pr9
+        ) case ok then {
+            if pr9 > 65535 then {
+                io.eprintln "zls: --listen port out of range (0-65535)"
+                os.exit code: 2
+            }
+            port9: pr9.u16
+            lo9: net.listen port: port9
+            match (
+                lo9
+            ) case ok then {
+                ao9: lo9.accept
+                match (
+                    ao9
+                ) case ok then {
+                    srv.transport = (Transport.tcp ao9)
+                    serve :srv
+                } case err then {
+                    io.eprintln "zls: accept failed"
+                    os.exit code: 3
+                }
+            } case err then {
+                io.eprintln "zls: listen failed"
+                os.exit code: 3
+            }
+        } case err then {
+            io.eprintln "zls: --listen expects a port number"
+            os.exit code: 2
+        }
+    } else if replay.length > 0 then {
         fo: io.open path: replay.stringview mode: io.openmode.read
         match (
             fo
