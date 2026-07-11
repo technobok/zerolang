@@ -10,6 +10,7 @@
 Value: json.Value
 Obj: json.Obj
 Arr: json.Arr
+Node: zast.Node
 
 # ---- small builders -------------------------------------------------
 
@@ -268,6 +269,9 @@ Server: class {
     exitCode: i32
     inbuf: Bytes
     inpos: u64
+    # last-good check per document uri: navigation answers from these
+    # even while the live buffer is broken
+    snapshots: (Map String value: zcheck.CheckResult)
 } as {
     # ---- framed reader over the BufReader ----
 
@@ -387,6 +391,14 @@ Server: class {
                 this.handleDidChange :msg
             } else if mv == "textDocument/didClose" then {
                 this.handleDidClose :msg
+            } else if mv == "textDocument/definition" then {
+                this.handleNav :msg mode: 1
+            } else if mv == "textDocument/hover" then {
+                this.handleNav :msg mode: 2
+            } else if mv == "textDocument/references" then {
+                this.handleNav :msg mode: 3
+            } else if mv == "textDocument/documentSymbol" then {
+                this.handleDocSymbol :msg
             } else {
                 if hasId then {
                     idv2: idValueOf :msg
@@ -463,6 +475,10 @@ Server: class {
         # response
         caps: newObj
         caps.set key: "textDocumentSync".string value: (Value.intval 1)
+        caps.set key: "definitionProvider".string value: (Value.boolean true)
+        caps.set key: "hoverProvider".string value: (Value.boolean true)
+        caps.set key: "referencesProvider".string value: (Value.boolean true)
+        caps.set key: "documentSymbolProvider".string value: (Value.boolean true)
         encName: "utf-16"
         if this.encUtf32 then encName = "utf-32"
         caps.set key: "positionEncoding".string value: (Value.text encName.string)
@@ -602,6 +618,10 @@ Server: class {
         msgs: (List String)
         zcheck.diagsOf :r :rows :msgs
         this.publishAll :r :rows :msgs
+        if r.parseOk then {
+            ku9: uri.string
+            this.snapshots.set key: ku9 value: r
+        }
     }
 
     # publishAll -- one publishDiagnostics per open document: its
@@ -663,6 +683,116 @@ Server: class {
             sendNotification method: "textDocument/publishDiagnostics" params: pv9
         }
     }
+
+    # ---- navigation requests ----
+
+    # handleNav -- definition (mode 1), hover (mode 2), references
+    # (mode 3): shared request decode + snapshot lookup.
+    handleNav: function {:this msg: Value mode: u8} is {
+        idv: idValueOf :msg
+        uo: json.textAt v: msg path: "params/textDocument/uri"
+        lo: json.intAt v: msg path: "params/position/line"
+        co: json.intAt v: msg path: "params/position/character"
+        line0: -1
+        match (
+            lo
+        ) case some then {
+            line0 = lo
+        } case none then {}
+        ch0: -1
+        match (
+            co
+        ) case some then {
+            ch0 = co
+        } case none then {}
+        answered9: false
+        match (
+            uo
+        ) case some then {
+            if line0 >= 0 when ch0 >= 0 then {
+                dtext: "".string
+                drel: "".string
+                dunit: "".string
+                found9: false
+                {
+                    ku: uo.copy
+                    dgo: this.docs.get key: ku
+                    match (
+                        dgo
+                    ) case some then {
+                        dtext = dgo.text.copy
+                        drel = dgo.relpath.copy
+                        dunit = unitNameOf path: dgo.path.stringview
+                        found9 = true
+                    } case none then {}
+                }
+                if found9 then {
+                    ks: uo.copy
+                    sno: this.snapshots.get key: ks
+                    match (
+                        sno
+                    ) case some then {
+                        res: (navAnswer
+                            snap: sno
+                            docRel: drel.stringview
+                            docUri: uo.stringview
+                            srcDir: this.srcDir.stringview
+                            docText: dtext.stringview
+                            docUnit: dunit.stringview
+                            :line0
+                            ch: ch0
+                            utf32: this.encUtf32
+                            :mode
+                        )
+                        sendResult id: idv result: res
+                        answered9 = true
+                    } case none then {}
+                }
+            }
+        } case none then {}
+        if answered9 == false then sendResult id: idv result: Value.nul
+    }
+
+    handleDocSymbol: function {:this msg: Value} is {
+        idv: idValueOf :msg
+        uo: json.textAt v: msg path: "params/textDocument/uri"
+        answered9: false
+        match (
+            uo
+        ) case some then {
+            mu: "".string
+            dtext: "".string
+            found9: false
+            {
+                ku: uo.copy
+                dgo: this.docs.get key: ku
+                match (
+                    dgo
+                ) case some then {
+                    mu = unitNameOf path: dgo.path.stringview
+                    dtext = dgo.text.copy
+                    found9 = true
+                } case none then {}
+            }
+            if found9 then {
+                ks: uo.copy
+                sno: this.snapshots.get key: ks
+                match (
+                    sno
+                ) case some then {
+                    res: (symbolsAnswer
+                        snap: sno
+                        unitName: mu.stringview
+                        docText: dtext.stringview
+                        utf32: this.encUtf32
+                    )
+                    sendResult id: idv result: res
+                    answered9 = true
+                } case none then {}
+            }
+        } case none then {}
+        if answered9 == false then sendResult id: idv result: Value.nul
+    }
 }
 
 # diagValue -- one LSP Diagnostic object from a flattened row.
@@ -707,6 +837,1034 @@ codeOf: function {n: u32} out String is {
     cs: "\{n}"
     r.append cs.stringview
     return r
+}
+
+# ---- span collection (per-request AST index) ------------------------
+# Positions are start-only in the AST; name-bearing leaves get a span
+# [colLo, colHi) in 1-based codepoint columns. Row kinds: 1 = bare atom
+# use, 2 = member access (nodeid is the DOTTED PATH's id, the
+# memberOwnerTid key; the name is the child atom's), 3 = binding name.
+# `pos` records every node's start for def-target positioning.
+
+# cpLenOf -- codepoint count of a short name (UTF-8 lead-byte scan).
+cpLenOf: function {s: StringView} out u32 is {
+    n9: 0.u32
+    i9: 0.u64
+    ln9: s.length
+    for i9 < ln9 loop {
+        b9: s.byteAt i: i9
+        match (
+            b9
+        ) case some then {
+            if b9 < 128 then {
+                n9 = n9 + 1
+            } else if b9 >= 192 then n9 = n9 + 1
+        } case none then {}
+        i9 = i9 + 1
+    }
+    return n9
+}
+
+spanrow: record {
+    nodeid: u32
+    line: u32
+    colLo: u32
+    colHi: u32
+    kind: u8
+}
+
+Spans: class {
+    rows: (List spanrow)
+    names: (List String)
+    pos: (Map u64 value: u64)
+} as {
+    note: function {:this id: u32 line: u32 col: u32} is {
+        if id > 0 then {
+            v9: (line.u64 * 1048576) + col.u64
+            this.pos.set key: id.u64 value: v9
+        }
+    }
+
+    addRow: function {:this id: u32 line: u32 col: u32 name: StringView kind: u8} is {
+        w9: cpLenOf s: name
+        this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w9 :kind)
+        this.names.append name.string
+    }
+
+    memberRow: function {:this dpid: u32 c: zast.Node} is {
+        match (
+            c
+        ) case atomid then {
+            this.addRow id: dpid line: c.lineno col: c.colno name: c.name.stringview kind: 2
+        } else {}
+    }
+
+    walkOpt: function {:this o: (Option zast.Node)} is {
+        match (
+            o
+        ) case some then {
+            this.walk n: o
+        } case none then {}
+    }
+
+    walk: function {:this n: zast.Node} is {
+        match (
+            n
+        ) case error then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+        } case atomid then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.addRow id: n.nodeid line: n.lineno col: n.colno name: n.name.stringview kind: 1
+        } case labelvalue then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+        } case stringchunk then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+        } case binop then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.lhs
+            this.walk n: n.operator
+            this.walk n: n.rhs
+        } case atomstring then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            spit9: n.stringparts.iterate
+            for sp9: spit9 loop this.walk n: sp9
+        } case dottedpath then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.parent
+            this.memberRow dpid: n.nodeid c: n.child
+        } case call then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.callable
+            ait9: n.arguments.iterate
+            for a9: ait9 loop this.walk n: a9
+        } case typeofexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.source
+        } case namedoperation then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.operation
+        } case datablock then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            eit9: n.elements.iterate
+            for e9: eit9 loop this.walk n: e9
+            this.walkOpt o: n.outType
+        } case yieldexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.expr
+        } case statement then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            sit9: n.statements.iterate
+            for s9: sit9 loop this.walk n: s9
+        } case statementline then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.statementline
+        } case assignment then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.addRow id: n.nodeid line: n.lineno col: n.colno name: n.name.stringview kind: 3
+            this.walk n: n.value
+        } case reassignment then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.topath
+            this.walk n: n.value
+        } case swapstmt then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.lhs
+            this.walk n: n.rhs
+        } case expression then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.expression
+        } case ifexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            cit9: n.clauses.iterate
+            for c9: cit9 loop this.walk n: c9
+            this.walkOpt o: n.elseclause
+        } case ifclause then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            coit9: n.conditions.iterate
+            for co9: coit9 loop this.walk n: co9
+            this.walk n: n.statement
+        } case forexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            fct9: n.conditions.iterate
+            for fc9: fct9 loop this.walk n: fc9
+            this.walkOpt o: n.body
+            fpt9: n.postconditions.iterate
+            for fp9: fpt9 loop this.walk n: fp9
+        } case doexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.statement
+        } case withexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.value
+            this.walk n: n.body
+        } case caseexpr then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.subject
+            cct9: n.clauses.iterate
+            for cc9: cct9 loop this.walk n: cc9
+            this.walkOpt o: n.elseclause
+        } case caseclause then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walk n: n.matcharm
+            this.walk n: n.statement
+        } case functiondef then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            this.walkOpt o: n.returntype
+            pit9: n.parameters.iterate
+            for pm9: pit9 loop this.walk n: pm9
+            this.walkOpt o: n.body
+            fat9: n.asItems.iterate
+            for fa9: fat9 loop this.walk n: fa9
+        } case objectdef then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            oit9: n.isItems.iterate
+            for oi9: oit9 loop this.walk n: oi9
+            oat9: n.asItems.iterate
+            for oa9: oat9 loop this.walk n: oa9
+        } case unitdef then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            ubt9: n.body.iterate
+            for ub9: ubt9 loop this.walk n: ub9
+        } case program then {
+            this.note id: n.nodeid line: n.lineno col: n.colno
+            uit9: n.units.iterate
+            for u9: uit9 loop this.walk n: u9
+        }
+    }
+}
+
+# optLabel -- a namedoperation's label text ("" when absent).
+optLabel: function {o: (Option String)} out String is {
+    match (
+        o
+    ) case some then {
+        return o.copy
+    } case none then {
+        return "".string
+    }
+}
+
+# docLine -- 1-based line `lineno` of `text` (without the newline).
+docLine: function {text: StringView lineno: u32} out String is {
+    if lineno == 0 then return "".string
+    cur: 1.u32
+    start: 0.u64
+    i: 0.u64
+    n: text.length
+    for i < n loop {
+        b: text.byteAt :i
+        match (
+            b
+        ) case some then {
+            if b == 10 then {
+                if cur == lineno then return (text.substring from: start to: i).string
+                cur = cur + 1
+                start = i + 1
+            }
+        } case none then {}
+        i = i + 1
+    }
+    if cur == lineno then return (text.substring from: start to: n).string
+    return "".string
+}
+
+# ---- navigation resolution ------------------------------------------
+
+# cpColOf -- LSP character (0-based, negotiated encoding) -> 1-based
+# codepoint column, measured over the line's text.
+cpColOf: function {lineText: StringView ch: i64 utf32: bool} out u32 is {
+    if ch < 0 then return 1
+    if utf32 then return ch.u32 + 1
+    units: 0.i64
+    idx: 0.u32
+    with cit: lineText.codepoints do for cp: cit loop {
+        if units >= ch then break
+        if cp >= 65536 then {
+            units = units + 2
+        } else {
+            units = units + 1
+        }
+        idx = idx + 1
+    }
+    return idx + 1
+}
+
+# pathMatches -- whether a provider path names the request's document
+# (overlay "/rel", plain "rel", or "<srcDir>/rel" forms).
+pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bool is {
+    if rel.length == 0 then return false
+    if pv == rel then return true
+    fs9: zcheck.joinPath a: srcDir b: rel
+    if pv == fs9.stringview then return true
+    ov9: "/".string
+    ov9.append rel
+    if pv == ov9.stringview then return true
+    return false
+}
+
+# ---- stamp lookups through the snapshot's Option symtab ----
+
+useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g9: o.typing.atomVariableId.get key: nid
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+useUnitDef: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g9: o.typing.atomUnitDefId.get key: nid
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+memberOwnerOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g9: o.typing.memberOwnerTid.get key: nid
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g9: o.typing.defVariableId.get key: nid
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+nodeTypeAt: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g9: o.typing.nodeType.get key: nid
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+# varDefNode -- the binding node that declared variable `vid`.
+varDefNode: function {o: (Option zenv.ZSymbolTable) vid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        with it: o.typing.defVariableId.iterateItems do for e: it loop {
+            if e.value == vid then return e.key
+        }
+        return 0
+    } case none then {
+        return 0
+    }
+}
+
+typeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
+    match (
+        o
+    ) case some then {
+        return (ztypecheck.typeNameOf st: o :tid)
+    } case none then {
+        return "".string
+    }
+}
+
+# ---- def-node navigation (unit/body indexes into the program AST) ----
+
+memberIn: function {op: zast.Node name: StringView wrapperId: u32} out u64 is {
+    match (
+        op
+    ) case objectdef then {
+        iit9: op.isItems.iterate
+        for ii9: iit9 loop {
+            m9: (memberLabelId m: ii9 :name)
+            if m9 > 0 then return m9
+        }
+        ait9: op.asItems.iterate
+        for ai9: ait9 loop {
+            m2: (memberLabelId m: ai9 :name)
+            if m2 > 0 then return m2
+        }
+        return wrapperId.u64
+    } else {
+        return wrapperId.u64
+    }
+}
+
+memberLabelId: function {m: zast.Node name: StringView} out u64 is {
+    match (
+        m
+    ) case namedoperation then {
+        lb9: optLabel o: m.name
+        if lb9.stringview == name then return m.nodeid.u64
+        return 0
+    } else {
+        return 0
+    }
+}
+
+defOrMember: function {d: zast.Node member: StringView} out u64 is {
+    match (
+        d
+    ) case namedoperation then {
+        if member.length == 0 then return d.nodeid.u64
+        return (memberIn op: d.operation name: member wrapperId: d.nodeid)
+    } else {
+        return 0
+    }
+}
+
+navUnitDef: function {ud: zast.Node bidx: u64 member: StringView} out u64 is {
+    match (
+        ud
+    ) case unitdef then {
+        if bidx >= ud.body.length then return 0
+        m9: ud.body.get i: bidx
+        return (defOrMember d: m9 :member)
+    } else {
+        return 0
+    }
+}
+
+navWrapper: function {w: zast.Node bidx: u64 member: StringView} out u64 is {
+    match (
+        w
+    ) case namedoperation then {
+        return (navUnitDef ud: w.operation :bidx :member)
+    } else {
+        return 0
+    }
+}
+
+navBody: function {prog: zast.Node uidx: u64 bidx: u64 member: StringView} out u64 is {
+    match (
+        prog
+    ) case program then {
+        if uidx >= prog.units.length then return 0
+        u9: prog.units.get i: uidx
+        return (navWrapper w: u9 :bidx :member)
+    } else {
+        return 0
+    }
+}
+
+# defNodeInfo -- the target nodeid for a top-level def (member == "")
+# or a named member inside it. Mono tids chase their generic origin.
+defNodeInfo: function {
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    tid: u64
+    member: StringView
+} out u64 is {
+    key0: defKeyOfTid :o :tid
+    if key0.length == 0 then return 0
+    return (defNodeByKeyIn :o :prog key: key0.stringview :member)
+}
+
+# defKeyOfTid -- a type's "unit.name" def-finder key (mono tids chase
+# their generic origin); "" when the type has no source definition.
+# definedInUnit holds only the unit; the name comes from the registry.
+defKeyOfTid: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
+    match (
+        o
+    ) case some then {
+        t9: tid
+        tn9: "".string
+        rt9: o.reg.typeById.get key: t9
+        match (
+            rt9
+        ) case some then {
+            go9: rt9.genericOriginId
+            match (
+                go9
+            ) case some then {
+                t9 = go9
+            } case none then {}
+        } case none then {}
+        rt2: o.reg.typeById.get key: t9
+        match (
+            rt2
+        ) case some then {
+            tn9 = rt2.name.copy
+        } case none then {}
+        if tn9.length == 0 then return "".string
+        ko9: o.typing.definedInUnit.get key: t9
+        match (
+            ko9
+        ) case some then {
+            k9: "\{ko9.stringview}.\{tn9.stringview}"
+            return k9
+        } case none then {
+            return "".string
+        }
+    } case none then {
+        return "".string
+    }
+}
+
+# defNodeByKeyIn -- target nodeid for a "unit.name" def-finder key.
+defNodeByKeyIn: function {
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    key: StringView
+    member: StringView
+} out u64 is {
+    match (
+        o
+    ) case some then {
+        ui9: 0.u64
+        bi9: 0.u64
+        hasU9: false
+        hasB9: false
+        k1: key.string
+        ug9: o.typing.defNodeUnitIdx.get key: k1
+        match (
+            ug9
+        ) case some then {
+            ui9 = ug9
+            hasU9 = true
+        } case none then {}
+        k2: key.string
+        bg9: o.typing.defNodeBodyIdx.get key: k2
+        match (
+            bg9
+        ) case some then {
+            bi9 = bg9
+            hasB9 = true
+        } case none then {}
+        if hasU9 when hasB9 then return (navBody :prog uidx: ui9 bidx: bi9 :member)
+        return 0
+    } case none then {
+        return 0
+    }
+}
+
+# defKeyFor -- the def-finder key a bare callable name resolves to:
+# the document's own unit first, then core's prelude re-exports
+# (call-position callables carry no atom stamps; this mirrors the
+# emitter's name probe).
+defKeyFor: function {
+    o: (Option zenv.ZSymbolTable)
+    uname: StringView
+    name: StringView
+} out String is {
+    match (
+        o
+    ) case some then {
+        k1: "\{uname}.\{name}"
+        kc1: k1.copy
+        if (o.typing.defNodeUnitIdx.has key: kc1) then return k1
+        pn9: name.string
+        pg9: o.typing.preludeUnit.get key: pn9
+        match (
+            pg9
+        ) case some then {
+            k2: "\{pg9.stringview}.\{name}"
+            kc2: k2.copy
+            if (o.typing.defNodeUnitIdx.has key: kc2) then return k2
+        } case none then {}
+        return "".string
+    } case none then {
+        return "".string
+    }
+}
+
+# locationValue -- an LSP Location for a target node ({} miss -> nul).
+locationValue: function {
+    snap: zcheck.CheckResult
+    sp: Spans
+    nid: u64
+    width: u32
+    docRel: StringView
+    docUri: StringView
+    srcDir: StringView
+    docText: StringView
+    utf32: bool
+} out Value is {
+    pg9: sp.pos.get key: nid
+    match (
+        pg9
+    ) case some then {
+        line9: (pg9 / 1048576).u32
+        col9: (pg9 % 1048576).u32
+        if line9 == 0 then return Value.nul
+        fs9: snap.parser.fsnoForNode nodeid: nid.u32
+        if fs9 == 0 then return Value.nul
+        pp9: snap.vfs.pathfromprovider dentryid: fs9
+        own9: pathMatches pv: pp9.stringview rel: docRel :srcDir
+        uri9: "".string
+        lineText9: "".string
+        if own9 then {
+            uri9 = docUri.string
+            lineText9 = docLine text: docText lineno: line9
+        } else {
+            uri9 = "file://".string
+            uri9.append pp9.stringview
+            lg9: snap.vfs.getline dentryid: fs9 lineno: (line9 - 1).u64
+            match (
+                lg9
+            ) case some then {
+                lineText9 = lg9.copy
+            } case none then {}
+        }
+        w9: width
+        if w9 == 0 then w9 = 1
+        c0: encodedCol lineText: lineText9.stringview cpCol1: col9 :utf32
+        c1: encodedCol lineText: lineText9.stringview cpCol1: col9 + w9 :utf32
+        if c1 <= c0 then c1 = c0 + 1
+        st9: newObj
+        st9.set key: "line".string value: (Value.intval (line9 - 1).i64)
+        st9.set key: "character".string value: (Value.intval c0.i64)
+        en9: newObj
+        en9.set key: "line".string value: (Value.intval (line9 - 1).i64)
+        en9.set key: "character".string value: (Value.intval c1.i64)
+        rg9: newObj
+        rg9.set key: "start".string value: (Value.object st9)
+        rg9.set key: "end".string value: (Value.object en9)
+        lo9: newObj
+        lo9.set key: "uri".string value: (Value.text uri9)
+        lo9.set key: "range".string value: (Value.object rg9)
+        return (Value.object lo9)
+    } case none then {
+        return Value.nul
+    }
+}
+
+# navAnswer -- definition (1), hover (2), references (3) from the
+# last-good snapshot.
+navAnswer: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    docUri: StringView
+    srcDir: StringView
+    docText: StringView
+    docUnit: StringView
+    line0: i64
+    ch: i64
+    utf32: bool
+    mode: u8
+} out Value is {
+    l1: line0 + 1
+    l1u: l1.u32
+    lt: docLine text: docText lineno: l1u
+    cp1: cpColOf lineText: lt.stringview :ch :utf32
+    sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+    sp.walk n: snap.prog
+    bestIdx: -1
+    bestKind: 0.u8
+    nr: sp.rows.length
+    ri: 0.u64
+    for ri < nr loop {
+        row: sp.rows.get i: ri
+        if row.line == l1u when row.colLo <= cp1 then {
+            if cp1 < row.colHi then {
+                fs9: snap.parser.fsnoForNode nodeid: row.nodeid
+                pp9: snap.vfs.pathfromprovider dentryid: fs9
+                if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
+                    take9: false
+                    if bestIdx < 0 then take9 = true
+                    if row.kind == 2 when bestKind != 2 then take9 = true
+                    if take9 then {
+                        bestIdx = ri.i64
+                        bestKind = row.kind
+                    }
+                }
+            }
+        }
+        ri = ri + 1
+    }
+    if bestIdx < 0 then return Value.nul
+    bi: bestIdx.u64
+    hit: sp.rows.get i: bi
+    hname: sp.names.get i: bi
+    w9: hit.colHi - hit.colLo
+    hnid: hit.nodeid.u64
+
+    if mode == 2 then {
+        tnid: hnid
+        t9: nodeTypeAt o: snap.st nid: tnid
+        if t9 == 0 then return Value.nul
+        tn: typeNameOfOpt o: snap.st tid: t9
+        if tn.length == 0 then return Value.nul
+        body9: hname.copy
+        body9.append ": "
+        body9.append tn.stringview
+        mk9: newObj
+        mk9.set key: "kind".string value: (Value.text "plaintext".string)
+        mk9.set key: "value".string value: (Value.text body9)
+        ho9: newObj
+        ho9.set key: "contents".string value: (Value.object mk9)
+        return (Value.object ho9)
+    }
+
+    # resolve the hit to a target
+    refVid: 0.u64
+    refTid: 0.u64
+    refOwner: 0.u64
+    refKey: "".string
+    refBind: 0.u64
+    if bestKind == 1 then {
+        refVid = useVarId o: snap.st nid: hnid
+        if refVid == 0 then refTid = useUnitDef o: snap.st nid: hnid
+        if refVid == 0 when refTid == 0 then {
+            refKey = defKeyFor o: snap.st uname: docUnit name: hname.stringview
+        }
+        if refVid == 0 when refTid == 0 then {
+            if refKey.length == 0 then {
+                # native-receiver atoms carry no stamps: fall back to the
+                # nearest preceding same-name binding in this file
+                bl9: 0.u32
+                rk9: 0.u64
+                for rk9 < nr loop {
+                    rb: sp.rows.get i: rk9
+                    if rb.kind == 3 when rb.line <= l1u then {
+                        if rb.line > bl9 then {
+                            nmB: sp.names.get i: rk9
+                            if nmB.stringview == hname.stringview then {
+                                fsB: snap.parser.fsnoForNode nodeid: rb.nodeid
+                                ppB: snap.vfs.pathfromprovider dentryid: fsB
+                                if (pathMatches pv: ppB.stringview rel: docRel :srcDir) then {
+                                    bl9 = rb.line
+                                    refBind = rb.nodeid.u64
+                                }
+                            }
+                        }
+                    }
+                    rk9 = rk9 + 1
+                }
+            }
+        }
+    }
+    if bestKind == 2 then refOwner = memberOwnerOf o: snap.st nid: hnid
+    if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
+
+    if mode == 1 then {
+        if refVid > 0 then {
+            dn9: varDefNode o: snap.st vid: refVid
+            if dn9 > 0 then {
+                return (locationValue
+                    :snap
+                    :sp
+                    nid: dn9
+                    width: w9
+                    :docRel
+                    :docUri
+                    :srcDir
+                    :docText
+                    :utf32
+                )
+            }
+            return Value.nul
+        }
+        if refTid > 0 then {
+            dt9: defNodeInfo o: snap.st prog: snap.prog tid: refTid member: ""
+            if dt9 > 0 then {
+                return (locationValue
+                    :snap
+                    :sp
+                    nid: dt9
+                    width: w9
+                    :docRel
+                    :docUri
+                    :srcDir
+                    :docText
+                    :utf32
+                )
+            }
+            return Value.nul
+        }
+        if refOwner > 0 then {
+            dm9: (defNodeInfo
+                o: snap.st
+                prog: snap.prog
+                tid: refOwner
+                member: hname.stringview
+            )
+            if dm9 > 0 then {
+                return (locationValue
+                    :snap
+                    :sp
+                    nid: dm9
+                    width: w9
+                    :docRel
+                    :docUri
+                    :srcDir
+                    :docText
+                    :utf32
+                )
+            }
+            return Value.nul
+        }
+        if refBind > 0 then {
+            return (locationValue
+                :snap
+                :sp
+                nid: refBind
+                width: w9
+                :docRel
+                :docUri
+                :srcDir
+                :docText
+                :utf32
+            )
+        }
+        if refKey.length > 0 then {
+            dk9: (defNodeByKeyIn
+                o: snap.st
+                prog: snap.prog
+                key: refKey.stringview
+                member: ""
+            )
+            if dk9 > 0 then {
+                return (locationValue
+                    :snap
+                    :sp
+                    nid: dk9
+                    width: w9
+                    :docRel
+                    :docUri
+                    :srcDir
+                    :docText
+                    :utf32
+                )
+            }
+            return Value.nul
+        }
+        return Value.nul
+    }
+
+    # references: one pass over the span rows
+    arr: newArr
+    rj: 0.u64
+    for rj < nr loop {
+        row2: sp.rows.get i: rj
+        n2: row2.nodeid.u64
+        add9: false
+        if refVid > 0 then {
+            if row2.kind == 1 then {
+                if (useVarId o: snap.st nid: n2) == refVid then add9 = true
+            }
+            if row2.kind == 3 then {
+                if (defVarIdOf o: snap.st nid: n2) == refVid then add9 = true
+            }
+        }
+        if refTid > 0 when row2.kind == 1 then {
+            if (useUnitDef o: snap.st nid: n2) == refTid then add9 = true
+        }
+        if refOwner > 0 when row2.kind == 2 then {
+            if (memberOwnerOf o: snap.st nid: n2) == refOwner then {
+                nm2: sp.names.get i: rj
+                if nm2.stringview == hname.stringview then add9 = true
+            }
+        }
+        if refKey.length > 0 when row2.kind == 1 then {
+            nm3: sp.names.get i: rj
+            if nm3.stringview == hname.stringview then {
+                if (useVarId o: snap.st nid: n2) == 0 then {
+                    if (useUnitDef o: snap.st nid: n2) == 0 then add9 = true
+                }
+            }
+        }
+        if refBind > 0 then {
+            if n2 == refBind then add9 = true
+            if row2.kind == 1 then {
+                nm4: sp.names.get i: rj
+                if nm4.stringview == hname.stringview then {
+                    if (useVarId o: snap.st nid: n2) == 0 then add9 = true
+                }
+            }
+        }
+        if add9 then {
+            lv2: (locationValue
+                :snap
+                :sp
+                nid: n2
+                width: row2.colHi - row2.colLo
+                :docRel
+                :docUri
+                :srcDir
+                :docText
+                :utf32
+            )
+            appendIfObject :arr v: lv2
+        }
+        rj = rj + 1
+    }
+    return (Value.array arr)
+}
+
+# appendIfObject -- append `v` when it is a real Location (drop nul).
+appendIfObject: function {arr: Arr v: Value.take} is {
+    keep9: false
+    match (
+        v
+    ) case object then {
+        keep9 = true
+    } else {}
+    if keep9 then arr.items.append v
+}
+
+# symbolsAnswer -- flat DocumentSymbol list for the document's unit.
+symbolsAnswer: function {
+    snap: zcheck.CheckResult
+    unitName: StringView
+    docText: StringView
+    utf32: bool
+} out Value is {
+    arr: newArr
+    collectUnitSymbols prog: snap.prog :unitName :docText :utf32 :arr
+    return (Value.array arr)
+}
+
+collectUnitSymbols: function {
+    prog: zast.Node
+    unitName: StringView
+    docText: StringView
+    utf32: bool
+    arr: Arr
+} is {
+    match (
+        prog
+    ) case program then {
+        uit9: prog.units.iterate
+        for u9: uit9 loop {
+            collectUnitSymbolsIn w: u9 :unitName :docText :utf32 :arr
+        }
+    } else {}
+}
+
+collectUnitSymbolsIn: function {
+    w: zast.Node
+    unitName: StringView
+    docText: StringView
+    utf32: bool
+    arr: Arr
+} is {
+    match (
+        w
+    ) case namedoperation then {
+        lb9: optLabel o: w.name
+        if lb9.stringview == unitName then {
+            collectBodySymbols ud: w.operation :docText :utf32 :arr
+        }
+    } else {}
+}
+
+collectBodySymbols: function {ud: zast.Node docText: StringView utf32: bool arr: Arr} is {
+    match (
+        ud
+    ) case unitdef then {
+        bit9: ud.body.iterate
+        for b9: bit9 loop {
+            symbolOf m: b9 :docText :utf32 :arr
+        }
+    } else {}
+}
+
+symbolOf: function {m: zast.Node docText: StringView utf32: bool arr: Arr} is {
+    match (
+        m
+    ) case namedoperation then {
+        lb9: optLabel o: m.name
+        if lb9.length == 0 then return
+        k9: symbolKindOf op: m.operation
+        lt9: docLine text: docText lineno: m.lineno
+        c0: encodedCol lineText: lt9.stringview cpCol1: m.colno :utf32
+        wname9: cpLenOf s: lb9.stringview
+        c1: encodedCol lineText: lt9.stringview cpCol1: m.colno + wname9 :utf32
+        if c1 <= c0 then c1 = c0 + 1
+        line0: 0.i64
+        if m.lineno > 0 then line0 = (m.lineno - 1).i64
+        st9: newObj
+        st9.set key: "line".string value: (Value.intval line0)
+        st9.set key: "character".string value: (Value.intval c0.i64)
+        en9: newObj
+        en9.set key: "line".string value: (Value.intval line0)
+        en9.set key: "character".string value: (Value.intval c1.i64)
+        rg9: newObj
+        rg9.set key: "start".string value: (Value.object st9)
+        rg9.set key: "end".string value: (Value.object en9)
+        rv9: (Value.object rg9)
+        sy9: newObj
+        sy9.set key: "name".string value: (Value.text lb9.copy)
+        sy9.set key: "kind".string value: (Value.intval k9)
+        sy9.set key: "range".string value: rv9
+        sr9: json.parse source: "null"
+        rgv2: (rangeCopy :docText :utf32 :line0 c0: c0.i64 c1: c1.i64)
+        sy9.set key: "selectionRange".string value: rgv2
+        arr.items.append (Value.object sy9)
+    } else {}
+}
+
+# rangeCopy -- a fresh range object (ranges cannot be shared: Values
+# move into their parent on set).
+rangeCopy: function {docText: StringView utf32: bool line0: i64 c0: i64 c1: i64} out Value is {
+    st9: newObj
+    st9.set key: "line".string value: (Value.intval line0)
+    st9.set key: "character".string value: (Value.intval c0)
+    en9: newObj
+    en9.set key: "line".string value: (Value.intval line0)
+    en9.set key: "character".string value: (Value.intval c1)
+    rg9: newObj
+    rg9.set key: "start".string value: (Value.object st9)
+    rg9.set key: "end".string value: (Value.object en9)
+    return (Value.object rg9)
+}
+
+symbolKindOf: function {op: zast.Node} out i64 is {
+    match (
+        op
+    ) case functiondef then {
+        return 12
+    } case objectdef then {
+        return 5
+    } else {
+        return 13
+    }
 }
 
 # ---- main ------------------------------------------------------------
@@ -788,6 +1946,7 @@ main: function is {
         exitCode: 0
         inbuf: ib
         inpos: 0
+        snapshots: (Map String value: zcheck.CheckResult)
     )
     if replay.length > 0 then {
         fo: io.open path: replay.stringview mode: io.openmode.read
