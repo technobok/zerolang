@@ -6809,6 +6809,31 @@ emitStmt: function {
         # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
         tabA: takeAliasBase :symtab n: n.value
         if tabA.length > 0 then {
+            # a narrowed-subject `.take` binding MOVES the payload out of
+            # the match arm's box: real storage from the narrowed cast plus
+            # box zeroing, so the subject's post-match destroy no-ops (a
+            # pure alias would re-resolve to the whole un-narrowed subject)
+            if (nvHas xs: ctx.narrowBox name: tabA.stringview) then {
+                ntO9: ntGet xs: ctx.narrowTid name: tabA.stringview
+                match (
+                    ntO9
+                ) case some then {
+                    ctB9: typeRefC :symtab :ctx tid: ntO9 thisTid: 0
+                    valB9: takeSourceResolve :ctx name: tabA.stringview
+                    lnB1: "\{ind}\{ctB9} \{nm} = \{valB9};\n"
+                    buf.append lnB1.stringview
+                    lnB2: "\{ind}\{valB9} = (\{ctB9}){0};\n"
+                    buf.append lnB2.stringview
+                    if (symtab.reg.hasDestructorName typeId: ntO9) then {
+                        ldcbB: symtab.reg.cnameOf tid: ntO9
+                        ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
+                        ldfsB: ldfB.copy
+                        tmp.listFrees.append ldfsB
+                        tmp.listFreeVars.append nm.copy
+                    }
+                    return
+                } case none then {}
+            }
             lalA: "\{ind}/* alias: \{nm} => \{tabA} */\n"
             buf.append lalA.stringview
             nvSet xs: ctx.aliases name: nm.stringview val: tabA.stringview
