@@ -370,6 +370,8 @@ Server: class {
                 this.handleNav :msg mode: 2
             } else if mv == "textDocument/references" then {
                 this.handleNav :msg mode: 3
+            } else if mv == "textDocument/completion" then {
+                this.handleNav :msg mode: 4
             } else if mv == "textDocument/documentSymbol" then {
                 this.handleDocSymbol :msg
             } else {
@@ -450,6 +452,8 @@ Server: class {
         caps.set key: "textDocumentSync".string value: (Value.intval 1)
         caps.set key: "definitionProvider".string value: (Value.boolean true)
         caps.set key: "hoverProvider".string value: (Value.boolean true)
+        comp9: newObj
+        caps.set key: "completionProvider".string value: (Value.object comp9)
         caps.set key: "referencesProvider".string value: (Value.boolean true)
         caps.set key: "documentSymbolProvider".string value: (Value.boolean true)
         encName: "utf-16"
@@ -697,17 +701,30 @@ Server: class {
                     match (
                         sno
                     ) case some then {
-                        res: (navAnswer
-                            snap: sno
-                            docRel: drel.stringview
-                            docUri: uo.stringview
-                            srcDir: this.srcDir.stringview
-                            docText: dtext.stringview
-                            :line0
-                            ch: ch0
-                            utf32: this.encUtf32
-                            :mode
-                        )
+                        res: Value.nul
+                        if mode == 4 then {
+                            res = (completionAnswer
+                                snap: sno
+                                docRel: drel.stringview
+                                srcDir: this.srcDir.stringview
+                                docText: dtext.stringview
+                                :line0
+                                ch: ch0
+                                utf32: this.encUtf32
+                            )
+                        } else {
+                            res = (navAnswer
+                                snap: sno
+                                docRel: drel.stringview
+                                docUri: uo.stringview
+                                srcDir: this.srcDir.stringview
+                                docText: dtext.stringview
+                                :line0
+                                ch: ch0
+                                utf32: this.encUtf32
+                                :mode
+                            )
+                        }
                         sendResult id: idv result: res
                         answered9 = true
                     } case none then {}
@@ -1697,6 +1714,355 @@ symbolKindOf: function {op: zast.Node} out i64 is {
     } else {
         return 13
     }
+}
+
+# ---- completion -------------------------------------------------------
+
+# byteIdxOfCp -- byte offset where the 1-based codepoint column starts;
+# s.length when the column is past the end of the line.
+byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
+    if cp1 <= 1 then return 0
+    cnt: 0.u32
+    i: 0.u64
+    n: s.length
+    for i < n loop {
+        b: s.byteAt :i
+        match (
+            b
+        ) case some then {
+            isStart9: b < 128
+            if b >= 192 then isStart9 = true
+            if isStart9 then {
+                cnt = cnt + 1
+                if cnt == cp1 then return i
+            }
+        } case none then {}
+        i = i + 1
+    }
+    return n
+}
+
+isIdentByte: function {b: u8} out bool is {
+    if b >= 97 when b <= 122 then return true
+    if b >= 65 when b <= 90 then return true
+    if b >= 48 when b <= 57 then return true
+    if b == 95 then return true
+    return false
+}
+
+# addCand -- record a completion candidate (first kind wins on dups).
+addCand: function {sink: (Map String value: u8) name: StringView kind: u8} is {
+    if name.length == 0 then return
+    k9: name.string
+    if (sink.has key: k9) then return
+    k2: name.string
+    sink.set key: k2 value: kind
+}
+
+addKeywords: function {sink: (Map String value: u8)} is {
+    addCand :sink name: "function" kind: 14
+    addCand :sink name: "class" kind: 14
+    addCand :sink name: "record" kind: 14
+    addCand :sink name: "union" kind: 14
+    addCand :sink name: "variant" kind: 14
+    addCand :sink name: "protocol" kind: 14
+    addCand :sink name: "facet" kind: 14
+    addCand :sink name: "enum" kind: 14
+    addCand :sink name: "data" kind: 14
+    addCand :sink name: "if" kind: 14
+    addCand :sink name: "then" kind: 14
+    addCand :sink name: "else" kind: 14
+    addCand :sink name: "when" kind: 14
+    addCand :sink name: "match" kind: 14
+    addCand :sink name: "case" kind: 14
+    addCand :sink name: "for" kind: 14
+    addCand :sink name: "while" kind: 14
+    addCand :sink name: "loop" kind: 14
+    addCand :sink name: "with" kind: 14
+    addCand :sink name: "do" kind: 14
+    addCand :sink name: "return" kind: 14
+    addCand :sink name: "break" kind: 14
+    addCand :sink name: "continue" kind: 14
+    addCand :sink name: "is" kind: 14
+    addCand :sink name: "as" kind: 14
+    addCand :sink name: "in" kind: 14
+    addCand :sink name: "out" kind: 14
+    addCand :sink name: "native" kind: 14
+    addCand :sink name: "true" kind: 14
+    addCand :sink name: "false" kind: 14
+    addCand :sink name: "null" kind: 14
+}
+
+# defKindOf -- the CompletionItemKind of a top-level definition.
+defKindOf: function {op: zast.Node} out u8 is {
+    match (
+        op
+    ) case functiondef then {
+        return 3
+    } case objectdef then {
+        return 7
+    } else {
+        return 21
+    }
+}
+
+# collectTopDefs -- every loaded unit's name (Module) and top-level
+# definition labels (Function / Class / Constant).
+collectTopDefs: function {prog: zast.Node sink: (Map String value: u8)} is {
+    match (
+        prog
+    ) case program then {
+        uit9: prog.units.iterate
+        for u9: uit9 loop {
+            collectUnitDefs w: u9 :sink
+        }
+    } else {}
+}
+
+collectUnitDefs: function {w: zast.Node sink: (Map String value: u8)} is {
+    match (
+        w
+    ) case namedoperation then {
+        ul9: optLabel o: w.name
+        addCand :sink name: ul9.stringview kind: 9
+        collectUnitDefsIn ud: w.operation :sink
+    } else {}
+}
+
+collectUnitDefsIn: function {ud: zast.Node sink: (Map String value: u8)} is {
+    match (
+        ud
+    ) case unitdef then {
+        bit9: ud.body.iterate
+        for b9: bit9 loop {
+            collectMemberDef m: b9 :sink
+        }
+    } else {}
+}
+
+collectMemberDef: function {m: zast.Node sink: (Map String value: u8)} is {
+    match (
+        m
+    ) case namedoperation then {
+        lb9: optLabel o: m.name
+        if lb9.length > 0 then {
+            k9: defKindOf op: m.operation
+            addCand :sink name: lb9.stringview kind: k9
+        }
+    } else {}
+}
+
+# enclosingDefStart -- the start line of the unit-body definition the
+# cursor sits in (the last def at or before the cursor line), also
+# adding that definition's parameter names when it is a function.
+# 0 when the cursor precedes every definition.
+enclosingDefStart: function {
+    prog: zast.Node
+    unitName: StringView
+    l1u: u32
+    sink: (Map String value: u8)
+} out u32 is {
+    match (
+        prog
+    ) case program then {
+        uit9: prog.units.iterate
+        for u9: uit9 loop {
+            r9: enclosingInUnit w: u9 :unitName :l1u :sink
+            if r9 > 0 then return r9
+        }
+        return 0
+    } else {
+        return 0
+    }
+}
+
+enclosingInUnit: function {
+    w: zast.Node
+    unitName: StringView
+    l1u: u32
+    sink: (Map String value: u8)
+} out u32 is {
+    match (
+        w
+    ) case namedoperation then {
+        ul9: optLabel o: w.name
+        if ul9.stringview == unitName then return (enclosingInBody ud: w.operation :l1u :sink)
+        return 0
+    } else {
+        return 0
+    }
+}
+
+enclosingInBody: function {ud: zast.Node l1u: u32 sink: (Map String value: u8)} out u32 is {
+    match (
+        ud
+    ) case unitdef then {
+        best9: 0.u32
+        {
+            bit9: ud.body.iterate
+            for b9: bit9 loop {
+                ln9: memberStartLine m: b9
+                if ln9 > 0 when ln9 <= l1u then {
+                    if ln9 > best9 then best9 = ln9
+                }
+            }
+        }
+        if best9 > 0 then {
+            bit2: ud.body.iterate
+            for b2: bit2 loop {
+                ln2: memberStartLine m: b2
+                if ln2 == best9 then addMemberParams m: b2 :sink
+            }
+        }
+        return best9
+    } else {
+        return 0
+    }
+}
+
+memberStartLine: function {m: zast.Node} out u32 is {
+    match (
+        m
+    ) case namedoperation then {
+        return m.lineno
+    } else {
+        return 0
+    }
+}
+
+addMemberParams: function {m: zast.Node sink: (Map String value: u8)} is {
+    match (
+        m
+    ) case namedoperation then {
+        addFnParams op: m.operation :sink
+    } else {}
+}
+
+addFnParams: function {op: zast.Node sink: (Map String value: u8)} is {
+    match (
+        op
+    ) case functiondef then {
+        pit9: op.parameters.iterate
+        for pm9: pit9 loop {
+            addParamLabel pm: pm9 :sink
+        }
+    } else {}
+}
+
+addParamLabel: function {pm: zast.Node sink: (Map String value: u8)} is {
+    match (
+        pm
+    ) case namedoperation then {
+        pl9: optLabel o: pm.name
+        addCand :sink name: pl9.stringview kind: 6
+    } else {}
+}
+
+# completionAnswer -- scope-based completion from the last-good
+# snapshot: the enclosing definition's params and preceding bindings,
+# every loaded unit's top-level defs and unit names, and keywords --
+# filtered by the identifier prefix on the LIVE line. A '.' before the
+# prefix is member position: empty (no wrong members).
+completionAnswer: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    docText: StringView
+    line0: i64
+    ch: i64
+    utf32: bool
+} out Value is {
+    arr: newArr
+    l1: line0 + 1
+    l1u: l1.u32
+    lt: docLine text: docText lineno: l1u
+    ltv: lt.stringview
+    cp1: cpColOf lineText: ltv :ch :utf32
+    cur9: byteIdxOfCp s: ltv :cp1
+    # identifier prefix ending at the cursor
+    ps9: cur9
+    for ps9 > 0 loop {
+        b9: ltv.byteAt i: ps9 - 1
+        match (
+            b9
+        ) case some then {
+            if (isIdentByte b: b9) == false then break
+        } case none then {
+            break
+        }
+        ps9 = ps9 - 1
+    }
+    # member position: a '.' immediately before the prefix
+    if ps9 > 0 then {
+        pb9: ltv.byteAt i: ps9 - 1
+        match (
+            pb9
+        ) case some then {
+            if pb9 == 46 then return (Value.array arr)
+        } case none then {}
+    }
+    prefix9: (ltv.substring from: ps9 to: cur9).string
+
+    cands: (Map String value: u8)
+    docUnit9: zsource.unitNameOf path: docRel
+    defStart9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u sink: cands
+    if defStart9 > 0 then {
+        sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+        sp.walk n: snap.prog
+        nr9: sp.rows.length
+        ri9: 0.u64
+        for ri9 < nr9 loop {
+            row9: sp.rows.get i: ri9
+            if row9.kind == 3 when row9.line >= defStart9 then {
+                if row9.line <= l1u then {
+                    fs9: snap.parser.fsnoForNode nodeid: row9.nodeid
+                    pp9: snap.vfs.pathfromprovider dentryid: fs9
+                    if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
+                        nm9: sp.names.get i: ri9
+                        addCand sink: cands name: nm9.stringview kind: 6
+                    }
+                }
+            }
+            ri9 = ri9 + 1
+        }
+    }
+    collectTopDefs prog: snap.prog sink: cands
+    addKeywords sink: cands
+
+    labels9: (List String)
+    with cit9: cands.iterateItems do for ce9: cit9 loop {
+        pv9: prefix9.stringview
+        if pv9.length == 0 then {
+            lc9: ce9.key.copy
+            labels9.append lc9
+        } else {
+            kv9: ce9.key.stringview
+            if kv9.startsWith pv9 then {
+                lc2: ce9.key.copy
+                labels9.append lc2
+            }
+        }
+    }
+    labels9.sort
+    li9: 0.u64
+    ln9: labels9.length
+    for li9 < ln9 loop {
+        lb9: labels9.get i: li9
+        kv2: lb9.copy
+        ko9: cands.get key: kv2
+        kind9: 6.u8
+        match (
+            ko9
+        ) case some then {
+            kind9 = ko9
+        } case none then {}
+        it9: newObj
+        it9.set key: "label".string value: (Value.text lb9.copy)
+        it9.set key: "kind".string value: (Value.intval kind9.i64)
+        arr.items.append (Value.object it9)
+        li9 = li9 + 1
+    }
+    return (Value.array arr)
 }
 
 # ---- main ------------------------------------------------------------
