@@ -372,6 +372,8 @@ Server: class {
                 this.handleNav :msg mode: 3
             } else if mv == "textDocument/completion" then {
                 this.handleNav :msg mode: 4
+            } else if mv == "textDocument/formatting" then {
+                this.handleFormatting :msg
             } else if mv == "textDocument/documentSymbol" then {
                 this.handleDocSymbol :msg
             } else {
@@ -454,6 +456,7 @@ Server: class {
         caps.set key: "hoverProvider".string value: (Value.boolean true)
         comp9: newObj
         caps.set key: "completionProvider".string value: (Value.object comp9)
+        caps.set key: "documentFormattingProvider".string value: (Value.boolean true)
         caps.set key: "referencesProvider".string value: (Value.boolean true)
         caps.set key: "documentSymbolProvider".string value: (Value.boolean true)
         encName: "utf-16"
@@ -647,12 +650,45 @@ Server: class {
                 }
                 ri = ri + 1
             }
+            lintInto :arr text: e.value.text.copy relpath: drel.stringview utf32: this.encUtf32
             p9: newObj
             p9.set key: "uri".string value: (Value.text durl)
             p9.set key: "diagnostics".string value: (Value.array arr)
             pv9: (Value.object p9)
             sendNotification method: "textDocument/publishDiagnostics" params: pv9
         }
+    }
+
+    # ---- formatting ----
+
+    handleFormatting: function {:this msg: Value} is {
+        idv: idValueOf :msg
+        uo: json.textAt v: msg path: "params/textDocument/uri"
+        answered9: false
+        match (
+            uo
+        ) case some then {
+            dtext: "".string
+            drel: "".string
+            found9: false
+            {
+                ku: uo.copy
+                dgo: this.docs.get key: ku
+                match (
+                    dgo
+                ) case some then {
+                    dtext = dgo.text.copy
+                    drel = dgo.relpath.copy
+                    found9 = true
+                } case none then {}
+            }
+            if found9 then {
+                res: formatAnswer text: dtext.stringview relpath: drel.stringview
+                sendResult id: idv result: res
+                answered9 = true
+            }
+        } case none then {}
+        if answered9 == false then sendResult id: idv result: Value.nul
     }
 
     # ---- navigation requests ----
@@ -1714,6 +1750,106 @@ symbolKindOf: function {op: zast.Node} out i64 is {
     } else {
         return 13
     }
+}
+
+# ---- lint + formatting ------------------------------------------------
+
+# lintInto -- fast-tier zl findings for one live buffer as Warning /
+# Information diagnostics (hard errors stay with the compile pass,
+# which owns them).
+lintInto: function {arr: Arr text: String.take relpath: StringView utf32: bool} is {
+    la9: zsource.analyzeSource source: text path: relpath.string lineLength: 100
+    with dit9: la9.diags.iterate do for d9: dit9 loop {
+        sevN9: 0.i64
+        k9: d9.sev
+        match (
+            k9
+        ) case WARNING then {
+            sevN9 = 2
+        } case INFO then {
+            sevN9 = 3
+        } else {}
+        if sevN9 > 0 then {
+            lt9: docLine text: la9.source.stringview lineno: d9.lineno
+            line0: 0.i64
+            if d9.lineno > 0 then line0 = (d9.lineno - 1).i64
+            c0: encodedCol lineText: lt9.stringview cpCol1: d9.colno :utf32
+            w9: d9.width
+            if w9 == 0 then w9 = 1
+            c1: encodedCol lineText: lt9.stringview cpCol1: d9.colno + w9 :utf32
+            if c1 <= c0 then c1 = c0 + 1
+            m9: d9.msg.copy
+            if d9.hint.length > 0 then {
+                m9.appendByte b: 10
+                m9.append "hint: "
+                m9.append d9.hint.stringview
+            }
+            st9: newObj
+            st9.set key: "line".string value: (Value.intval line0)
+            st9.set key: "character".string value: (Value.intval c0.i64)
+            en9: newObj
+            en9.set key: "line".string value: (Value.intval line0)
+            en9.set key: "character".string value: (Value.intval c1.i64)
+            rg9: newObj
+            rg9.set key: "start".string value: (Value.object st9)
+            rg9.set key: "end".string value: (Value.object en9)
+            dg9: newObj
+            dg9.set key: "range".string value: (Value.object rg9)
+            dg9.set key: "severity".string value: (Value.intval sevN9)
+            dg9.set key: "code".string value: (Value.text d9.code.copy)
+            dg9.set key: "source".string value: (Value.text "zl".string)
+            dg9.set key: "message".string value: (Value.text m9)
+            arr.items.append (Value.object dg9)
+        }
+    }
+}
+
+# formatAnswer -- the zl fmt pipeline over a live buffer: fast-tier
+# edits, re-parse validation, wrap at 100. One whole-document TextEdit
+# when anything changed; null when the buffer has parse errors or a
+# fix would break it (the editor keeps the buffer untouched).
+formatAnswer: function {text: StringView relpath: StringView} out Value is {
+    a9: zsource.analyzeSource source: text.string path: relpath.string lineLength: 100
+    if a9.parseErrorCount > 0 then return Value.nul
+    newsrc: a9.source.copy
+    valid9: true
+    if a9.edits.length > 0 then {
+        newsrc = zfix.applyEdits source: a9.source.stringview edits: a9.edits
+        valid9 = zsource.sourceParses source: newsrc.copy
+    }
+    if valid9 == false then return Value.nul
+    wrapped9: zsource.wrapSource source: newsrc.stringview lineLength: 100
+    newsrc = wrapped9
+    arr: newArr
+    changed9: (newsrc.stringview == text) == false
+    if changed9 then {
+        nl9: 0.i64
+        i9: 0.u64
+        n9: text.length
+        for i9 < n9 loop {
+            b9: text.byteAt i: i9
+            match (
+                b9
+            ) case some then {
+                if b9 == 10 then nl9 = nl9 + 1
+            } case none then {}
+            i9 = i9 + 1
+        }
+        st9: newObj
+        st9.set key: "line".string value: (Value.intval 0)
+        st9.set key: "character".string value: (Value.intval 0)
+        en9: newObj
+        en9.set key: "line".string value: (Value.intval nl9 + 1)
+        en9.set key: "character".string value: (Value.intval 0)
+        rg9: newObj
+        rg9.set key: "start".string value: (Value.object st9)
+        rg9.set key: "end".string value: (Value.object en9)
+        te9: newObj
+        te9.set key: "range".string value: (Value.object rg9)
+        te9.set key: "newText".string value: (Value.text newsrc)
+        arr.items.append (Value.object te9)
+    }
+    return (Value.array arr)
 }
 
 # ---- completion -------------------------------------------------------
