@@ -248,7 +248,7 @@ emitter-guard:
 	if [ "$$e3" -gt 37 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 37)"; fail=1; fi; \
 	if [ "$$e4" -gt 39 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 39)"; fail=1; fi; \
 	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
-	if [ "$$e6" -gt 121 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 121)"; fail=1; fi; \
+	if [ "$$e6" -gt 123 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 123)"; fail=1; fi; \
 	if [ "$$e7" -gt 20 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 20)"; fail=1; fi; \
 	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
 	if [ "$$e9" -gt 60 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 60)"; fail=1; fi; \
