@@ -1,0 +1,45 @@
+# map_union_value_borrow.z -- Map.get over a UNION value returns a
+# borrowed view pointing into the map's entry storage, exactly like the
+# String/class value kinds (the audited get contract: no allocation on
+# get, OptionView destroy is a no-op). Pins the union leg, which used
+# to malloc a box per get and leak it.
+
+U: union {
+    tagged: i64
+    named: String
+}
+
+main: function is {
+    m: (Map String value: U)
+    m.set key: "a".string value: (U.tagged 7)
+    m.set key: "b".string value: (U.named "seven".string)
+    g: m.get key: "a".string
+    match (
+        g
+    ) case some then {
+        match (
+            g
+        ) case tagged then {
+            print "a=\{g}"
+        } else {
+            print "a not tagged"
+        }
+    } case none then {
+        print "a missing"
+    }
+    g2: m.get key: "b".string
+    match (
+        g2
+    ) case some then {
+        match (
+            g2
+        ) case named then {
+            print "b=\{g2.stringview}"
+        } else {
+            print "b not named"
+        }
+    } case none then {
+        print "b missing"
+    }
+    print "len=\{m.length}"
+}

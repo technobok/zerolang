@@ -4729,6 +4729,16 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         return "/* zemitterc: unhandled expr */0".string
     } case atomid then {
         av: n.name.stringview
+        # `0c<char>` literal: the raw lexeme is not a C token, so decode
+        # to its codepoint here (decimal/hex lexemes pass through below
+        # as valid C text; identifiers never start with a digit)
+        if av.startsWith "0c" then {
+            pn9: ztypes.parseNumber numstr: av
+            if pn9.err.length == 0 then {
+                cl9: "\{pn9.ival}"
+                return cl9
+            }
+        }
         # stamped variable use first: the local, alias-resolved and C-mangled
         # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
         # key alloc + hash) never runs for it
@@ -4959,6 +4969,11 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         if cTypeLk3.length > 0 then {
                             bv1: bn2.stringview
                             bc1: bv1.string
+                            # `0cA.u8`: the 0c lexeme is not a C token; decode
+                            if bv1.startsWith "0c" then {
+                                pn1: ztypes.parseNumber numstr: bv1
+                                if pn1.err.length == 0 then bc1 = "\{pn1.ival}"
+                            }
                             sfx1: numLitSuffix name: mn2.stringview
                             bc1.append sfx1.stringview
                             return bc1
@@ -11993,16 +12008,13 @@ emitMapMono: function {
         gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
         getBody = gbV
     } else {
-        gbBorrow9: false
-        if (isReftypeParam :symtab :ctx tid: valTid) then gbBorrow9 = true
-        if valTid == ctx.strTid then gbBorrow9 = true
-        if gbBorrow9 then {
-            gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
-            getBody = gbR
-        } else {
-            gbVT: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        \{valT}* _copy = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n        *_copy = _this->entries[idx].value;\n        _r.data = _copy;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
-            getBody = gbVT
-        }
+        # every OptionView-producing value kind (class, String, union,
+        # protocol, ...) borrows a pointer into the entry storage: the
+        # view's SHARED lock pins the map, and OptionView destroy is a
+        # no-op, so a malloc'd box here would leak (the audited get
+        # contract is "no deep-copy on get")
+        gbR: "    z_\{ov}_t _r = {0};\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data = &_this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n        _r.data = NULL;\n    }\n    return _r;"
+        getBody = gbR
     }
     rmWrapId9: 0.u64
     roMm9: symtab.typing.childOf parentTypeId: monoId name: "remove"
