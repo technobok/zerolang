@@ -1,0 +1,64 @@
+# union_native_fd_arm.z -- a concrete user union whose arm is a
+# cross-unit native-fd class (io.File), mirroring zls's Transport
+# union { stdio: null; replay: io.File; tcp: net.Conn }. Exercises:
+#   - a union def with a cross-unit native-fd class arm,
+#   - constructing that arm by MOVING a narrowed File into it,
+#   - a bare-name-param match dispatching `read` on the class arm,
+#   - the union destructor closing the moved-in fd exactly once.
+# Run + leak: the fd must close once (no double close, no leak).
+
+Src: union {
+    empty9: null
+    file: io.File
+}
+
+readVia: function {s: Src into9: Bytes} out u64 is {
+    n9: 0.u64
+    match (
+        s
+    ) case file then {
+        rr: s.read into: into9 max: 16
+        match (
+            rr
+        ) case ok then {
+            n9 = rr
+        } case err then {}
+    } case empty9 then {}
+    return n9
+}
+
+main: function is {
+    p9: "union_fd_probe.dat"
+    {
+        wf: io.open path: p9 mode: io.openmode.write
+        match (
+            wf
+        ) case ok then {
+            data9: Bytes
+            data9.append from: 122.u8
+            data9.append from: 108.u8
+            data9.append from: 115.u8
+            bv9: ByteView.borrow from: data9.listview
+            ww: wf.write from: bv9
+            match (
+                ww
+            ) case ok then {} case err then {}
+        } case err then {
+            print "open-write failed"
+        }
+    }
+    rf: io.open path: p9 mode: io.openmode.read
+    match (
+        rf
+    ) case ok then {
+        s: (Src.file rf)
+        buf: Bytes
+        got9: readVia s: s into9: buf
+        print "got=\{got9}"
+        b0: buf.get i: 0
+        print "first=\{b0}"
+    } case err then {
+        print "open-read failed"
+    }
+    print "done"
+}

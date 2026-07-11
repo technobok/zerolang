@@ -3526,6 +3526,27 @@ ctorArgByLabel: function {
     return "0".string
 }
 
+# argIsPointerByLabel -- true when the arg at `label` already evaluates to a C
+# pointer (a reftype/List param or a `.lock` field), so a native by-pointer
+# parameter must pass it directly rather than re-addressing it with `&`.
+argIsPointerByLabel: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    label: StringView
+} out bool is {
+    aiter: call.arguments.iterate
+    for a: aiter loop {
+        match (
+            a
+        ) case namedoperation then {
+            an: unitLabel9 o: a.name
+            if an.stringview == label then return (pathIsPointer :symtab :ctx n: a.operation)
+        } else {}
+    }
+    return false
+}
+
 # ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
 # method call passing args positionally (`this.formatLockHolder holder`) rather
 # than by label; "" when there is no such arg.
@@ -14739,6 +14760,8 @@ emitFileMethodCall: function {
     if mn.stringview == "read" then {
         iv: ctorArgByLabel :symtab :ctx :call label: "into"
         mv: ctorArgByLabel :symtab :ctx :call label: "max"
+        ivptr9: argIsPointerByLabel :symtab :ctx :call label: "into"
+        if ivptr9 then return "\{fc}_read(\{recvExpr}, \{iv}, \{mv})"
         return "\{fc}_read(\{recvExpr}, &\{iv}, \{mv})"
     }
     if mn.stringview == "seek" then {
