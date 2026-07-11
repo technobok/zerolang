@@ -1,0 +1,114 @@
+# json_roundtrip.z -- lib/system/json.z end to end: parse -> serialize
+# roundtrips (scalars, arrays, objects, string escapes incl. \uXXXX and
+# surrogate pairs), parse-error reporting with byte offsets, path-based
+# accessors over a JSON-RPC-shaped message, and building + serializing
+# a response tree through the Obj/Arr carriers.
+
+Value: json.Value
+Obj: json.Obj
+Arr: json.Arr
+
+roundtrip: function {s: StringView} is {
+    r: json.parse source: s
+    match (
+        r
+    ) case ok then {
+        o: json.serialize v: r
+        print o
+    } case err then {
+        print "error at \{r.at}: \{r.msg.stringview}"
+    }
+}
+
+main: function is {
+    roundtrip s: "null"
+    roundtrip s: "  true "
+    roundtrip s: "false"
+    roundtrip s: "42"
+    roundtrip s: "-17"
+    roundtrip s: "0"
+    roundtrip s: "3.5"
+    roundtrip s: "[]"
+    roundtrip s: "{}"
+    roundtrip s: "[1,2,3]"
+    roundtrip s: "[[1],[2,[3]]]"
+    roundtrip s: "{\"a\": 1, \"b\": [true, null]}"
+    roundtrip s: "\"plain\""
+    roundtrip s: "\"quote:\\\" backslash:\\\\ slash:\\/ tab:\\t\""
+    roundtrip s: "\"h\\u00e9llo\\n\""
+    roundtrip s: "\"\\ud83d\\ude00\""
+    roundtrip s: "\"\\u0041\\u4e2d\""
+    roundtrip s: "{"
+    roundtrip s: "[1,]"
+    roundtrip s: "\"unterminated"
+    roundtrip s: "tru"
+    roundtrip s: "1 2"
+    roundtrip s: "\"\\ud83d\""
+    roundtrip s: "{\"a\" 1}"
+
+    src2: "{\"method\": \"initialize\", \"id\": 7, \"params\": {\"textDocument\": {\"uri\": \"file:///x.z\"}, \"flags\": [true, false]}}"
+    pr: json.parse source: src2
+    match (
+        pr
+    ) case ok then {
+        m: json.textAt v: pr path: "method"
+        match (
+            m
+        ) case some then {
+            print "method=\{m.stringview}"
+        } case none then {
+            print "method missing"
+        }
+        idv: json.intAt v: pr path: "id"
+        match (
+            idv
+        ) case some then {
+            print "id=\{idv}"
+        } case none then {
+            print "id missing"
+        }
+        u: json.textAt v: pr path: "params/textDocument/uri"
+        match (
+            u
+        ) case some then {
+            print "uri=\{u.stringview}"
+        } case none then {
+            print "uri missing"
+        }
+        f1: json.boolAt v: pr path: "params/flags/1"
+        match (
+            f1
+        ) case some then {
+            print "flag1=\{f1}"
+        } case none then {
+            print "flag1 missing"
+        }
+        hp: json.hasAt v: pr path: "params"
+        print "has params: \{hp}"
+        hn: json.hasAt v: pr path: "nope/deep"
+        print "has nope: \{hn}"
+        wrongkind: json.intAt v: pr path: "method"
+        match (
+            wrongkind
+        ) case some then {
+            print "method-as-int: \{wrongkind}"
+        } case none then {
+            print "method-as-int: none"
+        }
+    } case err then {
+        print "parse failed"
+    }
+
+    b: (Obj entries: (Map String value: Value) keys: (List String))
+    b.set key: "jsonrpc".string value: (Value.text "2.0".string)
+    b.set key: "id".string value: (Value.intval 7)
+    b.set key: "id".string value: (Value.intval 8)
+    inner: (Arr items: (List Value))
+    inner.items.append (Value.boolean true)
+    inner.items.append Value.nul
+    inner.items.append (Value.text "end".string)
+    b.set key: "result".string value: (Value.array inner)
+    root: (Value.object b)
+    out2: json.serialize v: root
+    print out2
+}

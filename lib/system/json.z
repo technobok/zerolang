@@ -1,0 +1,713 @@
+# json -- JSON (RFC 8259) value tree, parser, and serializer.
+# The tree is a reftype tagged sum (`Value`) mirroring the AST's
+# union-of-carriers shape: scalars ride in the arm payload, arrays
+# and objects in carrier classes. Objects remember key insertion
+# order (`keys`) so serialization is deterministic; `entries` gives
+# O(1) lookup. Integers and floats are separate arms so i64 values
+# (protocol ids, offsets) round-trip exactly.
+
+Value: union {
+    nul: null
+    boolean: bool
+    intval: i64
+    floatval: f64
+    text: String
+    array: Arr
+    object: Obj
+}
+
+Arr: class {
+    items: (List Value)
+}
+
+Obj: class {
+    entries: (Map String value: Value)
+    keys: (List String)
+} as {
+    # set -- insert or replace `key`. First insertion records the key
+    # in `keys`; replacement keeps the original position.
+    set: function {:this key: String.take value: Value.take} is {
+        if (this.entries.has :key) == false then this.keys.append key.copy
+        this.entries.set :key :value
+    }
+
+    has: function {:this key: StringView} out bool is {
+        k: key.string
+        return (this.entries.has key: k)
+    }
+}
+
+# Parse failure: byte offset into the input plus a message.
+JsonError: class {
+    at: u64
+    msg: String
+}
+
+ParseResult: union {
+    err: JsonError
+    ok: Value
+}
+
+# ---- accessors ----------------------------------------------------
+# Protocol-dispatch code addresses the tree with "/"-separated paths
+# ("params/textDocument/uri"); numeric segments index arrays. The
+# walk stays inside one call chain (element and member reads are
+# borrows, which user code cannot return), so the terminal value is
+# surfaced as scalars in `found`: the kind arm plus the matching
+# payload slot. Strings are copied out; structure (array/object) is
+# reported by kind and length, and is navigated in place by matching
+# on the tree at the use site.
+
+foundkind: variant {
+    missing: null
+    nul: null
+    boolean: null
+    intval: null
+    floatval: null
+    text: null
+    array: null
+    object: null
+}
+
+Found: class {
+    kind: foundkind
+    b: bool
+    i: i64
+    f: f64
+    s: String
+    n: u64
+}
+
+foundMissing: function out Found is {
+    return (Found kind: foundkind.missing b: false i: 0 f: 0.0 s: "".string n: 0)
+}
+
+# at -- walk `path` from `v`; the terminal's kind and payload.
+at: function {v: Value path: StringView} out Found is {
+    io9: path.splitOnce sep: "/"
+    match (
+        io9
+    ) case some then {
+        # own the head segment first: two live views of `path` would
+        # conflict with substring's receiver lock
+        k: "".string
+        {
+            head: path.substring from: 0 to: io9
+            k = head.string
+        }
+        rest: path.substring from: io9 + 1 to: path.length
+        match (
+            v
+        ) case object then {
+            child: v.entries.get key: k
+            match (
+                child
+            ) case some then {
+                return (at v: child path: rest)
+            } case none then {
+                return foundMissing
+            }
+        } case array then {
+            kv: k.stringview
+            ir: kv.parseU64
+            match (
+                ir
+            ) case ok then {
+                if ir < v.items.length then {
+                    el: v.items.get i: ir
+                    return (at v: el path: rest)
+                }
+                return foundMissing
+            } case err then {
+                return foundMissing
+            }
+        } else {
+            return foundMissing
+        }
+    } case none then {
+        match (
+            v
+        ) case object then {
+            k2: path.string
+            child2: v.entries.get key: k2
+            match (
+                child2
+            ) case some then {
+                return (describeValue v: child2)
+            } case none then {
+                return foundMissing
+            }
+        } case array then {
+            ir2: path.parseU64
+            match (
+                ir2
+            ) case ok then {
+                if ir2 < v.items.length then {
+                    el2: v.items.get i: ir2
+                    return (describeValue v: el2)
+                }
+                return foundMissing
+            } case err then {
+                return foundMissing
+            }
+        } else {
+            return foundMissing
+        }
+    }
+}
+
+# describeValue -- one Value as a Found (no path step).
+describeValue: function {v: Value} out Found is {
+    match (
+        v
+    ) case nul then {
+        return (Found kind: foundkind.nul b: false i: 0 f: 0.0 s: "".string n: 0)
+    } case boolean then {
+        return (Found kind: foundkind.boolean b: v i: 0 f: 0.0 s: "".string n: 0)
+    } case intval then {
+        return (Found kind: foundkind.intval b: false i: v f: 0.0 s: "".string n: 0)
+    } case floatval then {
+        return (Found kind: foundkind.floatval b: false i: 0 f: v s: "".string n: 0)
+    } case text then {
+        return (Found kind: foundkind.text b: false i: 0 f: 0.0 s: v.copy n: 0)
+    } case array then {
+        return (Found kind: foundkind.array b: false i: 0 f: 0.0 s: "".string n: v.items.length)
+    } case object then {
+        return (Found kind: foundkind.object b: false i: 0 f: 0.0 s: "".string n: v.keys.length)
+    }
+}
+
+# textAt -- terminal string member as an owned copy.
+textAt: function {v: Value path: StringView} out (Option String) is {
+    r: (at :v :path)
+    k: r.kind
+    match (
+        k
+    ) case text then {
+        return (Option.some r.s.copy)
+    } else {
+        return (Option.none String)
+    }
+}
+
+# intAt -- terminal integer member.
+intAt: function {v: Value path: StringView} out (optionval i64) is {
+    r: (at :v :path)
+    k: r.kind
+    match (
+        k
+    ) case intval then {
+        return (optionval.some r.i)
+    } else {
+        return (optionval.none i64)
+    }
+}
+
+# boolAt -- terminal boolean member.
+boolAt: function {v: Value path: StringView} out (optionval bool) is {
+    r: (at :v :path)
+    k: r.kind
+    match (
+        k
+    ) case boolean then {
+        return (optionval.some r.b)
+    } else {
+        return (optionval.none bool)
+    }
+}
+
+# hasAt -- whether the path resolves to any value.
+hasAt: function {v: Value path: StringView} out bool is {
+    r: (at :v :path)
+    k: r.kind
+    match (
+        k
+    ) case missing then {
+        return false
+    } else {
+        return true
+    }
+}
+
+# arrayLength -- element count, or 0 when `v` is not an array.
+arrayLength: function {v: Value} out u64 is {
+    match (
+        v
+    ) case array then {
+        return v.items.length
+    } else {
+        return 0.u64
+    }
+}
+
+# ---- serializer ---------------------------------------------------
+
+# serialize -- compact form, no whitespace; object keys in insertion
+# order; strings escaped per RFC 8259 (control bytes as \u00XX,
+# multi-byte UTF-8 passed through).
+serialize: function {v: Value} out String is {
+    buf: "".string
+    writeValue :v :buf
+    return buf
+}
+
+writeValue: function {v: Value buf: String} is {
+    match (
+        v
+    ) case nul then {
+        buf.append "null"
+    } case boolean then {
+        if v then {
+            buf.append "true"
+        } else {
+            buf.append "false"
+        }
+    } case intval then {
+        si9: "\{v}"
+        buf.append si9.stringview
+    } case floatval then {
+        sf9: "\{v}"
+        buf.append sf9.stringview
+    } case text then {
+        writeString sv: v.stringview :buf
+    } case array then {
+        buf.appendByte b: 91
+        first: true
+        with it: v.items.iterate do for item: it loop {
+            if first == false then buf.appendByte b: 44
+            first = false
+            writeValue v: item :buf
+        }
+        buf.appendByte b: 93
+    } case object then {
+        buf.appendByte b: 123
+        first: true
+        with kit: v.keys.iterate do for k: kit loop {
+            e: v.entries.get key: k
+            match (
+                e
+            ) case some then {
+                if first == false then buf.appendByte b: 44
+                first = false
+                writeString sv: k.stringview :buf
+                buf.appendByte b: 58
+                writeValue v: e :buf
+            } case none then {}
+        }
+        buf.appendByte b: 125
+    }
+}
+
+hexDigit: function {n: u8} out u8 is {
+    if n < 10 then return 48 + n
+    return 87 + n
+}
+
+writeString: function {sv: StringView buf: String} is {
+    buf.appendByte b: 34
+    n: sv.length
+    i: 0.u64
+    for i < n loop {
+        b: sv.byteAt i
+        match (
+            b
+        ) case some then {
+            if b == 34 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 34
+            } else if b == 92 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 92
+            } else if b == 10 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 0cn
+            } else if b == 13 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 0cr
+            } else if b == 9 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 0ct
+            } else if b == 8 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 0cb
+            } else if b == 12 then {
+                buf.appendByte b: 92
+                buf.appendByte b: 0cf
+            } else if b < 32 then {
+                buf.append "\\u00"
+                buf.appendByte b: (hexDigit n: b / 16)
+                buf.appendByte b: (hexDigit n: b % 16)
+            } else {
+                buf.appendByte :b
+            }
+        } case none then {}
+        i = i + 1
+    }
+    buf.appendByte b: 34
+}
+
+# ---- parser -------------------------------------------------------
+
+isDigit: function {b: u8} out bool is {
+    if b >= 48 when b <= 57 then return true
+    return false
+}
+
+isWs: function {b: u8} out bool is {
+    if b == 32 then return true
+    if b == 9 then return true
+    if b == 10 then return true
+    if b == 13 then return true
+    return false
+}
+
+# appendCodepoint -- UTF-8 encode `cp` onto `buf`. Codepoints beyond
+# U+10FFFF and unpaired surrogates are the caller's problem; this is
+# pure arithmetic encoding.
+appendCodepoint: function {buf: String cp: u32} is {
+    if cp < 128 then {
+        buf.appendByte b: cp.u8
+    } else if cp < 2048 then {
+        buf.appendByte b: (192 + (cp / 64)).u8
+        buf.appendByte b: (128 + (cp % 64)).u8
+    } else if cp < 65536 then {
+        buf.appendByte b: (224 + (cp / 4096)).u8
+        buf.appendByte b: (128 + ((cp / 64) % 64)).u8
+        buf.appendByte b: (128 + (cp % 64)).u8
+    } else {
+        buf.appendByte b: (240 + (cp / 262144)).u8
+        buf.appendByte b: (128 + ((cp / 4096) % 64)).u8
+        buf.appendByte b: (128 + ((cp / 64) % 64)).u8
+        buf.appendByte b: (128 + (cp % 64)).u8
+    }
+}
+
+Cursor: class {
+    src: String
+    pos: u64
+    depth: u32
+    failed: bool
+    errPos: u64
+    errMsg: String
+} as {
+    fail: function {:this msg: StringView} is {
+        if this.failed == false then {
+            this.failed = true
+            this.errPos = this.pos
+            this.errMsg = msg.string
+        }
+    }
+
+    peek: function {:this} out u8 is {
+        sv: this.src.stringview
+        b: sv.byteAt this.pos
+        match (
+            b
+        ) case some then {
+            return b
+        } case none then {
+            return 0.u8
+        }
+    }
+
+    advance: function {:this} is {
+        this.pos = this.pos + 1
+    }
+
+    skipWs: function {:this} is {
+        for (isWs b: this.peek) loop this.advance
+    }
+
+    parseValue: function {:this} out Value is {
+        this.skipWs
+        if this.failed then return Value.nul
+        b: this.peek
+        if b == 123 then {
+            this.depth = this.depth + 1
+            if this.depth > 128 then {
+                this.fail msg: "nesting too deep"
+                return Value.nul
+            }
+            r: this.parseObject
+            this.depth = this.depth - 1
+            return r
+        }
+        if b == 91 then {
+            this.depth = this.depth + 1
+            if this.depth > 128 then {
+                this.fail msg: "nesting too deep"
+                return Value.nul
+            }
+            r: this.parseArray
+            this.depth = this.depth - 1
+            return r
+        }
+        if b == 34 then {
+            s: this.parseString
+            return (Value.text s)
+        }
+        if b == 0ct then return (this.parseWord w: "true" v: (Value.boolean true))
+        if b == 0cf then return (this.parseWord w: "false" v: (Value.boolean false))
+        if b == 0cn then return (this.parseWord w: "null" v: Value.nul)
+        if b == 45 then return this.parseNumber
+        if (isDigit :b) then return this.parseNumber
+        this.fail msg: "unexpected character"
+        return Value.nul
+    }
+
+    # parseWord -- consume the literal `w` byte for byte; yields `v`.
+    parseWord: function {:this w: StringView v: Value.take} out Value is {
+        i: 0.u64
+        n: w.length
+        for i < n loop {
+            wb: w.byteAt i
+            match (
+                wb
+            ) case some then {
+                if this.peek == wb then {
+                    this.advance
+                } else {
+                    this.fail msg: "unexpected token"
+                    return v
+                }
+            } case none then {}
+            i = i + 1
+        }
+        return v
+    }
+
+    parseObject: function {:this} out Value is {
+        this.advance
+        o: (Obj entries: (Map String value: Value) keys: (List String))
+        this.skipWs
+        if this.peek == 125 then {
+            this.advance
+            return (Value.object o)
+        }
+        for true loop {
+            this.skipWs
+            if (this.peek == 34) == false then {
+                this.fail msg: "expected object key"
+                return (Value.object o)
+            }
+            k: this.parseString
+            if this.failed then return (Value.object o)
+            this.skipWs
+            if this.peek == 58 then {
+                this.advance
+            } else {
+                this.fail msg: "expected ':'"
+                return (Value.object o)
+            }
+            v: this.parseValue
+            if this.failed then return (Value.object o)
+            o.set key: k value: v
+            this.skipWs
+            b: this.peek
+            if b == 44 then {
+                this.advance
+            } else if b == 125 then {
+                this.advance
+                return (Value.object o)
+            } else {
+                this.fail msg: "expected ',' or '}'"
+                return (Value.object o)
+            }
+        }
+    }
+
+    parseArray: function {:this} out Value is {
+        this.advance
+        a: (Arr items: (List Value))
+        this.skipWs
+        if this.peek == 93 then {
+            this.advance
+            return (Value.array a)
+        }
+        for true loop {
+            v: this.parseValue
+            if this.failed then return (Value.array a)
+            a.items.append v
+            this.skipWs
+            b: this.peek
+            if b == 44 then {
+                this.advance
+            } else if b == 93 then {
+                this.advance
+                return (Value.array a)
+            } else {
+                this.fail msg: "expected ',' or ']'"
+                return (Value.array a)
+            }
+        }
+    }
+
+    parseString: function {:this} out String is {
+        this.advance
+        buf: "".string
+        for true loop {
+            b: this.peek
+            if b == 0 then {
+                this.fail msg: "unterminated string"
+                return buf
+            }
+            if b == 34 then {
+                this.advance
+                return buf
+            }
+            if b == 92 then {
+                this.advance
+                e: this.peek
+                this.advance
+                if e == 34 then {
+                    buf.appendByte b: 34
+                } else if e == 92 then {
+                    buf.appendByte b: 92
+                } else if e == 47 then {
+                    buf.appendByte b: 47
+                } else if e == 0cb then {
+                    buf.appendByte b: 8
+                } else if e == 0cf then {
+                    buf.appendByte b: 12
+                } else if e == 0cn then {
+                    buf.appendByte b: 10
+                } else if e == 0cr then {
+                    buf.appendByte b: 13
+                } else if e == 0ct then {
+                    buf.appendByte b: 9
+                } else if e == 0cu then {
+                    cp: this.hex4
+                    if this.failed then return buf
+                    if cp >= 55296 when cp <= 56319 then {
+                        if this.peek == 92 then {
+                            this.advance
+                        } else {
+                            this.fail msg: "unpaired surrogate"
+                            return buf
+                        }
+                        if this.peek == 0cu then {
+                            this.advance
+                        } else {
+                            this.fail msg: "unpaired surrogate"
+                            return buf
+                        }
+                        lo: this.hex4
+                        if this.failed then return buf
+                        if lo >= 56320 when lo <= 57343 then {
+                            full: 65536 + ((cp - 55296) * 1024) + (lo - 56320)
+                            appendCodepoint :buf cp: full
+                        } else {
+                            this.fail msg: "unpaired surrogate"
+                            return buf
+                        }
+                    } else if cp >= 56320 when cp <= 57343 then {
+                        this.fail msg: "unpaired surrogate"
+                        return buf
+                    } else {
+                        appendCodepoint :buf :cp
+                    }
+                } else {
+                    this.fail msg: "bad escape"
+                    return buf
+                }
+            } else {
+                if b < 32 then {
+                    this.fail msg: "control character in string"
+                    return buf
+                }
+                buf.appendByte :b
+                this.advance
+            }
+        }
+    }
+
+    # hex4 -- four hex digits as a scalar; 0 on failure (failed set).
+    hex4: function {:this} out u32 is {
+        v: 0.u32
+        i: 0.u64
+        for i < 4 loop {
+            b: this.peek
+            d: 0.u32
+            if (isDigit :b) then {
+                d = b.u32 - 48
+            } else if b >= 97 when b <= 102 then {
+                d = b.u32 - 87
+            } else if b >= 65 when b <= 70 then {
+                d = b.u32 - 55
+            } else {
+                this.fail msg: "bad unicode escape"
+                return 0.u32
+            }
+            v = (v * 16) + d
+            this.advance
+            i = i + 1
+        }
+        return v
+    }
+
+    parseNumber: function {:this} out Value is {
+        start: this.pos
+        isFloat: false
+        for true loop {
+            b: this.peek
+            if b == 45 then {
+                this.advance
+            } else if b == 43 then {
+                this.advance
+            } else if b == 46 then {
+                isFloat = true
+                this.advance
+            } else if b == 0ce then {
+                isFloat = true
+                this.advance
+            } else if b == 69 then {
+                isFloat = true
+                this.advance
+            } else if (isDigit :b) then {
+                this.advance
+            } else {
+                break
+            }
+        }
+        if this.pos == start then {
+            this.fail msg: "bad number"
+            return Value.nul
+        }
+        span: ((this.src.stringview).substring from: start to: this.pos).string
+        if isFloat then {
+            fr: span.stringview.parseF64
+            match (
+                fr
+            ) case ok then {
+                return (Value.floatval fr)
+            } case err then {
+                this.fail msg: "bad number"
+                return Value.nul
+            }
+        }
+        ir: span.stringview.parseI64
+        match (
+            ir
+        ) case ok then {
+            return (Value.intval ir)
+        } case err then {
+            this.fail msg: "bad number"
+            return Value.nul
+        }
+    }
+}
+
+# parse -- whole-input parse; trailing non-whitespace is an error.
+parse: function {source: StringView} out ParseResult is {
+    c: (Cursor src: source.string pos: 0 depth: 0 failed: false errPos: 0 errMsg: "".string)
+    v: c.parseValue
+    c.skipWs
+    if c.failed == false then {
+        if c.pos < c.src.length then c.fail msg: "trailing data"
+    }
+    if c.failed then {
+        e: (JsonError at: c.errPos msg: c.errMsg.copy)
+        return (ParseResult.err e)
+    }
+    return (ParseResult.ok v)
+}
