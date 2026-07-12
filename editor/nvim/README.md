@@ -40,18 +40,44 @@ Build the server:
 make bin/zls
 ```
 
-Then opt in from your config (once this plugin is on the runtimepath, so
-`zerolang.lsp` is `require`-able). It starts `zls` for every `zerolang` buffer —
-no other plugins required:
+`require("zerolang.lsp")` needs this `editor/nvim` directory on Neovim's
+runtimepath (otherwise you get `module 'zerolang.lsp' not found`). Pick whichever
+matches your setup.
+
+### Standalone (no plugin manager)
+
+Put this in `init.lua` — it adds the directory to the runtimepath itself, so it
+works even without installing the syntax plugin above:
 
 ```lua
-local zerolang = "~/path/to/zerolang" -- your checkout
+local zerolang = vim.fn.expand("~/path/to/zerolang") -- your checkout
+vim.opt.runtimepath:prepend(zerolang .. "/editor/nvim")
 require("zerolang.lsp").setup({
-    cmd = { vim.fn.expand(zerolang .. "/bin/zls"), "--stdio" },
-    systemDir = vim.fn.expand(zerolang .. "/lib/system"),
+    cmd = { zerolang .. "/bin/zls", "--stdio" },
+    systemDir = zerolang .. "/lib/system",
 })
 ```
 
-`systemDir` points at the zerolang standard library (or set `$ZEROLANG_SYSTEM`).
-`srcDir` is optional — it defaults to the workspace root `zls` detects. See
-`docs/zls.pdoc` for the full protocol contract.
+### lazy.nvim
+
+lazy loads plugins *after* `init.lua` runs, so call `setup` from the plugin's
+`config` — a bare top-level `require("zerolang.lsp")` would run too early and
+fail with `module not found`:
+
+```lua
+{
+    dir = "~/path/to/zerolang/editor/nvim",
+    config = function()
+        local zerolang = vim.fn.expand("~/path/to/zerolang")
+        require("zerolang.lsp").setup({
+            cmd = { zerolang .. "/bin/zls", "--stdio" },
+            systemDir = zerolang .. "/lib/system",
+        })
+    end,
+}
+```
+
+`zls` then starts automatically for every `zerolang` buffer — no other plugins
+required. `systemDir` points at the zerolang standard library (or set
+`$ZEROLANG_SYSTEM`); `srcDir` is optional (it defaults to the workspace root
+`zls` detects). See `docs/zls.pdoc` for the full protocol contract.
