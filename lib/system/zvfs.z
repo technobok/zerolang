@@ -459,6 +459,7 @@ FSProvider: class {
 
 ZVfs: class {
     providers: (List ProviderBox)
+    providerRoot: (Map u32 value: String)
     entrytable: DentryTable
     file_names: (List String)
     walk_cache: (Map String value: u32)
@@ -521,6 +522,7 @@ ZVfs: class {
         } case err then {
             panic "ZVfs.registerFS: root is not a directory (stat failed)"
         }
+        rpCopy: rootpath.copy
         fp: (FSProvider
             rootpath: rootpath.take
             pathtable: (List FSNode)
@@ -532,6 +534,7 @@ ZVfs: class {
         box: ProviderBox p: prov
         pid: this.providers.length.u32
         this.providers.append box.take
+        this.providerRoot.set key: pid value: rpCopy
         d: dentry.directory (dirdata parentid: 0 providerid: pid nodeid: 0)
         did: this.entrytable.append entry: d
         this.file_names.append "".string
@@ -747,6 +750,46 @@ ZVfs: class {
             return s
         }
     }
+
+    # pathfromproviderNative -- the dentry's absolute native path (the
+    # provider's registered root joined with the provider-relative path).
+    # "" when the provider has no native root (the in-memory overlay); the
+    # caller resolves those against its source dir, which the overlay shadows.
+    pathfromproviderNative: function {:this dentryid: u32} out String is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        rel9: "".string
+        pid9: 0.u32
+        got9: false
+        match (
+            e
+        ) case root then {
+        } case notfound then {
+        } case mount then {
+        } case file then {
+            pid9 = e.providerid
+            nid9: e.nodeid
+            box: this.providers.get i: pid9.u64
+            rel9 = box.p.path item: nid9
+            got9 = true
+        } case directory then {
+            pid9 = e.providerid
+            nid9: e.nodeid
+            box: this.providers.get i: pid9.u64
+            rel9 = box.p.path item: nid9
+            got9 = true
+        }
+        if (got9) == false then return "".string
+        ro9: this.providerRoot.get key: pid9
+        match (
+            ro9
+        ) case some then {
+            if ro9.length == 0 then return "".string
+            return (joinPath parent: ro9.stringview name: rel9.stringview)
+        } case none then {
+            return "".string
+        }
+    }
+
 
     # _extractMount -- read the dentry at `dentryid`, return a value-type
     # mountinfo carrier. For mount arms: is_mount=true + first/second/
@@ -1414,6 +1457,7 @@ main: function is {
         vtable: DentryTable entries: (List dentry)
         vfs: (ZVfs
             providers: (List ProviderBox)
+            providerRoot: (Map u32 value: String)
             entrytable: vtable
             file_names: (List String)
             walk_cache: (Map String value: u32)
