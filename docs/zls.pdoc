@@ -1,0 +1,164 @@
+#doc.lang: en
+
+#//: Zerolang Language Server Reference
+
+#doc.title: zls — Zerolang Language Server
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-07-12
+#doc.version: 0.1.0
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: zls — Zerolang Language Server Reference
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Synopsis
+
+#code: """
+  zls [--stdio] [--replay <file>] [--listen <port>] [--src <dir>] [--system <dir>]
+  """
+
+
+#--: Description
+
+#~"zls" is the zerolang language server: an editor-facing service that speaks the
+Language Server Protocol (an LSP 3.17 subset) over JSON-RPC 2.0 with
+#~"Content-Length" framing. A document check is #~"zcheck.check" — the same
+parse-and-typecheck service #~"zc" uses — so its diagnostics match the compiler
+exactly. Like #~"zl", it links #_*"no" emitter: it never generates C, only
+analyses.
+
+Documents sync as #b:"full text". On every #~"didOpen" / #~"didChange" the open
+buffers are overlaid on the source directory (shadowing what is on disk) and the
+owning unit is rechecked; the resulting diagnostics are published. Positions are
+negotiated in #b:"utf-32" — the codepoint columns the compiler reports — falling
+back to #b:"utf-16" conversion when a client does not offer utf-32.
+
+
+#--: Transports
+
+#~"zls" reads and writes one framed JSON-RPC stream; the transport is chosen at
+startup.
+
+#ul:
+  [#*: #~"--stdio" — stdin and stdout. The #_+"default"; the flag is accepted for
+    explicitness.]
+  [#*: #~"--replay <file>" — read the framed client messages from a file, write the
+    replies to stdout. The transport the test harness uses (a child's stdin cannot
+    be piped while its stdout is captured); rarely useful by hand.]
+  [#*: #~"--listen <port>" — accept one TCP connection on #~"127.0.0.1:<port>",
+    serve the session over it, then exit. An editor that connects over TCP
+    relaunches the server per session.]
+
+Diagnostics recompute inline in replay mode; over #~"--stdio" and #~"--listen" a
+burst of edits is #_*"coalesced" — the recheck fires once input goes quiet
+(about 100 ms), so fast typing does not queue a check per keystroke.
+
+
+#--: Flags
+
+#ul:
+  [#*: #~"--stdio" — serve over stdin and stdout (the default).]
+  [#*: #~"--replay <file>" — serve a framed message file (the test transport).]
+  [#*: #~"--listen <port>" — serve one TCP connection on localhost #~"<port>"
+    (0-65535).]
+  [#*: #~"--src <dir>" — the source directory; overrides the client's #~"srcDir"
+    (see #> to=project-layout-and-initialization: Project layout and
+    initialization).]
+  [#*: #~"--system <dir>" — the standard-library directory; overrides the client's
+    #~"systemDir".]
+  [#*: #~"--help" — print usage and exit.]
+
+
+#--: Project layout and initialization
+
+#~"zls" checks source #_*"from disk", layering open-buffer text on top, so it must
+be told two directories: #b:"srcDir" (where the project's #~".z" files live) and
+#b:"systemDir" (the standard library, #~"lib/system"). Both must be #_+"real"
+directories — a missing or non-directory path aborts the first check.
+
+At #~"initialize" the server resolves each, in order:
+
+#ul:
+  [#*: the #~"--src" / #~"--system" flags, if given;]
+  [#*: else the client's #~"initializationOptions.srcDir" /
+    #~"initializationOptions.systemDir";]
+  [#*: else auto-detected from #~"rootUri" — if the root holds both #~"src/" and
+    #~"lib/system/", those become #~"srcDir" and #~"systemDir"; otherwise the root
+    itself is #~"srcDir";]
+  [#*: else, for #~"systemDir" only, the environment: #~"$ZEROLANG_SYSTEM",
+    #~"$ZEROLANG_ROOT/lib/system", or the #~"lib/system" beside the #~"zls"
+    executable.]
+
+Unsaved edits are reflected only for files #_+"under" #~"srcDir": the overlay is
+keyed by the path relative to #~"srcDir", and a file outside it is read from disk.
+#b:"Position encoding" is #~"utf-32" when the client advertises it in
+#~"capabilities.general.positionEncodings", otherwise #~"utf-16".
+
+
+#--: Features
+
+#~"zls" advertises #~"textDocumentSync: Full" and these capabilities:
+
+#ul:
+  [#*: #b:"Diagnostics" — parse and type errors published via
+    #~"textDocument/publishDiagnostics" (coalesced while typing over stdio and
+    tcp).]
+  [#*: #b:"Go to definition" — #~"textDocument/definition".]
+  [#*: #b:"Hover" — #~"textDocument/hover"; the symbol's type.]
+  [#*: #b:"References" — #~"textDocument/references".]
+  [#*: #b:"Document symbols" — #~"textDocument/documentSymbol".]
+  [#*: #b:"Completion" — #~"textDocument/completion"; scope-based over locals,
+    top-level definitions, and keywords.]
+  [#*: #b:"Formatting" — #~"textDocument/formatting" as a whole-document edit; a
+    buffer that does not parse is left untouched.]
+
+Navigation and completion answer from the last successful check of each document,
+so they keep working while the live buffer is temporarily broken.
+
+
+#--: Editor integration
+
+Any LSP client works: launch #~"zls --stdio", set the document language id to
+#~"zerolang", and supply #~"srcDir" / #~"systemDir" as #~"initializationOptions"
+(or let #~"srcDir" auto-detect from the workspace root — see
+#> to=project-layout-and-initialization: Project layout and initialization). A
+ready-made Neovim client lives in #~"editor/nvim/"; see its #~"README.md".
+
+
+#--: Building
+
+#code: """
+  make bin/zls
+  """
+
+#~"zls" is compiled like any zerolang unit — #~"bin/zc zls --src src --system
+lib/system" — and linked into #~"bin/zls". It carries no emitter, so the build is
+front-end only.
+
+
+#--: Implementation
+
+The server is #~"src/zls.z". The shared check-only service it drives is
+#~"src/zcheck.z" (also used by #~"zc"); the TCP transport is #~"lib/system/net.z".
+The corpus runner exercises it through an #~"lsp" test kind that replays framed
+transcripts and compares the deframed replies to committed goldens
+(#~"src/ztestrunner.z", with cases in #~"tests/fixtures/lsp_cases/" and goldens in
+#~"tests/fixtures/lsp_golden/").

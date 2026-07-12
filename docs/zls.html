@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>zls &#x2014; Zerolang Language Server</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-07-12">
+<meta name="version" content="0.1.0">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="zls-zerolang-language-server-reference"><a href="#zls-zerolang-language-server-reference">zls &#x2014; Zerolang Language Server Reference</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#zls-zerolang-language-server-reference">zls &#x2014; Zerolang Language Server Reference</a>
+<ul>
+<li><a href="#synopsis">Synopsis</a>
+</li>
+<li><a href="#description">Description</a>
+</li>
+<li><a href="#transports">Transports</a>
+</li>
+<li><a href="#flags">Flags</a>
+</li>
+<li><a href="#project-layout-and-initialization">Project layout and initialization</a>
+</li>
+<li><a href="#features">Features</a>
+</li>
+<li><a href="#editor-integration">Editor integration</a>
+</li>
+<li><a href="#building">Building</a>
+</li>
+<li><a href="#implementation">Implementation</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="synopsis"><a href="#synopsis">1. Synopsis</a></h2>
+<pre><code>zls [--stdio] [--replay &lt;file&gt;] [--listen &lt;port&gt;] [--src &lt;dir&gt;] [--system &lt;dir&gt;]</code></pre>
+<h2 id="description"><a href="#description">2. Description</a></h2>
+<p><code>zls</code> is the zerolang language server: an editor-facing service that speaks the
+Language Server Protocol (an LSP 3.17 subset) over JSON-RPC 2.0 with
+<code>Content-Length</code> framing. A document check is <code>zcheck.check</code> &#x2014; the same
+parse-and-typecheck service <code>zc</code> uses &#x2014; so its diagnostics match the compiler
+exactly. Like <code>zl</code>, it links <em><strong>no</strong></em> emitter: it never generates C, only
+analyses.</p>
+<p>Documents sync as <strong>full text</strong>. On every <code>didOpen</code> / <code>didChange</code> the open
+buffers are overlaid on the source directory (shadowing what is on disk) and the
+owning unit is rechecked; the resulting diagnostics are published. Positions are
+negotiated in <strong>utf-32</strong> &#x2014; the codepoint columns the compiler reports &#x2014; falling
+back to <strong>utf-16</strong> conversion when a client does not offer utf-32.</p>
+<h2 id="transports"><a href="#transports">3. Transports</a></h2>
+<p><code>zls</code> reads and writes one framed JSON-RPC stream; the transport is chosen at
+startup.</p>
+<ul>
+<li><code>--stdio</code> &#x2014; stdin and stdout. The default; the flag is accepted for
+explicitness.</li>
+<li><code>--replay &lt;file&gt;</code> &#x2014; read the framed client messages from a file, write the
+replies to stdout. The transport the test harness uses (a child's stdin cannot
+be piped while its stdout is captured); rarely useful by hand.</li>
+<li><code>--listen &lt;port&gt;</code> &#x2014; accept one TCP connection on <code>127.0.0.1:&lt;port&gt;</code>,
+serve the session over it, then exit. An editor that connects over TCP
+relaunches the server per session.</li>
+</ul>
+<p>Diagnostics recompute inline in replay mode; over <code>--stdio</code> and <code>--listen</code> a
+burst of edits is <em><strong>coalesced</strong></em> &#x2014; the recheck fires once input goes quiet
+(about 100 ms), so fast typing does not queue a check per keystroke.</p>
+<h2 id="flags"><a href="#flags">4. Flags</a></h2>
+<ul>
+<li><code>--stdio</code> &#x2014; serve over stdin and stdout (the default).</li>
+<li><code>--replay &lt;file&gt;</code> &#x2014; serve a framed message file (the test transport).</li>
+<li><code>--listen &lt;port&gt;</code> &#x2014; serve one TCP connection on localhost <code>&lt;port&gt;</code>
+(0-65535).</li>
+<li><code>--src &lt;dir&gt;</code> &#x2014; the source directory; overrides the client's <code>srcDir</code>
+(see <a href="#project-layout-and-initialization">Project layout and</a>
+initialization).</li>
+<li><code>--system &lt;dir&gt;</code> &#x2014; the standard-library directory; overrides the client's
+<code>systemDir</code>.</li>
+<li><code>--help</code> &#x2014; print usage and exit.</li>
+</ul>
+<h2 id="project-layout-and-initialization"><a href="#project-layout-and-initialization">5. Project layout and initialization</a></h2>
+<p><code>zls</code> checks source <em><strong>from disk</strong></em>, layering open-buffer text on top, so it must
+be told two directories: <strong>srcDir</strong> (where the project's <code>.z</code> files live) and
+<strong>systemDir</strong> (the standard library, <code>lib/system</code>). Both must be real
+directories &#x2014; a missing or non-directory path aborts the first check.</p>
+<p>At <code>initialize</code> the server resolves each, in order:</p>
+<ul>
+<li>the <code>--src</code> / <code>--system</code> flags, if given;</li>
+<li>else the client's <code>initializationOptions.srcDir</code> /
+    <code>initializationOptions.systemDir</code>;</li>
+<li>else auto-detected from <code>rootUri</code> &#x2014; if the root holds both <code>src/</code> and
+    <code>lib/system/</code>, those become <code>srcDir</code> and <code>systemDir</code>; otherwise the root
+    itself is <code>srcDir</code>;</li>
+<li>else, for <code>systemDir</code> only, the environment: <code>$ZEROLANG_SYSTEM</code>,
+    <code>$ZEROLANG_ROOT/lib/system</code>, or the <code>lib/system</code> beside the <code>zls</code>
+    executable.</li>
+</ul>
+<p>Unsaved edits are reflected only for files under <code>srcDir</code>: the overlay is
+keyed by the path relative to <code>srcDir</code>, and a file outside it is read from disk.
+<strong>Position encoding</strong> is <code>utf-32</code> when the client advertises it in
+<code>capabilities.general.positionEncodings</code>, otherwise <code>utf-16</code>.</p>
+<h2 id="features"><a href="#features">6. Features</a></h2>
+<p><code>zls</code> advertises <code>textDocumentSync: Full</code> and these capabilities:</p>
+<ul>
+<li><strong>Diagnostics</strong> &#x2014; parse and type errors published via
+<code>textDocument/publishDiagnostics</code> (coalesced while typing over stdio and
+tcp).</li>
+<li><strong>Go to definition</strong> &#x2014; <code>textDocument/definition</code>.</li>
+<li><strong>Hover</strong> &#x2014; <code>textDocument/hover</code>; the symbol's type.</li>
+<li><strong>References</strong> &#x2014; <code>textDocument/references</code>.</li>
+<li><strong>Document symbols</strong> &#x2014; <code>textDocument/documentSymbol</code>.</li>
+<li><strong>Completion</strong> &#x2014; <code>textDocument/completion</code>; scope-based over locals,
+top-level definitions, and keywords.</li>
+<li><strong>Formatting</strong> &#x2014; <code>textDocument/formatting</code> as a whole-document edit; a
+buffer that does not parse is left untouched.</li>
+</ul>
+<p>Navigation and completion answer from the last successful check of each document,
+so they keep working while the live buffer is temporarily broken.</p>
+<h2 id="editor-integration"><a href="#editor-integration">7. Editor integration</a></h2>
+<p>Any LSP client works: launch <code>zls --stdio</code>, set the document language id to
+<code>zerolang</code>, and supply <code>srcDir</code> / <code>systemDir</code> as <code>initializationOptions</code>
+(or let <code>srcDir</code> auto-detect from the workspace root &#x2014; see
+<a href="#project-layout-and-initialization">Project layout and initialization). A</a>
+ready-made Neovim client lives in <code>editor/nvim/</code>; see its <code>README.md</code>.</p>
+<h2 id="building"><a href="#building">8. Building</a></h2>
+<pre><code>make bin/zls</code></pre>
+<p><code>zls</code> is compiled like any zerolang unit &#x2014; <code>bin/zc zls --src src --system
+lib/system</code> &#x2014; and linked into <code>bin/zls</code>. It carries no emitter, so the build is
+front-end only.</p>
+<h2 id="implementation"><a href="#implementation">9. Implementation</a></h2>
+<p>The server is <code>src/zls.z</code>. The shared check-only service it drives is
+<code>src/zcheck.z</code> (also used by <code>zc</code>); the TCP transport is <code>lib/system/net.z</code>.
+The corpus runner exercises it through an <code>lsp</code> test kind that replays framed
+transcripts and compares the deframed replies to committed goldens
+(<code>src/ztestrunner.z</code>, with cases in <code>tests/fixtures/lsp_cases/</code> and goldens in
+<code>tests/fixtures/lsp_golden/</code>).</p>
+</main>
+</body>
+</html>
