@@ -52,10 +52,7 @@ works even without installing the syntax plugin above:
 ```lua
 local zerolang = vim.fn.expand("~/path/to/zerolang") -- your checkout
 vim.opt.runtimepath:prepend(zerolang .. "/editor/nvim")
-require("zerolang.lsp").setup({
-    cmd = { zerolang .. "/bin/zls", "--stdio" },
-    systemDir = zerolang .. "/lib/system",
-})
+require("zerolang.lsp").setup()
 ```
 
 ### lazy.nvim
@@ -68,16 +65,19 @@ fail with `module not found`:
 {
     dir = "~/path/to/zerolang/editor/nvim",
     config = function()
-        local zerolang = vim.fn.expand("~/path/to/zerolang")
-        require("zerolang.lsp").setup({
-            cmd = { zerolang .. "/bin/zls", "--stdio" },
-            systemDir = zerolang .. "/lib/system",
-        })
+        require("zerolang.lsp").setup()
     end,
 }
 ```
 
 `zls` then starts automatically for every `zerolang` buffer — no other plugins
-required. `systemDir` points at the zerolang standard library (or set
-`$ZEROLANG_SYSTEM`); `srcDir` is optional (it defaults to the workspace root
-`zls` detects). See `docs/zls.pdoc` for the full protocol contract.
+required, and `setup()` needs no paths: it locates `bin/zls` and `lib/system`
+relative to this checkout. Pass `cmd` / `systemDir` (or set `$ZEROLANG_SYSTEM`)
+to override; `srcDir` is optional and defaults to the workspace root `zls`
+detects.
+
+One `zls` process serves a whole workspace: Neovim dedups clients by `root_dir`,
+so every `.z` buffer under the same root shares a single server, which checks
+the open buffers layered over the on-disk sources. Files in unrelated
+directories get their own root — and their own server. See `docs/zls.pdoc` for
+the full protocol contract.

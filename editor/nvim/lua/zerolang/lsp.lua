@@ -1,11 +1,18 @@
 -- Zerolang LSP client for Neovim.
 --
 -- Starts the `zls` language server (built to bin/zls) for `zerolang` buffers via
--- vim.lsp.start -- no plugin dependencies. Opt in from your config:
+-- vim.lsp.start -- no plugin dependencies. Put this checkout's editor/nvim on
+-- your runtimepath, then opt in with a zero-config call:
+--
+--   require("zerolang.lsp").setup()
+--
+-- setup() locates `bin/zls` and `lib/system` relative to this file's checkout,
+-- so no paths are needed. Override any of them if your layout differs:
 --
 --   require("zerolang.lsp").setup({
---     cmd = { "/path/to/zerolang/bin/zls", "--stdio" },
---     systemDir = "/path/to/zerolang/lib/system",
+--     cmd = { "/path/to/zls", "--stdio" },
+--     systemDir = "/path/to/lib/system",
+--     srcDir = "/path/to/program",   -- optional; else auto-detected
 --   })
 --
 -- `systemDir` must point at the zerolang standard library (a real directory); it
@@ -15,6 +22,11 @@
 -- program and the compiler checkout.
 
 local M = {}
+
+-- This file is <checkout>/editor/nvim/lua/zerolang/lsp.lua, so five dirname
+-- steps up from it is the checkout that holds bin/zls and lib/system/.
+local here = debug.getinfo(1, "S").source:sub(2)
+local checkout = vim.fn.fnamemodify(here, ":h:h:h:h:h")
 
 local uv = vim.uv or vim.loop
 
@@ -43,8 +55,8 @@ end
 
 function M.setup(opts)
   opts = opts or {}
-  local cmd = opts.cmd or { "zls", "--stdio" }
-  local system_dir = opts.systemDir or vim.env.ZEROLANG_SYSTEM
+  local cmd = opts.cmd or { checkout .. "/bin/zls", "--stdio" }
+  local system_dir = opts.systemDir or vim.env.ZEROLANG_SYSTEM or (checkout .. "/lib/system")
 
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "zerolang",
