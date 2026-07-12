@@ -1329,6 +1329,80 @@ typeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
     }
 }
 
+# fnSigTextOpt -- a function type's readable signature "name: function {p:
+# T ...} out Ret", the receiver skipped; "" when the type is not a function.
+fnSigTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64 name: StringView} out String is {
+    match (
+        o
+    ) case some then {
+        isFn9: false
+        if (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.FUNCTION then isFn9 = true
+        if (isFn9) == false then return "".string
+        # collect (paramName, paramTypeId) while the childIndex view is held,
+        # skipping the receiver; resolve type names after the views release
+        # (typeNameOf takes an exclusive lock on `o`).
+        pnames9: (List String)
+        ptids9: (List u64)
+        {
+            bp9: o.typing.childIndex.get key: tid
+            match (
+                bp9
+            ) case some then {
+                with rpit9: bp9.rows.iterate do for rpi9: rpit9 loop {
+                    tc9: o.typing.typeChild.get i: rpi9
+                    cn9: tc9.childName.stringview
+                    isRecv9: false
+                    if cn9 == "this" then isRecv9 = true
+                    zt9: o.reg.typeById.get key: tid
+                    match (
+                        zt9
+                    ) case some then {
+                        if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
+                    } case none then {}
+                    if (isRecv9) == false then {
+                        ctid9: 0.u64
+                        cg9: o.typing.childTypeById.get key: tc9.childNameId
+                        match (
+                            cg9
+                        ) case some then {
+                            ctid9 = cg9
+                        } case none then {}
+                        pnames9.append cn9.string
+                        ptids9.append ctid9
+                    }
+                }
+            } case none then {}
+        }
+        sig9: name.string
+        sig9.append ": function"
+        if pnames9.length > 0 then {
+            sig9.append " {"
+            pi9: 0.u64
+            for pi9 < pnames9.length loop {
+                if pi9 > 0 then sig9.append " "
+                pn9: pnames9.get i: pi9
+                sig9.append pn9.stringview
+                sig9.append ": "
+                pt9: ptids9.get i: pi9
+                ptn9: ztypecheck.typeNameOf st: o tid: pt9
+                sig9.append ptn9.stringview
+                pi9 = pi9 + 1
+            }
+            sig9.append "}"
+        }
+        rr9: ztypecheck.methodReturnOf st: o mid: tid
+        rtid9: ztypecheck.optU64Or o: rr9 d: 0
+        if rtid9 > 0 then {
+            rtn9: ztypecheck.typeNameOf st: o tid: rtid9
+            sig9.append " out "
+            sig9.append rtn9.stringview
+        }
+        return sig9
+    } case none then {
+        return "".string
+    }
+}
+
 # ---- def-node navigation (unit/body indexes into the program AST) ----
 
 memberIn: function {op: zast.Node name: StringView wrapperId: u32} out u64 is {
@@ -1612,12 +1686,21 @@ navAnswer: function {
     if mode == 2 then {
         tnid: hnid
         t9: nodeTypeAt o: snap.st nid: tnid
-        if t9 == 0 then return Value.nul
-        tn: typeNameOfOpt o: snap.st tid: t9
-        if tn.length == 0 then return Value.nul
-        body9: hname.copy
-        body9.append ": "
-        body9.append tn.stringview
+        # a callable / unit-member auto-calls to its return type in value
+        # position; prefer its stamped def tid so a function hovers as its
+        # signature rather than the return value's type.
+        ud9: useUnitDef o: snap.st nid: tnid
+        sigTid9: t9
+        if ud9 > 0 then sigTid9 = ud9
+        body9: fnSigTextOpt o: snap.st tid: sigTid9 name: hname.stringview
+        if body9.length == 0 then {
+            if t9 == 0 then return Value.nul
+            tn: typeNameOfOpt o: snap.st tid: t9
+            if tn.length == 0 then return Value.nul
+            body9 = hname.copy
+            body9.append ": "
+            body9.append tn.stringview
+        }
         mk9: newObj
         mk9.set key: "kind".string value: (Value.text "plaintext".string)
         mk9.set key: "value".string value: (Value.text body9)
