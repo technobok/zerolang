@@ -19,7 +19,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test ci build clean style-lint style-lint-fast zc zl install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard
+.PHONY: all check test ci build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard
 
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
 # front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
@@ -28,6 +28,11 @@ ZLSCOPE := src/*.z lib/system/zlexer.z lib/system/zparser.z lib/system/zast.z li
 # FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
 # elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.
 FMTSCOPE := src/*.z lib/system/*.z examples/*.z
+
+# all -- the default target: build the three tools (compiler, linter/formatter,
+# language server). `make check` / `make test` are the gates; `make build` compiles
+# the examples.
+all: bin/zc bin/zl bin/zls
 
 # check -- the fast pre-commit gate: the parse/token/whitespace rules, plus a repo-wide
 # formatter check.
@@ -125,6 +130,9 @@ bin/zls: bin/zc $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zs
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
 
+# zls -- convenience alias for bin/zls.
+zls: bin/zls
+
 # Standalone dump binaries (the Python-free golden regeneration path; the
 # dumper logic lives in lib/system/zlexer.z and lib/system/zparser.z).
 out/zlexer: bin/zc $(wildcard lib/system/*.z)
@@ -182,16 +190,20 @@ test-bootstrap:
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"
 
 # install -- a self-contained tree at $(ROOT) + a $(BINDIR)/zc symlink.
-install: bin/zc
+install: bin/zc bin/zl bin/zls
 	mkdir -p $(ROOT)/bin $(ROOT)/lib $(BINDIR)
 	cp bin/zc $(ROOT)/bin/zc
+	cp bin/zl $(ROOT)/bin/zl
+	cp bin/zls $(ROOT)/bin/zls
 	rm -rf $(ROOT)/lib/system $(ROOT)/lib/runtime $(ROOT)/docs $(ROOT)/src
 	cp -r lib/system $(ROOT)/lib/system
 	cp -r src/runtime $(ROOT)/lib/runtime
 	cp -r docs $(ROOT)/docs
 	cp -r src $(ROOT)/src
 	ln -sf $(ROOT)/bin/zc $(BINDIR)/zc
-	@echo "installed zc -> $(BINDIR)/zc (tree: $(ROOT))"
+	ln -sf $(ROOT)/bin/zl $(BINDIR)/zl
+	ln -sf $(ROOT)/bin/zls $(BINDIR)/zls
+	@echo "installed zc, zl, zls -> $(BINDIR) (tree: $(ROOT))"
 
 # docs -- render the .pdoc documentation to HTML. Commit the regenerated .html.
 # Needs the picodoc renderer at ../picodoc-c/picodoc (see docs/Makefile).
