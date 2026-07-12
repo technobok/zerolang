@@ -1634,6 +1634,69 @@ locationValue: function {
     }
 }
 
+# defNodeOf -- the def-node id a resolved hit points at: a variable binding
+# (refVid), a type/function def (refTid), or an owner's member (refOwner +
+# member name); 0 when unresolved.
+defNodeOf: function {
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    refVid: u64
+    refTid: u64
+    refOwner: u64
+    member: StringView
+} out u64 is {
+    if refVid > 0 then return (varDefNode :o vid: refVid)
+    if refTid > 0 then return (defNodeInfo :o :prog tid: refTid member: "")
+    if refOwner > 0 then return (defNodeInfo :o :prog tid: refOwner :member)
+    return 0
+}
+
+# docCommentForNode -- the contiguous `#` comment block immediately above the
+# definition at `defLine` (1-based) in file `fsno`, each line stripped of its
+# leading "# " and joined top-to-bottom by newlines; "" when there is none.
+# Reads through the vfs, so a definition in another unit works too.
+docCommentForNode: function {snap: zcheck.CheckResult fsno: u32 defLine: u32} out String is {
+    if defLine <= 1 then return "".string
+    acc9: (List String)
+    k9: defLine
+    for k9 > 1 loop {
+        k9 = k9 - 1
+        lg9: snap.vfs.getline dentryid: fsno lineno: (k9 - 1).u64
+        stop9: false
+        match (
+            lg9
+        ) case some then {
+            lv9: lg9.stringview
+            tl9: lv9.trimStart
+            if tl9.startsWith "#" then {
+                st9: 1.u64
+                sb9: tl9.byteAt i: 1
+                match (
+                    sb9
+                ) case some then {
+                    if sb9 == 32 then st9 = 2
+                } case none then {}
+                ds9: tl9.substring from: st9 to: tl9.length
+                acc9.append ds9.string
+            } else {
+                stop9 = true
+            }
+        } case none then {
+            stop9 = true
+        }
+        if stop9 then break
+    }
+    out9: "".string
+    ai9: acc9.length
+    for ai9 > 0 loop {
+        ai9 = ai9 - 1
+        if out9.length > 0 then out9.appendByte b: 10
+        dl9: acc9.get i: ai9
+        out9.append dl9.stringview
+    }
+    return out9
+}
+
 # navAnswer -- definition (1), hover (2), references (3) from the
 # last-good snapshot.
 navAnswer: function {
@@ -1683,6 +1746,21 @@ navAnswer: function {
     w9: hit.colHi - hit.colLo
     hnid: hit.nodeid.u64
 
+    # resolve the hit to a target
+    refVid: 0.u64
+    refTid: 0.u64
+    refOwner: 0.u64
+    if bestKind == 1 then {
+        refVid = useVarId o: snap.st nid: hnid
+        if refVid == 0 then refTid = useUnitDef o: snap.st nid: hnid
+    }
+    if bestKind == 2 then {
+        refOwner = memberOwnerOf o: snap.st nid: hnid
+        # a unit-qualified member has no owner stamp; fall back to its def tid
+        if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
+    }
+    if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
+
     if mode == 2 then {
         tnid: hnid
         t9: nodeTypeAt o: snap.st nid: tnid
@@ -1701,6 +1779,32 @@ navAnswer: function {
             body9.append ": "
             body9.append tn.stringview
         }
+        # append the `#` doc block above the definition, if any (cross-file ok)
+        dnd9: (defNodeOf
+            o: snap.st
+            prog: snap.prog
+            :refVid
+            :refTid
+            :refOwner
+            member: hname.stringview
+        )
+        if dnd9 > 0 then {
+            dfs9: snap.parser.fsnoForNode nodeid: dnd9.u32
+            dpg9: sp.pos.get key: dnd9
+            match (
+                dpg9
+            ) case some then {
+                dln9: (dpg9 / 1048576).u32
+                if dfs9 > 0 when dln9 > 1 then {
+                    doc9: docCommentForNode :snap fsno: dfs9 defLine: dln9
+                    if doc9.length > 0 then {
+                        body9.appendByte b: 10
+                        body9.appendByte b: 10
+                        body9.append doc9.stringview
+                    }
+                }
+            } case none then {}
+        }
         mk9: newObj
         mk9.set key: "kind".string value: (Value.text "plaintext".string)
         mk9.set key: "value".string value: (Value.text body9)
@@ -1709,79 +1813,20 @@ navAnswer: function {
         return (Value.object ho9)
     }
 
-    # resolve the hit to a target
-    refVid: 0.u64
-    refTid: 0.u64
-    refOwner: 0.u64
-    if bestKind == 1 then {
-        refVid = useVarId o: snap.st nid: hnid
-        if refVid == 0 then refTid = useUnitDef o: snap.st nid: hnid
-    }
-    if bestKind == 2 then {
-        refOwner = memberOwnerOf o: snap.st nid: hnid
-        # a unit-qualified member has no owner stamp; fall back to its def tid
-        if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
-    }
-    if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
-
     if mode == 1 then {
-        if refVid > 0 then {
-            dn9: varDefNode o: snap.st vid: refVid
-            if dn9 > 0 then {
-                return (locationValue
-                    :snap
-                    :sp
-                    nid: dn9
-                    width: w9
-                    :docRel
-                    :docUri
-                    :srcDir
-                    :docText
-                    :utf32
-                )
-            }
-            return Value.nul
-        }
-        if refTid > 0 then {
-            dt9: defNodeInfo o: snap.st prog: snap.prog tid: refTid member: ""
-            if dt9 > 0 then {
-                return (locationValue
-                    :snap
-                    :sp
-                    nid: dt9
-                    width: w9
-                    :docRel
-                    :docUri
-                    :srcDir
-                    :docText
-                    :utf32
-                )
-            }
-            return Value.nul
-        }
-        if refOwner > 0 then {
-            dm9: (defNodeInfo
-                o: snap.st
-                prog: snap.prog
-                tid: refOwner
-                member: hname.stringview
-            )
-            if dm9 > 0 then {
-                return (locationValue
-                    :snap
-                    :sp
-                    nid: dm9
-                    width: w9
-                    :docRel
-                    :docUri
-                    :srcDir
-                    :docText
-                    :utf32
-                )
-            }
-            return Value.nul
-        }
-        return Value.nul
+        dn9: defNodeOf o: snap.st prog: snap.prog :refVid :refTid :refOwner member: hname.stringview
+        if dn9 == 0 then return Value.nul
+        return (locationValue
+            :snap
+            :sp
+            nid: dn9
+            width: w9
+            :docRel
+            :docUri
+            :srcDir
+            :docText
+            :utf32
+        )
     }
 
     # references: one pass over the span rows
