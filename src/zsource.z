@@ -1019,6 +1019,7 @@ Analysis: class {
         } case ifexpr then {
             this.checkEmpty elseOpt: n.elseclause clauses: n.clauses
             this.checkBracesIf clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
+            this.checkChainBodyBreak clauses: n.clauses elseOpt: n.elseclause
             clit: n.clauses.iterate
             for cl: clit loop this.walk n: cl
             this.walkOpt o: n.elseclause
@@ -1040,6 +1041,7 @@ Analysis: class {
             this.walk n: n.body
         } case caseexpr then {
             this.checkBracesMatch clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
+            this.checkChainBodyBreak clauses: n.clauses elseOpt: n.elseclause
             this.walk n: n.subject
             ccit: n.clauses.iterate
             for cc: ccit loop this.walk n: cc
@@ -1272,6 +1274,99 @@ Analysis: class {
         ) case some then {
             this.tryDebrace body: elseOpt collapse: false
         } case none then {
+        }
+    }
+
+    # checkChainBodyBreak -- fmt: in a multi-line `match` or `if`, break any arm/clause
+    # body whose first statement clings to the opening `{` onto its own line.
+    checkChainBodyBreak: function {:this clauses: (List Node) elseOpt: (Option Node)} is {
+        if this.funcDepth == 0 then return
+        cit: clauses.iterate
+        for cl: cit loop {
+            match (
+                cl
+            ) case caseclause then {
+                this.forceBodyBreak body: cl.statement
+            } case ifclause then {
+                this.forceBodyBreak body: cl.statement
+            } else {
+            }
+        }
+        match (
+            elseOpt
+        ) case some then {
+            this.forceBodyBreak body: elseOpt
+        } case none then {
+        }
+    }
+
+    # forceBodyBreak -- a braced body whose closing `}` is not on the opening `{` line (a
+    # multi-line clause) starts its body on the next line at base+4; emit that edit when the
+    # first statement still shares the `{` line AND is itself single-line. One-line bodies are
+    # left to L008; a multi-line first statement is skipped (re-indenting it is out of scope).
+    forceBodyBreak: function {:this body: Node} is {
+        match (
+            body
+        ) case statement then {
+            if body.statements.length == 0 then return
+            openByte: (tokByteStart
+                lineStart: this.lineStart
+                srcLines: this.lines
+                lineno: body.lineno
+                colno: body.colno
+            )
+            coff: this.delimClose.get key: openByte
+            closeByte: 0.u64
+            match (
+                coff
+            ) case some then {
+                closeByte = coff
+            } case none then {
+                return
+            }
+            closeLine: (byteToLine
+                lineStart: this.lineStart
+                off: closeByte
+                nLines: this.lines.length
+            ) + 1
+            if body.lineno.u64 == closeLine then return
+            sl0: body.statements.get i: 0
+            match (
+                sl0
+            ) case statementline then {
+                if sl0.lineno != body.lineno then return
+                firstEnd: (closeLine - 1)
+                if body.statements.length > 1 then {
+                    sl1: body.statements.get i: 1
+                    match (
+                        sl1
+                    ) case statementline then {
+                        firstEnd = (sl1.lineno.u64 - 1)
+                    } else {
+                    }
+                }
+                if firstEnd > body.lineno.u64 then return
+                firstInner: (tokByteStart
+                    lineStart: this.lineStart
+                    srcLines: this.lines
+                    lineno: sl0.lineno
+                    colno: sl0.colno
+                )
+                oline: (byteToLine
+                    lineStart: this.lineStart
+                    off: openByte
+                    nLines: this.lines.length
+                )
+                lt: this.lines.get i: oline
+                base: (leadingSpaces line: lt.stringview)
+                this.edits.append (zfix.Edit
+                    byteLo: (openByte + 1)
+                    byteHi: firstInner
+                    replacement: (nlIndent n: (base + 4))
+                )
+            } else {
+            }
+        } else {
         }
     }
 
@@ -1770,35 +1865,64 @@ nodeinfo: record {
 nodeInfoOf: function {n: Node} out nodeinfo is {
     match (
         n
-    ) case error then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case atomid then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case labelvalue then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case stringchunk then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case binop then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case atomstring then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case dottedpath then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case call then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case typeofexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case namedoperation then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case datablock then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case yieldexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case statement then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case statementline then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case assignment then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case reassignment then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case swapstmt then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case expression then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case ifexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case ifclause then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case forexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case doexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case withexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case caseexpr then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case caseclause then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case functiondef then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case objectdef then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case unitdef then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
-    } case program then { return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    ) case error then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case atomid then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case labelvalue then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case stringchunk then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case binop then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case atomstring then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case dottedpath then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case call then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case typeofexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case namedoperation then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case datablock then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case yieldexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case statement then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case statementline then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case assignment then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case reassignment then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case swapstmt then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case expression then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case ifexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case ifclause then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case forexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case doexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case withexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case caseexpr then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case caseclause then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case functiondef then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case objectdef then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case unitdef then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
+    } case program then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
     }
 }
 
