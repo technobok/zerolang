@@ -197,6 +197,54 @@ optName: function {o: Option String} out String is {
     }
 }
 
+# casingSuggest -- the lowerCamelCase form of an ALL-CAPS / SCREAMING_SNAKE member name:
+# split on `_`, lowercase each segment, and capitalise the first letter of every segment
+# after the first. Compounds without underscores become run-together lowercase.
+casingSuggest: function {name: StringView} out String is {
+    buf: "".string
+    n: name.length
+    cap: false
+    i: 0.u64
+    for i < n loop {
+        bo: name.byteAt :i
+        match (
+            bo
+        ) case some then {
+            if bo == 95 then {
+                cap = true
+            } else {
+                c: bo
+                if c >= 65 when (c <= 90) then c = c + 32
+                if cap when (buf.length > 0) then {
+                    if c >= 97 when (c <= 122) then c = c - 32
+                }
+                buf.appendByte b: c
+                cap = false
+            }
+        } case none then {
+        }
+        i = i + 1
+    }
+    return buf
+}
+
+# casingClash -- true when `s` (a proposed lowercase member name) collides with a language
+# keyword or a future-reserved word, and so cannot be used as-is.
+casingClash: function {s: StringView} out bool is {
+    kr: zlexer.kwlookup sv: s
+    if kr.found then return true
+    return (zlexer.islookupReserved sv: s)
+}
+
+# casingMessage -- the L009 diagnostic text: a direct rename when the lowerCamelCase form is
+# usable, or a role-suffixed alternative when it clashes with a keyword/reserved word.
+casingMessage: function {orig: StringView sug: StringView} out String is {
+    if (casingClash s: sug) then {
+        return "member '\{orig}' is not lowerCamelCase -- '\{sug}' is a keyword; use a role suffix, e.g. '\{sug}Kind' (type-kind) / '\{sug}Def' (AST node)"
+    }
+    return "member '\{orig}' is not lowerCamelCase -- rename to '\{sug}'"
+}
+
 # trailingWsLen -- number of trailing ASCII-whitespace bytes (space, tab, CR) in
 # `ln`. Computed by hand (StringView.trimEnd's native is not emitted).
 trailingWsLen: function {ln: StringView} out u64 is {
@@ -1070,6 +1118,68 @@ Analysis: class {
         } case program then {
             puit: n.units.iterate
             for pum: puit loop this.walk n: pum
+        }
+    }
+
+    # walkCasing -- opt-in (L009): recurse to every type definition and check the member
+    # casing of `variant` / `union` declarations. Runs only under `zl lint --casing`.
+    walkCasing: function {:this n: Node} is {
+        match (
+            n
+        ) case program then {
+            it: n.units.iterate
+            for u: it loop this.walkCasing n: u
+        } case unitdef then {
+            it: n.body.iterate
+            for b: it loop this.walkCasing n: b
+        } case namedoperation then {
+            this.walkCasing n: n.operation
+        } case objectdef then {
+            this.checkMemberCasing kind: n.kind items: n.isItems
+        } else {
+        }
+    }
+
+    # checkMemberCasing -- flag each variant/union arm whose name starts with an uppercase
+    # letter (not lowerCamelCase), with a suggested rename (see casingSuggest/casingMessage).
+    checkMemberCasing: function {:this kind: zast.nodetype items: (List Node)} is {
+        isVU: false
+        if kind == zast.nodetype.VARIANT then isVU = true
+        if kind == zast.nodetype.UNION then isVU = true
+        if isVU == false then return
+        it: items.iterate
+        for item: it loop {
+            match (
+                item
+            ) case namedoperation then {
+                isTypeRef: false
+                match (
+                    item.operation
+                ) case labelvalue then {
+                    isTypeRef = true
+                } else {
+                }
+                nm: optName o: item.name
+                fb: nm.stringview.byteAt i: 0
+                up: false
+                match (
+                    fb
+                ) case some then {
+                    if fb >= 65 when (fb <= 90) then up = true
+                } case none then {
+                }
+                if up when (isTypeRef == false) then {
+                    sug: casingSuggest name: nm.stringview
+                    (this.warn
+                        code: "L009"
+                        msg: (casingMessage orig: nm.stringview sug: sug.stringview)
+                        line: item.lineno
+                        col: item.colno
+                        width: nm.length.u32
+                    )
+                }
+            } else {
+            }
         }
     }
 
@@ -2481,7 +2591,12 @@ renderDiff: function {
 # build the line table, and collect parse-error diagnostics.
 # analyzeSource -- the fast-tier analysis over IN-MEMORY source: the
 # read-then-analyze wrappers and zls's live editor buffers share it.
-analyzeSource: function {source: String.take path: String.take lineLength: u32} out Analysis is {
+analyzeSource: function {
+    source: String.take
+    path: String.take
+    lineLength: u32
+    casing: bool
+} out Analysis is {
     root: ast.parseSource source: source.copy
     lines: linesOf src: source.stringview
     a: (Analysis
@@ -2501,17 +2616,18 @@ analyzeSource: function {source: String.take path: String.take lineLength: u32} 
         wrapGroups: (List u64)
     )
     a.runFastChecks n: root
+    if casing then a.walkCasing n: root
     a.checkLineLength width: lineLength
     a.sortEditsInPlace
     return a
 }
 
-analyzeFile: function {path: String.take lineLength: u32} out Analysis is {
+analyzeFile: function {path: String.take lineLength: u32 casing: bool} out Analysis is {
     rd: io.readText path: path.stringview
     match (
         rd
     ) case ok then {
-        return (analyzeSource source: rd.take path: path.copy :lineLength)
+        return (analyzeSource source: rd.take path: path.copy :lineLength :casing)
     } case err then {
         a: (Analysis
             path: path.copy
@@ -2621,9 +2737,10 @@ analyzeFileTiered: function {
     srcdir: StringView
     systemdir: StringView
     lineLength: u32
+    casing: bool
 } out Analysis is {
     if full then return (analyzeFileFull :path :srcdir :systemdir :lineLength)
-    return (analyzeFile :path :lineLength)
+    return (analyzeFile :path :lineLength :casing)
 }
 
 # codepointLen -- number of Unicode codepoints in `s` (UTF-8 continuation bytes 0x80..0xBF are not
