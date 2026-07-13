@@ -78,8 +78,11 @@ detects.
 
 Completion autotriggers on `.`: typing a member access opens a popup of the
 value's fields and methods (or a unit's top-level symbols), driven by Neovim's
-built-in LSP completion. Pass `completion = false` to `setup()` to leave
-completion to your own engine (nvim-cmp, blink.cmp, …).
+built-in LSP completion. `setup()` sets `completeopt` to `menuone,noselect,popup`
+buffer-locally (the global default is left alone) so the menu opens without
+auto-selecting the first item and further typing filters it. Pass
+`completion = false` to `setup()` to leave completion — and `completeopt` — to
+your own engine (nvim-cmp, blink.cmp, …).
 
 One `zls` process serves a whole workspace: Neovim dedups clients by `root_dir`,
 so every `.z` buffer under the same root shares a single server, which checks

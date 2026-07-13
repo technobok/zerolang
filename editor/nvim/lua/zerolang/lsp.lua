@@ -88,6 +88,12 @@ function M.setup(opts)
           -- `completion = false` if you drive completion from your own engine.
           if opts.completion ~= false and client:supports_method("textDocument/completion") then
             vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
+            -- `noselect` so autotrigger opens the menu without inserting the
+            -- first item (and further typing filters rather than appending);
+            -- buffer-local, so the global default is untouched for other files.
+            vim.api.nvim_set_option_value(
+              "completeopt", "menuone,noselect,popup", { buf = bufnr }
+            )
           end
         end,
       }, { bufnr = args.buf })
