@@ -2636,8 +2636,73 @@ baseTypeInScope: function {
     return result9
 }
 
-# addMemberCompletions -- members of the base expression before a `.`: a
-# unit's symbols, or a value's type members.
+# dotFrom -- index of the first `.` at or after `start` in base, or
+# base.length when there is none.
+dotFrom: function {base: StringView start: u64} out u64 is {
+    n9: base.length
+    i9: start
+    for i9 < n9 loop {
+        b9: base.byteAt i: i9
+        match (
+            b9
+        ) case some then {
+            if b9 == 46 then return i9
+        } case none then {}
+        i9 = i9 + 1
+    }
+    return n9
+}
+
+# descendUnitType -- the type id of `unit.name`, resolved (and declared on
+# demand) by the compiler's own reference-level resolver, so it works even
+# for a type not yet referenced elsewhere in the loaded program.
+descendUnitType: function {
+    prog: zast.Node
+    unitName: StringView
+    name: StringView
+    o: (Option zenv.ZSymbolTable)
+} out u64 is {
+    result9: 0.u64
+    match (
+        o
+    ) case some then {
+        match (
+            prog
+        ) case program then {
+            result9 = (ztypecheck.descendNamed
+                ty: o.typing
+                reg: o.reg
+                units: prog.units
+                defUnit: unitName
+                :name
+            )
+        } else {}
+    } case none then {}
+    return result9
+}
+
+# childOfIn -- the type id of `parent`'s child named `name` (a field, method,
+# or a unit's member type), or 0. The compiler's own per-level resolver.
+childOfIn: function {o: (Option zenv.ZSymbolTable) parent: u64 name: StringView} out u64 is {
+    result9: 0.u64
+    match (
+        o
+    ) case some then {
+        co9: o.typing.childOf parentTypeId: parent :name
+        match (
+            co9
+        ) case some then {
+            result9 = co9
+        } case none then {}
+    } case none then {}
+    return result9
+}
+
+# addMemberCompletions -- members of the base expression before a `.`. A bare
+# unit lists its top-level symbols; otherwise the base is resolved one segment
+# at a time -- a `unit.Type` head via the compiler's descendNamed (declaring on
+# demand), a scope value via baseTypeInScope, each further segment via `childOf`
+# -- and the final type's fields/methods are listed.
 addMemberCompletions: function {
     snap: zcheck.CheckResult
     docRel: StringView
@@ -2646,22 +2711,63 @@ addMemberCompletions: function {
     base: StringView
     sink: (Map String value: u8)
 } is {
-    if (unitFsnoByName :snap name: base) > 0 then {
-        addUnitMembers prog: snap.prog name: base :sink
+    n9: base.length
+    d09: dotFrom :base start: 0
+    if d09 >= n9 then {
+        if (unitFsnoByName :snap name: base) > 0 then {
+            addUnitMembers prog: snap.prog name: base :sink
+        } else {
+            docUnit9: zsource.unitNameOf path: docRel
+            throwaway9: (Map String value: u8)
+            ds9: (enclosingDefStart
+                prog: snap.prog
+                unitName: docUnit9.stringview
+                :l1u
+                sink: throwaway9
+            )
+            bt9: baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u :base
+            if bt9 > 0 then addTypeMembers o: snap.st tid: bt9 :sink
+        }
+        return
+    }
+    seg09: (base.substring from: 0 to: d09).string
+    cur9: 0.u64
+    startSeg9: d09 + 1
+    if (unitFsnoByName :snap name: seg09.stringview) > 0 then {
+        d19: dotFrom :base start: d09 + 1
+        seg19: (base.substring from: d09 + 1 to: d19).string
+        cur9 = (descendUnitType
+            prog: snap.prog
+            unitName: seg09.stringview
+            name: seg19.stringview
+            o: snap.st
+        )
+        startSeg9 = d19 + 1
     } else {
         docUnit9: zsource.unitNameOf path: docRel
         throwaway9: (Map String value: u8)
         ds9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u sink: throwaway9
-        bt9: baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u :base
-        if bt9 > 0 then addTypeMembers o: snap.st tid: bt9 :sink
+        cur9 = baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u base: seg09.stringview
     }
+    if cur9 == 0 then return
+    pos9: startSeg9
+    for pos9 <= n9 loop {
+        de9: dotFrom :base start: pos9
+        seg9: (base.substring from: pos9 to: de9).string
+        if seg9.length > 0 then {
+            cur9 = childOfIn o: snap.st parent: cur9 name: seg9.stringview
+            if cur9 == 0 then return
+        }
+        pos9 = de9 + 1
+    }
+    addTypeMembers o: snap.st tid: cur9 :sink
 }
 
 # completionAnswer -- scope-based completion from the last-good
 # snapshot: the enclosing definition's params and preceding bindings,
 # every loaded unit's top-level defs and unit names, and keywords --
 # filtered by the identifier prefix on the LIVE line. A '.' before the
-# prefix is member position: empty (no wrong members).
+# prefix is member position -> the base's members.
 completionAnswer: function {
     snap: zcheck.CheckResult
     docRel: StringView
@@ -2708,7 +2814,7 @@ completionAnswer: function {
                     match (
                         bb9
                     ) case some then {
-                        if (isIdentByte b: bb9) == false then break
+                        if (isIdentByte b: bb9) == false when bb9 != 46 then break
                     } case none then {
                         break
                     }
