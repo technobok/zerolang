@@ -1049,17 +1049,30 @@ emitNarrowedTakeZero: function {
     } else {}
 }
 
-# implicitTakeSource -- the C source local of a bare reftype/String atom arg
-# (alias-resolved); "" for a type/fn definition reference or any non-atom shape.
-# The source of an implicit ownership move (no explicit `.take`).
-implicitTakeSourceName: function {symtab: zenv.ZSymbolTable ctx: Ctx nm: StringView} out String is {
-    rid: resolveTypeIdByName :symtab :ctx name: nm
-    if rid > 0 then {
-        rtt9: symtab.reg.typetypeOf typeId: rid
-        if rtt9 != ztypes.ztypetype.FUNCTION then return "".string
-        mfn9: userFnId :symtab :ctx name: nm
-        if mfn9 > 0 then return "".string
-    }
+# implicitTakeSourceAtom -- the C move-source lvalue of a bare atom, decided by
+# the typechecker's stamps ALONE (the emitter never re-resolves a name; a local
+# may legitimately shadow a type). A local variable (atomVariableId) is a move
+# source; a def/type/fn reference (atomUnitDefId) is not; an atom the checker
+# stamped as neither (e.g. a generator-promoted local, now instance state) is a
+# plain value and IS a move source.
+implicitTakeSourceAtom: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nid: u64
+    nm: StringView
+} out String is {
+    avo9: symtab.typing.atomVariableId.get key: nid
+    match (
+        avo9
+    ) case some then {
+        return (takeSourceResolve :ctx name: nm)
+    } case none then {}
+    udo9: symtab.typing.atomUnitDefId.get key: nid
+    match (
+        udo9
+    ) case some then {
+        return "".string
+    } case none then {}
     return (takeSourceResolve :ctx name: nm)
 }
 
@@ -1069,9 +1082,9 @@ implicitTakeSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out St
     ) case expression then {
         return (implicitTakeSource :symtab :ctx n: n.expression)
     } case atomid then {
-        return (implicitTakeSourceName :symtab :ctx nm: n.name.stringview)
+        return (implicitTakeSourceAtom :symtab :ctx nid: n.nodeid.u64 nm: n.name.stringview)
     } case labelvalue then {
-        return (implicitTakeSourceName :symtab :ctx nm: n.name.stringview)
+        return (implicitTakeSourceAtom :symtab :ctx nid: n.nodeid.u64 nm: n.name.stringview)
     } else {
         return "".string
     }
