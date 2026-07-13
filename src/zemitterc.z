@@ -592,7 +592,7 @@ matchDiverges: function {symtab: zenv.ZSymbolTable nid: u64} out bool is {
     tid: stampIdOf :symtab :nid
     if tid == 0 then return false
     tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.NEVER then return true
+    if tt == ztypes.ztypetype.neverType then return true
     return false
 }
 
@@ -629,7 +629,7 @@ builtinTid: function {symtab: zenv.ZSymbolTable base: StringView} out u64 is {
 originTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
     # a partial spec (GENERIC_PARAM typetype) is trie bookkeeping, never an
     # emittable mono; origin-keyed sweeps must not select it
-    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.GENERIC_PARAM then return 0
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return 0
     t: symtab.reg.typeById.get key: tid
     match (
         t
@@ -919,9 +919,9 @@ takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
         if bo9.length != 0 then return "".string
         btt9: symtab.reg.typetypeOf typeId: bt9
         isUC9: false
-        if btt9 == ztypes.ztypetype.RECORD then isUC9 = true
-        if btt9 == ztypes.ztypetype.CLASS then isUC9 = true
-        if btt9 == ztypes.ztypetype.UNION then isUC9 = true
+        if btt9 == ztypes.ztypetype.recordType then isUC9 = true
+        if btt9 == ztypes.ztypetype.classType then isUC9 = true
+        if btt9 == ztypes.ztypetype.unionType then isUC9 = true
         if isUC9 then {
             return (atomTextOf n: n.parent)
         } else {
@@ -950,8 +950,8 @@ takeStringSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Stri
         btn9: stampNameOf :symtab nid: bnid9
         isMv9: false
         if (stampIdOf :symtab nid: bnid9) == ctx.strTid then isMv9 = true
-        if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.UNION then isMv9 = true
-        if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.CLASS then {
+        if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.unionType then isMv9 = true
+        if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.classType then {
             bn9c: atomTextOf n: n.parent
             if (isPtrVar :ctx name: bn9c.stringview) == false then isMv9 = true
         }
@@ -1109,7 +1109,7 @@ implicitTakeFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
                 match (
                     mmco0
                 ) case some then {
-                    if (symtab.reg.typetypeOf typeId: mmco0) == ztypes.ztypetype.FUNCTION then {
+                    if (symtab.reg.typetypeOf typeId: mmco0) == ztypes.ztypetype.functionType then {
                         ct = mmco0
                     }
                 } case none then {}
@@ -1129,12 +1129,12 @@ implicitTakeFnId: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
         }
     }
     if ct == 0 then return (stampIdOf :symtab nid: (nodeIdOf9 n: call.callable))
-    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.FUNCTION then return ct
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.functionType then return ct
     cco: symtab.typing.childOf parentTypeId: ct name: "create"
     match (
         cco
     ) case some then {
-        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.FUNCTION then return cco
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then return cco
     } case none then {}
     return ct
 }
@@ -1167,7 +1167,7 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     if bnO.length > 0 then {
         uctO: resolveTypeIdByName :symtab :ctx name: bnO.stringview
         if uctO > 0 then {
-            if (symtab.reg.typetypeOf typeId: uctO) == ztypes.ztypetype.UNION then {
+            if (symtab.reg.typetypeOf typeId: uctO) == ztypes.ztypetype.unionType then {
                 monoLk1: monoOriginName :symtab tid: uctO
                 if monoLk1.length == 0 then {
                     uarmO: dottedChildText n: call.callable
@@ -1192,10 +1192,10 @@ isCtorOwnerCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
         }
     }
     if ct == 0 then return false
-    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.CLASS then return true
-    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.UNION then return true
-    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.RECORD then return true
-    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.VARIANT then return true
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.classType then return true
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.unionType then return true
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.recordType then return true
+    if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.variantType then return true
     return false
 }
 
@@ -2079,7 +2079,7 @@ emitInstanceMethodCall: function {
     rtidc: chaseColMono :symtab tid: rtid0
     rtid: methodOwnerId :symtab :ctx rtid: rtidc mn: mn.stringview
     if rtid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.CLASS then return "".string
+    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.classType then return "".string
     monoLk2: monoOriginName :symtab tid: rtid
     if monoLk2.length > 0 then {
         if (isUserClassMonoTid :symtab :ctx tid: rtid) == false then return "".string
@@ -2099,7 +2099,7 @@ emitInstanceMethodCall: function {
     match (
         mco9
     ) case some then {
-        if (symtab.reg.typetypeOf typeId: mco9) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: mco9) == ztypes.ztypetype.functionType then {
             rptr9: dottedReceiverIsPtr :symtab :ctx callable: call.callable
             mcn9: symtab.reg.cnameOf tid: mco9
             pnames: (List String)
@@ -2397,7 +2397,7 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
                 match (
                     ncc9
                 ) case some then {
-                    if (symtab.reg.typetypeOf typeId: ncc9) == ztypes.ztypetype.FUNCTION then return false
+                    if (symtab.reg.typetypeOf typeId: ncc9) == ztypes.ztypetype.functionType then return false
                 } case none then {}
             } case none then {}
             return true
@@ -2407,7 +2407,7 @@ bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bo
         match (
             cco9
         ) case some then {
-            if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.FUNCTION then return false
+            if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.functionType then return false
             return true
         } case none then {
             return false
@@ -3047,10 +3047,10 @@ emitUnionCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     }
     utid: resolveTypeIdByName :symtab :ctx name: bn.stringview
     if utid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.UNION then return "".string
+    if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.unionType then return "".string
     # build from the mono (smid0) for a user generic union; else the named template
     ctid9: utid
-    if smOrig9.length > 0 when (symtab.reg.typetypeOf typeId: smid0) == ztypes.ztypetype.UNION then {
+    if smOrig9.length > 0 when (symtab.reg.typetypeOf typeId: smid0) == ztypes.ztypetype.unionType then {
         ctid9 = smid0
     }
     vc: symtab.reg.cnameOf tid: ctid9
@@ -3140,7 +3140,7 @@ emitVariantCtorCall: function {
     }
     vtid: userFnId :symtab :ctx name: bn.stringview
     if vtid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: vtid) != ztypes.ztypetype.VARIANT then return "".string
+    if (symtab.reg.typetypeOf typeId: vtid) != ztypes.ztypetype.variantType then return "".string
     return (emitInlineVariantCtor :symtab :ctx :call tid: vtid arm: mn.stringview)
 }
 
@@ -3178,14 +3178,14 @@ emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
     if btid == 0 then return "".string
     bttq: symtab.reg.typetypeOf typeId: btid
     isStructQ: false
-    if bttq == ztypes.ztypetype.RECORD then isStructQ = true
-    if bttq == ztypes.ztypetype.CLASS then isStructQ = true
+    if bttq == ztypes.ztypetype.recordType then isStructQ = true
+    if bttq == ztypes.ztypetype.classType then isStructQ = true
     if (isStructQ) == false then return "".string
     mco: symtab.typing.childOf parentTypeId: btid name: mn.stringview
     match (
         mco
     ) case some then {
-        if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType then {
             pnames: (List String)
             pids: (List u64)
             recFieldLists :symtab tid: mco names: pnames ids: pids
@@ -3216,7 +3216,7 @@ emitTypeQualCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
                     ) case namedoperation then {
                         avq: emitExpr :symtab :ctx n: aQ.operation
                         byRef9: false
-                        if bttq == ztypes.ztypetype.CLASS when ai9 < pn then {
+                        if bttq == ztypes.ztypetype.classType when ai9 < pn then {
                             ppid9: pids.get i: ai9
                             pptn9: typeNameOfReg9 :symtab tid: ppid9
                             if pptn9.stringview == "this" then byRef9 = true
@@ -3381,7 +3381,7 @@ emitRecordCtor: function {
     match (
         cco
     ) case some then {
-        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
             cpn: (List String)
             cpi: (List u64)
             recFieldLists :symtab tid: cco names: cpn ids: cpi
@@ -3864,7 +3864,7 @@ emitGenericFnCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     if gdc9.length > 0 then return "".string
     gmf9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
     if gmf9 == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: gmf9) != ztypes.ztypetype.FUNCTION then return "".string
+    if (symtab.reg.typetypeOf typeId: gmf9) != ztypes.ztypetype.functionType then return "".string
     gmo9: monoOriginName :symtab tid: gmf9
     if gmo9.length == 0 then return "".string
     if (fnIsNativeId :symtab fid: gmf9) then return "".string
@@ -3990,7 +3990,7 @@ emitUnitMethodCall: function {
 } out String is {
     rsid9: dottedReceiverStampId :symtab callable: call.callable
     if rsid9 == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: rsid9) != ztypes.ztypetype.UNIT then return "".string
+    if (symtab.reg.typetypeOf typeId: rsid9) != ztypes.ztypetype.unitType then return "".string
     rmo9: monoOriginName :symtab tid: rsid9
     if rmo9.length == 0 then return "".string
     child9: dottedChildText n: call.callable
@@ -4003,7 +4003,7 @@ emitUnitMethodCall: function {
         fid9 = co9
     } case none then {}
     if fid9 == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: fid9) != ztypes.ztypetype.FUNCTION then return "".string
+    if (symtab.reg.typetypeOf typeId: fid9) != ztypes.ztypetype.functionType then return "".string
     fc9: symtab.reg.cnameOf tid: fid9
     fpNames9: (List String)
     fpIds9: (List u64)
@@ -4135,7 +4135,7 @@ emitCrossUnitFnCall: function {
         fid = go
     } case none then {}
     if fid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.FUNCTION then return "".string
+    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
     fc: cnameOf tid: fid name: child.stringview
     fpNames: (List String)
     fpIds: (List u64)
@@ -4291,7 +4291,7 @@ emitCrossUnitBareCreate: function {
     match (
         cco9
     ) case some then {
-        if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: cco9) == ztypes.ztypetype.functionType then {
             ccb9: symtab.reg.cnameOf tid: cco9
             return "\{ccb9}()"
         }
@@ -4325,7 +4325,7 @@ emitCrossUnitExplicitCreate: function {
     match (
         cco
     ) case some then {
-        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
             cpn: (List String)
             cpi: (List u64)
             recFieldLists :symtab tid: cco names: cpn ids: cpi
@@ -4387,7 +4387,7 @@ emitCrossUnitUnionCtor: function {
         utid = go
     } case none then {}
     if utid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.UNION then return "".string
+    if (symtab.reg.typetypeOf typeId: utid) != ztypes.ztypetype.unionType then return "".string
     vc: symtab.reg.cnameOf tid: utid
     tg: variantTag :symtab tid: utid arm: arm9.stringview
     payC: armPayloadC :symtab :ctx tid: utid arm: arm9.stringview
@@ -4435,8 +4435,8 @@ emitCrossUnitCtor: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallD
     if tid == 0 then return "".string
     tt: symtab.reg.typetypeOf typeId: tid
     isRc: false
-    if tt == ztypes.ztypetype.RECORD then isRc = true
-    if tt == ztypes.ztypetype.CLASS then isRc = true
+    if tt == ztypes.ztypetype.recordType then isRc = true
+    if tt == ztypes.ztypetype.classType then isRc = true
     if (isRc) == false then return "".string
     return (emitRecordCtor :symtab :ctx :call :tid name: child.stringview)
 }
@@ -4467,8 +4467,8 @@ emitCrossUnitTag: function {
     if vtid == 0 then return "".string
     vtt: symtab.reg.typetypeOf typeId: vtid
     isTagged: false
-    if vtt == ztypes.ztypetype.VARIANT then isTagged = true
-    if vtt == ztypes.ztypetype.UNION then isTagged = true
+    if vtt == ztypes.ztypetype.variantType then isTagged = true
+    if vtt == ztypes.ztypetype.unionType then isTagged = true
     if (isTagged) == false then return "".string
     pc: armPayloadC :symtab :ctx tid: vtid :arm
     if pc.length == 0 then {
@@ -4538,7 +4538,7 @@ emitFnptrLocalCall: function {
     cnid: nodeIdOf9 n: call.callable
     cTid: stampIdOf :symtab nid: cnid
     if cTid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.FUNCTION then return "".string
+    if (symtab.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return "".string
     stn9: typeNameOfReg9 :symtab tid: cTid
     if stn9.stringview == cn0 then return "".string
     fcm: ztypes.mangleVarName name: cn0
@@ -4658,8 +4658,8 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
         if cstid9 > 0 when cstmn9.length > 0 then {
             cstt9: symtab.reg.typetypeOf typeId: cstid9
             cstOk9: false
-            if cstt9 == ztypes.ztypetype.RECORD then cstOk9 = true
-            if cstt9 == ztypes.ztypetype.CLASS then cstOk9 = true
+            if cstt9 == ztypes.ztypetype.recordType then cstOk9 = true
+            if cstt9 == ztypes.ztypetype.classType then cstOk9 = true
             if cstOk9 then {
                 ctorTid9 = cstid9
                 cstn9: typeNameOfReg9 :symtab tid: cstid9
@@ -4667,10 +4667,10 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
             }
         }
     }
-    if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.RECORD then {
+    if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.recordType then {
         return (emitRecordCtor :symtab :ctx :call tid: ctorTid9 name: ctorNm9.stringview)
     }
-    if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.CLASS then {
+    if ctorTid9 > 0 when (symtab.reg.typetypeOf typeId: ctorTid9) == ztypes.ztypetype.classType then {
         return (emitRecordCtor :symtab :ctx :call tid: ctorTid9 name: ctorNm9.stringview)
     }
     iwc: emitIoWrapperCreate :symtab :ctx :call
@@ -4724,15 +4724,15 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
                     ppid9: pRaw9
                     pptt9: symtab.reg.typetypeOf typeId: ppid9
                     isProtoP9: false
-                    if pptt9 == ztypes.ztypetype.PROTOCOL then isProtoP9 = true
-                    if pptt9 == ztypes.ztypetype.FACET then isProtoP9 = true
+                    if pptt9 == ztypes.ztypetype.protocolType then isProtoP9 = true
+                    if pptt9 == ztypes.ztypetype.facetType then isProtoP9 = true
                     if isProtoP9 then {
                         aRaw9: stampIdOf :symtab nid: (nodeIdOf9 n: a.operation)
                         aTid9: aRaw9
                         aTT9: symtab.reg.typetypeOf typeId: aTid9
                         aConc9: false
-                        if aTT9 == ztypes.ztypetype.CLASS then aConc9 = true
-                        if aTT9 == ztypes.ztypetype.RECORD then aConc9 = true
+                        if aTT9 == ztypes.ztypetype.classType then aConc9 = true
+                        if aTT9 == ztypes.ztypetype.recordType then aConc9 = true
                         if aConc9 then {
                             pLbl9: conformanceLabelFor :symtab implTid: aTid9 protoTid: ppid9
                             if pLbl9.length > 0 then {
@@ -4976,7 +4976,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         } case none then {
             brid = userFnId :symtab :ctx name: av
         }
-        if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.RECORD then {
+        if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
             btn: typeNameOfReg9 :symtab tid: brid
             cTypeLk1: cTypeOf name: btn.stringview
             if cTypeLk1.length > 0 then {
@@ -4988,13 +4988,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             be0: "((\{brc}_t){0})"
             return be0
         }
-        if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.FUNCTION then {
+        if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType then {
             # a bare no-arg unit fn that typecheck coerced to a CALL (its atom
             # stamp is the RETURN type, not FUNCTION) is invoked here; a genuine
             # fn reference (stamped FUNCTION) keeps the bare cname.
             fbcn9: symtab.reg.cnameOf tid: brid
             fastid9: stampIdOf :symtab nid: n.nodeid.u64
-            if fastid9 > 0 when (symtab.reg.typetypeOf typeId: fastid9) == ztypes.ztypetype.FUNCTION then {
+            if fastid9 > 0 when (symtab.reg.typetypeOf typeId: fastid9) == ztypes.ztypetype.functionType then {
                 adAuto9: emitAllDefaultedCall :symtab :ctx fnTid: brid fcn: fbcn9.stringview
                 if adAuto9.length > 0 then return adAuto9
                 return fbcn9
@@ -5018,13 +5018,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             match (
                 dpUfo9
             ) case some then {
-                if (symtab.reg.typetypeOf typeId: dpUfo9) == ztypes.ztypetype.FUNCTION then {
+                if (symtab.reg.typetypeOf typeId: dpUfo9) == ztypes.ztypetype.functionType then {
                     dpUfc9: cnameOf tid: dpUfo9 name: dpUc9.stringview
                     # a node stamped FUNCTION is a fn REFERENCE (a .take peel
                     # delegates here): the bare cname, like the atom leg
                     dpStamp9: stampIdOf :symtab nid: n.nodeid.u64
                     if dpStamp9 > 0 then {
-                        if (symtab.reg.typetypeOf typeId: dpStamp9) == ztypes.ztypetype.FUNCTION then {
+                        if (symtab.reg.typetypeOf typeId: dpStamp9) == ztypes.ztypetype.functionType then {
                             return dpUfc9
                         }
                     }
@@ -5044,7 +5044,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             # case is claimed here -- concrete receivers keep their legs.
             cvp9: stampIdOf :symtab nid: (nodeIdOf9 n: n.parent)
             cvgen9: cvp9 == 0
-            if (symtab.reg.typetypeOf typeId: cvp9) == ztypes.ztypetype.GENERIC_PARAM then cvgen9 = true
+            if (symtab.reg.typetypeOf typeId: cvp9) == ztypes.ztypetype.genericParam then cvgen9 = true
             cvres9: false
             if cvgen9 then {
                 cvb9: dottedBaseAtom n: n.parent
@@ -5065,9 +5065,9 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if cvres9 then {
                 cvtt9: symtab.reg.typetypeOf typeId: cvp9
                 cvref9: false
-                if cvtt9 == ztypes.ztypetype.CLASS then cvref9 = true
-                if cvtt9 == ztypes.ztypetype.UNION then cvref9 = true
-                if cvtt9 == ztypes.ztypetype.PROTOCOL then cvref9 = true
+                if cvtt9 == ztypes.ztypetype.classType then cvref9 = true
+                if cvtt9 == ztypes.ztypetype.unionType then cvref9 = true
+                if cvtt9 == ztypes.ztypetype.protocolType then cvref9 = true
                 if cvp9 == ctx.strTid then cvref9 = true
                 if (cvref9) == false when (symtab.reg.hasDestructorName typeId: cvp9) == false then {
                     return (emitExpr :symtab :ctx n: n.parent)
@@ -5143,12 +5143,12 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             tktn9: stampNameOf :symtab nid: tknid9
             isMove9: false
             if (stampIdOf :symtab nid: tknid9) == ctx.strTid then isMove9 = true
-            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.UNION then isMove9 = true
-            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.CLASS then {
+            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.unionType then isMove9 = true
+            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.classType then {
                 tkbn9: atomTextOf n: n.parent
                 if (isPtrVar :ctx name: tkbn9.stringview) == false then isMove9 = true
             }
-            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.FUNCTION then isMove9 = true
+            if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.functionType then isMove9 = true
             if isMove9 then return (emitExpr :symtab :ctx n: n.parent)
         }
         cTypeLk2: cTypeOf name: mn2.stringview
@@ -5266,8 +5266,8 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             isTagged2: false
             if vtid2 > 0 then {
                 vtt2: symtab.reg.typetypeOf typeId: vtid2
-                if vtt2 == ztypes.ztypetype.VARIANT then isTagged2 = true
-                if vtt2 == ztypes.ztypetype.UNION then isTagged2 = true
+                if vtt2 == ztypes.ztypetype.variantType then isTagged2 = true
+                if vtt2 == ztypes.ztypetype.unionType then isTagged2 = true
             }
             if isTagged2 then {
                 pc2: armPayloadC :symtab :ctx tid: vtid2 arm: mn2.stringview
@@ -5299,7 +5299,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             }
             bstamp = chaseColMono :symtab tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
-            if rtt == ztypes.ztypetype.PROTOCOL then {
+            if rtt == ztypes.ztypetype.protocolType then {
                 isPMn9: true
                 if mn2.stringview == "create" then isPMn9 = false
                 if mn2.stringview == "borrow" then isPMn9 = false
@@ -5311,7 +5311,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 }
             }
             isRecOrCls: false
-            if rtt == ztypes.ztypetype.RECORD then {
+            if rtt == ztypes.ztypetype.recordType then {
                 # array/str monos are RECORD typetype but keep their own legs
                 # below (a.0 -> a.data[0]; str .length -> .len etc.).
                 bsoNmR9: monoOriginName :symtab tid: bstamp
@@ -5325,7 +5325,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     originTid: ctx.strOriginTid
                 ) == false then isRecOrCls = true
             }
-            if rtt == ztypes.ztypetype.CLASS then {
+            if rtt == ztypes.ztypetype.classType then {
                 # user classes only -- collection monos (List/Set/Map, with a
                 # generic origin) keep their own dottedpath legs below.
                 bsoNm0: monoOriginName :symtab tid: bstamp
@@ -5383,7 +5383,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 match (
                     mco
                 ) case some then {
-                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.PROTOCOL then {
+                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.protocolType then {
                         # borrowed conformance projection: f.myreader ->
                         # {Impl}_{label}_create(&f) (a borrowed fat pointer). Only an
                         # as-block conformance LABEL materializes; a stored protocol
@@ -5402,7 +5402,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                             return pj9b
                         }
                     }
-                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION when (symtab.typing.isChildFnptrField
+                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType when (symtab.typing.isChildFnptrField
                         parentTypeId: bstamp
                         name: mn2.stringview
                     ) == false then {
@@ -5431,13 +5431,13 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         # receiver (fbtn9 is the enclosing type's name).
                         if bn2.stringview == fbtn9.stringview then return "\{mc2}()"
                         mrecv6: "\{bn2}"
-                        if rtt == ztypes.ztypetype.CLASS then {
+                        if rtt == ztypes.ztypetype.classType then {
                             if (isPtrVar :ctx name: bn2.stringview) == false then mrecv6 = "&\{bn2}"
                         }
                         e6: "\{mc2}(\{mrecv6})"
                         return e6
                     }
-                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.FUNCTION when (symtab.typing.isChildFnptrField
+                    if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType when (symtab.typing.isChildFnptrField
                         parentTypeId: bstamp
                         name: mn2.stringview
                     ) then {
@@ -5461,7 +5461,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 e5: "\{bn2}.\{mn2}"
                 return e5
             }
-            if rtt == ztypes.ztypetype.VARIANT then {
+            if rtt == ztypes.ztypetype.variantType then {
                 e9: "\{bn2}.data.\{mn2}"
                 return e9
             }
@@ -5583,7 +5583,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 }
             }
             baseIsData9: false
-            if rtt == ztypes.ztypetype.DATA then {
+            if rtt == ztypes.ztypetype.dataType then {
                 baseIsData9 = true
             } else {
                 if (ctx.dataElems.has key: bn2.copy) then baseIsData9 = true
@@ -5692,15 +5692,15 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         if nlid9 > 0 then {
             nrtt9: symtab.reg.typetypeOf typeId: nlid9
             nDisp9: false
-            if nrtt9 == ztypes.ztypetype.CLASS then nDisp9 = true
-            if nrtt9 == ztypes.ztypetype.RECORD then nDisp9 = true
+            if nrtt9 == ztypes.ztypetype.classType then nDisp9 = true
+            if nrtt9 == ztypes.ztypetype.recordType then nDisp9 = true
             if nDisp9 then {
                 nlidM9: methodOwnerId :symtab :ctx rtid: nlid9 mn: mn2.stringview
                 nmco9: symtab.typing.childOf parentTypeId: nlidM9 name: mn2.stringview
                 match (
                     nmco9
                 ) case some then {
-                    if (symtab.reg.typetypeOf typeId: nmco9) == ztypes.ztypetype.FUNCTION then {
+                    if (symtab.reg.typetypeOf typeId: nmco9) == ztypes.ztypetype.functionType then {
                         # no-arg SV natives on a nested stringy base: the
                         # canonical native symbol, not the method-id cname
                         if (isSvNoArgNative name: mn2.stringview) when (isStringyTid
@@ -5718,7 +5718,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         nmc9: symtab.reg.cnameOf tid: nmco9
                         nrttM9: symtab.reg.typetypeOf typeId: nlidM9
                         nmrecv9: "\{base9}"
-                        if nrttM9 == ztypes.ztypetype.CLASS then {
+                        if nrttM9 == ztypes.ztypetype.classType then {
                             if (pathIsPointer :symtab :ctx n: n.parent) == false then {
                                 nmrecv9 = "&\{base9}"
                             }
@@ -5780,7 +5780,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     }
                 }
             }
-            if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.RECORD then {
+            if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.recordType then {
                 rce: symtab.reg.cnameOf tid: lti
                 if op.stringview == "==" then {
                     re1: "\{rce}_eq(\{l}, \{r})"
@@ -5791,7 +5791,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return re2
                 }
             }
-            if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.VARIANT then {
+            if lti > 0 when (symtab.reg.typetypeOf typeId: lti) == ztypes.ztypetype.variantType then {
                 vce: symtab.reg.cnameOf tid: lti
                 if op.stringview == "==" then {
                     ee1: "\{vce}_eq(\{l}, \{r})"
@@ -5974,15 +5974,15 @@ interpBaseIsOwnedStructField: function {symtab: zenv.ZSymbolTable n: Node} out b
         }
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: false
-        if btt == ztypes.ztypetype.RECORD then isUC = true
-        if btt == ztypes.ztypetype.CLASS then isUC = true
+        if btt == ztypes.ztypetype.recordType then isUC = true
+        if btt == ztypes.ztypetype.classType then isUC = true
         if (isUC) == false then return false
         cn: atomTextOf n: n.child
         co: symtab.typing.childOf parentTypeId: bt name: cn.stringview
         match (
             co
         ) case some then {
-            if (symtab.reg.typetypeOf typeId: co) == ztypes.ztypetype.FUNCTION then {
+            if (symtab.reg.typetypeOf typeId: co) == ztypes.ztypetype.functionType then {
                 return false
             } else {
                 return true
@@ -6172,7 +6172,7 @@ stampNameDeep: function {symtab: zenv.ZSymbolTable n: Node} out String is {
     if sid > 0 then {
         # a value-position FUNCTION stamp is an auto-call; its value
         # type is the method's return.
-        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
             rto: fnReturnTidOf :symtab tid: sid
             if rto > 0 then return (typeNameOfReg9 :symtab tid: rto)
             rno9: symtab.typing.funcReturnNode.get key: sid
@@ -6313,7 +6313,7 @@ emitPrintArg: function {
                 mcb: symtab.reg.cnameOf tid: svco
                 amn: monoOriginName :symtab tid: argTid
                 usesAmp: false
-                if (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.CLASS when amn.length == 0 then {
+                if (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType when amn.length == 0 then {
                     if (isPtrVar :ctx name: anm.stringview) == false then usesAmp = true
                 }
                 if usesAmp then {
@@ -6649,8 +6649,8 @@ emitDiscardedResult: function {
     dcdrop9: false
     if (symtab.reg.hasDestructorName typeId: rtid) when isBorrow == false then {
         if rtid == ctx.strTid then dcdrop9 = true
-        if dctt9 == ztypes.ztypetype.CLASS then dcdrop9 = true
-        if dctt9 == ztypes.ztypetype.UNION then dcdrop9 = true
+        if dctt9 == ztypes.ztypetype.classType then dcdrop9 = true
+        if dctt9 == ztypes.ztypetype.unionType then dcdrop9 = true
     }
     if dcdrop9 when (isNonLvalueArg s: ce) then {
         dctn9: tmp.next
@@ -6685,7 +6685,7 @@ emitCallStmt: function {
     if relmn.stringview == "release" then {
         relbnid: dottedBaseNodeId n: call.callable
         reltid: stampIdOf :symtab nid: relbnid
-        if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.PROTOCOL then return
+        if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
     }
     cn0: atomTextOf n: call.callable
     if cn0.stringview == "print" then {
@@ -7128,7 +7128,7 @@ emitStmt: function {
             if ftnid9 > 0 then {
                 ftst9: stampIdOf :symtab nid: ftnid9
                 if ftst9 > 0 then {
-                    if (symtab.reg.typetypeOf typeId: ftst9) == ztypes.ztypetype.FUNCTION then {
+                    if (symtab.reg.typetypeOf typeId: ftst9) == ztypes.ztypetype.functionType then {
                         # a function reference is POD: taking it moves nothing,
                         # so the source (a unit fn symbol or an fnptr field)
                         # is never zeroed
@@ -7151,7 +7151,7 @@ emitStmt: function {
             ltHasDtor9: false
             if (symtab.reg.hasDestructorName typeId: ltid) then ltHasDtor9 = true
             ltUmn9: monoOriginName :symtab tid: ltid
-            if ltUmn9.length > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.UNION then {
+            if ltUmn9.length > 0 when (symtab.reg.typetypeOf typeId: ltid) == ztypes.ztypetype.unionType then {
                 ltHasDtor9 = true
             }
             if ltHasDtor9 then {
@@ -7242,7 +7242,7 @@ emitStmt: function {
         if rftnid9 > 0 then {
             rftst9: stampIdOf :symtab nid: rftnid9
             if rftst9 > 0 then {
-                if (symtab.reg.typetypeOf typeId: rftst9) == ztypes.ztypetype.FUNCTION then {
+                if (symtab.reg.typetypeOf typeId: rftst9) == ztypes.ztypetype.functionType then {
                     rftFn9 = true
                 }
             }
@@ -7401,7 +7401,7 @@ emitStmt: function {
             if dct9.stringview == "release" then {
                 rrid9: dottedReceiverStampId :symtab callable: n
                 rtt9: symtab.reg.typetypeOf typeId: rrid9
-                if rtt9 == ztypes.ztypetype.PROTOCOL then return
+                if rtt9 == ztypes.ztypetype.protocolType then return
                 rcvNm9: dottedBaseAtom :n
                 rcvKey9: ztypes.mangleVarName name: rcvNm9.stringview
                 rbrw9: false
@@ -7428,8 +7428,8 @@ emitStmt: function {
                 }
                 rinv9: false
                 if rrid9 == ctx.strTid then rinv9 = true
-                if rtt9 == ztypes.ztypetype.CLASS then rinv9 = true
-                if rtt9 == ztypes.ztypetype.UNION then rinv9 = true
+                if rtt9 == ztypes.ztypetype.classType then rinv9 = true
+                if rtt9 == ztypes.ztypetype.unionType then rinv9 = true
                 if rinv9 then {
                     rci9: typeRefC :symtab :ctx tid: rrid9 thisTid: 0
                     riv9: "\{ind}\{rcvV9} = (\{rci9}){0};\n"
@@ -7460,7 +7460,7 @@ emitStmt: function {
         # coerced the atom to a call; emit the call expression as a statement.
         fcs9: atomTextOf :n
         ffid9: userFnId :symtab :ctx name: fcs9.stringview
-        if ffid9 > 0 when (symtab.reg.typetypeOf typeId: ffid9) == ztypes.ztypetype.FUNCTION then {
+        if ffid9 > 0 when (symtab.reg.typetypeOf typeId: ffid9) == ztypes.ztypetype.functionType then {
             fce9: emitExpr :symtab :ctx :n
             if (fce9.stringview.startsWith prefix: "/*") == false then {
                 artid9: stampIdOf :symtab nid: (nodeIdOf9 :n)
@@ -7716,8 +7716,8 @@ emitMatchStmt: function {
     isUni: false
     if vtid > 0 then {
         vtt0: symtab.reg.typetypeOf typeId: vtid
-        if vtt0 == ztypes.ztypetype.VARIANT then isVar = true
-        if vtt0 == ztypes.ztypetype.UNION then isUni = true
+        if vtt0 == ztypes.ztypetype.variantType then isVar = true
+        if vtt0 == ztypes.ztypetype.unionType then isUni = true
     }
     if (isVar) == false then {
         if (isUni) == false then {
@@ -8446,7 +8446,7 @@ emitObjIterFor: function {
         # generator function itself; resolve via its return type (the iterator
         # class) and auto-call it below.
         bareFnId9: 0.u64
-        if (symtab.reg.typetypeOf typeId: itid0) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: itid0) == ztypes.ztypetype.functionType then {
             brt9: 0.u64
             brt9 = fnReturnTidOf :symtab tid: itid0
             if brt9 == 0 then {
@@ -8531,7 +8531,7 @@ emitObjIterFor: function {
             callC: "".string
             itUfn9: userFnId :symtab :ctx name: itn.stringview
             isUserCls9: false
-            if itUfn9 > 0 when (symtab.reg.typetypeOf typeId: itid) == ztypes.ztypetype.CLASS then {
+            if itUfn9 > 0 when (symtab.reg.typetypeOf typeId: itid) == ztypes.ztypetype.classType then {
                 # exclude collection monos (SetIter etc., monoOriginName != "")
                 itorig9: monoOriginName :symtab tid: itid
                 if itorig9.length == 0 then isUserCls9 = true
@@ -9129,7 +9129,7 @@ fnReturnTypeId: function {symtab: zenv.ZSymbolTable op: Node} out u64 is {
 isUserClassMonoTid: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     og4: genericOriginOf9 :symtab :tid
     if og4 > 0 then {
-        if (symtab.reg.typetypeOf typeId: og4) == ztypes.ztypetype.CLASS then {
+        if (symtab.reg.typetypeOf typeId: og4) == ztypes.ztypetype.classType then {
             if (isCollectionOriginTid :ctx originTid: og4) == false then {
                 hit4: false
                 nat4: false
@@ -9167,7 +9167,7 @@ isReftypeParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool 
     # Only CLASS params pass by reference. A UNION is a small value-stable
     # {tag, void* data} struct passed BY VALUE (the data pointer is shared with
     # the source; the borrow is tracked separately), matching the reference.
-    if tt != ztypes.ztypetype.CLASS then return false
+    if tt != ztypes.ztypetype.classType then return false
     monoLk4: monoOriginName :symtab tid: cid
     if monoLk4.length > 0 then {
         if (isUserClassMonoTid :symtab :ctx tid: cid) == false then return false
@@ -9677,32 +9677,32 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         return act9
     }
     ctt: symtab.reg.typetypeOf typeId: cid
-    if ctt == ztypes.ztypetype.RECORD then {
+    if ctt == ztypes.ztypetype.recordType then {
         rc: cnameOf tid: cid name: tn.stringview
         rt9: "\{rc}_t"
         return rt9
     }
-    if ctt == ztypes.ztypetype.VARIANT then {
+    if ctt == ztypes.ztypetype.variantType then {
         rc2: cnameOf tid: cid name: tn.stringview
         rt8: "\{rc2}_t"
         return rt8
     }
-    if ctt == ztypes.ztypetype.CLASS then {
+    if ctt == ztypes.ztypetype.classType then {
         rc3: cnameOf tid: cid name: tn.stringview
         rt7: "\{rc3}_t"
         return rt7
     }
-    if ctt == ztypes.ztypetype.UNION then {
+    if ctt == ztypes.ztypetype.unionType then {
         rc4: cnameOf tid: cid name: tn.stringview
         rt6: "\{rc4}_t"
         return rt6
     }
-    if ctt == ztypes.ztypetype.PROTOCOL then {
+    if ctt == ztypes.ztypetype.protocolType then {
         rc5: cnameOf tid: cid name: tn.stringview
         rt5: "\{rc5}_t"
         return rt5
     }
-    if ctt == ztypes.ztypetype.FUNCTION then {
+    if ctt == ztypes.ztypetype.functionType then {
         rcf: cnameOf tid: cid name: tn.stringview
         rtf: "\{rcf}_ft"
         return rtf
@@ -9723,7 +9723,7 @@ variantArms: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids
             match (
                 cto
             ) case some then {
-                if (symtab.reg.typetypeOf typeId: cto) != ztypes.ztypetype.FUNCTION then {
+                if (symtab.reg.typetypeOf typeId: cto) != ztypes.ztypetype.functionType then {
                     if tc.childName.stringview != "tag" then {
                         cn0: tc.childName.copy
                         names.append cn0
@@ -9778,7 +9778,7 @@ isConformanceMarker: function {
 # (non-FUNCTION children, conformance markers excluded).
 recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
     parentFn0: false
-    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.FUNCTION then parentFn0 = true
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then parentFn0 = true
     # this type's conformance-marker labels, collected once (the per-field
     # probe below is a scan over these few names, not the whole table)
     mkNames0: (List String)
@@ -9811,7 +9811,7 @@ recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String i
                     if fptrFld0 then {
                         includeFld0 = true
                     } else {
-                        if (symtab.reg.typetypeOf typeId: cto) != ztypes.ztypetype.FUNCTION then {
+                        if (symtab.reg.typetypeOf typeId: cto) != ztypes.ztypetype.functionType then {
                             isConst0: false
                             aco0: symtab.typing.asConstClone.get key: cto
                             match (
@@ -10303,7 +10303,7 @@ emitUnitMonoInstances: function {
     t9: 0.u64
     for t9 < last9 loop {
         isMono9: false
-        if (symtab.reg.typetypeOf typeId: t9) == ztypes.ztypetype.UNIT then {
+        if (symtab.reg.typetypeOf typeId: t9) == ztypes.ztypetype.unitType then {
             go9opt: (optionval.none u64)
             {
                 to9: symtab.reg.typeById.get key: t9
@@ -10335,7 +10335,7 @@ emitUnitMonoInstances: function {
                                 cfo9
                             ) case some then {
                                 cfid9: cfo9
-                                if (symtab.reg.typetypeOf typeId: cfid9) == ztypes.ztypetype.FUNCTION then {
+                                if (symtab.reg.typetypeOf typeId: cfid9) == ztypes.ztypetype.functionType then {
                                     fnm9: typeNameOfReg9 :symtab tid: cfid9
                                     sig9: (fnSignature
                                         :symtab
@@ -10434,7 +10434,7 @@ emitFnMonoInstances: function {
     t9: 0.u64
     for t9 < last9 loop {
         isMono9: false
-        if (symtab.reg.typetypeOf typeId: t9) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: t9) == ztypes.ztypetype.functionType then {
             go9opt: (optionval.none u64)
             {
                 to9: symtab.reg.typeById.get key: t9
@@ -10535,7 +10535,7 @@ emitFnsIn: function {
                 isGenFn9: false
                 if fid > 0 then {
                     if (isGenericType :symtab tid: fid) then {
-                        if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.FUNCTION then {
+                        if (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType then {
                             isGenFn9 = true
                         }
                     }
@@ -11330,7 +11330,7 @@ applyTmpl: function {text: String key: StringView val: StringView} out String is
 # "" when not a mono.
 monoOriginName: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
     # partial specs (GENERIC_PARAM typetype) are trie bookkeeping, not monos
-    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.GENERIC_PARAM then return "".string
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return "".string
     go: genericOriginOf9 :symtab :tid
     if go > 0 then return (typeNameOfReg9 :symtab tid: go)
     return "".string
@@ -11927,8 +11927,8 @@ keyHashKind: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
     if tid == ctx.strTid then return 1
     if tid == ctx.svTid then return 2
     tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.RECORD then return 3
-    if tt == ztypes.ztypetype.VARIANT then return 3
+    if tt == ztypes.ztypetype.recordType then return 3
+    if tt == ztypes.ztypetype.variantType then return 3
     return 0
 }
 
@@ -12509,7 +12509,7 @@ ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx} out u64 is {
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
-        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
             tn: typeNameOfReg9 :symtab tid: ti
             if tn.stringview == "File" when (definedInNonMain :symtab :ctx tid: ti) then return ti
         }
@@ -12553,7 +12553,7 @@ cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} o
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
-        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
             tn: typeNameOfReg9 :symtab tid: ti
             if tn.stringview == name then {
                 duo: definedInUnitOf :symtab tid: ti
@@ -12634,7 +12634,7 @@ emitIoFileConformance: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
-        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
             cmo9: monoOriginName :symtab tid: ti
             if cmo9.length == 0 then {
                 duo9: definedInUnitOf :symtab tid: ti
@@ -12708,7 +12708,7 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
     ti: 1.u64
     for ti < last loop {
         if fid == 0 then {
-            if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+            if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
                 tn: typeNameOfReg9 :symtab tid: ti
                 if tn.stringview == "File" then {
                     if (definedInNonMain :symtab :ctx tid: ti) then fid = ti
@@ -12741,7 +12741,7 @@ emitNetFdClass: function {
     ti: 1.u64
     for ti < last loop {
         if fid == 0 then {
-            if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.CLASS then {
+            if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
                 tn: typeNameOfReg9 :symtab tid: ti
                 duo9: definedInUnitOf :symtab tid: ti
                 match (
@@ -13015,19 +13015,19 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     tt: symtab.reg.typetypeOf typeId: cid
     smPe: ctx.mainName.copy
     ctx.mainName = peUnit.copy
-    if tt == ztypes.ztypetype.VARIANT then {
+    if tt == ztypes.ztypetype.variantType then {
         emitOneVariant :symtab :ctx tid: cid name: nm.stringview :buf
     }
-    if tt == ztypes.ztypetype.RECORD then {
+    if tt == ztypes.ztypetype.recordType then {
         emitOneRecord :symtab :ctx tid: cid name: nm.stringview :buf
     }
-    if tt == ztypes.ztypetype.CLASS then {
+    if tt == ztypes.ztypetype.classType then {
         emitOneRecord :symtab :ctx tid: cid name: nm.stringview :buf
     }
-    if tt == ztypes.ztypetype.PROTOCOL then {
+    if tt == ztypes.ztypetype.protocolType then {
         emitOneProtocol :symtab :ctx tid: cid name: nm.stringview :buf
     }
-    if tt == ztypes.ztypetype.UNION then {
+    if tt == ztypes.ztypetype.unionType then {
         emitUnionMono :symtab :ctx tid: cid name: nm.stringview :buf
     }
     ctx.mainName = smPe
@@ -13079,12 +13079,12 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
         tt: symtab.reg.typetypeOf typeId: t
         isStructType: false
         isUnion: false
-        if tt == ztypes.ztypetype.RECORD then isStructType = true
-        if tt == ztypes.ztypetype.UNION then {
+        if tt == ztypes.ztypetype.recordType then isStructType = true
+        if tt == ztypes.ztypetype.unionType then {
             isStructType = true
             isUnion = true
         }
-        if tt == ztypes.ztypetype.CLASS then isStructType = true
+        if tt == ztypes.ztypetype.classType then isStructType = true
         if isStructType then {
             gen: isGenericType :symtab tid: t
             mo: monoOriginName :symtab tid: t
@@ -13224,10 +13224,10 @@ buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx acc: List u64} i
     for t < last loop {
         tt: symtab.reg.typetypeOf typeId: t
         isStruct: false
-        if tt == ztypes.ztypetype.RECORD then isStruct = true
-        if tt == ztypes.ztypetype.CLASS then isStruct = true
-        if tt == ztypes.ztypetype.UNION then isStruct = true
-        if tt == ztypes.ztypetype.VARIANT then isStruct = true
+        if tt == ztypes.ztypetype.recordType then isStruct = true
+        if tt == ztypes.ztypetype.classType then isStruct = true
+        if tt == ztypes.ztypetype.unionType then isStruct = true
+        if tt == ztypes.ztypetype.variantType then isStruct = true
         if isStruct then {
             mo: monoOriginName :symtab tid: t
             gen: isGenericType :symtab tid: t
@@ -13309,10 +13309,10 @@ userDefnRefsUnemitted: function {
     emitted: (Map u64 value: bool)
 } out bool is {
     tt: symtab.reg.typetypeOf :typeId
-    if tt == ztypes.ztypetype.UNION then return false
+    if tt == ztypes.ztypetype.unionType then return false
     fnames: (List String)
     fids: (List u64)
-    if tt == ztypes.ztypetype.VARIANT then {
+    if tt == ztypes.ztypetype.variantType then {
         variantArms :symtab tid: typeId names: fnames ids: fids
     } else {
         recFieldLists :symtab tid: typeId names: fnames ids: fids
@@ -13380,11 +13380,35 @@ emitUserTypeById: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Str
         ctx.mainName = duo.copy
     } case none then {}
     tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.VARIANT then emitOneVariant :symtab :ctx :tid name: nm.stringview :buf
-    if tt == ztypes.ztypetype.RECORD then emitOneRecord :symtab :ctx :tid name: nm.stringview :buf
-    if tt == ztypes.ztypetype.CLASS then emitOneRecord :symtab :ctx :tid name: nm.stringview :buf
-    if tt == ztypes.ztypetype.UNION then emitUnionMono :symtab :ctx :tid name: nm.stringview :buf
-    if tt == ztypes.ztypetype.PROTOCOL then {
+    if tt == ztypes.ztypetype.variantType then (emitOneVariant
+        :symtab
+        :ctx
+        :tid
+        name: nm.stringview
+        :buf
+    )
+    if tt == ztypes.ztypetype.recordType then (emitOneRecord
+        :symtab
+        :ctx
+        :tid
+        name: nm.stringview
+        :buf
+    )
+    if tt == ztypes.ztypetype.classType then (emitOneRecord
+        :symtab
+        :ctx
+        :tid
+        name: nm.stringview
+        :buf
+    )
+    if tt == ztypes.ztypetype.unionType then (emitUnionMono
+        :symtab
+        :ctx
+        :tid
+        name: nm.stringview
+        :buf
+    )
+    if tt == ztypes.ztypetype.protocolType then {
         emitOneProtocol :symtab :ctx :tid name: nm.stringview :buf
     }
     ctx.mainName = sm
@@ -13565,8 +13589,8 @@ ensureFwdStruct: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Stri
     } case none then {}
     tt: symtab.reg.typetypeOf typeId: tid
     isStruct: false
-    if tt == ztypes.ztypetype.RECORD then isStruct = true
-    if tt == ztypes.ztypetype.CLASS then isStruct = true
+    if tt == ztypes.ztypetype.recordType then isStruct = true
+    if tt == ztypes.ztypetype.classType then isStruct = true
     if isStruct then {
         if (originIsTid :symtab :tid originTid: ctx.strOriginTid) then isStruct = false
         if (originIsTid :symtab :tid originTid: ctx.arrayOriginTid) then isStruct = false
@@ -13597,10 +13621,10 @@ isComplexFnptrParam: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out 
     can: userFnId :symtab :ctx name: nm.stringview
     if can > 0 then ct = can
     tt: symtab.reg.typetypeOf typeId: ct
-    if tt == ztypes.ztypetype.PROTOCOL then return true
-    if tt == ztypes.ztypetype.FACET then return true
-    if tt == ztypes.ztypetype.UNION then return true
-    if tt == ztypes.ztypetype.VARIANT then return true
+    if tt == ztypes.ztypetype.protocolType then return true
+    if tt == ztypes.ztypetype.facetType then return true
+    if tt == ztypes.ztypetype.unionType then return true
+    if tt == ztypes.ztypetype.variantType then return true
     return false
 }
 
@@ -13672,7 +13696,7 @@ emitOneFnptrTypedef: function {
     dn: pIds.length
     for di < dn loop {
         pidd: rIds9.get i: di
-        if (symtab.reg.typetypeOf typeId: pidd) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: pidd) == ztypes.ztypetype.functionType then {
             emitOneFnptrTypedef :symtab :ctx tid: pidd :seen :fnOwner :buf
         }
         ensureFwdStruct :symtab :ctx tid: pidd :buf
@@ -13711,22 +13735,22 @@ emitFnptrTypedefs: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borr
         match (
             fco
         ) case some then {
-            if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.FUNCTION then {
+            if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.functionType then {
                 fpt0: symtab.reg.typetypeOf typeId: foc.parentTypeId
                 isObj0: false
-                if fpt0 == ztypes.ztypetype.RECORD then isObj0 = true
-                if fpt0 == ztypes.ztypetype.CLASS then isObj0 = true
-                if fpt0 == ztypes.ztypetype.UNION then isObj0 = true
-                if fpt0 == ztypes.ztypetype.VARIANT then isObj0 = true
-                if fpt0 == ztypes.ztypetype.PROTOCOL then isObj0 = true
-                if fpt0 == ztypes.ztypetype.FACET then isObj0 = true
+                if fpt0 == ztypes.ztypetype.recordType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.classType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.unionType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.variantType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.protocolType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.facetType then isObj0 = true
                 if isObj0 then fnOwner.set key: fco value: foc.parentTypeId
             }
         } case none then {}
     }
     t0: 0.u64
     for t0 < last loop {
-        if (symtab.reg.typetypeOf typeId: t0) == ztypes.ztypetype.FUNCTION then {
+        if (symtab.reg.typetypeOf typeId: t0) == ztypes.ztypetype.functionType then {
             if (fnptrTypedefEligible :symtab :ctx tid: t0) then {
                 emitOneFnptrTypedef :symtab :ctx tid: t0 :seen :fnOwner :buf
             }
@@ -13747,7 +13771,7 @@ emitUserStructsOrdered: function {
     # user PROTOCOLs upfront (fat pointer; no by-value user embedding)
     tp: 0.u64
     for tp < last loop {
-        if (symtab.reg.typetypeOf typeId: tp) == ztypes.ztypetype.PROTOCOL then {
+        if (symtab.reg.typetypeOf typeId: tp) == ztypes.ztypetype.protocolType then {
             pgen: isGenericType :symtab tid: tp
             pmo: monoOriginName :symtab tid: tp
             if pmo.length == 0 when pgen == false then {
@@ -13967,10 +13991,10 @@ emitMonos: function {
         }
         if (originIsTid :symtab tid: tcl9 originTid: ctx.strOriginTid) then wStr9.append tv9
         if (isBoxTid :symtab tid: tcl9) then wBox9.append tv9
-        if tt9 == ztypes.ztypetype.UNION then {
+        if tt9 == ztypes.ztypetype.unionType then {
             if isMono9 == false when gen9 == false when inIo9 then wIoUnion9.append tv9
         }
-        if tt9 == ztypes.ztypetype.CLASS then {
+        if tt9 == ztypes.ztypetype.classType then {
             if isMono9 == false when gen9 == false then {
                 if inCli9 then {
                     if (cliClassIsComposite :symtab :ctx tid: tcl9) then {
@@ -13985,12 +14009,12 @@ emitMonos: function {
                 }
             }
         }
-        if tt9 == ztypes.ztypetype.VARIANT then {
+        if tt9 == ztypes.ztypetype.variantType then {
             if isMono9 == false when gen9 == false then {
                 if (definedInNonMain :symtab :ctx tid: tcl9) then wSysVar9.append tv9
             }
         }
-        if tt9 == ztypes.ztypetype.RECORD then {
+        if tt9 == ztypes.ztypetype.recordType then {
             if isMono9 == false when gen9 == false when inIo9 then wSysRec9.append tv9
         }
         isValMono9: false
@@ -14013,7 +14037,7 @@ emitMonos: function {
         if (originIsTid :symtab tid: tcl9 originTid: ctx.optionOriginTid) then isOptRes9 = true
         if (originIsTid :symtab tid: tcl9 originTid: ctx.resultOriginTid) then isOptRes9 = true
         if isOptRes9 then wOptRes9.append tv9
-        if isMono9 when tt9 == ztypes.ztypetype.UNION then {
+        if isMono9 when tt9 == ztypes.ztypetype.unionType then {
             ugu9: true
             if isOptRes9 then ugu9 = false
             if ugu9 when isValMono9 then ugu9 = false
@@ -14062,15 +14086,15 @@ emitMonos: function {
                 if colDst9 == 5 then wMap9.append tv9
             }
         }
-        if tt9 == ztypes.ztypetype.PROTOCOL then {
+        if tt9 == ztypes.ztypetype.protocolType then {
             if gen9 == false then {
                 if (definedInNonMain :symtab :ctx tid: tcl9) then wProto9.append tv9
             }
         }
         if isMono9 then {
             ugr9: false
-            if tt9 == ztypes.ztypetype.RECORD then ugr9 = true
-            if tt9 == ztypes.ztypetype.CLASS then ugr9 = true
+            if tt9 == ztypes.ztypetype.recordType then ugr9 = true
+            if tt9 == ztypes.ztypetype.classType then ugr9 = true
             if ugr9 when (isCollectionOriginTid
                 :ctx
                 originTid: (originTidOf :symtab tid: tcl9)
@@ -14348,7 +14372,7 @@ protoChildMethods: function {
             match (
                 cto
             ) case some then {
-                if (symtab.reg.typetypeOf typeId: cto) == ztypes.ztypetype.FUNCTION then {
+                if (symtab.reg.typetypeOf typeId: cto) == ztypes.ztypetype.functionType then {
                     cn0: tc.childName.copy
                     isSynth: false
                     if cn0.stringview == "create" then isSynth = true
@@ -14501,7 +14525,7 @@ emitProtocolImpl: function {
     vtableCtype: "\{protoBase}_vtable_t"
     wbase: "\{implBase}_\{label}"
     implIsClass: false
-    if (symtab.reg.typetypeOf typeId: implTid) == ztypes.ztypetype.CLASS then implIsClass = true
+    if (symtab.reg.typetypeOf typeId: implTid) == ztypes.ztypetype.classType then implIsClass = true
     mnames: (List String)
     mids: (List u64)
     protoChildMethods :symtab tid: protoTid names: mnames ids: mids
@@ -14627,7 +14651,7 @@ emitProtocolImplsForType: function {
     for pi < pn loop {
         ptid: ptids.get i: pi
         plabel: plabels.get i: pi
-        if (symtab.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.PROTOCOL then {
+        if (symtab.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.protocolType then {
             pname: typeNameOfReg9 :symtab tid: ptid
             (emitProtocolImpl
                 :symtab
@@ -14662,7 +14686,7 @@ conformanceLabelFor: function {symtab: zenv.ZSymbolTable implTid: u64 protoTid: 
 fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is {
     tid: stampIdOf :symtab :nid
     if tid == 0 then return 0
-    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.CLASS then return 0
+    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return 0
     omn9: monoOriginName :symtab :tid
     if omn9.length != 0 then return 0
     duo9: definedInUnitOf :symtab :tid
@@ -14827,7 +14851,7 @@ wrapperCreateArg: function {
         ) case namedoperation then {
             al: unitLabel9 o: a.name
             if al.stringview == label then {
-                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.PROTOCOL then {
+                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.protocolType then {
                     ab: dottedBaseAtom n: a.operation
                     abr: aliasResolve :ctx name: ab.stringview
                     abrC: ztypes.mangleVarName name: abr.stringview
@@ -14839,7 +14863,7 @@ wrapperCreateArg: function {
                     if (isPtrVar :ctx name: abr.stringview) then abpfx9 = "".string
                     return "\{abcb}_\{ablab}_create(\{abpfx9}\{abrC})"
                 }
-                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.CLASS then {
+                if (symtab.reg.typetypeOf typeId: prtid) == ztypes.ztypetype.classType then {
                     ab2: dottedBaseAtom n: a.operation
                     abr2: aliasResolve :ctx name: ab2.stringview
                     abr2C: ztypes.mangleVarName name: abr2.stringview
@@ -14866,7 +14890,7 @@ emitIoWrapperCreate: function {
     if wn.length == 0 then return "".string
     wid: resolveTypeIdByName :symtab :ctx name: wn.stringview
     if wid == 0 then return "".string
-    if (symtab.reg.typetypeOf typeId: wid) != ztypes.ztypetype.CLASS then return "".string
+    if (symtab.reg.typetypeOf typeId: wid) != ztypes.ztypetype.classType then return "".string
     cco: symtab.typing.childOf parentTypeId: wid name: "create"
     cid: 0.u64
     match (
@@ -15281,7 +15305,7 @@ emitUserIterCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDa
     ) case some then {
         if (childExists :symtab tid: cano9 name: "call") then iterId = cano9
     } case none then {}
-    if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.CLASS then return "".string
+    if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.classType then return "".string
     itorig9: monoOriginName :symtab tid: iterId
     if itorig9.length != 0 then return "".string
     itn9: typeNameOfReg9 :symtab tid: iterId
@@ -15335,14 +15359,14 @@ emitProtocolDispatch: function {
     if mn.stringview == "borrow" then return "".string
     if mn.stringview == "release" then return "".string
     rtid: dottedReceiverStampId :symtab callable: call.callable
-    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.PROTOCOL then {
+    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.protocolType then {
         rtn0: typeNameOfReg9 :symtab tid: rtid
         if rtn0.length > 0 then {
             brid: resolveTypeIdByName :symtab :ctx name: rtn0.stringview
-            if (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.PROTOCOL then rtid = brid
+            if (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.protocolType then rtid = brid
         }
     }
-    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.PROTOCOL then return "".string
+    if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.protocolType then return "".string
     recv: emitDottedReceiver :symtab :ctx callable: call.callable
     if recv.length == 0 then return "".string
     acc: ".".string
@@ -15438,7 +15462,7 @@ emitProtocolCreateCall: function {
     if mn.stringview == "borrow" then isCreate = true
     if (isCreate) == false then return "".string
     protoTid: resolveTypeIdByName :symtab :ctx name: bn.stringview
-    if (symtab.reg.typetypeOf typeId: protoTid) != ztypes.ztypetype.PROTOCOL then return "".string
+    if (symtab.reg.typetypeOf typeId: protoTid) != ztypes.ztypetype.protocolType then return "".string
     suffix: "create_owned".string
     if mn.stringview == "borrow" then suffix = "create".string
     aiter: call.arguments.iterate
@@ -15582,7 +15606,7 @@ emitRecordDefsIn: function {
                     isGenFnFD9: false
                     if fdid > 0 then {
                         if (isGenericType :symtab tid: fdid) then {
-                            if (symtab.reg.typetypeOf typeId: fdid) == ztypes.ztypetype.FUNCTION then {
+                            if (symtab.reg.typetypeOf typeId: fdid) == ztypes.ztypetype.functionType then {
                                 isGenFnFD9 = true
                             }
                         }
@@ -15784,8 +15808,8 @@ emitOneVariant: function {
                         if qrid > 0 then {
                             qtt: symtab.reg.typetypeOf typeId: qrid
                             isAgg: false
-                            if qtt == ztypes.ztypetype.RECORD then isAgg = true
-                            if qtt == ztypes.ztypetype.VARIANT then isAgg = true
+                            if qtt == ztypes.ztypetype.recordType then isAgg = true
+                            if qtt == ztypes.ztypetype.variantType then isAgg = true
                             if isAgg then {
                                 qrc: cnameOf tid: qrid name: qtn.stringview
                                 qe: "\{qrc}_eq(a.data.\{qname}, b.data.\{qname})"
@@ -15924,8 +15948,8 @@ lockFieldIsReftypePtr: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} ou
     ftid: resolveTypeIdByName :symtab :ctx name: ftn.stringview
     if ftid == 0 then ftid = fid
     tt: symtab.reg.typetypeOf typeId: ftid
-    if tt == ztypes.ztypetype.CLASS then return true
-    if tt == ztypes.ztypetype.UNION then return true
+    if tt == ztypes.ztypetype.classType then return true
+    if tt == ztypes.ztypetype.unionType then return true
     return false
 }
 
@@ -16012,7 +16036,7 @@ emitOneRecord: function {
         buf.append l5.stringview
     }
     skipEqR: false
-    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.CLASS then skipEqR = true
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType then skipEqR = true
     if (skipEqR) == false then {
     lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
     buf.append lq.stringview
@@ -16034,8 +16058,8 @@ emitOneRecord: function {
                 if frid > 0 then {
                     ftt: symtab.reg.typetypeOf typeId: frid
                     isAggF: false
-                    if ftt == ztypes.ztypetype.RECORD then isAggF = true
-                    if ftt == ztypes.ztypetype.VARIANT then isAggF = true
+                    if ftt == ztypes.ztypetype.recordType then isAggF = true
+                    if ftt == ztypes.ztypetype.variantType then isAggF = true
                     if isAggF then {
                         frc: cnameOf tid: frid name: ftn.stringview
                         fe: "\{frc}_eq(a.\{fkn}, b.\{fkn})"
@@ -16251,7 +16275,7 @@ emitClassMonoMethods: function {
                                 co8
                             ) case some then {
                                 cf8: co8
-                                if (symtab.reg.typetypeOf typeId: cf8) == ztypes.ztypetype.FUNCTION then {
+                                if (symtab.reg.typetypeOf typeId: cf8) == ztypes.ztypetype.functionType then {
                                     fn8: typeNameOfReg9 :symtab tid: cf8
                                     sg8: (fnSignature
                                         :symtab
@@ -16577,8 +16601,8 @@ emitExprFormYield: function {
     if ct9.length == 0 then ct9 = "int64_t".string
     tt9: symtab.reg.typetypeOf typeId: ltid9
     isRef9: false
-    if tt9 == ztypes.ztypetype.CLASS then isRef9 = true
-    if tt9 == ztypes.ztypetype.UNION then isRef9 = true
+    if tt9 == ztypes.ztypetype.classType then isRef9 = true
+    if tt9 == ztypes.ztypetype.unionType then isRef9 = true
     if isRef9 then {
         lp0: "\{ind}\{ct9}* __borrow_\{nm} = this->_resume_input;\n"
         buf.append lp0.stringview
@@ -16723,7 +16747,7 @@ emitOneMethod: function {
     ctx.aliases = (List NameVal)
     ctx.narrowBox = (List NameVal)
     encIsClass: false
-    if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.CLASS then encIsClass = true
+    if (symtab.reg.typetypeOf typeId: thisTid9) == ztypes.ztypetype.classType then encIsClass = true
     clsNm9: typeNameOfReg9 :symtab tid: thisTid9
     pi: 0.u64
     pn: pnames.length
