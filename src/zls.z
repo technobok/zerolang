@@ -1332,6 +1332,36 @@ typeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
     }
 }
 
+# typeKindTextOpt -- a type definition's kind word ("class", "variant", ...)
+# for hover, or "" when tid is 0 or names something other than a type def.
+typeKindTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
+    result9: "".string
+    if tid == 0 then return result9
+    match (
+        o
+    ) case some then {
+        tt9: o.reg.typetypeOf typeId: tid
+        match (
+            tt9
+        ) case CLASS then {
+            result9 = "class".string
+        } case RECORD then {
+            result9 = "record".string
+        } case VARIANT then {
+            result9 = "variant".string
+        } case UNION then {
+            result9 = "union".string
+        } case FACET then {
+            result9 = "facet".string
+        } case PROTOCOL then {
+            result9 = "protocol".string
+        } case ENUM then {
+            result9 = "enum".string
+        } else {}
+    } case none then {}
+    return result9
+}
+
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
 fnSigTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64 name: StringView} out String is {
@@ -1944,12 +1974,19 @@ navAnswer: function {
         if ud9 > 0 then sigTid9 = ud9
         body9: fnSigTextOpt o: snap.st tid: sigTid9 name: hname.stringview
         if body9.length == 0 then {
-            if t9 == 0 then return Value.nul
-            tn: typeNameOfOpt o: snap.st tid: t9
-            if tn.length == 0 then return Value.nul
-            body9 = hname.copy
-            body9.append ": "
-            body9.append tn.stringview
+            tk9: typeKindTextOpt o: snap.st tid: refTid
+            if tk9.length > 0 then {
+                body9 = hname.copy
+                body9.append ": "
+                body9.append tk9.stringview
+            } else {
+                if t9 == 0 then return Value.nul
+                tn: typeNameOfOpt o: snap.st tid: t9
+                if tn.length == 0 then return Value.nul
+                body9 = hname.copy
+                body9.append ": "
+                body9.append tn.stringview
+            }
         }
         # append the `#` doc block above the definition, if any (cross-file ok)
         dnd9: (defNodeOf
