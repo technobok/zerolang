@@ -1703,6 +1703,148 @@ docCommentForNode: function {snap: zcheck.CheckResult fsno: u32 defLine: u32} ou
     return out9
 }
 
+# unitFsnoByName -- the vfs dentry id of the file for the unit named
+# `name`, or 0 when no such unit file exists.
+unitFsnoByName: function {snap: zcheck.CheckResult name: StringView} out u32 is {
+    ids9: (List u32)
+    paths9: (List String)
+    snap.vfs.fileTable outIds: ids9 outPaths: paths9
+    result9: 0.u32
+    i9: 0.u64
+    n9: ids9.length
+    for i9 < n9 loop {
+        pth9: paths9.get i: i9
+        un9: zsource.unitNameOf path: pth9.stringview
+        if un9.stringview == name then result9 = ids9.get i: i9
+        i9 = i9 + 1
+    }
+    return result9
+}
+
+# unitGenericParamsOf -- a unitdef's generic parameters rendered " {T U}"
+# (its `T: base.generic` body declarations); "" when it has none.
+unitGenericParamsOf: function {ud: zast.Node} out String is {
+    out9: "".string
+    match (
+        ud
+    ) case unitdef then {
+        bit9: ud.body.iterate
+        for gm9: bit9 loop {
+            match (
+                gm9
+            ) case namedoperation then {
+                if (ztypecheck.isBareGenericParam op: gm9.operation) then {
+                    gpn9: optLabel o: gm9.name
+                    if out9.length == 0 then out9.append " {"
+                    if out9.length > 2 then out9.append " "
+                    out9.append gpn9.stringview
+                }
+            } else {}
+        }
+    } else {}
+    if out9.length > 0 then out9.append "}"
+    return out9
+}
+
+# unitGenericSuffix -- the " {T U}" suffix for a generic unit named `name`.
+unitGenericSuffix: function {prog: zast.Node name: StringView} out String is {
+    out9: "".string
+    match (
+        prog
+    ) case program then {
+        uit9: prog.units.iterate
+        for u9: uit9 loop {
+            match (
+                u9
+            ) case namedoperation then {
+                lb9: optLabel o: u9.name
+                if lb9.stringview == name then {
+                    gs9: unitGenericParamsOf ud: u9.operation
+                    if gs9.length > 0 then out9 = gs9
+                }
+            } else {}
+        }
+    } else {}
+    return out9
+}
+
+# unitDocComment -- a unit file's godoc-style header: the contiguous `#`
+# comment lines from the top of the file, up to the first blank line or
+# first definition. "" when the file has no header comment.
+unitDocComment: function {snap: zcheck.CheckResult fsno: u32} out String is {
+    out9: "".string
+    k9: 0.u64
+    for true loop {
+        lg9: snap.vfs.getline dentryid: fsno lineno: k9
+        stop9: false
+        match (
+            lg9
+        ) case some then {
+            lv9: lg9.stringview
+            tl9: lv9.trimStart
+            if tl9.startsWith "#" then {
+                st9: 1.u64
+                sb9: tl9.byteAt i: 1
+                match (
+                    sb9
+                ) case some then {
+                    if sb9 == 32 then st9 = 2
+                } case none then {}
+                ds9: tl9.substring from: st9 to: tl9.length
+                if out9.length > 0 then out9.appendByte b: 10
+                out9.append ds9
+            } else {
+                stop9 = true
+            }
+        } case none then {
+            stop9 = true
+        }
+        if stop9 then break
+        k9 = k9 + 1
+    }
+    return out9
+}
+
+# locationAtFileTop -- an LSP Location at line 0 of file `fsno` (a unit
+# reference has no member node to point at).
+locationAtFileTop: function {
+    snap: zcheck.CheckResult
+    fsno: u32
+    docRel: StringView
+    docUri: StringView
+    srcDir: StringView
+} out Value is {
+    if fsno == 0 then return Value.nul
+    pp9: snap.vfs.pathfromprovider dentryid: fsno
+    own9: pathMatches pv: pp9.stringview rel: docRel :srcDir
+    uri9: "".string
+    if own9 then {
+        uri9 = docUri.string
+    } else {
+        absp9: snap.vfs.pathfromproviderNative dentryid: fsno
+        if absp9.length == 0 then {
+            st0: 0.u64
+            if pp9.startsWith "/" then st0 = 1
+            rel0: pp9.substring from: st0 to: pp9.length
+            absp9 = zcheck.joinPath a: srcDir b: rel0
+        }
+        uri9 = pathToUri path: absp9.stringview
+    }
+    st9: newObj
+    st9.set key: "line".string value: (Value.intval 0.i64)
+    st9.set key: "character".string value: (Value.intval 0.i64)
+    en9: newObj
+    en9.set key: "line".string value: (Value.intval 0.i64)
+    en9.set key: "character".string value: (Value.intval 0.i64)
+    rg9: newObj
+    rg9.set key: "start".string value: (Value.object st9)
+    rg9.set key: "end".string value: (Value.object en9)
+    lo9: newObj
+    lo9.set key: "uri".string value: (Value.text uri9)
+    lo9.set key: "range".string value: (Value.object rg9)
+    return (Value.object lo9)
+}
+
 # navAnswer -- definition (1), hover (2), references (3) from the
 # last-good snapshot.
 navAnswer: function {
@@ -1767,7 +1909,30 @@ navAnswer: function {
     }
     if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
 
+    unitFsno9: 0.u32
+    if refVid == 0 when refTid == 0 then {
+        unitFsno9 = unitFsnoByName :snap name: hname.stringview
+    }
+
     if mode == 2 then {
+        if unitFsno9 > 0 then {
+            ub9: "unit ".string
+            ub9.append hname.stringview
+            ugs9: unitGenericSuffix prog: snap.prog name: hname.stringview
+            ub9.append ugs9.stringview
+            udoc9: unitDocComment :snap fsno: unitFsno9
+            if udoc9.length > 0 then {
+                ub9.appendByte b: 10
+                ub9.appendByte b: 10
+                ub9.append udoc9.stringview
+            }
+            umk9: newObj
+            umk9.set key: "kind".string value: (Value.text "plaintext".string)
+            umk9.set key: "value".string value: (Value.text ub9)
+            uho9: newObj
+            uho9.set key: "contents".string value: (Value.object umk9)
+            return (Value.object uho9)
+        }
         tnid: hnid
         t9: nodeTypeAt o: snap.st nid: tnid
         # a callable / unit-member auto-calls to its return type in value
@@ -1820,6 +1985,9 @@ navAnswer: function {
     }
 
     if mode == 1 then {
+        if unitFsno9 > 0 then {
+            return (locationAtFileTop :snap fsno: unitFsno9 :docRel :docUri :srcDir)
+        }
         dn9: defNodeOf o: snap.st prog: snap.prog :refVid :refTid :refOwner member: hname.stringview
         if dn9 == 0 then return Value.nul
         return (locationValue
