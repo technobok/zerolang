@@ -245,6 +245,15 @@ Parser: class {
     }
 
     # Build an error node located at `tok`.
+    # isReservedWordTok -- true when tok names a keyword or a future-reserved
+    # word (illegal where a declaration name is expected -> E0033).
+    isReservedWordTok: function {:this tok: zlexer.Token} out bool is {
+        sv9: tok.tokstr.stringview
+        kr9: zlexer.kwlookup sv9
+        if kr9.found then return true
+        return (zlexer.islookupReserved sv: sv9)
+    }
+
     mkError: function {:this tok: zlexer.Token code: zast.err msg: String.take} out Node is {
         return (Node.error (zast.ErrorData
             nodeid: this.nextId
@@ -2183,6 +2192,14 @@ Parser: class {
             closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
             match closeOpt case none then {
                 bad: lex.peek
+                if (this.isReservedWordTok tok: bad) then {
+                    params.append (this.mkError
+                        tok: bad
+                        code: zast.err.RESERVEDNAME
+                        msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                    )
+                    return params
+                }
                 params.append (this.mkError
                     tok: bad
                     code: zast.err.BADPARAMETERBLOCK
@@ -2501,6 +2518,14 @@ Parser: class {
             closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
             match closeOpt case none then {
                 bad: lex.peek
+                if (this.isReservedWordTok tok: bad) then {
+                    items.append (this.mkError
+                        tok: bad
+                        code: zast.err.RESERVEDNAME
+                        msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                    )
+                    return items
+                }
                 items.append (this.mkError
                     tok: bad
                     code: zast.err.BADOBJECTBLOCK
@@ -2702,6 +2727,11 @@ Parser: class {
             closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
             match closeOpt case none then {
                 bad: lex.peek
+                if (this.isReservedWordTok tok: bad) then return (this.mkError
+                    tok: bad
+                    code: zast.err.RESERVEDNAME
+                    msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                )
                 return (this.mkError
                     tok: bad
                     code: zast.err.BADUNIT
@@ -3072,6 +3102,11 @@ Parser: class {
                 eofOpt
             ) case none then {
                 bad: lx.peek
+                if (this.isReservedWordTok tok: bad) then return (this.mkError
+                    tok: bad
+                    code: zast.err.RESERVEDNAME
+                    msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
+                )
                 return (this.mkError
                     tok: bad
                     code: zast.err.BADUNIT
@@ -3177,9 +3212,7 @@ Parser: class {
         loadQueue: (List String)
         loadQueue.append mainUnitName.copy
         ceIt: coreExterns.iterate
-        for ce: ceIt loop {
-            enqueueUnit queue: loadQueue :defNames name: ce.copy
-        }
+        for ce: ceIt loop enqueueUnit queue: loadQueue :defNames name: ce.copy
         for loadQueue.length > 0 loop {
             name: loadQueue.pop
             already: defNames.contains item: name
@@ -3216,9 +3249,7 @@ Parser: class {
                 } else {
                     defNames.append name.copy
                     eIt: unitExterns.iterate
-                    for e: eIt loop {
-                        enqueueUnit queue: loadQueue :defNames name: e.copy
-                    }
+                    for e: eIt loop enqueueUnit queue: loadQueue :defNames name: e.copy
                 }
             }
         }
@@ -3291,9 +3322,7 @@ ewBindOneName: function {scope: List String item: Node} is {
 # members) before their bodies are walked.
 ewBindNames: function {scope: List String items: List Node} is {
     it: items.iterate
-    for el: it loop {
-        ewBindOneName :scope item: el
-    }
+    for el: it loop ewBindOneName :scope item: el
 }
 
 # Drop bindings introduced since depth `n` (block / scope exit).
@@ -3316,9 +3345,7 @@ ewWalkOpt: function {externs: List String scope: List String o: Option Node} is 
 # Walk a list of child nodes.
 ewWalkList: function {externs: List String scope: List String items: List Node} is {
     it: items.iterate
-    for el: it loop {
-        ewWalk :externs :scope node: el
-    }
+    for el: it loop ewWalk :externs :scope node: el
 }
 
 # A statement-block line. Block lines are `statementline` nodes wrapping
@@ -3402,9 +3429,7 @@ ewWalk: function {externs: List String scope: List String node: Node} is {
     } case statement then {
         base: scope.length
         sit: node.statements.iterate
-        for line: sit loop {
-            ewWalkLine :externs :scope :line
-        }
+        for line: sit loop ewWalkLine :externs :scope :line
         ewTruncate :scope n: base
     } case statementline then {
         ewWalk :externs :scope node: node.statementline
@@ -3427,9 +3452,7 @@ ewWalk: function {externs: List String scope: List String node: Node} is {
     } case forexpr then {
         base: scope.length
         fit: node.conditions.iterate
-        for fc: fit loop {
-            ewWalkForCond :externs :scope cond: fc
-        }
+        for fc: fit loop ewWalkForCond :externs :scope cond: fc
         ewWalkOpt :externs :scope o: node.body
         ewWalkList :externs :scope items: node.postconditions
         ewTruncate :scope n: base
