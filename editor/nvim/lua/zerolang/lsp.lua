@@ -13,7 +13,12 @@
 --     cmd = { "/path/to/zls", "--stdio" },
 --     systemDir = "/path/to/lib/system",
 --     srcDir = "/path/to/program",   -- optional; else auto-detected
+--     completion = false,            -- optional; disable built-in autotrigger
 --   })
+--
+-- By default setup() turns on Neovim's built-in LSP completion with autotrigger,
+-- so typing `.` opens a member-completion popup. Pass `completion = false` to
+-- leave completion to your own engine (nvim-cmp, blink.cmp, ...).
 --
 -- `systemDir` must point at the zerolang standard library (a real directory); it
 -- also falls back to $ZEROLANG_SYSTEM. `srcDir` is optional -- when omitted, zls
@@ -77,6 +82,14 @@ function M.setup(opts)
         cmd = cmd,
         root_dir = find_root(fname),
         init_options = init_options,
+        on_attach = function(client, bufnr)
+          -- Built-in completion with autotrigger on the server's `.` trigger,
+          -- so a member popup opens the moment you type the dot. Opt out with
+          -- `completion = false` if you drive completion from your own engine.
+          if opts.completion ~= false and client:supports_method("textDocument/completion") then
+            vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
+          end
+        end,
       }, { bufnr = args.buf })
     end,
   })

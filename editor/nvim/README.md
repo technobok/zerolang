@@ -76,6 +76,11 @@ relative to this checkout. Pass `cmd` / `systemDir` (or set `$ZEROLANG_SYSTEM`)
 to override; `srcDir` is optional and defaults to the workspace root `zls`
 detects.
 
+Completion autotriggers on `.`: typing a member access opens a popup of the
+value's fields and methods (or a unit's top-level symbols), driven by Neovim's
+built-in LSP completion. Pass `completion = false` to `setup()` to leave
+completion to your own engine (nvim-cmp, blink.cmp, …).
+
 One `zls` process serves a whole workspace: Neovim dedups clients by `root_dir`,
 so every `.z` buffer under the same root shares a single server, which checks
 the open buffers layered over the on-disk sources. Files in unrelated

@@ -518,6 +518,9 @@ Server: class {
         caps.set key: "definitionProvider".string value: (Value.boolean true)
         caps.set key: "hoverProvider".string value: (Value.boolean true)
         comp9: newObj
+        ctc9: newArr
+        ctc9.items.append (Value.text ".".string)
+        comp9.set key: "triggerCharacters".string value: (Value.array ctc9)
         caps.set key: "completionProvider".string value: (Value.object comp9)
         caps.set key: "documentFormattingProvider".string value: (Value.boolean true)
         caps.set key: "referencesProvider".string value: (Value.boolean true)
@@ -1910,9 +1913,7 @@ navAnswer: function {
     if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
 
     unitFsno9: 0.u32
-    if refVid == 0 when refTid == 0 then {
-        unitFsno9 = unitFsnoByName :snap name: hname.stringview
-    }
+    if refVid == 0 when refTid == 0 then unitFsno9 = unitFsnoByName :snap name: hname.stringview
 
     if mode == 2 then {
         if unitFsno9 > 0 then {
@@ -2506,6 +2507,156 @@ addParamLabel: function {pm: zast.Node sink: (Map String value: u8)} is {
     } else {}
 }
 
+# addScopeCompletions -- the enclosing def's params/locals, every loaded
+# unit's top-level defs and unit names, and keywords.
+addScopeCompletions: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    sink: (Map String value: u8)
+} is {
+    docUnit9: zsource.unitNameOf path: docRel
+    defStart9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u :sink
+    if defStart9 > 0 then {
+        sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+        sp.walk n: snap.prog
+        nr9: sp.rows.length
+        ri9: 0.u64
+        for ri9 < nr9 loop {
+            row9: sp.rows.get i: ri9
+            if row9.kind == 3 when row9.line >= defStart9 then {
+                if row9.line <= l1u then {
+                    fs9: snap.parser.fsnoForNode nodeid: row9.nodeid
+                    pp9: snap.vfs.pathfromprovider dentryid: fs9
+                    if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
+                        nm9: sp.names.get i: ri9
+                        addCand :sink name: nm9.stringview kind: 6
+                    }
+                }
+            }
+            ri9 = ri9 + 1
+        }
+    }
+    collectTopDefs prog: snap.prog :sink
+    addKeywords :sink
+}
+
+# addTypeMembers -- a type's fields (kind 5) and methods (kind 2), the
+# receiver excluded.
+addTypeMembers: function {o: (Option zenv.ZSymbolTable) tid: u64 sink: (Map String value: u8)} is {
+    match (
+        o
+    ) case some then {
+        bp9: o.typing.childIndex.get key: tid
+        match (
+            bp9
+        ) case some then {
+            with rit9: bp9.rows.iterate do for ri9: rit9 loop {
+                tc9: o.typing.typeChild.get i: ri9
+                cn9: tc9.childName.stringview
+                isRecv9: false
+                if cn9 == "this" then isRecv9 = true
+                {
+                    zt9: o.reg.typeById.get key: tid
+                    match (
+                        zt9
+                    ) case some then {
+                        if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
+                    } case none then {}
+                }
+                if (isRecv9) == false then {
+                    k9: 5.u8
+                    cg9: o.typing.childTypeById.get key: tc9.childNameId
+                    match (
+                        cg9
+                    ) case some then {
+                        if (o.reg.typetypeOf typeId: cg9) == ztypes.ztypetype.FUNCTION then k9 = 2
+                    } case none then {}
+                    addCand :sink name: cn9 kind: k9
+                }
+            }
+        } case none then {}
+    } case none then {}
+}
+
+# addUnitMembers -- the top-level symbols of the file-unit named `name`.
+addUnitMembers: function {prog: zast.Node name: StringView sink: (Map String value: u8)} is {
+    match (
+        prog
+    ) case program then {
+        uit9: prog.units.iterate
+        for u9: uit9 loop {
+            match (
+                u9
+            ) case namedoperation then {
+                lb9: optLabel o: u9.name
+                if lb9.stringview == name then collectUnitDefsIn ud: u9.operation :sink
+            } else {}
+        }
+    } else {}
+}
+
+# baseTypeInScope -- the type id of the local/binding `base` visible in the
+# enclosing def (kind-1 use or kind-3 binding rows in scope); 0
+# when not found.
+baseTypeInScope: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    defStart9: u32
+    l1u: u32
+    base: StringView
+} out u64 is {
+    result9: 0.u64
+    sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+    sp.walk n: snap.prog
+    nr9: sp.rows.length
+    ri9: 0.u64
+    for ri9 < nr9 loop {
+        row9: sp.rows.get i: ri9
+        kindok9: false
+        if row9.kind == 3 then kindok9 = true
+        if row9.kind == 1 then kindok9 = true
+        if kindok9 when row9.line >= defStart9 then {
+            if row9.line <= l1u then {
+                nm9: sp.names.get i: ri9
+                if nm9.stringview == base then {
+                    fs9: snap.parser.fsnoForNode nodeid: row9.nodeid
+                    pp9: snap.vfs.pathfromprovider dentryid: fs9
+                    if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
+                        tt9: nodeTypeAt o: snap.st nid: row9.nodeid.u64
+                        if tt9 > 0 then result9 = tt9
+                    }
+                }
+            }
+        }
+        ri9 = ri9 + 1
+    }
+    return result9
+}
+
+# addMemberCompletions -- members of the base expression before a `.`: a
+# unit's symbols, or a value's type members.
+addMemberCompletions: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    base: StringView
+    sink: (Map String value: u8)
+} is {
+    if (unitFsnoByName :snap name: base) > 0 then {
+        addUnitMembers prog: snap.prog name: base :sink
+    } else {
+        docUnit9: zsource.unitNameOf path: docRel
+        throwaway9: (Map String value: u8)
+        ds9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u sink: throwaway9
+        bt9: baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u :base
+        if bt9 > 0 then addTypeMembers o: snap.st tid: bt9 :sink
+    }
+}
+
 # completionAnswer -- scope-based completion from the last-good
 # snapshot: the enclosing definition's params and preceding bindings,
 # every loaded unit's top-level defs and unit names, and keywords --
@@ -2540,42 +2691,44 @@ completionAnswer: function {
         }
         ps9 = ps9 - 1
     }
-    # member position: a '.' immediately before the prefix
+    cands: (Map String value: u8)
+    memberMode9: false
+    # member position: a '.' before the prefix -> complete the base's members
     if ps9 > 0 then {
         pb9: ltv.byteAt i: ps9 - 1
         match (
             pb9
         ) case some then {
-            if pb9 == 46 then return (Value.array arr)
+            if pb9 == 46 then {
+                memberMode9 = true
+                be9: ps9 - 1
+                bs9: be9
+                for bs9 > 0 loop {
+                    bb9: ltv.byteAt i: bs9 - 1
+                    match (
+                        bb9
+                    ) case some then {
+                        if (isIdentByte b: bb9) == false then break
+                    } case none then {
+                        break
+                    }
+                    bs9 = bs9 - 1
+                }
+                base9: (ltv.substring from: bs9 to: be9).string
+                (addMemberCompletions
+                    :snap
+                    :docRel
+                    :srcDir
+                    :l1u
+                    base: base9.stringview
+                    sink: cands
+                )
+            }
         } case none then {}
     }
     prefix9: (ltv.substring from: ps9 to: cur9).string
 
-    cands: (Map String value: u8)
-    docUnit9: zsource.unitNameOf path: docRel
-    defStart9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u sink: cands
-    if defStart9 > 0 then {
-        sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
-        sp.walk n: snap.prog
-        nr9: sp.rows.length
-        ri9: 0.u64
-        for ri9 < nr9 loop {
-            row9: sp.rows.get i: ri9
-            if row9.kind == 3 when row9.line >= defStart9 then {
-                if row9.line <= l1u then {
-                    fs9: snap.parser.fsnoForNode nodeid: row9.nodeid
-                    pp9: snap.vfs.pathfromprovider dentryid: fs9
-                    if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
-                        nm9: sp.names.get i: ri9
-                        addCand sink: cands name: nm9.stringview kind: 6
-                    }
-                }
-            }
-            ri9 = ri9 + 1
-        }
-    }
-    collectTopDefs prog: snap.prog sink: cands
-    addKeywords sink: cands
+    if (memberMode9) == false then addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
 
     labels9: (List String)
     with cit9: cands.iterateItems do for ce9: cit9 loop {
