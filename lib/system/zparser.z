@@ -28,11 +28,11 @@ chunkkind: data {
 } out u8
 
 chunkKindOf: function {tt: zlexer.TT} out u8 is {
-    match tt case STRMID then {
+    match tt case strMidTok then {
         return chunkkind.strmid
-    } case STRCHR then {
+    } case strChrTok then {
         return chunkkind.strchr
-    } case EOL then {
+    } case eolTok then {
         return chunkkind.eol
     } else {
         return 0
@@ -42,11 +42,11 @@ chunkKindOf: function {tt: zlexer.TT} out u8 is {
 # True for the token types that contribute literal text to a string
 # (a coalesced run, an escaped char, or an embedded newline).
 isStrChunkTok: function {tt: zlexer.TT} out bool is {
-    match tt case STRMID then {
+    match tt case strMidTok then {
         return true
-    } case STRCHR then {
+    } case strChrTok then {
         return true
-    } case EOL then {
+    } case eolTok then {
         return true
     } else {
         return false
@@ -120,19 +120,19 @@ chunkStartsWith: function {n: Node p: StringView} out bool is {
 # rejected inside an object body -- such a type must be defined at unit
 # level and referenced by name.
 isInlineTypedefTok: function {tt: zlexer.TT} out bool is {
-    match tt case RECORD then {
+    match tt case recordTok then {
         return true
-    } case CLASS then {
+    } case classTok then {
         return true
-    } case VARIANT then {
+    } case variantTok then {
         return true
-    } case UNION then {
+    } case unionTok then {
         return true
-    } case PROTOCOL then {
+    } case protocolTok then {
         return true
-    } case FACET then {
+    } case facetTok then {
         return true
-    } case DATA then {
+    } case dataTok then {
         return true
     } else {
         return false
@@ -311,9 +311,9 @@ Parser: class {
     # (LABELPRE), which forces a single-path operation to parse as a call.
     tokIsLabel: function {tok: zlexer.Token} out bool is {
         tt: tok.toktype
-        match tt case LABEL then {
+        match tt case labelTok then {
             return true
-        } case LABELPRE then {
+        } case labelPreTok then {
             return true
         } else {
             return false
@@ -323,11 +323,11 @@ Parser: class {
     # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG)
     atomLookahead: function {:this lex: zlexer.Lexer} out bool is {
         t: lex.peek
-        match t.toktype case PARENOPEN then {
+        match t.toktype case parenOpenTok then {
             return true
-        } case REFID then {
+        } case refIdTok then {
             return true
-        } case STRBEG then {
+        } case strBegTok then {
             return true
         } else {
             return false
@@ -340,11 +340,11 @@ Parser: class {
     # so the else arm is unreachable (guarded with an error node).
     parseAtom: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
-        match t.toktype case PARENOPEN then {
+        match t.toktype case parenOpenTok then {
             return (this.parseAtomExpr :lex)
-        } case REFID then {
+        } case refIdTok then {
             return (this.parseAtomId :lex)
-        } case STRBEG then {
+        } case strBegTok then {
             return (this.parseAtomString :lex)
         } else {
             return (this.mkError tok: t code: zast.err.badReference msg: "Expected an atom".string)
@@ -353,7 +353,7 @@ Parser: class {
 
     # parseAtomId -> id
     parseAtomId: function {:this lex: zlexer.Lexer} out Node is {
-        r: lex.accept tt: zlexer.TT.REFID
+        r: lex.accept tt: zlexer.TT.refIdTok
         match r case some then {
             return (Node.atomid (zast.AtomIdData
                 nodeid: this.nextId
@@ -395,7 +395,7 @@ Parser: class {
         nIsErr: this.isError :node
         if nIsErr then return node
         nx: lex.peek
-        nxIsDot: nx.toktype == zlexer.TT.DOT
+        nxIsDot: nx.toktype == zlexer.TT.dotTok
         if nxIsDot then {
             return (this.parsePathTail :lex parent: node startLine: sLine startCol: sCol)
         }
@@ -407,11 +407,11 @@ Parser: class {
     # reassigning an outer-scope binding) keeps each owned `parent`
     # local to its call.
     parsePathTail: function {:this lex: zlexer.Lexer parent: Node.take startLine: u32 startCol: u32} out Node is {
-        dotOpt: lex.accept tt: zlexer.TT.DOT
+        dotOpt: lex.accept tt: zlexer.TT.dotTok
         match dotOpt case none then {
             return parent
         } case some then {
-            idOpt: lex.accept tt: zlexer.TT.REFID
+            idOpt: lex.accept tt: zlexer.TT.refIdTok
             match idOpt case some then {
                 child: Node.atomid (zast.AtomIdData
                     nodeid: this.nextId
@@ -455,7 +455,7 @@ Parser: class {
     # Expression node (bare), or an error.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out Node is {
         firstTok: lex.peek
-        openOpt: lex.accept tt: zlexer.TT.PARENOPEN
+        openOpt: lex.accept tt: zlexer.TT.parenOpenTok
         match openOpt case none then {
             return (this.mkError
                 tok: firstTok
@@ -472,7 +472,7 @@ Parser: class {
                 return expr
             }
             lex.setFilterEol enabled: prevFilter
-            closeOpt: lex.accept tt: zlexer.TT.PARENCLOSE
+            closeOpt: lex.accept tt: zlexer.TT.parenCloseTok
             match closeOpt case some then {
                 return expr
             } case none then {
@@ -501,7 +501,7 @@ Parser: class {
         for true loop {
             t: lex.peek
             tt: t.toktype
-            if tt == zlexer.TT.STREND then {
+            if tt == zlexer.TT.strEndTok then {
                 same: t.tokstr.stringview == fDelim.stringview
                 if same then {
                     lex.advance
@@ -513,10 +513,10 @@ Parser: class {
                         msg: "Unmatched string literal delimiter".string
                     )
                 }
-            } else if tt == zlexer.TT.STREXPRBEG then {
+            } else if tt == zlexer.TT.strExprBegTok then {
                 lex.advance
                 bt: lex.peek
-                if bt.toktype != zlexer.TT.BRACEOPEN then {
+                if bt.toktype != zlexer.TT.braceOpenTok then {
                     return (this.mkError
                         tok: bt
                         code: zast.err.badString
@@ -531,7 +531,7 @@ Parser: class {
                     if eErr then return expr
                     parts.append expr
                     ct: lex.peek
-                    if ct.toktype != zlexer.TT.BRACECLOSE then {
+                    if ct.toktype != zlexer.TT.braceCloseTok then {
                         return (this.mkError
                             tok: ct
                             code: zast.err.badString
@@ -906,7 +906,7 @@ Parser: class {
         }
         argNames: (List String)
         for true loop {
-            lblOpt: lex.accept tt: zlexer.TT.LABEL
+            lblOpt: lex.accept tt: zlexer.TT.labelTok
             match lblOpt case some then {
                 nm: lblOpt.tokstr.copy
                 noName: lblOpt.tokstr.copy
@@ -938,7 +938,7 @@ Parser: class {
                 args.append no
                 argNames.append nm
             } case none then {
-                lblOpt2: lex.accept tt: zlexer.TT.LABELPRE
+                lblOpt2: lex.accept tt: zlexer.TT.labelPreTok
                 match lblOpt2 case some then {
                     nm: lblOpt2.tokstr.copy
                     lvName: lblOpt2.tokstr.copy
@@ -1062,19 +1062,19 @@ Parser: class {
     # begin with a keyword; everything else begins with an atom.
     exprLookahead: function {:this lex: zlexer.Lexer} out bool is {
         t: lex.peek
-        match t.toktype case IF then {
+        match t.toktype case ifTok then {
             return true
-        } case FOR then {
+        } case forTok then {
             return true
-        } case MATCH then {
+        } case matchTok then {
             return true
-        } case DATA then {
+        } case dataTok then {
             return true
-        } case WITH then {
+        } case withTok then {
             return true
-        } case BRACEOPEN then {
+        } case braceOpenTok then {
             return true
-        } case YIELD then {
+        } case yieldTok then {
             return true
         } else {
             return (this.atomLookahead :lex)
@@ -1100,9 +1100,9 @@ Parser: class {
     # True for a block-line separator token (EOL or ';').
     atSeparator: function {:this lex: zlexer.Lexer} out bool is {
         t: lex.peek
-        match t.toktype case EOL then {
+        match t.toktype case eolTok then {
             return true
-        } case SEMICOLON then {
+        } case semicolonTok then {
             return true
         } else {
             return false
@@ -1113,16 +1113,16 @@ Parser: class {
     # separator; only observable while EOL filtering is off).
     atEol: function {:this lex: zlexer.Lexer} out bool is {
         t: lex.peek
-        return (t.toktype == zlexer.TT.EOL)
+        return (t.toktype == zlexer.TT.eolTok)
     }
 
     # Does a block line start at the current token? (a binding label, a
     # label shorthand, or an expression)
     blocklineLookahead: function {:this lex: zlexer.Lexer} out bool is {
         t: lex.peek
-        match t.toktype case LABEL then {
+        match t.toktype case labelTok then {
             return true
-        } case LABELPRE then {
+        } case labelPreTok then {
             return true
         } else {
             return (this.exprLookahead :lex)
@@ -1138,7 +1138,7 @@ Parser: class {
         sLine: startTok.lineno
         sCol: startTok.colno
         tt: startTok.toktype
-        if tt == zlexer.TT.LABELPRE then {
+        if tt == zlexer.TT.labelPreTok then {
             lblTok: lex.acceptAny
             lvName: lblTok.tokstr.copy
             asgnName: lblTok.tokstr.copy
@@ -1157,10 +1157,10 @@ Parser: class {
                 statementline: asgn)
             )
         }
-        if tt == zlexer.TT.LABEL then {
+        if tt == zlexer.TT.labelTok then {
             lblTok: lex.acceptAny
             nm: lblTok.tokstr.copy
-            lex.accept tt: zlexer.TT.EOL
+            lex.accept tt: zlexer.TT.eolTok
             eLook: this.exprLookahead :lex
             if eLook then {
                 expr: this.parseExpression :lex
@@ -1207,7 +1207,7 @@ Parser: class {
         startTok: lex.peek
         sLine: startTok.lineno
         sCol: startTok.colno
-        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        openOpt: lex.accept tt: zlexer.TT.braceOpenTok
         match openOpt case some then {
             prevFilter: lex.filterEolState
             lex.setFilterEol enabled: false
@@ -1228,7 +1228,7 @@ Parser: class {
                 }
             }
             lex.setFilterEol enabled: prevFilter
-            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            closeOpt: lex.accept tt: zlexer.TT.braceCloseTok
             match closeOpt case some then {
                 return (Node.statement (zast.StatementData
                     nodeid: this.nextId
@@ -1277,7 +1277,7 @@ Parser: class {
         t: lex.peek
         sLine: t.lineno
         sCol: t.colno
-        if t.toktype == zlexer.TT.BRACEOPEN then return (this.acceptBlock :lex)
+        if t.toktype == zlexer.TT.braceOpenTok then return (this.acceptBlock :lex)
         eLook: this.exprLookahead :lex
         if eLook then {
             expr: this.parseExpression :lex
@@ -1314,9 +1314,9 @@ Parser: class {
     ifClausesTail: function {:this lex: zlexer.Lexer clauses: (List Node).take conditions: (List Node).take clauseLine: u32 clauseCol: u32 ifLine: u32 ifCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
-        if tt == zlexer.TT.WHEN then {
+        if tt == zlexer.TT.whenTok then {
             lex.advance
-            lex.accept tt: zlexer.TT.EOL
+            lex.accept tt: zlexer.TT.eolTok
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
@@ -1343,7 +1343,7 @@ Parser: class {
                 :ifCol
             )
         }
-        if tt == zlexer.TT.THEN then {
+        if tt == zlexer.TT.thenTok then {
             lex.advance
             stmt: this.acceptPrimaryExpression :lex
             sErr: this.isError node: stmt
@@ -1375,7 +1375,7 @@ Parser: class {
                 msg: "Expected then after conditions".string
             )
         }
-        if tt == zlexer.TT.ELSE then {
+        if tt == zlexer.TT.elseTok then {
             lex.advance
             estmt: this.acceptPrimaryExpression :lex
             eErr: this.isError node: estmt
@@ -1403,7 +1403,7 @@ Parser: class {
         startTok: lex.peek
         ifLine: startTok.lineno
         ifCol: startTok.colno
-        ifOpt: lex.accept tt: zlexer.TT.IF
+        ifOpt: lex.accept tt: zlexer.TT.ifTok
         match ifOpt case none then {
             return (this.mkError
                 tok: startTok
@@ -1451,13 +1451,13 @@ Parser: class {
     # ends the clauses and parses an optional `else`.
     caseClausesTail: function {:this lex: zlexer.Lexer subject: Node.take clauses: (List Node).take mLine: u32 mCol: u32} out Node is {
         clStart: lex.peek
-        isCase: clStart.toktype == zlexer.TT.CASE
+        isCase: clStart.toktype == zlexer.TT.caseTok
         if isCase then {
             cLine: clStart.lineno
             cCol: clStart.colno
             lex.advance
-            lex.accept tt: zlexer.TT.EOL
-            idOpt: lex.accept tt: zlexer.TT.REFID
+            lex.accept tt: zlexer.TT.eolTok
+            idOpt: lex.accept tt: zlexer.TT.refIdTok
             match idOpt case some then {
                 nm: idOpt.tokstr.copy
                 armNode: Node.atomid (zast.AtomIdData
@@ -1467,7 +1467,7 @@ Parser: class {
                     name: idOpt.tokstr.copy
                 )
                 tk: lex.peek
-                isThen: tk.toktype == zlexer.TT.THEN
+                isThen: tk.toktype == zlexer.TT.thenTok
                 if isThen then {
                     lex.advance
                     body: this.acceptPrimaryExpression :lex
@@ -1500,7 +1500,7 @@ Parser: class {
                 )
             }
         }
-        elseOpt: lex.accept tt: zlexer.TT.ELSE
+        elseOpt: lex.accept tt: zlexer.TT.elseTok
         match elseOpt case some then {
             estmt: this.acceptPrimaryExpression :lex
             eErr: this.isError node: estmt
@@ -1536,7 +1536,7 @@ Parser: class {
         startTok: lex.peek
         mLine: startTok.lineno
         mCol: startTok.colno
-        matchOpt: lex.accept tt: zlexer.TT.MATCH
+        matchOpt: lex.accept tt: zlexer.TT.matchTok
         match matchOpt case none then {
             return (this.mkError
                 tok: startTok
@@ -1544,7 +1544,7 @@ Parser: class {
                 msg: "Expected match".string
             )
         } case some then {
-            lex.accept tt: zlexer.TT.ON
+            lex.accept tt: zlexer.TT.onTok
             spaths: this.operationPaths :lex
             sn: spaths.length
             if sn == 0 then {
@@ -1572,9 +1572,9 @@ Parser: class {
     forClausesTail: function {:this lex: zlexer.Lexer conditions: (List Node).take postconditions: (List Node).take body: (Option Node).take hasBody: bool bound: bool forLine: u32 forCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
-        if tt == zlexer.TT.WHILE then {
+        if tt == zlexer.TT.whileTok then {
             lex.advance
-            lex.accept tt: zlexer.TT.EOL
+            lex.accept tt: zlexer.TT.eolTok
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
@@ -1611,7 +1611,7 @@ Parser: class {
                 :forCol
             )
         }
-        if tt == zlexer.TT.LABEL then {
+        if tt == zlexer.TT.labelTok then {
             if hasBody then {
                 return (this.mkError
                     tok: t
@@ -1628,7 +1628,7 @@ Parser: class {
             }
             lblTok: lex.acceptAny
             nm: lblTok.tokstr.copy
-            lex.accept tt: zlexer.TT.EOL
+            lex.accept tt: zlexer.TT.eolTok
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
@@ -1660,7 +1660,7 @@ Parser: class {
                 :forCol
             )
         }
-        if tt == zlexer.TT.LOOP then {
+        if tt == zlexer.TT.loopTok then {
             if hasBody then {
                 bad: lex.acceptAny
                 return (this.mkError tok: bad code: zast.err.badFor msg: "Duplicate loop".string)
@@ -1719,7 +1719,7 @@ Parser: class {
         startTok: lex.peek
         forLine: startTok.lineno
         forCol: startTok.colno
-        forOpt: lex.accept tt: zlexer.TT.FOR
+        forOpt: lex.accept tt: zlexer.TT.forTok
         match forOpt case none then {
             return (this.mkError
                 tok: startTok
@@ -1769,7 +1769,7 @@ Parser: class {
         startTok: lex.peek
         wLine: startTok.lineno
         wCol: startTok.colno
-        wOpt: lex.accept tt: zlexer.TT.WITH
+        wOpt: lex.accept tt: zlexer.TT.withTok
         match wOpt case none then {
             return (this.mkError
                 tok: startTok
@@ -1778,7 +1778,7 @@ Parser: class {
             )
         } case some then {
             t: lex.peek
-            isLabel: t.toktype == zlexer.TT.LABEL
+            isLabel: t.toktype == zlexer.TT.labelTok
             if isLabel then {
                 lblTok: lex.acceptAny
                 nm: lblTok.tokstr.copy
@@ -1796,7 +1796,7 @@ Parser: class {
                 oErr: this.isError node: op
                 if oErr then return op
                 value: this.wrapExpression inner: op
-                doOpt: lex.accept tt: zlexer.TT.DO
+                doOpt: lex.accept tt: zlexer.TT.doTok
                 match doOpt case none then {
                     bad: lex.peek
                     return (this.mkError
@@ -1836,7 +1836,7 @@ Parser: class {
         startTok: lex.peek
         dLine: startTok.lineno
         dCol: startTok.colno
-        dOpt: lex.accept tt: zlexer.TT.DATA
+        dOpt: lex.accept tt: zlexer.TT.dataTok
         match dOpt case none then {
             return (this.mkError
                 tok: startTok
@@ -1844,8 +1844,8 @@ Parser: class {
                 msg: "Expected data".string
             )
         } case some then {
-            lex.accept tt: zlexer.TT.IS
-            openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+            lex.accept tt: zlexer.TT.isTok
+            openOpt: lex.accept tt: zlexer.TT.braceOpenTok
             match openOpt case none then {
                 bad: lex.acceptAny
                 return (this.mkError
@@ -1859,7 +1859,7 @@ Parser: class {
                 for true loop {
                     et: lex.peek
                     ett: et.toktype
-                    if ett == zlexer.TT.LABELPRE then {
+                    if ett == zlexer.TT.labelPreTok then {
                         lblTok: lex.acceptAny
                         checkName: lblTok.tokstr.copy
                         dup: datanames.contains item: checkName
@@ -1883,7 +1883,7 @@ Parser: class {
                         )
                         elements.append no
                     } else {
-                        isLbl: ett == zlexer.TT.LABEL
+                        isLbl: ett == zlexer.TT.labelTok
                         if isLbl then {
                             lblTok: lex.acceptAny
                             checkName: lblTok.tokstr.copy
@@ -1938,7 +1938,7 @@ Parser: class {
                         }
                     }
                 }
-                closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+                closeOpt: lex.accept tt: zlexer.TT.braceCloseTok
                 match closeOpt case none then {
                     bad: lex.acceptAny
                     return (this.mkError
@@ -1955,7 +1955,7 @@ Parser: class {
                             msg: "data definition must have at least one element".string
                         )
                     }
-                    outOpt: lex.accept tt: zlexer.TT.OUT
+                    outOpt: lex.accept tt: zlexer.TT.outTok
                     match outOpt case some then {
                         la: this.atomLookahead :lex
                         if la then {
@@ -1997,7 +1997,7 @@ Parser: class {
     # later by the typechecker.
     acceptYieldExpression: function {:this lex: zlexer.Lexer} out Node is {
         startTok: lex.peek
-        yOpt: lex.accept tt: zlexer.TT.YIELD
+        yOpt: lex.accept tt: zlexer.TT.yieldTok
         match yOpt case none then {
             return (this.mkError
                 tok: startTok
@@ -2107,7 +2107,7 @@ Parser: class {
     acceptParamBlock: function {:this lex: zlexer.Lexer} out List Node is {
         params: (List Node)
         names: (List String)
-        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        openOpt: lex.accept tt: zlexer.TT.braceOpenTok
         match openOpt case none then {
             bad: lex.peek
             params.append (this.mkError
@@ -2118,10 +2118,10 @@ Parser: class {
             return params
         } case some then {
             for true loop {
-                lex.accept tt: zlexer.TT.EOL
+                lex.accept tt: zlexer.TT.eolTok
                 pk: lex.peek
                 pktt: pk.toktype
-                if pktt == zlexer.TT.LABELPRE then {
+                if pktt == zlexer.TT.labelPreTok then {
                     lblTok: lex.acceptAny
                     nm: lblTok.tokstr.copy
                     dup: names.contains item: nm
@@ -2145,7 +2145,7 @@ Parser: class {
                     )
                     params.append no
                 } else {
-                    isLbl: pktt == zlexer.TT.LABEL
+                    isLbl: pktt == zlexer.TT.labelTok
                     if isLbl then {
                         lblTok: lex.acceptAny
                         nm: lblTok.tokstr.copy
@@ -2189,7 +2189,7 @@ Parser: class {
                     }
                 }
             }
-            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            closeOpt: lex.accept tt: zlexer.TT.braceCloseTok
             match closeOpt case none then {
                 bad: lex.peek
                 if (this.isReservedWordTok tok: bad) then {
@@ -2220,7 +2220,7 @@ Parser: class {
     functionClausesTail: function {:this lex: zlexer.Lexer parameters: (List Node).take asItems: (List Node).take returntype: (Option Node).take body: (Option Node).take gotIn: bool hasOut: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
-        if tt == zlexer.TT.OUT then {
+        if tt == zlexer.TT.outTok then {
             if hasOut then {
                 return (this.mkError tok: t code: zast.err.badArgument msg: "Duplicate out".string)
             }
@@ -2253,12 +2253,12 @@ Parser: class {
                 )
             }
         }
-        if tt == zlexer.TT.IS then {
+        if tt == zlexer.TT.isTok then {
             if hasIs then {
                 return (this.mkError tok: t code: zast.err.badArgument msg: "Duplicate is".string)
             }
             lex.advance
-            natOpt: lex.accept tt: zlexer.TT.NATIVE
+            natOpt: lex.accept tt: zlexer.TT.nativeTok
             match natOpt case some then {
                 return (this.functionClausesTail
                     :lex
@@ -2294,7 +2294,7 @@ Parser: class {
                 )
             }
         }
-        if tt == zlexer.TT.AS then {
+        if tt == zlexer.TT.asTok then {
             if hasAs then {
                 return (this.mkError tok: t code: zast.err.badArgument msg: "Duplicate as".string)
             }
@@ -2322,7 +2322,7 @@ Parser: class {
                 :startCol
             )
         }
-        if tt == zlexer.TT.IN then {
+        if tt == zlexer.TT.inTok then {
             if gotIn then {
                 return (this.mkError tok: t code: zast.err.badArgument msg: "Duplicate in".string)
             }
@@ -2369,7 +2369,7 @@ Parser: class {
         parameters: (List Node)
         asItems: (List Node)
         pk: lex.peek
-        isBrace: pk.toktype == zlexer.TT.BRACEOPEN
+        isBrace: pk.toktype == zlexer.TT.braceOpenTok
         if isBrace then {
             pb: this.acceptParamBlock :lex
             pn: pb.length
@@ -2427,7 +2427,7 @@ Parser: class {
     # Option boundary: none when there is no `function` keyword.
     acceptFunctionDefinition: function {:this lex: zlexer.Lexer} out Option Node is {
         startTok: lex.peek
-        isFunc: startTok.toktype == zlexer.TT.FUNCTION
+        isFunc: startTok.toktype == zlexer.TT.functionTok
         if isFunc then return (Option.some (this.parseFunctionDefinition :lex :startTok))
         return (Option.none Node)
     }
@@ -2443,7 +2443,7 @@ Parser: class {
     getObjectBody: function {:this lex: zlexer.Lexer} out List Node is {
         items: (List Node)
         names: (List String)
-        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        openOpt: lex.accept tt: zlexer.TT.braceOpenTok
         match openOpt case none then {
             bad: lex.peek
             items.append (this.mkError
@@ -2457,7 +2457,7 @@ Parser: class {
                 for (this.atEol :lex) loop lex.advance
                 pk: lex.peek
                 pktt: pk.toktype
-                if pktt == zlexer.TT.LABELPRE then {
+                if pktt == zlexer.TT.labelPreTok then {
                     lblTok: lex.acceptAny
                     nm: lblTok.tokstr.copy
                     dup: names.contains item: nm
@@ -2481,7 +2481,7 @@ Parser: class {
                     )
                     items.append no
                 } else {
-                    isLbl: pktt == zlexer.TT.LABEL
+                    isLbl: pktt == zlexer.TT.labelTok
                     if isLbl then {
                         lblTok: lex.acceptAny
                         nm: lblTok.tokstr.copy
@@ -2496,7 +2496,7 @@ Parser: class {
                         }
                         names.append nm
                         opName: lblTok.tokstr.copy
-                        lex.accept tt: zlexer.TT.EOL
+                        lex.accept tt: zlexer.TT.eolTok
                         member: this.objectBodyMember :lex
                         mErr: this.isError node: member
                         if mErr then {
@@ -2515,7 +2515,7 @@ Parser: class {
                     }
                 }
             }
-            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            closeOpt: lex.accept tt: zlexer.TT.braceCloseTok
             match closeOpt case none then {
                 bad: lex.peek
                 if (this.isReservedWordTok tok: bad) then {
@@ -2544,8 +2544,8 @@ Parser: class {
     objectBodyMember: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
         tt: t.toktype
-        if tt == zlexer.TT.FUNCTION then return (this.parseFunctionDefinition :lex startTok: t)
-        if tt == zlexer.TT.UNIT then return (this.parseUnitDefinition :lex startTok: t)
+        if tt == zlexer.TT.functionTok then return (this.parseFunctionDefinition :lex startTok: t)
+        if tt == zlexer.TT.unitTok then return (this.parseUnitDefinition :lex startTok: t)
         inlineTypedef: isInlineTypedefTok :tt
         if inlineTypedef then {
             bad: lex.acceptAny
@@ -2575,33 +2575,33 @@ Parser: class {
     # error node.
     acceptTypeDefinition: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
-        match t.toktype case UNIT then {
+        match t.toktype case unitTok then {
             return (this.parseUnitDefinition :lex startTok: t)
-        } case FUNCTION then {
+        } case functionTok then {
             return (this.parseFunctionDefinition :lex startTok: t)
-        } case RECORD then {
+        } case recordTok then {
             return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.recordDef)
-        } case CLASS then {
+        } case classTok then {
             return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.classDef)
-        } case VARIANT then {
+        } case variantTok then {
             return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.variantDef)
-        } case UNION then {
+        } case unionTok then {
             return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.unionDef)
-        } case PROTOCOL then {
+        } case protocolTok then {
             return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.protocolDef)
-        } case FACET then {
+        } case facetTok then {
             return (this.parseItemDefinition :lex startTok: t kind: zast.nodetype.facetDef)
-        } case IF then {
+        } case ifTok then {
             ifn: this.acceptIfExpression :lex
             iErr: this.isError node: ifn
             if iErr then return ifn
             return (this.wrapExpression inner: ifn)
-        } case MATCH then {
+        } case matchTok then {
             mexpr: this.acceptMatchExpression :lex
             mErr: this.isError node: mexpr
             if mErr then return mexpr
             return (this.wrapExpression inner: mexpr)
-        } case DATA then {
+        } case dataTok then {
             dn: this.acceptDataDefinition :lex
             dErr: this.isError node: dn
             if dErr then return dn
@@ -2634,7 +2634,7 @@ Parser: class {
             for (this.atEol :lex) loop lex.advance
             pk: lex.peek
             pktt: pk.toktype
-            if pktt == zlexer.TT.LABELPRE then {
+            if pktt == zlexer.TT.labelPreTok then {
                 lblTok: lex.acceptAny
                 nm: lblTok.tokstr.copy
                 dup: names.contains item: nm
@@ -2659,7 +2659,7 @@ Parser: class {
                 )
                 body.append no
             } else {
-                isLbl: pktt == zlexer.TT.LABEL
+                isLbl: pktt == zlexer.TT.labelTok
                 if isLbl then {
                     lblTok: lex.acceptAny
                     nm: lblTok.tokstr.copy
@@ -2675,7 +2675,7 @@ Parser: class {
                     }
                     names.append nm
                     opName: lblTok.tokstr.copy
-                    lex.accept tt: zlexer.TT.EOL
+                    lex.accept tt: zlexer.TT.eolTok
                     lex.setFilterEol enabled: true
                     defNode: this.acceptTypeDefinition :lex
                     lex.setFilterEol enabled: false
@@ -2706,8 +2706,8 @@ Parser: class {
     # unitdef Node positioned at the keyword.
     parseUnitDefinition: function {:this lex: zlexer.Lexer startTok: zlexer.Token} out Node is {
         lex.advance
-        lex.accept tt: zlexer.TT.AS
-        openOpt: lex.accept tt: zlexer.TT.BRACEOPEN
+        lex.accept tt: zlexer.TT.asTok
+        openOpt: lex.accept tt: zlexer.TT.braceOpenTok
         match openOpt case none then {
             bad: lex.peek
             return (this.mkError
@@ -2724,7 +2724,7 @@ Parser: class {
                 if le then return last
                 body.append last
             }
-            closeOpt: lex.accept tt: zlexer.TT.BRACECLOSE
+            closeOpt: lex.accept tt: zlexer.TT.braceCloseTok
             match closeOpt case none then {
                 bad: lex.peek
                 if (this.isReservedWordTok tok: bad) then return (this.mkError
@@ -2777,7 +2777,7 @@ Parser: class {
     acceptItemBodiesTail: function {:this lex: zlexer.Lexer isItems: (List Node).take asItems: (List Node).take isNative: bool hasIs: bool hasAs: bool kind: zast.nodetype startLine: u32 startCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
-        if tt == zlexer.TT.IS then {
+        if tt == zlexer.TT.isTok then {
             if hasIs then {
                 return (this.mkError
                     tok: t
@@ -2793,7 +2793,7 @@ Parser: class {
                 )
             }
             lex.advance
-            natOpt: lex.accept tt: zlexer.TT.NATIVE
+            natOpt: lex.accept tt: zlexer.TT.nativeTok
             match natOpt case some then {
                 return (this.acceptItemBodiesTail
                     :lex
@@ -2828,7 +2828,7 @@ Parser: class {
                 )
             }
         }
-        if tt == zlexer.TT.NATIVE then {
+        if tt == zlexer.TT.nativeTok then {
             noBodyYet: true
             if hasIs then noBodyYet = false
             if isNative then noBodyYet = false
@@ -2847,7 +2847,7 @@ Parser: class {
                 )
             }
         }
-        if tt == zlexer.TT.AS then {
+        if tt == zlexer.TT.asTok then {
             if hasAs then {
                 return (this.mkError
                     tok: t
@@ -2876,7 +2876,7 @@ Parser: class {
                 :startCol
             )
         }
-        if tt == zlexer.TT.BRACEOPEN then {
+        if tt == zlexer.TT.braceOpenTok then {
             noBodyYet: true
             if hasIs then noBodyYet = false
             if isNative then noBodyYet = false
@@ -2925,37 +2925,37 @@ Parser: class {
 
     parseExpression: function {:this lex: zlexer.Lexer} out Node is {
         t: lex.peek
-        match t.toktype case IF then {
+        match t.toktype case ifTok then {
             ifn: this.acceptIfExpression :lex
             iErr: this.isError node: ifn
             if iErr then return ifn
             return (this.wrapExpression inner: ifn)
-        } case FOR then {
+        } case forTok then {
             forn: this.acceptForExpression :lex
             fErr: this.isError node: forn
             if fErr then return forn
             return (this.wrapExpression inner: forn)
-        } case MATCH then {
+        } case matchTok then {
             mexpr: this.acceptMatchExpression :lex
             mErr: this.isError node: mexpr
             if mErr then return mexpr
             return (this.wrapExpression inner: mexpr)
-        } case DATA then {
+        } case dataTok then {
             dn: this.acceptDataDefinition :lex
             dErr: this.isError node: dn
             if dErr then return dn
             return (this.wrapExpression inner: dn)
-        } case WITH then {
+        } case withTok then {
             wn: this.acceptWithExpression :lex
             wErr: this.isError node: wn
             if wErr then return wn
             return (this.wrapExpression inner: wn)
-        } case BRACEOPEN then {
+        } case braceOpenTok then {
             blk: this.acceptBareblock :lex
             bErr: this.isError node: blk
             if bErr then return blk
             return (this.wrapExpression inner: blk)
-        } case YIELD then {
+        } case yieldTok then {
             yn: this.acceptYieldExpression :lex
             yErr: this.isError node: yn
             if yErr then return yn
@@ -2970,14 +2970,14 @@ Parser: class {
                     msg: "Expected an expression".string
                 )
             }
-            eqOpt: lex.accept tt: zlexer.TT.EQUALS
+            eqOpt: lex.accept tt: zlexer.TT.equalsTok
             match eqOpt case some then {
                 ra: this.buildReassignment :paths :lex startLine: t.lineno startCol: t.colno
                 raErr: this.isError node: ra
                 if raErr then return ra
                 return (this.wrapExpression inner: ra)
             } case none then {
-                swOpt: lex.accept tt: zlexer.TT.SWAP
+                swOpt: lex.accept tt: zlexer.TT.swapTok
                 match swOpt case some then {
                     sw: this.buildSwap :paths :lex startLine: t.lineno startCol: t.colno
                     swErr: this.isError node: sw
@@ -3097,7 +3097,7 @@ Parser: class {
                 if le then return last
                 body.append last
             }
-            eofOpt: lx.accept tt: zlexer.TT.EOF
+            eofOpt: lx.accept tt: zlexer.TT.eofTok
             match (
                 eofOpt
             ) case none then {
