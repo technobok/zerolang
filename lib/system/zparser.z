@@ -115,6 +115,19 @@ chunkStartsWith: function {n: Node p: StringView} out bool is {
     return res
 }
 
+# True for the ownership/access marker names that cannot be declared as
+# type-body members (the language claims them in member position); the
+# visibility members `public:`/`private:` carve out the unit form.
+isReservedMemberName: function {name: StringView} out bool is {
+    if name == "lock" then return true
+    if name == "take" then return true
+    if name == "borrow" then return true
+    if name == "release" then return true
+    if name == "private" then return true
+    if name == "public" then return true
+    return false
+}
+
 # True for the keyword token types that open an inline type definition
 # (record / class / variant / union / protocol / facet / data). These are
 # rejected inside an object body -- such a type must be defined at unit
@@ -271,6 +284,16 @@ Parser: class {
     # True when `node` is an `error` arm (propagate malformed sub-results).
     isError: function {node: Node} out bool is {
         match node case error then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # True when `node` is a `unitdef` arm (the visibility members
+    # `public:` / `private:` declare one).
+    isUnitDef: function {node: Node} out bool is {
+        match node case unitdef then {
             return true
         } else {
             return false
@@ -2299,7 +2322,7 @@ Parser: class {
                 return (this.mkError tok: t code: zast.err.badArgument msg: "Duplicate as".string)
             }
             lex.advance
-            ab: this.getObjectBody :lex
+            ab: this.getObjectBody :lex typeBody: false
             an: ab.length
             if an > 0 then {
                 last: ab.pop
@@ -2440,7 +2463,7 @@ Parser: class {
     # practice; the EOL skip is kept for the filtering-off case. Returns
     # the items as namedoperation arms; a trailing error node flags a
     # malformed item for the caller to detect.
-    getObjectBody: function {:this lex: zlexer.Lexer} out List Node is {
+    getObjectBody: function {:this lex: zlexer.Lexer typeBody: bool} out List Node is {
         items: (List Node)
         names: (List String)
         openOpt: lex.accept tt: zlexer.TT.braceOpenTok
@@ -2502,6 +2525,21 @@ Parser: class {
                         if mErr then {
                             items.append member
                             return items
+                        }
+                        if typeBody when (isReservedMemberName name: lblTok.tokstr.stringview) then {
+                            visUnit: false
+                            if lblTok.tokstr.stringview == "public" then visUnit = true
+                            if lblTok.tokstr.stringview == "private" then visUnit = true
+                            allowed: false
+                            if visUnit when (this.isUnitDef node: member) then allowed = true
+                            if (allowed) == false then {
+                                items.append (this.mkError
+                                    tok: lblTok
+                                    code: zast.err.reservedMember
+                                    msg: "'\{lblTok.tokstr.stringview}' is a reserved member name"
+                                )
+                                return items
+                            }
                         }
                         no: (this.mkNamedOp
                             name: (Option.some opName)
@@ -2807,7 +2845,7 @@ Parser: class {
                     :startCol
                 )
             } case none then {
-                ib: this.getObjectBody :lex
+                ib: this.getObjectBody :lex typeBody: true
                 ibn: ib.length
                 if ibn > 0 then {
                     last: ib.pop
@@ -2856,7 +2894,7 @@ Parser: class {
                 )
             }
             lex.advance
-            ab: this.getObjectBody :lex
+            ab: this.getObjectBody :lex typeBody: true
             abn: ab.length
             if abn > 0 then {
                 last: ab.pop
@@ -2881,7 +2919,7 @@ Parser: class {
             if hasIs then noBodyYet = false
             if isNative then noBodyYet = false
             if noBodyYet then {
-                ib: this.getObjectBody :lex
+                ib: this.getObjectBody :lex typeBody: true
                 ibn: ib.length
                 if ibn > 0 then {
                     last: ib.pop
