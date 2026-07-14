@@ -5201,6 +5201,34 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
     } case labelvalue then {
         return (emitLocalAtomName :ctx name: n.name.stringview)
     } case dottedpath then {
+        # a stamped implicit zero-create on a unit-qualified type path
+        # (`unit.Conf`) constructs like the bare-atom legs
+        izd9: symtab.typing.implicitCreate.get key: n.nodeid.u64
+        match (
+            izd9
+        ) case some then {
+            dzn9: atomTextOf n: n.child
+            dzc9: scalarCTypeFor :symtab name: dzn9.stringview tid: izd9
+            if dzc9.length > 0 then return "((\{dzc9})0)"
+            if izd9 == ctx.strTid then return (emitExprStrZero :ctx)
+            dzt9: typedefChaseC :symtab :ctx tid: izd9
+            if dzt9.length > 0 then return "((\{dzt9})0)"
+            dzb9: symtab.typing.typedefBaseName.get key: izd9
+            match (
+                dzb9
+            ) case some then {
+                if dzb9.stringview == "String" then return (emitExprStrZero :ctx)
+            } case none then null
+            dzm9: chaseColMono :symtab tid: izd9
+            if dzm9 != izd9 then {
+                dzmc9: symtab.reg.cnameOf tid: dzm9
+                if (originIsTid :symtab tid: dzm9 originTid: ctx.listOriginTid) then {
+                    return "\{dzmc9}_create((uint64_t)0)"
+                }
+                return "\{dzmc9}_create()"
+            }
+            return (emitCtorDefaultsFill :symtab :ctx tid: izd9)
+        } case none then null
         dpUb9: atomTextOf n: n.parent
         if (symtab.reg.isUnitName name: dpUb9.stringview) when (isEmittableFileUnit name: dpUb9.stringview) then {
             dpUc9: atomTextOf n: n.child

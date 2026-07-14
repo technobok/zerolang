@@ -294,7 +294,10 @@ isImplicitZeroCreateTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
 # that cannot construct, with the shared teaching note.
 bareCtorError: function {
     st: zenv.ZSymbolTable
-    node: zast.AtomIdData
+    nodeid: u32
+    lineno: u32
+    colno: u32
+    width: u32
     msg: String
     hint: String
 } is {
@@ -303,14 +306,14 @@ bareCtorError: function {
     hc9: hint.copy
     (addErrorH
         :st
-        nodeid: node.nodeid
-        lineno: node.lineno
-        colno: node.colno
+        :nodeid
+        :lineno
+        :colno
         e: zast.err.callError
         msg: mc9
         note: nt9
         hint: hc9
-        width: node.name.length.u32
+        :width
     )
 }
 
@@ -326,6 +329,28 @@ checkBareTypeConstruction: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     node: zast.AtomIdData
+    tid: u64
+} is {
+    (checkBareTypeValueAt
+        :st
+        :unitName
+        nodeid: node.nodeid
+        lineno: node.lineno
+        colno: node.colno
+        width: node.name.length.u32
+        :tid
+    )
+}
+
+# checkBareTypeValueAt -- checkBareTypeConstruction's core against explicit
+# source coordinates, shared by the bare-atom and unit-qualified dotted legs.
+checkBareTypeValueAt: function {
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    nodeid: u32
+    lineno: u32
+    colno: u32
+    width: u32
     tid: u64
 } is {
     tt9: st.reg.typetypeOf typeId: tid
@@ -350,7 +375,7 @@ checkBareTypeConstruction: function {
         tnv9: tn9.copy
         mv9: "cannot construct '\{tnv9}' from its bare name: a borrowed view binds from an owner"
         hv9: "project the view from its owner ('.stringview', '.listview', '.substring')".string
-        bareCtorError :st :node msg: mv9 hint: hv9
+        bareCtorError :st :nodeid :lineno :colno :width msg: mv9 hint: hv9
         return
     }
     # a generic template has no concrete layout until its arguments apply
@@ -367,7 +392,7 @@ checkBareTypeConstruction: function {
         tng9: tn9.copy
         mg9: "cannot construct '\{tng9}' from its bare name: a generic type needs type arguments"
         hg9: "apply type arguments first, e.g. '(List of: u8)'".string
-        bareCtorError :st :node msg: mg9 hint: hg9
+        bareCtorError :st :nodeid :lineno :colno :width msg: mg9 hint: hg9
         return
     }
     # unions and variants select an arm; bool's arms are its literals
@@ -381,7 +406,7 @@ checkBareTypeConstruction: function {
         if tid == (builtinTidT ty: st.typing reg: st.reg base: "bool") then {
             hu9 = "write 'false' (the zero arm) or 'true'".string
         }
-        bareCtorError :st :node msg: mu9 hint: hu9
+        bareCtorError :st :nodeid :lineno :colno :width msg: mu9 hint: hu9
         return
     }
     isPF9: false
@@ -391,13 +416,13 @@ checkBareTypeConstruction: function {
         tnp9: tn9.copy
         mp9: "cannot construct '\{tnp9}' from its bare name: a protocol/facet projects a conforming value"
         hp9: "bind a value of a conforming type instead".string
-        bareCtorError :st :node msg: mp9 hint: hp9
+        bareCtorError :st :nodeid :lineno :colno :width msg: mp9 hint: hp9
         return
     }
     # a typedef class over String (Path) is the empty string value
     if tdb9 > 0 when tdb9 == (builtinTidT ty: st.typing reg: st.reg base: "String") then {
         ics9: tid
-        st.typing.implicitCreate.set key: node.nodeid.u64 value: ics9
+        st.typing.implicitCreate.set key: nodeid.u64 value: ics9
         return
     }
     # source-produced iterators have no standalone construction
@@ -409,7 +434,7 @@ checkBareTypeConstruction: function {
         tni9: tn9.copy
         mi9: "cannot construct '\{tni9}' from its bare name: iterators are produced by their source"
         hi9: "call '.iterate' / '.split' / '.codepoints' / '.lines' on the source value".string
-        bareCtorError :st :node msg: mi9 hint: hi9
+        bareCtorError :st :nodeid :lineno :colno :width msg: mi9 hint: hi9
         return
     }
     crO9: st.typing.childOf parentTypeId: tid name: "create"
@@ -423,7 +448,7 @@ checkBareTypeConstruction: function {
         tnn9: tn9.copy
         mn0: "cannot construct '\{tnn9}' from its bare name: the type does not define construction (create: null)"
         hn0: "use the type's own factory functions".string
-        bareCtorError :st :node msg: mn0 hint: hn0
+        bareCtorError :st :nodeid :lineno :colno :width msg: mn0 hint: hn0
         return
     }
     prov9: (List String)
@@ -440,7 +465,7 @@ checkBareTypeConstruction: function {
     )
     if misN9.length == 0 then {
         icr9: tid
-        st.typing.implicitCreate.set key: node.nodeid.u64 value: icr9
+        st.typing.implicitCreate.set key: nodeid.u64 value: icr9
         return
     }
     lst9: "".string
@@ -461,7 +486,7 @@ checkBareTypeConstruction: function {
     tnh9: tn9.copy
     m9: "cannot construct '\{tnc9}' from its bare name: missing required arguments \{lst9}"
     eh9: "provide each listed argument ('\{tnh9} name: value ...') or add field defaults"
-    bareCtorError :st :node msg: m9 hint: eh9
+    bareCtorError :st :nodeid :lineno :colno :width msg: m9 hint: eh9
 }
 
 # isViewFamilyTid -- a borrowed-view type: OptionView/ListView/MapEntry monos
@@ -10606,6 +10631,33 @@ checkDotted: function {
                         result9 = ro9
                     } case none then {
                         result9 = st.reg.allocType
+                    }
+                }
+            }
+            # a unit-qualified TYPE member in value position is the same
+            # zero-argument construction as a bare atom (`p: unit.Conf`);
+            # the name gate keeps value aliases out, the suppress flag
+            # keeps dotted-path bases out
+            if coerce when (isFn9) == false then {
+                if (st.typing.suppressBareCtor) == false then {
+                    tnd9: typeNameOf :st tid: mo9
+                    if tnd9.stringview == cn.stringview then {
+                        cdl9: nodeLine n: dp.child
+                        cdc9: nodeCol n: dp.child
+                        if (isImplicitZeroCreateTid :st tid: mo9) then {
+                            icd9: mo9
+                            st.typing.implicitCreate.set key: dp.nodeid.u64 value: icd9
+                        } else {
+                            (checkBareTypeValueAt
+                                :st
+                                unitName: un9.stringview
+                                nodeid: dp.nodeid
+                                lineno: cdl9
+                                colno: cdc9
+                                width: cn.length.u32
+                                tid: mo9
+                            )
+                        }
                     }
                 }
             }
