@@ -10281,7 +10281,9 @@ checkDotted: function {
         # tag, not a method) is a construction reference: record the dotted
         # node's tagged parent (construction dispatch and generic-union
         # inference key off it), stamp the path with the parent, and the
-        # path's value IS the parent. A value base keeps member semantics.
+        # path's value IS the parent. A VALUE base makes the path the arm
+        # PREDICATE: it types bool (true when the value currently holds
+        # that arm) and stamps dpArmPredicate for the tag-compare emission.
         btt0: st.reg.typetypeOf typeId: bt
         isTagged0: false
         if btt0 == ztypes.ztypetype.variantType then isTagged0 = true
@@ -10292,23 +10294,54 @@ checkDotted: function {
             if ctt0 == ztypes.ztypetype.functionType then isMember0 = false
             if ctt0 == ztypes.ztypetype.dataType then isMember0 = false
             if isMember0 then {
-                tvn0: bareAtomName n: dp.parent
-                isVal0: false
-                if tvn0.length > 0 then {
-                    tvo0: st.lookupVarId name: tvn0.stringview
-                    match (
-                        tvo0
-                    ) case some then {
-                        isVal0 = true
-                    } case none then null
-                }
-                if (isVal0) == false then {
+                isVal9: taggedRecvIsValue :st n: dp.parent
+                if (isVal9) == false then {
                     dpk0: dp.nodeid.u64
                     dpv0: bt
                     st.typing.dpTaggedParent.set key: dpk0 value: dpv0
                     setdp0: bt
                     st.typing.nodeType.set key: dp.nodeid.u64 value: setdp0
                     return bt
+                }
+                isArm9: true
+                if ctt0 == ztypes.ztypetype.tagType then isArm9 = false
+                gtpl9: false
+                {
+                    gz9: st.reg.typeById.get key: bt
+                    match (
+                        gz9
+                    ) case some then {
+                        if gz9.isgeneric then gtpl9 = true
+                    } case none then null
+                }
+                # an assignment-narrowed VARIANT value keeps the payload
+                # READ for its narrowed arm (`a: result.ok 42` then `a.ok`);
+                # a null arm has no payload and a union value has no inline
+                # payload member, so those stay predicates. The predicate
+                # covers every other receiver/arm pairing.
+                nHit9: false
+                rn9: bareAtomName n: dp.parent
+                nRead9: btt0 == ztypes.ztypetype.variantType
+                if ctt0 == ztypes.ztypetype.nullType then nRead9 = false
+                if rn9.length > 0 when nRead9 then {
+                    nsn9: st.getSubtypeName name: rn9.stringview
+                    if nsn9.length > 0 when nsn9.stringview == cn.stringview then nHit9 = true
+                }
+                if isArm9 when (gtpl9) == false when (nHit9) == false then {
+                    boolId9: (optU64Or
+                        o: (walkLookupTyperef
+                            ty: st.typing
+                            reg: st.reg
+                            currentUnit: unitName
+                            base: "bool"
+                        )
+                        d: 0
+                    )
+                    if boolId9 > 0 then {
+                        st.typing.dpArmPredicate.set key: dp.nodeid.u64 value: bt
+                        stampGate :st nid: dp.nodeid tid: boolId9
+                        return boolId9
+                    }
                 }
             }
         }
@@ -11805,6 +11838,45 @@ innermostNodeId: function {n: Node} out u32 is {
         return (innermostNodeId n: n.expression)
     } else {
         return (nodeId :n)
+    }
+}
+
+# pathRootName -- the leftmost bare atom of a value path (`a.b.c` -> a,
+# through expression wrappers), "" when the root is not a bare atom.
+pathRootName: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (pathRootName n: n.expression)
+    } case dottedpath then {
+        return (pathRootName n: n.parent)
+    } case atomid then {
+        return n.name.copy
+    } else {
+        return "".string
+    }
+}
+
+# taggedRecvIsValue -- the dotted receiver denotes a VALUE (a variable at
+# the path root, or a call result), not a type/unit reference.
+taggedRecvIsValue: function {st: zenv.ZSymbolTable n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (taggedRecvIsValue :st n: n.expression)
+    } case call then {
+        return true
+    } else {
+        rn0: pathRootName :n
+        if rn0.length == 0 then return false
+        rvo0: st.lookupVarId name: rn0.stringview
+        match (
+            rvo0
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
     }
 }
 
@@ -16540,6 +16612,22 @@ canonicalizeShellNodeStamps: function {st: zenv.ZSymbolTable mainName: StringVie
         v3: dvals9.get i: l9
         st.typing.dpTaggedParent.set key: k3 value: v3
         l9 = l9 + 1
+    }
+    pnids9: (List u64)
+    pvals9: (List u64)
+    with pt9: st.typing.dpArmPredicate.iterateItems do for p9: pt9 loop {
+        rid4: canonShellTid :st :cache9 tid: p9.value :mainName
+        if rid4 > 0 then {
+            pnids9.append p9.key
+            pvals9.append rid4
+        }
+    }
+    q9: 0.u64
+    for q9 < pnids9.length loop {
+        k4: pnids9.get i: q9
+        v4: pvals9.get i: q9
+        st.typing.dpArmPredicate.set key: k4 value: v4
+        q9 = q9 + 1
     }
 }
 

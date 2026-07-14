@@ -600,6 +600,19 @@ dpTaggedOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     }
 }
 
+# dpArmPredicateOf9 -- the arm-predicate stamp for a dotted node: the
+# variant/union type id when `value.arm` is a tag test; 0 otherwise.
+dpArmPredicateOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    go: symtab.typing.dpArmPredicate.get key: nid
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0
+    }
+}
+
 # memberOwnerOf9 -- the receiver's canonical type id for a dotted member
 # node; 0 when the path resolved through a non-member leg.
 memberOwnerOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
@@ -5148,6 +5161,27 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     }
                 }
             }
+        }
+        # arm predicate on a VALUE receiver: the typechecker stamped
+        # dpArmPredicate, so the path is a tag test. A bool receiver is a
+        # C bool (no tag field): identity for `.true`, negation for
+        # `.false`.
+        dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
+        if dap9 > 0 then {
+            recvP9: emitExpr :symtab :ctx n: n.parent
+            bsnP9: stampNameDeep :symtab n: n.parent
+            if bsnP9.stringview == "bool" then {
+                if mnc0.stringview == "true" then return "(\{recvP9})"
+                if mnc0.stringview == "false" then return "(!(\{recvP9}))"
+            }
+            accP9: ".".string
+            rootP9: atomTextOf n: n.parent
+            if rootP9.length > 0 then {
+                if (isPtrVar :ctx name: rootP9.stringview) then accP9 = "->".string
+            }
+            tgP9: variantTag :symtab tid: dap9 arm: mnc0.stringview
+            eP9: "((\{recvP9})\{accP9}tag == \{tgP9})"
+            return eP9
         }
         bn2r: atomTextOf n: n.parent
         bn2a9: aliasResolve :ctx name: bn2r.stringview
