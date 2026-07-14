@@ -290,21 +290,70 @@ isImplicitZeroCreateTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     return false
 }
 
-# checkBareTypeConstruction -- a bare record/class type name in a runtime
-# value position is a zero-argument create construction: stamp it for the
-# emitter when no required field remains (defaults and a body-carrying
-# user create both satisfy), else report the missing fields. Type families
-# without a create child keep their current behavior.
+# bareCtorError -- one diagnostic for a bare type name in value position
+# that cannot construct, with the shared teaching note.
+bareCtorError: function {
+    st: zenv.ZSymbolTable
+    node: zast.AtomIdData
+    msg: String
+    hint: String
+} is {
+    nt9: "a bare type name in value position is a zero-argument 'create' construction".string
+    mc9: msg.copy
+    hc9: hint.copy
+    (addErrorH
+        :st
+        nodeid: node.nodeid
+        lineno: node.lineno
+        colno: node.colno
+        e: zast.err.callError
+        msg: mc9
+        note: nt9
+        hint: hc9
+        width: node.name.length.u32
+    )
+}
+
+# checkBareTypeConstruction -- a bare type name in a runtime value position
+# is a zero-argument create construction. Records/classes stamp for the
+# emitter when no required field remains (defaults and a body-carrying user
+# create both satisfy) and report the missing fields otherwise; a typedef
+# class over String is the empty string value. Families that cannot
+# construct -- views, generic templates, unions/variants (an arm must be
+# selected), protocols/facets, source-produced iterators, create-disabled
+# types -- each get a targeted diagnostic.
 checkBareTypeConstruction: function {
     st: zenv.ZSymbolTable
+    unitName: StringView
     node: zast.AtomIdData
     tid: u64
 } is {
     tt9: st.reg.typetypeOf typeId: tid
-    isRC9: false
-    if tt9 == ztypes.ztypetype.recordType then isRC9 = true
-    if tt9 == ztypes.ztypetype.classType then isRC9 = true
-    if (isRC9) == false then return
+    isFam9: false
+    if tt9 == ztypes.ztypetype.recordType then isFam9 = true
+    if tt9 == ztypes.ztypetype.classType then isFam9 = true
+    if tt9 == ztypes.ztypetype.unionType then isFam9 = true
+    if tt9 == ztypes.ztypetype.variantType then isFam9 = true
+    if tt9 == ztypes.ztypetype.protocolType then isFam9 = true
+    if tt9 == ztypes.ztypetype.facetType then isFam9 = true
+    if (isFam9) == false then return
+    tn9: typeNameOf :st :tid
+    # borrowed views -- including a typedef class over a view (PathView) --
+    # bind from an owner and cannot be constructed
+    isVw9: isViewFamilyTid :st :tid
+    tdb9: 0.u64
+    if (isVw9) == false then {
+        tdb9 = typedefBaseOf :st :unitName :tid
+        if tdb9 > 0 when (isViewFamilyTid :st tid: tdb9) then isVw9 = true
+    }
+    if isVw9 then {
+        tnv9: tn9.copy
+        mv9: "cannot construct '\{tnv9}' from its bare name: a borrowed view binds from an owner"
+        hv9: "project the view from its owner ('.stringview', '.listview', '.substring')".string
+        bareCtorError :st :node msg: mv9 hint: hv9
+        return
+    }
+    # a generic template has no concrete layout until its arguments apply
     isGen9: false
     {
         gz9: st.reg.typeById.get key: tid
@@ -314,7 +363,55 @@ checkBareTypeConstruction: function {
             if gz9.isgeneric then isGen9 = true
         } case none then null
     }
-    if isGen9 then return
+    if isGen9 then {
+        tng9: tn9.copy
+        mg9: "cannot construct '\{tng9}' from its bare name: a generic type needs type arguments"
+        hg9: "apply type arguments first, e.g. '(List of: u8)'".string
+        bareCtorError :st :node msg: mg9 hint: hg9
+        return
+    }
+    # unions and variants select an arm; bool's arms are its literals
+    isUV9: false
+    if tt9 == ztypes.ztypetype.unionType then isUV9 = true
+    if tt9 == ztypes.ztypetype.variantType then isUV9 = true
+    if isUV9 then {
+        tnu9: tn9.copy
+        mu9: "cannot construct '\{tnu9}' from its bare name: a union/variant selects an arm"
+        hu9: "construct an arm: '\{tn9}.<arm> ...'"
+        if tid == (builtinTidT ty: st.typing reg: st.reg base: "bool") then {
+            hu9 = "write 'false' (the zero arm) or 'true'".string
+        }
+        bareCtorError :st :node msg: mu9 hint: hu9
+        return
+    }
+    isPF9: false
+    if tt9 == ztypes.ztypetype.protocolType then isPF9 = true
+    if tt9 == ztypes.ztypetype.facetType then isPF9 = true
+    if isPF9 then {
+        tnp9: tn9.copy
+        mp9: "cannot construct '\{tnp9}' from its bare name: a protocol/facet projects a conforming value"
+        hp9: "bind a value of a conforming type instead".string
+        bareCtorError :st :node msg: mp9 hint: hp9
+        return
+    }
+    # a typedef class over String (Path) is the empty string value
+    if tdb9 > 0 when tdb9 == (builtinTidT ty: st.typing reg: st.reg base: "String") then {
+        ics9: tid
+        st.typing.implicitCreate.set key: node.nodeid.u64 value: ics9
+        return
+    }
+    # source-produced iterators have no standalone construction
+    isIt9: false
+    if tid == (builtinTidT ty: st.typing reg: st.reg base: "CpIter") then isIt9 = true
+    if tid == (builtinTidT ty: st.typing reg: st.reg base: "Splitter") then isIt9 = true
+    if tid == (builtinTidT ty: st.typing reg: st.reg base: "LinesIter") then isIt9 = true
+    if isIt9 then {
+        tni9: tn9.copy
+        mi9: "cannot construct '\{tni9}' from its bare name: iterators are produced by their source"
+        hi9: "call '.iterate' / '.split' / '.codepoints' / '.lines' on the source value".string
+        bareCtorError :st :node msg: mi9 hint: hi9
+        return
+    }
     crO9: st.typing.childOf parentTypeId: tid name: "create"
     hasCr9: false
     match (
@@ -322,7 +419,13 @@ checkBareTypeConstruction: function {
     ) case some then {
         if (st.reg.typetypeOf typeId: crO9) == ztypes.ztypetype.functionType then hasCr9 = true
     } case none then null
-    if (hasCr9) == false then return
+    if (hasCr9) == false then {
+        tnn9: tn9.copy
+        mn0: "cannot construct '\{tnn9}' from its bare name: the type does not define construction (create: null)"
+        hn0: "use the type's own factory functions".string
+        bareCtorError :st :node msg: mn0 hint: hn0
+        return
+    }
     prov9: (List String)
     misN9: (List String)
     misI9: (List u64)
@@ -340,7 +443,6 @@ checkBareTypeConstruction: function {
         st.typing.implicitCreate.set key: node.nodeid.u64 value: icr9
         return
     }
-    tn9: typeNameOf :st :tid
     lst9: "".string
     li9: 0.u64
     ln9: misN9.length
@@ -358,19 +460,8 @@ checkBareTypeConstruction: function {
     tnc9: tn9.copy
     tnh9: tn9.copy
     m9: "cannot construct '\{tnc9}' from its bare name: missing required arguments \{lst9}"
-    nt9: "a bare type name in value position is a zero-argument 'create' construction".string
     eh9: "provide each listed argument ('\{tnh9} name: value ...') or add field defaults"
-    (addErrorH
-        :st
-        nodeid: node.nodeid
-        lineno: node.lineno
-        colno: node.colno
-        e: zast.err.callError
-        msg: m9
-        note: nt9
-        hint: eh9
-        width: node.name.length.u32
-    )
+    bareCtorError :st :node msg: m9 hint: eh9
 }
 
 # isViewFamilyTid -- a borrowed-view type: OptionView/ListView/MapEntry monos
@@ -11053,11 +11144,16 @@ checkAtomid: function {
                     }
                 }
                 if (st.typing.suppressBareCtor) == false then {
-                    if (isImplicitZeroCreateTid :st tid: fo) then {
-                        icv9: fo
-                        st.typing.implicitCreate.set key: node.nodeid.u64 value: icv9
-                    } else {
-                        checkBareTypeConstruction :st :node tid: fo
+                    # only an atom NAMING the type is a bare construction; a
+                    # value alias typed as it (true: bool.true) is a value use
+                    tnq9: typeNameOf :st tid: fo
+                    if tnq9.stringview == node.name.stringview then {
+                        if (isImplicitZeroCreateTid :st tid: fo) then {
+                            icv9: fo
+                            st.typing.implicitCreate.set key: node.nodeid.u64 value: icv9
+                        } else {
+                            checkBareTypeConstruction :st :unitName :node tid: fo
+                        }
                     }
                 }
                 setu: result
