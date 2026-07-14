@@ -3423,6 +3423,91 @@ emitAllDefaultedCall: function {
     return r
 }
 
+# emitExprStrZero -- the empty owned String value: the zero struct needs
+# no allocation and no free.
+emitExprStrZero: function {ctx: Ctx} out String is {
+    return "((\{ctx.strC}_t){0})"
+}
+
+# emitCtorDefaultsFill -- the zero-argument construction of a record/class
+# tid: a body-carrying user create called with its param defaults, else the
+# generated field-wise create with each field's default (fnptr fields pass
+# the method symbol). The typechecker's implicitCreate stamp guarantees no
+# required argument remains.
+emitCtorDefaultsFill: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    tid: u64
+} out String is {
+    cco: symtab.typing.childOf parentTypeId: tid name: "create"
+    match (
+        cco
+    ) case some then {
+        if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
+            crB9: false
+            crn9: symtab.typing.funcReturnNode.get key: cco
+            match (
+                crn9
+            ) case some then {
+                crB9 = true
+            } case none then null
+            if crB9 then {
+                cpn: (List String)
+                cpi: (List u64)
+                recFieldLists :symtab tid: cco names: cpn ids: cpi
+                cargs: "".string
+                ci: 0.u64
+                ccn: cpn.length
+                for ci < ccn loop {
+                    cpname: cpn.get i: ci
+                    cpid: cpi.get i: ci
+                    ci = ci + 1
+                    cav: "0".string
+                    if (symtab.typing.hasChildDefault
+                        parentTypeId: tid
+                        name: cpname.stringview
+                    ) then {
+                        cdt: (symtab.typing.childDefaultText
+                            parentTypeId: tid
+                            name: cpname.stringview
+                        )
+                        cav = renderDefault :symtab :ctx default: cdt.stringview targetTid: cpid
+                    }
+                    if cargs.length > 0 then cargs.append ", "
+                    cargs.append cav.stringview
+                }
+                ccb: symtab.reg.cnameOf tid: cco
+                return "\{ccb}(\{cargs})"
+            }
+        }
+    } case none then null
+    fnames: (List String)
+    fids: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids
+    args: "".string
+    fi: 0.u64
+    fn0: fnames.length
+    for fi < fn0 loop {
+        fname: fnames.get i: fi
+        ffid: fids.get i: fi
+        fi = fi + 1
+        av: "0".string
+        if (symtab.typing.hasChildDefault parentTypeId: tid name: fname.stringview) then {
+            cdt1: symtab.typing.childDefaultText parentTypeId: tid name: fname.stringview
+            av = renderDefault :symtab :ctx default: cdt1.stringview targetTid: ffid
+        } else {
+            if (symtab.typing.isChildFnptrField
+                parentTypeId: tid
+                name: fname.stringview
+            ) then av = symtab.reg.cnameOf tid: ffid
+        }
+        if args.length > 0 then args.append ", "
+        args.append av.stringview
+    }
+    rcb9: symtab.reg.cnameOf :tid
+    return "\{rcb9}_create(\{args})"
+}
+
 emitRecordCtor: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -5045,9 +5130,35 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 bsc: bsv.string
                 return bsc
             }
+            izr9: symtab.typing.implicitCreate.get key: n.nodeid.u64
+            match (
+                izr9
+            ) case some then {
+                return (emitCtorDefaultsFill :symtab :ctx tid: brid)
+            } case none then null
             brc: cnameOf tid: brid name: btn.stringview
             be0: "((\{brc}_t){0})"
             return be0
+        }
+        if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType then {
+            izc9: symtab.typing.implicitCreate.get key: n.nodeid.u64
+            match (
+                izc9
+            ) case some then {
+                # a collection-typedef class (Bytes) constructs through its
+                # mono's create; a user class through its defaults fill;
+                # String falls through to its own empty-value leg below
+                if izc9 == ctx.strTid then return (emitExprStrZero :ctx)
+                zmono9: chaseColMono :symtab tid: brid
+                if zmono9 != brid then {
+                    zmc9: symtab.reg.cnameOf tid: zmono9
+                    if (originIsTid :symtab tid: zmono9 originTid: ctx.listOriginTid) then {
+                        return "\{zmc9}_create((uint64_t)0)"
+                    }
+                    return "\{zmc9}_create()"
+                }
+                return (emitCtorDefaultsFill :symtab :ctx tid: brid)
+            } case none then null
         }
         if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType then {
             # a bare no-arg unit fn that typecheck coerced to a CALL (its atom
@@ -5073,10 +5184,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
         match (
             iso9
         ) case some then {
-            if iso9 == ctx.strTid then {
-                ise9: "((\{ctx.strC}_t){0})"
-                return ise9
-            }
+            if iso9 == ctx.strTid then return (emitExprStrZero :ctx)
         } case none then null
         return (emitLocalAtomName :ctx name: av)
     } case labelvalue then {

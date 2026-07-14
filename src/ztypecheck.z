@@ -290,6 +290,89 @@ isImplicitZeroCreateTid: function {st: zenv.ZSymbolTable tid: u64} out bool is {
     return false
 }
 
+# checkBareTypeConstruction -- a bare record/class type name in a runtime
+# value position is a zero-argument create construction: stamp it for the
+# emitter when no required field remains (defaults and a body-carrying
+# user create both satisfy), else report the missing fields. Type families
+# without a create child keep their current behavior.
+checkBareTypeConstruction: function {
+    st: zenv.ZSymbolTable
+    node: zast.AtomIdData
+    tid: u64
+} is {
+    tt9: st.reg.typetypeOf typeId: tid
+    isRC9: false
+    if tt9 == ztypes.ztypetype.recordType then isRC9 = true
+    if tt9 == ztypes.ztypetype.classType then isRC9 = true
+    if (isRC9) == false then return
+    isGen9: false
+    {
+        gz9: st.reg.typeById.get key: tid
+        match (
+            gz9
+        ) case some then {
+            if gz9.isgeneric then isGen9 = true
+        } case none then null
+    }
+    if isGen9 then return
+    crO9: st.typing.childOf parentTypeId: tid name: "create"
+    hasCr9: false
+    match (
+        crO9
+    ) case some then {
+        if (st.reg.typetypeOf typeId: crO9) == ztypes.ztypetype.functionType then hasCr9 = true
+    } case none then null
+    if (hasCr9) == false then return
+    prov9: (List String)
+    misN9: (List String)
+    misI9: (List u64)
+    (missingCtorFields
+        :st
+        funcId: tid
+        isCtor: true
+        provided: prov9
+        posCount: 0
+        missingNames: misN9
+        missingIds: misI9
+    )
+    if misN9.length == 0 then {
+        icr9: tid
+        st.typing.implicitCreate.set key: node.nodeid.u64 value: icr9
+        return
+    }
+    tn9: typeNameOf :st :tid
+    lst9: "".string
+    li9: 0.u64
+    ln9: misN9.length
+    for li9 < ln9 loop {
+        mn9: misN9.get i: li9
+        mid9: misI9.get i: li9
+        li9 = li9 + 1
+        mtn9: typeNameOf :st tid: mid9
+        mnc9: mn9.copy
+        mtc9: mtn9.copy
+        if lst9.length > 0 then lst9.append ", "
+        ln1: "'\{mnc9}' (type: \{mtc9})"
+        lst9.append ln1.stringview
+    }
+    tnc9: tn9.copy
+    tnh9: tn9.copy
+    m9: "cannot construct '\{tnc9}' from its bare name: missing required arguments \{lst9}"
+    nt9: "a bare type name in value position is a zero-argument 'create' construction".string
+    eh9: "provide each listed argument ('\{tnh9} name: value ...') or add field defaults"
+    (addErrorH
+        :st
+        nodeid: node.nodeid
+        lineno: node.lineno
+        colno: node.colno
+        e: zast.err.callError
+        msg: m9
+        note: nt9
+        hint: eh9
+        width: node.name.length.u32
+    )
+}
+
 # isViewFamilyTid -- a borrowed-view type: OptionView/ListView/MapEntry monos
 # (generic-origin keyed) or the non-generic StringView/ByteView views. A view
 # result is a borrow into its parent container/string: the binding holds a
@@ -9995,7 +10078,20 @@ checkDotted: function {
             }
         } case none then null
     }
+    # the base of a dotted path is a reference, not a bare value: a type
+    # name there must not construct (Counter.create, unit.Type.arm). Only
+    # name-shaped bases suppress -- an expression base walks normally so
+    # atoms inside its args still stamp.
+    supPrev9: st.typing.suppressBareCtor
+    match (
+        dp.parent
+    ) case atomid then {
+        st.typing.suppressBareCtor = true
+    } case dottedpath then {
+        st.typing.suppressBareCtor = true
+    } else null
     bt: checkValue :st :unitName :unitBody node: dp.parent
+    st.typing.suppressBareCtor = supPrev9
     if bt == 0 then {
         # an unresolved bare-name base may be a unit-qualified member
         # path (io.stdout): the side map types the base as the UNIT type.
@@ -10956,9 +11052,13 @@ checkAtomid: function {
                         result = st.reg.allocType
                     }
                 }
-                if (isImplicitZeroCreateTid :st tid: fo) then {
-                    icv9: fo
-                    st.typing.implicitCreate.set key: node.nodeid.u64 value: icv9
+                if (st.typing.suppressBareCtor) == false then {
+                    if (isImplicitZeroCreateTid :st tid: fo) then {
+                        icv9: fo
+                        st.typing.implicitCreate.set key: node.nodeid.u64 value: icv9
+                    } else {
+                        checkBareTypeConstruction :st :node tid: fo
+                    }
                 }
                 setu: result
                 st.typing.nodeType.set key: node.nodeid.u64 value: setu
