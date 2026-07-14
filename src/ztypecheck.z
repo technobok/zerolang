@@ -10121,6 +10121,42 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     }
 }
 
+# fnAutoCallable -- a bare reference to this function is a zero-argument
+# auto-call: it has no user parameters, or every non-receiver parameter
+# carries a default the site can fill. The strict no-user-args predicate
+# stays separate for its other gates (fnptr-field reads, for-iterators).
+fnAutoCallable: function {st: zenv.ZSymbolTable mid: u64} out bool is {
+    if (methodHasNoUserArgs :st :mid) then return true
+    names: (List String)
+    ids: (List u64)
+    dataFieldNames :st tid: mid :names :ids
+    thisPn9: String
+    {
+        zo9: st.reg.typeById.get key: mid
+        match (
+            zo9
+        ) case some then {
+            thisPn9 = optStrOrEmpty o: zo9.thisParamName
+        } case none then null
+    }
+    n9: names.length
+    i9: u64
+    userSeen9: false
+    for i9 < n9 loop {
+        pname: names.get i: i9
+        i9 = i9 + 1
+        isRecv9: false
+        if pname.stringview == "this" then isRecv9 = true
+        if thisPn9.length > 0 when thisPn9.stringview == pname.stringview then isRecv9 = true
+        if (isRecv9) == false then {
+            userSeen9 = true
+            hd9: st.typing.hasChildDefault parentTypeId: mid name: pname.stringview
+            if (hd9) == false then return false
+        }
+    }
+    return userSeen9
+}
+
 # canonicalChildBase -- a cross-unit narrowed match-arm base can be a shell id
 # (distinct from the canonical defining-unit id) whose member children are not
 # registered. Find a same-named type in any unit's resolved scope that has the
@@ -10215,7 +10251,13 @@ checkDotted: function {
     } case dottedpath then {
         st.typing.suppressBareCtor = true
     } else null
+    # a `.take` child makes the base a function REFERENCE: the base walk
+    # must not auto-call it
+    supFnPrev9: st.typing.suppressFnAutoCall
+    tknm9: atomName n: dp.child
+    if tknm9.stringview == "take" then st.typing.suppressFnAutoCall = true
     bt: checkValue :st :unitName :unitBody node: dp.parent
+    st.typing.suppressFnAutoCall = supFnPrev9
     st.typing.suppressBareCtor = supPrev9
     if bt == 0 then {
         # an unresolved bare-name base may be a unit-qualified member
@@ -10632,7 +10674,7 @@ checkDotted: function {
             isFn9: false
             if (st.reg.typetypeOf typeId: mo9) == ztypes.ztypetype.functionType then isFn9 = true
             if coerce when isFn9 then {
-                if (methodHasNoUserArgs :st mid: mo9) then {
+                if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable :st mid: mo9) then {
                     ro9: methodReturnOf :st mid: mo9
                     match (
                         ro9
@@ -11194,7 +11236,12 @@ checkAtomid: function {
                         }
                     } case none then null
                 }
-                if isAutoFn when (methodHasNoUserArgs :st mid: fo) then {
+                if isAutoFn when (st.typing.suppressFnAutoCall) == false then {
+                    if (fnAutoCallable :st mid: fo) == false then isAutoFn = false
+                } else {
+                    isAutoFn = false
+                }
+                if isAutoFn then {
                     ro9: methodReturnOf :st mid: fo
                     match (
                         ro9
@@ -15868,6 +15915,8 @@ maybeWalkMethods: function {
         # not leak into the walked bodies
         mwSup9: st.typing.suppressBareCtor
         st.typing.suppressBareCtor = false
+        mwSupFn9: st.typing.suppressFnAutoCall
+        st.typing.suppressFnAutoCall = false
         scanMemberSignatures :st :unitName :unitBody op: mem.operation
         canWalk: objectdefHasMethodBodies op: mem.operation
         if canWalk then {
@@ -15884,6 +15933,7 @@ maybeWalkMethods: function {
         ) case some then {
             runUnitMonoWalks :st :unitName :unitBody monoId: rgo9
         } case none then null
+        st.typing.suppressFnAutoCall = mwSupFn9
         st.typing.suppressBareCtor = mwSup9
     } else null
 }
