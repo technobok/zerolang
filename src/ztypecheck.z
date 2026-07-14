@@ -11138,6 +11138,34 @@ applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
     }
 }
 
+# postGuardRecord -- record the post-guard narrowing of `subject` under the
+# guarding statement's node id when the applied facts left it SHADOW-
+# narrowed to a payload arm: the emitter aliases the bare name for the
+# rest of the enclosing block.
+postGuardRecord: function {
+    st: zenv.ZSymbolTable
+    stmtNid: u32
+    subject: StringView
+    fullTid: u64
+} is {
+    if (st.isShadowNarrowed name: subject) == false then return
+    arm9: st.getSubtypeName name: subject
+    if arm9.length == 0 then return
+    po9: st.typing.childOf parentTypeId: fullTid name: arm9.stringview
+    match (
+        po9
+    ) case some then {
+        if (st.reg.typetypeOf typeId: po9) == ztypes.ztypetype.nullType then return
+        sn9: subject.string
+        st.typing.postGuardName.set key: stmtNid.u64 value: sn9
+        rv9: ztypes.mangleVarName name: subject
+        st.typing.postGuardRecv.set key: stmtNid.u64 value: rv9
+        st.typing.postGuardTid.set key: stmtNid.u64 value: fullTid
+        av9: arm9.copy
+        st.typing.postGuardArm.set key: stmtNid.u64 value: av9
+    } case none then null
+}
+
 # checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped),
 # then this clause's predicate facts as condition-true knowledge (appended to
 # factsOut), then its then-statement block.
@@ -12002,6 +12030,8 @@ checkIf: function {
         d: 0
     )
     accFacts: (List ArmPredFact)
+    guardFacts9: (List ArmPredFact)
+    elseDvg9: false
     anyEmpty: false
     branchTypes: (List u64)
     allDiverge: true
@@ -12016,6 +12046,7 @@ checkIf: function {
         with pfit9: accFacts.iterate do for pf9: pfit9 loop applyPredFact :st f: pf9 holds: false
         cfacts9: (List ArmPredFact)
         bt9: checkClause :st :unitName :unitBody :clause factsOut: cfacts9 boolId: pBool9
+        dvgC9: st.isUnreachable
         btc: bt9
         branchTypes.append btc
         if st.isUnreachable then {
@@ -12037,6 +12068,15 @@ checkIf: function {
         } else null
         if cn1c9 == 1 when cfacts9.length == 1 then {
             mvf9: cfacts9.pop
+            if dvgC9 then {
+                gf9: (ArmPredFact
+                    subject: mvf9.subject.copy
+                    armName: mvf9.armName.copy
+                    fullTid: mvf9.fullTid
+                    negated: mvf9.negated
+                )
+                guardFacts9.append gf9
+            }
             accFacts.append mvf9
         }
     }
@@ -12050,6 +12090,7 @@ checkIf: function {
         with efit9: accFacts.iterate do for ef9: efit9 loop applyPredFact :st f: ef9 holds: false
         walkBody :st :unitName :unitBody bodyOpt: ifnode.elseclause
         et9: lastStmtTypeOpt :st bodyOpt: ifnode.elseclause
+        if st.isUnreachable then elseDvg9 = true
         etc9: et9
         branchTypes.append etc9
         if st.isUnreachable then {
@@ -12101,6 +12142,37 @@ checkIf: function {
         }
     }
     st.popTo marker: ifMarker
+    # post-guard flow typing: a diverging clause's condition was FALSE for
+    # the remainder of the enclosing scope; a diverging else of a single-
+    # clause if means its condition was TRUE. Apply that knowledge (the
+    # exclusion collapse shadows to the payload where one arm remains) and
+    # record it for the emitter's block aliasing.
+    pgSubj9: "".string
+    pgTid9: 0.u64
+    pgApplied9: 0.u64
+    with gfit9: guardFacts9.iterate do for gf2: gfit9 loop {
+        applyPredFact :st f: gf2 holds: false
+        pgs9: gf2.subject.copy
+        pgSubj9 = pgs9
+        pgTid9 = gf2.fullTid
+        pgApplied9 = pgApplied9 + 1
+    }
+    if elseDvg9 when ifnode.clauses.length == 1 when accFacts.length == 1 then {
+        af0: accFacts.get i: 0
+        applyPredFact :st f: af0 holds: true
+        pga9: af0.subject.copy
+        pgSubj9 = pga9
+        pgTid9 = af0.fullTid
+        pgApplied9 = pgApplied9 + 1
+    }
+    if pgApplied9 == 1 when pgSubj9.length > 0 then {
+        (postGuardRecord
+            :st
+            stmtNid: ifnode.nodeid
+            subject: pgSubj9.stringview
+            fullTid: pgTid9
+        )
+    }
     invalidateTakenAcross :st names: takenAcross
     if allDiverge then st.markUnreachable
     return result
@@ -15084,9 +15156,17 @@ checkCase: function {
         }
     }
     if targetName.length > 0 when subjT > 0 then {
-        diter: diverging.iterate
-        for dn2: diter loop {
+        with diter: diverging.iterate do for dn2: diter loop {
             st.exclude name: targetName.stringview subtypeName: dn2.stringview fullTypeId: subjT
+        }
+        if diverging.length > 0 then {
+            shadowCollapseIfSingle :st name: targetName.stringview fullTid: subjT
+            (postGuardRecord
+                :st
+                stmtNid: casenode.nodeid
+                subject: targetName.stringview
+                fullTid: subjT
+            )
         }
     }
     if exhaustive when allDiverge when neverId > 0 then {
@@ -17127,6 +17207,22 @@ canonicalizeShellNodeStamps: function {st: zenv.ZSymbolTable mainName: StringVie
         v5: tvals9.get i: r9
         st.typing.dpTagRead.set key: k5 value: v5
         r9 = r9 + 1
+    }
+    gnids9: (List u64)
+    gvals9: (List u64)
+    with gt9: st.typing.postGuardTid.iterateItems do for g9: gt9 loop {
+        rid7: canonShellTid :st :cache9 tid: g9.value :mainName
+        if rid7 > 0 then {
+            gnids9.append g9.key
+            gvals9.append rid7
+        }
+    }
+    y9: 0.u64
+    for y9 < gnids9.length loop {
+        k7: gnids9.get i: y9
+        v7: gvals9.get i: y9
+        st.typing.postGuardTid.set key: k7 value: v7
+        y9 = y9 + 1
     }
     anids9: (List u64)
     avals9: (List u64)

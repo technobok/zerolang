@@ -9923,6 +9923,38 @@ emitBranchAssign: function {
     }
 }
 
+# postGuardStmtId9 -- the node id of a guarding if/match statement that
+# recorded a post-guard narrowing; 0 otherwise.
+postGuardStmtId9: function {symtab: zenv.ZSymbolTable n: Node} out u64 is {
+    match (
+        n
+    ) case statementline then {
+        return (postGuardStmtId9 :symtab n: n.statementline)
+    } case expression then {
+        return (postGuardStmtId9 :symtab n: n.expression)
+    } case ifexpr then {
+        po9: symtab.typing.postGuardName.get key: n.nodeid.u64
+        match (
+            po9
+        ) case some then {
+            return n.nodeid.u64
+        } case none then {
+            return 0
+        }
+    } case caseexpr then {
+        po9: symtab.typing.postGuardName.get key: n.nodeid.u64
+        match (
+            po9
+        ) case some then {
+            return n.nodeid.u64
+        } case none then {
+            return 0
+        }
+    } else {
+        return 0
+    }
+}
+
 emitBodyNode: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -9934,8 +9966,136 @@ emitBodyNode: function {
     match (
         n
     ) case statement then {
-        siter: n.statements.iterate
-        for s: siter loop emitStmt :symtab :ctx n: s :ind :tmp :buf
+        pgN9: (List String)
+        pgPrevV9: (List String)
+        pgPrevT9: (List u64)
+        pgDead9: (Set String)
+        i9: 0.u64
+        nst9: n.statements.length
+        for i9 < nst9 loop {
+            s9: n.statements.get i: i9
+            # a reassignment of a seeded name ends its post-guard alias
+            ri9: 0.u64
+            for ri9 < pgN9.length loop {
+                rn9: pgN9.get i: ri9
+                if (pgDead9.has item: rn9) == false then {
+                    if (bodyReassigns9 n: s9 name: rn9.stringview) then {
+                        rv9: pgPrevV9.get i: ri9
+                        if rv9.length > 0 then {
+                            nvSet xs: ctx.narrowBox name: rn9.stringview val: rv9.stringview
+                        } else {
+                            nvRemove xs: ctx.narrowBox name: rn9.stringview
+                        }
+                        rt9: pgPrevT9.get i: ri9
+                        if rt9 > 0 then {
+                            ntSet xs: ctx.narrowTid name: rn9.stringview tid: rt9
+                        } else {
+                            ntRemove xs: ctx.narrowTid name: rn9.stringview
+                        }
+                        rd9: rn9.copy
+                        pgDead9.add item: rd9
+                    }
+                }
+                ri9 = ri9 + 1
+            }
+            emitStmt :symtab :ctx n: s9 :ind :tmp :buf
+            pgid9: postGuardStmtId9 :symtab n: s9
+            if pgid9 > 0 then {
+                pgRawN9: "".string
+                {
+                    pgnO9: symtab.typing.postGuardName.get key: pgid9
+                    match (
+                        pgnO9
+                    ) case some then {
+                        pgv0: pgnO9.copy
+                        pgRawN9 = pgv0
+                    } case none then null
+                }
+                pgRecv9: "".string
+                {
+                    pgrO9: symtab.typing.postGuardRecv.get key: pgid9
+                    match (
+                        pgrO9
+                    ) case some then {
+                        pgrc9: pgrO9.copy
+                        pgRecv9 = pgrc9
+                    } case none then null
+                }
+                pgTid0: 0.u64
+                {
+                    pgtO9: symtab.typing.postGuardTid.get key: pgid9
+                    match (
+                        pgtO9
+                    ) case some then {
+                        pgTid0 = pgtO9
+                    } case none then null
+                }
+                pgArm0: "".string
+                {
+                    pgaO9: symtab.typing.postGuardArm.get key: pgid9
+                    match (
+                        pgaO9
+                    ) case some then {
+                        pgav9: pgaO9.copy
+                        pgArm0 = pgav9
+                    } case none then null
+                }
+                {
+                    if pgRawN9.length > 0 when pgRecv9.length > 0 when pgTid0 > 0 when pgArm0.length > 0 then {
+                        acc9: ".".string
+                        if (isPtrVar :ctx name: pgRawN9.stringview) then acc9 = "->".string
+                        alias9: (armAliasText9
+                            :symtab
+                            :ctx
+                            tid: pgTid0
+                            arm: pgArm0.stringview
+                            recv: pgRecv9.stringview
+                            acc: acc9.stringview
+                        )
+                        if alias9.length > 0 then {
+                            pv9: nvGet xs: ctx.narrowBox name: pgRawN9.stringview
+                            pgPrevV9.append pv9
+                            ptv9: (optU64Or9
+                                o: (ntGet xs: ctx.narrowTid name: pgRawN9.stringview)
+                            )
+                            pgPrevT9.append ptv9
+                            nvSet xs: ctx.narrowBox name: pgRawN9.stringview val: alias9.stringview
+                            pt9: (optU64Or9
+                                o: (symtab.typing.childOf
+                                    parentTypeId: pgTid0
+                                    name: pgArm0.stringview
+                                )
+                            )
+                            ntSet xs: ctx.narrowTid name: pgRawN9.stringview tid: pt9
+                            cmt9: "\{ind}/* post-guard alias: \{pgRawN9} => \{alias9} */\n"
+                            buf.append cmt9.stringview
+                            pgrn9: pgRawN9.copy
+                            pgN9.append pgrn9
+                        }
+                    }
+                }
+            }
+            i9 = i9 + 1
+        }
+        zi9: pgN9.length
+        for zi9 > 0 loop {
+            zi9 = zi9 - 1
+            zn9: pgN9.get i: zi9
+            if (pgDead9.has item: zn9) == false then {
+                zv9: pgPrevV9.get i: zi9
+                if zv9.length > 0 then {
+                    nvSet xs: ctx.narrowBox name: zn9.stringview val: zv9.stringview
+                } else {
+                    nvRemove xs: ctx.narrowBox name: zn9.stringview
+                }
+                zt9: pgPrevT9.get i: zi9
+                if zt9 > 0 then {
+                    ntSet xs: ctx.narrowTid name: zn9.stringview tid: zt9
+                } else {
+                    ntRemove xs: ctx.narrowTid name: zn9.stringview
+                }
+            }
+        }
     } else {
         emitStmt :symtab :ctx :n :ind :tmp :buf
     }

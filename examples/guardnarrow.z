@@ -1,0 +1,78 @@
+# guardnarrow.z - Post-guard flow typing
+#
+# A diverging branch narrows for the rest of the scope: after
+# `if o.none then return` the condition must have been false, so `o`
+# collapses to its remaining payload arm -- the bare name IS the payload.
+# The same applies after a match arm that exits the scope, and to the
+# negated forms. Reassignment ends the narrowing at that point.
+
+maybe: variant {
+    none: null
+    some: i64
+}
+
+result: variant {
+    err: i64
+    ok: i64
+}
+
+trio: variant {
+    a: null
+    b: null
+    c: i64
+}
+
+mk: function {v: i64} out maybe is {
+    if v > 0 then return (maybe.some v)
+    return maybe.none
+}
+
+mkr: function {v: i64} out result is {
+    if v < 0 then return (result.err v)
+    return (result.ok v)
+}
+
+pick: function {k: i64} out trio is {
+    if k == 0 then return trio.a
+    if k == 1 then return trio.b
+    return (trio.c k)
+}
+
+useif: function {o: maybe} out i64 is {
+    if o.none then return 0
+    print "if-guard payload \{o}"
+    return 1
+}
+
+usematch: function {r: result} out i64 is {
+    match (
+        r
+    ) case err then {
+        return 0 - 1
+    } case ok then null
+    print "match-guard payload \{r}"
+    return 1
+}
+
+useneg: function {t: trio} out i64 is {
+    if (t.c) == false then return 0
+    print "neg-guard payload \{t}"
+    return 1
+}
+
+usereassign: function {v: i64} out i64 is {
+    o: mk :v
+    if o.none then return 0
+    print "before reassign \{o}"
+    o = maybe.none
+    if o.none then print "reassigned to none"
+    return 2
+}
+
+main: function is {
+    a: useif o: (mk v: 7)
+    b: usematch r: (mkr v: 9)
+    c: useneg t: (pick k: 5)
+    d: usereassign v: 4
+    print "codes \{a} \{b} \{c} \{d}"
+}
