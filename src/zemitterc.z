@@ -1886,6 +1886,7 @@ emitStringArgMethod: function {
     if recvExpr.length == 0 then return "".string
     rtid0: dottedReceiverStampId :symtab callable: call.callable
     rtid: chaseColMono :symtab tid: rtid0
+    rtid = chaseStrTypedef :symtab :ctx tid: rtid
     rtn: typeNameOfReg9 :symtab tid: rtid
     if rtn.stringview != "String" then return "".string
     rptr: dottedReceiverIsPtr :symtab :ctx callable: call.callable
@@ -3028,6 +3029,14 @@ emitTypedefCreateCall: function {
     if bn.length == 0 then bn = atomTextOf n: call.callable
     if bn.length == 0 then return "".string
     tid: userFnId :symtab :ctx name: bn.stringview
+    if tid == 0 then {
+        so9: ztypecheck.resolveSystemChild ty: symtab.typing reg: symtab.reg name: bn.stringview
+        match (
+            so9
+        ) case some then {
+            tid = so9
+        } case none then null
+    }
     if tid == 0 then return "".string
     if (isTypedefType :symtab :tid) == false then return "".string
     aiter: call.arguments.iterate
@@ -5211,14 +5220,14 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             dzc9: scalarCTypeFor :symtab name: dzn9.stringview tid: izd9
             if dzc9.length > 0 then return "((\{dzc9})0)"
             if izd9 == ctx.strTid then return (emitExprStrZero :ctx)
-            dzt9: typedefChaseC :symtab :ctx tid: izd9
-            if dzt9.length > 0 then return "((\{dzt9})0)"
             dzb9: symtab.typing.typedefBaseName.get key: izd9
             match (
                 dzb9
             ) case some then {
                 if dzb9.stringview == "String" then return (emitExprStrZero :ctx)
             } case none then null
+            dzt9: typedefChaseC :symtab :ctx tid: izd9
+            if dzt9.length > 0 then return "((\{dzt9})0)"
             dzm9: chaseColMono :symtab tid: izd9
             if dzm9 != izd9 then {
                 dzmc9: symtab.reg.cnameOf tid: dzm9
@@ -5502,8 +5511,9 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     }
                 } case none then null
             }
-            bareSv9: (stampIdOf :symtab nid: bnid2) == ctx.svTid
-            bareStr9: (stampIdOf :symtab nid: bnid2) == ctx.strTid
+            bareTid9: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
+            bareSv9: bareTid9 == ctx.svTid
+            bareStr9: bareTid9 == ctx.strTid
             if bareStr9 when (isSvNoArgNative name: mn2.stringview) then {
                 # String receivers project to a view for the no-arg SV
                 # natives, mirroring the chained/auto-call legs
@@ -5554,7 +5564,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                     return eln2
                 }
             }
-            if (stampIdOf :symtab nid: bnid2) == ctx.strTid then {
+            if bareTid9 == ctx.strTid then {
                 if mn2.stringview == "length" then {
                     sacc3: ".".string
                     if (isPtrVar :ctx name: bn2.stringview) then sacc3 = "->".string
@@ -5598,6 +5608,7 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                 }
             }
             bstamp = chaseColMono :symtab tid: bstamp
+            bstamp = chaseStrTypedef :symtab :ctx tid: bstamp
             rtt: symtab.reg.typetypeOf typeId: bstamp
             if rtt == ztypes.ztypetype.protocolType then {
                 isPMn9: true
@@ -10958,6 +10969,20 @@ chaseColMono: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
     return tid
 }
 
+# chaseStrTypedef -- a class typedef over String/StringView (Path, PathView)
+# canonicalizes to the base tid: the wrapper shares the base's struct,
+# methods, and cleanup. Single-level chase (stdlib typedefs are one level).
+chaseStrTypedef: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is {
+    bo: symtab.typing.typedefBaseMangled.get key: tid
+    match (
+        bo
+    ) case some then {
+        if bo.stringview == "String" then return ctx.strTid
+        if bo.stringview == "StringView" then return ctx.svTid
+    } case none then null
+    return tid
+}
+
 typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} out String is {
     tn: typeNameOfReg9 :symtab :tid
     ct: cTypeOf name: tn.stringview
@@ -10986,6 +11011,7 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
         cmc9: symtab.reg.cnameOf tid: cmid9
         return "\{cmc9}_t"
     }
+    cid = chaseStrTypedef :symtab :ctx tid: cid
     tdc: typedefChaseC :symtab :ctx tid: cid
     if tdc.length > 0 then return tdc
     if cid == ctx.strTid then {
@@ -12301,6 +12327,18 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     f1: loadFragment path: p1.stringview svC: svC.stringview strC: strC.stringview
     buf.append f1.stringview
     buf.append "\n"
+    # a String-typedef class (Path) shares the String struct: alias its
+    # registered destructor to the String free so every generic destroy
+    # site links (unused wrappers are fine: -Wno-unused-function)
+    with sdit9: symtab.typing.typedefBaseMangled.iterateItems do for sde9: sdit9 loop {
+        if sde9.value.stringview == "String" then {
+            if (symtab.reg.hasDestructorName typeId: sde9.key) then {
+                sdc9: symtab.reg.cnameOf tid: sde9.key
+                sdw9: "static void \{sdc9}_destroy(\{strC}_t* p) { \{strC}_free(p); }\n"
+                buf.append sdw9.stringview
+            }
+        }
+    }
     p2: "\{runtimeDir}/z_StringView.inc"
     f2: loadFragment path: p2.stringview svC: svC.stringview strC: strC.stringview
     buf.append f2.stringview
