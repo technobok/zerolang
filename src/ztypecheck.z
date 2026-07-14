@@ -201,6 +201,40 @@ addErrorH: function {
     }
 }
 
+# addResolveErrorH -- addErrorH for resolution-time callers that hold the
+# ZTyping directly (no symbol table yet); same dedup, so re-entrant
+# resolution passes report once.
+addResolveErrorH: function {
+    ty: ztyping.ZTyping
+    nodeid: u32
+    lineno: u32
+    colno: u32
+    e: zast.err
+    msg: String
+    width: u32
+} is {
+    dup: false
+    with it: ty.errors.iterate do for prev: it loop {
+        if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno when prev.msg.stringview == msg.stringview then {
+            dup = true
+        }
+    }
+    if (dup) == false then {
+        ty.errors.append (zast.ErrorData
+            :nodeid
+            :lineno
+            :colno
+            :width
+            err: e
+            msg: msg.copy
+            fsno: 0
+            note: "".string
+            hint: "".string
+        )
+        ty.isError = true
+    }
+}
+
 addError: function {
     st: zenv.ZSymbolTable
     nodeid: u32
@@ -3317,12 +3351,26 @@ resolveVariant: function {
         gtk9: "\{unitName}.\{defName}"
         registerGenericParams :reg typeKey: gtk9.stringview items: vnode.asItems
     }
+    armNames9: (Set String)
     fiter: vnode.isItems.iterate
     for fm: fiter loop {
         match (
             fm
         ) case namedoperation then {
             aname: unitLabel o: fm.name
+            if aname.stringview == "tag" then {
+                mt9: "'tag' is a reserved member name".string
+                (addResolveErrorH
+                    :ty
+                    nodeid: fm.nodeid
+                    lineno: fm.lineno
+                    colno: fm.colno
+                    e: zast.err.reservedMember
+                    msg: mt9
+                    width: 3
+                )
+            }
+            armNames9.add item: aname.copy
             cid: (resolveTyperefShellMarked
                 :ty
                 :reg
@@ -3368,7 +3416,31 @@ resolveVariant: function {
             match (
                 mido
             ) case some then {
-                ty.setChild parentTypeId: vid childName: mname.stringview childTypeId: mido
+                if (armNames9.has item: mname) then {
+                    mc9: "'\{mname}' collides with the '\{defName}' arm of the same name"
+                    (addResolveErrorH
+                        :ty
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.duplicateDef
+                        msg: mc9
+                        width: mname.length.u32
+                    )
+                } else if mname.stringview == "tag" then {
+                    mr9: "'tag' is a reserved member name".string
+                    (addResolveErrorH
+                        :ty
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.reservedMember
+                        msg: mr9
+                        width: 3
+                    )
+                } else {
+                    ty.setChild parentTypeId: vid childName: mname.stringview childTypeId: mido
+                }
             } else null
         } else null
     }
@@ -3520,12 +3592,26 @@ resolveUnion: function {
         registerGenericParams :reg typeKey: gtk9.stringview items: vnode.asItems
     }
     allNull: true
+    armNames9: (Set String)
     fiter: vnode.isItems.iterate
     for fm: fiter loop {
         match (
             fm
         ) case namedoperation then {
             aname: unitLabel o: fm.name
+            if aname.stringview == "tag" then {
+                mt9: "'tag' is a reserved member name".string
+                (addResolveErrorH
+                    :ty
+                    nodeid: fm.nodeid
+                    lineno: fm.lineno
+                    colno: fm.colno
+                    e: zast.err.reservedMember
+                    msg: mt9
+                    width: 3
+                )
+            }
+            armNames9.add item: aname.copy
             an: atomName n: fm.operation
             if an.stringview != "null" then allNull = false
             cid: (resolveTyperefShellMarked
@@ -3573,7 +3659,31 @@ resolveUnion: function {
             match (
                 mido
             ) case some then {
-                ty.setChild parentTypeId: uid childName: mname.stringview childTypeId: mido
+                if (armNames9.has item: mname) then {
+                    mc9: "'\{mname}' collides with the '\{defName}' arm of the same name"
+                    (addResolveErrorH
+                        :ty
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.duplicateDef
+                        msg: mc9
+                        width: mname.length.u32
+                    )
+                } else if mname.stringview == "tag" then {
+                    mr9: "'tag' is a reserved member name".string
+                    (addResolveErrorH
+                        :ty
+                        nodeid: am.nodeid
+                        lineno: am.lineno
+                        colno: am.colno
+                        e: zast.err.reservedMember
+                        msg: mr9
+                        width: 3
+                    )
+                } else {
+                    ty.setChild parentTypeId: uid childName: mname.stringview childTypeId: mido
+                }
             } else null
         } else null
     }
