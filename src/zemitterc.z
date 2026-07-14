@@ -586,6 +586,33 @@ stampIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     }
 }
 
+# dpTaggedOf9 -- the tagged-construction stamp for a dotted node: the
+# variant/union type id when the path names a subtype member on the TYPE
+# (`Type.arm`); 0 otherwise.
+dpTaggedOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    go: symtab.typing.dpTaggedParent.get key: nid
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0
+    }
+}
+
+# memberOwnerOf9 -- the receiver's canonical type id for a dotted member
+# node; 0 when the path resolved through a non-member leg.
+memberOwnerOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    go: symtab.typing.memberOwnerTid.get key: nid
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0
+    }
+}
+
 # matchDiverges -- true when a match node is stamped `never` (the typechecker's
 # exhaustive + all-arms-diverge result), so its `default:` is provably unreachable.
 matchDiverges: function {symtab: zenv.ZSymbolTable nid: u64} out bool is {
@@ -5103,6 +5130,28 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             arm: xar9.stringview
         )
         if xtag9.length > 0 then return xtag9
+        # tagged-construction stamp: the typechecker resolved this path as
+        # `Type.arm`, so member emission wins over the name-matched legs
+        # below (io/os bases, ownership markers, numeric casts). Null-payload
+        # arms emit the tag; payload arms and generic templates fall through
+        # (construction calls and inference are handled by later legs).
+        dtp9: dpTaggedOf9 :symtab nid: n.nodeid.u64
+        if dtp9 > 0 then {
+            dtg9: false
+            if (symtab.reg.typetypeOf typeId: dtp9) == ztypes.ztypetype.variantType then dtg9 = true
+            if (symtab.reg.typetypeOf typeId: dtp9) == ztypes.ztypetype.unionType then dtg9 = true
+            if dtg9 when (isGenericType :symtab tid: dtp9) == false then {
+                vcH9: symtab.reg.cnameOf tid: dtp9
+                if vcH9.length > 0 then {
+                    pcH9: armPayloadC :symtab :ctx tid: dtp9 arm: mnc0.stringview
+                    if pcH9.length == 0 then {
+                        tgH9: variantTag :symtab tid: dtp9 arm: mnc0.stringview
+                        eH9: "((\{vcH9}_t){ .tag = \{tgH9} })"
+                        return eH9
+                    }
+                }
+            }
+        }
         bn2r: atomTextOf n: n.parent
         bn2a9: aliasResolve :ctx name: bn2r.stringview
         bn2: ztypes.mangleVarName name: bn2a9.stringview
@@ -5152,10 +5201,24 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             if isMove9 then return (emitExpr :symtab :ctx n: n.parent)
         }
         cTypeLk2: cTypeOf name: mn2.stringview
+        ncUser9: false
         if cTypeLk2.length > 0 then {
+            ncMot9: memberOwnerOf9 :symtab nid: n.nodeid.u64
+            if ncMot9 > 0 then {
+                ncShad9: (ztypecheck.isUserShadowElem
+                    ty: symtab.typing
+                    reg: symtab.reg
+                    elemTid: ncMot9
+                )
+                if ncShad9 then ncUser9 = true
+            }
+        }
+        if cTypeLk2.length > 0 when (ncUser9) == false then {
             # runtime numeric conversion `<expr>.<numtype>` -> a C cast (checked
-            # on narrowing). Works for any base (atom or compound binop/dotted);
-            # folded literal conversions return earlier via nodeConstText.
+            # on narrowing) for any base whose member owner is not a
+            # user-declared type -- a scalar-named variant arm or record field
+            # resolves through the member legs instead. Folded literal
+            # conversions return earlier via nodeConstText.
             ncSrc9: stampNameOf :symtab nid: (nodeIdOf9 n: n.parent)
             ncVal9: emitExpr :symtab :ctx n: n.parent
             return (emitNumericCast

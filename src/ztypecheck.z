@@ -10359,7 +10359,8 @@ checkDotted: function {
     ) case some then {
         # member-owner stamp: the use-site dotted path resolved a member of
         # `bt` (field, method, or tagged arm). Tooling reads this for
-        # go-to-definition; the compiler itself never consumes it.
+        # go-to-definition; the emitter reads it to gate the numeric-cast
+        # leg (a scalar-named member of a user type is not a conversion).
         if dp.nodeid > 0 when bt > 0 then {
             setmo9: bt
             st.typing.memberOwnerTid.set key: dp.nodeid.u64 value: setmo9
@@ -16638,9 +16639,10 @@ canonShellTid: function {
 
 # canonicalizeShellNodeStamps -- checkBodies runs BEFORE the shell-child
 # canonicalization, so expression nodes typed through a then-shell edge
-# carry the shell id in nodeType (and memberOwnerTid): the emitter reads
-# receiver types from those stamps, and a shell has no origin/children
-# to dispatch on. Rebind them to the canonical type like the child edges.
+# carry the shell id in nodeType (and memberOwnerTid / dpTaggedParent):
+# the emitter reads receiver types from those stamps, and a shell has no
+# origin/children to dispatch on. Rebind them to the canonical type like
+# the child edges.
 canonicalizeShellNodeStamps: function {st: zenv.ZSymbolTable mainName: StringView} is {
     cache9: (Map u64 value: u64)
     nids9: (List u64)
@@ -16674,6 +16676,22 @@ canonicalizeShellNodeStamps: function {st: zenv.ZSymbolTable mainName: StringVie
         v2: mvals9.get i: j9
         st.typing.memberOwnerTid.set key: k2 value: v2
         j9 = j9 + 1
+    }
+    dnids9: (List u64)
+    dvals9: (List u64)
+    with dt9: st.typing.dpTaggedParent.iterateItems do for d9: dt9 loop {
+        rid3: canonShellTid :st :cache9 tid: d9.value :mainName
+        if rid3 > 0 then {
+            dnids9.append d9.key
+            dvals9.append rid3
+        }
+    }
+    l9: 0.u64
+    for l9 < dnids9.length loop {
+        k3: dnids9.get i: l9
+        v3: dvals9.get i: l9
+        st.typing.dpTaggedParent.set key: k3 value: v3
+        l9 = l9 + 1
     }
 }
 
