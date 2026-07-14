@@ -90,7 +90,7 @@ pathToUri: function {path: StringView} out String is {
     return r
 }
 
-# relPathOf -- path relative to srcDir ("" when outside it).
+# relPathOf -- path relative to a provider root ("" when outside it).
 relPathOf: function {path: StringView srcDir: StringView} out String is {
     if srcDir.length == 0 then return "".string
     pre: srcDir.string
@@ -98,6 +98,17 @@ relPathOf: function {path: StringView srcDir: StringView} out String is {
     pv: pre.stringview
     if path.startsWith pv then return (path.substring from: pre.length to: path.length).string
     return "".string
+}
+
+# absRelPath -- absolute path for a provider-relative file: the srcDir
+# join when it exists on disk, else the systemDir join when that does,
+# else the srcDir join (unsaved new files).
+absRelPath: function {rel0: StringView srcDir: StringView systemDir: StringView} out String is {
+    sj9: zcheck.joinPath a: srcDir b: rel0
+    if (io.exists path: sj9.stringview) then return sj9
+    yj9: zcheck.joinPath a: systemDir b: rel0
+    if (io.exists path: yj9.stringview) then return yj9
+    return sj9
 }
 
 # ---- position encoding ----------------------------------------------
@@ -559,6 +570,9 @@ Server: class {
             ) case some then {
                 pth: uriToPath uri: uo.stringview
                 rel: relPathOf path: pth.stringview srcDir: this.srcDir.stringview
+                if rel.length == 0 then {
+                    rel = relPathOf path: pth.stringview srcDir: this.systemDir.stringview
+                }
                 d: (Document uri: uo.copy path: pth relpath: rel text: to.copy version: ver)
                 key9: uo.copy
                 this.docs.set key: key9 value: d
@@ -872,6 +886,7 @@ Server: class {
                                 docRel: drel.stringview
                                 docUri: uo.stringview
                                 srcDir: this.srcDir.stringview
+                                systemDir: this.systemDir.stringview
                                 docText: dtext.stringview
                                 :line0
                                 ch: ch0
@@ -1611,6 +1626,7 @@ locationValue: function {
     docRel: StringView
     docUri: StringView
     srcDir: StringView
+    systemDir: StringView
     docText: StringView
     utf32: bool
 } out Value is {
@@ -1636,7 +1652,7 @@ locationValue: function {
                 st0: 0.u64
                 if pp9.startsWith "/" then st0 = 1
                 rel0: pp9.substring from: st0 to: pp9.length
-                absp9 = zcheck.joinPath a: srcDir b: rel0
+                absp9 = absRelPath :rel0 :srcDir :systemDir
             }
             uri9 = pathToUri path: absp9.stringview
             lg9: snap.vfs.getline dentryid: fs9 lineno: (line9 - 1).u64
@@ -1842,6 +1858,7 @@ locationAtFileTop: function {
     docRel: StringView
     docUri: StringView
     srcDir: StringView
+    systemDir: StringView
 } out Value is {
     if fsno == 0 then return Value.nul
     pp9: snap.vfs.pathfromprovider dentryid: fsno
@@ -1855,7 +1872,7 @@ locationAtFileTop: function {
             st0: 0.u64
             if pp9.startsWith "/" then st0 = 1
             rel0: pp9.substring from: st0 to: pp9.length
-            absp9 = zcheck.joinPath a: srcDir b: rel0
+            absp9 = absRelPath :rel0 :srcDir :systemDir
         }
         uri9 = pathToUri path: absp9.stringview
     }
@@ -1881,6 +1898,7 @@ navAnswer: function {
     docRel: StringView
     docUri: StringView
     srcDir: StringView
+    systemDir: StringView
     docText: StringView
     line0: i64
     ch: i64
@@ -2020,7 +2038,7 @@ navAnswer: function {
 
     if mode == 1 then {
         if unitFsno9 > 0 then {
-            return (locationAtFileTop :snap fsno: unitFsno9 :docRel :docUri :srcDir)
+            return (locationAtFileTop :snap fsno: unitFsno9 :docRel :docUri :srcDir :systemDir)
         }
         dn9: defNodeOf o: snap.st prog: snap.prog :refVid :refTid :refOwner member: hname.stringview
         if dn9 == 0 then return Value.nul
@@ -2032,6 +2050,7 @@ navAnswer: function {
             :docRel
             :docUri
             :srcDir
+            :systemDir
             :docText
             :utf32
         )
@@ -2070,6 +2089,7 @@ navAnswer: function {
                 :docRel
                 :docUri
                 :srcDir
+                :systemDir
                 :docText
                 :utf32
             )

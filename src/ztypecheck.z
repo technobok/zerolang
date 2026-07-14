@@ -4851,6 +4851,25 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
     } else null
 }
 
+# demandAllUnitDefs -- demand every top-level definition of a unit. Used
+# when a stdlib unit is the MAIN unit (an editor opened it): its type
+# defs have no in-graph consumers, so nothing would demand them and
+# their signature typerefs would never stamp.
+demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry unitdef: Node} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        with dit9: unitdef.body.iterate do for bm9: dit9 loop {
+            match (
+                bm9
+            ) case namedoperation then {
+                dn9: unitLabel o: bm9.name
+                if dn9.length > 0 then reg.recordDemand name: dn9.stringview
+            } else null
+        }
+    } else null
+}
+
 registerAndResolveMain: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -4874,7 +4893,16 @@ registerAndResolveMain: function {
                 mu
             ) case namedoperation then {
                 nm: unitLabel o: mu.name
-                if (isFileUnit name: nm.stringview) then {
+                eager9: isFileUnit name: nm.stringview
+                if nm.stringview == mainName then {
+                    if (eager9) == false then {
+                        # a stdlib unit opened as main: demand all of its
+                        # defs so every signature typeref resolves + stamps.
+                        demandAllUnitDefs :reg unitdef: mu.operation
+                    }
+                    eager9 = true
+                }
+                if eager9 then {
                     # Skeleton mode (full=false): the reference resolves dep
                     # signatures lazily and never stamps their type-ref atoms, so
                     # suppress the dep sig stamps to match. Full mode stamps them
@@ -5501,13 +5529,16 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
+        mainName: program.mainUnitName.stringview
         uiter: program.units.iterate
         for u: uiter loop {
             match (
                 u
             ) case namedoperation then {
                 nm: unitLabel o: u.name
-                if (isFileUnit name: nm.stringview) then scanUnitCalls :reg unitdef: u.operation
+                eager9: isFileUnit name: nm.stringview
+                if nm.stringview == mainName then eager9 = true
+                if eager9 then scanUnitCalls :reg unitdef: u.operation
             } else null
         }
     } else null
