@@ -128,6 +128,44 @@ isReservedMemberName: function {name: StringView} out bool is {
     return false
 }
 
+# True when the node is the bare identifier `null` (through an
+# `expression` wrapper).
+nodeIsBareNull: function {n: Node} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.stringview == "null"
+    } case expression then {
+        return (nodeIsBareNull n: n.expression)
+    } else {
+        return false
+    }
+}
+
+# True when a statement line wraps the bare identifier `null`.
+slIsBareNull: function {sl: Node} out bool is {
+    match (
+        sl
+    ) case statementline then {
+        return (nodeIsBareNull n: sl.statementline)
+    } else {
+        return false
+    }
+}
+
+# True when a clause body is exactly the bare atom `null` (one wrapped
+# expression statement): the empty-body spelling.
+isBareNullBody: function {body: Node} out bool is {
+    match (
+        body
+    ) case statement then {
+        if body.statements.length != 1 then return false
+        return (slIsBareNull sl: (body.statements.get i: 0))
+    } else {
+        return false
+    }
+}
+
 # True for the keyword token types that open an inline type definition
 # (record / class / variant / union / protocol / facet / data). These are
 # rejected inside an object body -- such a type must be defined at unit
@@ -1292,6 +1330,28 @@ Parser: class {
         )
     }
 
+    # clause-body -> primary-expression, with a bare `null` body desugared
+    # to an empty block: `then null` / `else null` declare an empty body.
+    # Loop bodies do not take this form.
+    acceptClauseBody: function {:this lex: zlexer.Lexer} out Node is {
+        t: lex.peek
+        bLine: t.lineno
+        bCol: t.colno
+        body: this.acceptPrimaryExpression :lex
+        bErr: this.isError node: body
+        if bErr then return body
+        if (isBareNullBody :body) then {
+            stmts0: (List Node)
+            return (Node.statement (zast.StatementData
+                nodeid: this.nextId
+                lineno: bLine
+                colno: bCol
+                statements: stmts0)
+            )
+        }
+        return body
+    }
+
     # primary-expression -> block | operation. Control-flow bodies
     # (if/match then/else). A block parses directly to a Statement; a bare
     # expression is wrapped Statement(StatementLine(Expression)) so the
@@ -1368,7 +1428,7 @@ Parser: class {
         }
         if tt == zlexer.TT.thenTok then {
             lex.advance
-            stmt: this.acceptPrimaryExpression :lex
+            stmt: this.acceptClauseBody :lex
             sErr: this.isError node: stmt
             if sErr then return stmt
             clause: Node.ifclause (zast.IfClauseData
@@ -1400,7 +1460,7 @@ Parser: class {
         }
         if tt == zlexer.TT.elseTok then {
             lex.advance
-            estmt: this.acceptPrimaryExpression :lex
+            estmt: this.acceptClauseBody :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
             return (Node.ifexpr (zast.IfData
@@ -1493,7 +1553,7 @@ Parser: class {
                 isThen: tk.toktype == zlexer.TT.thenTok
                 if isThen then {
                     lex.advance
-                    body: this.acceptPrimaryExpression :lex
+                    body: this.acceptClauseBody :lex
                     bErr: this.isError node: body
                     if bErr then return body
                     clause: Node.caseclause (zast.CaseClauseData
@@ -1525,7 +1585,7 @@ Parser: class {
         }
         elseOpt: lex.accept tt: zlexer.TT.elseTok
         match elseOpt case some then {
-            estmt: this.acceptPrimaryExpression :lex
+            estmt: this.acceptClauseBody :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
             return (Node.caseexpr (zast.CaseData

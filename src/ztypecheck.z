@@ -10969,6 +10969,27 @@ checkReassignment: function {
     lvt: checkValue :st :unitName :unitBody node: rasgn.topath
     st.typing.inAssignTarget = false
     rvt: checkValue :st :unitName :unitBody node: rasgn.value
+    mrv0: materialiseLiteral :st :unitName t: rvt
+    if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
+        m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
+        vln0: nodeLine n: rasgn.value
+        vcl0: nodeCol n: rasgn.value
+        vid0: nodeId n: rasgn.value
+        en0: "".string
+        eh0: "".string
+        (addErrorH
+            :st
+            nodeid: vid0
+            lineno: vln0
+            colno: vcl0
+            e: zast.err.typeError
+            msg: m0n
+            note: en0
+            hint: eh0
+            width: 4
+        )
+        return
+    }
     # A typeof-placeholder field resolves at its first write: swap the
     # field child to the RHS's type and restamp the target path.
     if lvt > 0 when rvt > 0 then {
@@ -11609,10 +11630,21 @@ checkIf: function {
         o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never")
         d: 0
     )
+    nullId: (optU64Or
+        o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "null")
+        d: 0
+    )
+    anyEmpty: false
     branchTypes: (List u64)
     allDiverge: true
     cliter: ifnode.clauses.iterate
     for clause: cliter loop {
+        match (
+            clause
+        ) case ifclause then {
+            if (isEmptyBody n: clause.statement) then anyEmpty = true
+        } else {
+        }
         bm: st.pushBlock name: "if_branch"
         bt9: checkClause :st :unitName :unitBody :clause
         btc: bt9
@@ -11634,6 +11666,7 @@ checkIf: function {
         ifnode.elseclause
     ) case some then {
         hasElse = true
+        if (isEmptyBodyOpt bodyOpt: ifnode.elseclause) then anyEmpty = true
         ebm: st.pushBlock name: "if_else"
         walkBody :st :unitName :unitBody bodyOpt: ifnode.elseclause
         et9: lastStmtTypeOpt :st bodyOpt: ifnode.elseclause
@@ -11659,7 +11692,16 @@ checkIf: function {
     } else {
         # An exhaustive (else-carrying) if is a value: the first completing
         # branch's type, diverging branches skipped (mirrors the match rule).
-        if hasElse then {
+        if hasElse when anyEmpty then {
+            # an empty (`{}` / null) branch body makes the if valueless:
+            # stamp null so consuming it as a value is rejected.
+            if nullId > 0 then {
+                result = nullId
+                setnv0: result
+                st.typing.nodeType.set key: ifnode.nodeid.u64 value: setnv0
+            }
+        }
+        if hasElse when (anyEmpty) == false then {
             ti9: 0.u64
             tn9: branchTypes.length
             for ti9 < tn9 loop {
@@ -14455,6 +14497,29 @@ sumSubtypeNames: function {st: zenv.ZSymbolTable sid: u64} out List String is {
     return arms
 }
 
+# isEmptyBody -- a statement block with no statement lines (an empty
+# `{}` or `null` clause body).
+isEmptyBody: function {n: Node} out bool is {
+    match (
+        n
+    ) case statement then {
+        return n.statements.length == 0
+    } else {
+        return false
+    }
+}
+
+# isEmptyBodyOpt -- isEmptyBody through an optional clause body.
+isEmptyBodyOpt: function {bodyOpt: Option Node} out bool is {
+    match (
+        bodyOpt
+    ) case some then {
+        return (isEmptyBody n: bodyOpt)
+    } case none then {
+        return false
+    }
+}
+
 # lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
 lastStmtTypeOpt: function {st: zenv.ZSymbolTable bodyOpt: Option Node} out u64 is {
     match (
@@ -14501,6 +14566,11 @@ checkCase: function {
         neverId = nvOpt
     } case none then {
     }
+    nullId: (optU64Or
+        o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "null")
+        d: 0
+    )
+    anyEmpty: false
     st.pushBlock name: "match_body"
     if targetName.length > 0 then st.resetNarrowing name: targetName.stringview
     covered: (List String)
@@ -14513,6 +14583,7 @@ checkCase: function {
             clause
         ) case caseclause then {
             armName: atomName n: clause.matcharm
+            if (isEmptyBody n: clause.statement) then anyEmpty = true
             # A value-match literal arm wears the subject's concrete type.
             if (isSum) == false then {
                 if (isNumericLiteralName name: armName.stringview) when subjT > 0 then {
@@ -14566,6 +14637,7 @@ checkCase: function {
     } case none then {
     }
     if hasElse then {
+        if (isEmptyBodyOpt bodyOpt: casenode.elseclause) then anyEmpty = true
         elseMarker: st.pushBlock name: "arm:else"
         if targetName.length > 0 when subjT > 0 then {
             eiter: covered.iterate
@@ -14635,6 +14707,16 @@ checkCase: function {
         } else {
             return 0
         }
+    }
+    if exhaustive when anyEmpty then {
+        # an empty (`{}` / null) arm body makes the match valueless: stamp
+        # null so consuming the match as a value is rejected.
+        if nullId > 0 then {
+            setne0: nullId
+            st.typing.nodeType.set key: casenode.nodeid.u64 value: setne0
+            return nullId
+        }
+        return 0
     }
     if exhaustive then {
         # the first completing (non-diverging) arm's type is the match value;
