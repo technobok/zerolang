@@ -5032,6 +5032,15 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             btn: typeNameOfReg9 :symtab tid: brid
             cTypeLk1: cTypeOf name: btn.stringview
             if cTypeLk1.length > 0 then {
+                # a stamped implicit zero-create is the scalar's zero value;
+                # an unstamped scalar-name atom keeps the raw name text
+                izo9: symtab.typing.implicitCreate.get key: n.nodeid.u64
+                match (
+                    izo9
+                ) case some then {
+                    ize9: "((\{cTypeLk1})0)"
+                    return ize9
+                } case none then null
                 bsv: btn.stringview
                 bsc: bsv.string
                 return bsc
@@ -5058,6 +5067,17 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             recFieldLists :symtab tid: brid names: fpn9 ids: fpi9
             if fpn9.length == 0 then return "\{fbcn9}()"
         }
+        # a stamped implicit zero-create on a String atom is the empty
+        # owned string: the zero struct needs no allocation and no free
+        iso9: symtab.typing.implicitCreate.get key: n.nodeid.u64
+        match (
+            iso9
+        ) case some then {
+            if iso9 == ctx.strTid then {
+                ise9: "((\{ctx.strC}_t){0})"
+                return ise9
+            }
+        } case none then null
         return (emitLocalAtomName :ctx name: av)
     } case labelvalue then {
         return (emitLocalAtomName :ctx name: n.name.stringview)
@@ -5561,7 +5581,20 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                         mc2: symtab.reg.cnameOf tid: mco
                         # `Type.create` -- the base is the type name itself, not
                         # an instance -- is a constructor/static call and takes no
-                        # receiver (fbtn9 is the enclosing type's name).
+                        # receiver (fbtn9 is the enclosing type's name). The
+                        # native scalar/String creates have no C symbol: the
+                        # zero value is the construction.
+                        if bn2.stringview == fbtn9.stringview when mn2.stringview == "create" then {
+                            zsc9: scalarCTypeFor :symtab name: fbtn9.stringview tid: bstamp
+                            if zsc9.length > 0 then {
+                                zse9: "((\{zsc9})0)"
+                                return zse9
+                            }
+                            if bstamp == ctx.strTid then {
+                                zst9: "((\{ctx.strC}_t){0})"
+                                return zst9
+                            }
+                        }
                         if bn2.stringview == fbtn9.stringview then return "\{mc2}()"
                         mrecv6: "\{bn2}"
                         if rtt == ztypes.ztypetype.classType then {
