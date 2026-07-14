@@ -613,6 +613,19 @@ dpArmPredicateOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     }
 }
 
+# dpTagReadOf9 -- the tag-accessor stamp for a dotted node: the variant/
+# union type id when `value.<accessor>` reads the discriminator; 0 otherwise.
+dpTagReadOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
+    go: symtab.typing.dpTagRead.get key: nid
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0
+    }
+}
+
 # memberOwnerOf9 -- the receiver's canonical type id for a dotted member
 # node; 0 when the path resolved through a non-member leg.
 memberOwnerOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
@@ -5182,6 +5195,30 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             tgP9: variantTag :symtab tid: dap9 arm: mnc0.stringview
             eP9: "((\{recvP9})\{accP9}tag == \{tgP9})"
             return eP9
+        }
+        # explicit tag-accessor read: the discriminator cast to the declared
+        # numeric type. A bool receiver is a C bool with no tag field -- the
+        # bool VALUE is its discriminator.
+        dtr9: dpTagReadOf9 :symtab nid: n.nodeid.u64
+        if dtr9 > 0 then {
+            recvT9: emitExpr :symtab :ctx n: n.parent
+            tatE9: 0.u64
+            tato9: symtab.typing.tagAccessorTid.get key: dtr9
+            match (
+                tato9
+            ) case some then {
+                tatE9 = tato9
+            } case none then null
+            castT9: typeRefC :symtab :ctx tid: tatE9 thisTid: 0
+            bsnT9: stampNameDeep :symtab n: n.parent
+            if bsnT9.stringview == "bool" then return "((\{castT9})(\{recvT9}))"
+            accT9: ".".string
+            rootT9: atomTextOf n: n.parent
+            if rootT9.length > 0 then {
+                if (isPtrVar :ctx name: rootT9.stringview) then accT9 = "->".string
+            }
+            eT9: "((\{castT9})(\{recvT9})\{accT9}tag)"
+            return eT9
         }
         bn2r: atomTextOf n: n.parent
         bn2a9: aliasResolve :ctx name: bn2r.stringview

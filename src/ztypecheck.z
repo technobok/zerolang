@@ -888,6 +888,23 @@ parseDecimalU64: function {text: StringView} out optionval u64 is {
 # isNumericLiteralName -- true when a name begins with a digit: a numeric-literal
 # atom (an `as`-block static constant like `version: 1`), as opposed to a type-name
 # atom (a conformance marker). 48..57 are the ASCII digits.
+# isNumericTypeName -- the name of a builtin numeric scalar type.
+isNumericTypeName: function {name: StringView} out bool is {
+    if name == "i8" then return true
+    if name == "i16" then return true
+    if name == "i32" then return true
+    if name == "i64" then return true
+    if name == "i128" then return true
+    if name == "u8" then return true
+    if name == "u16" then return true
+    if name == "u32" then return true
+    if name == "u64" then return true
+    if name == "u128" then return true
+    if name == "f32" then return true
+    if name == "f64" then return true
+    return false
+}
+
 isNumericLiteralName: function {name: StringView} out bool is {
     b0: name.byteAt 0.u64
     match (
@@ -3328,6 +3345,52 @@ resolveRecord: function {
 # synthesized `tag` child (the `{name}:tag:data` discriminator wrapper), any as-block
 # methods, then synthesized `==`/`!=`. Variants have no `create` (bare construction is
 # disabled). Custom-DATA tags + generics arrive later.
+# detectTagAccessor -- a non-function variant/union as-item of the form
+# `name: <numeric>.tag` declares the read-only tag accessor: instances
+# expose the discriminator ordinal as the numeric type under that name.
+detectTagAccessor: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    units: List Node
+    unitName: StringView
+    defName: StringView
+    ownerId: u64
+    armNames: Set String
+    am: zast.NamedOperationData
+} is {
+    tp9: dottedParentName n: am.operation
+    tc9: dottedChildName n: am.operation
+    if tc9.stringview != "tag" then return
+    if (isNumericTypeName name: tp9.stringview) == false then return
+    mname9: unitLabel o: am.name
+    nid9: (resolveTyperefShellMarked
+        :ty
+        :reg
+        :units
+        :unitName
+        ownerId: 0
+        typeExpr: am.operation
+        thisName: defName
+    )
+    if nid9 == 0 then return
+    if (armNames.has item: mname9) then {
+        mac9: "'\{mname9}' collides with the '\{defName}' arm of the same name"
+        (addResolveErrorH
+            :ty
+            nodeid: am.nodeid
+            lineno: am.lineno
+            colno: am.colno
+            e: zast.err.duplicateDef
+            msg: mac9
+            width: mname9.length.u32
+        )
+        return
+    }
+    man9: mname9.copy
+    ty.tagAccessorName.set key: ownerId value: man9
+    ty.tagAccessorTid.set key: ownerId value: nid9
+}
+
 resolveVariant: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -3441,7 +3504,20 @@ resolveVariant: function {
                 } else {
                     ty.setChild parentTypeId: vid childName: mname.stringview childTypeId: mido
                 }
-            } else null
+            } else {
+                if (isgen) == false then {
+                    (detectTagAccessor
+                        :ty
+                        :reg
+                        :units
+                        :unitName
+                        :defName
+                        ownerId: vid
+                        armNames: armNames9
+                        :am
+                    )
+                }
+            }
         } else null
     }
     if (isgen) == false then {
@@ -3684,7 +3760,20 @@ resolveUnion: function {
                 } else {
                     ty.setChild parentTypeId: uid childName: mname.stringview childTypeId: mido
                 }
-            } else null
+            } else {
+                if (isgen) == false then {
+                    (detectTagAccessor
+                        :ty
+                        :reg
+                        :units
+                        :unitName
+                        :defName
+                        ownerId: uid
+                        armNames: armNames9
+                        :am
+                    )
+                }
+            }
         } else null
     }
     if (allNull) == false then {
@@ -10338,6 +10427,67 @@ checkDotted: function {
         if tdd9 == 0 then tdd9 = typedefBaseOf :st :unitName tid: bt
         if tdd9 > 0 then bt = tdd9
     }
+    # explicit tag accessor: a variant/union as-item `name: <numeric>.tag`
+    # exposes the discriminator on instances as a read-only numeric under
+    # the declared name; without one, instance reads of `tag` are rejected.
+    btt5: st.reg.typetypeOf typeId: bt
+    isSum5: false
+    if btt5 == ztypes.ztypetype.variantType then isSum5 = true
+    if btt5 == ztypes.ztypetype.unionType then isSum5 = true
+    if isSum5 when (taggedRecvIsValue :st n: dp.parent) then {
+        taHit5: false
+        tan5: st.typing.tagAccessorName.get key: bt
+        match (
+            tan5
+        ) case some then {
+            if tan5.stringview == cn.stringview then taHit5 = true
+        } case none then null
+        if taHit5 then {
+            if st.typing.inAssignTarget then {
+                mro5: "'\{cn}' is read-only — the tag accessor cannot be assigned"
+                en5: "".string
+                eh5: "".string
+                (addErrorH
+                    :st
+                    nodeid: dp.nodeid
+                    lineno: dp.lineno
+                    colno: dp.colno
+                    e: zast.err.typeError
+                    msg: mro5
+                    note: en5
+                    hint: eh5
+                    width: cn.length.u32
+                )
+                return 0
+            }
+            tat5: optU64Or o: (st.typing.tagAccessorTid.get key: bt) d: 0
+            if tat5 > 0 then {
+                st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
+                setmo5: bt
+                st.typing.memberOwnerTid.set key: dp.nodeid.u64 value: setmo5
+                stampGate :st nid: dp.nodeid tid: tat5
+                return tat5
+            }
+        }
+        if cn.stringview == "tag" then {
+            btn5: typeNameOf :st tid: bt
+            mnx5: "tag not exposed on '\{btn5}' — declare it in the as block (eg. `tag: u8.tag`)"
+            en6: "".string
+            eh6: "".string
+            (addErrorH
+                :st
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.typeError
+                msg: mnx5
+                note: en6
+                hint: eh6
+                width: cn.length.u32
+            )
+            return 0
+        }
+    }
     # A cross-unit narrowed match-arm base can be a SHELL whose member
     # children are not registered (cross-unit demand mints a shell id distinct
     # from the canonical defining-unit id); on a member miss retarget the base
@@ -16932,6 +17082,38 @@ canonicalizeShellNodeStamps: function {st: zenv.ZSymbolTable mainName: StringVie
         v4: pvals9.get i: q9
         st.typing.dpArmPredicate.set key: k4 value: v4
         q9 = q9 + 1
+    }
+    tnids9: (List u64)
+    tvals9: (List u64)
+    with tt9: st.typing.dpTagRead.iterateItems do for t9: tt9 loop {
+        rid5: canonShellTid :st :cache9 tid: t9.value :mainName
+        if rid5 > 0 then {
+            tnids9.append t9.key
+            tvals9.append rid5
+        }
+    }
+    r9: 0.u64
+    for r9 < tnids9.length loop {
+        k5: tnids9.get i: r9
+        v5: tvals9.get i: r9
+        st.typing.dpTagRead.set key: k5 value: v5
+        r9 = r9 + 1
+    }
+    anids9: (List u64)
+    avals9: (List u64)
+    with at9: st.typing.tagAccessorTid.iterateItems do for a9: at9 loop {
+        rid6: canonShellTid :st :cache9 tid: a9.value :mainName
+        if rid6 > 0 then {
+            anids9.append a9.key
+            avals9.append rid6
+        }
+    }
+    w9: 0.u64
+    for w9 < anids9.length loop {
+        k6: anids9.get i: w9
+        v6: avals9.get i: w9
+        st.typing.tagAccessorTid.set key: k6 value: v6
+        w9 = w9 + 1
     }
 }
 
