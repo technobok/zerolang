@@ -8908,6 +8908,130 @@ exprNodeId9: function {n: Node} out u64 is {
     }
 }
 
+# bodyReassigns9 -- true when the body (at any depth through the common
+# statement containers) reassigns `name`, which would stale a narrowBox
+# alias for it.
+bodyReassigns9: function {n: Node name: StringView} out bool is {
+    match (
+        n
+    ) case statement then {
+        hit9: false
+        with sit9: n.statements.iterate do for s9: sit9 loop {
+            if (bodyReassigns9 n: s9 :name) then hit9 = true
+        }
+        return hit9
+    } case statementline then {
+        return (bodyReassigns9 n: n.statementline :name)
+    } case expression then {
+        return (bodyReassigns9 n: n.expression :name)
+    } case reassignment then {
+        rb9: atomTextOf n: n.topath
+        if rb9.length == 0 then rb9 = dottedBaseAtom n: n.topath
+        return rb9.stringview == name
+    } case ifexpr then {
+        hif9: false
+        with cit9: n.clauses.iterate do for c9: cit9 loop {
+            if (bodyReassigns9 n: c9 :name) then hif9 = true
+        }
+        if hif9 then return true
+        return (bodyReassignsOpt9 o: n.elseclause :name)
+    } case ifclause then {
+        return (bodyReassigns9 n: n.statement :name)
+    } case caseexpr then {
+        hce9: false
+        with kit9: n.clauses.iterate do for k9: kit9 loop {
+            if (bodyReassigns9 n: k9 :name) then hce9 = true
+        }
+        if hce9 then return true
+        return (bodyReassignsOpt9 o: n.elseclause :name)
+    } case caseclause then {
+        return (bodyReassigns9 n: n.statement :name)
+    } case forexpr then {
+        return (bodyReassignsOpt9 o: n.body :name)
+    } case doexpr then {
+        return (bodyReassigns9 n: n.statement :name)
+    } case withexpr then {
+        return (bodyReassigns9 n: n.body :name)
+    } else {
+        return false
+    }
+}
+
+# bodyReassignsOpt9 -- bodyReassigns9 through an optional node.
+bodyReassignsOpt9: function {o: Option Node name: StringView} out bool is {
+    match (
+        o
+    ) case some then {
+        return (bodyReassigns9 n: o :name)
+    } case none then {
+        return false
+    }
+}
+
+# seedFromPred9 -- one if-condition operation: admit a POSITIVE bare arm
+# predicate whose receiver is a non-bool variable, whose arm carries a
+# payload, and whose subject the body does not reassign; append its
+# narrowBox seed (subject, alias text, payload tid).
+seedFromPred9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+    body: Node
+    names: List String
+    vals: List String
+    tids: List u64
+} is {
+    match (
+        n
+    ) case expression then {
+        seedFromPred9 :symtab :ctx n: n.expression :body :names :vals :tids
+    } case dottedpath then {
+        dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
+        if dap9 == 0 then return
+        bsn9: stampNameDeep :symtab n: n.parent
+        if bsn9.stringview == "bool" then return
+        subj9: atomTextOf n: n.parent
+        if subj9.length == 0 then return
+        arm9: atomTextOf n: n.child
+        pc9: armPayloadC :symtab :ctx tid: dap9 arm: arm9.stringview
+        if pc9.length == 0 then return
+        if (bodyReassigns9 n: body name: subj9.stringview) then return
+        recv9: emitExpr :symtab :ctx n: n.parent
+        acc9: ".".string
+        if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
+        alias9: "".string
+        if (symtab.reg.typetypeOf typeId: dap9) == ztypes.ztypetype.unionType then {
+            alias9 = "(*(\{pc9}*)\{recv9}\{acc9}data)"
+        } else {
+            alias9 = "\{recv9}\{acc9}data.\{arm9}"
+        }
+        names.append subj9
+        vals.append alias9
+        pt9: optU64Or9 o: (symtab.typing.childOf parentTypeId: dap9 name: arm9.stringview)
+        tids.append pt9
+    } else null
+}
+
+# ifPredSeeds9 -- collect the narrowBox seeds for a clause's positive bare
+# arm-predicate conjuncts (parallel name/alias/payload-tid lists).
+ifPredSeeds9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    conds: List Node
+    body: Node
+    names: List String
+    vals: List String
+    tids: List u64
+} is {
+    with kit9: conds.iterate do for k9: kit9 loop {
+        match (
+            k9
+        ) case namedoperation then {
+            seedFromPred9 :symtab :ctx n: k9.operation :body :names :vals :tids
+        } else null
+    }
+}
+
 emitIfClause: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -8941,6 +9065,35 @@ emitIfClause: function {
             buf.append lg.stringview
         }
         ind2: "\{ind}    "
+        sN9: (List String)
+        sV9: (List String)
+        sT9: (List u64)
+        (ifPredSeeds9
+            :symtab
+            :ctx
+            conds: n.conditions
+            body: n.statement
+            names: sN9
+            vals: sV9
+            tids: sT9
+        )
+        sPrevV9: (List String)
+        sPrevT9: (List u64)
+        si9: 0.u64
+        for si9 < sN9.length loop {
+            snm9: sN9.get i: si9
+            pv9: nvGet xs: ctx.narrowBox name: snm9.stringview
+            sPrevV9.append pv9
+            ptv9: optU64Or9 o: (ntGet xs: ctx.narrowTid name: snm9.stringview)
+            sPrevT9.append ptv9
+            svv9: sV9.get i: si9
+            nvSet xs: ctx.narrowBox name: snm9.stringview val: svv9.stringview
+            stt9: sT9.get i: si9
+            ntSet xs: ctx.narrowTid name: snm9.stringview tid: stt9
+            cmtS9: "\{ind}    /* alias: \{snm9} => \{svv9} */\n"
+            buf.append cmtS9.stringview
+            si9 = si9 + 1
+        }
         if assignTo.length > 0 then {
             (emitBranchAssign
                 :symtab
@@ -8956,6 +9109,23 @@ emitIfClause: function {
             lLi9: tmp.listFrees.length
             emitBodyNode :symtab :ctx n: n.statement ind: ind2.stringview :tmp :buf
             flushBlockFrees :ctx :tmp fL: fLi9 lL: lLi9 :buf
+        }
+        ri9: 0.u64
+        for ri9 < sN9.length loop {
+            rnm9: sN9.get i: ri9
+            rv9: sPrevV9.get i: ri9
+            if rv9.length > 0 then {
+                nvSet xs: ctx.narrowBox name: rnm9.stringview val: rv9.stringview
+            } else {
+                nvRemove xs: ctx.narrowBox name: rnm9.stringview
+            }
+            rt9: sPrevT9.get i: ri9
+            if rt9 > 0 then {
+                ntSet xs: ctx.narrowTid name: rnm9.stringview tid: rt9
+            } else {
+                ntRemove xs: ctx.narrowTid name: rnm9.stringview
+            }
+            ri9 = ri9 + 1
         }
     } else null
 }

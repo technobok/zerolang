@@ -10709,25 +10709,201 @@ isComparisonOp: function {name: StringView} out bool is {
     return false
 }
 
-# checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped)
-# then its then-statement block.
+# ArmPredFact -- one bare arm predicate recognized in an if condition: the
+# subject variable, the arm, the sum type, and whether the condition form
+# is negated (`(x.a) == false` / trailing `.false`).
+ArmPredFact: class {
+    subject: String
+    armName: String
+    fullTid: u64
+    negated: bool
+}
+
+# predDottedCore -- an ArmPredFact from an exploded predicate dotted node
+# (`x.a` carrying a dpArmPredicate stamp on a non-bool receiver with a
+# bare-variable subject), or none.
+predDottedCore: function {
+    st: zenv.ZSymbolTable
+    nid: u64
+    parent: Node
+    childName: StringView
+    boolId: u64
+    negated: bool
+} out Option ArmPredFact is {
+    ptid9: optU64Or o: (st.typing.dpArmPredicate.get key: nid) d: 0
+    if ptid9 == 0 then return (Option.none ArmPredFact)
+    if ptid9 == boolId then return (Option.none ArmPredFact)
+    sn9: bareAtomName n: parent
+    if sn9.length == 0 then return (Option.none ArmPredFact)
+    if childName.length == 0 then return (Option.none ArmPredFact)
+    an9: childName.string
+    return (Option.some (ArmPredFact
+        subject: sn9
+        armName: an9
+        fullTid: ptid9
+        :negated
+    ))
+}
+
+# predDottedFact -- predDottedCore over a Node (expression wrappers peeled).
+predDottedFact: function {
+    st: zenv.ZSymbolTable
+    n: Node
+    boolId: u64
+    negated: bool
+} out Option ArmPredFact is {
+    match (
+        n
+    ) case expression then {
+        return (predDottedFact :st n: n.expression :boolId :negated)
+    } case dottedpath then {
+        cnc9: atomName n: n.child
+        return (predDottedCore
+            :st
+            nid: n.nodeid.u64
+            parent: n.parent
+            childName: cnc9.stringview
+            :boolId
+            :negated
+        )
+    } else {
+        return (Option.none ArmPredFact)
+    }
+}
+
+# predFactOf -- recognize an if-condition operation as an arm predicate:
+# bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
+# `(x.a) == true` / `(x.a) == false`. none otherwise.
+predFactOf: function {st: zenv.ZSymbolTable n: Node boolId: u64} out Option ArmPredFact is {
+    match (
+        n
+    ) case expression then {
+        return (predFactOf :st n: n.expression :boolId)
+    } case dottedpath then {
+        cn9: atomName n: n.child
+        if cn9.stringview == "true" then return (predDottedFact
+            :st
+            n: n.parent
+            :boolId
+            negated: false
+        )
+        if cn9.stringview == "false" then return (predDottedFact
+            :st
+            n: n.parent
+            :boolId
+            negated: true
+        )
+        return (predDottedCore
+            :st
+            nid: n.nodeid.u64
+            parent: n.parent
+            childName: cn9.stringview
+            :boolId
+            negated: false
+        )
+    } case binop then {
+        opn9: bareAtomName n: n.operator
+        if opn9.stringview == "==" then {
+            ln9: bareAtomName n: n.lhs
+            rn9: bareAtomName n: n.rhs
+            if rn9.stringview == "true" then return (predDottedFact
+                :st
+                n: n.lhs
+                :boolId
+                negated: false
+            )
+            if rn9.stringview == "false" then return (predDottedFact
+                :st
+                n: n.lhs
+                :boolId
+                negated: true
+            )
+            if ln9.stringview == "true" then return (predDottedFact
+                :st
+                n: n.rhs
+                :boolId
+                negated: false
+            )
+            if ln9.stringview == "false" then return (predDottedFact
+                :st
+                n: n.rhs
+                :boolId
+                negated: true
+            )
+        }
+        return (Option.none ArmPredFact)
+    } else {
+        return (Option.none ArmPredFact)
+    }
+}
+
+# applyPredFact -- record one predicate fact on its subject in the current
+# branch scope. `holds` is the branch's knowledge of the condition: true
+# on the then path, false on else/later-clause paths. A holding positive
+# (or failing negated) fact narrows to the arm; the opposite excludes it
+# (zenv.exclude collapses to the last remaining arm on its own). Then-path
+# narrows SHADOW (bare name is the payload, aliased by the emitter);
+# condition-false narrows keep the sidecar form (payload via the narrowed
+# `x.arm` read), matching exclude-collapse and assignment narrowing.
+applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
+    doNarrow9: false
+    if holds when (f.negated) == false then doNarrow9 = true
+    if (holds) == false when f.negated then doNarrow9 = true
+    if doNarrow9 then {
+        po9: st.typing.childOf parentTypeId: f.fullTid name: f.armName.stringview
+        match (
+            po9
+        ) case some then {
+            (st.narrow
+                name: f.subject.stringview
+                toTypeId: po9
+                subtypeName: f.armName.stringview
+                shadow: holds
+            )
+        } case none then null
+    } else {
+        (st.exclude
+            name: f.subject.stringview
+            subtypeName: f.armName.stringview
+            fullTypeId: f.fullTid
+        )
+    }
+}
+
+# checkClause -- walk one if-clause: its condition(s) (namedoperation-wrapped),
+# then this clause's predicate facts as condition-true knowledge (appended to
+# factsOut), then its then-statement block.
 checkClause: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     unitBody: List Node
     clause: Node
+    factsOut: List ArmPredFact
+    boolId: u64
 } out u64 is {
     match (
         clause
     ) case ifclause then {
-        coiter: clause.conditions.iterate
-        for cond: coiter loop {
+        with coiter: clause.conditions.iterate do for cond: coiter loop {
             match (
                 cond
             ) case namedoperation then {
                 checkValue :st :unitName :unitBody node: cond.operation
             } else null
         }
+        with cfit9: clause.conditions.iterate do for cnd9: cfit9 loop {
+            match (
+                cnd9
+            ) case namedoperation then {
+                fo9: predFactOf :st n: cnd9.operation :boolId
+                match (
+                    fo9
+                ) case some then {
+                    factsOut.append fo9.take
+                } case none then null
+            } else null
+        }
+        with afit9: factsOut.iterate do for af9: afit9 loop applyPredFact :st f: af9 holds: true
         checkStatement :st :unitName :unitBody block: clause.statement
         return (lastStmtType :st block: clause.statement)
     } else {
@@ -11553,6 +11729,11 @@ checkIf: function {
         o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "null")
         d: 0
     )
+    pBool9: (optU64Or
+        o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "bool")
+        d: 0
+    )
+    accFacts: (List ArmPredFact)
     anyEmpty: false
     branchTypes: (List u64)
     allDiverge: true
@@ -11564,7 +11745,9 @@ checkIf: function {
             if (isEmptyBody n: clause.statement) then anyEmpty = true
         } else null
         bm: st.pushBlock name: "if_branch"
-        bt9: checkClause :st :unitName :unitBody :clause
+        with pfit9: accFacts.iterate do for pf9: pfit9 loop applyPredFact :st f: pf9 holds: false
+        cfacts9: (List ArmPredFact)
+        bt9: checkClause :st :unitName :unitBody :clause factsOut: cfacts9 boolId: pBool9
         btc: bt9
         branchTypes.append btc
         if st.isUnreachable then {
@@ -11578,6 +11761,16 @@ checkIf: function {
             restoreTakenArm :st :liveBefore taken: takenAcross
         }
         st.popTo marker: bm
+        cn1c9: 0.u64
+        match (
+            clause
+        ) case ifclause then {
+            cn1c9 = clause.conditions.length
+        } else null
+        if cn1c9 == 1 when cfacts9.length == 1 then {
+            mvf9: cfacts9.pop
+            accFacts.append mvf9
+        }
     }
     hasElse: false
     match (
@@ -11586,6 +11779,7 @@ checkIf: function {
         hasElse = true
         if (isEmptyBodyOpt bodyOpt: ifnode.elseclause) then anyEmpty = true
         ebm: st.pushBlock name: "if_else"
+        with efit9: accFacts.iterate do for ef9: efit9 loop applyPredFact :st f: ef9 holds: false
         walkBody :st :unitName :unitBody bodyOpt: ifnode.elseclause
         et9: lastStmtTypeOpt :st bodyOpt: ifnode.elseclause
         etc9: et9
