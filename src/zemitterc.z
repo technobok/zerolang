@@ -3432,6 +3432,51 @@ emitAllDefaultedCall: function {
     return r
 }
 
+# renderedMethodDefaultArgs -- the comma-joined rendered defaults for every
+# non-receiver parameter of a method, when ALL of them carry defaults; ""
+# when any is required or there are none (the caller keeps its emission).
+renderedMethodDefaultArgs: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    fnTid: u64
+} out String is {
+    pn: (List String)
+    pidl: (List u64)
+    recFieldLists :symtab tid: fnTid names: pn ids: pidl
+    thisPn9: String
+    {
+        zo9: symtab.reg.typeById.get key: fnTid
+        match (
+            zo9
+        ) case some then {
+            thisPn9 = ztypecheck.optStrOrEmpty o: zo9.thisParamName
+        } case none then null
+    }
+    args: String
+    userSeen9: false
+    j: u64
+    m: pn.length
+    for j < m loop {
+        pnj: pn.get i: j
+        pij: pidl.get i: j
+        j = j + 1
+        isRecv9: false
+        if pnj.stringview == "this" then isRecv9 = true
+        if thisPn9.length > 0 when thisPn9.stringview == pnj.stringview then isRecv9 = true
+        if (isRecv9) == false then {
+            userSeen9 = true
+            hd9: symtab.typing.hasChildDefault parentTypeId: fnTid name: pnj.stringview
+            if (hd9) == false then return "".string
+            dt: symtab.typing.childDefaultText parentTypeId: fnTid name: pnj.stringview
+            rv: renderDefault :symtab :ctx default: dt.stringview targetTid: pij
+            if args.length > 0 then args.append ", "
+            args.append rv.stringview
+        }
+    }
+    if (userSeen9) == false then return "".string
+    return args
+}
+
 # emitExprStrZero -- the empty owned String value: the zero struct needs
 # no allocation and no free.
 emitExprStrZero: function {ctx: Ctx} out String is {
@@ -5758,11 +5803,17 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
                                 return zst9
                             }
                         }
-                        if bn2.stringview == fbtn9.stringview then return "\{mc2}()"
+                        if bn2.stringview == fbtn9.stringview then {
+                            sda9: renderedMethodDefaultArgs :symtab :ctx fnTid: mco
+                            if sda9.length > 0 then return "\{mc2}(\{sda9})"
+                            return "\{mc2}()"
+                        }
                         mrecv6: "\{bn2}"
                         if rtt == ztypes.ztypetype.classType then {
                             if (isPtrVar :ctx name: bn2.stringview) == false then mrecv6 = "&\{bn2}"
                         }
+                        ida9: renderedMethodDefaultArgs :symtab :ctx fnTid: mco
+                        if ida9.length > 0 then return "\{mc2}(\{mrecv6}, \{ida9})"
                         e6: "\{mc2}(\{mrecv6})"
                         return e6
                     }
