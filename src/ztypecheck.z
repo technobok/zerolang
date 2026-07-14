@@ -12885,21 +12885,20 @@ dataFieldNames: function {st: zenv.ZSymbolTable tid: u64 names: List String ids:
     } case none then null
 }
 
-# checkMissingCallArgs -- report each required field/param (no default) a call or
-# construction did not provide. The method receiver is implicitly bound; a
-# construction's FUNCTION-typed (fnptr) fields are auto-bound.
-checkMissingCallArgs: function {
+# missingCtorFields -- collect each required field/param (no default) of
+# `funcId` that the provided labels / positional count do not cover, into
+# missingNames/missingIds. The method receiver is implicitly bound; a
+# construction's body-carrying FUNCTION-typed (fnptr) fields are auto-bound;
+# native types have no required fields.
+missingCtorFields: function {
     st: zenv.ZSymbolTable
-    call: zast.CallData
     funcId: u64
     isCtor: bool
+    provided: List String
+    posCount: u64
+    missingNames: List String
+    missingIds: List u64
 } is {
-    mcb0: metaCreateBaseId n: call.callable
-    match (
-        mcb0
-    ) case some then {
-        return
-    } case none then null
     fzNat9: false
     {
         fzo9: st.reg.typeById.get key: funcId
@@ -12929,15 +12928,6 @@ checkMissingCallArgs: function {
     dataFieldNames :st tid: effId :names :ids
     pcnt: names.length
     if pcnt == 0 then return
-    posCount: 0.u64
-    with aiter: call.arguments.iterate do for arg: aiter loop {
-        match (
-            arg
-        ) case namedoperation then {
-            an: unitLabel o: arg.name
-            if an.length == 0 then posCount = posCount + 1
-        } else null
-    }
     thisPn9: "".string
     {
         zoR: st.reg.typeById.get key: effId
@@ -12976,32 +12966,67 @@ checkMissingCallArgs: function {
                 need = false
             }
             if need then {
-            prov: false
-            if posI < posCount then prov = true
-            with niter: call.arguments.iterate do for narg: niter loop {
-                match (
-                    narg
-                ) case namedoperation then {
-                    nn: unitLabel o: narg.name
-                    if nn.length > 0 when nn.stringview == pname.stringview then prov = true
-                } else null
-            }
-            if (prov) == false then {
-                tnm: typeNameOf :st tid: pcid
-                tnc: tnm.copy
-                pnc: pname.copy
-                mm: "missing required argument '\{pnc}' (type: \{tnc})"
-                (addError
-                    :st
-                    nodeid: call.nodeid
-                    lineno: call.lineno
-                    colno: call.colno
-                    e: zast.err.callError
-                    msg: mm
-                )
+                prov: false
+                if posI < posCount then prov = true
+                with piter: provided.iterate do for pv: piter loop {
+                    if pv.stringview == pname.stringview then prov = true
+                }
+                if (prov) == false then {
+                    missingNames.append pname.copy
+                    missingIds.append pcid
                 }
             }
         }
+    }
+}
+
+# checkMissingCallArgs -- report each required field/param (no default) a call or
+# construction did not provide, via missingCtorFields over the call's labeled
+# and positional arguments.
+checkMissingCallArgs: function {
+    st: zenv.ZSymbolTable
+    call: zast.CallData
+    funcId: u64
+    isCtor: bool
+} is {
+    mcb0: metaCreateBaseId n: call.callable
+    match (
+        mcb0
+    ) case some then {
+        return
+    } case none then null
+    posCount: 0.u64
+    provided: (List String)
+    with aiter: call.arguments.iterate do for arg: aiter loop {
+        match (
+            arg
+        ) case namedoperation then {
+            an: unitLabel o: arg.name
+            if an.length == 0 then posCount = posCount + 1
+            if an.length > 0 then provided.append an
+        } else null
+    }
+    missingNames: (List String)
+    missingIds: (List u64)
+    missingCtorFields :st :funcId :isCtor :provided :posCount :missingNames :missingIds
+    mi: 0.u64
+    mn: missingNames.length
+    for mi < mn loop {
+        pname: missingNames.get i: mi
+        pcid: missingIds.get i: mi
+        mi = mi + 1
+        tnm: typeNameOf :st tid: pcid
+        tnc: tnm.copy
+        pnc: pname.copy
+        mm: "missing required argument '\{pnc}' (type: \{tnc})"
+        (addError
+            :st
+            nodeid: call.nodeid
+            lineno: call.lineno
+            colno: call.colno
+            e: zast.err.callError
+            msg: mm
+        )
     }
 }
 
