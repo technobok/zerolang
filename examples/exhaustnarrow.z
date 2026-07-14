@@ -1,0 +1,70 @@
+# exhaustnarrow.z - Narrowing-aware match exhaustiveness
+#
+# A match need only cover the arms its subject can still hold: arms
+# excluded by enclosing flow (an if-predicate guard, a diverging match
+# arm) drop out of the requirement, and a subject whose arm is known
+# exactly (assignment narrowing, exclusion collapse) needs only that
+# arm's case.
+
+trio: variant {
+    a: null
+    b: null
+    c: i64
+}
+
+result: variant {
+    ok: i64
+    err: i64
+}
+
+pick: function {k: i64} out trio is {
+    if k == 0 then return trio.a
+    if k == 1 then return trio.b
+    return (trio.c k)
+}
+
+mkr: function {v: i64} out result is {
+    if v < 0 then return (result.err v)
+    return (result.ok v)
+}
+
+useguard: function {v: trio} is {
+    if v.a then {
+        print "guarded a"
+    } else {
+        match (
+            v
+        ) case b then {
+            print "else b"
+        } case c then {
+            print "else c \{v}"
+        }
+    }
+}
+
+divergeguard: function {r: result} out i64 is {
+    match (
+        r
+    ) case err then {
+        return 0 - 1
+    } case ok then null
+    match (
+        r
+    ) case ok then {
+        print "post-guard ok \{r}"
+    }
+    return 1
+}
+
+main: function is {
+    useguard v: (pick k: 2)
+    useguard v: (pick k: 0)
+    x: divergeguard r: (mkr v: 7)
+    print "dg=\{x}"
+    a: result.ok 42
+    match (
+        a
+    ) case ok then {
+        print "assign-narrow ok \{a}"
+    }
+}

@@ -1697,22 +1697,26 @@ typechecker emits a targeted diagnostic pointing at the shadowing.
 Passing the narrowed name to a function expecting the outer
 union/variant is also a type error for the same reason.
 
-Assignment-based narrowing is different — a variable assigned a
-specific subtype (#~"x: Result.ok 42") keeps its outer type so it
-remains passable as the full union; the compiler tracks a
-#~"narrowed_subtype" sidecar. Arm names on the value remain
-[#> to=sum-types: predicates] (#~"x.ok" is #~"true" here); the payload
-is reached through #>"match" or an #>"if" predicate branch.
+Assignment-based narrowing is different — a variable assigned or
+constructed as a specific subtype (#~"x: Result.ok 42") keeps its outer
+type so it remains passable as the full union, and it is #_*"not"
+re-narrowed to the payload. The compiler records the known arm: a
+#>"match" over such a value is exhaustive with only that arm's case.
+Arm names on the value remain [#> to=sum-types: predicates] (#~"x.ok"
+is #~"true" here); the payload is reached through #>"match" or an
+#>"if" predicate branch.
 
 Also, a #~"match" clause that exits the current scope (using a #~"return", #~"break"
 or #~"continue") will also 'narrow' a named target for the remainder of that
 scope -- ie. the type of that named target will exclude the subtypes where a
 matching #~"of" clause has resulted in exiting the current scope.
 
-Assignment-based narrowing: when a variable of union or variant type is assigned
-a specific subtype value (eg. #~"x: Result.ok 42"), the compiler narrows the
-variable to that subtype. Reassignment resets narrowing and optionally re-narrows
-if the new value is also a specific subtype.
+Match exhaustiveness respects the flow state: a #>"match" need only
+cover the arms its subject can still hold at that point. Arms excluded
+by enclosing flow — an #>"if" arm-predicate guard, a #~"match" arm that
+exits the scope — drop out of the requirement, and a subject whose arm
+is known exactly needs only that arm's case. Reassignment resets all
+narrowing (and re-narrows when the new value is a specific subtype).
 
 An #~"else" clause of a #~"match" sees the union/variant type with all explicit
 #~"case" subtypes excluded.
