@@ -24,7 +24,7 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
 # front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
 # pre-existing first-arg-elision labels that were never enforced).
-ZLSCOPE := src/*.z lib/system/zlexer.z lib/system/zparser.z lib/system/zast.z lib/system/zvfs.z lib/system/tokenize.z lib/system/ast.z
+ZLSCOPE := src/*.z lib/system/*.z
 # FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
 # elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.
 FMTSCOPE := src/*.z lib/system/*.z examples/*.z
