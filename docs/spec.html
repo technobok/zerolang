@@ -1533,20 +1533,21 @@ spelling remains the construction reference: <code>kind.a</code> builds the arm,
 <code>.false</code> negates a predicate (<code>if x.a.false then</code> reads "if x is not
 a") and <code>.true</code> passes it through. Comparing with <code>== false</code> remains
 equivalent.</p>
-<p>One pairing keeps its established meaning: a <em><strong>variant</strong></em> value narrowed
-by assignment to a payload arm reads that payload &#x2014; after
-<code>a: result.ok 42</code>, <code>a.ok</code> is the <code>i64</code> payload, not a predicate
-(see <a href="#type-narrowing">type narrowing</a>). Null arms and <code>union</code>
-values always test as predicates.</p>
+<p>The predicate is the <em><strong>only</strong></em> meaning of <code>x.arm</code> on a value &#x2014; there
+is no payload read through the arm name. The payload is reached by
+narrowing: inside a <code>match</code> arm or the <code>then</code> branch of
+<code>if x.a then</code>, the bare name <em><strong>is</strong></em> the payload, and <code>x.a</code> there
+is an ordinary member lookup on the payload type itself.</p>
 <h5 id="narrowing-in-if">Narrowing in if</h5>
 <p>A bare arm predicate as an <a href="#if">if</a> condition narrows its subject, when
 the subject is a bare variable name. In the <code>then</code> branch the value is
 known to hold the arm: the bare name <em><strong>is</strong></em> the payload, exactly as in
 a <code>match</code> arm. In the <code>else</code> branch (and in later <code>else if</code>
 clauses) the arm is excluded; exclusions accumulate across a clause
-chain, and when only one arm remains the subject collapses to it &#x2014; its
-payload is then read through the narrowed <code>x.arm</code> form. The negated
-conditions <code>(x.a) == false</code> and <code>x.a.false</code> flip the two sides.
+chain, and when only one arm remains the subject collapses to it &#x2014; a
+nested <code>if x.arm then</code> (or a <code>match</code>) then reads its payload. The
+negated conditions <code>(x.a) == false</code> and <code>x.a.false</code> flip the two
+sides.
 Every bare-predicate conjunct of a <code>when</code> chain narrows in its
 <code>then</code> branch; multi-conjunct conditions contribute nothing to the
 else side. Loop conditions do not narrow.</p>
@@ -1626,7 +1627,9 @@ union/variant is also a type error for the same reason.</p>
 <p>Assignment-based narrowing is different &#x2014; a variable assigned a
 specific subtype (<code>x: Result.ok 42</code>) keeps its outer type so it
 remains passable as the full union; the compiler tracks a
-<code>narrowed_subtype</code> sidecar that rejects accessing other arms.</p>
+<code>narrowed_subtype</code> sidecar. Arm names on the value remain
+<a href="#sum-types">predicates</a> (<code>x.ok</code> is <code>true</code> here); the payload
+is reached through <a href="#match">match</a> or an <a href="#if">if</a> predicate branch.</p>
 <p>Also, a <code>match</code> clause that exits the current scope (using a <code>return</code>, <code>break</code>
 or <code>continue</code>) will also 'narrow' a named target for the remainder of that
 scope -- ie. the type of that named target will exclude the subtypes where a
@@ -1641,9 +1644,10 @@ if the new value is also a specific subtype.</p>
 of <code>if x.a then</code> SHADOWS <code>x</code> with the arm payload, exactly as a
 <code>case a</code> arm does. The <code>else</code> branch and later <code>else if</code> clauses
 see the tested arms excluded, and exclusions accumulate across the
-chain &#x2014; when a single arm remains the subject collapses to it and its
-payload is read through the narrowed <code>x.arm</code> form. The negated
-conditions <code>(x.a) == false</code> and <code>x.a.false</code> swap the two sides.
+chain &#x2014; when a single arm remains the subject collapses to it, and a
+nested <code>if x.arm then</code> (or a <code>match</code>) reads its payload. The
+negated conditions <code>(x.a) == false</code> and <code>x.a.false</code> swap the two
+sides.
 See <a href="#sum-types">Narrowing in if</a>.</p>
 <p>If all branches of an <code>if</code> or <code>match</code> exit the current scope (return, break,
 continue), any statements following that expression are unreachable and are
