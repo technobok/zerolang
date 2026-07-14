@@ -1101,6 +1101,11 @@ empty body: nothing runs on that path. An <code>if</code> containing a null (or 
 <code>{}</code>) body yields no value, so it can only stand as a statement &#x2014; binding it,
 passing it as an argument, or returning it is a compile-time error. Loop bodies
 may not be <code>null</code>.</p>
+<p>A condition that is a bare <a href="#sum-types">arm predicate</a> (<code>if x.a
+then</code>) narrows <code>x</code> exactly as a <code>match</code> arm would: the <code>then</code>
+branch sees the payload through the bare name, and the <code>else</code> branch
+(and later <code>else if</code> clauses) see the arm excluded. See
+<a href="#type-narrowing">type narrowing</a>.</p>
 <p>Each <code>when</code> condition must be an operation that results in a boolean. <code>when</code> is
 the default argument and the <code>when</code> keyword may be omitted for the first
 condition specified immediately after the <code>if</code>.</p>
@@ -1601,7 +1606,8 @@ destructor for the union. For mixed unions, the emitted destructor's
 program source via a flow-typing system (TypeState). This tracking is
 intra-function only and does not cross function call boundaries.</p>
 <p><a href="#sum-types">Sum types</a> can be 'narrowed' back to their specific child types
-by using <a href="#match">match</a> expressions or by assignment to a specific subtype.</p>
+by using <a href="#match">match</a> expressions, by <a href="#sum-types">arm predicates</a> in <a href="#if">if</a>
+conditions, or by assignment to a specific subtype.</p>
 <p>Within a successful <code>then</code> clause of a <code>match</code>, the narrowed name
 SHADOWS the parent binding &#x2014; it takes on the payload type for the
 duration of the arm. Field access, method dispatch, re-matching, and
@@ -1631,6 +1637,14 @@ variable to that subtype. Reassignment resets narrowing and optionally re-narrow
 if the new value is also a specific subtype.</p>
 <p>An <code>else</code> clause of a <code>match</code> sees the union/variant type with all explicit
 <code>case</code> subtypes excluded.</p>
+<p>An <a href="#if">if</a> over arm predicates narrows the same way: the <code>then</code> branch
+of <code>if x.a then</code> SHADOWS <code>x</code> with the arm payload, exactly as a
+<code>case a</code> arm does. The <code>else</code> branch and later <code>else if</code> clauses
+see the tested arms excluded, and exclusions accumulate across the
+chain &#x2014; when a single arm remains the subject collapses to it and its
+payload is read through the narrowed <code>x.arm</code> form. The negated
+conditions <code>(x.a) == false</code> and <code>x.a.false</code> swap the two sides.
+See <a href="#sum-types">Narrowing in if</a>.</p>
 <p>If all branches of an <code>if</code> or <code>match</code> exit the current scope (return, break,
 continue), any statements following that expression are unreachable and are
 flagged as a compile error.</p>
@@ -4175,7 +4189,13 @@ types or value types. Valtype payloads are stored in the heap-allocated
 subtype slot; reftype payloads are stored by pointer.</p>
 <p>Methods can be defined on the union body. These methods operate on the union
 type itself. To access subtype-specific data, the union must first be narrowed
-via <code>match</code>.</p>
+&#x2014; via <code>match</code>, or via an <a href="#sum-types">arm predicate</a> in an <a href="#if">if</a>
+condition (<code>if u.text then</code> narrows <code>u</code> in the then branch).</p>
+<p>On a union <em><strong>value</strong></em>, naming an arm is a boolean <a href="#sum-types">arm
+predicate</a>: <code>u.text</code> is true when <code>u</code> currently holds that arm. On
+the type, the same spelling constructs the arm (<code>pack.text v</code>). The
+declared tag label, when present, reads the discriminator &#x2014; see
+<a href="#tag">tag</a>.</p>
 <p>Arguments for <code>union</code>:</p>
 <table>
 <colgroup>
