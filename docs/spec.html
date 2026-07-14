@@ -457,6 +457,10 @@ losslessly be stored in the resulting format:</p>
 (1.0e15).f128
 (1e15).f128</code></pre>
 <h4 id="numeric-defaults"><a href="#numeric-defaults">2.7.4. Numeric defaults</a></h4>
+<p>A bare numeric <em><strong>literal</strong></em> is distinct from a bare numeric <em><strong>type
+name</strong></em>: <code>x: u64</code> constructs the type's zero value (see Zero Values
+under Implicit Construction), while <code>x: 0</code> is a literal that follows
+the default-type rule below.</p>
 <p>Bare numeric literals follow the default-type rule when their surrounding
 context does not pin a target type:</p>
 <table>
@@ -710,7 +714,10 @@ the runtime must allocate to splice the interpolated values into the
 surrounding text, the resulting literal types as <code>String</code>.</p>
 <p>Use <code>.string</code> to copy a literal into an owned <code>String</code> -- this is
 the conventional convert when passing literals to function parameters
-or storing them into class/record fields declared as <code>String</code>.</p>
+or storing them into class/record fields declared as <code>String</code>.
+For the <em><strong>empty</strong></em> owned string, no literal is needed at all: the bare
+type name constructs it (<code>buf: String</code> -- see Zero Values under
+Implicit Construction).</p>
 <p>A conversion is legal only when it <em><strong>changes</strong></em> the type:
 <code>String.stringview</code> projects a view and <code>StringView.string</code> makes an
 owned copy, but the same-type forms are compile errors. <code>.string</code> on a
@@ -3609,6 +3616,50 @@ list, both the bare-name and explicit forms use that signature.</p>
 <p>The implicit construction rule does not apply inside a <code>data</code> clause
 or as a generic parameter (both of which are type references, not
 runtime expressions).</p>
+<h5 id="zero-values-bare-type-names-in-value-position">Zero Values -- Bare Type Names in Value Position</h5>
+<p>A bare type name in a runtime value position is a zero-argument
+<code>create</code> construction: the same step-3 dispatch as above with an
+empty argument list. The constructed value is the type's zero value:</p>
+<ul>
+<li>A numeric type constructs zero -- <code>x: u64</code> binds <code>0.u64</code>.</li>
+<li><code>String</code> constructs the empty owned string. This is the
+canonical empty-string initializer, and it allocates nothing: the
+empty string's storage is the all-zero struct.</li>
+<li>A record or class fills each field's declared default, or calls
+  a body-carrying user <code>create</code> whose parameters are all defaulted.
+  A remaining required field is a compile error naming the missing
+  arguments.</li>
+<li>A typedef follows its base -- <code>Bytes</code> is the empty byte
+  buffer, a numeric typedef is its scalar's zero.</li>
+</ul>
+<p>The rule applies in every runtime value position -- binding
+initializers, call arguments, return values, reassignment right-hand
+sides -- and to unit-qualified type names (<code>c: settings.Limits</code>).
+The explicit dotted form (<code>u64.create</code>, <code>String.create</code>) is the
+same construction.</p>
+<pre><code class="language-zerolang">main: function is {
+    total: u64                # 0
+    buf: String               # empty owned string, no allocation
+    buf.append "grown"
+    b: Bytes                  # empty byte buffer
+}</code></pre>
+<p>Declaration contexts are unchanged. A record or class field
+<code>label: String</code> and a function parameter <code>{s: String}</code> remain type
+annotations -- the field or parameter is required and carries no
+default -- and <code>data</code> clauses and generic type arguments remain type
+references. A unit-level binding is also unaffected: unit constants
+take literal values. Only runtime expressions construct. Likewise, an
+atom must <em><strong>name the type</strong></em> to construct: a value alias typed as the
+type (<code>true</code> is an alias for <code>bool.true</code>) is a value use.</p>
+<p>Families with no zero value are targeted compile errors: a union or
+variant selects an arm first (<code>bool</code> has its literals <code>false</code> and
+<code>true</code>); a borrowed view binds from an owner; a generic template
+needs its type arguments; iterators come from their source
+(<code>.iterate</code>, <code>.split</code>, <code>.codepoints</code>, <code>.lines</code>); and a
+<code>create: null</code> type keeps its named factories.</p>
+<p>The zero-value form is the preferred spelling of empty and zero
+initializers: write <code>n: u64</code> rather than <code>n: 0.u64</code>, and
+<code>s: String</code> rather than <code>s: "".string</code>.</p>
 <h5 id="disabling-default-construction-create-null">Disabling Default Construction (create: null)</h5>
 <p>Writing <code>create: null</code> in a type's <code>as</code> block suppresses the
 compiler-generated default constructor. After this, any attempt to

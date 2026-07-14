@@ -322,6 +322,11 @@ Examples:
 
 #----: Numeric defaults
 
+A bare numeric #_*"literal" is distinct from a bare numeric #_*"type
+name": #~"x: u64" constructs the type's zero value (see Zero Values
+under Implicit Construction), while #~"x: 0" is a literal that follows
+the default-type rule below.
+
 Bare numeric literals follow the default-type rule when their surrounding
 context does not pin a target type:
 
@@ -612,6 +617,9 @@ surrounding text, the resulting literal types as #~"String".
 Use #~".string" to copy a literal into an owned #~"String" -- this is
 the conventional convert when passing literals to function parameters
 or storing them into class/record fields declared as #~"String".
+For the #_*"empty" owned string, no literal is needed at all: the bare
+type name constructs it (#~"buf: String" -- see Zero Values under
+Implicit Construction).
 
 A conversion is legal only when it #_*"changes" the type:
 #~"String.stringview" projects a view and #~"StringView.string" makes an
@@ -4107,6 +4115,59 @@ list, both the bare-name and explicit forms use that signature.
 The implicit construction rule does not apply inside a #~"data" clause
 or as a generic parameter (both of which are type references, not
 runtime expressions).
+
+#-----: Zero Values -- Bare Type Names in Value Position
+
+A bare type name in a runtime value position is a zero-argument
+#~"create" construction: the same step-3 dispatch as above with an
+empty argument list. The constructed value is the type's zero value:
+
+#ul:
+  [#*: A numeric type constructs zero -- #~"x: u64" binds #~"0.u64".]
+  [#*: #~"String" constructs the empty owned string. This is the
+  canonical empty-string initializer, and it allocates nothing: the
+  empty string's storage is the all-zero struct.]
+  [#*: A record or class fills each field's declared default, or calls
+  a body-carrying user #~"create" whose parameters are all defaulted.
+  A remaining required field is a compile error naming the missing
+  arguments.]
+  [#*: A typedef follows its base -- #~"Bytes" is the empty byte
+  buffer, a numeric typedef is its scalar's zero.]
+
+The rule applies in every runtime value position -- binding
+initializers, call arguments, return values, reassignment right-hand
+sides -- and to unit-qualified type names (#~"c: settings.Limits").
+The explicit dotted form (#~"u64.create", #~"String.create") is the
+same construction.
+
+#code language=zerolang: """
+  main: function is {
+      total: u64                # 0
+      buf: String               # empty owned string, no allocation
+      buf.append "grown"
+      b: Bytes                  # empty byte buffer
+  }
+  """
+
+Declaration contexts are unchanged. A record or class field
+#~"label: String" and a function parameter #~"{s: String}" remain type
+annotations -- the field or parameter is required and carries no
+default -- and #~"data" clauses and generic type arguments remain type
+references. A unit-level binding is also unaffected: unit constants
+take literal values. Only runtime expressions construct. Likewise, an
+atom must #_*"name the type" to construct: a value alias typed as the
+type (#~"true" is an alias for #~"bool.true") is a value use.
+
+Families with no zero value are targeted compile errors: a union or
+variant selects an arm first (#~"bool" has its literals #~"false" and
+#~"true"); a borrowed view binds from an owner; a generic template
+needs its type arguments; iterators come from their source
+(#~".iterate", #~".split", #~".codepoints", #~".lines"); and a
+#~"create: null" type keeps its named factories.
+
+The zero-value form is the preferred spelling of empty and zero
+initializers: write #~"n: u64" rather than #~"n: 0.u64", and
+#~"s: String" rather than #~"s: \"\".string".
 
 #-----: Disabling Default Construction (create: null)
 
