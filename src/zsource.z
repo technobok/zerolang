@@ -197,10 +197,10 @@ optName: function {o: Option String} out String is {
 # split on `_`, lowercase each segment, and capitalise the first letter of every segment
 # after the first. Compounds without underscores become run-together lowercase.
 casingSuggest: function {name: StringView} out String is {
-    buf: "".string
+    buf: String
     n: name.length
     cap: false
-    i: 0.u64
+    i: u64
     for i < n loop {
         bo: name.byteAt :i
         match (
@@ -244,7 +244,7 @@ casingMessage: function {orig: StringView sug: StringView} out String is {
 # `ln`. Computed by hand (StringView.trimEnd's native is not emitted).
 trailingWsLen: function {ln: StringView} out u64 is {
     n: ln.length
-    k: 0.u64
+    k: u64
     keep: true
     for keep loop {
         if k >= n then {
@@ -303,7 +303,7 @@ Analysis: class {
     # parseErrorCount -- how many collected diagnostics are hard (ERROR) -- i.e.
     # parse errors. The fmt parse gate refuses any file with a non-zero count.
     parseErrorCount: function {:this} out u64 is {
-        c: 0.u64
+        c: u64
         with it: this.diags.iterate do for d: it loop {
             match (
                 d.sev
@@ -317,7 +317,7 @@ Analysis: class {
     # failCount -- diagnostics that fail the gate: everything except advisory INFO. `zl lint` exits
     # non-zero on a non-zero count, so INFO rules (line-length) report without failing.
     failCount: function {:this} out u64 is {
-        c: 0.u64
+        c: u64
         with it: this.diags.iterate do for d: it loop {
             isInfo: false
             match (
@@ -341,7 +341,7 @@ Analysis: class {
     # byte-lengths (independent of the codepoint-based column).
     checkTrailingWs: function {:this} is {
         lls: linesOf src: this.source.stringview
-        off: 0.u64
+        off: u64
         lno: 1.u32
         with it: lls.iterate do for ln: it loop {
             llen: ln.length
@@ -391,7 +391,7 @@ Analysis: class {
         lineStart: lineStartIndex src: sv
         nLines: lls.length
         srcLen: sv.length
-        i: 0.u64
+        i: u64
         for i < nLines loop {
             ln: lls.get :i
             blank: (trailingWsLen ln: ln.stringview) == ln.length
@@ -545,7 +545,7 @@ Analysis: class {
         if cn.length == 0 then return
         primary: primaryGenericParam name: cn.stringview
         if primary.length == 0 then return
-        idx: 0.u64
+        idx: u64
         aiter: arguments.iterate
         for a: aiter loop {
             if idx == 0 then this.checkElideFirst arg: a primary: primary.stringview
@@ -728,7 +728,7 @@ Analysis: class {
         base: leadingSpaces line: lnt.stringview
         srcOwned: this.source.copy
         srcv: srcOwned.stringview
-        p0: 0.u64
+        p0: u64
         havep0: false
         {
             p0node: parameters.get i: 0
@@ -755,7 +755,7 @@ Analysis: class {
         } case none then null
         if isBrace == false then return
         coff: this.delimClose.get key: obrace
-        closeB: 0.u64
+        closeB: u64
         match (
             coff
         ) case some then {
@@ -802,7 +802,7 @@ Analysis: class {
         srcLines: linesOf src: sv
         m: toks.length
         prevFor: false
-        i: 0.u64
+        i: u64
         for i < m loop {
             t: toks.get :i
             match (
@@ -877,7 +877,7 @@ Analysis: class {
         lineStart: lineStartIndex src: sv
         srcLines: linesOf src: sv
         m: toks.length
-        i: 0.u64
+        i: u64
         for i < m loop {
             t: toks.get :i
             isColon: false
@@ -902,8 +902,8 @@ Analysis: class {
                     j: i + 1
                     foundNxt: false
                     nxtContent: false
-                    nl: 0.u32
-                    nc: 0.u32
+                    nl: u32
+                    nc: u32
                     for j < m loop {
                         tj: toks.get i: j
                         isWs: false
@@ -1024,6 +1024,7 @@ Analysis: class {
         } case statementline then {
             this.walk n: n.statementline
         } case assignment then {
+            if this.funcDepth > 0 then this.tryBareZeroInit value: n.value
             this.walk n: n.value
         } case reassignment then {
             this.walk n: n.topath
@@ -1170,6 +1171,72 @@ Analysis: class {
         } case none then null
     }
 
+    # tryBareZeroInit -- L011: a zero/empty binding initializer written as a
+    # literal (`"".string`, `0.u64`) where the bare type name constructs the
+    # same value. Function-body binding initializers only: record/class
+    # fields and parameter defaults keep literal values (a bare type name
+    # there is an annotation), and reassignment right-hand sides prefer the
+    # coerced bare literal (`x = 0`). The replacement span is byte-verified
+    # against the expected source spelling before any edit is recorded.
+    tryBareZeroInit: function {:this value: Node} is {
+        match (
+            value
+        ) case expression then {
+            this.tryBareZeroInit value: value.expression
+        } case statementline then {
+            this.tryBareZeroInit value: value.statementline
+        } case statement then {
+            if value.statements.length == 1 then {
+                s0: value.statements.get i: 0
+                this.tryBareZeroInit value: s0
+            }
+        } case dottedpath then {
+            repl: bareZeroTypeName n: value.child
+            if repl.length == 0 then return
+            ptext: bareZeroParentText n: value.parent
+            if ptext.length == 0 then return
+            isStr9: ptext.stringview == "\"\""
+            isStrRepl9: repl.stringview == "String"
+            if isStr9 when (isStrRepl9) == false then return
+            if (isStr9) == false when isStrRepl9 then return
+            pin9: nodeInfoOf n: value.parent
+            cin9: nodeInfoOf n: value.child
+            if pin9.line != cin9.line then return
+            srcOwned: this.source.copy
+            srcv: srcOwned.stringview
+            lo: (tokByteStart
+                lineStart: this.lineStart
+                srcLines: this.lines
+                lineno: pin9.line
+                colno: pin9.col
+            )
+            cs9: (tokByteStart
+                lineStart: this.lineStart
+                srcLines: this.lines
+                lineno: cin9.line
+                colno: cin9.col
+            )
+            hi: cs9 + repl.length
+            if hi > srcv.length then return
+            ctext9: repl.copy
+            if isStr9 then ctext9 = "string".string
+            expect9: "\{ptext}.\{ctext9}"
+            actual9: srcv.substring from: lo to: hi
+            if actual9 != expect9.stringview then return
+            wm9: "zero/empty initializer: write the bare type name `\{repl}`"
+            (this.warnFix
+                code: "L011"
+                msg: wm9
+                line: pin9.line
+                col: pin9.col
+                width: (hi - lo).u32
+                :lo
+                :hi
+                :repl
+            )
+        } else null
+    }
+
     # tryNullBody -- L010: an empty `{ }` match arm/else body reads better as
     # the bare `null` body. Replaces the brace span (including any interior
     # newlines) with `null` when the merged line stays inside the wrap width;
@@ -1197,7 +1264,7 @@ Analysis: class {
             } case none then null
             if isBrace == false then return
             coff: this.delimClose.get key: openByte
-            closeByte: 0.u64
+            closeByte: u64
             match (
                 coff
             ) case some then {
@@ -1265,7 +1332,7 @@ Analysis: class {
                 } case none then null
                 if isBrace == false then return
                 coff: this.delimClose.get key: openByte
-                closeByte: 0.u64
+                closeByte: u64
                 match (
                     coff
                 ) case some then {
@@ -1331,9 +1398,9 @@ Analysis: class {
     # lose its braces) or a comment (which a one-line collapse would swallow).
     bracesBlocked: function {:this openByte: u64 closeByte: u64} out bool is {
         m: this.fastToks.length
-        depth: 0.i64
+        depth: i64
         blocked: false
-        i: 0.u64
+        i: u64
         for i < m loop {
             t: this.fastToks.get :i
             tb: (tokByteStart
@@ -1460,7 +1527,7 @@ Analysis: class {
                 colno: body.colno
             )
             coff: this.delimClose.get key: openByte
-            closeByte: 0.u64
+            closeByte: u64
             match (
                 coff
             ) case some then {
@@ -1529,7 +1596,7 @@ Analysis: class {
         lineStart: lineStartIndex src: sv
         srcLines: linesOf src: sv
         m: toks.length
-        i: 0.u64
+        i: u64
         for i < m loop {
             t: toks.get :i
             isIf: false
@@ -1583,7 +1650,7 @@ Analysis: class {
                             mScan = false
                         } else {
                             tj: toks.get i: j
-                            kind: 0.u32
+                            kind: u32
                             match (
                                 tj.toktype
                             ) case parenOpenTok then {
@@ -2055,6 +2122,38 @@ nodeInfoOf: function {n: Node} out nodeinfo is {
     }
 }
 
+# bareZeroTypeName -- the bare-type replacement when a dotted child atom is a
+# zero-init suffix candidate: `string` maps to String, a concrete numeric
+# type name maps to itself, anything else to "" (c8/c32/f128 are not
+# constructible stdlib types).
+bareZeroTypeName: function {n: Node} out String is {
+    match (
+        n
+    ) case atomid then {
+        if n.name.stringview == "string" then return "String".string
+        isNum9: isNumericTypeName name: n.name.stringview
+        if isNum9 when n.name.stringview != "c8" then {
+            if n.name.stringview != "c32" when n.name.stringview != "f128" then return n.name.copy
+        }
+    } else null
+    return "".string
+}
+
+# bareZeroParentText -- the source spelling of a zero-literal dotted parent:
+# `""` for the empty string literal, `0` / `0.0` for the numeric zeros; ""
+# when the parent is not a zero literal.
+bareZeroParentText: function {n: Node} out String is {
+    match (
+        n
+    ) case atomstring then {
+        if n.stringparts.length == 0 then return "\"\"".string
+    } case atomid then {
+        if n.name.stringview == "0" then return "0".string
+        if n.name.stringview == "0.0" then return "0.0".string
+    } else null
+    return "".string
+}
+
 # isNumericTypeName -- a name in the numeric-type set the suffix check ranges over.
 isNumericTypeName: function {name: StringView} out bool is {
     if name == "i8" then return true
@@ -2186,7 +2285,7 @@ isAnchor: function {n: Node tname: StringView st: zenv.ZSymbolTable} out bool is
     ) case some then {
         zhit9: false
         zlit9: false
-        znm9: "".string
+        znm9: String
         {
             zo: st.reg.typeById.get key: to
             match (
@@ -2225,7 +2324,7 @@ unitNameOf: function {path: StringView} out String is {
     match (
         slashOpt
     ) case some then {
-        r: "".string
+        r: String
         i: slashOpt + 1
         n: path.length
         for i < n loop {
@@ -2261,7 +2360,7 @@ linesOf: function {src: StringView} out (List String) is {
 # byte offsets and back without depending on the tokenizer's escape-decoded widths.
 lineStartIndex: function {src: StringView} out (List u64) is {
     ls: (List u64)
-    off: 0.u64
+    off: u64
     lls: linesOf :src
     with it: lls.iterate do for ln: it loop {
         ls.append off
@@ -2273,8 +2372,8 @@ lineStartIndex: function {src: StringView} out (List u64) is {
 # byteToLine -- the 0-based index of the line containing byte `off`: the largest i with
 # lineStart[i] <= off. lineStart ascends, so the scan stops at the first line past off.
 byteToLine: function {lineStart: (List u64).borrow off: u64 nLines: u64} out u64 is {
-    r: 0.u64
-    i: 0.u64
+    r: u64
+    i: u64
     for i < nLines loop {
         v: lineStart.get :i
         if v <= off then {
@@ -2294,8 +2393,8 @@ colToByteInLine: function {lineText: StringView colno: u32} out u64 is {
     if colno <= 1 then return 0
     target: (colno - 1).u64
     n: lineText.length
-    b: 0.u64
-    cp: 0.u64
+    b: u64
+    cp: u64
     for cp < target loop {
         if b >= n then break
         b = b + 1
@@ -2345,17 +2444,17 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out (List zfix.Edit) is {
     result: (List zfix.Edit)
     n: edits.length
     used: (List bool)
-    p: 0.u64
+    p: u64
     for p < n loop {
         used.append false
         p = p + 1
     }
-    k: 0.u64
+    k: u64
     for k < n loop {
         best: n
-        bestLo: 0.u64
-        bestHi: 0.u64
-        i: 0.u64
+        bestLo: u64
+        bestHi: u64
+        i: u64
         for i < n loop {
             u: used.get :i
             if (u) == false then {
@@ -2408,7 +2507,7 @@ emitDiffHunk: function {
     aByte: lineStart.get i: clLo
     bByte: srcLen
     if (clHi + 1) < nLines then bByte = lineStart.get i: (clHi + 1)
-    newBlock: "".string
+    newBlock: String
     prev: aByte
     j: cStart
     for j < cEnd loop {
@@ -2466,8 +2565,8 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
     oldLen: old.length
     newLen: new.length
     edits: (List zfix.Edit)
-    i: 0.u64
-    p: 0.u64
+    i: u64
+    p: u64
     for true loop {
         if i >= m when (p >= n) then break
         matched: false
@@ -2486,7 +2585,7 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
             t: 1.u64
             for t <= 256 loop {
                 if found then break
-                a: 0.u64
+                a: u64
                 for a <= t loop {
                     if found then break
                     b: t - a
@@ -2517,7 +2616,7 @@ lineDiffEdits: function {old: StringView new: StringView} out (List zfix.Edit) i
             hi: byteAtLine starts: oldStarts srcLen: oldLen k: i2
             nlo: byteAtLine starts: newStarts srcLen: newLen k: p
             nhi: byteAtLine starts: newStarts srcLen: newLen k: p2
-            repl: "".string
+            repl: String
             zfix.appendRange buf: repl src: new lo: nlo hi: nhi
             doEmit: false
             if hi > lo then doEmit = true
@@ -2538,7 +2637,7 @@ renderDiff: function {
     source: StringView
     edits: (List zfix.Edit).borrow
 } out String is {
-    buf: "".string
+    buf: String
     m: edits.length
     if m == 0 then return buf
     lineStart: lineStartIndex src: source
@@ -2548,12 +2647,12 @@ renderDiff: function {
     hdr: "--- \{path}\n+++ \{path}\n"
     buf.append hdr.stringview
 
-    newDelta: 0.i64
+    newDelta: i64
     cActive: false
-    cStart: 0.u64
-    clLo: 0.u64
-    clHi: 0.u64
-    i: 0.u64
+    cStart: u64
+    clLo: u64
+    clHi: u64
+    i: u64
     for i < m loop {
         e: edits.get :i
         lo: byteToLine :lineStart off: e.byteLo :nLines
@@ -2762,8 +2861,8 @@ analyzeFileTiered: function {
 # counted); the display "column" length for the line-length rule.
 codepointLen: function {s: StringView} out u64 is {
     n: s.length
-    c: 0.u64
-    b: 0.u64
+    c: u64
+    b: u64
     for b < n loop {
         bo: s.byteAt i: b
         cont: false
@@ -2805,7 +2904,7 @@ sourceParses: function {source: String.take} out bool is {
 # nlIndent -- a newline followed by `n` spaces (the wrap indent unit).
 nlIndent: function {n: u64} out String is {
     s: "\n".string
-    i: 0.u64
+    i: u64
     for i < n loop {
         s.appendByte b: 32
         i = i + 1
@@ -2815,7 +2914,7 @@ nlIndent: function {n: u64} out String is {
 
 # leadingSpaces -- count of leading space bytes on a line.
 leadingSpaces: function {line: StringView} out u64 is {
-    n: 0.u64
+    n: u64
     for n < line.length loop {
         bo: line.byteAt i: n
         sp: false
@@ -2890,7 +2989,7 @@ wsRunStart: function {src: StringView from: u64} out u64 is {
 
 # hasHash -- true if the line contains a `#` (a comment; wrapping skips such lines).
 hasHash: function {line: StringView} out bool is {
-    n: 0.u64
+    n: u64
     for n < line.length loop {
         bo: line.byteAt i: n
         match (
@@ -2915,10 +3014,10 @@ buildDelimMap: function {
     toks: tokenize.scan source: src.string
     nt: toks.length
     stack: (List u64)
-    i: 0.u64
+    i: u64
     for i < nt loop {
         t: toks.get :i
-        kind: 0.u32
+        kind: u32
         match (
             t.toktype
         ) case parenOpenTok then {
@@ -2950,7 +3049,7 @@ buildDelimMap: function {
 # would not parse (skipping past it); loops until no wrappable call remains.
 wrapSource: function {source: StringView lineLength: u32} out String is {
     cur: source.string
-    guard: 0.u64
+    guard: u64
     for guard < 40 loop {
         guard = guard + 1
         rd: cur.copy
@@ -2982,12 +3081,12 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
         } else {
             good: (List zfix.Edit)
             ng: a.wrapGroups.length
-            gi: 0.u64
+            gi: u64
             for gi < ng loop {
                 gstart: a.wrapGroups.get i: gi
                 gend: a.edits.length
                 if (gi + 1) < ng then gend = a.wrapGroups.get i: (gi + 1)
-                added: 0.u64
+                added: u64
                 k: gstart
                 for k < gend loop {
                     e9: a.edits.get i: k
@@ -3002,7 +3101,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
                 cnd2: zfix.applyEdits source: cur.stringview edits: good
                 bad9: (sourceParses source: cnd2.copy) == false
                 if bad9 then {
-                    j: 0.u64
+                    j: u64
                     for j < added loop {
                         pd9: good.pop
                         j = j + 1
