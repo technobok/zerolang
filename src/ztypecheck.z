@@ -11084,14 +11084,34 @@ predFactOf: function {st: zenv.ZSymbolTable n: Node boolId: u64} out Option ArmP
     }
 }
 
+# shadowCollapseIfSingle -- when exclusions have collapsed `name` to a
+# single PAYLOAD arm (the sidecar form), upgrade to the shadow narrowing:
+# the bare name becomes the payload, exactly as in a match arm. A null
+# payload keeps the outer type (nothing to read). Condition-derived
+# call sites only -- construction narrowing never routes through here.
+shadowCollapseIfSingle: function {st: zenv.ZSymbolTable name: StringView fullTid: u64} is {
+    arm9: st.narrowedArmOf :name fullTypeId: fullTid
+    if arm9.length == 0 then return
+    po9: st.typing.childOf parentTypeId: fullTid name: arm9.stringview
+    match (
+        po9
+    ) case some then {
+        if (st.reg.typetypeOf typeId: po9) == ztypes.ztypetype.nullType then return
+        (st.narrow
+            :name
+            toTypeId: po9
+            subtypeName: arm9.stringview
+            shadow: true
+        )
+    } case none then null
+}
+
 # applyPredFact -- record one predicate fact on its subject in the current
 # branch scope. `holds` is the branch's knowledge of the condition: true
 # on the then path, false on else/later-clause paths. A holding positive
-# (or failing negated) fact narrows to the arm; the opposite excludes it
-# (zenv.exclude collapses to the last remaining arm on its own). Then-path
-# narrows SHADOW (bare name is the payload, aliased by the emitter);
-# condition-false narrows keep the sidecar form (payload via the narrowed
-# `x.arm` read), matching exclude-collapse and assignment narrowing.
+# (or failing negated) fact SHADOW-narrows to the arm (the bare name is
+# the payload); the opposite excludes it, and an exclusion that leaves a
+# single payload arm collapses to the same shadow form.
 applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
     doNarrow9: false
     if holds when (f.negated) == false then doNarrow9 = true
@@ -11105,7 +11125,7 @@ applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
                 name: f.subject.stringview
                 toTypeId: po9
                 subtypeName: f.armName.stringview
-                shadow: holds
+                shadow: true
             )
         } case none then null
     } else {
@@ -11114,6 +11134,7 @@ applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
             subtypeName: f.armName.stringview
             fullTypeId: f.fullTid
         )
+        shadowCollapseIfSingle :st name: f.subject.stringview fullTid: f.fullTid
     }
 }
 
@@ -14988,10 +15009,10 @@ checkCase: function {
         if (isEmptyBodyOpt bodyOpt: casenode.elseclause) then anyEmpty = true
         elseMarker: st.pushBlock name: "arm:else"
         if targetName.length > 0 when subjT > 0 then {
-            eiter: covered.iterate
-            for en2: eiter loop {
+            with eiter: covered.iterate do for en2: eiter loop {
                 st.exclude name: targetName.stringview subtypeName: en2.stringview fullTypeId: subjT
             }
+            shadowCollapseIfSingle :st name: targetName.stringview fullTid: subjT
         }
         walkBody :st :unitName :unitBody bodyOpt: casenode.elseclause
         et: lastStmtTypeOpt :st bodyOpt: casenode.elseclause

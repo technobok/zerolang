@@ -722,6 +722,8 @@ Ctx: class {
     aliases: (List NameVal)
     narrowBox: (List NameVal)
     narrowTid: (List NameTid)
+    exclArms: (List NameVal)
+    exclTids: (List NameTid)
     genActive: bool
     genYieldCount: u64
     genYieldNext: u64
@@ -7454,10 +7456,35 @@ emitStmt: function {
             first = false
             emitIfClause :symtab :ctx n: c :isFirst assignTo: ifAssign.stringview :ind :tmp :buf
         }
-        match (
-            n.elseclause
-        ) case some then null case none then null
-        emitElse9 :symtab :ctx o: n.elseclause assignTo: ifAssign.stringview :ind :tmp :buf
+        chS9: (List String)
+        chA9: (List String)
+        chT9: (List u64)
+        chN9: (List bool)
+        chR9: (List String)
+        (chainFactsOfClauses9
+            :symtab
+            :ctx
+            clauses: n.clauses
+            subjects: chS9
+            arms: chA9
+            tids: chT9
+            negs: chN9
+            recvs: chR9
+        )
+        (emitElse9
+            :symtab
+            :ctx
+            o: n.elseclause
+            assignTo: ifAssign.stringview
+            :ind
+            :tmp
+            chSubjects: chS9
+            chArms: chA9
+            chTids: chT9
+            chNegs: chN9
+            chRecvs: chR9
+            :buf
+        )
         le: "\{ind}}\n"
         buf.append le.stringview
     } case caseexpr then {
@@ -7869,8 +7896,7 @@ emitMatchStmt: function {
     buf.append l1.stringview
     sname: atomTextDeep n: m.subject
     ind2: "\{ind}    "
-    citer: m.clauses.iterate
-    for c: citer loop {
+    with citer: m.clauses.iterate do for c: citer loop {
         (emitMatchClause
             :symtab
             :ctx
@@ -7885,6 +7911,71 @@ emitMatchStmt: function {
             :buf
         )
     }
+    covA9: (List String)
+    with c3iter: m.clauses.iterate do for c3: c3iter loop {
+        match (
+            c3
+        ) case caseclause then {
+            cnm9: c3.name.copy
+            covA9.append cnm9
+        } else null
+    }
+    meN9: "".string
+    meV9: "".string
+    meT9: 0.u64
+    meSeed9: false
+    match (
+        m.elseclause
+    ) case some then {
+        if sname.length > 0 then {
+            allME9: (List String)
+            sumArmNames9 :symtab tid: vtid names: allME9
+            remME9: 0.u64
+            armME9: "".string
+            with mit9: allME9.iterate do for ma9: mit9 loop {
+                cov9: false
+                with cvi9: covA9.iterate do for cv9: cvi9 loop {
+                    if cv9.stringview == ma9.stringview then cov9 = true
+                }
+                if (cov9) == false then {
+                    remME9 = remME9 + 1
+                    mv9: ma9.copy
+                    armME9 = mv9
+                }
+            }
+            if remME9 == 1 then {
+                if (bodyReassignsOpt9 o: m.elseclause name: sname.stringview) == false then {
+                    mrecv9: "_m\{mN}"
+                    alias9: (armAliasText9
+                        :symtab
+                        :ctx
+                        tid: vtid
+                        arm: armME9.stringview
+                        recv: mrecv9.stringview
+                        acc: "."
+                    )
+                    if alias9.length > 0 then {
+                        msn9: sname.copy
+                        meN9 = msn9
+                        meV9 = alias9.copy
+                        meT9 = (optU64Or9
+                            o: (symtab.typing.childOf parentTypeId: vtid name: armME9.stringview)
+                        )
+                        meSeed9 = true
+                    }
+                }
+            }
+        }
+    } case none then null
+    mePrevV9: "".string
+    mePrevT9: 0.u64
+    if meSeed9 then {
+        pv9: nvGet xs: ctx.narrowBox name: meN9.stringview
+        mePrevV9 = pv9
+        mePrevT9 = optU64Or9 o: (ntGet xs: ctx.narrowTid name: meN9.stringview)
+        nvSet xs: ctx.narrowBox name: meN9.stringview val: meV9.stringview
+        ntSet xs: ctx.narrowTid name: meN9.stringview tid: meT9
+    }
     mdvg: matchDiverges :symtab nid: m.nodeid.u64
     (emitMatchElse
         :symtab
@@ -7896,6 +7987,18 @@ emitMatchStmt: function {
         diverges: mdvg
         :buf
     )
+    if meSeed9 then {
+        if mePrevV9.length > 0 then {
+            nvSet xs: ctx.narrowBox name: meN9.stringview val: mePrevV9.stringview
+        } else {
+            nvRemove xs: ctx.narrowBox name: meN9.stringview
+        }
+        if mePrevT9 > 0 then {
+            ntSet xs: ctx.narrowTid name: meN9.stringview tid: mePrevT9
+        } else {
+            ntRemove xs: ctx.narrowTid name: meN9.stringview
+        }
+    }
     l9: "\{ind}}\n"
     buf.append l9.stringview
 }
@@ -8438,7 +8541,35 @@ emitIfBindValue: function {
             first = false
             emitIfClause :symtab :ctx n: c :isFirst assignTo: nm :ind :tmp :buf
         }
-        emitElse9 :symtab :ctx o: n.elseclause assignTo: nm :ind :tmp :buf
+        chS9: (List String)
+        chA9: (List String)
+        chT9: (List u64)
+        chN9: (List bool)
+        chR9: (List String)
+        (chainFactsOfClauses9
+            :symtab
+            :ctx
+            clauses: n.clauses
+            subjects: chS9
+            arms: chA9
+            tids: chT9
+            negs: chN9
+            recvs: chR9
+        )
+        (emitElse9
+            :symtab
+            :ctx
+            o: n.elseclause
+            assignTo: nm
+            :ind
+            :tmp
+            chSubjects: chS9
+            chArms: chA9
+            chTids: chT9
+            chNegs: chN9
+            chRecvs: chR9
+            :buf
+        )
         le: "\{ind}}\n"
         buf.append le.stringview
         return true
@@ -8945,6 +9076,90 @@ exprNodeId9: function {n: Node} out u64 is {
     }
 }
 
+# sumArmNames9 -- the excludable arm names of a sum type, in declaration
+# order (the checker's exclusion universe).
+sumArmNames9: function {symtab: zenv.ZSymbolTable tid: u64 names: List String} is {
+    b0: symtab.typing.childIndex.get key: tid
+    match (
+        b0
+    ) case some then {
+        with bit9: b0.rows.iterate do for r9: bit9 loop {
+            row9: symtab.typing.typeChild.get i: r9
+            cto9: symtab.typing.childTypeById.get key: row9.childNameId
+            match (
+                cto9
+            ) case some then {
+                k9: symtab.reg.typetypeOf typeId: cto9
+                if (zenv.isExcludableKind k: k9) then {
+                    if (symtab.reg.isTagGenericOriginOf typeId: cto9) == false then {
+                        names.append row9.childName.copy
+                    }
+                }
+            } case none then null
+        }
+    } case none then null
+}
+
+# armAliasText9 -- the C lvalue for `recv`'s payload of `arm` on sum type
+# `tid`: the inline union member for variants, the heap cast for unions.
+# "" when the arm carries no payload.
+armAliasText9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    tid: u64
+    arm: StringView
+    recv: StringView
+    acc: StringView
+} out String is {
+    pc9: armPayloadC :symtab :ctx :tid :arm
+    if pc9.length == 0 then return "".string
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
+        return "(*(\{pc9}*)\{recv}\{acc}data)"
+    }
+    return "\{recv}\{acc}data.\{arm}"
+}
+
+# remainingArm9 -- the single arm of `tid` left after removing the
+# ambient exclusions recorded for `subject` (ctx.exclArms) plus the
+# `extra` space-joined arms; "" when zero or more than one remain.
+remainingArm9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    subject: StringView
+    tid: u64
+    extra: StringView
+} out String is {
+    exv9: nvGet xs: ctx.exclArms name: subject
+    all9: (List String)
+    sumArmNames9 :symtab :tid names: all9
+    remN9: 0.u64
+    rem9: "".string
+    with ait9: all9.iterate do for a9: ait9 loop {
+        hit9: false
+        if exv9.length > 0 then {
+            if (svHasWord9 hay: exv9.stringview word: a9.stringview) then hit9 = true
+        }
+        if (hit9) == false when extra.length > 0 then {
+            if (svHasWord9 hay: extra word: a9.stringview) then hit9 = true
+        }
+        if (hit9) == false then {
+            remN9 = remN9 + 1
+            rv9: a9.copy
+            rem9 = rv9
+        }
+    }
+    if remN9 != 1 then return "".string
+    return rem9
+}
+
+# svHasWord9 -- space-delimited word membership.
+svHasWord9: function {hay: StringView word: StringView} out bool is {
+    with wit9: (hay.split sep: " ") do for w9: wit9 loop {
+        if w9 == word then return true
+    }
+    return false
+}
+
 # bodyReassigns9 -- true when the body (at any depth through the common
 # statement containers) reassigns `name`, which would stale a narrowBox
 # alias for it.
@@ -9005,10 +9220,11 @@ bodyReassignsOpt9: function {o: Option Node name: StringView} out bool is {
     }
 }
 
-# seedFromPred9 -- one if-condition operation: admit a POSITIVE bare arm
-# predicate whose receiver is a non-bool variable, whose arm carries a
-# payload, and whose subject the body does not reassign; append its
-# narrowBox seed (subject, alias text, payload tid).
+# seedFromPred9 -- one POSITIVE bare arm predicate dotted node: admit a
+# non-bool receiver variable whose arm carries a payload and whose
+# subject the body does not reassign; append its narrowBox seed
+# (subject, alias text, payload tid). The condition-form dispatch
+# (trailing .true/.false, == true/false) lives in seedCondOp9.
 seedFromPred9: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -9023,6 +9239,75 @@ seedFromPred9: function {
     ) case expression then {
         seedFromPred9 :symtab :ctx n: n.expression :body :names :vals :tids
     } case dottedpath then {
+        arm0: atomTextOf n: n.child
+        (seedPosCore9
+            :symtab
+            :ctx
+            nid: n.nodeid.u64
+            parent: n.parent
+            childName: arm0.stringview
+            :body
+            :names
+            :vals
+            :tids
+        )
+    } else null
+}
+
+# seedPosCore9 -- the exploded positive-seed core (dotted node fields).
+seedPosCore9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nid: u64
+    parent: Node
+    childName: StringView
+    body: Node
+    names: List String
+    vals: List String
+    tids: List u64
+} is {
+    dap9: dpArmPredicateOf9 :symtab :nid
+    if dap9 == 0 then return
+    bsn9: stampNameDeep :symtab n: parent
+    if bsn9.stringview == "bool" then return
+    subj9: atomTextOf n: parent
+    if subj9.length == 0 then return
+    if (bodyReassigns9 n: body name: subj9.stringview) then return
+    recv9: emitExpr :symtab :ctx n: parent
+    acc9: ".".string
+    if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
+    alias9: (armAliasText9
+        :symtab
+        :ctx
+        tid: dap9
+        arm: childName
+        recv: recv9.stringview
+        acc: acc9.stringview
+    )
+    if alias9.length == 0 then return
+    names.append subj9
+    vals.append alias9
+    pt9: optU64Or9 o: (symtab.typing.childOf parentTypeId: dap9 name: childName)
+    tids.append pt9
+}
+
+# seedNegFromPred9 -- a NEGATED bare arm predicate: the branch knows the
+# subject does NOT hold `arm`. When exactly one payload arm remains, seed
+# its alias (exclusion collapse, mirroring the checker).
+seedNegFromPred9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+    body: Node
+    names: List String
+    vals: List String
+    tids: List u64
+} is {
+    match (
+        n
+    ) case expression then {
+        seedNegFromPred9 :symtab :ctx n: n.expression :body :names :vals :tids
+    } case dottedpath then {
         dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
         if dap9 == 0 then return
         bsn9: stampNameDeep :symtab n: n.parent
@@ -9030,27 +9315,111 @@ seedFromPred9: function {
         subj9: atomTextOf n: n.parent
         if subj9.length == 0 then return
         arm9: atomTextOf n: n.child
-        pc9: armPayloadC :symtab :ctx tid: dap9 arm: arm9.stringview
-        if pc9.length == 0 then return
+        rem9: (remainingArm9
+            :symtab
+            :ctx
+            subject: subj9.stringview
+            tid: dap9
+            extra: arm9.stringview
+        )
+        if rem9.length == 0 then return
         if (bodyReassigns9 n: body name: subj9.stringview) then return
         recv9: emitExpr :symtab :ctx n: n.parent
         acc9: ".".string
         if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
-        alias9: "".string
-        if (symtab.reg.typetypeOf typeId: dap9) == ztypes.ztypetype.unionType then {
-            alias9 = "(*(\{pc9}*)\{recv9}\{acc9}data)"
-        } else {
-            alias9 = "\{recv9}\{acc9}data.\{arm9}"
-        }
+        alias9: (armAliasText9
+            :symtab
+            :ctx
+            tid: dap9
+            arm: rem9.stringview
+            recv: recv9.stringview
+            acc: acc9.stringview
+        )
+        if alias9.length == 0 then return
         names.append subj9
         vals.append alias9
-        pt9: optU64Or9 o: (symtab.typing.childOf parentTypeId: dap9 name: arm9.stringview)
+        pt9: optU64Or9 o: (symtab.typing.childOf parentTypeId: dap9 name: rem9.stringview)
         tids.append pt9
     } else null
 }
 
-# ifPredSeeds9 -- collect the narrowBox seeds for a clause's positive bare
-# arm-predicate conjuncts (parallel name/alias/payload-tid lists).
+# seedCondOp9 -- one if-condition operation, dispatched by form: bare
+# `x.a` (positive), `x.a.true` (positive inner), `x.a.false` (negated
+# inner), and the `(x.a) == true/false` comparisons.
+seedCondOp9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+    body: Node
+    names: List String
+    vals: List String
+    tids: List u64
+} is {
+    match (
+        n
+    ) case expression then {
+        seedCondOp9 :symtab :ctx n: n.expression :body :names :vals :tids
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview == "true" then {
+            seedFromPred9 :symtab :ctx n: n.parent :body :names :vals :tids
+            return
+        }
+        if cn9.stringview == "false" then {
+            seedNegFromPred9 :symtab :ctx n: n.parent :body :names :vals :tids
+            return
+        }
+        (seedPosCore9
+            :symtab
+            :ctx
+            nid: n.nodeid.u64
+            parent: n.parent
+            childName: cn9.stringview
+            :body
+            :names
+            :vals
+            :tids
+        )
+    } case binop then {
+        opn9: bareAtomText9 n: n.operator
+        if opn9.stringview == "==" then {
+            ln9: bareAtomText9 n: n.lhs
+            rn9: bareAtomText9 n: n.rhs
+            if rn9.stringview == "true" then {
+                seedFromPred9 :symtab :ctx n: n.lhs :body :names :vals :tids
+                return
+            }
+            if rn9.stringview == "false" then {
+                seedNegFromPred9 :symtab :ctx n: n.lhs :body :names :vals :tids
+                return
+            }
+            if ln9.stringview == "true" then {
+                seedFromPred9 :symtab :ctx n: n.rhs :body :names :vals :tids
+                return
+            }
+            if ln9.stringview == "false" then {
+                seedNegFromPred9 :symtab :ctx n: n.rhs :body :names :vals :tids
+            }
+        }
+    } else null
+}
+
+# bareAtomText9 -- the expression-unwrapped bare atom text of a node,
+# "" for any other shape.
+bareAtomText9: function {n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (bareAtomText9 n: n.expression)
+    } case atomid then {
+        return n.name.copy
+    } else {
+        return "".string
+    }
+}
+
+# ifPredSeeds9 -- collect the narrowBox seeds for a clause's bare
+# arm-predicate conjuncts, all condition forms (parallel lists).
 ifPredSeeds9: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -9064,9 +9433,191 @@ ifPredSeeds9: function {
         match (
             k9
         ) case namedoperation then {
-            seedFromPred9 :symtab :ctx n: k9.operation :body :names :vals :tids
+            seedCondOp9 :symtab :ctx n: k9.operation :body :names :vals :tids
         } else null
     }
+}
+
+# chainFactsOfClauses9 -- the accumulated single-bare-conjunct facts of an
+# if chain (subject/arm/tid/negated parallel lists), mirroring the
+# checker's accumulation rule exactly.
+chainFactsOfClauses9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    clauses: List Node
+    subjects: List String
+    arms: List String
+    tids: List u64
+    negs: List bool
+    recvs: List String
+} is {
+    with cit9: clauses.iterate do for c9: cit9 loop {
+        match (
+            c9
+        ) case ifclause then {
+            if c9.conditions.length == 1 then {
+                tS9: (List String)
+                tA9: (List String)
+                tT9: (List u64)
+                tN9: (List bool)
+                tR9: (List String)
+                with kit9: c9.conditions.iterate do for k9: kit9 loop {
+                    match (
+                        k9
+                    ) case namedoperation then {
+                        (chainCondFact9
+                            :symtab
+                            :ctx
+                            n: k9.operation
+                            subjects: tS9
+                            arms: tA9
+                            tids: tT9
+                            negs: tN9
+                            recvs: tR9
+                        )
+                    } else null
+                }
+                if tS9.length == 1 then {
+                    ms9: tS9.pop
+                    subjects.append ms9
+                    ma9: tA9.pop
+                    arms.append ma9
+                    tids.append (tT9.get i: 0)
+                    negs.append (tN9.get i: 0)
+                    mr9: tR9.pop
+                    recvs.append mr9
+                }
+            }
+        } else null
+    }
+}
+
+# chainCondFact9 -- recognize one condition operation as a bare arm
+# predicate for chain accumulation (all four forms).
+chainCondFact9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+    subjects: List String
+    arms: List String
+    tids: List u64
+    negs: List bool
+    recvs: List String
+} is {
+    match (
+        n
+    ) case expression then {
+        chainCondFact9 :symtab :ctx n: n.expression :subjects :arms :tids :negs :recvs
+    } case dottedpath then {
+        cn9: atomTextOf n: n.child
+        if cn9.stringview == "true" then {
+            chainInnerFact9 :symtab :ctx n: n.parent neg: false :subjects :arms :tids :negs :recvs
+            return
+        }
+        if cn9.stringview == "false" then {
+            chainInnerFact9 :symtab :ctx n: n.parent neg: true :subjects :arms :tids :negs :recvs
+            return
+        }
+        (chainFactCore9
+            :symtab
+            :ctx
+            nid: n.nodeid.u64
+            parent: n.parent
+            childName: cn9.stringview
+            neg: false
+            :subjects
+            :arms
+            :tids
+            :negs
+            :recvs
+        )
+    } case binop then {
+        opn9: bareAtomText9 n: n.operator
+        if opn9.stringview == "==" then {
+            ln9: bareAtomText9 n: n.lhs
+            rn9: bareAtomText9 n: n.rhs
+            if rn9.stringview == "true" then {
+                chainInnerFact9 :symtab :ctx n: n.lhs neg: false :subjects :arms :tids :negs :recvs
+                return
+            }
+            if rn9.stringview == "false" then {
+                chainInnerFact9 :symtab :ctx n: n.lhs neg: true :subjects :arms :tids :negs :recvs
+                return
+            }
+            if ln9.stringview == "true" then {
+                chainInnerFact9 :symtab :ctx n: n.rhs neg: false :subjects :arms :tids :negs :recvs
+                return
+            }
+            if ln9.stringview == "false" then {
+                chainInnerFact9 :symtab :ctx n: n.rhs neg: true :subjects :arms :tids :negs :recvs
+            }
+        }
+    } else null
+}
+
+# chainInnerFact9 -- the stamped bare-predicate core for chain facts.
+chainInnerFact9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+    neg: bool
+    subjects: List String
+    arms: List String
+    tids: List u64
+    negs: List bool
+    recvs: List String
+} is {
+    match (
+        n
+    ) case expression then {
+        chainInnerFact9 :symtab :ctx n: n.expression :neg :subjects :arms :tids :negs :recvs
+    } case dottedpath then {
+        arm0: atomTextOf n: n.child
+        (chainFactCore9
+            :symtab
+            :ctx
+            nid: n.nodeid.u64
+            parent: n.parent
+            childName: arm0.stringview
+            :neg
+            :subjects
+            :arms
+            :tids
+            :negs
+            :recvs
+        )
+    } else null
+}
+
+# chainFactCore9 -- the exploded chain-fact core (dotted node fields).
+# Captures the emitted receiver text alongside the fact so the else
+# emission never re-derives it from the name.
+chainFactCore9: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nid: u64
+    parent: Node
+    childName: StringView
+    neg: bool
+    subjects: List String
+    arms: List String
+    tids: List u64
+    negs: List bool
+    recvs: List String
+} is {
+    dap9: dpArmPredicateOf9 :symtab :nid
+    if dap9 == 0 then return
+    bsn9: stampNameDeep :symtab n: parent
+    if bsn9.stringview == "bool" then return
+    subj9: atomTextOf n: parent
+    if subj9.length == 0 then return
+    an9: childName.string
+    rv9: emitExpr :symtab :ctx n: parent
+    subjects.append subj9
+    arms.append an9
+    tids.append dap9
+    negs.append neg
+    recvs.append rv9
 }
 
 emitIfClause: function {
@@ -9174,6 +9725,11 @@ emitElse9: function {
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
+    chSubjects: List String
+    chArms: List String
+    chTids: List u64
+    chNegs: List bool
+    chRecvs: List String
     buf: String.borrow
 } is {
     match (
@@ -9182,6 +9738,109 @@ emitElse9: function {
         lh: "\{ind}} else {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
+        # condition-false knowledge: each positive chain fact excludes its
+        # arm for the else body (layered in ctx.exclArms so nested else-if
+        # wraps compose); a negated fact IS the arm directly.
+        exN9: (List String)
+        exPrevV9: (List String)
+        exPrevT9: (List u64)
+        fi9: 0.u64
+        for fi9 < chSubjects.length loop {
+            if (chNegs.get i: fi9) == false then {
+                fs9: chSubjects.get i: fi9
+                pv0: nvGet xs: ctx.exclArms name: fs9.stringview
+                fsv9: fs9.copy
+                exN9.append fsv9
+                pvc9: pv0.copy
+                exPrevV9.append pvc9
+                exPrevT9.append (optU64Or9 o: (ntGet xs: ctx.exclTids name: fs9.stringview))
+                fa9: chArms.get i: fi9
+                nx9: "".string
+                if pv0.length > 0 then {
+                    nj9: "\{pv0} \{fa9}"
+                    nx9 = nj9
+                } else {
+                    na0: fa9.copy
+                    nx9 = na0
+                }
+                nvSet xs: ctx.exclArms name: fs9.stringview val: nx9.stringview
+                ntSet xs: ctx.exclTids name: fs9.stringview tid: (chTids.get i: fi9)
+            }
+            fi9 = fi9 + 1
+        }
+        sN9: (List String)
+        sPrevV9: (List String)
+        sPrevT9: (List u64)
+        doneS9: (Set String)
+        gi9: 0.u64
+        for gi9 < chSubjects.length loop {
+            gs9: chSubjects.get i: gi9
+            if (doneS9.has item: gs9) == false then {
+                gsc9: gs9.copy
+                doneS9.add item: gsc9
+                gtid9: chTids.get i: gi9
+                negArm9: "".string
+                hj9: 0.u64
+                for hj9 < chSubjects.length loop {
+                    h2s9: chSubjects.get i: hj9
+                    if h2s9.stringview == gs9.stringview then {
+                        if (chNegs.get i: hj9) then {
+                            hav9: chArms.get i: hj9
+                            hac9: hav9.copy
+                            negArm9 = hac9
+                        }
+                    }
+                    hj9 = hj9 + 1
+                }
+                fArm9: negArm9.copy
+                if fArm9.length == 0 then {
+                    rr9: (remainingArm9
+                        :symtab
+                        :ctx
+                        subject: gs9.stringview
+                        tid: gtid9
+                        extra: ""
+                    )
+                    fArm9 = rr9
+                }
+                if fArm9.length > 0 then {
+                    if (bodyReassigns9 n: o name: gs9.stringview) == false then {
+                        mrecv9: chRecvs.get i: gi9
+                        macc9: ".".string
+                        if (isPtrVar :ctx name: gs9.stringview) then macc9 = "->".string
+                        alias9: (armAliasText9
+                            :symtab
+                            :ctx
+                            tid: gtid9
+                            arm: fArm9.stringview
+                            recv: mrecv9.stringview
+                            acc: macc9.stringview
+                        )
+                        if alias9.length > 0 then {
+                            pv9: nvGet xs: ctx.narrowBox name: gs9.stringview
+                            sPrevV9.append pv9
+                            ptv9: (optU64Or9
+                                o: (ntGet xs: ctx.narrowTid name: gs9.stringview)
+                            )
+                            sPrevT9.append ptv9
+                            gsv9: gs9.copy
+                            sN9.append gsv9
+                            nvSet xs: ctx.narrowBox name: gs9.stringview val: alias9.stringview
+                            pt9: (optU64Or9
+                                o: (symtab.typing.childOf
+                                    parentTypeId: gtid9
+                                    name: fArm9.stringview
+                                )
+                            )
+                            ntSet xs: ctx.narrowTid name: gs9.stringview tid: pt9
+                            cmtS9: "\{ind}    /* alias: \{gs9} => \{alias9} */\n"
+                            buf.append cmtS9.stringview
+                        }
+                    }
+                }
+            }
+            gi9 = gi9 + 1
+        }
         if assignTo.length > 0 then {
             emitBranchAssign :symtab :ctx n: o target: assignTo ind: ind2.stringview :tmp :buf
         } else {
@@ -9189,6 +9848,40 @@ emitElse9: function {
             lLe9: tmp.listFrees.length
             emitBodyNode :symtab :ctx n: o ind: ind2.stringview :tmp :buf
             flushBlockFrees :ctx :tmp fL: fLe9 lL: lLe9 :buf
+        }
+        ri9: 0.u64
+        for ri9 < sN9.length loop {
+            rnm9: sN9.get i: ri9
+            rv9: sPrevV9.get i: ri9
+            if rv9.length > 0 then {
+                nvSet xs: ctx.narrowBox name: rnm9.stringview val: rv9.stringview
+            } else {
+                nvRemove xs: ctx.narrowBox name: rnm9.stringview
+            }
+            rt9: sPrevT9.get i: ri9
+            if rt9 > 0 then {
+                ntSet xs: ctx.narrowTid name: rnm9.stringview tid: rt9
+            } else {
+                ntRemove xs: ctx.narrowTid name: rnm9.stringview
+            }
+            ri9 = ri9 + 1
+        }
+        xi9: exN9.length
+        for xi9 > 0 loop {
+            xi9 = xi9 - 1
+            xn9: exN9.get i: xi9
+            xv9: exPrevV9.get i: xi9
+            if xv9.length > 0 then {
+                nvSet xs: ctx.exclArms name: xn9.stringview val: xv9.stringview
+            } else {
+                nvRemove xs: ctx.exclArms name: xn9.stringview
+            }
+            xt9: exPrevT9.get i: xi9
+            if xt9 > 0 then {
+                ntSet xs: ctx.exclTids name: xn9.stringview tid: xt9
+            } else {
+                ntRemove xs: ctx.exclTids name: xn9.stringview
+            }
         }
     } case none then null
 }
@@ -11295,6 +11988,8 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
         aliases: (List NameVal)
         narrowBox: (List NameVal)
         narrowTid: (List NameTid)
+        exclArms: (List NameVal)
+        exclTids: (List NameTid)
         genActive: false
         genYieldCount: 0
         genYieldNext: 0
