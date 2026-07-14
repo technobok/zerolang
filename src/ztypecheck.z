@@ -10155,6 +10155,60 @@ fnAutoCallable: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     return userSeen9
 }
 
+# bareFnRefError -- a bare reference to a function with required parameters
+# is a call missing its arguments (a reference needs the explicit '.take').
+bareFnRefError: function {
+    st: zenv.ZSymbolTable
+    nodeid: u32
+    lineno: u32
+    colno: u32
+    width: u32
+    fid: u64
+} is {
+    prov9: (List String)
+    misN9: (List String)
+    misI9: (List u64)
+    (missingCtorFields
+        :st
+        funcId: fid
+        isCtor: false
+        provided: prov9
+        posCount: 0
+        missingNames: misN9
+        missingIds: misI9
+    )
+    lst9: String
+    li9: u64
+    ln9: misN9.length
+    for li9 < ln9 loop {
+        mn9: misN9.get i: li9
+        mid9: misI9.get i: li9
+        li9 = li9 + 1
+        mtn9: typeNameOf :st tid: mid9
+        mnc9: mn9.copy
+        mtc9: mtn9.copy
+        if lst9.length > 0 then lst9.append ", "
+        ln1: "'\{mnc9}' (type: \{mtc9})"
+        lst9.append ln1.stringview
+    }
+    fn9: typeNameOf :st tid: fid
+    fnc9: fn9.copy
+    m9: "a bare reference to '\{fnc9}' calls it: missing required arguments \{lst9}"
+    nt9: "a bare function reference in value position is a call".string
+    eh9: "call it with its required arguments, or store a reference with '\{fn9}.take'"
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.callError
+        msg: m9
+        note: nt9
+        hint: eh9
+        :width
+    )
+}
+
 # canonicalChildBase -- a cross-unit narrowed match-arm base can be a shell id
 # (distinct from the canonical defining-unit id) whose member children are not
 # registered. Find a same-named type in any unit's resolved scope that has the
@@ -10672,6 +10726,21 @@ checkDotted: function {
             isFn9: false
             if (st.reg.typetypeOf typeId: mo9) == ztypes.ztypetype.functionType then isFn9 = true
             if coerce when isFn9 then {
+                if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+                    :st
+                    mid: mo9
+                ) == false then {
+                    ufl9: nodeLine n: dp.child
+                    ufc9: nodeCol n: dp.child
+                    (bareFnRefError
+                        :st
+                        nodeid: dp.nodeid
+                        lineno: ufl9
+                        colno: ufc9
+                        width: cn.length.u32
+                        fid: mo9
+                    )
+                }
                 if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable :st mid: mo9) then {
                     ro9: methodReturnOf :st mid: mo9
                     match (
@@ -11238,7 +11307,17 @@ checkAtomid: function {
                     } case none then null
                 }
                 if isAutoFn when (st.typing.suppressFnAutoCall) == false then {
-                    if (fnAutoCallable :st mid: fo) == false then isAutoFn = false
+                    if (fnAutoCallable :st mid: fo) == false then {
+                        isAutoFn = false
+                        (bareFnRefError
+                            :st
+                            nodeid: node.nodeid
+                            lineno: node.lineno
+                            colno: node.colno
+                            width: node.name.length.u32
+                            fid: fo
+                        )
+                    }
                 } else {
                     isAutoFn = false
                 }
