@@ -5536,16 +5536,14 @@ stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
                 st.typing.nodeType.set key: nd2 value: setd2
             } else {
                 nd3: nodes.get i: di
-                ngo: st.typing.pendingDefaultName.get key: nd3
-                match (
-                    ngo
-                ) case some then {
+                ng9: copiedMapStr m: st.typing.pendingDefaultName key: nd3
+                if ng9.length > 0 then {
                     nrt: (optU64Or
                         o: (walkLookupTyperef
                             ty: st.typing
                             reg: st.reg
                             currentUnit: unitName
-                            base: ngo.stringview
+                            base: ng9.stringview
                         )
                         d: 0
                     )
@@ -5554,7 +5552,7 @@ stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
                         setd4: nrt
                         st.typing.nodeType.set key: nd4 value: setd4
                     }
-                } case none then null
+                }
             }
         }
         di = di + 1
@@ -10105,46 +10103,50 @@ metaCreateBaseId: function {n: Node} out optionval u32 is {
 }
 
 # typedefBaseOf -- a typedef type's base type id (the recorded base name,
+# copiedMapStr -- owned copy of a u64-keyed map entry ("" when absent):
+# confines the value view to this frame so the caller can immediately
+# re-lend the map's container (fnReturnTidOf-style view scoping).
+copiedMapStr: function {m: (Map u64 value: String) key: u64} out String is {
+    vo: m.get :key
+    match (
+        vo
+    ) case some then {
+        return vo.copy
+    } case none then {
+        return "".string
+    }
+}
+
 # resolved at read time -- the resolver runs before the base's unit), or 0.
 typedefBaseOf: function {st: zenv.ZSymbolTable unitName: StringView tid: u64} out u64 is {
-    bo: st.typing.typedefBaseName.get key: tid
-    match (
-        bo
-    ) case some then {
-        return (optU64Or
-            o: (walkLookupTyperef
-                ty: st.typing
-                reg: st.reg
-                currentUnit: unitName
-                base: bo.stringview
-            )
-            d: 0
+    bn9: copiedMapStr m: st.typing.typedefBaseName key: tid
+    if bn9.length == 0 then return 0
+    return (optU64Or
+        o: (walkLookupTyperef
+            ty: st.typing
+            reg: st.reg
+            currentUnit: unitName
+            base: bn9.stringview
         )
-    } case none then {
-        return 0
-    }
+        d: 0
+    )
 }
 
 # typedefBaseMangledOf -- a typedef type's base INSTANCE id (the recorded
 # mangled name resolved at read time -- monos register in resolved once
 # minted), or 0.
 typedefBaseMangledOf: function {st: zenv.ZSymbolTable unitName: StringView tid: u64} out u64 is {
-    bo: st.typing.typedefBaseMangled.get key: tid
-    match (
-        bo
-    ) case some then {
-        return (optU64Or
-            o: (walkLookupTyperef
-                ty: st.typing
-                reg: st.reg
-                currentUnit: unitName
-                base: bo.stringview
-            )
-            d: 0
+    bm9: copiedMapStr m: st.typing.typedefBaseMangled key: tid
+    if bm9.length == 0 then return 0
+    return (optU64Or
+        o: (walkLookupTyperef
+            ty: st.typing
+            reg: st.reg
+            currentUnit: unitName
+            base: bm9.stringview
         )
-    } case none then {
-        return 0
-    }
+        d: 0
+    )
 }
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
@@ -10399,15 +10401,24 @@ bareFnRefError: function {
 canonicalChildBase: function {st: zenv.ZSymbolTable bt: u64 child: StringView} out u64 is {
     nm: typeNameOf :st tid: bt
     if nm.length == 0 then return 0
-    cands9: (List u64)
+    uks9: (List String)
     with uit: st.reg.unitNameTid.iterateItems do for ue: uit loop {
-        k: "\{ue.key}.\{nm}"
+        ukc9: ue.key.copy
+        uks9.append ukc9
+    }
+    cands9: (List u64)
+    uki9: u64
+    ukn9: uks9.length
+    for uki9 < ukn9 loop {
+        uk9: uks9.get i: uki9
+        k: "\{uk9}.\{nm}"
         ro9: resolvedByKey ty: st.typing reg: st.reg key: k
         match (
             ro9
         ) case some then {
             if ro9 != bt then cands9.append ro9
         } case none then null
+        uki9 = uki9 + 1
     }
     found: u64
     ci9: u64
@@ -15411,26 +15422,27 @@ checkGenericCall: function {
     match (
         rno
     ) case some then {
-        rbn: st.typing.pendingTyperef.get key: rno
-        match (
-            rbn
-        ) case some then {
-            rv: rbn.stringview
-            rk: rv.string
-            rgot2: subs.get key: rk
+        rk2: copiedMapStr m: st.typing.pendingTyperef key: rno
+        if rk2.length > 0 then {
+            rgot2: subs.get key: rk2
             match (
                 rgot2
             ) case some then {
                 st.reg.setReturnType typeId: mid value: rgot2
             } case none then {
-                rconc: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: rv
+                rconc: (walkLookupTyperef
+                    ty: st.typing
+                    reg: st.reg
+                    currentUnit: unitName
+                    base: rk2.stringview
+                )
                 match (
                     rconc
                 ) case some then {
                     st.reg.setReturnType typeId: mid value: rconc
                 } case none then null
             }
-        } case none then null
+        }
     } case none then null
     # A generic-instance return (`out (optionval t: u64)`) has no bare
     # pendingTyperef name, so the sub/name path above leaves the mono's
@@ -18068,10 +18080,16 @@ canonicalizeShellChildren: function {st: zenv.ZSymbolTable mainName: StringView}
     ri9: u64
     rn9: st.typing.typeChild.length
     for ri9 < rn9 loop {
-        row: st.typing.typeChild.get i: ri9
+        rpt9: u64
+        rcn9: u64
+        {
+            row: st.typing.typeChild.get i: ri9
+            rpt9 = row.parentTypeId
+            rcn9 = row.childNameId
+        }
         cto9: u64
         {
-            ctoO9: st.typing.childTypeById.get key: row.childNameId
+            ctoO9: st.typing.childTypeById.get key: rcn9
             match (
                 ctoO9
             ) case some then {
@@ -18093,7 +18111,7 @@ canonicalizeShellChildren: function {st: zenv.ZSymbolTable mainName: StringView}
         if ok9 then {
             pu9: mainName.string
             {
-                puo9: st.typing.definedInUnit.get key: row.parentTypeId
+                puo9: st.typing.definedInUnit.get key: rpt9
                 match (
                     puo9
                 ) case some then {
@@ -18127,7 +18145,7 @@ canonicalizeShellChildren: function {st: zenv.ZSymbolTable mainName: StringView}
                 )
                 if rid9 > 0 when rid9 != cto9 then {
                     setc9: rid9
-                    st.typing.childTypeById.set key: row.childNameId value: setc9
+                    st.typing.childTypeById.set key: rcn9 value: setc9
                 }
             }
         }
