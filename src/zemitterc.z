@@ -5283,14 +5283,20 @@ emitExpr: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
             return (emitCtorDefaultsFill :symtab :ctx tid: izd9)
         } case none then null
         dpUb9: atomTextOf n: n.parent
-        if (symtab.reg.isUnitName name: dpUb9.stringview) when (isEmittableFileUnit name: dpUb9.stringview) then {
+        if (symtab.reg.isUnitName name: dpUb9.stringview) then {
             dpUc9: atomTextOf n: n.child
             dpUk9: "\{dpUb9}.\{dpUc9}"
             dpUfo9: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: dpUk9
             match (
                 dpUfo9
             ) case some then {
-                if (symtab.reg.typetypeOf typeId: dpUfo9) == ztypes.ztypetype.functionType then {
+                dpOk9: isEmittableFileUnit name: dpUb9.stringview
+                if (dpOk9) == false then {
+                    # runtime-backed units: only a bodied+demanded free fn
+                    # earns the id-cname reference/auto-call route here
+                    dpOk9 = stdFnRefEmittable :symtab :ctx fid: dpUfo9
+                }
+                if dpOk9 when (symtab.reg.typetypeOf typeId: dpUfo9) == ztypes.ztypetype.functionType then {
                     dpUfc9: cnameOf tid: dpUfo9 name: dpUc9.stringview
                     # a node stamped FUNCTION is a fn REFERENCE (a .take peel
                     # delegates here): the bare cname, like the atom leg
@@ -15027,18 +15033,39 @@ collectLateMonosKind: function {
 # fnptrTypedefEligible -- a FUNCTION type worth a `_ft` typedef: a real spec /
 # free function / method defined in an emittable unit. Synthetic create/==/!=
 # carry no definedInUnit; generic templates and monos are skipped.
+# stdFnRefEmittable -- a FUNCTION worth a reference cname / _ft typedef:
+# emittable-unit fns always; a runtime-backed unit's fn only when it is a
+# BODIED (non-native), DEMANDED free fn (natives keep routing through the
+# declaration-driven call emitter and have no id-cname definition).
+stdFnRefEmittable: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
+    duo9: definedInUnitOf :symtab tid: fid
+    match (
+        duo9
+    ) case some then {
+        if (isEmittableFileUnit name: duo9.stringview) then return true
+        if (fnIsNativeId :symtab :fid) then return false
+        # demand is recorded under the composed "unit.fn" key; read the fn
+        # name off the id-keyed registry entry to compose it
+        te9: symtab.reg.typeById.get key: fid
+        match (
+            te9
+        ) case some then {
+            return (
+                stdFnUndemanded :symtab unitName: duo9.stringview fnName: te9.name.stringview
+            ) == false
+        } case none then {
+            return false
+        }
+    } case none then {
+        return false
+    }
+}
+
 fnptrTypedefEligible: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     if (isGenericType :symtab :tid) then return false
     mo: monoOriginName :symtab :tid
     if mo.length > 0 then return false
-    duo: definedInUnitOf :symtab :tid
-    match (
-        duo
-    ) case some then {
-        return (isEmittableFileUnit name: duo.stringview)
-    } case none then {
-        return false
-    }
+    return (stdFnRefEmittable :symtab :ctx fid: tid)
 }
 
 # fnRegReturnId -- a FUNCTION type's registered return type id (0 when none).
