@@ -655,7 +655,7 @@ UnitData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    body: (List Node)
+    body: (List u32)
 }
 
 # Program payload (parse root): the file-level units as namedoperation
@@ -666,7 +666,7 @@ ProgramData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    units: (List Node)
+    units: (List u32)
     mainUnitName: String
     nodes: (List Node)
 }
@@ -901,11 +901,11 @@ printOptName: function {o: Option String} is {
 
 # Print a Data block's optional `out` type annotation, descending
 # into the type node when present.
-printOptChild: function {o: Option Node} is {
+printOptChild: function {nodes: List Node o: Option Node} is {
     match (
         o
     ) case some then {
-        printNode o
+        printNode :nodes n: o
     } case none then {
         print "  <none>"
     }
@@ -983,7 +983,7 @@ posOf: function {n: Node} out nodepos is {
 # Print one line per Node in the form
 #   "<nodeid>: <arm> @<lineno>:<colno>"
 # Recursive arms (binop, atomstring) descend into their children.
-printNode: function {n: Node} is {
+printNode: function {nodes: List Node n: Node} is {
     match (
         n
     ) case error then {
@@ -996,120 +996,130 @@ printNode: function {n: Node} is {
         print "\{n.nodeid}: stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
     } case binop then {
         print "\{n.nodeid}: binop @\{n.lineno}:\{n.colno}"
-        printNode n.lhs
-        printNode n.operator
-        printNode n.rhs
+        printNode :nodes n: n.lhs
+        printNode :nodes n: n.operator
+        printNode :nodes n: n.rhs
     } case atomstring then {
         print "\{n.nodeid}: atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
         iter: n.stringparts.iterate
-        for part: iter loop printNode part
+        for part: iter loop printNode :nodes n: part
     } case dottedpath then {
         print "\{n.nodeid}: dottedpath @\{n.lineno}:\{n.colno}"
-        printNode n.parent
-        printNode n.child
+        printNode :nodes n: n.parent
+        printNode :nodes n: n.child
     } case call then {
         print "\{n.nodeid}: call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
-        printNode n.callable
+        printNode :nodes n: n.callable
         argiter: n.arguments.iterate
-        for arg: argiter loop printNode arg
+        for arg: argiter loop printNode :nodes n: arg
     } case typeofexpr then {
         print "\{n.nodeid}: typeofexpr @\{n.lineno}:\{n.colno}"
-        printNode n.source
+        printNode :nodes n: n.source
     } case namedoperation then {
         print "\{n.nodeid}: namedoperation @\{n.lineno}:\{n.colno}"
         printOptName n.name
-        printNode n.operation
+        printNode :nodes n: n.operation
     } case datablock then {
         print "\{n.nodeid}: datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
         eiter: n.elements.iterate
-        for el: eiter loop printNode el
+        for el: eiter loop printNode :nodes n: el
         print "  outType:"
-        printOptChild n.outType
+        printOptChild :nodes o: n.outType
     } case yieldexpr then {
         print "\{n.nodeid}: yieldexpr @\{n.lineno}:\{n.colno}"
-        printNode n.expr
+        printNode :nodes n: n.expr
     } case statement then {
         print "\{n.nodeid}: statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
         siter: n.statements.iterate
-        for line: siter loop printNode line
+        for line: siter loop printNode :nodes n: line
     } case statementline then {
         print "\{n.nodeid}: statementline @\{n.lineno}:\{n.colno}"
-        printNode n.statementline
+        printNode :nodes n: n.statementline
     } case assignment then {
         print "\{n.nodeid}: assignment @\{n.lineno}:\{n.colno} name=\{n.name}"
-        printNode n.value
+        printNode :nodes n: n.value
     } case reassignment then {
         print "\{n.nodeid}: reassignment @\{n.lineno}:\{n.colno}"
-        printNode n.topath
-        printNode n.value
+        printNode :nodes n: n.topath
+        printNode :nodes n: n.value
     } case swapstmt then {
         print "\{n.nodeid}: swapstmt @\{n.lineno}:\{n.colno}"
-        printNode n.lhs
-        printNode n.rhs
+        printNode :nodes n: n.lhs
+        printNode :nodes n: n.rhs
     } case expression then {
         print "\{n.nodeid}: expression @\{n.lineno}:\{n.colno}"
-        printNode n.expression
+        printNode :nodes n: n.expression
     } case ifexpr then {
         print "\{n.nodeid}: ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
         clit: n.clauses.iterate
-        for cl: clit loop printNode cl
+        for cl: clit loop printNode :nodes n: cl
         print "  elseclause:"
-        printOptChild n.elseclause
+        printOptChild :nodes o: n.elseclause
     } case ifclause then {
         print "\{n.nodeid}: ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
         coit: n.conditions.iterate
-        for co: coit loop printNode co
-        printNode n.statement
+        for co: coit loop printNode :nodes n: co
+        printNode :nodes n: n.statement
     } case forexpr then {
         print "\{n.nodeid}: forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
         fcit: n.conditions.iterate
-        for fc: fcit loop printNode fc
+        for fc: fcit loop printNode :nodes n: fc
         print "  body:"
-        printOptChild n.body
+        printOptChild :nodes o: n.body
         fpit: n.postconditions.iterate
-        for fp: fpit loop printNode fp
+        for fp: fpit loop printNode :nodes n: fp
     } case doexpr then {
         print "\{n.nodeid}: doexpr @\{n.lineno}:\{n.colno}"
-        printNode n.statement
+        printNode :nodes n: n.statement
     } case withexpr then {
         print "\{n.nodeid}: withexpr @\{n.lineno}:\{n.colno} name=\{n.name}"
-        printNode n.value
-        printNode n.body
+        printNode :nodes n: n.value
+        printNode :nodes n: n.body
     } case caseexpr then {
         print "\{n.nodeid}: caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
-        printNode n.subject
+        printNode :nodes n: n.subject
         ccit: n.clauses.iterate
-        for cc: ccit loop printNode cc
+        for cc: ccit loop printNode :nodes n: cc
         print "  elseclause:"
-        printOptChild n.elseclause
+        printOptChild :nodes o: n.elseclause
     } case caseclause then {
         print "\{n.nodeid}: caseclause @\{n.lineno}:\{n.colno} name=\{n.name}"
-        printNode n.matcharm
-        printNode n.statement
+        printNode :nodes n: n.matcharm
+        printNode :nodes n: n.statement
     } case functiondef then {
         print "\{n.nodeid}: functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}"
         print "  returntype:"
-        printOptChild n.returntype
+        printOptChild :nodes o: n.returntype
         piter: n.parameters.iterate
-        for pm: piter loop printNode pm
+        for pm: piter loop printNode :nodes n: pm
         print "  body:"
-        printOptChild n.body
+        printOptChild :nodes o: n.body
         faiter: n.asItems.iterate
-        for fam: faiter loop printNode fam
+        for fam: faiter loop printNode :nodes n: fam
     } case objectdef then {
         print "\{n.nodeid}: objectdef @\{n.lineno}:\{n.colno} kind=\{nodetypename n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
         oiiter: n.isItems.iterate
-        for oim: oiiter loop printNode oim
+        for oim: oiiter loop printNode :nodes n: oim
         oaiter: n.asItems.iterate
-        for oam: oaiter loop printNode oam
+        for oam: oaiter loop printNode :nodes n: oam
     } case unitdef then {
         print "\{n.nodeid}: unitdef @\{n.lineno}:\{n.colno} body=\{n.body.length}"
-        ubiter: n.body.iterate
-        for ubm: ubiter loop printNode ubm
+        ubi9: u64
+        ubn9: n.body.length
+        for ubi9 < ubn9 loop {
+            ubid9: n.body.get i: ubi9
+            printNode :nodes n: (nodes.get i: (ubid9 - 1).u64)
+            ubi9 = ubi9 + 1
+        }
     } case program then {
         print "\{n.nodeid}: program @\{n.lineno}:\{n.colno} units=\{n.units.length} mainUnitName=\{n.mainUnitName}"
-        puiter: n.units.iterate
-        for pum: puiter loop printNode pum
+        pui9: u64
+        pun9: n.units.length
+        for pui9 < pun9 loop {
+            puid9: n.units.get i: pui9
+            printNode :nodes n: (nodes.get i: (puid9 - 1).u64)
+            pui9 = pui9 + 1
+        }
     }
 }
 
@@ -1117,17 +1127,17 @@ printNode: function {n: Node} is {
 # printNode but without the `<nodeid>: ` header prefix and without the
 # namedoperation position (the Python reference cannot recover the label
 # token position for dict-valued member maps).
-printOptChildCanonical: function {o: Option Node} is {
+printOptChildCanonical: function {nodes: List Node o: Option Node} is {
     match (
         o
     ) case some then {
-        printNodeCanonical o
+        printNodeCanonical :nodes n: o
     } case none then {
         print "  <none>"
     }
 }
 
-printNodeCanonical: function {n: Node} is {
+printNodeCanonical: function {nodes: List Node n: Node} is {
     match (
         n
     ) case error then {
@@ -1140,120 +1150,130 @@ printNodeCanonical: function {n: Node} is {
         print "stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
     } case binop then {
         print "binop @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.lhs
-        printNodeCanonical n.operator
-        printNodeCanonical n.rhs
+        printNodeCanonical :nodes n: n.lhs
+        printNodeCanonical :nodes n: n.operator
+        printNodeCanonical :nodes n: n.rhs
     } case atomstring then {
         print "atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
         iter: n.stringparts.iterate
-        for part: iter loop printNodeCanonical part
+        for part: iter loop printNodeCanonical :nodes n: part
     } case dottedpath then {
         print "dottedpath @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.parent
-        printNodeCanonical n.child
+        printNodeCanonical :nodes n: n.parent
+        printNodeCanonical :nodes n: n.child
     } case call then {
         print "call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
-        printNodeCanonical n.callable
+        printNodeCanonical :nodes n: n.callable
         argiter: n.arguments.iterate
-        for arg: argiter loop printNodeCanonical arg
+        for arg: argiter loop printNodeCanonical :nodes n: arg
     } case typeofexpr then {
         print "typeofexpr @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.source
+        printNodeCanonical :nodes n: n.source
     } case namedoperation then {
         print "namedoperation"
         printOptName n.name
-        printNodeCanonical n.operation
+        printNodeCanonical :nodes n: n.operation
     } case datablock then {
         print "datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
         eiter: n.elements.iterate
-        for el: eiter loop printNodeCanonical el
+        for el: eiter loop printNodeCanonical :nodes n: el
         print "  outType:"
-        printOptChildCanonical n.outType
+        printOptChildCanonical :nodes o: n.outType
     } case yieldexpr then {
         print "yieldexpr @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.expr
+        printNodeCanonical :nodes n: n.expr
     } case statement then {
         print "statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
         siter: n.statements.iterate
-        for line: siter loop printNodeCanonical line
+        for line: siter loop printNodeCanonical :nodes n: line
     } case statementline then {
         print "statementline @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.statementline
+        printNodeCanonical :nodes n: n.statementline
     } case assignment then {
         print "assignment @\{n.lineno}:\{n.colno} name=\{n.name}"
-        printNodeCanonical n.value
+        printNodeCanonical :nodes n: n.value
     } case reassignment then {
         print "reassignment @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.topath
-        printNodeCanonical n.value
+        printNodeCanonical :nodes n: n.topath
+        printNodeCanonical :nodes n: n.value
     } case swapstmt then {
         print "swapstmt @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.lhs
-        printNodeCanonical n.rhs
+        printNodeCanonical :nodes n: n.lhs
+        printNodeCanonical :nodes n: n.rhs
     } case expression then {
         print "expression @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.expression
+        printNodeCanonical :nodes n: n.expression
     } case ifexpr then {
         print "ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
         clit: n.clauses.iterate
-        for cl: clit loop printNodeCanonical cl
+        for cl: clit loop printNodeCanonical :nodes n: cl
         print "  elseclause:"
-        printOptChildCanonical n.elseclause
+        printOptChildCanonical :nodes o: n.elseclause
     } case ifclause then {
         print "ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
         coit: n.conditions.iterate
-        for co: coit loop printNodeCanonical co
-        printNodeCanonical n.statement
+        for co: coit loop printNodeCanonical :nodes n: co
+        printNodeCanonical :nodes n: n.statement
     } case forexpr then {
         print "forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
         fcit: n.conditions.iterate
-        for fc: fcit loop printNodeCanonical fc
+        for fc: fcit loop printNodeCanonical :nodes n: fc
         print "  body:"
-        printOptChildCanonical n.body
+        printOptChildCanonical :nodes o: n.body
         fpit: n.postconditions.iterate
-        for fp: fpit loop printNodeCanonical fp
+        for fp: fpit loop printNodeCanonical :nodes n: fp
     } case doexpr then {
         print "doexpr @\{n.lineno}:\{n.colno}"
-        printNodeCanonical n.statement
+        printNodeCanonical :nodes n: n.statement
     } case withexpr then {
         print "withexpr @\{n.lineno}:\{n.colno} name=\{n.name}"
-        printNodeCanonical n.value
-        printNodeCanonical n.body
+        printNodeCanonical :nodes n: n.value
+        printNodeCanonical :nodes n: n.body
     } case caseexpr then {
         print "caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
-        printNodeCanonical n.subject
+        printNodeCanonical :nodes n: n.subject
         ccit: n.clauses.iterate
-        for cc: ccit loop printNodeCanonical cc
+        for cc: ccit loop printNodeCanonical :nodes n: cc
         print "  elseclause:"
-        printOptChildCanonical n.elseclause
+        printOptChildCanonical :nodes o: n.elseclause
     } case caseclause then {
         print "caseclause @\{n.lineno}:\{n.colno} name=\{n.name}"
-        printNodeCanonical n.matcharm
-        printNodeCanonical n.statement
+        printNodeCanonical :nodes n: n.matcharm
+        printNodeCanonical :nodes n: n.statement
     } case functiondef then {
         print "functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}"
         print "  returntype:"
-        printOptChildCanonical n.returntype
+        printOptChildCanonical :nodes o: n.returntype
         piter: n.parameters.iterate
-        for pm: piter loop printNodeCanonical pm
+        for pm: piter loop printNodeCanonical :nodes n: pm
         print "  body:"
-        printOptChildCanonical n.body
+        printOptChildCanonical :nodes o: n.body
         faiter: n.asItems.iterate
-        for fam: faiter loop printNodeCanonical fam
+        for fam: faiter loop printNodeCanonical :nodes n: fam
     } case objectdef then {
         print "objectdef @\{n.lineno}:\{n.colno} kind=\{nodetypename n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
         oiiter: n.isItems.iterate
-        for oim: oiiter loop printNodeCanonical oim
+        for oim: oiiter loop printNodeCanonical :nodes n: oim
         oaiter: n.asItems.iterate
-        for oam: oaiter loop printNodeCanonical oam
+        for oam: oaiter loop printNodeCanonical :nodes n: oam
     } case unitdef then {
         print "unitdef @\{n.lineno}:\{n.colno} body=\{n.body.length}"
-        ubiter: n.body.iterate
-        for ubm: ubiter loop printNodeCanonical ubm
+        ubi9: u64
+        ubn9: n.body.length
+        for ubi9 < ubn9 loop {
+            ubid9: n.body.get i: ubi9
+            printNodeCanonical :nodes n: (nodes.get i: (ubid9 - 1).u64)
+            ubi9 = ubi9 + 1
+        }
     } case program then {
         print "program @\{n.lineno}:\{n.colno} units=\{n.units.length} mainUnitName=\{n.mainUnitName}"
-        puiter: n.units.iterate
-        for pum: puiter loop printNodeCanonical pum
+        pui9: u64
+        pun9: n.units.length
+        for pui9 < pun9 loop {
+            puid9: n.units.get i: pui9
+            printNodeCanonical :nodes n: (nodes.get i: (puid9 - 1).u64)
+            pui9 = pui9 + 1
+        }
     }
 }
 
@@ -1261,6 +1281,8 @@ printNodeCanonical: function {n: Node} is {
 # print a deterministic dump for the harness to compare against
 # tests/fixtures/zast_z/smoke.expected.
 main: function is {
+    # empty table for the pre-program smoke prints (their arms never fetch)
+    nodes: (List Node)
     print "=== err ==="
     printErr err.fileNotFound
     printErr err.duplicateDef
@@ -1365,11 +1387,11 @@ main: function is {
         note: "".string
         hint: "".string
     )
-    printNode n1
+    printNode :nodes n: n1
     n2: Node.atomid (AtomIdData nodeid: 2 lineno: 11 colno: 3 name: "myvar".string)
-    printNode n2
+    printNode :nodes n: n2
     n3: Node.labelvalue (LabelValueData nodeid: 3 lineno: 12 colno: 7 name: "x".string)
-    printNode n3
+    printNode :nodes n: n3
     n4: Node.stringchunk (StringChunkData
         nodeid: 4
         lineno: 13
@@ -1377,7 +1399,7 @@ main: function is {
         text: "hello".string
         chunkKind: 0
     )
-    printNode n4
+    printNode :nodes n: n4
 
     # Recursive: an atomstring containing two child nodes (list of Node).
     parts: (List Node)
@@ -1390,7 +1412,7 @@ main: function is {
     )
     parts.append (Node.atomid (AtomIdData nodeid: 6 lineno: 14 colno: 8 name: "name".string))
     n5: Node.atomstring (AtomStringData nodeid: 7 lineno: 14 colno: 1 stringparts: parts)
-    printNode n5
+    printNode :nodes n: n5
 
     # Recursive: a binop "x + y" with three Node children stored
     # by value on the carrier class.
@@ -1398,25 +1420,25 @@ main: function is {
     op: Node.atomid (AtomIdData nodeid: 9 lineno: 15 colno: 3 name: "+".string)
     rhs: Node.atomid (AtomIdData nodeid: 10 lineno: 15 colno: 5 name: "y".string)
     n6: Node.binop (BinOpData nodeid: 11 lineno: 15 colno: 3 :lhs operator: op :rhs)
-    printNode n6
+    printNode :nodes n: n6
 
     # dottedpath "a.b": parent and child are atomid Node children.
     dpp: Node.atomid (AtomIdData nodeid: 12 lineno: 16 colno: 1 name: "a".string)
     dpc: Node.atomid (AtomIdData nodeid: 13 lineno: 16 colno: 3 name: "b".string)
     n7: Node.dottedpath (DottedPathData nodeid: 14 lineno: 16 colno: 2 parent: dpp child: dpc)
-    printNode n7
+    printNode :nodes n: n7
 
     # call "f arg": callable atomid + one-element argument list.
     callee: Node.atomid (AtomIdData nodeid: 15 lineno: 17 colno: 1 name: "f".string)
     args: (List Node)
     args.append (Node.atomid (AtomIdData nodeid: 16 lineno: 17 colno: 3 name: "arg".string))
     n8: Node.call (CallData nodeid: 17 lineno: 17 colno: 1 callable: callee arguments: args)
-    printNode n8
+    printNode :nodes n: n8
 
     # typeofexpr over a single source operation.
     tsrc: Node.atomid (AtomIdData nodeid: 18 lineno: 18 colno: 1 name: "x".string)
     n9: Node.typeofexpr (TypeOfExprData nodeid: 19 lineno: 18 colno: 1 source: tsrc)
-    printNode n9
+    printNode :nodes n: n9
 
     # namedoperation "label: x" — a labelled argument value.
     noval: Node.atomid (AtomIdData nodeid: 20 lineno: 19 colno: 8 name: "x".string)
@@ -1428,7 +1450,7 @@ main: function is {
         name: noname
         operation: noval
     )
-    printNode n10
+    printNode :nodes n: n10
 
     # namedoperation with no label (positional argument).
     noval2: Node.atomid (AtomIdData nodeid: 22 lineno: 20 colno: 1 name: "y".string)
@@ -1439,7 +1461,7 @@ main: function is {
         name: (Option.none String)
         operation: noval2
     )
-    printNode n11
+    printNode :nodes n: n11
 
     # datablock "data { a b } out T" — two element nodes plus an out type.
     elems: (List Node)
@@ -1453,7 +1475,7 @@ main: function is {
         elements: elems
         outType: (Option.some douttype)
     )
-    printNode n12
+    printNode :nodes n: n12
 
     # datablock with no out annotation.
     elems2: (List Node)
@@ -1465,17 +1487,17 @@ main: function is {
         elements: elems2
         outType: (Option.none Node)
     )
-    printNode n13
+    printNode :nodes n: n13
 
     # yieldexpr "yield x" — a generator suspension point.
     yval: Node.atomid (AtomIdData nodeid: 30 lineno: 23 colno: 7 name: "x".string)
     n14: Node.yieldexpr (YieldExprData nodeid: 31 lineno: 23 colno: 1 expr: yval)
-    printNode n14
+    printNode :nodes n: n14
 
     # expression wrapping an atomid operation.
     exprop: Node.atomid (AtomIdData nodeid: 32 lineno: 24 colno: 4 name: "y".string)
     n15: Node.expression (ExpressionData nodeid: 33 lineno: 24 colno: 4 expression: exprop)
-    printNode n15
+    printNode :nodes n: n15
 
     # assignment "x: y" — bind x to the expression node above (rebuilt).
     asgexprop: Node.atomid (AtomIdData nodeid: 34 lineno: 25 colno: 4 name: "y".string)
@@ -1487,7 +1509,7 @@ main: function is {
         name: "x".string
         value: asgval
     )
-    printNode n16
+    printNode :nodes n: n16
 
     # reassignment "a.b = z" — target dotted path, expression value.
     raparent: Node.atomid (AtomIdData nodeid: 37 lineno: 26 colno: 1 name: "a".string)
@@ -1508,13 +1530,13 @@ main: function is {
         topath: rapath
         value: raval
     )
-    printNode n17
+    printNode :nodes n: n17
 
     # swapstmt "swap p q" — two owned paths.
     swlhs: Node.atomid (AtomIdData nodeid: 43 lineno: 27 colno: 6 name: "p".string)
     swrhs: Node.atomid (AtomIdData nodeid: 44 lineno: 27 colno: 8 name: "q".string)
     n18: Node.swapstmt (SwapStmtData nodeid: 45 lineno: 27 colno: 1 lhs: swlhs rhs: swrhs)
-    printNode n18
+    printNode :nodes n: n18
 
     # statementline wrapping a standalone assignment.
     slexprop: Node.atomid (AtomIdData nodeid: 46 lineno: 28 colno: 4 name: "m".string)
@@ -1527,7 +1549,7 @@ main: function is {
         value: slval
     )
     n19: Node.statementline (StatementLineData nodeid: 49 lineno: 28 colno: 1 statementline: slasg)
-    printNode n19
+    printNode :nodes n: n19
 
     # statement block holding two statementlines (exercises the list iterator).
     lines: (List Node)
@@ -1555,7 +1577,7 @@ main: function is {
         statementline: l2expr)
     )
     n20: Node.statement (StatementData nodeid: 57 lineno: 29 colno: 1 statements: lines)
-    printNode n20
+    printNode :nodes n: n20
 
     # --- control flow (PR-C) ---
 
@@ -1590,7 +1612,7 @@ main: function is {
         clauses: ifClauses
         elseclause: (Option.some elseStmt)
     )
-    printNode n21
+    printNode :nodes n: n21
 
     # forexpr: one binding + one positional while-condition, body, one postcondition.
     forBindOp: Node.atomid (AtomIdData nodeid: 64 lineno: 33 colno: 8 name: "items".string)
@@ -1625,13 +1647,13 @@ main: function is {
         body: (Option.some forBody)
         postconditions: forPost
     )
-    printNode n22
+    printNode :nodes n: n22
 
     # doexpr: an empty statement block.
     doItems: (List Node)
     doStmt: Node.statement (StatementData nodeid: 71 lineno: 34 colno: 4 statements: doItems)
     n23: Node.doexpr (DoData nodeid: 72 lineno: 34 colno: 1 statement: doStmt)
-    printNode n23
+    printNode :nodes n: n23
 
     # withexpr "with w: v do e".
     withVal: Node.atomid (AtomIdData nodeid: 73 lineno: 35 colno: 9 name: "v".string)
@@ -1644,7 +1666,7 @@ main: function is {
         value: withVal
         body: withBody
     )
-    printNode n24
+    printNode :nodes n: n24
 
     # caseexpr: subject + one caseclause (matcharm atomid), no else.
     caseSubject: Node.atomid (AtomIdData nodeid: 76 lineno: 36 colno: 6 name: "opt".string)
@@ -1674,7 +1696,7 @@ main: function is {
         clauses: caseClauses
         elseclause: (Option.none Node)
     )
-    printNode n25
+    printNode :nodes n: n25
 
     # --- definitions / containers (PR-D) ---
 
@@ -1699,7 +1721,7 @@ main: function is {
         asItems: objAsItems
         isNative: false
     )
-    printNode n26
+    printNode :nodes n: n26
 
     # functiondef "greet: function {x: i64} out i64 is { ... }" -> nested
     # in a unit, in a program; only the program is printed (recurses).
@@ -1735,8 +1757,24 @@ main: function is {
         name: (Option.some "greet".string)
         operation: fnDef
     )
-    unitBody: (List Node)
-    unitBody.append unitMember
+    progNodes: (List Node)
+    npf9: u32
+    for npf9 < 91 loop {
+        progNodes.append from: (Node.error (ErrorData
+            nodeid: 0
+            lineno: 0
+            colno: 0
+            width: 0
+            err: err.badUnit
+            msg: String
+            fsno: 0
+            note: String
+            hint: String
+        ))
+        npf9 = npf9 + 1
+    }
+    unitBody: (List u32)
+    unitBody.append (tableAdd nodes: progNodes n: unitMember)
     unitDef: Node.unitdef (UnitData nodeid: 90 lineno: 39 colno: 1 body: unitBody)
 
     progUnit: Node.namedoperation (NamedOperationData
@@ -1746,8 +1784,8 @@ main: function is {
         name: (Option.some "main".string)
         operation: unitDef
     )
-    progUnits: (List Node)
-    progUnits.append progUnit
+    progUnits: (List u32)
+    progUnits.append (tableAdd nodes: progNodes n: progUnit)
     n27: Node.program (ProgramData
         nodeid: 92
         lineno: 39
@@ -1756,7 +1794,24 @@ main: function is {
         mainUnitName: "main".string
         nodes: (List Node)
     )
-    printNode n27
+    printNode nodes: progNodes n: n27
+}
+
+# printProgramCanonicalRoot -- canonical dump entry for a parsed program
+# node (its master table rides inside it).
+printProgramCanonicalRoot: function {prog: Node} is {
+    match (
+        prog
+    ) case program then {
+        print "program @\{prog.lineno}:\{prog.colno} units=\{prog.units.length} mainUnitName=\{prog.mainUnitName}"
+        pui9: u64
+        pun9: prog.units.length
+        for pui9 < pun9 loop {
+            puid9: prog.units.get i: pui9
+            printNodeCanonical nodes: prog.nodes n: (prog.nodes.get i: (puid9 - 1).u64)
+            pui9 = pui9 + 1
+        }
+    } else null
 }
 
 # ---- id-linked master node table (ECS migration) ----
@@ -1774,6 +1829,164 @@ tableSet: function {nodes: List Node id: u32 child: Node.take} is {
 tableAppend: function {nodes: List Node n: Node.take} out u32 is {
     nodes.append from: n
     return nodes.length.u32
+}
+
+# nodeIdOf -- a node's own id (any arm).
+nodeIdOf: function {n: Node} out u32 is {
+    match (
+        n
+    ) case error then {
+        return n.nodeid
+    } case atomid then {
+        return n.nodeid
+    } case labelvalue then {
+        return n.nodeid
+    } case stringchunk then {
+        return n.nodeid
+    } case binop then {
+        return n.nodeid
+    } case atomstring then {
+        return n.nodeid
+    } case dottedpath then {
+        return n.nodeid
+    } case call then {
+        return n.nodeid
+    } case typeofexpr then {
+        return n.nodeid
+    } case namedoperation then {
+        return n.nodeid
+    } case datablock then {
+        return n.nodeid
+    } case yieldexpr then {
+        return n.nodeid
+    } case statement then {
+        return n.nodeid
+    } case statementline then {
+        return n.nodeid
+    } case assignment then {
+        return n.nodeid
+    } case reassignment then {
+        return n.nodeid
+    } case swapstmt then {
+        return n.nodeid
+    } case expression then {
+        return n.nodeid
+    } case ifexpr then {
+        return n.nodeid
+    } case ifclause then {
+        return n.nodeid
+    } case forexpr then {
+        return n.nodeid
+    } case doexpr then {
+        return n.nodeid
+    } case withexpr then {
+        return n.nodeid
+    } case caseexpr then {
+        return n.nodeid
+    } case caseclause then {
+        return n.nodeid
+    } case functiondef then {
+        return n.nodeid
+    } case objectdef then {
+        return n.nodeid
+    } case unitdef then {
+        return n.nodeid
+    } case program then {
+        return n.nodeid
+    }
+}
+
+# tableAdd -- move a finished node into its reserved slot; returns its id.
+tableAdd: function {nodes: List Node n: Node.take} out u32 is {
+    id9: nodeIdOf :n
+    tableSet :nodes id: id9 child: n
+    return id9
+}
+
+# tableTake -- swap a row out of the table (a placeholder goes back in);
+# used to propagate an error node up out of a converted list.
+tableTake: function {nodes: List Node id: u32} out Node is {
+    return (nodes.set i: (id - 1).u64 val: (Node.error (ErrorData
+        nodeid: 0
+        lineno: 0
+        colno: 0
+        width: 0
+        err: err.badUnit
+        msg: String
+        fsno: 0
+        note: String
+        hint: String
+    )))
+}
+
+# tableAppendRebase -- append a synthesized node, rewriting its root
+# nodeid to the dense table id (post-parse synthesis mints range ids
+# that cannot index the table; children stay embedded and keep theirs).
+tableAppendRebase: function {nodes: List Node n: Node.take} out u32 is {
+    did9: (nodes.length + 1).u32
+    match (
+        n
+    ) case error then {
+        n.nodeid = did9
+    } case atomid then {
+        n.nodeid = did9
+    } case labelvalue then {
+        n.nodeid = did9
+    } case stringchunk then {
+        n.nodeid = did9
+    } case binop then {
+        n.nodeid = did9
+    } case atomstring then {
+        n.nodeid = did9
+    } case dottedpath then {
+        n.nodeid = did9
+    } case call then {
+        n.nodeid = did9
+    } case typeofexpr then {
+        n.nodeid = did9
+    } case namedoperation then {
+        n.nodeid = did9
+    } case datablock then {
+        n.nodeid = did9
+    } case yieldexpr then {
+        n.nodeid = did9
+    } case statement then {
+        n.nodeid = did9
+    } case statementline then {
+        n.nodeid = did9
+    } case assignment then {
+        n.nodeid = did9
+    } case reassignment then {
+        n.nodeid = did9
+    } case swapstmt then {
+        n.nodeid = did9
+    } case expression then {
+        n.nodeid = did9
+    } case ifexpr then {
+        n.nodeid = did9
+    } case ifclause then {
+        n.nodeid = did9
+    } case forexpr then {
+        n.nodeid = did9
+    } case doexpr then {
+        n.nodeid = did9
+    } case withexpr then {
+        n.nodeid = did9
+    } case caseexpr then {
+        n.nodeid = did9
+    } case caseclause then {
+        n.nodeid = did9
+    } case functiondef then {
+        n.nodeid = did9
+    } case objectdef then {
+        n.nodeid = did9
+    } case unitdef then {
+        n.nodeid = did9
+    } case program then {
+        n.nodeid = did9
+    }
+    nodes.append from: n
+    return did9
 }
 
 # kindOf -- the node-kind tag of a table row.

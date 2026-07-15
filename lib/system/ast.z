@@ -1,5 +1,5 @@
 # ast -- public syntax-tree API (preview): the parser and AST node types, plus
-# `parseSource`, a single-file in-memory parse (no filesystem) that returns a
+# `parseSource`, a single-file in-memory parse (no filesystem) that returns the
 # unit AST node. Cross-unit programs use `Parser.parse` with a `zvfs.ZVfs`.
 # Mirrors Python's `ast`. Stability: preview -- the surface may change.
 
@@ -12,7 +12,7 @@ errCode: zast.errCode
 ErrorData: zast.ErrorData
 UnitData: zast.UnitData
 
-# parseSource -- parse a single source string into a unit AST node, entirely in
+# parseSource -- parse a single source string into a program node wrapping one unit, entirely in
 # memory (no VFS, no disk). Syntax errors surface as `Node.error` nodes embedded
 # in the tree rather than as a failure.
 parseSource: function {source: String.take} out Node is {
@@ -21,10 +21,33 @@ parseSource: function {source: String.take} out Node is {
     lx: zlexer.Lexer.create lexer: tk
     firstTok: lx.peek
     body: p.acceptUnitBody lex: lx
-    return (Node.unitdef (zast.UnitData
+    ln9: firstTok.lineno
+    cn9: firstTok.colno
+    root: Node.unitdef (zast.UnitData
         nodeid: p.nextId
-        lineno: firstTok.lineno
-        colno: firstTok.colno
-        :body)
+        lineno: ln9
+        colno: cn9
+        :body
+    )
+    # wrap in a program node so the master node table rides with the
+    # result (the unit body is an id list into it)
+    wid9: p.intern n: (p.mkNamedOp
+        name: (Option.none String)
+        operation: root
+        line: ln9
+        col: cn9
+    )
+    units9: (List u32)
+    units9.append wid9
+    pid9: p.nextId
+    tbl9: (List Node)
+    tbl9 swap p.nodes
+    return (Node.program (zast.ProgramData
+        nodeid: pid9
+        lineno: ln9
+        colno: cn9
+        units: units9
+        mainUnitName: String
+        nodes: tbl9)
     )
 }

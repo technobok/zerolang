@@ -284,6 +284,11 @@ Parser: class {
         return id
     }
 
+    # intern -- move a finished node into its reserved master-table slot.
+    intern: function {:this n: Node.take} out u32 is {
+        return (zast.tableAdd nodes: this.nodes :n)
+    }
+
     # fsnoForNode -- the fsno of the file whose parse allocated `nodeid`:
     # the innermost containing segment (subunit ranges nest inside their
     # parent's, so the largest containing startId wins). 0 when no segment
@@ -2737,8 +2742,8 @@ Parser: class {
     # filtering is off so newlines separate definitions, and re-enabled
     # while a definition value is parsed. Returns the definitions as
     # namedoperation arms; a trailing error node flags a malformed body.
-    acceptUnitBody: function {:this lex: zlexer.Lexer} out List Node is {
-        body: (List Node)
+    acceptUnitBody: function {:this lex: zlexer.Lexer} out List u32 is {
+        body: (List u32)
         names: (List String)
         prevFilter: lex.filterEolState
         lex.setFilterEol enabled: false
@@ -2751,11 +2756,11 @@ Parser: class {
                 nm: lblTok.tokstr.copy
                 dup: names.contains item: nm
                 if dup then {
-                    body.append (this.mkError
+                    body.append (this.intern n: (this.mkError
                         tok: lblTok
                         code: zast.err.duplicateDef
                         msg: "Duplicate definition".string
-                    )
+                    ))
                     lex.setFilterEol enabled: prevFilter
                     return body
                 }
@@ -2769,7 +2774,7 @@ Parser: class {
                     line: lblTok.lineno
                     col: lblTok.colno
                 )
-                body.append no
+                body.append (this.intern n: no)
             } else {
                 isLbl: pktt == zlexer.TT.labelTok
                 if isLbl then {
@@ -2777,11 +2782,11 @@ Parser: class {
                     nm: lblTok.tokstr.copy
                     dup: names.contains item: nm
                     if dup then {
-                        body.append (this.mkError
+                        body.append (this.intern n: (this.mkError
                             tok: lblTok
                             code: zast.err.duplicateDef
                             msg: "Duplicate definition".string
-                        )
+                        ))
                         lex.setFilterEol enabled: prevFilter
                         return body
                     }
@@ -2793,7 +2798,7 @@ Parser: class {
                     lex.setFilterEol enabled: false
                     dErr: this.isError node: defNode
                     if dErr then {
-                        body.append defNode
+                        body.append (this.intern n: defNode)
                         lex.setFilterEol enabled: prevFilter
                         return body
                     }
@@ -2803,7 +2808,7 @@ Parser: class {
                         line: lblTok.lineno
                         col: lblTok.colno
                     )
-                    body.append no
+                    body.append (this.intern n: no)
                 } else {
                     break
                 }
@@ -2831,10 +2836,11 @@ Parser: class {
             body: this.acceptUnitBody :lex
             bn: body.length
             if bn > 0 then {
-                last: body.pop
-                le: this.isError node: last
-                if le then return last
-                body.append last
+                lastId9: body.pop
+                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                }
+                body.append lastId9
             }
             closeOpt: lex.accept tt: zlexer.TT.braceCloseTok
             match closeOpt case none then {
@@ -3142,7 +3148,7 @@ Parser: class {
     # Returns an `error` Node on failure (FILENOTFOUND distinguishable via
     # isFileNotFound) or a benign `atomid` "ok" sentinel on success -- so a
     # bare Node return avoids disassembling an owned result carrier.
-    loadUnit: function {:this vfs: zvfs.ZVfs parentid: u32 unitname: String coreNames: List String outBody: List Node outExterns: List String outNames: List String} out Node is {
+    loadUnit: function {:this vfs: zvfs.ZVfs parentid: u32 unitname: String coreNames: List String outBody: List u32 outExterns: List String outNames: List String} out Node is {
         valid: isValidUnitName name: unitname.stringview
         if (valid) == false then {
             return (Node.error (zast.ErrorData
@@ -3202,10 +3208,11 @@ Parser: class {
             body: this.acceptUnitBody lex: lx
             bn: body.length
             if bn > 0 then {
-                last: body.pop
-                le: this.isError node: last
-                if le then return last
-                body.append last
+                lastId9: body.pop
+                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                }
+                body.append lastId9
             }
             eofOpt: lx.accept tt: zlexer.TT.eofTok
             match (
@@ -3224,8 +3231,8 @@ Parser: class {
                 )
             } case some then null
             this.fileSegs.append (FileSeg startId: segStart9 endId: this.nextNodeId fsno: fsid)
-            ewBindNames scope: outNames items: body
-            raw: collectExterns :body
+            ewBindNameIds nodes: this.nodes scope: outNames items: body
+            raw: collectExterns nodes: this.nodes :body
             dirid: vfs.walk parent: parentid name: unitname.stringview
             dkind: vfs.arm dentryid: dirid
             hasSubdir: false
@@ -3267,12 +3274,12 @@ Parser: class {
                 colno: firstTok.colno
                 :body
             )
-            outBody.append (this.mkNamedOp
+            outBody.append (this.intern n: (this.mkNamedOp
                 name: (Option.some unitname.copy)
                 operation: root
                 line: firstTok.lineno
                 col: firstTok.colno
-            )
+            ))
             return (Node.atomid (zast.AtomIdData
                 nodeid: this.nextId
                 lineno: 0
@@ -3289,7 +3296,7 @@ Parser: class {
     # dict popitem). Definitions/queue are parallel String/Node lists (no
     # reftype-valued Map).
     parse: function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node is {
-        units: (List Node)
+        units: (List u32)
         coreNames: (List String)
         coreNamesOut: (List String)
         coreExterns: (List String)
@@ -3434,6 +3441,17 @@ ewBindNames: function {scope: List String items: List Node} is {
     for el: it loop ewBindOneName :scope item: el
 }
 
+# Bind the top-level names of a converted id-list (unit bodies).
+ewBindNameIds: function {nodes: List Node scope: List String items: List u32} is {
+    ei9: u64
+    en9: items.length
+    for ei9 < en9 loop {
+        eid9: items.get i: ei9
+        ewBindOneName :scope item: (nodes.get i: (eid9 - 1).u64)
+        ei9 = ei9 + 1
+    }
+}
+
 # Drop bindings introduced since depth `n` (block / scope exit).
 ewTruncate: function {scope: List String n: u64} is {
     for scope.length > n loop {
@@ -3442,147 +3460,173 @@ ewTruncate: function {scope: List String n: u64} is {
 }
 
 # Walk an optional child node if present.
-ewWalkOpt: function {externs: List String scope: List String o: Option Node} is {
+ewWalkOpt: function {nodes: List Node externs: List String scope: List String o: Option Node} is {
     match (
         o
     ) case some then {
-        ewWalk :externs :scope node: o
+        ewWalk :nodes :externs :scope node: o
     } case none then null
 }
 
 # Walk a list of child nodes.
-ewWalkList: function {externs: List String scope: List String items: List Node} is {
+ewWalkList: function {
+    nodes: List Node
+    externs: List String
+    scope: List String
+    items: List Node
+} is {
     it: items.iterate
-    for el: it loop ewWalk :externs :scope node: el
+    for el: it loop ewWalk :nodes :externs :scope node: el
+}
+
+# Walk a converted id-list (unit bodies).
+ewWalkBodyIds: function {
+    nodes: List Node
+    externs: List String
+    scope: List String
+    items: List u32
+} is {
+    wi9: u64
+    wn9: items.length
+    for wi9 < wn9 loop {
+        wid9: items.get i: wi9
+        ewWalk :nodes :externs :scope node: (nodes.get i: (wid9 - 1).u64)
+        wi9 = wi9 + 1
+    }
 }
 
 # A statement-block line. Block lines are `statementline` nodes wrapping
 # the real form (assignment / reassignment / swap / bare expression);
 # unwrap one level, then dispatch. An assignment binds its name for the
 # lines that follow (but not for its own value).
-ewWalkLine: function {externs: List String scope: List String line: Node} is {
+ewWalkLine: function {nodes: List Node externs: List String scope: List String line: Node} is {
     match (
         line
     ) case statementline then {
-        ewWalkStmtInner :externs :scope inner: line.statementline
+        ewWalkStmtInner :nodes :externs :scope inner: line.statementline
     } else {
-        ewWalkStmtInner :externs :scope inner: line
+        ewWalkStmtInner :nodes :externs :scope inner: line
     }
 }
 
 # The unwrapped statement form. `inner` is taken by value so reading its
 # fields does not free anything still owned by the enclosing statement.
-ewWalkStmtInner: function {externs: List String scope: List String inner: Node} is {
+ewWalkStmtInner: function {
+    nodes: List Node
+    externs: List String
+    scope: List String
+    inner: Node
+} is {
     match (
         inner
     ) case assignment then {
-        ewWalk :externs :scope node: inner.value
+        ewWalk :nodes :externs :scope node: inner.value
         scope.append inner.name.copy
     } case reassignment then {
-        ewWalk :externs :scope node: inner.topath
-        ewWalk :externs :scope node: inner.value
+        ewWalk :nodes :externs :scope node: inner.topath
+        ewWalk :nodes :externs :scope node: inner.value
     } case swapstmt then {
-        ewWalk :externs :scope node: inner.lhs
-        ewWalk :externs :scope node: inner.rhs
+        ewWalk :nodes :externs :scope node: inner.lhs
+        ewWalk :nodes :externs :scope node: inner.rhs
     } else {
-        ewWalk :externs :scope node: inner
+        ewWalk :nodes :externs :scope node: inner
     }
 }
 
 # A for-loop condition arm: a named arm (`label op`) binds the loop
 # variable for the body after its iterable is walked; an unnamed arm
 # (a `while` / leading condition) is just walked.
-ewWalkForCond: function {externs: List String scope: List String cond: Node} is {
+ewWalkForCond: function {nodes: List Node externs: List String scope: List String cond: Node} is {
     match (
         cond
     ) case namedoperation then {
-        ewWalk :externs :scope node: cond.operation
+        ewWalk :nodes :externs :scope node: cond.operation
         ewBindOptName :scope o: cond.name
     } else {
-        ewWalk :externs :scope node: cond
+        ewWalk :nodes :externs :scope node: cond
     }
 }
 
 # The core recursive walk: same arms and child order as zast.printNode.
 # Emits atomid references; threads the bound scope through nested
 # definitions and blocks.
-ewWalk: function {externs: List String scope: List String node: Node} is {
+ewWalk: function {nodes: List Node externs: List String scope: List String node: Node} is {
     match (
         node
     ) case error then null case atomid then {
         ewEmit :externs :scope name: node.name.copy
     } case labelvalue then null case stringchunk then null case binop then {
-        ewWalk :externs :scope node: node.lhs
-        ewWalk :externs :scope node: node.operator
-        ewWalk :externs :scope node: node.rhs
+        ewWalk :nodes :externs :scope node: node.lhs
+        ewWalk :nodes :externs :scope node: node.operator
+        ewWalk :nodes :externs :scope node: node.rhs
     } case atomstring then {
-        ewWalkList :externs :scope items: node.stringparts
+        ewWalkList :nodes :externs :scope items: node.stringparts
     } case dottedpath then {
-        ewWalk :externs :scope node: node.parent
+        ewWalk :nodes :externs :scope node: node.parent
     } case call then {
-        ewWalk :externs :scope node: node.callable
-        ewWalkList :externs :scope items: node.arguments
+        ewWalk :nodes :externs :scope node: node.callable
+        ewWalkList :nodes :externs :scope items: node.arguments
     } case typeofexpr then {
-        ewWalk :externs :scope node: node.source
+        ewWalk :nodes :externs :scope node: node.source
     } case namedoperation then {
-        ewWalk :externs :scope node: node.operation
+        ewWalk :nodes :externs :scope node: node.operation
     } case datablock then {
-        ewWalkList :externs :scope items: node.elements
-        ewWalkOpt :externs :scope o: node.outType
+        ewWalkList :nodes :externs :scope items: node.elements
+        ewWalkOpt :nodes :externs :scope o: node.outType
     } case yieldexpr then {
-        ewWalk :externs :scope node: node.expr
+        ewWalk :nodes :externs :scope node: node.expr
     } case statement then {
         base: scope.length
         sit: node.statements.iterate
-        for line: sit loop ewWalkLine :externs :scope :line
+        for line: sit loop ewWalkLine :nodes :externs :scope :line
         ewTruncate :scope n: base
     } case statementline then {
-        ewWalk :externs :scope node: node.statementline
+        ewWalk :nodes :externs :scope node: node.statementline
     } case assignment then {
-        ewWalk :externs :scope node: node.value
+        ewWalk :nodes :externs :scope node: node.value
     } case reassignment then {
-        ewWalk :externs :scope node: node.topath
-        ewWalk :externs :scope node: node.value
+        ewWalk :nodes :externs :scope node: node.topath
+        ewWalk :nodes :externs :scope node: node.value
     } case swapstmt then {
-        ewWalk :externs :scope node: node.lhs
-        ewWalk :externs :scope node: node.rhs
+        ewWalk :nodes :externs :scope node: node.lhs
+        ewWalk :nodes :externs :scope node: node.rhs
     } case expression then {
-        ewWalk :externs :scope node: node.expression
+        ewWalk :nodes :externs :scope node: node.expression
     } case ifexpr then {
-        ewWalkList :externs :scope items: node.clauses
-        ewWalkOpt :externs :scope o: node.elseclause
+        ewWalkList :nodes :externs :scope items: node.clauses
+        ewWalkOpt :nodes :externs :scope o: node.elseclause
     } case ifclause then {
-        ewWalkList :externs :scope items: node.conditions
-        ewWalk :externs :scope node: node.statement
+        ewWalkList :nodes :externs :scope items: node.conditions
+        ewWalk :nodes :externs :scope node: node.statement
     } case forexpr then {
         base: scope.length
         fit: node.conditions.iterate
-        for fc: fit loop ewWalkForCond :externs :scope cond: fc
-        ewWalkOpt :externs :scope o: node.body
-        ewWalkList :externs :scope items: node.postconditions
+        for fc: fit loop ewWalkForCond :nodes :externs :scope cond: fc
+        ewWalkOpt :nodes :externs :scope o: node.body
+        ewWalkList :nodes :externs :scope items: node.postconditions
         ewTruncate :scope n: base
     } case doexpr then {
-        ewWalk :externs :scope node: node.statement
+        ewWalk :nodes :externs :scope node: node.statement
     } case withexpr then {
         base: scope.length
-        ewWalk :externs :scope node: node.value
+        ewWalk :nodes :externs :scope node: node.value
         scope.append node.name.copy
-        ewWalk :externs :scope node: node.body
+        ewWalk :nodes :externs :scope node: node.body
         ewTruncate :scope n: base
     } case caseexpr then {
-        ewWalk :externs :scope node: node.subject
-        ewWalkList :externs :scope items: node.clauses
-        ewWalkOpt :externs :scope o: node.elseclause
+        ewWalk :nodes :externs :scope node: node.subject
+        ewWalkList :nodes :externs :scope items: node.clauses
+        ewWalkOpt :nodes :externs :scope o: node.elseclause
     } case caseclause then {
-        ewWalk :externs :scope node: node.statement
+        ewWalk :nodes :externs :scope node: node.statement
     } case functiondef then {
         base: scope.length
         ewBindNames :scope items: node.parameters
         ewBindNames :scope items: node.asItems
-        ewWalkOpt :externs :scope o: node.returntype
-        ewWalkList :externs :scope items: node.parameters
-        ewWalkOpt :externs :scope o: node.body
-        ewWalkList :externs :scope items: node.asItems
+        ewWalkOpt :nodes :externs :scope o: node.returntype
+        ewWalkList :nodes :externs :scope items: node.parameters
+        ewWalkOpt :nodes :externs :scope o: node.body
+        ewWalkList :nodes :externs :scope items: node.asItems
         ewTruncate :scope n: base
     } case objectdef then {
         base: scope.length
@@ -3591,16 +3635,16 @@ ewWalk: function {externs: List String scope: List String node: Node} is {
         scope.append "meta".string
         ewBindNames :scope items: node.isItems
         ewBindNames :scope items: node.asItems
-        ewWalkList :externs :scope items: node.isItems
-        ewWalkList :externs :scope items: node.asItems
+        ewWalkList :nodes :externs :scope items: node.isItems
+        ewWalkList :nodes :externs :scope items: node.asItems
         ewTruncate :scope n: base
     } case unitdef then {
         base: scope.length
         scope.append "this".string
         scope.append "type".string
         scope.append "meta".string
-        ewBindNames :scope items: node.body
-        ewWalkList :externs :scope items: node.body
+        ewBindNameIds :nodes :scope items: node.body
+        ewWalkBodyIds :nodes :externs :scope items: node.body
         ewTruncate :scope n: base
     } case program then null
 }
@@ -3609,14 +3653,14 @@ ewWalk: function {externs: List String scope: List String node: Node} is {
 # scope with {this,type,meta} and every top-level definition name (so
 # forward references resolve), then walks the body. Returns the deduped
 # extern names in source-reference order; parse() loads them as units.
-collectExterns: function {body: List Node} out List String is {
+collectExterns: function {nodes: List Node body: List u32} out List String is {
     externs: (List String)
     scope: (List String)
     scope.append "this".string
     scope.append "type".string
     scope.append "meta".string
-    ewBindNames :scope items: body
-    ewWalkList :externs :scope items: body
+    ewBindNameIds :nodes :scope items: body
+    ewWalkBodyIds :nodes :externs :scope items: body
     return externs
 }
 
@@ -3641,7 +3685,7 @@ runPath: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptPath lex: lx
     match r case some then {
-        zast.printNode r
+        zast.printNode nodes: p.nodes n: r
     } case none then {
         print "<no atom>"
     }
@@ -3655,7 +3699,7 @@ runOp: function {label: StringView src: String.take} is {
     paths: p.operationPaths lex: lx
     r: p.acceptOperationOrCall :paths lex: lx
     match r case some then {
-        zast.printNode r
+        zast.printNode nodes: p.nodes n: r
     } case none then {
         print "<none>"
     }
@@ -3668,7 +3712,7 @@ runExpr: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptExpression lex: lx
     match r case some then {
-        zast.printNode r
+        zast.printNode nodes: p.nodes n: r
     } case none then {
         print "<none>"
     }
@@ -3684,7 +3728,7 @@ runYieldBody: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptExpression lex: lx
     match r case some then {
-        zast.printNode r
+        zast.printNode nodes: p.nodes n: r
     } case none then {
         print "<none>"
     }
@@ -3699,7 +3743,7 @@ runFunc: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptFunctionDefinition lex: lx
     match r case some then {
-        zast.printNode r
+        zast.printNode nodes: p.nodes n: r
     } case none then {
         print "<none>"
     }
@@ -3713,7 +3757,7 @@ runDef: function {label: StringView src: String.take} is {
     tk: zlexer.Tokenizer.create source: src fsno: 0
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptTypeDefinition lex: lx
-    zast.printNode r
+    zast.printNode nodes: p.nodes n: r
 }
 
 # Inline smoke harness: parse each snippet and dump its node tree.
@@ -3824,7 +3868,7 @@ main: function is {
             vfs.rootid = rootid
             p: Parser.create
             prog: p.parse :vfs :rootid mainUnitName: mainName
-            zast.printNodeCanonical prog
+            zast.printProgramCanonicalRoot prog
         } else {
             path: argv.get i: 1
             r: io.readText path: path.stringview
@@ -3842,7 +3886,7 @@ main: function is {
                     colno: firstTok.colno
                     :body
                 )
-                zast.printNodeCanonical root
+                zast.printNodeCanonical nodes: p.nodes n: root
             } case err then {
                 io.eprintln "zparser: could not read source file"
                 os.exit code: 1

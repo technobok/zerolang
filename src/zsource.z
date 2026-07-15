@@ -434,11 +434,11 @@ Analysis: class {
         }
     }
     # walkOpt -- recurse into an optional child node when present.
-    walkOpt: function {:this o: Option Node} is {
+    walkOpt: function {:this nodes: List Node o: Option Node} is {
         match (
             o
         ) case some then {
-            this.walk n: o
+            this.walk :nodes n: o
         } case none then null
     }
 
@@ -973,7 +973,37 @@ Analysis: class {
 
     # walk -- traversal collecting embedded parse errors as diagnostics, recursing
     # every child (all 29 arms, mirroring zast.printNodeCanonical).
-    walk: function {:this n: Node} is {
+    # walkProgram / walkCasingProgram -- root entries: the table rides
+    # inside the program node.
+    walkProgram: function {:this prog: Node} is {
+        match (
+            prog
+        ) case program then {
+            wpi9: u64
+            wpn9: prog.units.length
+            for wpi9 < wpn9 loop {
+                wpid9: prog.units.get i: wpi9
+                this.walk nodes: prog.nodes n: (prog.nodes.get i: (wpid9 - 1).u64)
+                wpi9 = wpi9 + 1
+            }
+        } else null
+    }
+
+    walkCasingProgram: function {:this prog: Node} is {
+        match (
+            prog
+        ) case program then {
+            wci9: u64
+            wcn9: prog.units.length
+            for wci9 < wcn9 loop {
+                wcid9: prog.units.get i: wci9
+                this.walkCasing nodes: prog.nodes n: (prog.nodes.get i: (wcid9 - 1).u64)
+                wci9 = wci9 + 1
+            }
+        } else null
+    }
+
+    walk: function {:this nodes: List Node n: Node} is {
         match (
             n
         ) case error then {
@@ -989,15 +1019,15 @@ Analysis: class {
             )
             this.diags.append d
         } case atomid then null case labelvalue then null case stringchunk then null case binop then {
-            this.walk n: n.lhs
-            this.walk n: n.operator
-            this.walk n: n.rhs
+            this.walk :nodes n: n.lhs
+            this.walk :nodes n: n.operator
+            this.walk :nodes n: n.rhs
         } case atomstring then {
             spit: n.stringparts.iterate
-            for part: spit loop this.walk n: part
+            for part: spit loop this.walk :nodes n: part
         } case dottedpath then {
-            this.walk n: n.parent
-            this.walk n: n.child
+            this.walk :nodes n: n.parent
+            this.walk :nodes n: n.child
         } case call then {
             if this.wrapWidth > 0 then {
                 this.tryWrapCall arguments: n.arguments line: n.lineno col: n.colno
@@ -1005,106 +1035,106 @@ Analysis: class {
                 this.checkElide callable: n.callable arguments: n.arguments
                 this.checkCollapseName arguments: n.arguments
             }
-            this.walk n: n.callable
+            this.walk :nodes n: n.callable
             ait: n.arguments.iterate
-            for arg: ait loop this.walk n: arg
+            for arg: ait loop this.walk :nodes n: arg
         } case typeofexpr then {
-            this.walk n: n.source
+            this.walk :nodes n: n.source
         } case namedoperation then {
-            this.walk n: n.operation
+            this.walk :nodes n: n.operation
         } case datablock then {
             elit: n.elements.iterate
-            for el: elit loop this.walk n: el
-            this.walkOpt o: n.outType
+            for el: elit loop this.walk :nodes n: el
+            this.walkOpt :nodes o: n.outType
         } case yieldexpr then {
-            this.walk n: n.expr
+            this.walk :nodes n: n.expr
         } case statement then {
             stit: n.statements.iterate
-            for stln: stit loop this.walk n: stln
+            for stln: stit loop this.walk :nodes n: stln
         } case statementline then {
-            this.walk n: n.statementline
+            this.walk :nodes n: n.statementline
         } case assignment then {
             if this.funcDepth > 0 then this.tryBareZeroInit value: n.value
-            this.walk n: n.value
+            this.walk :nodes n: n.value
         } case reassignment then {
-            this.walk n: n.topath
-            this.walk n: n.value
+            this.walk :nodes n: n.topath
+            this.walk :nodes n: n.value
         } case swapstmt then {
-            this.walk n: n.lhs
-            this.walk n: n.rhs
+            this.walk :nodes n: n.lhs
+            this.walk :nodes n: n.rhs
         } case expression then {
-            this.walk n: n.expression
+            this.walk :nodes n: n.expression
         } case ifexpr then {
             this.checkEmpty elseOpt: n.elseclause clauses: n.clauses
             this.checkBracesIf clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
             this.checkChainBodyBreak clauses: n.clauses elseOpt: n.elseclause
             clit: n.clauses.iterate
-            for cl: clit loop this.walk n: cl
-            this.walkOpt o: n.elseclause
+            for cl: clit loop this.walk :nodes n: cl
+            this.walkOpt :nodes o: n.elseclause
         } case ifclause then {
             coit: n.conditions.iterate
-            for co: coit loop this.walk n: co
-            this.walk n: n.statement
+            for co: coit loop this.walk :nodes n: co
+            this.walk :nodes n: n.statement
         } case forexpr then {
             this.checkBracesFor bodyOpt: n.body
             fcit: n.conditions.iterate
-            for fc: fcit loop this.walk n: fc
-            this.walkOpt o: n.body
+            for fc: fcit loop this.walk :nodes n: fc
+            this.walkOpt :nodes o: n.body
             fpit: n.postconditions.iterate
-            for fp: fpit loop this.walk n: fp
+            for fp: fpit loop this.walk :nodes n: fp
         } case doexpr then {
-            this.walk n: n.statement
+            this.walk :nodes n: n.statement
         } case withexpr then {
-            this.walk n: n.value
-            this.walk n: n.body
+            this.walk :nodes n: n.value
+            this.walk :nodes n: n.body
         } case caseexpr then {
             this.checkBracesMatch clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
             this.checkChainBodyBreak clauses: n.clauses elseOpt: n.elseclause
             this.checkNullArms clauses: n.clauses elseOpt: n.elseclause
-            this.walk n: n.subject
+            this.walk :nodes n: n.subject
             ccit: n.clauses.iterate
-            for cc: ccit loop this.walk n: cc
-            this.walkOpt o: n.elseclause
+            for cc: ccit loop this.walk :nodes n: cc
+            this.walkOpt :nodes o: n.elseclause
         } case caseclause then {
-            this.walk n: n.matcharm
-            this.walk n: n.statement
+            this.walk :nodes n: n.matcharm
+            this.walk :nodes n: n.statement
         } case functiondef then {
             if this.wrapWidth > 0 then this.tryWrapParams parameters: n.parameters line: n.lineno
-            this.walkOpt o: n.returntype
+            this.walkOpt :nodes o: n.returntype
             pmit: n.parameters.iterate
-            for pm: pmit loop this.walk n: pm
+            for pm: pmit loop this.walk :nodes n: pm
             this.funcDepth = this.funcDepth + 1
-            this.walkOpt o: n.body
+            this.walkOpt :nodes o: n.body
             this.funcDepth = this.funcDepth - 1
             fait: n.asItems.iterate
-            for fam: fait loop this.walk n: fam
+            for fam: fait loop this.walk :nodes n: fam
         } case objectdef then {
             isit: n.isItems.iterate
-            for oim: isit loop this.walk n: oim
+            for oim: isit loop this.walk :nodes n: oim
             asit: n.asItems.iterate
-            for oam: asit loop this.walk n: oam
+            for oam: asit loop this.walk :nodes n: oam
         } case unitdef then {
             udit: n.body.iterate
-            for ubm: udit loop this.walk n: ubm
+            for ubmId9: udit loop this.walk :nodes n: (nodes.get i: (ubmId9 - 1).u64)
         } case program then {
             puit: n.units.iterate
-            for pum: puit loop this.walk n: pum
+            for pumId9: puit loop this.walk :nodes n: (nodes.get i: (pumId9 - 1).u64)
         }
     }
 
     # walkCasing -- opt-in (L009): recurse to every type definition and check the member
     # casing of `variant` / `union` declarations. Runs only under `zl lint --casing`.
-    walkCasing: function {:this n: Node} is {
+    walkCasing: function {:this nodes: List Node n: Node} is {
         match (
             n
         ) case program then {
             it: n.units.iterate
-            for u: it loop this.walkCasing n: u
+            for uId9: it loop this.walkCasing :nodes n: (nodes.get i: (uId9 - 1).u64)
         } case unitdef then {
             it: n.body.iterate
-            for b: it loop this.walkCasing n: b
+            for bId9: it loop this.walkCasing :nodes n: (nodes.get i: (bId9 - 1).u64)
         } case namedoperation then {
-            this.walkCasing n: n.operation
+            this.walkCasing :nodes n: n.operation
         } case objectdef then {
             this.checkMemberCasing kind: n.kind items: n.isItems
         } else null
@@ -1748,7 +1778,7 @@ Analysis: class {
             srcLines: this.lines
         )
         this.fastToks = tokenize.scan source: this.source.copy
-        this.walk :n
+        this.walkProgram prog: n
         this.checkForWhile
         this.checkTrailingWs
         this.checkFinalNewline
@@ -1887,20 +1917,20 @@ Analysis: class {
 
     # walkSuf -- preorder over the subtree running the typecheck-based suffix check, threading
     # the enclosing function's return type for `return`s.
-    walkSuf: function {:this n: Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
+    walkSuf: function {:this nodes: List Node n: Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
         match (
             n
         ) case error then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
             this.sufBinop lhs: n.lhs rhs: n.rhs :uname :st
-            this.walkSuf n: n.lhs :uname :st :funcret
-            this.walkSuf n: n.operator :uname :st :funcret
-            this.walkSuf n: n.rhs :uname :st :funcret
+            this.walkSuf :nodes n: n.lhs :uname :st :funcret
+            this.walkSuf :nodes n: n.operator :uname :st :funcret
+            this.walkSuf :nodes n: n.rhs :uname :st :funcret
         } case atomstring then {
             iter: n.stringparts.iterate
-            for part: iter loop this.walkSuf n: part :uname :st :funcret
+            for part: iter loop this.walkSuf :nodes n: part :uname :st :funcret
         } case dottedpath then {
-            this.walkSuf n: n.parent :uname :st :funcret
-            this.walkSuf n: n.child :uname :st :funcret
+            this.walkSuf :nodes n: n.parent :uname :st :funcret
+            this.walkSuf :nodes n: n.child :uname :st :funcret
         } case call then {
             (this.sufCall
                 callNid: n.nodeid
@@ -1910,96 +1940,108 @@ Analysis: class {
                 :st
                 :funcret
             )
-            this.walkSuf n: n.callable :uname :st :funcret
+            this.walkSuf :nodes n: n.callable :uname :st :funcret
             argiter: n.arguments.iterate
-            for arg: argiter loop this.walkSuf n: arg :uname :st :funcret
+            for arg: argiter loop this.walkSuf :nodes n: arg :uname :st :funcret
         } case typeofexpr then {
-            this.walkSuf n: n.source :uname :st :funcret
+            this.walkSuf :nodes n: n.source :uname :st :funcret
         } case namedoperation then {
-            this.walkSuf n: n.operation :uname :st :funcret
+            this.walkSuf :nodes n: n.operation :uname :st :funcret
         } case datablock then {
             eiter: n.elements.iterate
-            for el: eiter loop this.walkSuf n: el :uname :st :funcret
-            this.walkSufOpt o: n.outType :uname :st :funcret
+            for el: eiter loop this.walkSuf :nodes n: el :uname :st :funcret
+            this.walkSufOpt :nodes o: n.outType :uname :st :funcret
         } case yieldexpr then {
-            this.walkSuf n: n.expr :uname :st :funcret
+            this.walkSuf :nodes n: n.expr :uname :st :funcret
         } case statement then {
             siter: n.statements.iterate
-            for sln: siter loop this.walkSuf n: sln :uname :st :funcret
+            for sln: siter loop this.walkSuf :nodes n: sln :uname :st :funcret
         } case statementline then {
-            this.walkSuf n: n.statementline :uname :st :funcret
+            this.walkSuf :nodes n: n.statementline :uname :st :funcret
         } case assignment then {
-            this.walkSuf n: n.value :uname :st :funcret
+            this.walkSuf :nodes n: n.value :uname :st :funcret
         } case reassignment then {
             this.sufReassign topath: n.topath value: n.value :uname :st
-            this.walkSuf n: n.topath :uname :st :funcret
-            this.walkSuf n: n.value :uname :st :funcret
+            this.walkSuf :nodes n: n.topath :uname :st :funcret
+            this.walkSuf :nodes n: n.value :uname :st :funcret
         } case swapstmt then {
-            this.walkSuf n: n.lhs :uname :st :funcret
-            this.walkSuf n: n.rhs :uname :st :funcret
+            this.walkSuf :nodes n: n.lhs :uname :st :funcret
+            this.walkSuf :nodes n: n.rhs :uname :st :funcret
         } case expression then {
-            this.walkSuf n: n.expression :uname :st :funcret
+            this.walkSuf :nodes n: n.expression :uname :st :funcret
         } case ifexpr then {
             clit: n.clauses.iterate
-            for cl: clit loop this.walkSuf n: cl :uname :st :funcret
-            this.walkSufOpt o: n.elseclause :uname :st :funcret
+            for cl: clit loop this.walkSuf :nodes n: cl :uname :st :funcret
+            this.walkSufOpt :nodes o: n.elseclause :uname :st :funcret
         } case ifclause then {
             coit: n.conditions.iterate
-            for co: coit loop this.walkSuf n: co :uname :st :funcret
-            this.walkSuf n: n.statement :uname :st :funcret
+            for co: coit loop this.walkSuf :nodes n: co :uname :st :funcret
+            this.walkSuf :nodes n: n.statement :uname :st :funcret
         } case forexpr then {
             fcit: n.conditions.iterate
-            for fc: fcit loop this.walkSuf n: fc :uname :st :funcret
-            this.walkSufOpt o: n.body :uname :st :funcret
+            for fc: fcit loop this.walkSuf :nodes n: fc :uname :st :funcret
+            this.walkSufOpt :nodes o: n.body :uname :st :funcret
             fpit: n.postconditions.iterate
-            for fp: fpit loop this.walkSuf n: fp :uname :st :funcret
+            for fp: fpit loop this.walkSuf :nodes n: fp :uname :st :funcret
         } case doexpr then {
-            this.walkSuf n: n.statement :uname :st :funcret
+            this.walkSuf :nodes n: n.statement :uname :st :funcret
         } case withexpr then {
-            this.walkSuf n: n.value :uname :st :funcret
-            this.walkSuf n: n.body :uname :st :funcret
+            this.walkSuf :nodes n: n.value :uname :st :funcret
+            this.walkSuf :nodes n: n.body :uname :st :funcret
         } case caseexpr then {
-            this.walkSuf n: n.subject :uname :st :funcret
+            this.walkSuf :nodes n: n.subject :uname :st :funcret
             ccit: n.clauses.iterate
-            for cc: ccit loop this.walkSuf n: cc :uname :st :funcret
-            this.walkSufOpt o: n.elseclause :uname :st :funcret
+            for cc: ccit loop this.walkSuf :nodes n: cc :uname :st :funcret
+            this.walkSufOpt :nodes o: n.elseclause :uname :st :funcret
         } case caseclause then {
-            this.walkSuf n: n.matcharm :uname :st :funcret
-            this.walkSuf n: n.statement :uname :st :funcret
+            this.walkSuf :nodes n: n.matcharm :uname :st :funcret
+            this.walkSuf :nodes n: n.statement :uname :st :funcret
         } case functiondef then {
-            this.walkSufRet ret: n.returntype :uname :st
+            this.walkSufRet :nodes ret: n.returntype :uname :st
             piter: n.parameters.iterate
-            for pm: piter loop this.walkSuf n: pm :uname :st funcret: n.returntype
-            this.walkSufOpt o: n.body :uname :st funcret: n.returntype
+            for pm: piter loop this.walkSuf :nodes n: pm :uname :st funcret: n.returntype
+            this.walkSufOpt :nodes o: n.body :uname :st funcret: n.returntype
             faiter: n.asItems.iterate
-            for fam: faiter loop this.walkSuf n: fam :uname :st funcret: n.returntype
+            for fam: faiter loop this.walkSuf :nodes n: fam :uname :st funcret: n.returntype
         } case objectdef then {
             oiiter: n.isItems.iterate
-            for oim: oiiter loop this.walkSuf n: oim :uname :st :funcret
+            for oim: oiiter loop this.walkSuf :nodes n: oim :uname :st :funcret
             oaiter: n.asItems.iterate
-            for oam: oaiter loop this.walkSuf n: oam :uname :st :funcret
+            for oam: oaiter loop this.walkSuf :nodes n: oam :uname :st :funcret
         } case unitdef then {
             ubiter: n.body.iterate
-            for ubm: ubiter loop this.walkSuf n: ubm :uname :st :funcret
+            for ubmId9: ubiter loop (this.walkSuf
+                :nodes
+                n: (nodes.get i: (ubmId9 - 1).u64)
+                :uname
+                :st
+                :funcret
+            )
         } case program then {
             puiter: n.units.iterate
-            for pum: puiter loop this.walkSuf n: pum :uname :st :funcret
+            for pumId9: puiter loop (this.walkSuf
+                :nodes
+                n: (nodes.get i: (pumId9 - 1).u64)
+                :uname
+                :st
+                :funcret
+            )
         }
     }
 
     # walkSufOpt -- run the suffix check on an optional child node.
-    walkSufOpt: function {:this o: Option Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
+    walkSufOpt: function {:this nodes: List Node o: Option Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
         match (
             o
         ) case some then {
-            this.walkSuf n: o :uname :st :funcret
+            this.walkSuf :nodes n: o :uname :st :funcret
         } case none then null
     }
 
     # a functiondef returntype doubles as its own funcret: this frame lets
     # the two arguments share one root without aliasing one source path
-    walkSufRet: function {:this ret: Option Node uname: StringView st: zenv.ZSymbolTable} is {
-        this.walkSufOpt o: ret :uname :st funcret: ret
+    walkSufRet: function {:this nodes: List Node ret: Option Node uname: StringView st: zenv.ZSymbolTable} is {
+        this.walkSufOpt :nodes o: ret :uname :st funcret: ret
     }
 
     # lintSuffixUnit -- run the suffix check over a typechecked program's main unit.
@@ -2009,18 +2051,26 @@ Analysis: class {
             prog
         ) case program then {
             uiter: prog.units.iterate
-            for u: uiter loop this.lintSuffixNamedOp namedOp: u mainName: mn.stringview :uname :st
+            for uId9: uiter loop {
+                (this.lintSuffixNamedOp
+                    nodes: prog.nodes
+                    namedOp: (prog.nodes.get i: (uId9 - 1).u64)
+                    mainName: mn.stringview
+                    :uname
+                    :st
+                )
+            }
         } else null
     }
 
     # lintSuffixNamedOp -- run the suffix check on the main unit only.
-    lintSuffixNamedOp: function {:this namedOp: Node mainName: StringView uname: StringView st: zenv.ZSymbolTable} is {
+    lintSuffixNamedOp: function {:this nodes: List Node namedOp: Node mainName: StringView uname: StringView st: zenv.ZSymbolTable} is {
         match (
             namedOp
         ) case namedoperation then {
             un: optName o: namedOp.name
             if un.stringview == mainName then {
-                this.walkSuf n: namedOp.operation :uname :st funcret: (Option.none Node)
+                this.walkSuf :nodes n: namedOp.operation :uname :st funcret: (Option.none Node)
             }
         } else null
     }
@@ -2736,7 +2786,7 @@ analyzeSource: function {
         wrapGroups: (List u64)
     )
     a.runFastChecks n: root
-    if casing then a.walkCasing n: root
+    if casing then a.walkCasingProgram prog: root
     a.checkLineLength width: lineLength
     a.sortEditsInPlace
     return a
@@ -2903,7 +2953,7 @@ sourceParses: function {source: String.take} out bool is {
         wrapGroups: (List u64)
     )
     root: ast.parseSource :source
-    a.walk n: root
+    a.walkProgram prog: root
     return a.parseErrorCount == 0
 }
 
@@ -3082,7 +3132,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
         # must be populated here too or commented bodies lose their
         # comments whenever a wrap edit lands in the same batch
         a.fastToks = tokenize.scan source: rd.copy
-        a.walk n: root
+        a.walkProgram prog: root
         if a.wrapFound == false then break
         se: sortEdits edits: a.edits
         cand: zfix.applyEdits source: cur.stringview edits: se
