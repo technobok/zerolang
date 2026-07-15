@@ -5096,6 +5096,121 @@ demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry unitdef: Node} is {
     } else null
 }
 
+# nativeOnlyBodyError -- one diagnostic for a bodied function declared in a
+# native-only stdlib unit (its C would never be emitted; calls fail at link).
+nativeOnlyBodyError: function {
+    ty: ztyping.ZTyping
+    unitName: StringView
+    fnName: StringView
+    nodeid: u32
+    lineno: u32
+    colno: u32
+} is {
+    unc9: unitName.string
+    fnc9: fnName.string
+    em9: "unit '\{unc9}' is native-only: '\{fnc9}' has a body that would never be emitted"
+    en9: (
+        "the native-only stdlib units declare 'is native' signatures whose bodies live in the C runtime"
+    ).string
+    eh9: "declare it 'is native' and implement it under src/runtime, or move it to an emitted unit".string
+    ty.errors.append (zast.ErrorData
+        :nodeid
+        :lineno
+        :colno
+        width: fnName.length.u32
+        err: zast.err.typeError
+        msg: em9
+        fsno: 0
+        note: en9
+        hint: eh9
+    )
+    ty.isError = true
+}
+
+# nativeOnlyCheckOp -- one unit member: a bodied top-level function errors
+# directly; a type's is/as members are scanned for bodied methods.
+nativeOnlyCheckOp: function {
+    ty: ztyping.ZTyping
+    unitName: StringView
+    defName: StringView
+    op: Node
+} is {
+    if (isFunctionDefWithBody o: op) then {
+        (nativeOnlyBodyError
+            :ty
+            :unitName
+            fnName: defName
+            nodeid: (nodeId n: op)
+            lineno: (nodeLine n: op)
+            colno: (nodeCol n: op)
+        )
+        return
+    }
+    match (
+        op
+    ) case objectdef then {
+        with iit9: op.isItems.iterate do for im9: iit9 loop {
+            match (
+                im9
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: im9.operation) then {
+                    in9: unitLabel o: im9.name
+                    mn9: "\{defName}.\{in9}"
+                    (nativeOnlyBodyError
+                        :ty
+                        :unitName
+                        fnName: mn9.stringview
+                        nodeid: (nodeId n: im9.operation)
+                        lineno: (nodeLine n: im9.operation)
+                        colno: (nodeCol n: im9.operation)
+                    )
+                }
+            } else null
+        }
+        with ait9: op.asItems.iterate do for am9: ait9 loop {
+            match (
+                am9
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: am9.operation) then {
+                    an9: unitLabel o: am9.name
+                    amn9: "\{defName}.\{an9}"
+                    (nativeOnlyBodyError
+                        :ty
+                        :unitName
+                        fnName: amn9.stringview
+                        nodeid: (nodeId n: am9.operation)
+                        lineno: (nodeLine n: am9.operation)
+                        colno: (nodeCol n: am9.operation)
+                    )
+                }
+            } else null
+        }
+    } else null
+}
+
+# checkNativeOnlyUnitBodies -- reject BODIED functions in the native-only
+# stdlib units (system/core/collections/io/os/cli): isEmittableFileUnit
+# excludes them from body emission, so a bodied function there typechecks
+# but never links. Covers top-level functions and type members.
+checkNativeOnlyUnitBodies: function {
+    ty: ztyping.ZTyping
+    unitName: StringView
+    unitdef: Node
+} is {
+    match (
+        unitdef
+    ) case unitdef then {
+        with dit9: unitdef.body.iterate do for dm9: dit9 loop {
+            match (
+                dm9
+            ) case namedoperation then {
+                dn9: unitLabel o: dm9.name
+                nativeOnlyCheckOp :ty :unitName defName: dn9.stringview op: dm9.operation
+            } else null
+        }
+    } else null
+}
+
 registerAndResolveMain: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -5119,6 +5234,9 @@ registerAndResolveMain: function {
                 mu
             ) case namedoperation then {
                 nm: unitLabel o: mu.name
+                if (isStdlibUnitName name: nm.stringview) then {
+                    checkNativeOnlyUnitBodies :ty unitName: nm.stringview unitdef: mu.operation
+                }
                 eager9: isFileUnit name: nm.stringview
                 if nm.stringview == mainName then {
                     # a stdlib unit opened as main: demand all of its
