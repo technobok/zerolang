@@ -226,6 +226,7 @@ main: function is {
     root: ".".string
     report: false
     heavy: false
+    saveTemps: false
     timeoutSecs: 60.i32
     i: 1.u64
     for i < n loop {
@@ -244,6 +245,8 @@ main: function is {
             report = true
         } else if av == "--heavy" then {
             heavy = true
+        } else if av == "--save-temps" then {
+            saveTemps = true
         } else if av == "--timeout" then {
             i = i + 1
             tval: (argv.get :i).copy
@@ -269,6 +272,27 @@ main: function is {
     mypid: os.pid
     d: "/tmp/ztr_\{mypid}"
     io.mkdirp path: d.stringview
+    # sweep trees crashed prior runs left behind: the names are
+    # pid-scoped, and a live owner still has /proc/<pid>
+    myPidS9: "\{mypid}"
+    stale9: io.listDir path: "/tmp"
+    match (
+        stale9
+    ) case ok then {
+        with sit9: stale9.iterate do for se9: sit9 loop {
+            sv9: se9.stringview
+            if sv9.startsWith "ztr_" then {
+                spid9: sv9.substring from: 4 to: sv9.length
+                if spid9 != myPidS9.stringview then {
+                    proc9: "/proc/\{spid9}"
+                    if (io.exists path: proc9.stringview) == false then {
+                        dead9: "/tmp/ztr_\{spid9}"
+                        io.removeTree path: dead9.stringview
+                    }
+                }
+            }
+        }
+    } case err then null
 
     passN: u64
     leakclean: u64
@@ -1212,6 +1236,11 @@ main: function is {
     }
 
     # ---------------- summary ----------------
+    if saveTemps then {
+        print "kept test artifacts at \{d.stringview}"
+    } else {
+        io.removeTree path: d.stringview
+    }
     print "----"
     print "pass=\{passN} leak-clean=\{leakclean} xfail=\{xfail} xleak=\{xleak} skip=\{skip} fails=\{fails}"
     if report then {
