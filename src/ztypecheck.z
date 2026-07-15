@@ -5108,11 +5108,11 @@ nativeOnlyBodyError: function {
 } is {
     unc9: unitName.string
     fnc9: fnName.string
-    em9: "unit '\{unc9}' is native-only: '\{fnc9}' has a body that would never be emitted"
+    em9: "type method '\{fnc9}' in unit '\{unc9}' cannot carry a .z body: the type is runtime-backed"
     en9: (
-        "the native-only stdlib units declare 'is native' signatures whose bodies live in the C runtime"
+        "the runtime-backed stdlib units' types are implemented by the C runtime; their methods are 'is native'"
     ).string
-    eh9: "declare it 'is native' and implement it under src/runtime, or move it to an emitted unit".string
+    eh9: "implement it as a native under src/runtime, or as a free function taking the value".string
     ty.errors.append (zast.ErrorData
         :nodeid
         :lineno
@@ -5135,17 +5135,8 @@ nativeOnlyCheckOp: function {
     defName: StringView
     op: Node
 } is {
-    if (isFunctionDefWithBody o: op) then {
-        (nativeOnlyBodyError
-            :ty
-            :unitName
-            fnName: defName
-            nodeid: (nodeId n: op)
-            lineno: (nodeLine n: op)
-            colno: (nodeCol n: op)
-        )
-        return
-    }
+    # a bodied FREE function here is ordinary emitted code (only the
+    # unit's TYPES are runtime-backed); nothing to reject at this level
     match (
         op
     ) case objectdef then {
@@ -5188,10 +5179,11 @@ nativeOnlyCheckOp: function {
     } else null
 }
 
-# checkNativeOnlyUnitBodies -- reject BODIED functions in the native-only
-# stdlib units (system/core/collections/io/os/cli): isEmittableFileUnit
-# excludes them from body emission, so a bodied function there typechecks
-# but never links. Covers top-level functions and type members.
+# checkNativeOnlyUnitBodies -- the runtime-backed stdlib units
+# (system/core/collections/io/os/cli) implement their TYPES in the C
+# runtime: a type method with a .z body there would never be emitted
+# (emitRecordDefs excludes those units), so reject it eagerly. Bodied
+# FREE functions are fine -- they emit like any cross-unit function.
 checkNativeOnlyUnitBodies: function {
     ty: ztyping.ZTyping
     unitName: StringView
@@ -16467,14 +16459,11 @@ runDepUnitWalks: function {st: zenv.ZSymbolTable mainName: StringView depUnits: 
             du
         ) case namedoperation then {
             dn: unitLabel o: du.name
+            # the runtime-backed stdlib units walk too: depWalkUnit is
+            # body-filtered, so only their bodied FREE functions (ordinary
+            # emitted code) get checked; native decls and types are inert
             isKnownD: false
             if dn.stringview == mainName then isKnownD = true
-            if dn.stringview == "io" then isKnownD = true
-            if dn.stringview == "collections" then isKnownD = true
-            if dn.stringview == "system" then isKnownD = true
-            if dn.stringview == "core" then isKnownD = true
-            if dn.stringview == "os" then isKnownD = true
-            if dn.stringview == "cli" then isKnownD = true
             if (isKnownD) == false then depWalkUnit :st depName: dn.stringview unitOp: du.operation
         } else null
     }
