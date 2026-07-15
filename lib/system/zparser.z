@@ -253,15 +253,34 @@ Parser: class {
     # Per-file nodeid segments: diagnostics map an erroring node back to
     # the file whose parse allocated it.
     fileSegs: (List FileSeg)
+    # Master node table: one slot per minted id (placeholder rows carry
+    # nodeid 0 until a converted parent moves the real child in).
+    nodes: (List Node)
 } as {
     create: function {} out this is {
-        return (meta.create nextNodeId: 1 functionBodyDepth: 0 fileSegs: (List FileSeg))
+        return (meta.create
+            nextNodeId: 1
+            functionBodyDepth: 0
+            fileSegs: (List FileSeg)
+            nodes: (List Node)
+        )
     }
 
-    # Allocate the next node id.
+    # Allocate the next node id and reserve its master-table slot.
     nextId: function {:this} out u32 is {
         id: this.nextNodeId
         this.nextNodeId = this.nextNodeId + 1
+        this.nodes.append from: (Node.error (zast.ErrorData
+            nodeid: 0
+            lineno: 0
+            colno: 0
+            width: 0
+            err: zast.err.badUnit
+            msg: String
+            fsno: 0
+            note: String
+            hint: String
+        ))
         return id
     }
 
@@ -3341,12 +3360,16 @@ Parser: class {
                 }
             }
         }
+        pid9: this.nextId
+        tbl9: (List Node)
+        tbl9 swap this.nodes
         return (Node.program (zast.ProgramData
-            nodeid: this.nextId
+            nodeid: pid9
             lineno: 1
             colno: 1
             :units
-            mainUnitName: mainUnitName.copy)
+            mainUnitName: mainUnitName.copy
+            nodes: tbl9)
         )
     }
 }
