@@ -280,8 +280,9 @@ clean:
 # declaration, a quoted-name entry in zemitterc's call maps, and a C
 # fragment under src/runtime/natives must all agree (symlink/readlink
 # once had fragments but no map entry: calls typechecked, never linked).
-# Leg 1: every top-level function declared in the four name-mapped units
-# appears quoted somewhere in zemitterc.z. Leg 2: every _Z_* fragment
+# Leg 1: every top-level 'is native' function declared in the four
+# name-mapped units appears quoted somewhere in zemitterc.z (bodied
+# free functions emit generically and are exempt). Leg 2: every _Z_* fragment
 # name zemitterc references exists on disk. The numeric/collection/String
 # native families are emitter-specials with no per-name artifacts and are
 # out of scope here (system/core/collections are guarded by the
@@ -289,7 +290,7 @@ clean:
 native-guard:
 	@fail=0; \
 	for u in io os cli net; do \
-	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {sub(/:.*/,""); print}' lib/system/$$u.z); do \
+	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z); do \
 	    grep -q "\"$$n\"" src/zemitterc.z || { echo "native-guard: $$u.$$n declared but never named in src/zemitterc.z"; fail=1; }; \
 	  done; \
 	done; \

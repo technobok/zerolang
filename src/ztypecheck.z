@@ -5203,6 +5203,56 @@ checkNativeOnlyUnitBodies: function {
     } else null
 }
 
+# unitHasBodiedFreeFn -- a unit carries at least one top-level bodied
+# function (ordinary emitted code inside a runtime-backed unit).
+unitHasBodiedFreeFn: function {unitdef: Node} out bool is {
+    match (
+        unitdef
+    ) case unitdef then {
+        with bit9: unitdef.body.iterate do for bm9: bit9 loop {
+            match (
+                bm9
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: bm9.operation) then return true
+            } else null
+        }
+    } else null
+    return false
+}
+
+# unitHasDemandedBodiedFn -- a unit carries a top-level bodied function the
+# program actually referenced (its composed key resolved during the demand
+# loop). Gates the runtime-backed units' post-main resolve+walk so programs
+# that never call a bodied stdlib fn stay untouched.
+unitHasDemandedBodiedFn: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    unitdef: Node
+} out bool is {
+    match (
+        unitdef
+    ) case unitdef then {
+        with bit9: unitdef.body.iterate do for bm9: bit9 loop {
+            match (
+                bm9
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: bm9.operation) then {
+                    bn9: unitLabel o: bm9.name
+                    bk9: "\{unitName}.\{bn9}"
+                    ro9: resolvedByKey :ty :reg key: bk9
+                    match (
+                        ro9
+                    ) case some then {
+                        return true
+                    } case none then null
+                }
+            } else null
+        }
+    } else null
+    return false
+}
+
 registerAndResolveMain: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -16452,6 +16502,37 @@ checkFunctionBody: function {
 # checks a demanded user unit's function bodies on first touch, inside the
 # using function's scope. Walks every resolved function-with-body member of
 # each non-system dependency unit, scoped function:{unit}.{fn}.
+# resolveDemandedStdDeps -- one resolve sweep over the runtime-backed dep
+# units (post-main): resolves whatever their bodied free fns' demands
+# recorded, mirroring the registerAndResolveMain demand driver.
+resolveDemandedStdDeps: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    units: List Node
+} is {
+    n9: units.length
+    i9: u64
+    for i9 < n9 loop {
+        u9: units.get i: i9
+        i9 = i9 + 1
+        match (
+            u9
+        ) case namedoperation then {
+            un9: unitLabel o: u9.name
+            if (isStdlibUnitName name: un9.stringview) then {
+                (resolveDemandedUnitBody
+                    :ty
+                    :reg
+                    :units
+                    unitName: un9.stringview
+                    shadowUnit: ""
+                    unitdef: u9.operation
+                )
+            }
+        } else null
+    }
+}
+
 runDepUnitWalks: function {st: zenv.ZSymbolTable mainName: StringView depUnits: List Node} is {
     diter: depUnits.iterate
     for du: diter loop {
@@ -16459,11 +16540,18 @@ runDepUnitWalks: function {st: zenv.ZSymbolTable mainName: StringView depUnits: 
             du
         ) case namedoperation then {
             dn: unitLabel o: du.name
-            # the runtime-backed stdlib units walk too: depWalkUnit is
-            # body-filtered, so only their bodied FREE functions (ordinary
-            # emitted code) get checked; native decls and types are inert
+            # the runtime-backed stdlib units are excluded here: their bodied
+            # free fns walk in checkBodies' final pass, AFTER the main unit
+            # settles (demand order must not disturb main's shadow/mono
+            # resolution)
             isKnownD: false
             if dn.stringview == mainName then isKnownD = true
+            if dn.stringview == "io" then isKnownD = true
+            if dn.stringview == "collections" then isKnownD = true
+            if dn.stringview == "system" then isKnownD = true
+            if dn.stringview == "core" then isKnownD = true
+            if dn.stringview == "os" then isKnownD = true
+            if dn.stringview == "cli" then isKnownD = true
             if (isKnownD) == false then depWalkUnit :st depName: dn.stringview unitOp: du.operation
         } else null
     }
@@ -16654,6 +16742,57 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             ) case namedoperation then {
                 checkUnitBodies :st unitName: mainName unitdef: mu.operation depUnits: program.units
             } else null
+        }
+        # runtime-backed dep units with bodied free fns: demand, resolve,
+        # and walk them AFTER the main unit completes, so main's name,
+        # shadow, and mono resolution are settled first
+        dn9: program.units.length
+        di9: u64
+        hasStd9: false
+        for di9 < dn9 loop {
+            du9: program.units.get i: di9
+            di9 = di9 + 1
+            match (
+                du9
+            ) case namedoperation then {
+                dun9: unitLabel o: du9.name
+                if (isStdlibUnitName name: dun9.stringview) when (unitHasDemandedBodiedFn
+                    ty: st.typing
+                    reg: st.reg
+                    unitName: dun9.stringview
+                    unitdef: du9.operation
+                ) then {
+                    demandAllUnitDefs reg: st.reg unitdef: du9.operation
+                    hasStd9 = true
+                }
+            } else null
+        }
+        if hasStd9 then {
+            againS9: true
+            for againS9 loop {
+                beforeS9: st.reg.nextTypeId
+                resolveDemandedStdDeps ty: st.typing reg: st.reg units: program.units
+                if st.reg.nextTypeId == beforeS9 then againS9 = false
+            }
+            wn9: program.units.length
+            wi9: u64
+            for wi9 < wn9 loop {
+                wu9: program.units.get i: wi9
+                wi9 = wi9 + 1
+                match (
+                    wu9
+                ) case namedoperation then {
+                    wun9: unitLabel o: wu9.name
+                    if (isStdlibUnitName name: wun9.stringview) when (unitHasDemandedBodiedFn
+                        ty: st.typing
+                        reg: st.reg
+                        unitName: wun9.stringview
+                        unitdef: wu9.operation
+                    ) then {
+                        depWalkUnit :st depName: wun9.stringview unitOp: wu9.operation
+                    }
+                } else null
+            }
         }
     } else null
 }

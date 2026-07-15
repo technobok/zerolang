@@ -11342,7 +11342,7 @@ fillDataElems: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
                 u
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
-                if (isEmittableUnitFns name: un.stringview) then {
+                if (isEmittableFileUnit name: un.stringview) then {
                     fillDataElemsIn :symtab :ctx mainOp: u.operation
                 }
             } else null
@@ -11419,7 +11419,7 @@ fillNeeds: function {program: Node ctx: Ctx} is {
                 u
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
-                if (isEmittableUnitFns name: un.stringview) then {
+                if (isEmittableFileUnit name: un.stringview) then {
                     fillNeedsIn :ctx mainOp: u.operation
                 }
             } else null
@@ -11617,7 +11617,7 @@ fillConstVals: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
                 u
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
-                if (isEmittableUnitFns name: un.stringview) then {
+                if (isEmittableFileUnit name: un.stringview) then {
                     sm9: ctx.mainName.copy
                     ctx.mainName = un.copy
                     fillConstValsIn :symtab :ctx mainOp: u.operation
@@ -11673,6 +11673,27 @@ isEmittableFileUnit: function {name: StringView} out bool is {
 isEmittableUnitFns: function {name: StringView} out bool is {
     if name.length == 0 then return false
     return true
+}
+
+# stdFnUndemanded -- a bodied free fn in a runtime-backed stdlib unit that
+# the program never referenced: its def was not resolved (no composed key),
+# so its body carries no stamps -- skip it everywhere (definition, needs
+# pre-scan, literal pooling). Emittable user/dep units always emit.
+stdFnUndemanded: function {
+    symtab: zenv.ZSymbolTable
+    unitName: StringView
+    fnName: StringView
+} out bool is {
+    if (isEmittableFileUnit name: unitName) then return false
+    k9: "\{unitName}.\{fnName}"
+    ro9: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: k9
+    match (
+        ro9
+    ) case some then {
+        return false
+    } case none then {
+        return true
+    }
 }
 
 # isGenericTemplateUnitOp -- a file unit that is a generic template (declares a
@@ -11936,6 +11957,13 @@ emitFnsIn: function {
                 if (isFunctionDefWithBody9 n: bm.operation) then {
                     nm: unitLabel9 o: bm.name
                     skipDepMain: false
+                    # a runtime-backed unit's bodied fn only emits when the
+                    # program referenced it (undemanded bodies carry no stamps)
+                    if (stdFnUndemanded
+                        :symtab
+                        unitName: ctx.mainName.stringview
+                        fnName: nm.stringview
+                    ) then skipDepMain = true
                     if nm.stringview == "main" then {
                         if ctx.mainName.stringview != ctx.realMain.stringview then {
                             skipDepMain = true
@@ -12253,7 +12281,12 @@ emitFnBody: function {symtab: zenv.ZSymbolTable ctx: Ctx op: Node fid: u64 buf: 
 
 # collectUnitLiterals -- pool the plain literals of every main-unit
 # function body.
-collectUnitLiterals: function {program: Node ids: List u64 texts: List String} is {
+collectUnitLiterals: function {
+    program: Node
+    symtab: zenv.ZSymbolTable
+    ids: List u64
+    texts: List String
+} is {
     match (
         program
     ) case program then {
@@ -12263,14 +12296,26 @@ collectUnitLiterals: function {program: Node ids: List u64 texts: List String} i
             ) case namedoperation then {
                 un: unitLabel9 o: u.name
                 if (isEmittableUnitFns name: un.stringview) then {
-                    collectUnitLiteralsIn mainOp: u.operation :ids :texts
+                    (collectUnitLiteralsIn
+                        mainOp: u.operation
+                        :symtab
+                        unitName: un.stringview
+                        :ids
+                        :texts
+                    )
                 }
             } else null
         }
     } else null
 }
 
-collectUnitLiteralsIn: function {mainOp: Node ids: List u64 texts: List String} is {
+collectUnitLiteralsIn: function {
+    mainOp: Node
+    symtab: zenv.ZSymbolTable
+    unitName: StringView
+    ids: List u64
+    texts: List String
+} is {
     match (
         mainOp
     ) case unitdef then {
@@ -12279,7 +12324,9 @@ collectUnitLiteralsIn: function {mainOp: Node ids: List u64 texts: List String} 
             match (
                 bm
             ) case namedoperation then {
-                collectFnLiterals n: bm.operation :ids :texts
+                bn9: unitLabel9 o: bm.name
+                skipU9: stdFnUndemanded :symtab :unitName fnName: bn9.stringview
+                if (skipU9) == false then collectFnLiterals n: bm.operation :ids :texts
             } else null
         }
     } else null
@@ -12417,7 +12464,7 @@ emitC: function {program: Node symtab: zenv.ZSymbolTable runtimeDir: StringView}
     mn: mainNameOf9 :program
     litIds: (List u64)
     litTexts: (List String)
-    collectUnitLiterals :program ids: litIds texts: litTexts
+    collectUnitLiterals :program :symtab ids: litIds texts: litTexts
     rm: mn.copy
     ctx: (Ctx
         mainName: mn
@@ -14314,7 +14361,6 @@ emitRuntimeIo: function {
     ioFragIf :symtab :ctx :runtimeDir need: "io_mkdir" frag: "_Z_IO_MKDIR" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "io_mkdirp" frag: "_Z_IO_MKDIRP" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "io_remove" frag: "_Z_IO_REMOVE" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_removeTree" frag: "_Z_IO_REMOVE_TREE" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "io_symlink" frag: "_Z_IO_SYMLINK" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "io_readlink" frag: "_Z_IO_READLINK" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "io_rename" frag: "_Z_IO_RENAME" :buf
@@ -16513,7 +16559,6 @@ emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} ou
     if mn.stringview == "mkdir" then fname = "z_io_mkdir".string
     if mn.stringview == "mkdirp" then fname = "z_io_mkdirp".string
     if mn.stringview == "remove" then fname = "z_io_remove".string
-    if mn.stringview == "removeTree" then fname = "z_io_removeTree".string
     if mn.stringview == "symlink" then fname = "z_io_symlink".string
     if mn.stringview == "readlink" then fname = "z_io_readlink".string
     if mn.stringview == "rename" then fname = "z_io_rename".string
