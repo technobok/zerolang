@@ -125,6 +125,8 @@ Table of Contents</div>
 </li>
 <li><a href="#code-generator">Code Generator</a>
 <ul>
+<li><a href="#runtime-backed-stdlib-units">Runtime-backed stdlib units</a>
+</li>
 <li><a href="#c-name-generation">C Name Generation</a>
 </li>
 </ul>
@@ -573,7 +575,37 @@ features (<code>typeof</code>, <code>constexpr</code>, <code>#embed</code>) are 
 <p>The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a <code>main()</code>
 entry point. Each section is collected separately and assembled at the end.</p>
-<h3 id="c-name-generation"><a href="#c-name-generation">8.1. C Name Generation</a></h3>
+<h3 id="runtime-backed-stdlib-units"><a href="#runtime-backed-stdlib-units">8.1. Runtime-backed stdlib units</a></h3>
+<p>Six stdlib units -- <code>system</code>, <code>core</code>, <code>collections</code>, <code>io</code>,
+<code>os</code>, <code>cli</code> -- are <em><strong>runtime-backed</strong></em>: their types (String, File,
+the collections, the numerics) and their <code>is native</code> functions are
+implemented by the hand-written C runtime under <code>src/runtime</code>. The
+emitter never generates structs or type-method bodies for them
+(<code>isEmittableFileUnit</code> excludes the six from every type-emission
+pass); instead each native is wired by <em><strong>name</strong></em> across three layers
+that must agree: the <code>.z</code> declaration (what the type checker
+validates), a quoted-name entry in the emitter's call maps
+(<code>emitIoCall</code> and friends), and a C fragment under
+<code>src/runtime/natives</code>. The <code>make native-guard</code> ratchet (run in
+<code>make ci</code>) holds the io/os/cli/net free-function layer together:
+every <code>is native</code> declaration must appear in the emitter maps, and
+every referenced <code>_Z_*</code> fragment must exist on disk.</p>
+<p><em><strong>Bodied free functions</strong></em> in these units are ordinary emitted
+zerolang (<code>io.removeTree</code> is the living example). They are
+demand-gated end to end: the type checker resolves and walks them in a
+final <code>checkBodies</code> pass -- after the main unit settles, so demand
+order cannot disturb the main unit's shadow and monomorph resolution --
+and only in programs whose demand loop referenced them; the emitter
+correspondingly skips undemanded bodies in <code>emitFnsIn</code> and the
+literal pool, so an unused stdlib body cannot drag runtime fragments
+or unmaterialized monos into unrelated programs. Two rules apply
+inside such a body: sibling natives must be called through the dotted
+unit form (<code>io.remove</code>, not bare <code>remove</code> -- a bare name emits the
+raw C identifier and collides with libc), and <code>.take</code> references to
+bodied stdlib functions are not yet wired (they are callable only).
+A <em><strong>type method</strong></em> with a <code>.z</code> body in these units is a compile
+error (E0100): the type's methods belong to the C runtime.</p>
+<h3 id="c-name-generation"><a href="#c-name-generation">8.2. C Name Generation</a></h3>
 <p>A type's C name is composed <strong>once, at mint</strong>: <code>ztypes.composeCname</code>
 fills <code>ZType.cname</code> inside <code>newType</code>, and the emitter reads it back
 through <code>reg.cnameOf</code>. Names are never reassigned after mint, so the

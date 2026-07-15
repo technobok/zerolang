@@ -543,6 +543,39 @@ The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a #~"main()"
 entry point. Each section is collected separately and assembled at the end.
 
+#---: Runtime-backed stdlib units
+
+Six stdlib units -- #~"system", #~"core", #~"collections", #~"io",
+#~"os", #~"cli" -- are #_*"runtime-backed": their types (String, File,
+the collections, the numerics) and their #~"is native" functions are
+implemented by the hand-written C runtime under #~"src/runtime". The
+emitter never generates structs or type-method bodies for them
+(#~"isEmittableFileUnit" excludes the six from every type-emission
+pass); instead each native is wired by #_*"name" across three layers
+that must agree: the #~".z" declaration (what the type checker
+validates), a quoted-name entry in the emitter's call maps
+(#~"emitIoCall" and friends), and a C fragment under
+#~"src/runtime/natives". The #~"make native-guard" ratchet (run in
+#~"make ci") holds the io/os/cli/net free-function layer together:
+every #~"is native" declaration must appear in the emitter maps, and
+every referenced #~"_Z_*" fragment must exist on disk.
+
+#_*"Bodied free functions" in these units are ordinary emitted
+zerolang (#~"io.removeTree" is the living example). They are
+demand-gated end to end: the type checker resolves and walks them in a
+final #~"checkBodies" pass -- after the main unit settles, so demand
+order cannot disturb the main unit's shadow and monomorph resolution --
+and only in programs whose demand loop referenced them; the emitter
+correspondingly skips undemanded bodies in #~"emitFnsIn" and the
+literal pool, so an unused stdlib body cannot drag runtime fragments
+or unmaterialized monos into unrelated programs. Two rules apply
+inside such a body: sibling natives must be called through the dotted
+unit form (#~"io.remove", not bare #~"remove" -- a bare name emits the
+raw C identifier and collides with libc), and #~".take" references to
+bodied stdlib functions are not yet wired (they are callable only).
+A #_*"type method" with a #~".z" body in these units is a compile
+error (E0100): the type's methods belong to the C runtime.
+
 #---: C Name Generation
 
 A type's C name is composed #b:"once, at mint": #~"ztypes.composeCname"
