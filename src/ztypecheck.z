@@ -710,7 +710,7 @@ populatePreludeBody: function {
                 bm
             ) case namedoperation then {
                 dn: unitLabel o: bm.name
-                atgt0: dottedDefTarget n: bm.operation
+                atgt0: dottedDefTarget n: (nodes.get i: (bm.operation - 1).u64)
                 if atgt0.length > 0 then {
                     ps0: String
                     with pit: (atgt0.stringview.split sep: ".") do for pseg: pit loop {
@@ -744,7 +744,7 @@ populatePrelude: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
                     :ty
                     :reg
                     nodes: program.nodes
-                    unitop: ru.operation
+                    unitop: (program.nodes.get i: (ru.operation - 1).u64)
                 )
             } else null
         }
@@ -772,7 +772,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping program: Node} is {
                     nodes: program.nodes
                     unitName: unm.stringview
                     unitIdx: uidx0
-                    unitop: ru.operation
+                    unitop: (program.nodes.get i: (ru.operation - 1).u64)
                 )
             } else null
             uidx0 = uidx0 + 1
@@ -800,7 +800,7 @@ indexUnitBody: function {
                 bm
             ) case namedoperation then {
                 dn: unitLabel o: bm.name
-                tto: defTypetypeOf defn: bm.operation name: dn.stringview
+                tto: defTypetypeOf defn: (nodes.get i: (bm.operation - 1).u64) name: dn.stringview
                 match (
                     tto
                 ) case some then {
@@ -810,12 +810,12 @@ indexUnitBody: function {
                 sk0: "\{unitName}.\{dn}"
                 uv0: unitIdx
                 ty.defNodeUnitIdx.set key: sk0 value: uv0
-                atgt0: dottedDefTarget n: bm.operation
+                atgt0: dottedDefTarget n: (nodes.get i: (bm.operation - 1).u64)
                 if atgt0.length > 0 then {
                     ak0: "\{unitName}.\{dn}"
                     ty.funcAliases.set key: ak0 value: atgt0
                     adn0: "\{unitName}.\{dn}"
-                    adnid0: nodeId n: bm.operation
+                    adnid0: nodeId n: (nodes.get i: (bm.operation - 1).u64)
                     adv0: adnid0.u64
                     ty.aliasDefNode.set key: adn0 value: adv0
                 }
@@ -1185,85 +1185,89 @@ isLabelValue: function {op: Node} out bool is {
 # nodeMentionsName -- whether a subtree references a bare name (atom reads,
 # call callables, dotted bases). Drives the conformer-context gate: the
 # reference's lazy resolution only reaches a conformer the main body names.
-nodeMentionsName: function {n: Node name: StringView} out bool is {
+nodeMentionsName: function {nodes: List Node n: Node name: StringView} out bool is {
     match (
         n
     ) case atomid then {
         return n.name.stringview == name
     } case expression then {
-        return (nodeMentionsName n: n.expression :name)
+        return (nodeMentionsName :nodes n: n.expression :name)
     } case dottedpath then {
-        return (nodeMentionsName n: n.parent :name)
+        return (nodeMentionsName :nodes n: n.parent :name)
     } case call then {
-        if (nodeMentionsName n: n.callable :name) then return true
+        if (nodeMentionsName :nodes n: n.callable :name) then return true
         aiter: n.arguments.iterate
         for arg: aiter loop {
             match (
                 arg
             ) case namedoperation then {
-                if (nodeMentionsName n: arg.operation :name) then return true
+                if (nodeMentionsName
+                    :nodes
+                    n: (nodes.get i: (arg.operation - 1).u64)
+                    :name
+                ) then return true
             } else null
         }
         return false
     } case binop then {
-        if (nodeMentionsName n: n.lhs :name) then return true
-        return (nodeMentionsName n: n.rhs :name)
+        if (nodeMentionsName :nodes n: n.lhs :name) then return true
+        return (nodeMentionsName :nodes n: n.rhs :name)
     } case statement then {
         siter: n.statements.iterate
         for sm: siter loop {
-            if (nodeMentionsName n: sm :name) then return true
+            if (nodeMentionsName :nodes n: sm :name) then return true
         }
         return false
     } case statementline then {
-        return (nodeMentionsName n: n.statementline :name)
+        return (nodeMentionsName :nodes n: n.statementline :name)
     } case assignment then {
-        return (nodeMentionsName n: n.value :name)
+        return (nodeMentionsName :nodes n: n.value :name)
     } case reassignment then {
-        return (nodeMentionsName n: n.value :name)
+        return (nodeMentionsName :nodes n: n.value :name)
     } case caseexpr then {
-        if (nodeMentionsName n: n.subject :name) then return true
+        if (nodeMentionsName :nodes n: n.subject :name) then return true
         citer: n.clauses.iterate
         for cm: citer loop {
-            if (nodeMentionsName n: cm :name) then return true
+            if (nodeMentionsName :nodes n: cm :name) then return true
         }
         return false
     } case caseclause then {
-        return (nodeMentionsName n: n.statement :name)
+        return (nodeMentionsName :nodes n: n.statement :name)
     } case ifexpr then {
         citer2: n.clauses.iterate
         for cm2: citer2 loop {
-            if (nodeMentionsName n: cm2 :name) then return true
+            if (nodeMentionsName :nodes n: cm2 :name) then return true
         }
         return false
     } case forexpr then {
-        return (nodeMentionsNameOpt o: n.body :name)
+        return (nodeMentionsNameOpt :nodes o: n.body :name)
     } case withexpr then {
-        if (nodeMentionsName n: n.value :name) then return true
-        return (nodeMentionsName n: n.body :name)
+        if (nodeMentionsName :nodes n: n.value :name) then return true
+        return (nodeMentionsName :nodes n: n.body :name)
     } case doexpr then {
-        return (nodeMentionsName n: n.statement :name)
+        return (nodeMentionsName :nodes n: n.statement :name)
     } else {
         return false
     }
 }
 
 # nodeMentionsNameOpt -- nodeMentionsName over an optional subtree.
-nodeMentionsNameOpt: function {o: Option Node name: StringView} out bool is {
+nodeMentionsNameOpt: function {nodes: List Node o: Option Node name: StringView} out bool is {
     match (
         o
     ) case some then {
-        return (nodeMentionsName n: o :name)
+        return (nodeMentionsName :nodes n: o :name)
     } case none then {
         return false
     }
 }
 
 # fnBodyMentions -- nodeMentionsName over a function definition's body.
-fnBodyMentions: function {op: Node name: StringView} out bool is {
+fnBodyMentions: function {nodes: List Node op: Node name: StringView} out bool is {
     match (
         op
     ) case functiondef then {
-        return (nodeMentionsNameOpt o: op.body :name)
+        return (nodeMentionsNameOpt :nodes o: op.body :name)
     } else {
         return false
     }
@@ -1278,7 +1282,11 @@ mainBodyMentions: function {nodes: List Node unitBody: List u32 name: StringView
                 mm
             ) case namedoperation then {
                 mn: unitLabel o: mm.name
-                if mn.stringview == "main" then return (fnBodyMentions op: mm.operation :name)
+                if mn.stringview == "main" then return (fnBodyMentions
+                    :nodes
+                    op: (nodes.get i: (mm.operation - 1).u64)
+                    :name
+                )
             } else null
         }
     }
@@ -1290,7 +1298,12 @@ mainBodyMentions: function {nodes: List Node unitBody: List u32 name: StringView
 # receiver to the conformer (the reference resolves the protocol inside the
 # conformer's resolution, inheriting its `this` context). Full mode only:
 # signature-only resolves protocols standalone, receiver dropped.
-recordConformerContexts: function {ty: ztyping.ZTyping defName: StringView op: Node} is {
+recordConformerContexts: function {
+    nodes: List Node
+    ty: ztyping.ZTyping
+    defName: StringView
+    op: Node
+} is {
     match (
         op
     ) case objectdef then {
@@ -1305,7 +1318,7 @@ recordConformerContexts: function {ty: ztyping.ZTyping defName: StringView op: N
             match (
                 am
             ) case namedoperation then {
-                cn: atomName n: am.operation
+                cn: atomName n: (nodes.get i: (am.operation - 1).u64)
                 skipIt: false
                 if cn.length == 0 then skipIt = true
                 if (isNumericLiteralName name: cn.stringview) then skipIt = true
@@ -1366,23 +1379,29 @@ isGenericParam: function {op: Node} out bool is {
 # registerGenericParams -- record a type's generic-param names (keyed
 # `{unit}.{type}.{param}`) so method-param resolution can drop params typed by them.
 registerGenericParams: function {
+    nodes: List Node
     reg: ztypes.ZTypeRegistry
     typeKey: StringView
     items: List Node
 } is {
     iter: items.iterate
-    for m: iter loop registerGenericParamOne :reg :typeKey :m
+    for m: iter loop registerGenericParamOne :nodes :reg :typeKey :m
 }
 
 # registerGenericParamOne -- record one member's generic-param declaration.
-registerGenericParamOne: function {reg: ztypes.ZTypeRegistry typeKey: StringView m: Node} is {
+registerGenericParamOne: function {
+    nodes: List Node
+    reg: ztypes.ZTypeRegistry
+    typeKey: StringView
+    m: Node
+} is {
     match (
         m
     ) case namedoperation then {
-        if (isGenericParam op: m.operation) then {
+        if (isGenericParam op: (nodes.get i: (m.operation - 1).u64)) then {
             pn: unitLabel o: m.name
-            cb: genericConstraintBase n: m.operation
-            ckx9: genericConstraintKind n: m.operation
+            cb: genericConstraintBase n: (nodes.get i: (m.operation - 1).u64)
+            ckx9: genericConstraintKind n: (nodes.get i: (m.operation - 1).u64)
             cf9x: cb.copy
             if ckx9.length > 0 then cf9x = "\{cb}.\{ckx9}"
             k9: constraintKindFor text: cf9x.stringview
@@ -1441,7 +1460,7 @@ hasGenericParamIds: function {nodes: List Node items: List u32} out bool is {
         match (
             hm9
         ) case namedoperation then {
-            if (isGenericParam op: hm9.operation) then return true
+            if (isGenericParam op: (nodes.get i: (hm9.operation - 1).u64)) then return true
         } else null
         hi9 = hi9 + 1
     }
@@ -1459,18 +1478,18 @@ registerGenericParamIds: function {
     for ri9 < rn9 loop {
         rid9: items.get i: ri9
         rm9: nodes.get i: (rid9 - 1).u64
-        registerGenericParamOne :reg :typeKey m: rm9
+        registerGenericParamOne :nodes :reg :typeKey m: rm9
         ri9 = ri9 + 1
     }
 }
 
-hasGenericParam: function {items: List Node} out bool is {
+hasGenericParam: function {nodes: List Node items: List Node} out bool is {
     it: items.iterate
     for m: it loop {
         match (
             m
         ) case namedoperation then {
-            if (isGenericParam op: m.operation) then return true
+            if (isGenericParam op: (nodes.get i: (m.operation - 1).u64)) then return true
         } else null
     }
     return false
@@ -1740,7 +1759,7 @@ resolveMonoRefParts: function {
             match (
                 arg9
             ) case namedoperation then {
-                an9: atomName n: arg9.operation
+                an9: atomName n: (nodes.get i: (arg9.operation - 1).u64)
                 if (isNumericLiteralName name: an9.stringview) then {
                     sfx9.append s: "_"
                     sfx9.append s: an9.stringview
@@ -1756,7 +1775,8 @@ resolveMonoRefParts: function {
                 } else {
                     aid9: u64
                     if an9.length == 0 then {
-                        aid9 = resolveDottedArgTid :ty :reg :nodes :units dp: arg9.operation
+                        opf19: nodes.get i: (arg9.operation - 1).u64
+                        aid9 = resolveDottedArgTid :ty :reg :nodes :units dp: opf19
                         if aid9 == 0 then {
                             inner9: (resolveMonoRefInline
                                 :ty
@@ -1765,7 +1785,7 @@ resolveMonoRefParts: function {
                                 :unitName
                                 :thisName
                                 :enclKey
-                                op: arg9.operation
+                                op: (nodes.get i: (arg9.operation - 1).u64)
                                 nid: 0
                             )
                             if inner9 > 0 then {
@@ -1988,9 +2008,17 @@ recordTyperef: function {
             match (
                 arg
             ) case namedoperation then {
-                an: atomName n: arg.operation
+                an: atomName n: (nodes.get i: (arg.operation - 1).u64)
                 if (isNumericLiteralName name: an.stringview) == false then {
-                    recordTyperef :ty :reg :nodes :units :unitName :thisName node: arg.operation
+                    (recordTyperef
+                        :ty
+                        :reg
+                        :nodes
+                        :units
+                        :unitName
+                        :thisName
+                        node: (nodes.get i: (arg.operation - 1).u64)
+                    )
                 }
             } else null
         }
@@ -2272,7 +2300,12 @@ recordReturnType: function {
 # demandTyperefNames -- record demands for every name a type-expr
 # references (the head and, transitively, parameter-arg names), so the
 # demand walks resolve a signature's full closure. Creates no types.
-demandTyperefNames: function {reg: ztypes.ZTypeRegistry unitName: StringView typeExpr: Node} is {
+demandTyperefNames: function {
+    nodes: List Node
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    typeExpr: Node
+} is {
     match (
         typeExpr
     ) case atomid then {
@@ -2281,7 +2314,7 @@ demandTyperefNames: function {reg: ztypes.ZTypeRegistry unitName: StringView typ
             reg.recordSeededDemand un: unitName name: typeExpr.name.stringview
         }
     } case expression then {
-        demandTyperefNames :reg :unitName typeExpr: typeExpr.expression
+        demandTyperefNames :nodes :reg :unitName typeExpr: typeExpr.expression
     } case call then {
         hn: atomName n: typeExpr.callable
         if hn.length > 0 then {
@@ -2293,11 +2326,16 @@ demandTyperefNames: function {reg: ztypes.ZTypeRegistry unitName: StringView typ
             match (
                 arg
             ) case namedoperation then {
-                demandTyperefNames :reg :unitName typeExpr: arg.operation
+                (demandTyperefNames
+                    :nodes
+                    :reg
+                    :unitName
+                    typeExpr: (nodes.get i: (arg.operation - 1).u64)
+                )
             } else null
         }
     } case dottedpath then {
-        demandTyperefNames :reg :unitName typeExpr: typeExpr.parent
+        demandTyperefNames :nodes :reg :unitName typeExpr: typeExpr.parent
     } else null
 }
 
@@ -2387,10 +2425,15 @@ resolveTyperefShell: function {
             match (
                 arg
             ) case namedoperation then {
-                an: typeArgSuffixName :reg op: arg.operation
+                an: typeArgSuffixName :reg op: (nodes.get i: (arg.operation - 1).u64)
                 suffix.append "_"
                 suffix.append an.stringview
-                demandTyperefNames :reg :unitName typeExpr: arg.operation
+                (demandTyperefNames
+                    :nodes
+                    :reg
+                    :unitName
+                    typeExpr: (nodes.get i: (arg.operation - 1).u64)
+                )
             } else null
         }
         return (reg.newType name: suffix.stringview typetype: ztypes.ztypetype.recordType)
@@ -2684,11 +2727,16 @@ isNativeValueView: function {name: StringView} out bool is {
 # demandReturnType -- record cross-unit demand for a function's return-type base
 # name (`out (Result t: u64 e: IoError)` -> demand "Result"), so a type named only
 # in a return position is resolved. The Option is borrowed, never bound.
-demandReturnType: function {reg: ztypes.ZTypeRegistry unitName: StringView o: Option Node} is {
+demandReturnType: function {
+    nodes: List Node
+    reg: ztypes.ZTypeRegistry
+    unitName: StringView
+    o: Option Node
+} is {
     match (
         o
     ) case some then {
-        demandTyperefNames :reg :unitName typeExpr: o
+        demandTyperefNames :nodes :reg :unitName typeExpr: o
     } case none then null
 }
 
@@ -2728,19 +2776,19 @@ resolveFunction: function {
     }
     dfid: fid
     rfid: fid
-    isgen: hasGenericParam items: fnode.asItems
+    isgen: hasGenericParam :nodes items: fnode.asItems
     if isgen then {
         reg.setGeneric typeId: fid value: true
         # Function templates register their param constraints like type
         # templates do (checkGenericCall checks satisfaction per call).
         fgtk9: "\{unitName}.\{defName}"
-        registerGenericParams :reg typeKey: fgtk9.stringview items: fnode.asItems
+        registerGenericParams :nodes :reg typeKey: fgtk9.stringview items: fnode.asItems
         aiter2: fnode.asItems.iterate
         for am: aiter2 loop {
             match (
                 am
             ) case namedoperation then {
-                if (isGenericParam op: am.operation) then {
+                if (isGenericParam op: (nodes.get i: (am.operation - 1).u64)) then {
                     apn: unitLabel o: am.name
                     ty.setGenericArg parentTypeId: fid paramName: apn.stringview argTypeId: 0
                 }
@@ -2770,7 +2818,7 @@ resolveFunction: function {
             skipParam: false
             genParam: false
             fnParam9: false
-            ptn: atomName n: pm.operation
+            ptn: atomName n: (nodes.get i: (pm.operation - 1).u64)
             if skipThisType then {
                 if ptn.stringview == "this" then skipParam = true
             }
@@ -2840,7 +2888,7 @@ resolveFunction: function {
                             tid: gpt2
                         )
                     }
-                    pnid2: nodeId n: pm.operation
+                    pnid2: nodeId n: (nodes.get i: (pm.operation - 1).u64)
                     gpv2b: gpt2
                     ty.nodeType.set key: pnid2.u64 value: gpv2b
                 }
@@ -2852,7 +2900,7 @@ resolveFunction: function {
                     :nodes
                     :units
                     :unitName
-                    typeExpr: pm.operation
+                    typeExpr: (nodes.get i: (pm.operation - 1).u64)
                     :thisName
                 )
                 ty.setChild parentTypeId: fid childName: pname.stringview childTypeId: cid
@@ -2879,9 +2927,9 @@ resolveFunction: function {
                             funcname: ptn.stringview
                         )
                     } else {
-                        pdcn9: dottedChildName n: pm.operation
+                        pdcn9: dottedChildName n: (nodes.get i: (pm.operation - 1).u64)
                         if pdcn9.length > 0 when (isStripMarker name: pdcn9.stringview) == false then {
-                            prn9: rootNameOf n: pm.operation
+                            prn9: rootNameOf n: (nodes.get i: (pm.operation - 1).u64)
                             # a dotted numeric literal (0.u64) is a typed numeric
                             # default, not a variant arm (mirrors the field
                             # classifiers' rootNameOf guard)
@@ -2901,17 +2949,31 @@ resolveFunction: function {
                         }
                     }
                 }
-                if (paramIsThisReceiver op: pm.operation) then {
+                if (paramIsThisReceiver op: (nodes.get i: (pm.operation - 1).u64)) then {
                     reg.setThisParamName typeId: fid name: pname.stringview
                 }
-                recordTyperef :ty :reg :nodes :units :unitName :thisName node: pm.operation
-                pown: pathOwnership n: pm.operation
+                (recordTyperef
+                    :ty
+                    :reg
+                    :nodes
+                    :units
+                    :unitName
+                    :thisName
+                    node: (nodes.get i: (pm.operation - 1).u64)
+                )
+                pown: pathOwnership n: (nodes.get i: (pm.operation - 1).u64)
                 match (
                     pown
                 ) case some then {
                     ty.setChildOwnership parentTypeId: fid name: pname.stringview ownership: pown
                 } case none then {
-                    isref: paramIsBorrowReftype :ty :reg :unitName :thisName op: pm.operation
+                    isref: (paramIsBorrowReftype
+                        :ty
+                        :reg
+                        :unitName
+                        :thisName
+                        op: (nodes.get i: (pm.operation - 1).u64)
+                    )
                     if isref then {
                         (ty.setChildOwnership
                             parentTypeId: fid
@@ -2923,7 +2985,7 @@ resolveFunction: function {
             }
         } else null
     }
-    demandReturnType :reg :unitName o: fnode.returntype
+    demandReturnType :nodes :reg :unitName o: fnode.returntype
     recordReturnType :ty :reg :nodes :units :unitName :thisName o: fnode.returntype
     recordFuncReturnNode :ty :fid o: fnode.returntype
     stampGenericParamRef :ty :reg enclKey: enclKey.stringview o: fnode.returntype
@@ -3167,14 +3229,14 @@ attachMethods: function {
                 :unitName
                 qname: qname.stringview
                 thisName: defName
-                op: am.operation
+                op: (nodes.get i: (am.operation - 1).u64)
             )
             match (
                 mido
             ) case some then {
                 ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: mido
             } case none then {
-                cn: atomName n: am.operation
+                cn: atomName n: (nodes.get i: (am.operation - 1).u64)
                 if (isNumericLiteralName name: cn.stringview) then {
                     # A static constant's child is a per-constant NULL-unit
                     # clone of the literal's default type: named through the
@@ -3184,7 +3246,7 @@ attachMethods: function {
                     cid: reg.newType name: clname typetype: ztypes.ztypetype.recordType
                     ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: cid
                     ty.markAsConstClone typeId: cid
-                    cnid3: nodeId n: am.operation
+                    cnid3: nodeId n: (nodes.get i: (am.operation - 1).u64)
                     cidc: cid
                     ty.nodeType.set key: cnid3.u64 value: cidc
                 }
@@ -3197,7 +3259,7 @@ attachMethods: function {
                 :unitName
                 fnName: gfn.stringview
                 thisName: defName
-                op: am.operation
+                op: (nodes.get i: (am.operation - 1).u64)
             )
         } else null
     }
@@ -3250,11 +3312,19 @@ attachMarkers: function {
         match (
             mm
         ) case namedoperation then {
-            cnm: atomName n: mm.operation
+            cnm: atomName n: (nodes.get i: (mm.operation - 1).u64)
             if (isNumericLiteralName name: cnm.stringview) == false then {
-                recordTyperef :ty :reg :nodes :units :unitName thisName: "" node: mm.operation
+                (recordTyperef
+                    :ty
+                    :reg
+                    :nodes
+                    :units
+                    :unitName
+                    thisName: ""
+                    node: (nodes.get i: (mm.operation - 1).u64)
+                )
             }
-            mtid: markerTargetId :ty :reg :unitName op: mm.operation
+            mtid: markerTargetId :ty :reg :unitName op: (nodes.get i: (mm.operation - 1).u64)
             match (
                 mtid
             ) case some then {
@@ -3269,7 +3339,7 @@ attachMarkers: function {
                     label: mlbl.stringview
                 )
             } case none then {
-                if (isLabelValue op: mm.operation) then {
+                if (isLabelValue op: (nodes.get i: (mm.operation - 1).u64)) then {
                     amlbl: unitLabel o: mm.name
                     amlid: (resolveAtomType
                         :ty
@@ -3386,13 +3456,13 @@ isTypedefField: function {n: Node} out bool is {
 # recordIsTypedef -- true when a record's `is` body carries a single `X.typedef`
 # field. Such a record gets no field child and synthesizes `create`+`borrow`
 # instead of `create`/`==`/`!=`.
-recordIsTypedef: function {rnode: zast.ObjectDefData} out bool is {
+recordIsTypedef: function {nodes: List Node rnode: zast.ObjectDefData} out bool is {
     fiter: rnode.isItems.iterate
     for fm: fiter loop {
         match (
             fm
         ) case namedoperation then {
-            if (isTypedefField n: fm.operation) then return true
+            if (isTypedefField n: (nodes.get i: (fm.operation - 1).u64)) then return true
         } else null
     }
     return false
@@ -3415,7 +3485,7 @@ typedefFieldBaseName: function {n: Node} out String is {
 # parameterized ref as its instance mangling (`(List of: u8)` ->
 # "List_u8"), matching the shell/mono naming so member delegation finds
 # the minted instance.
-mangledTypeName: function {op: Node} out String is {
+mangledTypeName: function {nodes: List Node op: Node} out String is {
     match (
         op
     ) case atomid then {
@@ -3423,7 +3493,7 @@ mangledTypeName: function {op: Node} out String is {
     } case labelvalue then {
         return op.name.copy
     } case expression then {
-        return (mangledTypeName op: op.expression)
+        return (mangledTypeName :nodes op: op.expression)
     } case call then {
         base: atomName n: op.callable
         aiter: op.arguments.iterate
@@ -3431,7 +3501,7 @@ mangledTypeName: function {op: Node} out String is {
             match (
                 arg
             ) case namedoperation then {
-                an: atomName n: arg.operation
+                an: atomName n: (nodes.get i: (arg.operation - 1).u64)
                 if an.length > 0 then {
                     base.append s: "_"
                     base.append s: an.stringview
@@ -3448,13 +3518,13 @@ mangledTypeName: function {op: Node} out String is {
 
 # objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
 # field (the typedef wrapper base), or "" when the object is not a typedef.
-objectTypedefBase: function {onode: zast.ObjectDefData} out String is {
+objectTypedefBase: function {nodes: List Node onode: zast.ObjectDefData} out String is {
     fiter: onode.isItems.iterate
     for fm: fiter loop {
         match (
             fm
         ) case namedoperation then {
-            if (isTypedefField n: fm.operation) then return (typedefFieldBaseName n: fm.operation)
+            if (isTypedefField n: (nodes.get i: (fm.operation - 1).u64)) then return (typedefFieldBaseName n: (nodes.get i: (fm.operation - 1).u64))
         } else null
     }
     return "".string
@@ -3463,11 +3533,11 @@ objectTypedefBase: function {onode: zast.ObjectDefData} out String is {
 # typedefFieldMangledName -- the mangled instance name of an `X.typedef`
 # field's `X` (`(List of: u8).typedef` -> "List_u8"), the minted-mono key
 # member delegation resolves through.
-typedefFieldMangledName: function {n: Node} out String is {
+typedefFieldMangledName: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case dottedpath then {
-        return (mangledTypeName op: n.parent)
+        return (mangledTypeName :nodes op: n.parent)
     } else {
         return "".string
     }
@@ -3475,14 +3545,14 @@ typedefFieldMangledName: function {n: Node} out String is {
 
 # objectTypedefMangled -- the mangled base-instance name of an objectdef's
 # single `X.typedef` field, or "" when the object is not a typedef.
-objectTypedefMangled: function {onode: zast.ObjectDefData} out String is {
+objectTypedefMangled: function {nodes: List Node onode: zast.ObjectDefData} out String is {
     fiter: onode.isItems.iterate
     for fm: fiter loop {
         match (
             fm
         ) case namedoperation then {
-            if (isTypedefField n: fm.operation) then {
-                return (typedefFieldMangledName n: fm.operation)
+            if (isTypedefField n: (nodes.get i: (fm.operation - 1).u64)) then {
+                return (typedefFieldMangledName :nodes n: (nodes.get i: (fm.operation - 1).u64))
             }
         } else null
     }
@@ -3522,20 +3592,20 @@ resolveRecord: function {
     )
     rrid: rid
     reg.setValtype typeId: rid value: true
-    isgen: hasGenericParam items: rnode.asItems
+    isgen: hasGenericParam :nodes items: rnode.asItems
     if isgen then {
         reg.setGeneric typeId: rid value: true
         rtk: "\{unitName}.\{defName}"
-        registerGenericParams :reg typeKey: rtk.stringview items: rnode.asItems
+        registerGenericParams :nodes :reg typeKey: rtk.stringview items: rnode.asItems
     }
-    istd: recordIsTypedef :rnode
+    istd: recordIsTypedef :nodes :rnode
     if istd then {
-        tdb: objectTypedefBase onode: rnode
+        tdb: objectTypedefBase :nodes onode: rnode
         if tdb.length > 0 then {
             tdk: rid
             ty.typedefBaseName.set key: tdk value: tdb
         }
-        tdm: objectTypedefMangled onode: rnode
+        tdm: objectTypedefMangled :nodes onode: rnode
         if tdm.length > 0 then {
             tdk2: rid
             ty.typedefBaseMangled.set key: tdk2 value: tdm
@@ -3558,7 +3628,7 @@ resolveRecord: function {
                     :unitName
                     qname: qname.stringview
                     thisName: defName
-                    op: fm.operation
+                    op: (nodes.get i: (fm.operation - 1).u64)
                 )
                 match (
                     mido
@@ -3570,7 +3640,7 @@ resolveRecord: function {
                         ty.setChildFnptrField parentTypeId: rid name: fname.stringview
                     }
                 } case none then {
-                    ftnR9: fieldHeadName n: fm.operation
+                    ftnR9: fieldHeadName n: (nodes.get i: (fm.operation - 1).u64)
                     mkeyR9: "\{unitName}.\{defName}.\{ftnR9}"
                     mrefR9: resolvedByKey :ty :reg key: mkeyR9
                     handledR9: false
@@ -3585,10 +3655,10 @@ resolveRecord: function {
                         if (reg.typetypeOf typeId: mrefR9) == ztypes.ztypetype.functionType then {
                             ty.setChildFnptrField parentTypeId: rid name: fname.stringview
                         }
-                        pdkR9: nodeId n: fm.operation
+                        pdkR9: nodeId n: (nodes.get i: (fm.operation - 1).u64)
                         pdoR9: rid
                         ty.pendingDefaultOwner.set key: pdkR9.u64 value: pdoR9
-                        pdk2R9: nodeId n: fm.operation
+                        pdk2R9: nodeId n: (nodes.get i: (fm.operation - 1).u64)
                         pdiR9: mrefR9
                         ty.pendingDefaultId.set key: pdk2R9.u64 value: pdiR9
                         handledR9 = true
@@ -3600,7 +3670,7 @@ resolveRecord: function {
                             :nodes :units
                             :unitName
                             ownerId: 0
-                            typeExpr: fm.operation
+                            typeExpr: (nodes.get i: (fm.operation - 1).u64)
                             thisName: defName
                         )
                         ty.setChild parentTypeId: rid childName: fname.stringview childTypeId: cid
@@ -3614,10 +3684,10 @@ resolveRecord: function {
                             :units
                             :unitName
                             thisName: ""
-                            node: fm.operation
+                            node: (nodes.get i: (fm.operation - 1).u64)
                         )
-                        dcn1: dottedChildName n: fm.operation
-                        rdnr: rootNameOf n: fm.operation
+                        dcn1: dottedChildName n: (nodes.get i: (fm.operation - 1).u64)
+                        rdnr: rootNameOf n: (nodes.get i: (fm.operation - 1).u64)
                         if (isNumericLiteralName name: rdnr.stringview) then {
                             (ty.setChildDefault
                                 parentTypeId: rid
@@ -3635,11 +3705,11 @@ resolveRecord: function {
                         }
                         if dcn1.length > 0 when (isStripMarker name: dcn1.stringview) then {} else {
                             if dcn1.length > 0 then {
-                                rdk3: nodeId n: fm.operation
+                                rdk3: nodeId n: (nodes.get i: (fm.operation - 1).u64)
                                 rdo3: rid
                                 ty.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
-                                rdk4: nodeId n: fm.operation
-                                rdn4: rootNameOf n: fm.operation
+                                rdk4: nodeId n: (nodes.get i: (fm.operation - 1).u64)
+                                rdn4: rootNameOf n: (nodes.get i: (fm.operation - 1).u64)
                                 ty.pendingDefaultName.set key: rdk4.u64 value: rdn4
                             }
                         }
@@ -3702,8 +3772,8 @@ detectTagAccessor: function {
     armNames: Set String
     am: zast.NamedOperationData
 } is {
-    tp9: dottedParentName n: am.operation
-    tc9: dottedChildName n: am.operation
+    tp9: dottedParentName n: (nodes.get i: (am.operation - 1).u64)
+    tc9: dottedChildName n: (nodes.get i: (am.operation - 1).u64)
     if tc9.stringview != "tag" then return
     if (isNumericTypeName name: tp9.stringview) == false then return
     mname9: unitLabel o: am.name
@@ -3713,7 +3783,7 @@ detectTagAccessor: function {
         :nodes :units
         :unitName
         ownerId: 0
-        typeExpr: am.operation
+        typeExpr: (nodes.get i: (am.operation - 1).u64)
         thisName: defName
     )
     if nid9 == 0 then return
@@ -3752,11 +3822,11 @@ resolveVariant: function {
     )
     vvid: vid
     reg.setValtype typeId: vid value: true
-    isgen: hasGenericParam items: vnode.asItems
+    isgen: hasGenericParam :nodes items: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: vid value: true
         gtk9: "\{unitName}.\{defName}"
-        registerGenericParams :reg typeKey: gtk9.stringview items: vnode.asItems
+        registerGenericParams :nodes :reg typeKey: gtk9.stringview items: vnode.asItems
     }
     armNames9: (Set String)
     fiter: vnode.isItems.iterate
@@ -3784,15 +3854,23 @@ resolveVariant: function {
                 :nodes :units
                 :unitName
                 ownerId: 0
-                typeExpr: fm.operation
+                typeExpr: (nodes.get i: (fm.operation - 1).u64)
                 thisName: defName
             )
             ty.setChild parentTypeId: vid childName: aname.stringview childTypeId: cid
-            recordTyperef :ty :reg :nodes :units :unitName thisName: "" node: fm.operation
+            (recordTyperef
+                :ty
+                :reg
+                :nodes
+                :units
+                :unitName
+                thisName: ""
+                node: (nodes.get i: (fm.operation - 1).u64)
+            )
         } else null
     }
     if (isgen) == false then {
-        customTagV: unionCustomTagId :ty :reg :unitName uid: vid asItems: vnode.asItems
+        customTagV: unionCustomTagId :nodes :ty :reg :unitName uid: vid asItems: vnode.asItems
         tagId: u64
         match (
             customTagV
@@ -3818,7 +3896,7 @@ resolveVariant: function {
                 :unitName
                 qname: qname.stringview
                 thisName: defName
-                op: am.operation
+                op: (nodes.get i: (am.operation - 1).u64)
             )
             match (
                 mido
@@ -3918,6 +3996,7 @@ dottedTyperefId: function {st: zenv.ZSymbolTable op: Node} out u64 is {
 # item whose `<data>` resolves to an in-unit DATA type. Returns that DATA's type id;
 # none when absent or not a DATA (the union then synthesizes its own tag wrapper).
 unionCustomTagId: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
@@ -3931,7 +4010,7 @@ unionCustomTagId: function {
         ) case namedoperation then {
             nm: unitLabel o: am.name
             if nm.stringview == "tag" then {
-                pn: dottedParentName n: am.operation
+                pn: dottedParentName n: (nodes.get i: (am.operation - 1).u64)
                 if pn.length != 0 then {
                     rr: walkLookupTyperef :ty :reg currentUnit: unitName base: pn.stringview
                     match (
@@ -3956,7 +4035,7 @@ unionCustomTagId: function {
                                 match (
                                     tgo
                                 ) case some then {
-                                    tnid0: innermostNodeId n: am.operation
+                                    tnid0: innermostNodeId n: (nodes.get i: (am.operation - 1).u64)
                                     ty.nodeType.set key: tnid0.u64 value: tgo
                                 } case none then null
                             }
@@ -3969,7 +4048,7 @@ unionCustomTagId: function {
                         pv: pn.copy
                         ty.pendingCustomTag.set key: uk value: pv
                         uk2: uid
-                        pnid9: innermostNodeId n: am.operation
+                        pnid9: innermostNodeId n: (nodes.get i: (am.operation - 1).u64)
                         pnv9: pnid9.u64
                         ty.pendingCustomTagNode.set key: uk2 value: pnv9
                     }
@@ -4005,11 +4084,11 @@ resolveUnion: function {
     )
     uuid: uid
     reg.setValtype typeId: uid value: false
-    isgen: hasGenericParam items: vnode.asItems
+    isgen: hasGenericParam :nodes items: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: uid value: true
         gtk9: "\{unitName}.\{defName}"
-        registerGenericParams :reg typeKey: gtk9.stringview items: vnode.asItems
+        registerGenericParams :nodes :reg typeKey: gtk9.stringview items: vnode.asItems
     }
     allNull: true
     armNames9: (Set String)
@@ -4032,7 +4111,7 @@ resolveUnion: function {
                 )
             }
             armNames9.add item: aname.copy
-            an: atomName n: fm.operation
+            an: atomName n: (nodes.get i: (fm.operation - 1).u64)
             if an.stringview != "null" then allNull = false
             cid: (resolveTyperefShellMarked
                 :ty
@@ -4040,15 +4119,23 @@ resolveUnion: function {
                 :nodes :units
                 :unitName
                 ownerId: 0
-                typeExpr: fm.operation
+                typeExpr: (nodes.get i: (fm.operation - 1).u64)
                 thisName: defName
             )
             ty.setChild parentTypeId: uid childName: aname.stringview childTypeId: cid
-            recordTyperef :ty :reg :nodes :units :unitName thisName: "" node: fm.operation
+            (recordTyperef
+                :ty
+                :reg
+                :nodes
+                :units
+                :unitName
+                thisName: ""
+                node: (nodes.get i: (fm.operation - 1).u64)
+            )
         } else null
     }
     if (isgen) == false then {
-        customTag: unionCustomTagId :ty :reg :unitName :uid asItems: vnode.asItems
+        customTag: unionCustomTagId :nodes :ty :reg :unitName :uid asItems: vnode.asItems
         tagId: u64
         match (
             customTag
@@ -4074,7 +4161,7 @@ resolveUnion: function {
                 :unitName
                 qname: qname.stringview
                 thisName: defName
-                op: am.operation
+                op: (nodes.get i: (am.operation - 1).u64)
             )
             match (
                 mido
@@ -4205,15 +4292,15 @@ resolveClass: function {
     ccid: cid
     reg.setValtype typeId: cid value: false
     needsDtor: false
-    isgen: hasGenericParam items: cnode.asItems
+    isgen: hasGenericParam :nodes items: cnode.asItems
     if isgen then {
         reg.setGeneric typeId: cid value: true
         gtk9: "\{unitName}.\{defName}"
-        registerGenericParams :reg typeKey: gtk9.stringview items: cnode.asItems
+        registerGenericParams :nodes :reg typeKey: gtk9.stringview items: cnode.asItems
     }
-    istd: recordIsTypedef rnode: cnode
+    istd: recordIsTypedef :nodes rnode: cnode
     if istd then {
-        tdbase: objectTypedefBase onode: cnode
+        tdbase: objectTypedefBase :nodes onode: cnode
         if (fieldTypeNeedsCleanup
             :ty
             :reg
@@ -4226,7 +4313,7 @@ resolveClass: function {
             tdk3: cid
             ty.typedefBaseName.set key: tdk3 value: tdbase
         }
-        tdm3: objectTypedefMangled onode: cnode
+        tdm3: objectTypedefMangled :nodes onode: cnode
         if tdm3.length > 0 then {
             tdk4: cid
             ty.typedefBaseMangled.set key: tdk4 value: tdm3
@@ -4237,13 +4324,13 @@ resolveClass: function {
         match (
             fm
         ) case namedoperation then {
-            if (isFunctionDefOp op: fm.operation) then {
+            if (isFunctionDefOp op: (nodes.get i: (fm.operation - 1).u64)) then {
                 fname: unitLabel o: fm.name
                 prodM4: false
                 if (isgen) == false then {
                     prodM4 = true
                 } else {
-                    if (functiondefIsNative op: fm.operation) == false then {
+                    if (functiondefIsNative op: (nodes.get i: (fm.operation - 1).u64)) == false then {
                         prodM4 = true
                     } else {
                         # Flipped collection families resolve their native
@@ -4273,7 +4360,7 @@ resolveClass: function {
                         :unitName
                         qname: qname.stringview
                         thisName: defName
-                        op: fm.operation
+                        op: (nodes.get i: (fm.operation - 1).u64)
                     )
                     match (
                         mido
@@ -4287,9 +4374,9 @@ resolveClass: function {
                 }
             } else {
                 fname: unitLabel o: fm.name
-                ftn: fieldHeadName n: fm.operation
+                ftn: fieldHeadName n: (nodes.get i: (fm.operation - 1).u64)
                 lockField: false
-                flock0: pathOwnership n: fm.operation
+                flock0: pathOwnership n: (nodes.get i: (fm.operation - 1).u64)
                 match (
                     flock0
                 ) case some then {
@@ -4307,14 +4394,14 @@ resolveClass: function {
                     if lockField then ty.setChildLockField parentTypeId: cid name: fname.stringview
                     # a sibling-member ref default: the construction fill
                     # stamps the default's node with the member's type.
-                    pdk: nodeId n: fm.operation
+                    pdk: nodeId n: (nodes.get i: (fm.operation - 1).u64)
                     pdo: cid
                     ty.pendingDefaultOwner.set key: pdk.u64 value: pdo
-                    pdk2: nodeId n: fm.operation
+                    pdk2: nodeId n: (nodes.get i: (fm.operation - 1).u64)
                     pdi: mref
                     ty.pendingDefaultId.set key: pdk2.u64 value: pdi
                 } case none then {
-                    if (isTypedefField n: fm.operation) then {
+                    if (isTypedefField n: (nodes.get i: (fm.operation - 1).u64)) then {
                         # No field child for the wrapper, but the inner refs
                         # (the u8 in `(List of: u8).typedef`) still stamp.
                         (recordTyperef
@@ -4324,7 +4411,7 @@ resolveClass: function {
                             :units
                             :unitName
                             thisName: ""
-                            node: fm.operation
+                            node: (nodes.get i: (fm.operation - 1).u64)
                         )
                     } else {
                         if fname.stringview != "_resume_input" then {
@@ -4343,7 +4430,7 @@ resolveClass: function {
                             :nodes :units
                             :unitName
                             ownerId: cid
-                            typeExpr: fm.operation
+                            typeExpr: (nodes.get i: (fm.operation - 1).u64)
                             thisName: defName
                         )
                         ty.setChild parentTypeId: cid childName: fname.stringview childTypeId: cidf
@@ -4360,10 +4447,10 @@ resolveClass: function {
                             :units
                             :unitName
                             thisName: ""
-                            node: fm.operation
+                            node: (nodes.get i: (fm.operation - 1).u64)
                         )
-                        dcn0: dottedChildName n: fm.operation
-                        rdnc: rootNameOf n: fm.operation
+                        dcn0: dottedChildName n: (nodes.get i: (fm.operation - 1).u64)
+                        rdnc: rootNameOf n: (nodes.get i: (fm.operation - 1).u64)
                         if (isNumericLiteralName name: rdnc.stringview) then {
                             (ty.setChildDefault
                                 parentTypeId: cid
@@ -4381,11 +4468,11 @@ resolveClass: function {
                         }
                         if dcn0.length > 0 when (isStripMarker name: dcn0.stringview) then {} else {
                             if dcn0.length > 0 then {
-                                rdk: nodeId n: fm.operation
+                                rdk: nodeId n: (nodes.get i: (fm.operation - 1).u64)
                                 rdo: cid
                                 ty.pendingDefaultOwner.set key: rdk.u64 value: rdo
-                                rdk2: nodeId n: fm.operation
-                                rdn: rootNameOf n: fm.operation
+                                rdk2: nodeId n: (nodes.get i: (fm.operation - 1).u64)
+                                rdn: rootNameOf n: (nodes.get i: (fm.operation - 1).u64)
                                 ty.pendingDefaultName.set key: rdk2.u64 value: rdn
                             }
                         }
@@ -4402,10 +4489,10 @@ resolveClass: function {
         match (
             amP4
         ) case namedoperation then {
-            if (isFunctionDefOp op: amP4.operation) then {
+            if (isFunctionDefOp op: (nodes.get i: (amP4.operation - 1).u64)) then {
                 afnP4: unitLabel o: amP4.name
                 prodA4: false
-                if isgen when (functiondefIsNative op: amP4.operation) then {
+                if isgen when (functiondefIsNative op: (nodes.get i: (amP4.operation - 1).u64)) then {
                     famA4: false
                     if defName == "ListIter" then famA4 = true
                     if defName == "SetIter" then famA4 = true
@@ -4428,7 +4515,7 @@ resolveClass: function {
                         :unitName
                         qname: aqnP4.stringview
                         thisName: defName
-                        op: amP4.operation
+                        op: (nodes.get i: (amP4.operation - 1).u64)
                     )
                     match (
                         amidP4
@@ -4515,7 +4602,7 @@ resolveFacet: function {
     )
     ffid: fid
     reg.setValtype typeId: fid value: true
-    isgen: hasGenericParam items: fnode.isItems
+    isgen: hasGenericParam :nodes items: fnode.isItems
     if isgen then reg.setGeneric typeId: fid value: true
     specThisStr: defName.string
     dropThis: true
@@ -4543,7 +4630,7 @@ resolveFacet: function {
                 :unitName
                 qname: qname.stringview
                 thisName: specThisStr.stringview
-                op: sm.operation
+                op: (nodes.get i: (sm.operation - 1).u64)
                 skipThis: dropThis
             )
             match (
@@ -4585,7 +4672,7 @@ resolveProtocol: function {
     )
     ppid: pid
     reg.setValtype typeId: pid value: false
-    isgen: hasGenericParam items: fnode.isItems
+    isgen: hasGenericParam :nodes items: fnode.isItems
     if isgen then reg.setGeneric typeId: pid value: true
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
@@ -4622,7 +4709,7 @@ resolveProtocol: function {
                 :unitName
                 qname: qname.stringview
                 thisName: specThisStr.stringview
-                op: sm.operation
+                op: (nodes.get i: (sm.operation - 1).u64)
                 skipThis: dropThis
             )
             match (
@@ -4699,7 +4786,15 @@ descendIntoUnit: function {
         ) case namedoperation then {
             dn9: unitLabel o: bm9.name
             if dn9.stringview == defName then {
-                resolveDef :ty :reg :nodes :units :unitName :defName defn: bm9.operation
+                (resolveDef
+                    :ty
+                    :reg
+                    :nodes
+                    :units
+                    :unitName
+                    :defName
+                    defn: (nodes.get i: (bm9.operation - 1).u64)
+                )
             }
         } else null
     } else null
@@ -4782,7 +4877,7 @@ descendNamed: function {
             unitName: defUnit
             defName: name
             bodyIdx: bidx9
-            unitdef: ue9.operation
+            unitdef: (nodes.get i: (ue9.operation - 1).u64)
         )
     } else null
     ty.suppressSigStamp = sup9
@@ -5087,7 +5182,7 @@ resolveUnitBody: function {
                 match (
                     gm
                 ) case namedoperation then {
-                    if (isBareGenericParam op: gm.operation) then {
+                    if (isBareGenericParam op: (nodes.get i: (gm.operation - 1).u64)) then {
                         gpn0: unitLabel o: gm.name
                         gtid0: u64
                         gpo0: reg.genericParamTidOf typeKey: unitName paramName: gpn0.stringview
@@ -5108,7 +5203,7 @@ resolveUnitBody: function {
                         }
                         gtidK0: gtid0
                         ty.definedInUnit.set key: gtidK0 value: unitName.string
-                        gpnid: nodeId n: gm.operation
+                        gpnid: nodeId n: (nodes.get i: (gm.operation - 1).u64)
                         gtidV0: gtid0
                         ty.nodeType.set key: gpnid.u64 value: gtidV0
                     }
@@ -5146,7 +5241,12 @@ resolveUnitBody: function {
                         match (
                             mem2
                         ) case namedoperation then {
-                            recordConformerContexts :ty defName: cnm2.stringview op: mem2.operation
+                            (recordConformerContexts
+                                :nodes
+                                :ty
+                                defName: cnm2.stringview
+                                op: (nodes.get i: (mem2.operation - 1).u64)
+                            )
                         } else null
                     }
                 }
@@ -5162,19 +5262,19 @@ resolveUnitBody: function {
                 defName: unitLabel o: bm.name
                 eager: true
                 if full then {
-                    if (isFunctionDefOp op: bm.operation) == false then {
-                        if (isUnitOp op: bm.operation) == false then eager = false
+                    if (isFunctionDefOp op: (nodes.get i: (bm.operation - 1).u64)) == false then {
+                        if (isUnitOp op: (nodes.get i: (bm.operation - 1).u64)) == false then eager = false
                     }
                 }
                 if eager then {
-                    if (isUnitOp op: bm.operation) then {
+                    if (isUnitOp op: (nodes.get i: (bm.operation - 1).u64)) then {
                         (resolveInlineGenericUnit
                             :ty
                             :reg
                             :nodes :units
                             :unitName
                             defName: defName.stringview
-                            unitOp: bm.operation
+                            unitOp: (nodes.get i: (bm.operation - 1).u64)
                         )
                     } else {
                         rkeyE: "\{unitName}.\{defName}"
@@ -5185,7 +5285,7 @@ resolveUnitBody: function {
                                 :nodes :units
                                 :unitName
                                 defName: defName.stringview
-                                defn: bm.operation
+                                defn: (nodes.get i: (bm.operation - 1).u64)
                             )
                         }
                     }
@@ -5233,7 +5333,7 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
             ) case namedoperation then {
                 nm: unitLabel o: ru.name
                 uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.unitType
-                opid: unitdefNodeId n: ru.operation
+                opid: unitdefNodeId n: (program.nodes.get i: (ru.operation - 1).u64)
                 ty.unitTypesById.set key: opid.u64 value: uid
                 uid3: uid
                 reg.setUnitName name: nm.stringview uid: uid3
@@ -5296,6 +5396,7 @@ nativeOnlyBodyError: function {
 # nativeOnlyCheckOp -- one unit member: a bodied top-level function errors
 # directly; a type's is/as members are scanned for bodied methods.
 nativeOnlyCheckOp: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     unitName: StringView
     defName: StringView
@@ -5310,16 +5411,16 @@ nativeOnlyCheckOp: function {
             match (
                 im9
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: im9.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (im9.operation - 1).u64)) then {
                     in9: unitLabel o: im9.name
                     mn9: "\{defName}.\{in9}"
                     (nativeOnlyBodyError
                         :ty
                         :unitName
                         fnName: mn9.stringview
-                        nodeid: (nodeId n: im9.operation)
-                        lineno: (nodeLine n: im9.operation)
-                        colno: (nodeCol n: im9.operation)
+                        nodeid: (nodeId n: (nodes.get i: (im9.operation - 1).u64))
+                        lineno: (nodeLine n: (nodes.get i: (im9.operation - 1).u64))
+                        colno: (nodeCol n: (nodes.get i: (im9.operation - 1).u64))
                     )
                 }
             } else null
@@ -5328,16 +5429,16 @@ nativeOnlyCheckOp: function {
             match (
                 am9
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: am9.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (am9.operation - 1).u64)) then {
                     an9: unitLabel o: am9.name
                     amn9: "\{defName}.\{an9}"
                     (nativeOnlyBodyError
                         :ty
                         :unitName
                         fnName: amn9.stringview
-                        nodeid: (nodeId n: am9.operation)
-                        lineno: (nodeLine n: am9.operation)
-                        colno: (nodeCol n: am9.operation)
+                        nodeid: (nodeId n: (nodes.get i: (am9.operation - 1).u64))
+                        lineno: (nodeLine n: (nodes.get i: (am9.operation - 1).u64))
+                        colno: (nodeCol n: (nodes.get i: (am9.operation - 1).u64))
                     )
                 }
             } else null
@@ -5365,7 +5466,13 @@ checkNativeOnlyUnitBodies: function {
                 dm9
             ) case namedoperation then {
                 dn9: unitLabel o: dm9.name
-                nativeOnlyCheckOp :ty :unitName defName: dn9.stringview op: dm9.operation
+                (nativeOnlyCheckOp
+                    :nodes
+                    :ty
+                    :unitName
+                    defName: dn9.stringview
+                    op: (nodes.get i: (dm9.operation - 1).u64)
+                )
             } else null
         }
     } else null
@@ -5382,7 +5489,7 @@ unitHasBodiedFreeFn: function {nodes: List Node unitdef: Node} out bool is {
             match (
                 bm9
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: bm9.operation) then return true
+                if (isFunctionDefWithBody o: (nodes.get i: (bm9.operation - 1).u64)) then return true
             } else null
         }
     } else null
@@ -5408,7 +5515,7 @@ unitHasDemandedBodiedFn: function {
             match (
                 bm9
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: bm9.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (bm9.operation - 1).u64)) then {
                     bn9: unitLabel o: bm9.name
                     bk9: "\{unitName}.\{bn9}"
                     ro9: resolvedByKey :ty :reg key: bk9
@@ -5453,7 +5560,7 @@ registerAndResolveMain: function {
                         :ty
                         nodes: program.nodes
                         unitName: nm.stringview
-                        unitdef: mu.operation
+                        unitdef: (program.nodes.get i: (mu.operation - 1).u64)
                     )
                 }
                 eager9: isFileUnit name: nm.stringview
@@ -5463,7 +5570,7 @@ registerAndResolveMain: function {
                     if (eager9) == false then (demandAllUnitDefs
                         :reg
                         nodes: program.nodes
-                        unitdef: mu.operation
+                        unitdef: (program.nodes.get i: (mu.operation - 1).u64)
                     )
                     eager9 = true
                 }
@@ -5477,7 +5584,7 @@ registerAndResolveMain: function {
                         if (nm.stringview == mainName) == false then {
                             if (unitDefIsGeneric
                                 nodes: program.nodes
-                                o: mu.operation
+                                o: (program.nodes.get i: (mu.operation - 1).u64)
                             ) == false then supp = true
                         }
                     }
@@ -5488,7 +5595,7 @@ registerAndResolveMain: function {
                         nodes: program.nodes
                                 units: program.units
                         unitName: nm.stringview
-                        unitdef: mu.operation
+                        unitdef: (program.nodes.get i: (mu.operation - 1).u64)
                         :full
                     )
                     ty.suppressSigStamp = false
@@ -5550,7 +5657,7 @@ resolveDemandedUnitBody: function {
                                 :nodes :units
                                 :unitName
                                 defName: dn.stringview
-                                defn: bm.operation
+                                defn: (nodes.get i: (bm.operation - 1).u64)
                             )
                         }
                     }
@@ -5577,7 +5684,7 @@ isConformanceMarker: function {op: Node} out bool is {
 
 # declaresConformance -- true when an objectdef declares conformance via an as-item
 # (the oracle eager-resolves such collections types on first touch of the unit).
-declaresConformance: function {op: Node} out bool is {
+declaresConformance: function {nodes: List Node op: Node} out bool is {
     match (
         op
     ) case objectdef then {
@@ -5586,7 +5693,7 @@ declaresConformance: function {op: Node} out bool is {
             match (
                 cm
             ) case namedoperation then {
-                if (isConformanceMarker op: cm.operation) then return true
+                if (isConformanceMarker op: (nodes.get i: (cm.operation - 1).u64)) then return true
             } else null
         }
         return false
@@ -5614,7 +5721,7 @@ resolveConformanceDefs: function {
             match (
                 bm
             ) case namedoperation then {
-                if (declaresConformance op: bm.operation) then {
+                if (declaresConformance :nodes op: (nodes.get i: (bm.operation - 1).u64)) then {
                     dn: unitLabel o: bm.name
                     rkey: "\{unitName}.\{dn}"
                     if (ty.definedKeys.has item: rkey) == false then {
@@ -5624,7 +5731,7 @@ resolveConformanceDefs: function {
                             :nodes :units
                             :unitName
                             defName: dn.stringview
-                            defn: bm.operation
+                            defn: (nodes.get i: (bm.operation - 1).u64)
                         )
                     }
                 }
@@ -5698,31 +5805,31 @@ seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
 # stampCtorDefaults -- a construction fills unprovided defaulted fields: the
 # default's node stamps its resolved member/parent type, once the owner has
 # actually been constructed (full-mode body walk).
-stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
-    nodes: (List u64)
+stampCtorDefaults: function {nodes: List Node st: zenv.ZSymbolTable unitName: StringView} is {
+    dnids9: (List u64)
     owners: (List u64)
     with diter: st.typing.pendingDefaultOwner.iterateItems do for de: diter loop {
         dk: de.key
-        nodes.append dk
+        dnids9.append dk
         dv: de.value
         owners.append dv
     }
     di: u64
-    dn: nodes.length
+    dn: dnids9.length
     for di < dn loop {
         ow: owners.get i: di
         cgot: st.typing.constructedTypes.get key: ow
         isCon: optBoolOr o: cgot d: false
         if isCon then {
-            nd: nodes.get i: di
+            nd: dnids9.get i: di
             ido: st.typing.pendingDefaultId.get key: nd
             idv: optU64Or o: ido d: 0
             if idv > 0 then {
-                nd2: nodes.get i: di
+                nd2: dnids9.get i: di
                 setd2: idv
                 st.typing.nodeType.set key: nd2 value: setd2
             } else {
-                nd3: nodes.get i: di
+                nd3: dnids9.get i: di
                 ng9: copiedMapStr m: st.typing.pendingDefaultName key: nd3
                 if ng9.length > 0 then {
                     nrt: (optU64Or
@@ -5735,7 +5842,7 @@ stampCtorDefaults: function {st: zenv.ZSymbolTable unitName: StringView} is {
                         d: 0
                     )
                     if nrt > 0 then {
-                        nd4: nodes.get i: di
+                        nd4: dnids9.get i: di
                         setd4: nrt
                         st.typing.nodeType.set key: nd4 value: setd4
                     }
@@ -5867,7 +5974,7 @@ isFunctionDefWithBody: function {o: Node} out bool is {
 
 # objectHasMethodBody -- true when an objectdef holds at least one is/as-item method
 # with a body. Scans both blocks (transient iterators over different lists).
-objectHasMethodBody: function {op: Node} out bool is {
+objectHasMethodBody: function {nodes: List Node op: Node} out bool is {
     match (
         op
     ) case objectdef then {
@@ -5876,7 +5983,7 @@ objectHasMethodBody: function {op: Node} out bool is {
             match (
                 im
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: im.operation) then return true
+                if (isFunctionDefWithBody o: (nodes.get i: (im.operation - 1).u64)) then return true
             } else null
         }
         aiter: op.asItems.iterate
@@ -5884,7 +5991,7 @@ objectHasMethodBody: function {op: Node} out bool is {
             match (
                 am
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: am.operation) then return true
+                if (isFunctionDefWithBody o: (nodes.get i: (am.operation - 1).u64)) then return true
             } else null
         }
         return false
@@ -5904,7 +6011,10 @@ unitHasObjectMethodBody: function {nodes: List Node def: Node} out bool is {
             match (
                 bm
             ) case namedoperation then {
-                if (objectHasMethodBody op: bm.operation) then return true
+                if (objectHasMethodBody
+                    :nodes
+                    op: (nodes.get i: (bm.operation - 1).u64)
+                ) then return true
             } else null
         }
         return false
@@ -5922,15 +6032,15 @@ unitHasObjectMethodBody: function {nodes: List Node def: Node} out bool is {
 # expression/statement subtree (full-mode body-walk pre-pass): `return` pulls
 # return+never, any other bare-atom callable (e.g. `print`) is demanded by name
 # so the cross-unit pass resolves it before the walk runs.
-scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
+scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node} is {
     match (
         node
     ) case statement then {
-        for stm: node.statements.iterate loop scanCallsInNode :reg node: stm
+        for stm: node.statements.iterate loop scanCallsInNode :nodes :reg node: stm
     } case statementline then {
-        scanCallsInNode :reg node: node.statementline
+        scanCallsInNode :nodes :reg node: node.statementline
     } case expression then {
-        scanCallsInNode :reg node: node.expression
+        scanCallsInNode :nodes :reg node: node.expression
     } case call then {
         cn: atomName n: node.callable
         if cn.stringview == "return" then {
@@ -5943,16 +6053,16 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             if cn.stringview == "panic" then reg.recordDemand name: "never"
             if cn.length > 0 then reg.recordDemand name: cn.stringview
         }
-        scanCallsInNode :reg node: node.callable
+        scanCallsInNode :nodes :reg node: node.callable
         for arg: node.arguments.iterate loop {
             match (
                 arg
             ) case namedoperation then {
-                scanCallsInNode :reg node: arg.operation
+                scanCallsInNode :nodes :reg node: (nodes.get i: (arg.operation - 1).u64)
             } else null
         }
     } case atomstring then {
-        for sp: node.stringparts.iterate loop scanCallsInNode :reg node: sp
+        for sp: node.stringparts.iterate loop scanCallsInNode :nodes :reg node: sp
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
@@ -5960,40 +6070,40 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
             reg.recordDemand name: node.name.stringview
         }
     } case binop then {
-        scanCallsInNode :reg node: node.lhs
-        scanCallsInNode :reg node: node.rhs
+        scanCallsInNode :nodes :reg node: node.lhs
+        scanCallsInNode :nodes :reg node: node.rhs
     } case assignment then {
-        scanCallsInNode :reg node: node.value
+        scanCallsInNode :nodes :reg node: node.value
     } case reassignment then {
-        scanCallsInNode :reg node: node.topath
-        scanCallsInNode :reg node: node.value
+        scanCallsInNode :nodes :reg node: node.topath
+        scanCallsInNode :nodes :reg node: node.value
     } case ifexpr then {
-        for cl: node.clauses.iterate loop scanCallsInNode :reg node: cl
-        scanBodyOpt :reg bodyOpt: node.elseclause
+        for cl: node.clauses.iterate loop scanCallsInNode :nodes :reg node: cl
+        scanBodyOpt :nodes :reg bodyOpt: node.elseclause
     } case forexpr then {
         reg.recordDemand name: "never"
         for fc: node.conditions.iterate loop {
             match (
                 fc
             ) case namedoperation then {
-                scanCallsInNode :reg node: fc.operation
+                scanCallsInNode :nodes :reg node: (nodes.get i: (fc.operation - 1).u64)
             } else null
         }
-        scanBodyOpt :reg bodyOpt: node.body
+        scanBodyOpt :nodes :reg bodyOpt: node.body
         for fp: node.postconditions.iterate loop {
             match (
                 fp
             ) case namedoperation then {
-                scanCallsInNode :reg node: fp.operation
+                scanCallsInNode :nodes :reg node: (nodes.get i: (fp.operation - 1).u64)
             } else null
         }
     } case doexpr then {
         reg.recordDemand name: "never"
         if (blockHasBreak n: node.statement) then reg.recordDemand name: "optionval"
-        scanCallsInNode :reg node: node.statement
+        scanCallsInNode :nodes :reg node: node.statement
     } case withexpr then {
-        scanCallsInNode :reg node: node.value
-        scanCallsInNode :reg node: node.body
+        scanCallsInNode :nodes :reg node: node.value
+        scanCallsInNode :nodes :reg node: node.body
     } case dottedpath then {
         bn: atomName n: node.parent
         if bn.length > 0 then {
@@ -6010,49 +6120,53 @@ scanCallsInNode: function {reg: ztypes.ZTypeRegistry node: Node} is {
                 if mn0.length > 0 then reg.recordDemand name: mn0.stringview
             }
         }
-        scanCallsInNode :reg node: node.parent
+        scanCallsInNode :nodes :reg node: node.parent
     } case caseexpr then {
-        scanCallsInNode :reg node: node.subject
-        for cl: node.clauses.iterate loop scanCallsInNode :reg node: cl
-        scanBodyOpt :reg bodyOpt: node.elseclause
+        scanCallsInNode :nodes :reg node: node.subject
+        for cl: node.clauses.iterate loop scanCallsInNode :nodes :reg node: cl
+        scanBodyOpt :nodes :reg bodyOpt: node.elseclause
     } case caseclause then {
-        scanCallsInNode :reg node: node.statement
+        scanCallsInNode :nodes :reg node: node.statement
     } case ifclause then {
         for cnd: node.conditions.iterate loop {
             match (
                 cnd
             ) case namedoperation then {
-                scanCallsInNode :reg node: cnd.operation
+                scanCallsInNode :nodes :reg node: (nodes.get i: (cnd.operation - 1).u64)
             } else null
         }
-        scanCallsInNode :reg node: node.statement
+        scanCallsInNode :nodes :reg node: node.statement
     } else null
 }
 
 # scanBodyOpt -- scan an optional function body for call demands.
-scanBodyOpt: function {reg: ztypes.ZTypeRegistry bodyOpt: Option Node} is {
+scanBodyOpt: function {nodes: List Node reg: ztypes.ZTypeRegistry bodyOpt: Option Node} is {
     match (
         bodyOpt
     ) case some then {
-        scanCallsInNode :reg node: bodyOpt
+        scanCallsInNode :nodes :reg node: bodyOpt
     } case none then null
 }
 
 # scanDefCalls -- scan a functiondef's body, or an objectdef's is/as method
 # bodies, for call demands. A type constructed only inside a method body must be
 # demanded here or it never resolves and the construction stamps type 0.
-scanDefCalls: function {reg: ztypes.ZTypeRegistry op: Node} is {
+scanDefCalls: function {nodes: List Node reg: ztypes.ZTypeRegistry op: Node} is {
     match (
         op
     ) case functiondef then {
-        scanBodyOpt :reg bodyOpt: op.body
+        scanBodyOpt :nodes :reg bodyOpt: op.body
     } case objectdef then {
         iiter: op.isItems.iterate
         for im: iiter loop {
             match (
                 im
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: im.operation) then scanDefCalls :reg op: im.operation
+                if (isFunctionDefWithBody o: (nodes.get i: (im.operation - 1).u64)) then (scanDefCalls
+                    :nodes
+                    :reg
+                    op: (nodes.get i: (im.operation - 1).u64)
+                )
             } else null
         }
         aiter: op.asItems.iterate
@@ -6060,7 +6174,11 @@ scanDefCalls: function {reg: ztypes.ZTypeRegistry op: Node} is {
             match (
                 am
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: am.operation) then scanDefCalls :reg op: am.operation
+                if (isFunctionDefWithBody o: (nodes.get i: (am.operation - 1).u64)) then (scanDefCalls
+                    :nodes
+                    :reg
+                    op: (nodes.get i: (am.operation - 1).u64)
+                )
             } else null
         }
     } else null
@@ -6084,9 +6202,12 @@ scanDemandedDepClassBodies: function {reg: ztypes.ZTypeRegistry nodes: List Node
             ) case namedoperation then {
                 cn: unitLabel o: bm.name
                 if (reg.isDemanded name: cn.stringview) then {
-                    hasm: objectdefHasMethodBodies op: bm.operation
-                    if hasm when (objectdefIsGeneric o: bm.operation) then hasm = false
-                    if hasm then scanDefCalls :reg op: bm.operation
+                    hasm: objectdefHasMethodBodies :nodes op: (nodes.get i: (bm.operation - 1).u64)
+                    if hasm when (objectdefIsGeneric
+                        :nodes
+                        o: (nodes.get i: (bm.operation - 1).u64)
+                    ) then hasm = false
+                    if hasm then scanDefCalls :nodes :reg op: (nodes.get i: (bm.operation - 1).u64)
                 }
             } else null
         }
@@ -6110,7 +6231,11 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
                 nm: unitLabel o: u.name
                 eager9: isFileUnit name: nm.stringview
                 if nm.stringview == mainName then eager9 = true
-                if eager9 then scanUnitCalls :reg nodes: program.nodes unitdef: u.operation
+                if eager9 then (scanUnitCalls
+                    :reg
+                    nodes: program.nodes
+                    unitdef: (program.nodes.get i: (u.operation - 1).u64)
+                )
             } else null
         }
     } else null
@@ -6126,7 +6251,7 @@ scanUnitCalls: function {reg: ztypes.ZTypeRegistry nodes: List Node unitdef: Nod
             match (
                 bm
             ) case namedoperation then {
-                scanDefCalls :reg op: bm.operation
+                scanDefCalls :nodes :reg op: (nodes.get i: (bm.operation - 1).u64)
             } else null
         }
     } else null
@@ -6148,7 +6273,7 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
                 if nm.stringview == mainName then {
                     if (unitHasObjectMethodBody
                         nodes: program.nodes
-                        def: u.operation
+                        def: (program.nodes.get i: (u.operation - 1).u64)
                     ) then found = true
                 }
             } else null
@@ -6244,7 +6369,7 @@ resolveDemandsByDescent: function {
                                 units: program.units
                                 unitName: mainName9
                                 shadowUnit: ""
-                                unitdef: mu9.operation
+                                unitdef: (program.nodes.get i: (mu9.operation - 1).u64)
                             )
                             if reg.nextTypeId == beforeM9 then againM9 = false
                         }
@@ -6278,7 +6403,7 @@ resolveDemandsByDescent: function {
                                 units: program.units
                             unitName: un9.stringview
                             shadowUnit: mainName9
-                            unitdef: u9.operation
+                            unitdef: (program.nodes.get i: (u9.operation - 1).u64)
                         )
                         if anyDem9 then {
                             (onFirstEntry
@@ -6288,7 +6413,7 @@ resolveDemandsByDescent: function {
                                 units: program.units
                                 unitName: un9.stringview
                                 mainName: mainName9
-                                unitdef: u9.operation
+                                unitdef: (program.nodes.get i: (u9.operation - 1).u64)
                                 :full
                                 entered: entered9
                             )
@@ -6318,18 +6443,18 @@ callableUnitName: function {op: Node} out String is {
 
 # firstArgTypeName -- the type-name of a call's first argument (the instantiation type
 # argument, e.g. i64 in (genmath t: i64)), else "".
-firstArgTypeName: function {op: Node} out String is {
+firstArgTypeName: function {nodes: List Node op: Node} out String is {
     match (
         op
     ) case expression then {
-        return (firstArgTypeName op: op.expression)
+        return (firstArgTypeName :nodes op: op.expression)
     } case call then {
         aiter: op.arguments.iterate
         for arg: aiter loop {
             match (
                 arg
             ) case namedoperation then {
-                return (atomName n: arg.operation)
+                return (atomName n: (nodes.get i: (arg.operation - 1).u64))
             } else null
         }
         return "".string
@@ -6355,12 +6480,12 @@ InstReq: class {
 
 # instFillIds -- record the instantiation's expression/call/callable/arg node
 # ids on the request (the reference stamps all four at binding resolution).
-instFillIds: function {r: InstReq op: Node} is {
+instFillIds: function {nodes: List Node r: InstReq op: Node} is {
     match (
         op
     ) case expression then {
         r.exprId = op.nodeid.u64
-        instFillIds :r op: op.expression
+        instFillIds :nodes :r op: op.expression
     } case call then {
         r.callId = op.nodeid.u64
         instFillCallable :r op: op.callable
@@ -6369,7 +6494,7 @@ instFillIds: function {r: InstReq op: Node} is {
             match (
                 a9
             ) case namedoperation then {
-                if r.argAtomId == 0 then instFillArg :r op: a9.operation
+                if r.argAtomId == 0 then instFillArg :r op: (nodes.get i: (a9.operation - 1).u64)
             } else null
         }
     } else null
@@ -6403,9 +6528,9 @@ collectMainInstantiations: function {nodes: List Node o: Node reqs: List InstReq
             match (
                 bm
             ) case namedoperation then {
-                tn: callableUnitName op: bm.operation
+                tn: callableUnitName op: (nodes.get i: (bm.operation - 1).u64)
                 if tn.length != 0 then {
-                    at: firstArgTypeName op: bm.operation
+                    at: firstArgTypeName :nodes op: (nodes.get i: (bm.operation - 1).u64)
                     bindn: unitLabel o: bm.name
                     mono: "\{tn}_\{at}"
                     r9: (InstReq
@@ -6418,7 +6543,7 @@ collectMainInstantiations: function {nodes: List Node o: Node reqs: List InstReq
                         calId: 0
                         argAtomId: 0
                     )
-                    instFillIds r: r9 op: bm.operation
+                    instFillIds :nodes r: r9 op: (nodes.get i: (bm.operation - 1).u64)
                     reqs.append r9
                 }
             } else null
@@ -6443,7 +6568,7 @@ scanMainForInstantiations: function {program: Node reqs: List InstReq} is {
                 un: unitLabel o: u.name
                 if un.stringview == mainName then (collectMainInstantiations
                     nodes: program.nodes
-                    o: u.operation
+                    o: (program.nodes.get i: (u.operation - 1).u64)
                     :reqs
                 )
             } else null
@@ -6471,7 +6596,7 @@ attachMonoUnitFuncs: function {
             match (
                 fm
             ) case namedoperation then {
-                if (isFunctionDefOp op: fm.operation) then {
+                if (isFunctionDefOp op: (nodes.get i: (fm.operation - 1).u64)) then {
                     fn: unitLabel o: fm.name
                     shellName: "\{monoName}.\{fn}"
                     shellId: (reg.newType
@@ -6697,7 +6822,7 @@ addResumeInputExpr: function {
             ) case namedoperation then {
                 an: unitLabel o: arg.name
                 if an.stringview == "accepts" then {
-                    tn: baseTypeName n: arg.operation
+                    tn: baseTypeName n: (nodes.get i: (arg.operation - 1).u64)
                     rf: (resolveAtomType
                         :ty
                         :reg
@@ -6718,7 +6843,7 @@ addResumeInputExpr: function {
                         thisName: ""
                     )
                     ty.setChild parentTypeId: callId childName: "value" childTypeId: vf
-                    own: pathOwnership n: arg.operation
+                    own: pathOwnership n: (nodes.get i: (arg.operation - 1).u64)
                     match (
                         own
                     ) case some then {
@@ -6732,13 +6857,13 @@ addResumeInputExpr: function {
 
 # condIterableCallable -- the callable name of a for-loop's inline iterable (a
 # `binding: (gen ...)` condition), or "". A `while` condition (no binding) yields "".
-condIterableCallable: function {conds: List Node} out String is {
+condIterableCallable: function {nodes: List Node conds: List Node} out String is {
     citer: conds.iterate
     for c: citer loop {
         match (
             c
         ) case namedoperation then {
-            cb: callableUnitName op: c.operation
+            cb: callableUnitName op: (nodes.get i: (c.operation - 1).u64)
             if cb.length != 0 then return cb
         } else null
     }
@@ -6747,16 +6872,16 @@ condIterableCallable: function {conds: List Node} out String is {
 
 # forIterableCallable -- for a yielding for-loop whose iterable is a generator call,
 # the callable name; "" otherwise (peels statementline/expression).
-forIterableCallable: function {e: Node} out String is {
+forIterableCallable: function {nodes: List Node e: Node} out String is {
     match (
         e
     ) case statementline then {
-        return (forIterableCallable e: e.statementline)
+        return (forIterableCallable :nodes e: e.statementline)
     } case expression then {
-        return (forIterableCallable e: e.expression)
+        return (forIterableCallable :nodes e: e.expression)
     } case forexpr then {
         if (optHasYield o: e.body) then {
-            return (condIterableCallable conds: e.conditions)
+            return (condIterableCallable :nodes conds: e.conditions)
         } else {
             return "".string
         }
@@ -6795,7 +6920,7 @@ addInlineIterFieldsBlk: function {
         n: u64
         siter: blk.statements.iterate
         for st: siter loop {
-            cb: forIterableCallable e: st
+            cb: forIterableCallable :nodes e: st
             if cb.length != 0 then {
                 fieldName: "_iter\{n}"
                 fieldType: "\{cb.stringview}_iter"
@@ -6872,12 +6997,12 @@ synthGeneratorIterClass: function {
             pm
         ) case namedoperation then {
             pn: unitLabel o: pm.name
-            ptn: baseTypeName n: pm.operation
+            ptn: baseTypeName n: (nodes.get i: (pm.operation - 1).u64)
             f1: resolveAtomType :ty :reg :nodes :units :unitName nm: ptn.stringview :thisName
             ty.setChild parentTypeId: iterId childName: pn.stringview childTypeId: f1
             f2: resolveAtomType :ty :reg :nodes :units :unitName nm: ptn.stringview :thisName
             ty.setChild parentTypeId: createId childName: pn.stringview childTypeId: f2
-            pown: pathOwnership n: pm.operation
+            pown: pathOwnership n: (nodes.get i: (pm.operation - 1).u64)
             match (
                 pown
             ) case some then {
@@ -6944,7 +7069,7 @@ resolveInlineGenericUnit: function {
                     match (
                         gm
                     ) case namedoperation then {
-                        if (isBareGenericParam op: gm.operation) then {
+                        if (isBareGenericParam op: (nodes.get i: (gm.operation - 1).u64)) then {
                             gpn5: unitLabel o: gm.name
                             ik5: "\{unitName}.\{defName}"
                             gtid5: u64
@@ -6967,7 +7092,7 @@ resolveInlineGenericUnit: function {
                                     tid: gtid5
                                 )
                             }
-                            gpnid: nodeId n: gm.operation
+                            gpnid: nodeId n: (nodes.get i: (gm.operation - 1).u64)
                             gtidV5: gtid5
                             ty.nodeType.set key: gpnid.u64 value: gtidV5
                         }
@@ -7002,7 +7127,7 @@ resolveInlineGenericUnit: function {
                     :unitName
                     qname: qn.stringview
                     thisName: ""
-                    op: bm.operation
+                    op: (nodes.get i: (bm.operation - 1).u64)
                 )
                 match (
                     mido
@@ -7103,7 +7228,7 @@ resolveInlineMono: function {
             ) case namedoperation then {
                 bn: unitLabel o: bm.name
                 if bn.stringview == templateName then {
-                    if (isUnitOp op: bm.operation) then {
+                    if (isUnitOp op: (nodes.get i: (bm.operation - 1).u64)) then {
                         (createUnitMono
                             :ty
                             :nodes
@@ -7111,7 +7236,7 @@ resolveInlineMono: function {
                             :unitName
                             :monoName
                             :templateName
-                            templateOp: bm.operation
+                            templateOp: (nodes.get i: (bm.operation - 1).u64)
                         )
                     }
                 }
@@ -7149,7 +7274,7 @@ resolveUnitMono: function {
                         :unitName
                         :monoName
                         :templateName
-                        templateOp: u.operation
+                        templateOp: (program.nodes.get i: (u.operation - 1).u64)
                     )
                 }
                 if un.stringview == unitName then {
@@ -7160,7 +7285,7 @@ resolveUnitMono: function {
                         :unitName
                         :monoName
                         :templateName
-                        mainOp: u.operation
+                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
                     )
                 }
             } else null
@@ -7206,18 +7331,18 @@ fnReturnBaseNameOf: function {op: Node} out String is {
 # cloneUnitMethod -- deep-clone a template method functiondef with fresh synth
 # nodeids. The clone never registers in ast_nodes, so its body's stamps stay
 # out of the dump; only its walk's scope/entry/variable rows are visible.
-cloneUnitMethod: function {ids: zgenerator.GenIds op: Node} out Option Node is {
+cloneUnitMethod: function {nodes: List Node ids: zgenerator.GenIds op: Node} out Option Node is {
     match (
         op
     ) case functiondef then {
         pm9: (Map String value: bool)
         params9: (List Node)
         with piter: op.parameters.iterate do for pp: piter loop {
-            pc: zgenerator.clonePath :ids n: pp
+            pc: zgenerator.clonePath :nodes :ids n: pp
             params9.append pc
         }
-        rt9: zgenerator.rewriteOptToThis :ids o: op.returntype promoted: pm9
-        body9: zgenerator.rewriteOptToThis :ids o: op.body promoted: pm9
+        rt9: zgenerator.rewriteOptToThis :nodes :ids o: op.returntype promoted: pm9
+        body9: zgenerator.rewriteOptToThis :nodes :ids o: op.body promoted: pm9
         ln9: op.lineno
         cn9: op.colno
         fnew: (Node.functiondef (zast.FunctionData
@@ -7245,6 +7370,7 @@ cloneUnitMethod: function {ids: zgenerator.GenIds op: Node} out Option Node is {
 # AST. The template fn stays childless -- only the instance carries substituted
 # param children, matching the reference (which carries them via the clone).
 registerMonoFnParams: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     op: Node
     fnId: u64
@@ -7259,7 +7385,7 @@ registerMonoFnParams: function {
             match (
                 ppm
             ) case namedoperation then {
-                pptn: atomName n: ppm.operation
+                pptn: atomName n: (nodes.get i: (ppm.operation - 1).u64)
                 ppgo: gpNames.get key: pptn
                 match (
                     ppgo
@@ -7300,7 +7426,7 @@ buildUnitMonoFull: function {
             match (
                 gm
             ) case namedoperation then {
-                if (isGenericParam op: gm.operation) then {
+                if (isGenericParam op: (nodes.get i: (gm.operation - 1).u64)) then {
                     gn: unitLabel o: gm.name
                     if gpFirst.length == 0 then {
                         gnv9: gn.stringview
@@ -7319,7 +7445,7 @@ buildUnitMonoFull: function {
             match (
                 fm
             ) case namedoperation then {
-                if (isFunctionDefOp op: fm.operation) then {
+                if (isFunctionDefOp op: (nodes.get i: (fm.operation - 1).u64)) then {
                     fn: unitLabel o: fm.name
                     qn: "\{monoName}.\{fn}"
                     srcId: u64
@@ -7337,7 +7463,7 @@ buildUnitMonoFull: function {
                             unitName: tmplUnitName
                             qname: tq.stringview
                             thisName: ""
-                            op: fm.operation
+                            op: (nodes.get i: (fm.operation - 1).u64)
                         )
                         match (
                             mo0
@@ -7417,7 +7543,7 @@ buildUnitMonoFull: function {
                         } case none then {
                             # template return unresolved at signature time
                             # (out t): derive from the method's AST typeref.
-                            rnm: fnReturnBaseNameOf op: fm.operation
+                            rnm: fnReturnBaseNameOf op: (nodes.get i: (fm.operation - 1).u64)
                             if rnm.length > 0 then {
                                 rgo2: gpNames.get key: rnm
                                 rid2: u64
@@ -7442,9 +7568,16 @@ buildUnitMonoFull: function {
                             }
                         }
                     }
-                    registerMonoFnParams :ty op: fm.operation fnId: newFnId :gpNames :argId
+                    (registerMonoFnParams
+                        :nodes
+                        :ty
+                        op: (nodes.get i: (fm.operation - 1).u64)
+                        fnId: newFnId
+                        :gpNames
+                        :argId
+                    )
                     ty.setChild parentTypeId: monoId childName: fn.stringview childTypeId: newFnId
-                    co9: cloneUnitMethod ids: ids9 op: fm.operation
+                    co9: cloneUnitMethod :nodes ids: ids9 op: (nodes.get i: (fm.operation - 1).u64)
                     match (
                         co9
                     ) case some then {
@@ -7496,7 +7629,7 @@ completeInlineReq: function {
             ) case namedoperation then {
                 bn: unitLabel o: bm.name
                 if bn.stringview == tmplName then {
-                    if (isUnitOp op: bm.operation) then {
+                    if (isUnitOp op: (nodes.get i: (bm.operation - 1).u64)) then {
                         (buildUnitMonoFull
                             :ty
                             :reg
@@ -7507,7 +7640,7 @@ completeInlineReq: function {
                             :monoName
                             :tplId
                             :argId
-                            templateOp: bm.operation
+                            templateOp: (nodes.get i: (bm.operation - 1).u64)
                         )
                     }
                 }
@@ -7539,8 +7672,8 @@ inlineTemplateTid: function {
             ) case namedoperation then {
                 bn: unitLabel o: bm.name
                 if bn.stringview == tmplName then {
-                    if (isUnitOp op: bm.operation) then {
-                        tnid: unitdefNodeId n: bm.operation
+                    if (isUnitOp op: (nodes.get i: (bm.operation - 1).u64)) then {
+                        tnid: unitdefNodeId n: (nodes.get i: (bm.operation - 1).u64)
                         tso: ty.nodeType.get key: tnid.u64
                         match (
                             tso
@@ -7626,10 +7759,11 @@ completeUnitInstantiations: function {
                         ) case namedoperation then {
                             tun: unitLabel o: tu.name
                             if tun.stringview == mainName.stringview then {
+                                top9: program.nodes.get i: (tu.operation - 1).u64
                                 tplId = (inlineTemplateTid
                                     :ty
                                     nodes: program.nodes
-                                    mainOp: tu.operation
+                                    mainOp: top9
                                     tmplName: rt.stringview
                                 )
                             }
@@ -7663,7 +7797,7 @@ completeUnitInstantiations: function {
                                     monoName: rm.stringview
                                     :tplId
                                     :argId
-                                    templateOp: u9.operation
+                                    templateOp: (program.nodes.get i: (u9.operation - 1).u64)
                                 )
                             }
                             if un9.stringview == mainName.stringview then {
@@ -7678,7 +7812,7 @@ completeUnitInstantiations: function {
                                     tmplName: rt.stringview
                                     :tplId
                                     :argId
-                                    mainOp: u9.operation
+                                    mainOp: (program.nodes.get i: (u9.operation - 1).u64)
                                 )
                             }
                         } else null
@@ -9534,7 +9668,7 @@ inferGenericConstruction: function {
             # binds the primary generic param (`(List String)`); a value
             # first arg (`(box 5)`) is left for value inference.
             if pk.length == 0 when argIdx == 0 then {
-                anE: paramTypeBaseName op: arg.operation
+                anE: paramTypeBaseName op: (nodes.get i: (arg.operation - 1).u64)
                 if (isNumericLiteralName name: anE.stringview) == false then {
                     teo: (walkLookupTyperef
                         ty: st.typing
@@ -9554,7 +9688,7 @@ inferGenericConstruction: function {
                 isP = st.reg.isGenericParamOf typeKey: tk.stringview name: pk.stringview
             }
             if isP then {
-                an: paramTypeBaseName op: arg.operation
+                an: paramTypeBaseName op: (nodes.get i: (arg.operation - 1).u64)
                 if (isNumericLiteralName name: an.stringview) then {
                     sfx.append s: "_"
                     sfx.append s: an.stringview
@@ -9580,7 +9714,13 @@ inferGenericConstruction: function {
                     } case none then null
                 }
             } else {
-                vt0: checkValue :st :unitName :nodes :unitBody node: arg.operation
+                vt0: (checkValue
+                    :st
+                    :unitName
+                    :nodes
+                    :unitBody
+                    node: (nodes.get i: (arg.operation - 1).u64)
+                )
                 gidx: u64
                 gfound: false
                 fi: u64
@@ -9598,7 +9738,7 @@ inferGenericConstruction: function {
                 if gfound when vt0 > 0 then {
                     mv0: materialiseLiteral :st :unitName t: vt0
                     if mv0 != vt0 then {
-                        iid0: innermostNodeId n: arg.operation
+                        iid0: innermostNodeId n: (nodes.get i: (arg.operation - 1).u64)
                         if iid0 > 0 then {
                             setm0: mv0
                             st.typing.nodeType.set key: iid0.u64 value: setm0
@@ -9700,6 +9840,7 @@ inferGenericConstruction: function {
 # with its chains and children, and the call's
 # value is the mono.
 genericTypeConstruction: function {
+    nodes: List Node
     st: zenv.ZSymbolTable
     unitName: StringView
     call: zast.CallData
@@ -9732,7 +9873,7 @@ genericTypeConstruction: function {
             # empty label so the field-bound inference leg owns the call.
             if pk0.length == 0 when argIdx == 0 then {
                 if primaryName.length > 0 then {
-                    anP: paramTypeBaseName op: arg.operation
+                    anP: paramTypeBaseName op: (nodes.get i: (arg.operation - 1).u64)
                     pid0: u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
                         pao0: (walkLookupTyperef
@@ -9742,7 +9883,10 @@ genericTypeConstruction: function {
                             base: anP.stringview
                         )
                         pid0 = optU64Or o: pao0 d: 0
-                        if pid0 == 0 then pid0 = dottedTyperefId :st op: arg.operation
+                        if pid0 == 0 then {
+                            dop9: nodes.get i: (arg.operation - 1).u64
+                            pid0 = dottedTyperefId :st op: dop9
+                        }
                     }
                     if pid0 > 0 then pk0 = primaryName.copy
                 }
@@ -9752,7 +9896,7 @@ genericTypeConstruction: function {
                 isP0 = st.reg.isGenericParamOf typeKey: tk0.stringview name: pk0.stringview
             }
             if (isP0) == false then anyMiss = true
-            an: paramTypeBaseName op: arg.operation
+            an: paramTypeBaseName op: (nodes.get i: (arg.operation - 1).u64)
             if (anyMiss) == false then { if (isNumericLiteralName name: an.stringview) then {
                 nsfx2: "\{sfx}_\{an}"
                 sfx = nsfx2
@@ -9778,7 +9922,10 @@ genericTypeConstruction: function {
                     base: an.stringview
                 )
                 aid: optU64Or o: ao d: 0
-                if aid == 0 then aid = dottedTyperefId :st op: arg.operation
+                if aid == 0 then {
+                    opf1059: nodes.get i: (arg.operation - 1).u64
+                    aid = dottedTyperefId :st op: opf1059
+                }
                 if aid > 0 then {
                     atn: typeNameOf :st tid: aid
                     nsfx: "\{sfx}_\{atn}"
@@ -9857,6 +10004,7 @@ genericTypeConstruction: function {
 # generic param supplied twice (e.g. an elided leading arg plus an explicit
 # label) is a duplicate. Returns false when an error was emitted.
 validateGenericTypeArgs: function {
+    nodes: List Node
     st: zenv.ZSymbolTable
     unitName: StringView
     call: zast.CallData
@@ -9892,7 +10040,7 @@ validateGenericTypeArgs: function {
             pk: unitLabel o: arg.name
             if pk.length == 0 when argIdx == 0 then {
                 if primaryName.length > 0 then {
-                    anP: paramTypeBaseName op: arg.operation
+                    anP: paramTypeBaseName op: (nodes.get i: (arg.operation - 1).u64)
                     pid0: u64
                     if (isNumericLiteralName name: anP.stringview) == false then {
                         pao0: (walkLookupTyperef
@@ -9902,7 +10050,10 @@ validateGenericTypeArgs: function {
                             base: anP.stringview
                         )
                         pid0 = optU64Or o: pao0 d: 0
-                        if pid0 == 0 then pid0 = dottedTyperefId :st op: arg.operation
+                        if pid0 == 0 then {
+                            dop9: nodes.get i: (arg.operation - 1).u64
+                            pid0 = dottedTyperefId :st op: dop9
+                        }
                     }
                     if pid0 > 0 then pk = primaryName.copy
                 }
@@ -10277,13 +10428,19 @@ checkProjectionCreate: function {
                 }
                 if isFrom then {
                     found = true
-                    pvt: checkValue :st :unitName :nodes :unitBody node: arg.operation
+                    pvt: (checkValue
+                        :st
+                        :unitName
+                        :nodes
+                        :unitBody
+                        node: (nodes.get i: (arg.operation - 1).u64)
+                    )
                     if pvt > 0 then {
                         if borrows then {
                             # The from-path's root is the borrow origin (a
                             # bare name or a `.lock`/`.borrow` projection) --
                             # the projection borrows, it never hoists.
-                            pbr: rootNameOf n: arg.operation
+                            pbr: rootNameOf n: (nodes.get i: (arg.operation - 1).u64)
                             if pbr.length > 0 then {
                                 pbv2: st.lookupVarId name: pbr.stringview
                                 match (
@@ -10295,8 +10452,8 @@ checkProjectionCreate: function {
                                 } case none then null
                             }
                         } else {
-                            if (argIsTrivial op: arg.operation) then {
-                                pbn: bareAtomName n: arg.operation
+                            if (argIsTrivial op: (nodes.get i: (arg.operation - 1).u64)) then {
+                                pbn: bareAtomName n: (nodes.get i: (arg.operation - 1).u64)
                                 if pbn.length > 0 then {
                                     pbv: st.lookupVarId name: pbn.stringview
                                     match (
@@ -10313,7 +10470,7 @@ checkProjectionCreate: function {
                             } else {
                                 tnm3: (hoistArg
                                     :st
-                                    argNode: arg.operation
+                                    argNode: (nodes.get i: (arg.operation - 1).u64)
                                     argType: pvt
                                     paramType: 0
                                     :consumes
@@ -10430,10 +10587,16 @@ checkTypedefCreate: function {
                 }
                 if isFrom then {
                     found = true
-                    vt: checkValue :st :unitName :nodes :unitBody node: arg.operation
+                    vt: (checkValue
+                        :st
+                        :unitName
+                        :nodes
+                        :unitBody
+                        node: (nodes.get i: (arg.operation - 1).u64)
+                    )
                     if vt > 0 then {
-                        if (argIsTrivial op: arg.operation) then {
-                            bn: bareAtomName n: arg.operation
+                        if (argIsTrivial op: (nodes.get i: (arg.operation - 1).u64)) then {
+                            bn: bareAtomName n: (nodes.get i: (arg.operation - 1).u64)
                             if bn.length > 0 then {
                                 bvo: st.lookupVarId name: bn.stringview
                                 match (
@@ -10448,7 +10611,7 @@ checkTypedefCreate: function {
                         } else {
                             tnm: (hoistArg
                                 :st
-                                argNode: arg.operation
+                                argNode: (nodes.get i: (arg.operation - 1).u64)
                                 argType: vt
                                 paramType: 0
                                 consumes: true
@@ -10493,11 +10656,17 @@ checkTypedefBorrow: function {
                 }
                 if isFrom then {
                     found = true
-                    vt: checkValue :st :unitName :nodes :unitBody node: arg.operation
+                    vt: (checkValue
+                        :st
+                        :unitName
+                        :nodes
+                        :unitBody
+                        node: (nodes.get i: (arg.operation - 1).u64)
+                    )
                     if vt > 0 then {
                         if st.typing.pendingBorrowPath.length <= 0 then {
                             tup: (List String)
-                            appendValueTuple n: arg.operation dst: tup
+                            appendValueTuple n: (nodes.get i: (arg.operation - 1).u64) dst: tup
                             ti: u64
                             tn: tup.length
                             for ti < tn loop {
@@ -12061,14 +12230,20 @@ checkClause: function {
             match (
                 cond
             ) case namedoperation then {
-                checkValue :st :unitName :nodes :unitBody node: cond.operation
+                (checkValue
+                    :st
+                    :unitName
+                    :nodes
+                    :unitBody
+                    node: (nodes.get i: (cond.operation - 1).u64)
+                )
             } else null
         }
         with cfit9: clause.conditions.iterate do for cnd9: cfit9 loop {
             match (
                 cnd9
             ) case namedoperation then {
-                fo9: predFactOf :st n: cnd9.operation :boolId
+                fo9: predFactOf :st n: (nodes.get i: (cnd9.operation - 1).u64) :boolId
                 match (
                     fo9
                 ) case some then {
@@ -12667,7 +12842,7 @@ checkFor: function {
             # its walk runs in a call scope and the atom keeps the FUNCTION
             # stamp rather than the auto-call's coerced return.
             facId: u64
-            fbn: bareAtomName n: cond.operation
+            fbn: bareAtomName n: (nodes.get i: (cond.operation - 1).u64)
             if fbn.length > 0 then {
                 ffo: (walkLookupTyperef
                     ty: st.typing
@@ -12704,22 +12879,24 @@ checkFor: function {
                 # synthetic invocation's call scope opens.
                 maybeWalkMethods :st :unitName :nodes :unitBody name: fbn.stringview
                 fcm: st.pushCall
-                vt = checkValue :st :unitName :nodes :unitBody node: cond.operation
+                opf29: nodes.get i: (cond.operation - 1).u64
+                vt = checkValue :st :unitName :nodes :unitBody node: opf29
                 st.popTo marker: fcm
-                fiid: innermostNodeId n: cond.operation
+                fiid: innermostNodeId n: (nodes.get i: (cond.operation - 1).u64)
                 if fiid > 0 then {
                     setff: facId
                     st.typing.nodeType.set key: fiid.u64 value: setff
                 }
             } else {
-                vt = checkValue :st :unitName :nodes :unitBody node: cond.operation
+                opf39: nodes.get i: (cond.operation - 1).u64
+                vt = checkValue :st :unitName :nodes :unitBody node: opf39
             }
             nm: unitLabel o: cond.name
             if nm.length > 0 when vt > 0 then {
                 # A call-shaped iterator init probes its per-iteration call
                 # in an empty call scope (the reference's rewrite walks it
                 # once); gated on the value being an iterator wrapper.
-                if (isCallNode n: cond.operation) then {
+                if (isCallNode n: (nodes.get i: (cond.operation - 1).u64)) then {
                     doProbe9: false
                     pw9: iterWrapperElem :st :unitName wid: vt
                     match (
@@ -12784,14 +12961,14 @@ checkFor: function {
                 }
                 if elem > 0 then {
                     if isView then {
-                        srcName: atomName n: cond.operation
+                        srcName: atomName n: (nodes.get i: (cond.operation - 1).u64)
                         bo: "<iterator>".string
                         if srcName.length > 0 then bo = srcName.copy
                         v: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.borrowed
                         v.borrowOrigin = (Option.some bo)
                         vid: v.variableId
                         st.defineVar name: nm.stringview var: v
-                        condNid: nodeId n: cond.operation
+                        condNid: nodeId n: (nodes.get i: (cond.operation - 1).u64)
                         st.typing.defVariableId.set key: condNid.u64 value: vid
                     } else {
                         st.define name: nm.stringview ztypeId: elem
@@ -12807,7 +12984,7 @@ checkFor: function {
         match (
             pc
         ) case namedoperation then {
-            checkValue :st :unitName :nodes :unitBody node: pc.operation
+            checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (pc.operation - 1).u64)
         } else {
             checkValue :st :unitName :nodes :unitBody node: pc
         }
@@ -13912,9 +14089,11 @@ walkCallArgsHoist: function {
             }
             vt: u64
             if useNC then {
-                vt = valueNoCoerce :st :unitName :nodes :unitBody n: arg.operation
+                opf49: nodes.get i: (arg.operation - 1).u64
+                vt = valueNoCoerce :st :unitName :nodes :unitBody n: opf49
             } else {
-                vt = checkValue :st :unitName :nodes :unitBody node: arg.operation
+                opf59: nodes.get i: (arg.operation - 1).u64
+                vt = checkValue :st :unitName :nodes :unitBody node: opf59
             }
             if vt > 0 then {
                 pn: unitLabel o: arg.name
@@ -14125,11 +14304,11 @@ walkCallArgsHoist: function {
                         }
                     }
                 }
-                if (argIsTrivial op: arg.operation) then {
+                if (argIsTrivial op: (nodes.get i: (arg.operation - 1).u64)) then {
                     # A trivial literal argument coerces in place at the
                     # parameter boundary (no hoist: restamp its bare node).
                     if pt > 0 then {
-                        iid2: innermostNodeId n: arg.operation
+                        iid2: innermostNodeId n: (nodes.get i: (arg.operation - 1).u64)
                         if iid2 > 0 then {
                             seta2: pt
                             st.typing.nodeType.set key: iid2.u64 value: seta2
@@ -14138,7 +14317,7 @@ walkCallArgsHoist: function {
                     # A bare-name reftype argument: a take parameter consumes
                     # it (the overlay propagates out on pop); a lock/borrow
                     # parameter locks it for the call.
-                    bn: bareAtomName n: arg.operation
+                    bn: bareAtomName n: (nodes.get i: (arg.operation - 1).u64)
                     if bn.length > 0 when (typeIsReftype :st tid: vt) then {
                         bvo: st.lookupVarId name: bn.stringview
                         match (
@@ -14150,9 +14329,9 @@ walkCallArgsHoist: function {
                                 if (isBorrowedVar :st vid: bvo) then {
                                     bnc7: bn.copy
                                     mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                                    aid7: nodeId n: arg.operation
-                                    aln7: nodeLine n: arg.operation
-                                    acl7: nodeCol n: arg.operation
+                                    aid7: nodeId n: (nodes.get i: (arg.operation - 1).u64)
+                                    aln7: nodeLine n: (nodes.get i: (arg.operation - 1).u64)
+                                    acl7: nodeCol n: (nodes.get i: (arg.operation - 1).u64)
                                     (addError
                                         :st
                                         nodeid: aid7
@@ -14171,9 +14350,9 @@ walkCallArgsHoist: function {
                                         name: bn.stringview
                                         callId: call.nodeid.u64
                                         shared: false
-                                        nodeid: (nodeId n: arg.operation)
-                                        lineno: (nodeLine n: arg.operation)
-                                        colno: (nodeCol n: arg.operation)
+                                        nodeid: (nodeId n: (nodes.get i: (arg.operation - 1).u64))
+                                        lineno: (nodeLine n: (nodes.get i: (arg.operation - 1).u64))
+                                        colno: (nodeCol n: (nodes.get i: (arg.operation - 1).u64))
                                     )
                                     if lockRoot.length == 0 then lockRoot = bn.copy
                                     if isDeclLock then {
@@ -14195,7 +14374,7 @@ walkCallArgsHoist: function {
                     # temp's origin is the base; the base's lock row lands
                     # in the call scope via the borrow-lock install).
                     if isLockish then {
-                        lsb9: lockSuffixBase n: arg.operation
+                        lsb9: lockSuffixBase n: (nodes.get i: (arg.operation - 1).u64)
                         if lsb9.length > 0 then {
                             drainPendingBorrow :st
                             lsbc9: lsb9.copy
@@ -14209,7 +14388,13 @@ walkCallArgsHoist: function {
                     }
                     hadPending: false
                     if st.typing.pendingBorrowPath.length > 0 then hadPending = true
-                    tnm: hoistArg :st argNode: arg.operation argType: vt paramType: pt :consumes
+                    tnm: (hoistArg
+                        :st
+                        argNode: (nodes.get i: (arg.operation - 1).u64)
+                        argType: vt
+                        paramType: pt
+                        :consumes
+                    )
                     if (hadPending) == false then {
                         if isLockish when (typeIsReftype :st tid: vt) then {
                             (lockCallArg
@@ -14217,9 +14402,9 @@ walkCallArgsHoist: function {
                                 name: tnm.stringview
                                 callId: call.nodeid.u64
                                 shared: false
-                                nodeid: (nodeId n: arg.operation)
-                                lineno: (nodeLine n: arg.operation)
-                                colno: (nodeCol n: arg.operation)
+                                nodeid: (nodeId n: (nodes.get i: (arg.operation - 1).u64))
+                                lineno: (nodeLine n: (nodes.get i: (arg.operation - 1).u64))
+                                colno: (nodeCol n: (nodes.get i: (arg.operation - 1).u64))
                             )
                         }
                     }
@@ -14255,9 +14440,9 @@ checkBoxConstruction: function {
                     if an.stringview != "from" then {
                         anc7: an.copy
                         mbx7: "the builtin Box constructs with 'from:'; unknown argument '\{anc7}'"
-                        bxid7: nodeId n: arg.operation
-                        bxln7: nodeLine n: arg.operation
-                        bxcl7: nodeCol n: arg.operation
+                        bxid7: nodeId n: (nodes.get i: (arg.operation - 1).u64)
+                        bxln7: nodeLine n: (nodes.get i: (arg.operation - 1).u64)
+                        bxcl7: nodeCol n: (nodes.get i: (arg.operation - 1).u64)
                         (addError
                             :st
                             nodeid: bxid7
@@ -14268,16 +14453,22 @@ checkBoxConstruction: function {
                         )
                     }
                     fnd = true
-                    avt: checkValue :st :unitName :nodes :unitBody node: arg.operation
+                    avt: (checkValue
+                        :st
+                        :unitName
+                        :nodes
+                        :unitBody
+                        node: (nodes.get i: (arg.operation - 1).u64)
+                    )
                     vt = materialiseLiteral :st :unitName t: avt
                     if vt > 0 then {
-                        if (argIsTrivial op: arg.operation) then {
-                            iid: innermostNodeId n: arg.operation
+                        if (argIsTrivial op: (nodes.get i: (arg.operation - 1).u64)) then {
+                            iid: innermostNodeId n: (nodes.get i: (arg.operation - 1).u64)
                             if iid > 0 then {
                                 setbl: vt
                                 st.typing.nodeType.set key: iid.u64 value: setbl
                             }
-                            bn: bareAtomName n: arg.operation
+                            bn: bareAtomName n: (nodes.get i: (arg.operation - 1).u64)
                             if bn.length > 0 when (typeIsReftype :st tid: vt) then {
                                 bvo8: st.lookupVarId name: bn.stringview
                                 match (
@@ -14286,9 +14477,9 @@ checkBoxConstruction: function {
                                     if (isViewVar :st vid: bvo8) then {
                                         bnc8: bn.copy
                                         mb8: "Cannot move borrowed variable '\{bnc8}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                                        aid8: nodeId n: arg.operation
-                                        aln8: nodeLine n: arg.operation
-                                        acl8: nodeCol n: arg.operation
+                                        aid8: nodeId n: (nodes.get i: (arg.operation - 1).u64)
+                                        aln8: nodeLine n: (nodes.get i: (arg.operation - 1).u64)
+                                        acl8: nodeCol n: (nodes.get i: (arg.operation - 1).u64)
                                         (addError
                                             :st
                                             nodeid: aid8
@@ -14307,7 +14498,7 @@ checkBoxConstruction: function {
                         } else {
                             (hoistArg
                                 :st
-                                argNode: arg.operation
+                                argNode: (nodes.get i: (arg.operation - 1).u64)
                                 argType: vt
                                 paramType: 0
                                 consumes: true
@@ -14525,14 +14716,20 @@ checkCall: function {
             match (
                 arg
             ) case namedoperation then {
-                argT9: checkValue :st :unitName :nodes :unitBody node: arg.operation
-                bfn9: returnedBareFieldName :st n: arg.operation
+                argT9: (checkValue
+                    :st
+                    :unitName
+                    :nodes
+                    :unitBody
+                    node: (nodes.get i: (arg.operation - 1).u64)
+                )
+                bfn9: returnedBareFieldName :st n: (nodes.get i: (arg.operation - 1).u64)
                 if st.typing.currentReturnsBorrow then bfn9 = "".string
                 if bfn9.length > 0 then {
                     mbf9: "Cannot return field '\{bfn9}' as a bare read — the owner still frees it; return '\{bfn9}.copy' (duplicate) or '\{bfn9}.take' (move out)"
-                    bfid9: nodeId n: arg.operation
-                    bfln9: nodeLine n: arg.operation
-                    bfcl9: nodeCol n: arg.operation
+                    bfid9: nodeId n: (nodes.get i: (arg.operation - 1).u64)
+                    bfln9: nodeLine n: (nodes.get i: (arg.operation - 1).u64)
+                    bfcl9: nodeCol n: (nodes.get i: (arg.operation - 1).u64)
                     (addError
                         :st
                         nodeid: bfid9
@@ -14550,9 +14747,9 @@ checkCall: function {
                         enc9: en9.copy
                         anc9: an9.copy
                         m4: "return type mismatch: function expects \{enc9}, got \{anc9}"
-                        rvid9: nodeId n: arg.operation
-                        rvln9: nodeLine n: arg.operation
-                        rvcl9: nodeCol n: arg.operation
+                        rvid9: nodeId n: (nodes.get i: (arg.operation - 1).u64)
+                        rvln9: nodeLine n: (nodes.get i: (arg.operation - 1).u64)
+                        rvcl9: nodeCol n: (nodes.get i: (arg.operation - 1).u64)
                         (addError
                             :st
                             nodeid: rvid9
@@ -14639,7 +14836,13 @@ checkCall: function {
                         match (
                             warg
                         ) case namedoperation then {
-                            checkValue :st :unitName :nodes :unitBody node: warg.operation
+                            (checkValue
+                                :st
+                                :unitName
+                                :nodes
+                                :unitBody
+                                node: (nodes.get i: (warg.operation - 1).u64)
+                            )
                         } else null
                     }
                 }
@@ -14993,7 +15196,14 @@ checkCall: function {
                             } case none then null
                         }
                         if isGenT then {
-                            validateGenericTypeArgs :st :unitName :call tplId: dtp allowFrom: true
+                            (validateGenericTypeArgs
+                                :nodes
+                                :st
+                                :unitName
+                                :call
+                                tplId: dtp
+                                allowFrom: true
+                            )
                             # Generic template: infer the mono (mirrors
                             # _infer_generic_union_construction). A NULL-payload
                             # arm with an argument names the type EXPLICITLY
@@ -15016,7 +15226,7 @@ checkCall: function {
                                         if (argFound) == false then {
                                             argFound = true
                                             if isNullPay then {
-                                                etn: paramTypeBaseName op: farg.operation
+                                                etn: paramTypeBaseName op: (nodes.get i: (farg.operation - 1).u64)
                                                 subT = (optU64Or
                                                     o: (walkLookupTyperef
                                                         ty: st.typing
@@ -15029,14 +15239,15 @@ checkCall: function {
                                                 if subT == 0 then {
                                                     # a cross-unit type arg (optionval.none ztypes.zlockstate):
                                                     # paramTypeBaseName/walkLookupTyperef miss a dotted ref, resolve cross-unit.
-                                                    subT = dottedTyperefId :st op: farg.operation
+                                                    opf69: nodes.get i: (farg.operation - 1).u64
+                                                    subT = dottedTyperefId :st op: opf69
                                                 }
                                             } else {
                                                 avt2: (checkValue
                                                     :st
                                                     :unitName
                                                     :nodes :unitBody
-                                                    node: farg.operation
+                                                    node: (nodes.get i: (farg.operation - 1).u64)
                                                 )
                                                 mvt2: materialiseLiteral :st :unitName t: avt2
                                                 subT = mvt2
@@ -15101,7 +15312,7 @@ checkCall: function {
                                         :unitName
                                         :nodes
                                         :unitBody
-                                        node: arg2.operation
+                                        node: (nodes.get i: (arg2.operation - 1).u64)
                                     )
                                     # a literal payload coerces at the arm's
                                     # payload type (restamp the bare node).
@@ -15112,7 +15323,7 @@ checkCall: function {
                                         )
                                         upid: optU64Or o: upo d: 0
                                         if upid > 0 then {
-                                            uiid: innermostNodeId n: arg2.operation
+                                            uiid: innermostNodeId n: (nodes.get i: (arg2.operation - 1).u64)
                                             if uiid > 0 then {
                                                 setup: upid
                                                 (st.typing.nodeType.set
@@ -15227,8 +15438,15 @@ checkCall: function {
                             } case none then null
                         }
                         if isGenD then {
-                            validateGenericTypeArgs :st :unitName :call tplId: dro allowFrom: false
-                            gres2: genericTypeConstruction :st :unitName :call tplId: dro
+                            (validateGenericTypeArgs
+                                :nodes
+                                :st
+                                :unitName
+                                :call
+                                tplId: dro
+                                allowFrom: false
+                            )
+                            gres2: genericTypeConstruction :nodes :st :unitName :call tplId: dro
                             if gres2 > 0 then return gres2
                         }
                         # A plain cross-unit class/record dotted construction
@@ -15441,8 +15659,15 @@ checkCall: function {
                 gtt: st.reg.typetypeOf typeId: funcId
                 if gtt != ztypes.ztypetype.functionType then {
                     errB9: st.typing.errors.length
-                    vok9: validateGenericTypeArgs :st :unitName :call tplId: funcId allowFrom: false
-                    gres: genericTypeConstruction :st :unitName :call tplId: funcId
+                    vok9: (validateGenericTypeArgs
+                        :nodes
+                        :st
+                        :unitName
+                        :call
+                        tplId: funcId
+                        allowFrom: false
+                    )
+                    gres: genericTypeConstruction :nodes :st :unitName :call tplId: funcId
                     if gres > 0 then return gres
                     # field-bound value args: infer the instance and construct
                     # through the standard ctor flow (mirrors the reference's
@@ -15521,7 +15746,13 @@ checkCall: function {
                     match (
                         garg
                     ) case namedoperation then {
-                        checkValue :st :unitName :nodes :unitBody node: garg.operation
+                        (checkValue
+                            :st
+                            :unitName
+                            :nodes
+                            :unitBody
+                            node: (nodes.get i: (garg.operation - 1).u64)
+                        )
                     } else null
                 }
             }
@@ -15602,7 +15833,7 @@ checkGenericCall: function {
                 if an2.stringview == gp2.stringview then isTypeArg = true
             }
             if isTypeArg then {
-                tn3: atomName n: arg.operation
+                tn3: atomName n: (nodes.get i: (arg.operation - 1).u64)
                 to3: (walkLookupTyperef
                     ty: st.typing
                     reg: st.reg
@@ -15617,7 +15848,13 @@ checkGenericCall: function {
                     subs.set key: sk value: sv
                 } case none then null
             } else {
-                avt: checkValue :st :unitName :nodes :unitBody node: arg.operation
+                avt: (checkValue
+                    :st
+                    :unitName
+                    :nodes
+                    :unitBody
+                    node: (nodes.get i: (arg.operation - 1).u64)
+                )
                 mat: materialiseLiteral :st :unitName t: avt
                 holder: ""
                 if an2.length > 0 then {
@@ -16342,11 +16579,11 @@ nodeIsFunctiondef: function {o: Node} out bool is {
 
 # objectdefIsGeneric -- a type definition with a generic as-block parameter;
 # generic templates are never body-walked (instances clone at call sites).
-objectdefIsGeneric: function {o: Node} out bool is {
+objectdefIsGeneric: function {nodes: List Node o: Node} out bool is {
     match (
         o
     ) case objectdef then {
-        return (hasGenericParam items: o.asItems)
+        return (hasGenericParam :nodes items: o.asItems)
     } else {
         return false
     }
@@ -16386,7 +16623,7 @@ scanFnSig: function {
             match (
                 pm
             ) case namedoperation then {
-                bn: baseTypeName n: pm.operation
+                bn: baseTypeName n: (nodes.get i: (pm.operation - 1).u64)
                 if bn.length > 0 then (maybeWalkMethods
                     :st
                     :unitName
@@ -16419,8 +16656,8 @@ scanMemberSignatures: function {
                 match (
                     fm
                 ) case namedoperation then {
-                    if (nodeIsFunctiondef o: fm.operation) == false then {
-                        bn: baseTypeName n: fm.operation
+                    if (nodeIsFunctiondef o: (nodes.get i: (fm.operation - 1).u64)) == false then {
+                        bn: baseTypeName n: (nodes.get i: (fm.operation - 1).u64)
                         if bn.length > 0 then {
                             maybeWalkMethods :st :unitName :nodes :unitBody name: bn.stringview
                         }
@@ -16431,14 +16668,26 @@ scanMemberSignatures: function {
                 match (
                     im
                 ) case namedoperation then {
-                    scanFnSig :st :unitName :nodes :unitBody op: im.operation
+                    (scanFnSig
+                        :st
+                        :unitName
+                        :nodes
+                        :unitBody
+                        op: (nodes.get i: (im.operation - 1).u64)
+                    )
                 } else null
             }
             with aiter: op.asItems.iterate do for am: aiter loop {
                 match (
                     am
                 ) case namedoperation then {
-                    scanFnSig :st :unitName :nodes :unitBody op: am.operation
+                    (scanFnSig
+                        :st
+                        :unitName
+                        :nodes
+                        :unitBody
+                        op: (nodes.get i: (am.operation - 1).u64)
+                    )
                 } else null
             }
         } else null
@@ -16486,12 +16735,25 @@ maybeWalkMethods: function {
         st.typing.suppressBareCtor = false
         mwSupFn9: st.typing.suppressFnAutoCall
         st.typing.suppressFnAutoCall = false
-        scanMemberSignatures :st :unitName :nodes :unitBody op: mem.operation
-        canWalk: objectdefHasMethodBodies op: mem.operation
+        (scanMemberSignatures
+            :st
+            :unitName
+            :nodes
+            :unitBody
+            op: (nodes.get i: (mem.operation - 1).u64)
+        )
+        canWalk: objectdefHasMethodBodies :nodes op: (nodes.get i: (mem.operation - 1).u64)
         if canWalk then {
             prev: st.typing.synthLabel.copy
             prevThis: st.typing.currentThisName.copy
-            checkMethodBodies :st :unitName :nodes :unitBody typeName: name op: mem.operation
+            (checkMethodBodies
+                :st
+                :unitName
+                :nodes
+                :unitBody
+                typeName: name
+                op: (nodes.get i: (mem.operation - 1).u64)
+            )
             st.typing.synthLabel = prev
             st.typing.currentThisName = prevThis
         }
@@ -16509,7 +16771,7 @@ maybeWalkMethods: function {
 
 # objectdefHasMethodBodies -- a unit member whose operation is an objectdef
 # with at least one functiondef-with-body item.
-objectdefHasMethodBodies: function {op: Node} out bool is {
+objectdefHasMethodBodies: function {nodes: List Node op: Node} out bool is {
     match (
         op
     ) case objectdef then {
@@ -16518,7 +16780,7 @@ objectdefHasMethodBodies: function {op: Node} out bool is {
             match (
                 im
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: im.operation) then return true
+                if (isFunctionDefWithBody o: (nodes.get i: (im.operation - 1).u64)) then return true
             } else null
         }
         aiter: op.asItems.iterate
@@ -16526,7 +16788,7 @@ objectdefHasMethodBodies: function {op: Node} out bool is {
             match (
                 am
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: am.operation) then return true
+                if (isFunctionDefWithBody o: (nodes.get i: (am.operation - 1).u64)) then return true
             } else null
         }
         return false
@@ -16553,7 +16815,7 @@ checkMethodBodies: function {
             match (
                 im
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: im.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (im.operation - 1).u64)) then {
                     mname: unitLabel o: im.name
                     qn: "\{typeName}.\{mname}"
                     ed7: (List u32)
@@ -16561,7 +16823,7 @@ checkMethodBodies: function {
                         :st
                         :unitName
                         defName: qn.stringview
-                        defn: im.operation
+                        defn: (nodes.get i: (im.operation - 1).u64)
                         thisName: typeName
                         :nodes :unitBody
                         depUnits: ed7
@@ -16574,7 +16836,7 @@ checkMethodBodies: function {
             match (
                 am
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: am.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (am.operation - 1).u64)) then {
                     mname2: unitLabel o: am.name
                     qn2: "\{typeName}.\{mname2}"
                     ed6: (List u32)
@@ -16582,7 +16844,7 @@ checkMethodBodies: function {
                         :st
                         :unitName
                         defName: qn2.stringview
-                        defn: am.operation
+                        defn: (nodes.get i: (am.operation - 1).u64)
                         thisName: typeName
                         :nodes :unitBody
                         depUnits: ed6
@@ -16674,8 +16936,13 @@ checkFunctionBody: function {
                     pm
                 ) case namedoperation then {
                     pname: unitLabel o: pm.name
-                    pnid: nodeId n: pm.operation
-                    ptid: paramTypeId typing: st.typing reg: st.reg :unitName op: pm.operation
+                    pnid: nodeId n: (nodes.get i: (pm.operation - 1).u64)
+                    ptid: (paramTypeId
+                        typing: st.typing
+                        reg: st.reg
+                        :unitName
+                        op: (nodes.get i: (pm.operation - 1).u64)
+                    )
                     if ptid == 0 when isGenDef then {
                         # a template's own bare param carries no stamp; bind
                         # the canonical param tid from the FUNCTION child so
@@ -16706,7 +16973,7 @@ checkFunctionBody: function {
                             }
                         }
                     }
-                    if thisName.length > 0 when (paramIsThisReceiver op: pm.operation) then {
+                    if thisName.length > 0 when (paramIsThisReceiver op: (nodes.get i: (pm.operation - 1).u64)) then {
                         thOpt: (walkLookupTyperef
                             ty: st.typing
                             reg: st.reg
@@ -16719,7 +16986,7 @@ checkFunctionBody: function {
                             ptid = thOpt
                         } case none then null
                     }
-                    pown9: pathOwnership n: pm.operation
+                    pown9: pathOwnership n: (nodes.get i: (pm.operation - 1).u64)
                     isLockP9: false
                     match (
                         pown9
@@ -16728,7 +16995,7 @@ checkFunctionBody: function {
                     } case none then null
                     isGenP9: false
                     if (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.genericParam then isGenP9 = true
-                    if isLockP9 when (paramIsThisReceiver op: pm.operation) == false when (typeIsValtype
+                    if isLockP9 when (paramIsThisReceiver op: (nodes.get i: (pm.operation - 1).u64)) == false when (typeIsValtype
                         ty: st.typing
                         reg: st.reg
                         tid: ptid
@@ -16736,8 +17003,8 @@ checkFunctionBody: function {
                         ptn9: typeNameOf :st tid: ptid
                         ptnc9: ptn9.copy
                         pnc9: pname.copy
-                        plln9: nodeLine n: pm.operation
-                        plcl9: nodeCol n: pm.operation
+                        plln9: nodeLine n: (nodes.get i: (pm.operation - 1).u64)
+                        plcl9: nodeCol n: (nodes.get i: (pm.operation - 1).u64)
                         ml9: "Cannot use '.lock' on valtype parameter '\{pnc9}' (type '\{ptnc9}') — locking requires identity (use a class)"
                         (addError
                             :st
@@ -16748,7 +17015,7 @@ checkFunctionBody: function {
                             msg: ml9
                         )
                     }
-                    own: ownershipOfParam o: (pathOwnership n: pm.operation)
+                    own: ownershipOfParam o: (pathOwnership n: (nodes.get i: (pm.operation - 1).u64))
                     v: st.reg.newVariable ztypeId: ptid ownership: own
                     vid2: v.variableId
                     st.defineVar name: pname.stringview var: v
@@ -16833,7 +17100,7 @@ resolveDemandedStdDeps: function {
                     :nodes :units
                     unitName: un9.stringview
                     shadowUnit: ""
-                    unitdef: u9.operation
+                    unitdef: (nodes.get i: (u9.operation - 1).u64)
                 )
             }
         } else null
@@ -16869,7 +17136,7 @@ runDepUnitWalks: function {
                 :st
                 :nodes
                 depName: dn.stringview
-                unitOp: du.operation
+                unitOp: (nodes.get i: (du.operation - 1).u64)
             )
         } else null
     }
@@ -16890,12 +17157,15 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
             match (
                 bm
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: bm.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (bm.operation - 1).u64)) then {
                     dv0: di0
                     idxs.append dv0
                 } else {
-                    hasm0: objectdefHasMethodBodies op: bm.operation
-                    if hasm0 when (objectdefIsGeneric o: bm.operation) then hasm0 = false
+                    hasm0: objectdefHasMethodBodies :nodes op: (nodes.get i: (bm.operation - 1).u64)
+                    if hasm0 when (objectdefIsGeneric
+                        :nodes
+                        o: (nodes.get i: (bm.operation - 1).u64)
+                    ) then hasm0 = false
                     if hasm0 then {
                         dv1: di0
                         idxs.append dv1
@@ -16912,7 +17182,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
             match (
                 bm2
             ) case namedoperation then {
-                if (isFunctionDefWithBody o: bm2.operation) then {
+                if (isFunctionDefWithBody o: (nodes.get i: (bm2.operation - 1).u64)) then {
                     fn: unitLabel o: bm2.name
                     rk: "\{depName}.\{fn}"
                     rgo: resolvedByKey ty: st.typing reg: st.reg key: rk
@@ -16929,7 +17199,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
                                 :st
                                 unitName: depName
                                 defName: dq.stringview
-                                defn: bm2.operation
+                                defn: (nodes.get i: (bm2.operation - 1).u64)
                                 thisName: ""
                                 :nodes
                                 unitBody: unitOp.body
@@ -16957,7 +17227,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
                                 :nodes
                                 unitBody: unitOp.body
                                 typeName: cls.stringview
-                                op: bm2.operation
+                                op: (nodes.get i: (bm2.operation - 1).u64)
                             )
                             st.typing.synthLabel = cprev
                             st.typing.currentThisName = cprevThis
@@ -17005,7 +17275,7 @@ checkUnitBodies: function {
                         :st
                         :unitName
                         defName: mainName.stringview
-                        defn: mm.operation
+                        defn: (nodes.get i: (mm.operation - 1).u64)
                         thisName: ""
                         :nodes
                         unitBody: unitdef.body
@@ -17025,7 +17295,7 @@ checkUnitBodies: function {
                         :st
                         :unitName
                         defName: defName.stringview
-                        defn: bm.operation
+                        defn: (nodes.get i: (bm.operation - 1).u64)
                         thisName: ""
                         :nodes
                         unitBody: unitdef.body
@@ -17073,7 +17343,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 (checkUnitBodies
                     :st
                     unitName: mainName
-                    unitdef: mu.operation
+                    unitdef: (program.nodes.get i: (mu.operation - 1).u64)
                     nodes: program.nodes
                     depUnits: program.units
                 )
@@ -17098,9 +17368,13 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                     reg: st.reg
                     nodes: program.nodes
                     unitName: dun9.stringview
-                    unitdef: du9.operation
+                    unitdef: (program.nodes.get i: (du9.operation - 1).u64)
                 ) then {
-                    demandAllUnitDefs reg: st.reg nodes: program.nodes unitdef: du9.operation
+                    (demandAllUnitDefs
+                        reg: st.reg
+                        nodes: program.nodes
+                        unitdef: (program.nodes.get i: (du9.operation - 1).u64)
+                    )
                     hasStd9 = true
                 }
             } else null
@@ -17132,13 +17406,13 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                         reg: st.reg
                         nodes: program.nodes
                         unitName: wun9.stringview
-                        unitdef: wu9.operation
+                        unitdef: (program.nodes.get i: (wu9.operation - 1).u64)
                     ) then {
                         (depWalkUnit
                             :st
                             nodes: program.nodes
                             depName: wun9.stringview
-                            unitOp: wu9.operation
+                            unitOp: (program.nodes.get i: (wu9.operation - 1).u64)
                         )
                     }
                 } else null
@@ -17419,6 +17693,7 @@ constantBranchWalkOpt: function {
 # resolves to the first branch's type -- stamped on the If, its Expression
 # wrapper, and resolved[unit.name].
 resolveUnitIfDef: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     mainName: StringView
@@ -17440,7 +17715,12 @@ resolveUnitIfDef: function {
                     match (
                         cond
                     ) case namedoperation then {
-                        constantOperandType :ty :reg :mainName n: cond.operation
+                        (constantOperandType
+                            :ty
+                            :reg
+                            :mainName
+                            n: (nodes.get i: (cond.operation - 1).u64)
+                        )
                     } else null
                 }
                 bt9: constantBranchWalk :ty :reg :mainName block: clause.statement
@@ -17470,6 +17750,7 @@ resolveUnitIfDef: function {
 # own nodes stay unstamped: the oracle's stamps there carry its unregistered
 # literal pseudo-type (NULL in the dump), invisible to every projection.
 resolveConstantDef: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     mainName: StringView
@@ -17479,8 +17760,16 @@ resolveConstantDef: function {
     match (
         defn
     ) case expression then {
-        resolveUnitIfDef :ty :reg :mainName :defName wrapperId: defn.nodeid n: defn.expression
-        resolveConstantDef :ty :reg :mainName :defName defn: defn.expression
+        (resolveUnitIfDef
+            :nodes
+            :ty
+            :reg
+            :mainName
+            :defName
+            wrapperId: defn.nodeid
+            n: defn.expression
+        )
+        resolveConstantDef :nodes :ty :reg :mainName :defName defn: defn.expression
     } case atomid then {
         if (isNumericLiteralName name: defn.name.stringview) then {
             base: "i64"
@@ -17590,11 +17879,12 @@ resolveConstantDefsInUnit: function {
                 defName: unitLabel o: bm.name
                 if defName.length > 0 then {
                     (resolveConstantDef
+                        :nodes
                         :ty
                         :reg
                         :mainName
                         defName: defName.stringview
-                        defn: bm.operation
+                        defn: (nodes.get i: (bm.operation - 1).u64)
                     )
                 }
             } else null
@@ -17623,7 +17913,7 @@ resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
                         :reg
                         nodes: program.nodes
                         :mainName
-                        unitdef: u.operation
+                        unitdef: (program.nodes.get i: (u.operation - 1).u64)
                     )
                 }
             } else null
@@ -17642,8 +17932,14 @@ unitHasYieldFn: function {nodes: List Node unitdef: Node} out bool is {
             match (
                 bm
             ) case namedoperation then {
-                if (zgenerator.fnBodyHasYield n: bm.operation) then return true
-                if (objectHasYieldMethod n: bm.operation) then return true
+                if (zgenerator.fnBodyHasYield
+                    :nodes
+                    n: (nodes.get i: (bm.operation - 1).u64)
+                ) then return true
+                if (objectHasYieldMethod
+                    :nodes
+                    n: (nodes.get i: (bm.operation - 1).u64)
+                ) then return true
             } else null
         }
         return false
@@ -17654,7 +17950,7 @@ unitHasYieldFn: function {nodes: List Node unitdef: Node} out bool is {
 
 # objectHasYieldMethod -- any is/as member of an object definition whose
 # body suspends.
-objectHasYieldMethod: function {n: Node} out bool is {
+objectHasYieldMethod: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case objectdef then {
@@ -17663,7 +17959,10 @@ objectHasYieldMethod: function {n: Node} out bool is {
             match (
                 am
             ) case namedoperation then {
-                if (zgenerator.fnBodyHasYield n: am.operation) then return true
+                if (zgenerator.fnBodyHasYield
+                    :nodes
+                    n: (nodes.get i: (am.operation - 1).u64)
+                ) then return true
             } else null
         }
         iiter: n.isItems.iterate
@@ -17671,7 +17970,10 @@ objectHasYieldMethod: function {n: Node} out bool is {
             match (
                 im
             ) case namedoperation then {
-                if (zgenerator.fnBodyHasYield n: im.operation) then return true
+                if (zgenerator.fnBodyHasYield
+                    :nodes
+                    n: (nodes.get i: (im.operation - 1).u64)
+                ) then return true
             } else null
         }
         return false
@@ -17714,7 +18016,7 @@ resolveNamedDefsIn: function {
                             :nodes :units
                             :unitName
                             defName: dn.stringview
-                            defn: bm.operation
+                            defn: (nodes.get i: (bm.operation - 1).u64)
                         )
                     }
                 }
@@ -17740,7 +18042,10 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             match (
                 yu
             ) case namedoperation then {
-                if (unitHasYieldFn nodes: program.nodes unitdef: yu.operation) then anyYield = true
+                if (unitHasYieldFn
+                    nodes: program.nodes
+                    unitdef: (program.nodes.get i: (yu.operation - 1).u64)
+                ) then anyYield = true
             } else null
         }
         if (anyYield) == false then return
@@ -17761,7 +18066,7 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
                         nodes: program.nodes
                                 units: program.units
                         unitName: "system"
-                        unitdef: su.operation
+                        unitdef: (program.nodes.get i: (su.operation - 1).u64)
                         wantA: "Iterator"
                         wantB: "optionval"
                     )
@@ -17780,7 +18085,12 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             match (
                 uel
             ) case namedoperation then {
-                lowerGeneratorsInUnit :ty :ids nodes: program.nodes unitdef: uel.operation
+                (lowerGeneratorsInUnit
+                    :ty
+                    :ids
+                    nodes: program.nodes
+                    unitdef: (program.nodes.get i: (uel.operation - 1).u64)
+                )
             } else null
             ui = ui + 1
         }
@@ -17810,12 +18120,17 @@ lowerGeneratorsInUnit: function {
             match (
                 bm
             ) case namedoperation then {
-                if (zgenerator.fnBodyHasYield n: bm.operation) then {
-                    hd: zgenerator.returnHeadName n: bm.operation
+                if (zgenerator.fnBodyHasYield
+                    :nodes
+                    n: (nodes.get i: (bm.operation - 1).u64)
+                ) then {
+                    hd: zgenerator.returnHeadName n: (nodes.get i: (bm.operation - 1).u64)
                     if hd.stringview == "Iterator" then {
-                        if (zgenerator.canLowerNow n: bm.operation hasReceiver: false) then {
-                            isCand = true
-                        }
+                        if (zgenerator.canLowerNow
+                            :nodes
+                            n: (nodes.get i: (bm.operation - 1).u64)
+                            hasReceiver: false
+                        ) then isCand = true
                     }
                 }
             } else null
@@ -17831,14 +18146,23 @@ lowerGeneratorsInUnit: function {
         for ci < cn loop {
             idx: cIdx.get i: ci
             uel2Id9: unitdef.body.get i: idx
-            uel2: nodes.get i: (uel2Id9 - 1).u64
-            match (
-                uel2
-            ) case namedoperation then {
-                dnm: unitLabel o: uel2.name
+            # scope the row view: lowering appends to the table below, and a
+            # live row view must not span a growing append
+            opId9: u32
+            dnm: String
+            {
+                uel2: nodes.get i: (uel2Id9 - 1).u64
+                match (
+                    uel2
+                ) case namedoperation then {
+                    dnm = unitLabel o: uel2.name
+                    opId9 = uel2.operation
+                } else null
+            }
+            if opId9 > 0 then {
                 sname: "\{dnm}_iter"
-                fnNode: uel2.operation.take
-                lowOpt: (zgenerator.lowerOne
+                fnNode: zast.tableTake :nodes id: opId9
+                lowOpt: (zgenerator.lowerOne :nodes
                     :ids
                     fn: fnNode
                     synthName: sname.stringview
@@ -17863,12 +18187,27 @@ lowerGeneratorsInUnit: function {
                         nsi = nsi + 1
                     }
                     fac: lowOpt.factory.take
-                    uel2.operation = fac
+                    facId9: zast.tableAppendRebase :nodes n: fac
+                    {
+                        uel2w: nodes.get i: (uel2Id9 - 1).u64
+                        match (
+                            uel2w
+                        ) case namedoperation then {
+                            uel2w.operation = facId9
+                        } else null
+                    }
                     cls: lowOpt.synthClass.take
-                    clsN: zgenerator.mkNamedOp :ids line: 0 col: 0 name: sname.stringview op: cls
+                    clsN: (zgenerator.mkNamedOp
+                        :nodes
+                        :ids
+                        line: 0
+                        col: 0
+                        name: sname.stringview
+                        op: cls
+                    )
                     stagedCls.append clsN
                 } case none then null
-            } else null
+            }
             ci = ci + 1
         }
         # staged synth classes append after the loop: uel2's element view
@@ -17892,10 +18231,11 @@ lowerGeneratorsInUnit: function {
                 tnm: unitLabel o: oel.name
                 if tnm.length > 0 then {
                     (lowerGeneratorMethods
+                        :nodes
                         :ty
                         :ids
                         typeName: tnm.stringview
-                        defn: oel.operation
+                        defn: (nodes.get i: (oel.operation - 1).u64)
                         dst: pendingCls
                     )
                 }
@@ -17918,6 +18258,7 @@ lowerGeneratorsInUnit: function {
 # definition (as-block first, then is-block), replacing each method with
 # its factory in place and appending the synth class to the unit body.
 lowerGeneratorMethods: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     ids: zgenerator.GenIds
     typeName: StringView
@@ -17927,12 +18268,13 @@ lowerGeneratorMethods: function {
     match (
         defn
     ) case objectdef then {
-        lowerGeneratorItems :ty :ids :typeName items: defn.asItems :dst
-        lowerGeneratorItems :ty :ids :typeName items: defn.isItems :dst
+        lowerGeneratorItems :nodes :ty :ids :typeName items: defn.asItems :dst
+        lowerGeneratorItems :nodes :ty :ids :typeName items: defn.isItems :dst
     } else null
 }
 
 lowerGeneratorItems: function {
+    nodes: List Node
     ty: ztyping.ZTyping
     ids: zgenerator.GenIds
     typeName: StringView
@@ -17947,10 +18289,14 @@ lowerGeneratorItems: function {
         match (
             bm
         ) case namedoperation then {
-            if (zgenerator.fnBodyHasYield n: bm.operation) then {
-                hd: zgenerator.returnHeadName n: bm.operation
+            if (zgenerator.fnBodyHasYield :nodes n: (nodes.get i: (bm.operation - 1).u64)) then {
+                hd: zgenerator.returnHeadName n: (nodes.get i: (bm.operation - 1).u64)
                 if hd.stringview == "Iterator" then {
-                    if (zgenerator.canLowerNow n: bm.operation hasReceiver: true) then isCand = true
+                    if (zgenerator.canLowerNow
+                        :nodes
+                        n: (nodes.get i: (bm.operation - 1).u64)
+                        hasReceiver: true
+                    ) then isCand = true
                 }
             }
         } else null
@@ -17961,8 +18307,8 @@ lowerGeneratorItems: function {
             ) case namedoperation then {
                 mnm: unitLabel o: bm2.name
                 sname: "\{typeName}_\{mnm}_iter"
-                fnNode: bm2.operation.take
-                lowOpt: (zgenerator.lowerOne
+                fnNode: zast.tableTake :nodes id: bm2.operation
+                lowOpt: (zgenerator.lowerOne :nodes
                     :ids
                     fn: fnNode
                     synthName: sname.stringview
@@ -17996,9 +18342,16 @@ lowerGeneratorItems: function {
                         iri = iri + 1
                     }
                     fac: lowOpt.factory.take
-                    bm2.operation = fac
+                    bm2.operation = zast.tableAppendRebase :nodes n: fac
                     cls: lowOpt.synthClass.take
-                    clsN: zgenerator.mkNamedOp :ids line: 0 col: 0 name: sname.stringview op: cls
+                    clsN: (zgenerator.mkNamedOp
+                        :nodes
+                        :ids
+                        line: 0
+                        col: 0
+                        name: sname.stringview
+                        op: cls
+                    )
                     dst.append clsN
                 } case none then null
             } else null
@@ -18580,7 +18933,7 @@ typecheck: function {
         match (
             program
         ) case program then {
-            stampCtorDefaults :st unitName: program.mainUnitName.stringview
+            stampCtorDefaults nodes: program.nodes :st unitName: program.mainUnitName.stringview
         } else null
         foldLiteralStamps :st :program
         match (

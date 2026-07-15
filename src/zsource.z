@@ -577,7 +577,7 @@ Analysis: class {
     # value collapses to the `:name` shorthand (same atomVariableId stamp -- codegen-neutral once
     # the emitter treats labelvalue == atomid). Fires on atomid values only, so it is idempotent:
     # a `:name` parses to a labelvalue and atomName returns "".
-    checkCollapseName: function {:this arguments: List Node} is {
+    checkCollapseName: function {:this nodes: List Node arguments: List Node} is {
         if this.lineStart.length == 0 then return
         aiter: arguments.iterate
         for a: aiter loop {
@@ -585,7 +585,7 @@ Analysis: class {
                 a
             ) case namedoperation then {
                 label: optName o: a.name
-                val: atomName n: a.operation
+                val: atomName n: (nodes.get i: (a.operation - 1).u64)
                 lsv: label.stringview
                 vsv: val.stringview
                 if lsv.length > 0 when vsv.length > 0 when lsv == vsv then {
@@ -595,7 +595,7 @@ Analysis: class {
                         lineno: a.lineno
                         colno: a.colno
                     )
-                    vi9: nodeInfoOf n: a.operation
+                    vi9: nodeInfoOf n: (nodes.get i: (a.operation - 1).u64)
                     hi9: (tokByteStart
                         lineStart: this.lineStart
                         srcLines: this.lines
@@ -621,7 +621,7 @@ Analysis: class {
     # args and starts at/after wrapSkip, emit the wrap edits (one arg per line at base+4; a `(` is
     # added when the call is bare) and set wrapFound. Only the first such call per pass is wrapped;
     # wrapSource's re-parse gate + fixpoint handle discards and the rest.
-    tryWrapCall: function {:this arguments: List Node line: u32 col: u32} is {
+    tryWrapCall: function {:this nodes: List Node arguments: List Node line: u32 col: u32} is {
         if line.u64 == this.wrapStart then return
         ac: arguments.length
         if ac < 2 then return
@@ -688,7 +688,7 @@ Analysis: class {
                 )
                 ap9: as9
                 match (
-                    arg.operation
+                    (nodes.get i: (arg.operation - 1).u64)
                 ) case labelvalue then {
                     ap9 = as9 - 1
                 } else null
@@ -704,7 +704,7 @@ Analysis: class {
     # tryWrapParams -- wrap mode: an over-long single-line function signature with >= 2 params breaks
     # its `{ }` param block onto one-param-per-line (the `{ }` already filters eol). Same batch/fixpoint
     # bookkeeping as tryWrapCall; the close `}` is located via the delimiter map, not line-end.
-    tryWrapParams: function {:this parameters: List Node line: u32} is {
+    tryWrapParams: function {:this nodes: List Node parameters: List Node line: u32} is {
         if line.u64 == this.wrapStart then return
         pc: parameters.length
         if pc < 2 then return
@@ -778,7 +778,7 @@ Analysis: class {
                 )
                 pp9: ps9
                 match (
-                    pm.operation
+                    (nodes.get i: (pm.operation - 1).u64)
                 ) case labelvalue then {
                     pp9 = ps9 - 1
                 } else null
@@ -1030,10 +1030,10 @@ Analysis: class {
             this.walk :nodes n: n.child
         } case call then {
             if this.wrapWidth > 0 then {
-                this.tryWrapCall arguments: n.arguments line: n.lineno col: n.colno
+                this.tryWrapCall :nodes arguments: n.arguments line: n.lineno col: n.colno
             } else {
                 this.checkElide callable: n.callable arguments: n.arguments
-                this.checkCollapseName arguments: n.arguments
+                this.checkCollapseName :nodes arguments: n.arguments
             }
             this.walk :nodes n: n.callable
             ait: n.arguments.iterate
@@ -1041,7 +1041,7 @@ Analysis: class {
         } case typeofexpr then {
             this.walk :nodes n: n.source
         } case namedoperation then {
-            this.walk :nodes n: n.operation
+            this.walk :nodes n: (nodes.get i: (n.operation - 1).u64)
         } case datablock then {
             elit: n.elements.iterate
             for el: elit loop this.walk :nodes n: el
@@ -1099,7 +1099,11 @@ Analysis: class {
             this.walk :nodes n: n.matcharm
             this.walk :nodes n: n.statement
         } case functiondef then {
-            if this.wrapWidth > 0 then this.tryWrapParams parameters: n.parameters line: n.lineno
+            if this.wrapWidth > 0 then (this.tryWrapParams
+                :nodes
+                parameters: n.parameters
+                line: n.lineno
+            )
             this.walkOpt :nodes o: n.returntype
             pmit: n.parameters.iterate
             for pm: pmit loop this.walk :nodes n: pm
@@ -1134,15 +1138,15 @@ Analysis: class {
             it: n.body.iterate
             for bId9: it loop this.walkCasing :nodes n: (nodes.get i: (bId9 - 1).u64)
         } case namedoperation then {
-            this.walkCasing :nodes n: n.operation
+            this.walkCasing :nodes n: (nodes.get i: (n.operation - 1).u64)
         } case objectdef then {
-            this.checkMemberCasing kind: n.kind items: n.isItems
+            this.checkMemberCasing :nodes kind: n.kind items: n.isItems
         } else null
     }
 
     # checkMemberCasing -- flag each variant/union arm whose name starts with an uppercase
     # letter (not lowerCamelCase), with a suggested rename (see casingSuggest/casingMessage).
-    checkMemberCasing: function {:this kind: zast.nodetype items: (List Node)} is {
+    checkMemberCasing: function {:this nodes: List Node kind: zast.nodetype items: (List Node)} is {
         isVU: false
         if kind == zast.nodetype.variantDef then isVU = true
         if kind == zast.nodetype.unionDef then isVU = true
@@ -1154,7 +1158,7 @@ Analysis: class {
             ) case namedoperation then {
                 isTypeRef: false
                 match (
-                    item.operation
+                    (nodes.get i: (item.operation - 1).u64)
                 ) case labelvalue then {
                     isTypeRef = true
                 } else null
@@ -1843,13 +1847,13 @@ Analysis: class {
 
     # sufNamedArg -- a named call/constructor argument whose suffix the parameter / field type
     # fixes.
-    sufNamedArg: function {:this arg: Node calleeType: u64 uname: StringView st: zenv.ZSymbolTable} is {
+    sufNamedArg: function {:this nodes: List Node arg: Node calleeType: u64 uname: StringView st: zenv.ZSymbolTable} is {
         match (
             arg
         ) case namedoperation then {
             an: optName o: arg.name
             if an.length > 0 then {
-                s9: operandSuffix n: arg.operation
+                s9: operandSuffix n: (nodes.get i: (arg.operation - 1).u64)
                 if s9.tname.length > 0 then {
                     pto: st.typing.childOf parentTypeId: calleeType name: an.stringview
                     match (
@@ -1867,11 +1871,11 @@ Analysis: class {
 
     # sufNamedArgReturn -- a return value whose suffix the enclosing function's return type
     # fixes.
-    sufNamedArgReturn: function {:this arg: Node rtName: StringView uname: StringView} is {
+    sufNamedArgReturn: function {:this nodes: List Node arg: Node rtName: StringView uname: StringView} is {
         match (
             arg
         ) case namedoperation then {
-            s9: operandSuffix n: arg.operation
+            s9: operandSuffix n: (nodes.get i: (arg.operation - 1).u64)
             if s9.tname.length > 0 when (s9.tname.stringview == rtName) then {
                 this.emitSuf :uname ln: s9.line col: s9.col tname: s9.tname.stringview
             }
@@ -1885,7 +1889,7 @@ Analysis: class {
 
     # sufCall -- redundant suffixes in a call: a `return` uses the enclosing function's return
     # type; otherwise each named argument's parameter type.
-    sufCall: function {:this callNid: u32 callable: Node arguments: List Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
+    sufCall: function {:this nodes: List Node callNid: u32 callable: Node arguments: List Node uname: StringView st: zenv.ZSymbolTable funcret: Option Node} is {
         ck: st.typing.callKind.get key: callNid.u64
         isRet: false
         match (
@@ -1901,7 +1905,12 @@ Analysis: class {
             rtName: typeNameOfOpt o: funcret :st
             if rtName.length > 0 then {
                 ait: arguments.iterate
-                for a: ait loop this.sufNamedArgReturn arg: a rtName: rtName.stringview :uname
+                for a: ait loop (this.sufNamedArgReturn
+                    :nodes
+                    arg: a
+                    rtName: rtName.stringview
+                    :uname
+                )
             }
         } else {
             cInfo: nodeInfoOf n: callable
@@ -1910,7 +1919,7 @@ Analysis: class {
                 co
             ) case some then {
                 ait: arguments.iterate
-                for a: ait loop this.sufNamedArg arg: a calleeType: co :uname :st
+                for a: ait loop this.sufNamedArg :nodes arg: a calleeType: co :uname :st
             } case none then null
         }
     }
@@ -1932,7 +1941,7 @@ Analysis: class {
             this.walkSuf :nodes n: n.parent :uname :st :funcret
             this.walkSuf :nodes n: n.child :uname :st :funcret
         } case call then {
-            (this.sufCall
+            (this.sufCall :nodes
                 callNid: n.nodeid
                 callable: n.callable
                 arguments: n.arguments
@@ -1946,7 +1955,7 @@ Analysis: class {
         } case typeofexpr then {
             this.walkSuf :nodes n: n.source :uname :st :funcret
         } case namedoperation then {
-            this.walkSuf :nodes n: n.operation :uname :st :funcret
+            this.walkSuf :nodes n: (nodes.get i: (n.operation - 1).u64) :uname :st :funcret
         } case datablock then {
             eiter: n.elements.iterate
             for el: eiter loop this.walkSuf :nodes n: el :uname :st :funcret
@@ -2070,7 +2079,13 @@ Analysis: class {
         ) case namedoperation then {
             un: optName o: namedOp.name
             if un.stringview == mainName then {
-                this.walkSuf :nodes n: namedOp.operation :uname :st funcret: (Option.none Node)
+                (this.walkSuf
+                    :nodes
+                    n: (nodes.get i: (namedOp.operation - 1).u64)
+                    :uname
+                    :st
+                    funcret: (Option.none Node)
+                )
             }
         } else null
     }

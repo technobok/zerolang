@@ -86,11 +86,11 @@ topNodeId: function {n: Node} out u32 is {
     }
 }
 
-paramOpId: function {n: Node} out u32 is {
+paramOpId: function {nodes: List zast.Node n: Node} out u32 is {
     match (
         n
     ) case namedoperation then {
-        return (topNodeId n: n.operation)
+        return (topNodeId n: (nodes.get i: (n.operation - 1).u64))
     } else {
         return 0
     }
@@ -98,7 +98,7 @@ paramOpId: function {n: Node} out u32 is {
 
 # bodyContainsYield -- a yield anywhere in this subtree, not descending
 # into nested function literals (their yields belong to that function).
-bodyContainsYield: function {n: Node} out bool is {
+bodyContainsYield: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case yieldexpr then {
@@ -108,76 +108,76 @@ bodyContainsYield: function {n: Node} out bool is {
     } case statement then {
         siter: n.statements.iterate
         for s0: siter loop {
-            if (bodyContainsYield n: s0) then return true
+            if (bodyContainsYield :nodes n: s0) then return true
         }
         return false
     } case statementline then {
-        return (bodyContainsYield n: n.statementline)
+        return (bodyContainsYield :nodes n: n.statementline)
     } case expression then {
-        return (bodyContainsYield n: n.expression)
+        return (bodyContainsYield :nodes n: n.expression)
     } case assignment then {
-        return (bodyContainsYield n: n.value)
+        return (bodyContainsYield :nodes n: n.value)
     } case reassignment then {
-        return (bodyContainsYield n: n.value)
+        return (bodyContainsYield :nodes n: n.value)
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0: cliter loop {
-            if (bodyContainsYield n: cl0) then return true
+            if (bodyContainsYield :nodes n: cl0) then return true
         }
-        return (bodyContainsYieldOpt o: n.elseclause)
+        return (bodyContainsYieldOpt :nodes o: n.elseclause)
     } case ifclause then {
         coiter: n.conditions.iterate
         for c0: coiter loop {
-            if (bodyContainsYield n: c0) then return true
+            if (bodyContainsYield :nodes n: c0) then return true
         }
-        return (bodyContainsYield n: n.statement)
+        return (bodyContainsYield :nodes n: n.statement)
     } case forexpr then {
         fiter: n.conditions.iterate
         for f0: fiter loop {
-            if (bodyContainsYield n: f0) then return true
+            if (bodyContainsYield :nodes n: f0) then return true
         }
-        if (bodyContainsYieldOpt o: n.body) then return true
+        if (bodyContainsYieldOpt :nodes o: n.body) then return true
         piter: n.postconditions.iterate
         for p0: piter loop {
-            if (bodyContainsYield n: p0) then return true
+            if (bodyContainsYield :nodes n: p0) then return true
         }
         return false
     } case doexpr then {
-        return (bodyContainsYield n: n.statement)
+        return (bodyContainsYield :nodes n: n.statement)
     } case withexpr then {
-        if (bodyContainsYield n: n.value) then return true
-        return (bodyContainsYield n: n.body)
+        if (bodyContainsYield :nodes n: n.value) then return true
+        return (bodyContainsYield :nodes n: n.body)
     } case caseexpr then {
-        if (bodyContainsYield n: n.subject) then return true
+        if (bodyContainsYield :nodes n: n.subject) then return true
         mliter: n.clauses.iterate
         for m0: mliter loop {
-            if (bodyContainsYield n: m0) then return true
+            if (bodyContainsYield :nodes n: m0) then return true
         }
-        return (bodyContainsYieldOpt o: n.elseclause)
+        return (bodyContainsYieldOpt :nodes o: n.elseclause)
     } case caseclause then {
-        return (bodyContainsYield n: n.statement)
+        return (bodyContainsYield :nodes n: n.statement)
     } case namedoperation then {
-        return (bodyContainsYield n: n.operation)
+        return (bodyContainsYield :nodes n: (nodes.get i: (n.operation - 1).u64))
     } case call then {
-        if (bodyContainsYield n: n.callable) then return true
+        if (bodyContainsYield :nodes n: n.callable) then return true
         aiter: n.arguments.iterate
         for a0: aiter loop {
-            if (bodyContainsYield n: a0) then return true
+            if (bodyContainsYield :nodes n: a0) then return true
         }
         return false
     } case binop then {
-        if (bodyContainsYield n: n.lhs) then return true
-        return (bodyContainsYield n: n.rhs)
+        if (bodyContainsYield :nodes n: n.lhs) then return true
+        return (bodyContainsYield :nodes n: n.rhs)
     } else {
         return false
     }
 }
 
-bodyContainsYieldOpt: function {o: Option Node} out bool is {
+bodyContainsYieldOpt: function {nodes: List zast.Node o: Option Node} out bool is {
     match (
         o
     ) case some then {
-        return (bodyContainsYield n: o)
+        return (bodyContainsYield :nodes n: o)
     } case none then {
         return false
     }
@@ -185,11 +185,11 @@ bodyContainsYieldOpt: function {o: Option Node} out bool is {
 
 # fnBodyHasYield -- the cheap structural generator pre-test on a
 # functiondef Node (spec/native bodies are never generators).
-fnBodyHasYield: function {n: Node} out bool is {
+fnBodyHasYield: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case functiondef then {
-        return (bodyContainsYieldOpt o: n.body)
+        return (bodyContainsYieldOpt :nodes o: n.body)
     } else {
         return false
     }
@@ -262,7 +262,7 @@ pathLeafName: function {n: Node} out String is {
 # expression / call / namedoperation shapes), minting fresh nodeids. The
 # synth wrapper and field types embed clones because a node owns exactly
 # one parent.
-clonePath: function {ids: GenIds n: Node} out Node is {
+clonePath: function {nodes: List zast.Node ids: GenIds n: Node} out Node is {
     match (
         n
     ) case atomid then {
@@ -285,8 +285,8 @@ clonePath: function {ids: GenIds n: Node} out Node is {
     } case dottedpath then {
         ln2: n.lineno
         co2: n.colno
-        np: clonePath :ids n: n.parent
-        nc: clonePath :ids n: n.child
+        np: clonePath :nodes :ids n: n.parent
+        nc: clonePath :nodes :ids n: n.child
         return (Node.dottedpath (zast.DottedPathData
             nodeid: ids.mint
             lineno: ln2
@@ -297,7 +297,7 @@ clonePath: function {ids: GenIds n: Node} out Node is {
     } case expression then {
         ln3: n.lineno
         co3: n.colno
-        ne: clonePath :ids n: n.expression
+        ne: clonePath :nodes :ids n: n.expression
         return (Node.expression (zast.ExpressionData
             nodeid: ids.mint
             lineno: ln3
@@ -307,11 +307,11 @@ clonePath: function {ids: GenIds n: Node} out Node is {
     } case call then {
         ln4: n.lineno
         co4: n.colno
-        ncal: clonePath :ids n: n.callable
+        ncal: clonePath :nodes :ids n: n.callable
         nargs: (List Node)
         aiter: n.arguments.iterate
         for a0: aiter loop {
-            na0: clonePath :ids n: a0
+            na0: clonePath :nodes :ids n: a0
             nargs.append na0
         }
         return (Node.call (zast.CallData
@@ -324,21 +324,21 @@ clonePath: function {ids: GenIds n: Node} out Node is {
     } case namedoperation then {
         ln5: n.lineno
         co5: n.colno
-        nop: clonePath :ids n: n.operation
+        nop: clonePath :nodes :ids n: (nodes.get i: (n.operation - 1).u64)
         nnm: cloneOptString o: n.name
         return (Node.namedoperation (zast.NamedOperationData
             nodeid: ids.mint
             lineno: ln5
             colno: co5
             name: nnm
-            operation: nop)
+            operation: (zast.tableAppendRebase :nodes n: nop))
         )
     } case binop then {
         ln6: n.lineno
         co6: n.colno
-        nl6: clonePath :ids n: n.lhs
-        no6: clonePath :ids n: n.operator
-        nr6: clonePath :ids n: n.rhs
+        nl6: clonePath :nodes :ids n: n.lhs
+        no6: clonePath :nodes :ids n: n.operator
+        nr6: clonePath :nodes :ids n: n.rhs
         return (Node.binop (zast.BinOpData
             nodeid: ids.mint
             lineno: ln6
@@ -353,7 +353,7 @@ clonePath: function {ids: GenIds n: Node} out Node is {
         nparts: (List Node)
         spiter: n.stringparts.iterate
         for sp0: spiter loop {
-            np0: clonePath :ids n: sp0
+            np0: clonePath :nodes :ids n: sp0
             nparts.append np0
         }
         return (Node.atomstring (zast.AtomStringData
@@ -414,29 +414,29 @@ GivesParts: class {
     acceptsTy: (Option Node)
 }
 
-givesParts: function {ids: GenIds n: Node} out GivesParts is {
+givesParts: function {nodes: List zast.Node ids: GenIds n: Node} out GivesParts is {
     result: (GivesParts base: (Option.none Node) leaf: "".string acceptsTy: (Option.none Node))
     match (
         n
     ) case functiondef then {
-        givesPartsOpt :ids o: n.returntype dst: result
+        givesPartsOpt :nodes :ids o: n.returntype dst: result
     } else null
     return result
 }
 
-givesPartsOpt: function {ids: GenIds o: Option Node dst: GivesParts} is {
+givesPartsOpt: function {nodes: List zast.Node ids: GenIds o: Option Node dst: GivesParts} is {
     match (
         o
     ) case some then {
-        givesPartsOf :ids n: o :dst
+        givesPartsOf :nodes :ids n: o :dst
     } case none then null
 }
 
-givesPartsOf: function {ids: GenIds n: Node dst: GivesParts} is {
+givesPartsOf: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesParts} is {
     match (
         n
     ) case expression then {
-        givesPartsOf :ids n: n.expression :dst
+        givesPartsOf :nodes :ids n: n.expression :dst
     } case call then {
         aiter: n.arguments.iterate
         for a0: aiter loop {
@@ -445,23 +445,23 @@ givesPartsOf: function {ids: GenIds n: Node dst: GivesParts} is {
             ) case namedoperation then {
                 an: optStringOr o: a0.name d: ""
                 if an.stringview == "gives" then {
-                    givesFromOp :ids n: a0.operation :dst
+                    givesFromOp :nodes :ids n: (nodes.get i: (a0.operation - 1).u64) :dst
                 }
                 if an.stringview == "accepts" then {
-                    acceptsFromOp :ids n: a0.operation :dst
+                    acceptsFromOp :nodes :ids n: (nodes.get i: (a0.operation - 1).u64) :dst
                 }
             } else null
         }
     } else null
 }
 
-givesFromOp: function {ids: GenIds n: Node dst: GivesParts} is {
+givesFromOp: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesParts} is {
     isExpr: false
     match (
         n
     ) case expression then {
         isExpr = true
-        givesFromOp :ids n: n.expression :dst
+        givesFromOp :nodes :ids n: n.expression :dst
     } else null
     if isExpr then return
     lf: pathLeafName :n
@@ -469,20 +469,20 @@ givesFromOp: function {ids: GenIds n: Node dst: GivesParts} is {
         match (
             n
         ) case dottedpath then {
-            bc: clonePath :ids n: n.parent
+            bc: clonePath :nodes :ids n: n.parent
             dst.base = (Option.some bc)
             dst.leaf = lf
         } else null
     } else {
-        bc2: clonePath :ids :n
+        bc2: clonePath :nodes :ids :n
         dst.base = (Option.some bc2)
     }
 }
 
-acceptsFromOp: function {ids: GenIds n: Node dst: GivesParts} is {
+acceptsFromOp: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesParts} is {
     nm0: leafAtomName :n
     if nm0.stringview != "null" then {
-        ac: clonePath :ids :n
+        ac: clonePath :nodes :ids :n
         dst.acceptsTy = (Option.some ac)
     }
 }
@@ -518,11 +518,11 @@ pathBaseAtomId: function {n: Node} out u32 is {
 
 # cloneDottedParent -- a clone of a dotted path's parent (the ownership
 # leaf stripped); none for non-dotted shapes.
-cloneDottedParent: function {ids: GenIds n: Node} out Option Node is {
+cloneDottedParent: function {nodes: List zast.Node ids: GenIds n: Node} out Option Node is {
     match (
         n
     ) case dottedpath then {
-        c: clonePath :ids n: n.parent
+        c: clonePath :nodes :ids n: n.parent
         return (Option.some c)
     } else {
         return (Option.none Node)
@@ -540,32 +540,51 @@ mkAtom: function {ids: GenIds line: u32 col: u32 name: StringView} out Node is {
     )
 }
 
-mkNamedOp: function {ids: GenIds line: u32 col: u32 name: StringView op: Node.take} out Node is {
+mkNamedOp: function {
+    nodes: List zast.Node
+    ids: GenIds
+    line: u32
+    col: u32
+    name: StringView
+    op: Node.take
+} out Node is {
     nm: (Option.some name.string)
     return (Node.namedoperation (zast.NamedOperationData
         nodeid: ids.mint
         lineno: line
         colno: col
         name: nm
-        operation: op)
+        operation: (zast.tableAppendRebase :nodes n: op))
     )
 }
 
-mkBareOp: function {ids: GenIds line: u32 col: u32 op: Node.take} out Node is {
+mkBareOp: function {
+    nodes: List zast.Node
+    ids: GenIds
+    line: u32
+    col: u32
+    op: Node.take
+} out Node is {
     return (Node.namedoperation (zast.NamedOperationData
         nodeid: ids.mint
         lineno: line
         colno: col
         name: (Option.none String)
-        operation: op)
+        operation: (zast.tableAppendRebase :nodes n: op))
     )
 }
 
 # mkReturnBody -- `{ return (<inner>) }`: the single-statement body both
 # the create method and the factory share.
-mkReturnBody: function {ids: GenIds line: u32 col: u32 inner: Node.take} out Node is {
+mkReturnBody: function {
+    nodes: List zast.Node
+    ids: GenIds
+    line: u32
+    col: u32
+    inner: Node.take
+} out Node is {
     retCal: mkAtom :ids :line :col name: "return"
-    retArg: mkBareOp :ids :line :col op: inner
+    retArg: mkBareOp :nodes :ids :line :col op: inner
     retArgs: (List Node)
     retArgs.append retArg
     retCall: (Node.call (zast.CallData
@@ -602,6 +621,7 @@ mkReturnBody: function {ids: GenIds line: u32 col: u32 inner: Node.take} out Nod
 # forward by label-value shorthand; promoted locals are reserved fields
 # the body's first write initialises.
 buildCreateMethod: function {
+    nodes: List zast.Node
     ids: GenIds
     line: u32
     col: u32
@@ -618,7 +638,7 @@ buildCreateMethod: function {
         child: createAtom)
     )
     zeroAtom: mkAtom :ids :line :col name: "0"
-    stArg: mkNamedOp :ids :line :col name: "state" op: zeroAtom
+    stArg: mkNamedOp :nodes :ids :line :col name: "state" op: zeroAtom
     cargs: (List Node)
     cargs.append stArg
     fi: u64
@@ -633,7 +653,7 @@ buildCreateMethod: function {
             colno: col
             name: f0s)
         )
-        fa0: mkNamedOp :ids :line :col name: f0v op: lv0
+        fa0: mkNamedOp :nodes :ids :line :col name: f0v op: lv0
         cargs.append fa0
         fi = fi + 1
     }
@@ -644,7 +664,7 @@ buildCreateMethod: function {
         callable: metaCreate
         arguments: cargs)
     )
-    body: mkReturnBody :ids :line :col inner: icall
+    body: mkReturnBody :nodes :ids :line :col inner: icall
     thisRet: mkAtom :ids :line :col name: "this"
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
@@ -662,6 +682,7 @@ buildCreateMethod: function {
 # {this: this} out (<wrapper> t: <gives>) is <original body>`. Yields stay
 # in place; promoted-name rewriting lands with the parameterized examples.
 buildCallMethod: function {
+    nodes: List zast.Node
     ids: GenIds
     line: u32
     col: u32
@@ -670,14 +691,14 @@ buildCallMethod: function {
     valueParam: (Option Node).take
 } out Node is {
     thisP: mkAtom :ids :line :col name: "this"
-    thisParam: mkNamedOp :ids :line :col name: "this" op: thisP
+    thisParam: mkNamedOp :nodes :ids :line :col name: "this" op: thisP
     params: (List Node)
     params.append thisParam
     vp9: valueParam.take
     match (
         vp9
     ) case some then {
-        vparam: mkNamedOp :ids :line :col name: "value" op: vp9.take
+        vparam: mkNamedOp :nodes :ids :line :col name: "value" op: vp9.take
         params.append vparam
     } case none then null
     return (Node.functiondef (zast.FunctionData
@@ -695,6 +716,7 @@ buildCallMethod: function {
 # buildWrapper -- the synth `.call` return `(Option|OptionView t: <base>)`;
 # leaf "take" selects Option, anything else OptionView.
 buildWrapper: function {
+    nodes: List zast.Node
     ids: GenIds
     line: u32
     col: u32
@@ -704,7 +726,7 @@ buildWrapper: function {
     wn: "OptionView"
     if leaf == "take" then wn = "Option"
     wAtom: mkAtom :ids :line :col name: wn
-    tArg: mkNamedOp :ids :line :col name: "t" op: base
+    tArg: mkNamedOp :nodes :ids :line :col name: "t" op: base
     wargs: (List Node)
     wargs.append tArg
     return (Node.call (zast.CallData
@@ -720,6 +742,7 @@ buildWrapper: function {
 # the synth class, body = `return (<synth_name> p1: p1 ...)` forwarding
 # each captured parameter by name.
 buildFactory: function {
+    nodes: List zast.Node
     ids: GenIds
     line: u32
     col: u32
@@ -750,10 +773,10 @@ buildFactory: function {
                 parent: va0
                 child: pa0)
             )
-            fa1: mkNamedOp :ids :line :col name: f0v op: vp0
+            fa1: mkNamedOp :nodes :ids :line :col name: f0v op: vp0
             fargs.append fa1
         } else {
-            fa0: mkNamedOp :ids :line :col name: f0v op: va0
+            fa0: mkNamedOp :nodes :ids :line :col name: f0v op: va0
             fargs.append fa0
         }
         fi = fi + 1
@@ -765,7 +788,7 @@ buildFactory: function {
         callable: synthAtom
         arguments: fargs)
     )
-    body: mkReturnBody :ids :line :col inner: icall
+    body: mkReturnBody :nodes :ids :line :col inner: icall
     retAtom: mkAtom :ids :line :col name: synthName
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
@@ -809,14 +832,14 @@ GenCross: class {
     yieldBound: (Map String value: bool)
 }
 
-crossWalk: function {gc: GenCross n: Node inYieldLoop: bool} is {
+crossWalk: function {nodes: List zast.Node gc: GenCross n: Node inYieldLoop: bool} is {
     match (
         n
     ) case functiondef then null case yieldexpr then {
-        crossWalk :gc n: n.expr :inYieldLoop
+        crossWalk :nodes :gc n: n.expr :inYieldLoop
         gc.yieldCount = gc.yieldCount + 1
     } case assignment then {
-        crossWalk :gc n: n.value :inYieldLoop
+        crossWalk :nodes :gc n: n.value :inYieldLoop
         anv: n.name.stringview
         if (isYieldValue n: n.value) then {
             ybk: anv.string
@@ -854,84 +877,84 @@ crossWalk: function {gc: GenCross n: Node inYieldLoop: bool} is {
             }
         }
     } case forexpr then {
-        bodyYields: bodyContainsYieldOpt o: n.body
+        bodyYields: bodyContainsYieldOpt :nodes o: n.body
         sub: inYieldLoop
         if bodyYields then sub = true
         fiter: n.conditions.iterate
         for f0: fiter loop {
-            crossWalk :gc n: f0 inYieldLoop: sub
+            crossWalk :nodes :gc n: f0 inYieldLoop: sub
         }
-        crossWalkOpt :gc o: n.body inYieldLoop: sub
+        crossWalkOpt :nodes :gc o: n.body inYieldLoop: sub
         piter: n.postconditions.iterate
         for p0: piter loop {
-            crossWalk :gc n: p0 inYieldLoop: sub
+            crossWalk :nodes :gc n: p0 inYieldLoop: sub
         }
     } case statement then {
         siter: n.statements.iterate
         for s0: siter loop {
-            crossWalk :gc n: s0 :inYieldLoop
+            crossWalk :nodes :gc n: s0 :inYieldLoop
         }
     } case statementline then {
-        crossWalk :gc n: n.statementline :inYieldLoop
+        crossWalk :nodes :gc n: n.statementline :inYieldLoop
     } case expression then {
-        crossWalk :gc n: n.expression :inYieldLoop
+        crossWalk :nodes :gc n: n.expression :inYieldLoop
     } case reassignment then {
-        crossWalk :gc n: n.topath :inYieldLoop
-        crossWalk :gc n: n.value :inYieldLoop
+        crossWalk :nodes :gc n: n.topath :inYieldLoop
+        crossWalk :nodes :gc n: n.value :inYieldLoop
     } case swapstmt then {
-        crossWalk :gc n: n.lhs :inYieldLoop
-        crossWalk :gc n: n.rhs :inYieldLoop
+        crossWalk :nodes :gc n: n.lhs :inYieldLoop
+        crossWalk :nodes :gc n: n.rhs :inYieldLoop
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0: cliter loop {
-            crossWalk :gc n: cl0 :inYieldLoop
+            crossWalk :nodes :gc n: cl0 :inYieldLoop
         }
-        crossWalkOpt :gc o: n.elseclause :inYieldLoop
+        crossWalkOpt :nodes :gc o: n.elseclause :inYieldLoop
     } case ifclause then {
         coiter: n.conditions.iterate
         for c0: coiter loop {
-            crossWalk :gc n: c0 :inYieldLoop
+            crossWalk :nodes :gc n: c0 :inYieldLoop
         }
-        crossWalk :gc n: n.statement :inYieldLoop
+        crossWalk :nodes :gc n: n.statement :inYieldLoop
     } case doexpr then {
-        crossWalk :gc n: n.statement :inYieldLoop
+        crossWalk :nodes :gc n: n.statement :inYieldLoop
     } case withexpr then {
-        crossWalk :gc n: n.value :inYieldLoop
-        crossWalk :gc n: n.body :inYieldLoop
+        crossWalk :nodes :gc n: n.value :inYieldLoop
+        crossWalk :nodes :gc n: n.body :inYieldLoop
     } case caseexpr then {
-        crossWalk :gc n: n.subject :inYieldLoop
+        crossWalk :nodes :gc n: n.subject :inYieldLoop
         mliter: n.clauses.iterate
         for m0: mliter loop {
-            crossWalk :gc n: m0 :inYieldLoop
+            crossWalk :nodes :gc n: m0 :inYieldLoop
         }
-        crossWalkOpt :gc o: n.elseclause :inYieldLoop
+        crossWalkOpt :nodes :gc o: n.elseclause :inYieldLoop
     } case caseclause then {
-        crossWalk :gc n: n.statement :inYieldLoop
+        crossWalk :nodes :gc n: n.statement :inYieldLoop
     } case call then {
         cciter: n.arguments.iterate
         for cc0: cciter loop {
-            crossWalk :gc n: cc0 :inYieldLoop
+            crossWalk :nodes :gc n: cc0 :inYieldLoop
         }
     } case namedoperation then {
-        crossWalk :gc n: n.operation :inYieldLoop
+        crossWalk :nodes :gc n: (nodes.get i: (n.operation - 1).u64) :inYieldLoop
     } case binop then {
-        crossWalk :gc n: n.lhs :inYieldLoop
-        crossWalk :gc n: n.rhs :inYieldLoop
+        crossWalk :nodes :gc n: n.lhs :inYieldLoop
+        crossWalk :nodes :gc n: n.rhs :inYieldLoop
     } case dottedpath then {
-        crossWalk :gc n: n.parent :inYieldLoop
+        crossWalk :nodes :gc n: n.parent :inYieldLoop
     } case atomstring then {
         apiter: n.stringparts.iterate
         for ap0: apiter loop {
-            crossWalk :gc n: ap0 :inYieldLoop
+            crossWalk :nodes :gc n: ap0 :inYieldLoop
         }
     } else null
 }
 
-crossWalkOpt: function {gc: GenCross o: Option Node inYieldLoop: bool} is {
+crossWalkOpt: function {nodes: List zast.Node gc: GenCross o: Option Node inYieldLoop: bool} is {
     match (
         o
     ) case some then {
-        crossWalk :gc n: o :inYieldLoop
+        crossWalk :nodes :gc n: o :inYieldLoop
     } case none then null
 }
 
@@ -974,7 +997,13 @@ crossingLocals: function {gc: GenCross dst: List String} is {
 
 # firstRhsOf -- the first `name: <rhs>` assignment's INNER rhs (a clone),
 # feeding the promoted local's typeof field.
-firstRhsOf: function {ids: GenIds n: Node name: StringView dst: GivesParts} is {
+firstRhsOf: function {
+    nodes: List zast.Node
+    ids: GenIds
+    n: Node
+    name: StringView
+    dst: GivesParts
+} is {
     match (
         n
     ) case functiondef then null case assignment then {
@@ -986,61 +1015,67 @@ firstRhsOf: function {ids: GenIds n: Node name: StringView dst: GivesParts} is {
         } case none then null
         if (already) == false then {
             if n.name.stringview == name then {
-                rc: cloneInner :ids n: n.value
+                rc: cloneInner :nodes :ids n: n.value
                 dst.base = (Option.some rc)
             }
         }
     } case statement then {
         siter: n.statements.iterate
         for s0: siter loop {
-            firstRhsOf :ids n: s0 :name :dst
+            firstRhsOf :nodes :ids n: s0 :name :dst
         }
     } case statementline then {
-        firstRhsOf :ids n: n.statementline :name :dst
+        firstRhsOf :nodes :ids n: n.statementline :name :dst
     } case expression then {
-        firstRhsOf :ids n: n.expression :name :dst
+        firstRhsOf :nodes :ids n: n.expression :name :dst
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0: cliter loop {
-            firstRhsOf :ids n: cl0 :name :dst
+            firstRhsOf :nodes :ids n: cl0 :name :dst
         }
-        firstRhsOfOpt :ids o: n.elseclause :name :dst
+        firstRhsOfOpt :nodes :ids o: n.elseclause :name :dst
     } case ifclause then {
-        firstRhsOf :ids n: n.statement :name :dst
+        firstRhsOf :nodes :ids n: n.statement :name :dst
     } case forexpr then {
-        firstRhsOfOpt :ids o: n.body :name :dst
+        firstRhsOfOpt :nodes :ids o: n.body :name :dst
     } case doexpr then {
-        firstRhsOf :ids n: n.statement :name :dst
+        firstRhsOf :nodes :ids n: n.statement :name :dst
     } case withexpr then {
-        firstRhsOf :ids n: n.body :name :dst
+        firstRhsOf :nodes :ids n: n.body :name :dst
     } case caseexpr then {
         mliter: n.clauses.iterate
         for m0: mliter loop {
-            firstRhsOf :ids n: m0 :name :dst
+            firstRhsOf :nodes :ids n: m0 :name :dst
         }
-        firstRhsOfOpt :ids o: n.elseclause :name :dst
+        firstRhsOfOpt :nodes :ids o: n.elseclause :name :dst
     } case caseclause then {
-        firstRhsOf :ids n: n.statement :name :dst
+        firstRhsOf :nodes :ids n: n.statement :name :dst
     } else null
 }
 
-firstRhsOfOpt: function {ids: GenIds o: Option Node name: StringView dst: GivesParts} is {
+firstRhsOfOpt: function {
+    nodes: List zast.Node
+    ids: GenIds
+    o: Option Node
+    name: StringView
+    dst: GivesParts
+} is {
     match (
         o
     ) case some then {
-        firstRhsOf :ids n: o :name :dst
+        firstRhsOf :nodes :ids n: o :name :dst
     } case none then null
 }
 
 # cloneInner -- clone the inside of an expression wrapper (the typeof
 # field embeds the bare operation).
-cloneInner: function {ids: GenIds n: Node} out Node is {
+cloneInner: function {nodes: List zast.Node ids: GenIds n: Node} out Node is {
     match (
         n
     ) case expression then {
-        return (cloneInner :ids n: n.expression)
+        return (cloneInner :nodes :ids n: n.expression)
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
@@ -1052,7 +1087,7 @@ cloneInner: function {ids: GenIds n: Node} out Node is {
 # crossing analysis (the yielding-loop rule promotes it) and to the
 # typeof field machinery. Recurses into for bodies only, mirroring the
 # reference.
-promoteIterables: function {ids: GenIds ctr: GenIds n: Node} out Node is {
+promoteIterables: function {nodes: List zast.Node ids: GenIds ctr: GenIds n: Node} out Node is {
     match (
         n
     ) case statement then {
@@ -1061,7 +1096,7 @@ promoteIterables: function {ids: GenIds ctr: GenIds n: Node} out Node is {
         newLines: (List Node)
         siter: n.statements.iterate
         for s0: siter loop {
-            promoteLine :ids :ctr n: s0 dst: newLines
+            promoteLine :nodes :ids :ctr n: s0 dst: newLines
         }
         return (Node.statement (zast.StatementData
             nodeid: ids.mint
@@ -1070,15 +1105,20 @@ promoteIterables: function {ids: GenIds ctr: GenIds n: Node} out Node is {
             statements: newLines)
         )
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
-promoteIterablesOpt: function {ids: GenIds ctr: GenIds o: Option Node} out Option Node is {
+promoteIterablesOpt: function {
+    nodes: List zast.Node
+    ids: GenIds
+    ctr: GenIds
+    o: Option Node
+} out Option Node is {
     match (
         o
     ) case some then {
-        r: promoteIterables :ids :ctr n: o
+        r: promoteIterables :nodes :ids :ctr n: o
         return (Option.some r)
     } case none then {
         return (Option.none Node)
@@ -1088,7 +1128,7 @@ promoteIterablesOpt: function {ids: GenIds ctr: GenIds o: Option Node} out Optio
 # promoteLine -- one statement line: a for-statement transforms (possibly
 # appending synthetic bindings first); anything else passes through as a
 # rewrite-clone (the rewrite with no promotions is a faithful deep copy).
-promoteLine: function {ids: GenIds ctr: GenIds n: Node dst: List Node} is {
+promoteLine: function {nodes: List zast.Node ids: GenIds ctr: GenIds n: Node dst: List Node} is {
     isFor: false
     match (
         n
@@ -1101,7 +1141,7 @@ promoteLine: function {ids: GenIds ctr: GenIds n: Node dst: List Node} is {
         ) case statementline then {
             lnQ: n.lineno
             coQ: n.colno
-            ni: promoteInExpr :ids :ctr n: n.statementline :dst
+            ni: promoteInExpr :nodes :ids :ctr n: n.statementline :dst
             nl: (Node.statementline (zast.StatementLineData
                 nodeid: ids.mint
                 lineno: lnQ
@@ -1112,7 +1152,7 @@ promoteLine: function {ids: GenIds ctr: GenIds n: Node dst: List Node} is {
         } else null
     } else {
         empty9: (Map String value: bool)
-        nc: rewriteToThis :ids :n promoted: empty9
+        nc: rewriteToThis :nodes :ids :n promoted: empty9
         dst.append nc
     }
 }
@@ -1129,13 +1169,19 @@ lineIsFor: function {n: Node} out bool is {
     }
 }
 
-promoteInExpr: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node is {
+promoteInExpr: function {
+    nodes: List zast.Node
+    ids: GenIds
+    ctr: GenIds
+    n: Node
+    dst: List Node
+} out Node is {
     match (
         n
     ) case expression then {
         lnR: n.lineno
         coR: n.colno
-        ni: promoteInExpr :ids :ctr n: n.expression :dst
+        ni: promoteInExpr :nodes :ids :ctr n: n.expression :dst
         return (Node.expression (zast.ExpressionData
             nodeid: ids.mint
             lineno: lnR
@@ -1143,19 +1189,25 @@ promoteInExpr: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Nod
             expression: ni)
         )
     } else {
-        return (promoteFor :ids :ctr :n :dst)
+        return (promoteFor :nodes :ids :ctr :n :dst)
     }
 }
 
-promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node is {
+promoteFor: function {
+    nodes: List zast.Node
+    ids: GenIds
+    ctr: GenIds
+    n: Node
+    dst: List Node
+} out Node is {
     match (
         n
     ) case forexpr then {
         lnS: n.lineno
         coS: n.colno
         # recurse into the loop body first (nested suspending fors)
-        nbody: promoteIterablesOpt :ids :ctr o: n.body
-        suspends: bodyContainsYieldOpt o: nbody
+        nbody: promoteIterablesOpt :nodes :ids :ctr o: n.body
+        suspends: bodyContainsYieldOpt :nodes o: nbody
         nconds: (List Node)
         citer: n.conditions.iterate
         for c0: citer loop {
@@ -1165,7 +1217,7 @@ promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node i
             ) case namedoperation then {
                 cn0: optStringOr o: c0.name d: ""
                 if cn0.length > 0 when suspends then {
-                    if (condIsTrivial n: c0.operation) == false then doHoist = true
+                    if (condIsTrivial n: (nodes.get i: (c0.operation - 1).u64)) == false then doHoist = true
                 }
             } else null
             if doHoist then {
@@ -1173,11 +1225,16 @@ promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node i
                     c0
                 ) case namedoperation then {
                     # synth nodes carry the ITERABLE's source position
-                    hl0: nodeLineOf n: c0.operation
-                    hc0: nodeColOf n: c0.operation
+                    hl0: nodeLineOf n: (nodes.get i: (c0.operation - 1).u64)
+                    hc0: nodeColOf n: (nodes.get i: (c0.operation - 1).u64)
                     synthN: "_iter\{ctr.mint}"
                     empty7: (Map String value: bool)
-                    rhs0: rewriteToThis :ids n: c0.operation promoted: empty7
+                    rhs0: (rewriteToThis
+                        :nodes
+                        :ids
+                        n: (nodes.get i: (c0.operation - 1).u64)
+                        promoted: empty7
+                    )
                     rhsE: ensureExpr :ids line: hl0 col: hc0 n: rhs0
                     snv0: synthN.stringview
                     sno0: snv0.string
@@ -1198,12 +1255,12 @@ promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node i
                     dst.append sl0
                     cn1: optStringOr o: c0.name d: ""
                     na0: mkAtom :ids line: hl0 col: hc0 name: sno1.stringview
-                    nc0: mkNamedOp :ids line: hl0 col: hc0 name: cn1.stringview op: na0
+                    nc0: mkNamedOp :nodes :ids line: hl0 col: hc0 name: cn1.stringview op: na0
                     nconds.append nc0
                 } else null
             } else {
                 empty6: (Map String value: bool)
-                cc0: rewriteToThis :ids n: c0 promoted: empty6
+                cc0: rewriteToThis :nodes :ids n: c0 promoted: empty6
                 nconds.append cc0
             }
         }
@@ -1211,7 +1268,7 @@ promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node i
         piter: n.postconditions.iterate
         for p0: piter loop {
             empty5: (Map String value: bool)
-            pp0: rewriteToThis :ids n: p0 promoted: empty5
+            pp0: rewriteToThis :nodes :ids n: p0 promoted: empty5
             nposts.append pp0
         }
         return (Node.forexpr (zast.ForData
@@ -1224,7 +1281,7 @@ promoteFor: function {ids: GenIds ctr: GenIds n: Node dst: List Node} out Node i
         )
     } else {
         empty4: (Map String value: bool)
-        return (rewriteToThis :ids :n promoted: empty4)
+        return (rewriteToThis :nodes :ids :n promoted: empty4)
     }
 }
 
@@ -1314,7 +1371,12 @@ ensureExpr: function {ids: GenIds line: u32 col: u32 n: Node.take} out Node is {
 # become the dotted path, dotted HEADS rewrite (children are field
 # labels), and an assignment to a promoted name becomes a reassignment
 # through `this` (the field was reserved at create time).
-rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)} out Node is {
+rewriteToThis: function {
+    nodes: List zast.Node
+    ids: GenIds
+    n: Node
+    promoted: (Map String value: bool)
+} out Node is {
     match (
         n
     ) case atomid then {
@@ -1347,8 +1409,8 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case dottedpath then {
         ln2: n.lineno
         co2: n.colno
-        np: rewriteToThis :ids n: n.parent :promoted
-        nc: clonePath :ids n: n.child
+        np: rewriteToThis :nodes :ids n: n.parent :promoted
+        nc: clonePath :nodes :ids n: n.child
         return (Node.dottedpath (zast.DottedPathData
             nodeid: ids.mint
             lineno: ln2
@@ -1359,7 +1421,7 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case expression then {
         ln3: n.lineno
         co3: n.colno
-        ne: rewriteToThis :ids n: n.expression :promoted
+        ne: rewriteToThis :nodes :ids n: n.expression :promoted
         return (Node.expression (zast.ExpressionData
             nodeid: ids.mint
             lineno: ln3
@@ -1369,11 +1431,11 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case call then {
         ln4: n.lineno
         co4: n.colno
-        ncal: rewriteToThis :ids n: n.callable :promoted
+        ncal: rewriteToThis :nodes :ids n: n.callable :promoted
         nargs: (List Node)
         aiter: n.arguments.iterate
         for a0: aiter loop {
-            na0: rewriteToThis :ids n: a0 :promoted
+            na0: rewriteToThis :nodes :ids n: a0 :promoted
             nargs.append na0
         }
         return (Node.call (zast.CallData
@@ -1386,21 +1448,21 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case namedoperation then {
         ln5: n.lineno
         co5: n.colno
-        nop: rewriteToThis :ids n: n.operation :promoted
+        nop: rewriteToThis :nodes :ids n: (nodes.get i: (n.operation - 1).u64) :promoted
         nnm: cloneOptString o: n.name
         return (Node.namedoperation (zast.NamedOperationData
             nodeid: ids.mint
             lineno: ln5
             colno: co5
             name: nnm
-            operation: nop)
+            operation: (zast.tableAppendRebase :nodes n: nop))
         )
     } case binop then {
         ln6: n.lineno
         co6: n.colno
-        nl6: rewriteToThis :ids n: n.lhs :promoted
-        no6: clonePath :ids n: n.operator
-        nr6: rewriteToThis :ids n: n.rhs :promoted
+        nl6: rewriteToThis :nodes :ids n: n.lhs :promoted
+        no6: clonePath :nodes :ids n: n.operator
+        nr6: rewriteToThis :nodes :ids n: n.rhs :promoted
         return (Node.binop (zast.BinOpData
             nodeid: ids.mint
             lineno: ln6
@@ -1415,7 +1477,7 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
         nstmts: (List Node)
         siter: n.statements.iterate
         for s0: siter loop {
-            ns0: rewriteToThis :ids n: s0 :promoted
+            ns0: rewriteToThis :nodes :ids n: s0 :promoted
             nstmts.append ns0
         }
         return (Node.statement (zast.StatementData
@@ -1427,7 +1489,7 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case statementline then {
         ln8: n.lineno
         co8: n.colno
-        ni8: rewriteToThis :ids n: n.statementline :promoted
+        ni8: rewriteToThis :nodes :ids n: n.statementline :promoted
         return (Node.statementline (zast.StatementLineData
             nodeid: ids.mint
             lineno: ln8
@@ -1437,7 +1499,7 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case assignment then {
         ln9c: n.lineno
         co9c: n.colno
-        nval: rewriteToThis :ids n: n.value :promoted
+        nval: rewriteToThis :nodes :ids n: n.value :promoted
         anv9: n.name.stringview
         isP9: optBoolOr2 o: (promoted.get key: anv9.string) d: false
         if isP9 then {
@@ -1462,8 +1524,8 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case reassignment then {
         lnA: n.lineno
         coA: n.colno
-        ntp: rewriteToThis :ids n: n.topath :promoted
-        nvA: rewriteToThis :ids n: n.value :promoted
+        ntp: rewriteToThis :nodes :ids n: n.topath :promoted
+        nvA: rewriteToThis :nodes :ids n: n.value :promoted
         return (Node.reassignment (zast.ReassignmentData
             nodeid: ids.mint
             lineno: lnA
@@ -1474,8 +1536,8 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case swapstmt then {
         lnB: n.lineno
         coB: n.colno
-        nlB: rewriteToThis :ids n: n.lhs :promoted
-        nrB: rewriteToThis :ids n: n.rhs :promoted
+        nlB: rewriteToThis :nodes :ids n: n.lhs :promoted
+        nrB: rewriteToThis :nodes :ids n: n.rhs :promoted
         return (Node.swapstmt (zast.SwapStmtData
             nodeid: ids.mint
             lineno: lnB
@@ -1489,10 +1551,10 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
         ncls: (List Node)
         cliter: n.clauses.iterate
         for cl0: cliter loop {
-            ncl0: rewriteToThis :ids n: cl0 :promoted
+            ncl0: rewriteToThis :nodes :ids n: cl0 :promoted
             ncls.append ncl0
         }
-        nels: rewriteOptToThis :ids o: n.elseclause :promoted
+        nels: rewriteOptToThis :nodes :ids o: n.elseclause :promoted
         return (Node.ifexpr (zast.IfData
             nodeid: ids.mint
             lineno: lnC
@@ -1506,10 +1568,10 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
         nconds: (List Node)
         coiter: n.conditions.iterate
         for c0: coiter loop {
-            nc0: rewriteToThis :ids n: c0 :promoted
+            nc0: rewriteToThis :nodes :ids n: c0 :promoted
             nconds.append nc0
         }
-        nst: rewriteToThis :ids n: n.statement :promoted
+        nst: rewriteToThis :nodes :ids n: n.statement :promoted
         return (Node.ifclause (zast.IfClauseData
             nodeid: ids.mint
             lineno: lnD
@@ -1523,14 +1585,14 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
         nfconds: (List Node)
         fiter: n.conditions.iterate
         for f0: fiter loop {
-            nf0: rewriteToThis :ids n: f0 :promoted
+            nf0: rewriteToThis :nodes :ids n: f0 :promoted
             nfconds.append nf0
         }
-        nbody: rewriteOptToThis :ids o: n.body :promoted
+        nbody: rewriteOptToThis :nodes :ids o: n.body :promoted
         nposts: (List Node)
         piter: n.postconditions.iterate
         for p0: piter loop {
-            np0: rewriteToThis :ids n: p0 :promoted
+            np0: rewriteToThis :nodes :ids n: p0 :promoted
             nposts.append np0
         }
         return (Node.forexpr (zast.ForData
@@ -1544,15 +1606,15 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case doexpr then {
         lnF: n.lineno
         coF: n.colno
-        nstF: rewriteToThis :ids n: n.statement :promoted
+        nstF: rewriteToThis :nodes :ids n: n.statement :promoted
         return (Node.doexpr (zast.DoData nodeid: ids.mint lineno: lnF colno: coF statement: nstF))
     } case withexpr then {
         lnG: n.lineno
         coG: n.colno
         wnv: n.name.stringview
         wn0: wnv.string
-        nvG: rewriteToThis :ids n: n.value :promoted
-        nbG: rewriteToThis :ids n: n.body :promoted
+        nvG: rewriteToThis :nodes :ids n: n.value :promoted
+        nbG: rewriteToThis :nodes :ids n: n.body :promoted
         return (Node.withexpr (zast.WithData
             nodeid: ids.mint
             lineno: lnG
@@ -1564,14 +1626,14 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case caseexpr then {
         lnH: n.lineno
         coH: n.colno
-        nsubH: rewriteToThis :ids n: n.subject :promoted
+        nsubH: rewriteToThis :nodes :ids n: n.subject :promoted
         nclsH: (List Node)
         mliter: n.clauses.iterate
         for m0: mliter loop {
-            nm0: rewriteToThis :ids n: m0 :promoted
+            nm0: rewriteToThis :nodes :ids n: m0 :promoted
             nclsH.append nm0
         }
-        nelsH: rewriteOptToThis :ids o: n.elseclause :promoted
+        nelsH: rewriteOptToThis :nodes :ids o: n.elseclause :promoted
         return (Node.caseexpr (zast.CaseData
             nodeid: ids.mint
             lineno: lnH
@@ -1585,8 +1647,8 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
         coI: n.colno
         cnv: n.name.stringview
         cn0: cnv.string
-        nma: clonePath :ids n: n.matcharm
-        nstI: rewriteToThis :ids n: n.statement :promoted
+        nma: clonePath :nodes :ids n: n.matcharm
+        nstI: rewriteToThis :nodes :ids n: n.statement :promoted
         return (Node.caseclause (zast.CaseClauseData
             nodeid: ids.mint
             lineno: lnI
@@ -1598,7 +1660,7 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
     } case yieldexpr then {
         lnJ: n.lineno
         coJ: n.colno
-        nxJ: rewriteToThis :ids n: n.expr :promoted
+        nxJ: rewriteToThis :nodes :ids n: n.expr :promoted
         return (Node.yieldexpr (zast.YieldExprData
             nodeid: ids.mint
             lineno: lnJ
@@ -1611,7 +1673,7 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
         npartsK: (List Node)
         spiter: n.stringparts.iterate
         for sp0: spiter loop {
-            nsp0: rewriteToThis :ids n: sp0 :promoted
+            nsp0: rewriteToThis :nodes :ids n: sp0 :promoted
             npartsK.append nsp0
         }
         return (Node.atomstring (zast.AtomStringData
@@ -1634,11 +1696,12 @@ rewriteToThis: function {ids: GenIds n: Node promoted: (Map String value: bool)}
             chunkKind: ckL)
         )
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
 rewriteOptToThis: function {
+    nodes: List zast.Node
     ids: GenIds
     o: Option Node
     promoted: (Map String value: bool)
@@ -1646,7 +1709,7 @@ rewriteOptToThis: function {
     match (
         o
     ) case some then {
-        r: rewriteToThis :ids n: o :promoted
+        r: rewriteToThis :nodes :ids n: o :promoted
         return (Option.some r)
     } case none then {
         return (Option.none Node)
@@ -1670,6 +1733,7 @@ mkThisDotted: function {ids: GenIds line: u32 col: u32 name: StringView} out Nod
 # cloneWithThisHead -- the rewritten spine carries the supplied position
 # (the reference synthesizes the receiver rewrite at loc = func.start).
 cloneWithThisHead: function {
+    nodes: List zast.Node
     ids: GenIds
     n: Node
     receiverType: StringView
@@ -1705,8 +1769,8 @@ cloneWithThisHead: function {
             )
         }
     } case dottedpath then {
-        np: cloneWithThisHead :ids n: n.parent :receiverType :line :col
-        nc: clonePath :ids n: n.child
+        np: cloneWithThisHead :nodes :ids n: n.parent :receiverType :line :col
+        nc: clonePath :nodes :ids n: n.child
         return (Node.dottedpath (zast.DottedPathData
             nodeid: ids.mint
             lineno: line
@@ -1715,7 +1779,7 @@ cloneWithThisHead: function {
             child: nc)
         )
     } case expression then {
-        ne: cloneWithThisHead :ids n: n.expression :receiverType :line :col
+        ne: cloneWithThisHead :nodes :ids n: n.expression :receiverType :line :col
         return (Node.expression (zast.ExpressionData
             nodeid: ids.mint
             lineno: line
@@ -1723,7 +1787,7 @@ cloneWithThisHead: function {
             expression: ne)
         )
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
@@ -1762,12 +1826,17 @@ isThisPrivate: function {n: Node} out bool is {
 # parameter: a take-leaf strips (fields hold owned values), lock keeps
 # its suffix, bare passes through. Receiver (`this`-headed) params
 # capture as receiver-type lock fields.
-paramFieldPath: function {ids: GenIds n: Node receiverType: StringView} out Node is {
+paramFieldPath: function {
+    nodes: List zast.Node
+    ids: GenIds
+    n: Node
+    receiverType: StringView
+} out Node is {
     if receiverType.length > 0 then {
         if (pathHeadIsThis :n) then {
             fl0: nodeLineOf :n
             fc0: nodeColOf :n
-            return (cloneWithThisHead :ids :n :receiverType line: fl0 col: fc0)
+            return (cloneWithThisHead :nodes :ids :n :receiverType line: fl0 col: fc0)
         }
     }
     lf: pathLeafName :n
@@ -1775,12 +1844,12 @@ paramFieldPath: function {ids: GenIds n: Node receiverType: StringView} out Node
         match (
             n
         ) case dottedpath then {
-            return (clonePath :ids n: n.parent)
+            return (clonePath :nodes :ids n: n.parent)
         } else {
-            return (clonePath :ids :n)
+            return (clonePath :nodes :ids :n)
         }
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
@@ -1788,6 +1857,7 @@ paramFieldPath: function {ids: GenIds n: Node receiverType: StringView} out Node
 # `this` head rewritten to the receiver type (inside the synth class,
 # `this` is the iterator, not the original receiver).
 cloneCreateParam: function {
+    nodes: List zast.Node
     ids: GenIds
     n: Node
     receiverType: StringView
@@ -1802,43 +1872,57 @@ cloneCreateParam: function {
         nnm: cloneOptString o: n.name
         isTh0: false
         if receiverType.length > 0 then {
-            isTh0 = pathHeadIsThis n: n.operation
+            opf209: nodes.get i: (n.operation - 1).u64
+            isTh0 = pathHeadIsThis n: opf209
         }
         if isTh0 then {
-            nop1: cloneWithThisHead :ids n: n.operation :receiverType line: fnLine col: fnCol
+            nop1: (cloneWithThisHead
+                :nodes
+                :ids
+                n: (nodes.get i: (n.operation - 1).u64)
+                :receiverType
+                line: fnLine
+                col: fnCol
+            )
             return (Node.namedoperation (zast.NamedOperationData
                 nodeid: ids.mint
                 lineno: ln0
                 colno: co0
                 name: nnm
-                operation: nop1)
+                operation: (zast.tableAppendRebase :nodes n: nop1))
             )
         } else {
-            nop: clonePath :ids n: n.operation
+            nop: clonePath :nodes :ids n: (nodes.get i: (n.operation - 1).u64)
             return (Node.namedoperation (zast.NamedOperationData
                 nodeid: ids.mint
                 lineno: ln0
                 colno: co0
                 name: nnm
-                operation: nop)
+                operation: (zast.tableAppendRebase :nodes n: nop))
             )
         }
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
 # cloneFactoryParam -- the factory's parameter: `this.private.lock`
 # exposes publicly as `this.lock` (the body projects `.private` when
 # forwarding); everything else clones as-is.
-cloneFactoryParam: function {ids: GenIds n: Node fnLine: u32 fnCol: u32} out Node is {
+cloneFactoryParam: function {
+    nodes: List zast.Node
+    ids: GenIds
+    n: Node
+    fnLine: u32
+    fnCol: u32
+} out Node is {
     match (
         n
     ) case namedoperation then {
         ln0: n.lineno
         co0: n.colno
         nnm: cloneOptString o: n.name
-        if (isThisPrivateLock n: n.operation) then {
+        if (isThisPrivateLock n: (nodes.get i: (n.operation - 1).u64)) then {
             # the public this.lock replacement carries the function's start
             # (the reference synthesizes it at loc = func.start)
             ta0: mkAtom :ids line: fnLine col: fnCol name: "this"
@@ -1855,35 +1939,35 @@ cloneFactoryParam: function {ids: GenIds n: Node fnLine: u32 fnCol: u32} out Nod
                 lineno: ln0
                 colno: co0
                 name: nnm
-                operation: nop2)
+                operation: (zast.tableAppendRebase :nodes n: nop2))
             )
         } else {
-            nop: clonePath :ids n: n.operation
+            nop: clonePath :nodes :ids n: (nodes.get i: (n.operation - 1).u64)
             return (Node.namedoperation (zast.NamedOperationData
                 nodeid: ids.mint
                 lineno: ln0
                 colno: co0
                 name: nnm
-                operation: nop)
+                operation: (zast.tableAppendRebase :nodes n: nop))
             )
         }
     } else {
-        return (clonePath :ids :n)
+        return (clonePath :nodes :ids :n)
     }
 }
 
 # canLowerNow -- pre-surgery shape gate on the borrowed definition: a
 # parenthesized gives, a real body, and no receiver (`this`-headed)
 # parameter types (method generators land with the listiter slice).
-canLowerNow: function {n: Node hasReceiver: bool} out bool is {
+canLowerNow: function {nodes: List zast.Node n: Node hasReceiver: bool} out bool is {
     match (
         n
     ) case functiondef then {
         piter: n.parameters.iterate
         for p0: piter loop {
-            if (paramHeadIsThis n: p0) then {
+            if (paramHeadIsThis :nodes n: p0) then {
                 if hasReceiver then {
-                    if (paramIsThisLock n: p0) == false then return false
+                    if (paramIsThisLock :nodes n: p0) == false then return false
                 } else {
                     return false
                 }
@@ -1906,21 +1990,21 @@ canLowerNow: function {n: Node hasReceiver: bool} out bool is {
 
 # returnHasAccepts -- a non-null accepts: argument on the iterator return
 # (the bidirectional form).
-returnHasAccepts: function {o: Option Node} out bool is {
+returnHasAccepts: function {nodes: List zast.Node o: Option Node} out bool is {
     match (
         o
     ) case some then {
-        return (returnHasAcceptsOf n: o)
+        return (returnHasAcceptsOf :nodes n: o)
     } case none then {
         return false
     }
 }
 
-returnHasAcceptsOf: function {n: Node} out bool is {
+returnHasAcceptsOf: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (returnHasAcceptsOf n: n.expression)
+        return (returnHasAcceptsOf :nodes n: n.expression)
     } case call then {
         aiter: n.arguments.iterate
         for a0: aiter loop {
@@ -1929,7 +2013,7 @@ returnHasAcceptsOf: function {n: Node} out bool is {
             ) case namedoperation then {
                 an: optStringOr o: a0.name d: ""
                 if an.stringview == "accepts" then {
-                    nv0: leafAtomName n: a0.operation
+                    nv0: leafAtomName n: (nodes.get i: (a0.operation - 1).u64)
                     if nv0.stringview != "null" then return true
                 }
             } else null
@@ -1940,11 +2024,11 @@ returnHasAcceptsOf: function {n: Node} out bool is {
     }
 }
 
-paramHeadIsThis: function {n: Node} out bool is {
+paramHeadIsThis: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case namedoperation then {
-        return (pathHeadIsThis n: n.operation)
+        return (pathHeadIsThis n: (nodes.get i: (n.operation - 1).u64))
     } else {
         return false
     }
@@ -1952,11 +2036,11 @@ paramHeadIsThis: function {n: Node} out bool is {
 
 # paramIsThisLock -- the receiver parameter forms a generator method may
 # carry: `this.lock` or `this.private.lock`.
-paramIsThisLock: function {n: Node} out bool is {
+paramIsThisLock: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case namedoperation then {
-        lf: pathLeafName n: n.operation
+        lf: pathLeafName n: (nodes.get i: (n.operation - 1).u64)
         if lf.stringview == "lock" then {
             return true
         } else {
@@ -1988,12 +2072,13 @@ pathHeadIsThis: function {n: Node} out bool is {
 # rewritten through `this`, and assemble the synth class (state +
 # captured fields + create + call) plus the forwarding factory.
 lowerOne: function {
+    nodes: List zast.Node
     ids: GenIds
     fn: Node.take
     synthName: StringView
     receiverType: StringView
 } out Option GenLowered is {
-    gp: givesParts :ids n: fn
+    gp: givesParts :nodes :ids n: fn
     match (
         fn
     ) case functiondef then {
@@ -2003,7 +2088,7 @@ lowerOne: function {
         match (
             gbase
         ) case some then {
-            wrapper: buildWrapper :ids :line :col base: gbase.take leaf: gp.leaf.stringview
+            wrapper: buildWrapper :nodes :ids :line :col base: gbase.take leaf: gp.leaf.stringview
             # the EXPRESSION wrapper's id keys the pendingMono record; the
             # typechecker's valtype collapse looks it up there.
             wid: ids.mint
@@ -2024,25 +2109,30 @@ lowerOne: function {
             privNames: (Map String value: bool)
             piter: fn.parameters.iterate
             for p0: piter loop {
-                cp0: cloneCreateParam :ids n: p0 :receiverType fnLine: line fnCol: col
-                isThP: paramHeadIsThis n: p0
-                cpid0: paramOpId n: cp0
+                cp0: cloneCreateParam :nodes :ids n: p0 :receiverType fnLine: line fnCol: col
+                isThP: paramHeadIsThis :nodes n: p0
+                cpid0: paramOpId :nodes n: cp0
                 if cpid0 > 0 when isThP then {} else {
                     if cpid0 > 0 then noStamp.append cpid0
                 }
-                fp0: cloneFactoryParam :ids n: p0 fnLine: line fnCol: col
+                fp0: cloneFactoryParam :nodes :ids n: p0 fnLine: line fnCol: col
                 match (
                     p0
                 ) case namedoperation then {
                     pn0: optStringOr o: p0.name d: ""
                     if pn0.length > 0 then {
-                        if (isThisPrivateLock n: p0.operation) then {
+                        if (isThisPrivateLock n: (nodes.get i: (p0.operation - 1).u64)) then {
                             pnv1: pn0.stringview
                             pk1: pnv1.string
                             pv1: true
                             privNames.set key: pk1 value: pv1
                         }
-                        pf0: paramFieldPath :ids n: p0.operation :receiverType
+                        pf0: (paramFieldPath
+                            :nodes
+                            :ids
+                            n: (nodes.get i: (p0.operation - 1).u64)
+                            :receiverType
+                        )
                         pFields.append pf0
                         createParams.append cp0
                         factoryParams.append fp0
@@ -2055,7 +2145,7 @@ lowerOne: function {
             # the suspending-iterable promotion runs first; the analyses and
             # the this-rewrite read the promoted body.
             ictr: (GenIds nextId: 0)
-            pBody: promoteIterablesOpt :ids ctr: ictr o: fn.body
+            pBody: promoteIterablesOpt :nodes :ids ctr: ictr o: fn.body
             # promoted = parameters + yield-crossing locals
             gc: (GenCross
                 yieldCount: 0
@@ -2075,7 +2165,7 @@ lowerOne: function {
                 gc.params.set key: gk0 value: gv0
                 gi = gi + 1
             }
-            crossWalkOpt :gc o: pBody inYieldLoop: false
+            crossWalkOpt :nodes :gc o: pBody inYieldLoop: false
             crossing: (List String)
             crossingLocals :gc dst: crossing
             promoted: (Map String value: bool)
@@ -2100,7 +2190,7 @@ lowerOne: function {
                 ci2 = ci2 + 1
             }
             # the call body: a deep clone with promoted names through `this`
-            newBodyOpt: rewriteOptToThis :ids o: pBody :promoted
+            newBodyOpt: rewriteOptToThis :nodes :ids o: pBody :promoted
             match (
                 newBodyOpt
             ) case some then {
@@ -2117,16 +2207,16 @@ lowerOne: function {
                 ) case some then {
                     al9: nodeLineOf n: acc9
                     ac9: nodeColOf n: acc9
-                    vp0: clonePath :ids n: acc9
+                    vp0: clonePath :nodes :ids n: acc9
                     valueParam = (Option.some vp0)
                     alf9: pathLeafName n: acc9
                     if alf9.stringview == "take" then {
-                        resumeField = cloneDottedParent :ids n: acc9
+                        resumeField = cloneDottedParent :nodes :ids n: acc9
                         rfb0: resumeBaseId o: resumeField
                         if rfb0 > 0 then noStamp.append rfb0
                     } else {
                         if alf9.stringview == "lock" then {
-                            rf1: clonePath :ids n: acc9
+                            rf1: clonePath :nodes :ids n: acc9
                             # the field copy shares the param's stamp in the
                             # reference -- one stamp per ref (the recorder
                             # keys the head atom)
@@ -2138,9 +2228,9 @@ lowerOne: function {
                         } else {
                             base9: (Option.none Node)
                             if alf9.stringview == "borrow" then {
-                                base9 = cloneDottedParent :ids n: acc9
+                                base9 = cloneDottedParent :nodes :ids n: acc9
                             } else {
-                                b10: clonePath :ids n: acc9
+                                b10: clonePath :nodes :ids n: acc9
                                 base9 = (Option.some b10)
                             }
                             rfb2: resumeBaseId o: base9
@@ -2162,8 +2252,23 @@ lowerOne: function {
                         }
                     }
                 } case none then null
-                callM: buildCallMethod :ids :line :col body: newBodyOpt.take :wrapExpr :valueParam
-                createM: buildCreateMethod :ids :line :col params: createParams fwdNames: pNames
+                callM: (buildCallMethod
+                    :nodes
+                    :ids
+                    :line
+                    :col
+                    body: newBodyOpt.take
+                    :wrapExpr
+                    :valueParam
+                )
+                createM: (buildCreateMethod
+                    :nodes
+                    :ids
+                    :line
+                    :col
+                    params: createParams
+                    fwdNames: pNames
+                )
                 # class fields: the state cursor, captured params, then
                 # typeof-typed yield-crossing locals (first-assignment order)
                 sysAtom: mkAtom :ids :line :col name: "system"
@@ -2175,7 +2280,7 @@ lowerOne: function {
                     parent: sysAtom
                     child: i64Leaf)
                 )
-                stField: mkNamedOp :ids :line :col name: "state" op: i64Atom
+                stField: mkNamedOp :nodes :ids :line :col name: "state" op: i64Atom
                 isItems: (List Node)
                 isItems.append stField
                 fi3: u64
@@ -2186,7 +2291,7 @@ lowerOne: function {
                     pf3: pFields.get i: fi3
                     # field paths staged owned: List.get is a borrow, the
                     # namedoperation stores owned -- clone out
-                    pf3o: clonePath :ids n: pf3
+                    pf3o: clonePath :nodes :ids n: pf3
                     # receiver-lock fields stamp (the reference builds them
                     # fresh); ordinary param fields share the factory's stamp
                     tf3: thisFlags.get i: fi3
@@ -2199,7 +2304,7 @@ lowerOne: function {
                         pfid3: topNodeId n: pf3o
                         if pfid3 > 0 then noStamp.append pfid3
                     }
-                    nf3: mkNamedOp :ids :line :col name: f3v op: pf3o
+                    nf3: mkNamedOp :nodes :ids :line :col name: f3v op: pf3o
                     isItems.append nf3
                     fi3 = fi3 + 1
                 }
@@ -2213,7 +2318,7 @@ lowerOne: function {
                         leaf: "".string
                         acceptsTy: (Option.none Node)
                     )
-                    firstRhsOfOpt :ids o: pBody name: l3v dst: rhsCar
+                    firstRhsOfOpt :nodes :ids o: pBody name: l3v dst: rhsCar
                     rc3: rhsCar.base.take
                     match (
                         rc3
@@ -2224,7 +2329,7 @@ lowerOne: function {
                             colno: col
                             source: rc3.take)
                         )
-                        nf4: mkNamedOp :ids :line :col name: l3v op: tof3
+                        nf4: mkNamedOp :nodes :ids :line :col name: l3v op: tof3
                         isItems.append nf4
                     } case none then null
                     li3 = li3 + 1
@@ -2233,11 +2338,11 @@ lowerOne: function {
                 match (
                     rfg9
                 ) case some then {
-                    rfn9: mkNamedOp :ids :line :col name: "_resume_input" op: rfg9.take
+                    rfn9: mkNamedOp :nodes :ids :line :col name: "_resume_input" op: rfg9.take
                     isItems.append rfn9
                 } case none then null
-                createNamed: mkNamedOp :ids :line :col name: "create" op: createM
-                callNamed: mkNamedOp :ids :line :col name: "call" op: callM
+                createNamed: mkNamedOp :nodes :ids :line :col name: "create" op: createM
+                callNamed: mkNamedOp :nodes :ids :line :col name: "call" op: callM
                 asItems: (List Node)
                 asItems.append createNamed
                 asItems.append callNamed
@@ -2251,6 +2356,7 @@ lowerOne: function {
                     isNative: false)
                 )
                 factory: (buildFactory
+                    :nodes
                     :ids
                     :line
                     :col
