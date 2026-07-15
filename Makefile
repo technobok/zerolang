@@ -276,26 +276,29 @@ emitter-guard:
 clean:
 	rm -rf $(BUILDDIR) bin
 
-# native-guard -- the io/os/cli/net natives are wired by NAME: a .z
-# declaration, a quoted-name entry in zemitterc's call maps, and a C
-# fragment under src/runtime/natives must all agree (symlink/readlink
-# once had fragments but no map entry: calls typechecked, never linked).
-# Leg 1: every top-level 'is native' function declared in the four
-# name-mapped units appears quoted somewhere in zemitterc.z (bodied
-# free functions emit generically and are exempt). Leg 2: every _Z_* fragment
-# name zemitterc references exists on disk. The numeric/collection/String
-# native families are emitter-specials with no per-name artifacts and are
-# out of scope here (system/core/collections are guarded by the
-# native-only body error instead).
+# native-guard -- the io/os/cli/net natives are declaration-driven: the
+# unified emitter derives the C symbol z_<unit>_<name> from the resolved
+# declaration, and the C implementation lives in a conventionally-named
+# fragment _Z_<UNIT>_<UPPER_SNAKE(name)>.inc under src/runtime/natives.
+# Leg 1: every top-level 'is native' free function in the four convention
+# units has its fragment on disk, or is a known exception (print is the
+# statement-special; stdin/stdout/stderr live in the stream fragments;
+# env->GET_ENV and pollReadable->POLL are renamed). Bodied free functions
+# emit generically and are exempt. Leg 2: every _Z_* fragment name the
+# emitter references exists on disk.
+NATIVE_GUARD_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.env net.pollReadable
 native-guard:
 	@fail=0; \
 	for u in io os cli net; do \
 	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z); do \
-	    grep -q "\"$$n\"" src/zemitterc.z || { echo "native-guard: $$u.$$n declared but never named in src/zemitterc.z"; fail=1; }; \
+	    case " $(NATIVE_GUARD_EXCEPTIONS) " in *" $$u.$$n "*) continue;; esac; \
+	    snake=$$(echo "$$n" | sed 's/\([A-Z]\)/_\1/g' | tr 'a-z' 'A-Z'); \
+	    frag="_Z_$$(echo $$u | tr 'a-z' 'A-Z')_$$snake"; \
+	    test -f src/runtime/natives/$$frag.inc || { echo "native-guard: $$u.$$n declared native but $$frag.inc missing (add the fragment or an exceptions entry)"; fail=1; }; \
 	  done; \
 	done; \
 	for f in $$(grep -oE '"_Z_[A-Z0-9_]+"' src/zemitterc.z | tr -d '"' | sort -u); do \
 	  test -f src/runtime/natives/$$f.inc || { echo "native-guard: fragment $$f.inc referenced but missing"; fail=1; }; \
 	done; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "native-guard OK: io/os/cli/net name maps + fragment files consistent"
+	echo "native-guard OK: native declarations and runtime fragments consistent"

@@ -4781,22 +4781,16 @@ emitCallValue: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData}
     if mcc.length > 0 then return mcc
     pdc: emitProtocolDispatch :symtab :ctx :call
     if pdc.length > 0 then return pdc
-    ioc: emitIoCall :symtab :ctx :call
-    if ioc.length > 0 then return ioc
+    nfc9: emitNativeFreeFnCall :symtab :ctx :call
+    if nfc9.length > 0 then return nfc9
     fmc: emitFileMethodCall :symtab :ctx :call
     if fmc.length > 0 then return fmc
-    clic: emitCliCall :symtab :ctx :call
-    if clic.length > 0 then return clic
     clisc: emitCliSpecCreate :symtab :ctx :call
     if clisc.length > 0 then return clisc
     pmc: emitParsedMethodCall :symtab :ctx :call
     if pmc.length > 0 then return pmc
     uic: emitUserIterCall :symtab :ctx :call
     if uic.length > 0 then return uic
-    osc: emitOsCall :symtab :ctx :call
-    if osc.length > 0 then return osc
-    netc9: emitNetCall :symtab :ctx :call
-    if netc9.length > 0 then return netc9
     scv9: emitStrConvCall :symtab :ctx :call
     if scv9.length > 0 then return scv9
     dc: emitDottedCall :symtab :ctx :call
@@ -16477,205 +16471,197 @@ osNeedsErrno: function {ctx: Ctx} out bool is {
 # emitOsCall -- an arg-taking os.* native (env/setEnv/unsetEnv/setCwd/exit):
 # `z_os_<name>(args...)` in source order. "" for any non-os callee. (No-arg os
 # fns ride the emitExpr dotted leg.)
-emitOsCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: dottedBaseAtom n: call.callable
-    if bn.stringview != "os" then return "".string
-    mn: dottedChildText n: call.callable
-    isOsC: false
-    if mn.stringview == "env" then isOsC = true
-    if mn.stringview == "setEnv" then isOsC = true
-    if mn.stringview == "unsetEnv" then isOsC = true
-    if mn.stringview == "setCwd" then isOsC = true
-    if mn.stringview == "exit" then isOsC = true
-    if mn.stringview == "spawn" then isOsC = true
-    if (isOsC) == false then return "".string
-    needsAdd :ctx name: "os"
-    oname9: "os_\{mn}"
-    needsAdd :ctx name: oname9.stringview
-    args: String
-    first: true
-    with aiter: call.arguments.iterate do for a: aiter loop {
-        match (
-            a
-        ) case namedoperation then {
-            av: emitExpr :symtab :ctx n: a.operation
-            if first then {
-                first = false
-            } else {
-                args.append ", "
-            }
-            # spawn's argv is a (List of: String), passed by pointer; a local
-            # list needs its address, a List param is already a pointer.
-            al9: unitLabel9 o: a.name
-            argPtr9: pathIsPointer :symtab :ctx n: a.operation
-            if al9.stringview == "argv" when argPtr9 == false then args.append "&"
-            args.append av.stringview
-        } else null
-    }
-    return "z_os_\{mn}(\{args})"
+# isNativeRuntimeUnit -- a unit whose `is native` FREE functions follow the
+# runtime convention: C symbol `z_<unit>_<name>`, fragment
+# `_Z_<UNIT>_<UPPER_SNAKE(name)>.inc`. system/core/collections natives use
+# bespoke legacy symbols (z_stringJoin, statement-special print/panic) and
+# stay outside; adding a new convention unit is one line here.
+isNativeRuntimeUnit: function {name: StringView} out bool is {
+    if name == "io" then return true
+    if name == "os" then return true
+    if name == "net" then return true
+    if name == "cli" then return true
+    return false
 }
 
-# emitNetCall -- the net unit's free natives (listen/connect/
-# pollReadable): scalar args, literal z_net_* symbols.
-emitNetCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: dottedBaseAtom n: call.callable
-    if bn.stringview != "net" then return "".string
-    mn: dottedChildText n: call.callable
-    isNetC: false
-    if mn.stringview == "listen" then isNetC = true
-    if mn.stringview == "connect" then isNetC = true
-    if mn.stringview == "pollReadable" then isNetC = true
-    if (isNetC) == false then return "".string
-    needsAdd :ctx name: "net"
-    args: String
-    first: true
-    with aiter: call.arguments.iterate do for a: aiter loop {
-        match (
-            a
-        ) case namedoperation then {
-            av: emitExpr :symtab :ctx n: a.operation
-            if first then {
-                first = false
-            } else {
-                args.append ", "
-            }
-            args.append av.stringview
-        } else null
-    }
-    return "z_net_\{mn}(\{args})"
-}
-
-emitIoCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    bn: dottedBaseAtom n: call.callable
-    if bn.stringview != "io" then return "".string
-    mn: dottedChildText n: call.callable
-    fname: String
-    if mn.stringview == "readText" then fname = "z_io_readText".string
-    if mn.stringview == "writeText" then fname = "z_io_writeText".string
-    if mn.stringview == "appendText" then fname = "z_io_appendText".string
-    if mn.stringview == "eprintln" then fname = "z_io_eprintln".string
-    if mn.stringview == "open" then fname = "z_io_open".string
-    if mn.stringview == "exists" then fname = "z_io_exists".string
-    if mn.stringview == "mkdir" then fname = "z_io_mkdir".string
-    if mn.stringview == "mkdirp" then fname = "z_io_mkdirp".string
-    if mn.stringview == "remove" then fname = "z_io_remove".string
-    if mn.stringview == "symlink" then fname = "z_io_symlink".string
-    if mn.stringview == "readlink" then fname = "z_io_readlink".string
-    if mn.stringview == "rename" then fname = "z_io_rename".string
-    if mn.stringview == "stat" then fname = "z_io_stat".string
-    if mn.stringview == "lstat" then fname = "z_io_lstat".string
-    if mn.stringview == "listDir" then fname = "z_io_listDir".string
-    if fname.length == 0 then return "".string
-    needsAdd :ctx name: "io"
-    iname: "io_\{mn}"
-    needsAdd :ctx name: iname.stringview
-    args: String
-    first: true
-    with aiter: call.arguments.iterate do for a: aiter loop {
-        match (
-            a
-        ) case namedoperation then {
-            # an interpolated argument builds into a hoisted owned temp
-            # (freed at the statement flush) and passes as its view
-            avh9: emitColInterpArg :symtab :ctx n: a.operation consumes: false
-            av: String
-            if avh9.length > 0 then {
-                av = svValueForm :ctx expr: avh9.stringview isStr: true
-            } else {
-                av = emitExpr :symtab :ctx n: a.operation
-            }
-            if first then {
-                first = false
-            } else {
-                args.append ", "
-            }
-            # a String arg to a StringLike io param passes as a by-value view
-            if avh9.length == 0 when (stampIdOf
+# lowerNativeArg -- lower one native-call argument from the DECLARED
+# parameter: StringView / StringLike-generic params take a by-value view
+# (String args project, interpolations hoist to a view); class and
+# borrowed-List params pass by pointer; take params pass the owned value;
+# scalars pass verbatim.
+lowerNativeArg: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    fid: u64
+    pname: StringView
+    pid: u64
+    op: Node
+} out String is {
+    isViewP9: false
+    if pid == ctx.svTid then isViewP9 = true
+    if (symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam then isViewP9 = true
+    if isViewP9 then {
+        avh9: emitColInterpArg :symtab :ctx n: op consumes: false
+        if avh9.length > 0 then return (svValueForm :ctx expr: avh9.stringview isStr: true)
+        av0: emitExpr :symtab :ctx n: op
+        if (stampIdOf :symtab nid: (nodeIdOf9 n: op)) == ctx.strTid then {
+            hb9: (hoistBorrowValArg
                 :symtab
-                nid: (nodeIdOf9 n: a.operation)
-            ) == ctx.strTid then {
-                ioh9: (hoistBorrowValArg
-                    :symtab
-                    :ctx
-                    av: av.stringview
-                    pid: ctx.strTid
-                    paramTake: false
-                    isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: a.operation)
-                )
-                if ioh9.length > 0 then av = ioh9
-                iosv9: svValueForm :ctx expr: av.stringview isStr: true
-                args.append iosv9.stringview
-            } else {
-                args.append av.stringview
-            }
-        } else null
+                :ctx
+                av: av0.stringview
+                pid: ctx.strTid
+                paramTake: false
+                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: op)
+            )
+            if hb9.length > 0 then av0 = hb9
+            return (svValueForm :ctx expr: av0.stringview isStr: true)
+        }
+        return av0
     }
-    return "\{fname}(\{args})"
+    iv9: emitInterpArgExpr :symtab :ctx n: op
+    if iv9.length > 0 then return iv9
+    isTake9: (symtab.typing.childOwnershipIs
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.takeMode
+    )
+    needAmp9: false
+    if (isTake9) == false then {
+        if (isReftypeParam :symtab :ctx tid: pid) then needAmp9 = true
+        if (isListPtrParam :symtab :fid :pname tid: pid) then needAmp9 = true
+    }
+    av1: emitExpr :symtab :ctx n: op
+    if needAmp9 when (pathIsPointer :symtab :ctx n: op) == false then return "&\{av1}"
+    return av1
 }
 
-# cliSpecArg -- the `spec:` argument of a cli free-function call, addressed
-# (the natives take `z_Spec_t* spec`); a pointer receiver is passed as-is.
-cliSpecArg: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
-    aiter: call.arguments.iterate
-    for a: aiter loop {
+# emitNativeArg -- find one native-call argument by label, else by the
+# positional cursor, and lower it (lowerNativeArg).
+emitNativeArg: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    fid: u64
+    pname: StringView
+    pid: u64
+    usePos: bool
+    posIdx: u64
+} out String is {
+    seen9: u64
+    with aiter: call.arguments.iterate do for a: aiter loop {
         match (
             a
         ) case namedoperation then {
             al: unitLabel9 o: a.name
-            if al.stringview == "spec" then {
-                at: atomTextOf n: a.operation
-                ar: aliasResolve :ctx name: at.stringview
-                arC: ztypes.mangleVarName name: ar.stringview
-                if (isPtrVar :ctx name: ar.stringview) then return arC
-                return "&\{arC}"
+            if usePos then {
+                if al.length == 0 then {
+                    if seen9 == posIdx then {
+                        return (lowerNativeArg :symtab :ctx :fid :pname :pid op: a.operation)
+                    }
+                    seen9 = seen9 + 1
+                }
+            } else {
+                if al.stringview == pname then {
+                    return (lowerNativeArg :symtab :ctx :fid :pname :pid op: a.operation)
+                }
             }
         } else null
     }
     return "0".string
 }
 
-# emitCliCall -- a cli free-function (addFlag/addOption/addPositional/parse/
-# helpText): `z_cli_<name>(&spec, ...)` in the native's param order. "" otherwise.
-emitCliCall: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallData} out String is {
+# emitNativeFreeFnCall -- ANY call (dotted `io.remove ...` or a bare sibling
+# `remove ...` inside the unit) that resolves to an `is native` FREE function
+# of a runtime-convention unit emits `z_<unit>_<name>(<args>)`, each argument
+# lowered from the declared parameter (emitNativeArg). "" for anything else:
+# bodied siblings fall through to the id-cname route, methods to their own
+# legs, non-convention natives (stringJoin/print/panic) to theirs.
+emitNativeFreeFnCall: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+} out String is {
+    un: String
+    mn: String
     bn: dottedBaseAtom n: call.callable
-    if bn.stringview != "cli" then return "".string
-    mn: dottedChildText n: call.callable
-    isMod: false
-    if mn.stringview == "addFlag" then isMod = true
-    if mn.stringview == "addOption" then isMod = true
-    if mn.stringview == "addPositional" then isMod = true
-    if mn.stringview == "parse" then isMod = true
-    if mn.stringview == "helpText" then isMod = true
-    if (isMod) == false then return "".string
-    needsAdd :ctx name: "cli"
-    cneed: "cli_\{mn}"
-    needsAdd :ctx name: cneed.stringview
-    sp9: cliSpecArg :symtab :ctx :call
-    if mn.stringview == "addFlag" then {
-        na: ctorArgByLabel :symtab :ctx :call label: "name"
-        sa: ctorArgByLabel :symtab :ctx :call label: "shortName"
-        ha: ctorArgByLabel :symtab :ctx :call label: "help"
-        return "z_cli_addFlag(\{sp9}, \{na}, \{sa}, \{ha})"
+    if bn.length > 0 then {
+        if (isNativeRuntimeUnit name: bn.stringview) == false then return "".string
+        mn = dottedChildText n: call.callable
+        un = bn
+    } else {
+        cn0: atomTextOf n: call.callable
+        if cn0.length == 0 then return "".string
+        fid0: userFnId :symtab :ctx name: cn0.stringview
+        if fid0 == 0 then return "".string
+        if (fnIsNativeId :symtab fid: fid0) == false then return "".string
+        duo0: definedInUnitOf :symtab tid: fid0
+        match (
+            duo0
+        ) case some then {
+            if (isNativeRuntimeUnit name: duo0.stringview) == false then return "".string
+            un = duo0.copy
+        } case none then {
+            return "".string
+        }
+        mn = cn0
     }
-    if mn.stringview == "addOption" then {
-        na2: ctorArgByLabel :symtab :ctx :call label: "name"
-        sa2: ctorArgByLabel :symtab :ctx :call label: "shortName"
-        ha2: ctorArgByLabel :symtab :ctx :call label: "help"
-        ra2: ctorArgByLabel :symtab :ctx :call label: "required"
-        return "z_cli_addOption(\{sp9}, \{na2}, \{sa2}, \{ha2}, \{ra2})"
+    if mn.length == 0 then return "".string
+    fk9: "\{un}.\{mn}"
+    fo9: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: fk9
+    fid: u64
+    match (
+        fo9
+    ) case some then {
+        fid = fo9
+    } case none then {
+        return "".string
     }
-    if mn.stringview == "addPositional" then {
-        na3: ctorArgByLabel :symtab :ctx :call label: "name"
-        ha3: ctorArgByLabel :symtab :ctx :call label: "help"
-        ra3: ctorArgByLabel :symtab :ctx :call label: "required"
-        return "z_cli_addPositional(\{sp9}, \{na3}, \{ha3}, \{ra3})"
+    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
+    if (fnIsNativeId :symtab :fid) == false then return "".string
+    needsAdd :ctx name: un.stringview
+    nk9: "\{un}_\{mn}"
+    needsAdd :ctx name: nk9.stringview
+    pn: (List String)
+    pidl: (List u64)
+    recFieldLists :symtab tid: fid names: pn ids: pidl
+    args: String
+    m: pn.length
+    j: u64
+    posIdx9: u64
+    for j < m loop {
+        pname: pn.get i: j
+        pid: pidl.get i: j
+        j = j + 1
+        hasL9: ctorHasLabel :call label: pname.stringview
+        av: String
+        if hasL9 then {
+            av = (emitNativeArg
+                :symtab
+                :ctx
+                :call
+                :fid
+                pname: pname.stringview
+                :pid
+                usePos: false
+                posIdx: 0
+            )
+        } else {
+            av = (emitNativeArg
+                :symtab
+                :ctx
+                :call
+                :fid
+                pname: pname.stringview
+                :pid
+                usePos: true
+                posIdx: posIdx9
+            )
+            posIdx9 = posIdx9 + 1
+        }
+        if args.length > 0 then args.append ", "
+        args.append av.stringview
     }
-    if mn.stringview == "parse" then {
-        pa: ctorArgByLabel :symtab :ctx :call label: "args"
-        return "z_cli_parse(\{sp9}, \{pa})"
-    }
-    if mn.stringview == "helpText" then return "z_cli_helpText(\{sp9})"
-    return "".string
+    return "z_\{un}_\{mn}(\{args})"
 }
 
 # cliCreateClass -- the class name X of a `cli.X.create` callable, else "".

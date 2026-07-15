@@ -551,14 +551,23 @@ the collections, the numerics) and their #~"is native" functions are
 implemented by the hand-written C runtime under #~"src/runtime". The
 emitter never generates structs or type-method bodies for them
 (#~"isEmittableFileUnit" excludes the six from every type-emission
-pass); instead each native is wired by #_*"name" across three layers
-that must agree: the #~".z" declaration (what the type checker
-validates), a quoted-name entry in the emitter's call maps
-(#~"emitIoCall" and friends), and a C fragment under
-#~"src/runtime/natives". The #~"make native-guard" ratchet (run in
-#~"make ci") holds the io/os/cli/net free-function layer together:
-every #~"is native" declaration must appear in the emitter maps, and
-every referenced #~"_Z_*" fragment must exist on disk.
+pass); instead native FREE functions are #_*"declaration-driven": one
+emitter (#~"emitNativeFreeFnCall") derives the C symbol
+#~"z_<unit>_<name>" from the resolved declaration and lowers every
+argument from the declared parameter types (StringView / StringLike
+params take a by-value view, class and borrowed-List params pass by
+pointer, #~"take" params pass the owned value, scalars pass
+verbatim) -- for both the dotted (#~"io.remove") and bare same-unit
+call shapes. The C implementation lives in a conventionally-named
+fragment #~"_Z_<UNIT>_<UPPER_SNAKE(name)>.inc" under
+#~"src/runtime/natives". Adding a native to a convention unit is a
+declaration plus a fragment -- no emitter edits; a new
+native-bearing unit is one line in #~"isNativeRuntimeUnit"
+(system/collections natives keep bespoke legacy symbols and their
+own legs). The #~"make native-guard" ratchet (run in #~"make ci")
+asserts each #~"is native" declaration's fragment exists (with a
+small exceptions list for the stream/statement specials and two
+renames) and that every referenced #~"_Z_*" fragment is on disk.
 
 #_*"Bodied free functions" in these units are ordinary emitted
 zerolang (#~"io.removeTree" is the living example). They are
@@ -568,11 +577,11 @@ order cannot disturb the main unit's shadow and monomorph resolution --
 and only in programs whose demand loop referenced them; the emitter
 correspondingly skips undemanded bodies in #~"emitFnsIn" and the
 literal pool, so an unused stdlib body cannot drag runtime fragments
-or unmaterialized monos into unrelated programs. Two rules apply
-inside such a body: sibling natives must be called through the dotted
-unit form (#~"io.remove", not bare #~"remove" -- a bare name emits the
-raw C identifier and collides with libc), and #~".take" references to
-bodied stdlib functions are not yet wired (they are callable only).
+or unmaterialized monos into unrelated programs. One limitation
+applies inside such a body: #~".take" references to bodied stdlib
+functions are not yet wired (they are callable only). Sibling
+natives may be called bare or dotted -- both shapes resolve through
+the declaration-driven native emitter.
 A #_*"type method" with a #~".z" body in these units is a compile
 error (E0100): the type's methods belong to the C runtime.
 

@@ -582,14 +582,23 @@ the collections, the numerics) and their <code>is native</code> functions are
 implemented by the hand-written C runtime under <code>src/runtime</code>. The
 emitter never generates structs or type-method bodies for them
 (<code>isEmittableFileUnit</code> excludes the six from every type-emission
-pass); instead each native is wired by <em><strong>name</strong></em> across three layers
-that must agree: the <code>.z</code> declaration (what the type checker
-validates), a quoted-name entry in the emitter's call maps
-(<code>emitIoCall</code> and friends), and a C fragment under
-<code>src/runtime/natives</code>. The <code>make native-guard</code> ratchet (run in
-<code>make ci</code>) holds the io/os/cli/net free-function layer together:
-every <code>is native</code> declaration must appear in the emitter maps, and
-every referenced <code>_Z_*</code> fragment must exist on disk.</p>
+pass); instead native FREE functions are <em><strong>declaration-driven</strong></em>: one
+emitter (<code>emitNativeFreeFnCall</code>) derives the C symbol
+<code>z_&lt;unit&gt;_&lt;name&gt;</code> from the resolved declaration and lowers every
+argument from the declared parameter types (StringView / StringLike
+params take a by-value view, class and borrowed-List params pass by
+pointer, <code>take</code> params pass the owned value, scalars pass
+verbatim) -- for both the dotted (<code>io.remove</code>) and bare same-unit
+call shapes. The C implementation lives in a conventionally-named
+fragment <code>_Z_&lt;UNIT&gt;_&lt;UPPER_SNAKE(name)&gt;.inc</code> under
+<code>src/runtime/natives</code>. Adding a native to a convention unit is a
+declaration plus a fragment -- no emitter edits; a new
+native-bearing unit is one line in <code>isNativeRuntimeUnit</code>
+(system/collections natives keep bespoke legacy symbols and their
+own legs). The <code>make native-guard</code> ratchet (run in <code>make ci</code>)
+asserts each <code>is native</code> declaration's fragment exists (with a
+small exceptions list for the stream/statement specials and two
+renames) and that every referenced <code>_Z_*</code> fragment is on disk.</p>
 <p><em><strong>Bodied free functions</strong></em> in these units are ordinary emitted
 zerolang (<code>io.removeTree</code> is the living example). They are
 demand-gated end to end: the type checker resolves and walks them in a
@@ -598,11 +607,11 @@ order cannot disturb the main unit's shadow and monomorph resolution --
 and only in programs whose demand loop referenced them; the emitter
 correspondingly skips undemanded bodies in <code>emitFnsIn</code> and the
 literal pool, so an unused stdlib body cannot drag runtime fragments
-or unmaterialized monos into unrelated programs. Two rules apply
-inside such a body: sibling natives must be called through the dotted
-unit form (<code>io.remove</code>, not bare <code>remove</code> -- a bare name emits the
-raw C identifier and collides with libc), and <code>.take</code> references to
-bodied stdlib functions are not yet wired (they are callable only).
+or unmaterialized monos into unrelated programs. One limitation
+applies inside such a body: <code>.take</code> references to bodied stdlib
+functions are not yet wired (they are callable only). Sibling
+natives may be called bare or dotted -- both shapes resolve through
+the declaration-driven native emitter.
 A <em><strong>type method</strong></em> with a <code>.z</code> body in these units is a compile
 error (E0100): the type's methods belong to the C runtime.</p>
 <h3 id="c-name-generation"><a href="#c-name-generation">8.2. C Name Generation</a></h3>
