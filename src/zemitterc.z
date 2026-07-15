@@ -11027,7 +11027,7 @@ unitLabel9: function {o: Option String} out String is {
 # fnReturnTypeId -- the stamped type id of a function's return-type node (the
 # typecheck stamps `op.returntype`, even for concrete fns whose registry
 # returnTypeId is unset). 0 when the fn has no return type.
-fnReturnTypeId: function {symtab: zenv.ZSymbolTable op: Node} out u64 is {
+fnReturnTypeId: function {nodes: List Node symtab: zenv.ZSymbolTable op: Node} out u64 is {
     match (
         op
     ) case functiondef then {
@@ -11249,6 +11249,7 @@ registerReftypeParams: function {symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} is
 }
 
 fnSignature: function {
+    nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     name: StringView
@@ -11257,10 +11258,10 @@ fnSignature: function {
 } out String is {
     if name == "main" then return "void z_main(void)".string
     ret: "void".string
-    rbn: ztypecheck.fnReturnBaseNameOf :op
+    rbn: ztypecheck.fnReturnBaseNameOf :nodes :op
     if rbn.length > 0 then {
         rbc: cTypeOf name: rbn.stringview
-        rtid0: fnReturnTypeId :symtab :op
+        rtid0: fnReturnTypeId :nodes :symtab :op
         if rtid0 == ctx.strTid then {
             rs0: "\{ctx.strC}_t"
             ret = rs0
@@ -11311,7 +11312,7 @@ fnSignature: function {
         }
     }
     if ret.stringview == "void" then {
-        rtnid9: fnReturnTypeId :symtab :op
+        rtnid9: fnReturnTypeId :nodes :symtab :op
         if rtnid9 > 0 then {
             rtr9: typeRefC :symtab :ctx tid: rtnid9 thisTid: 0
             if rtr9.length > 0 then ret = rtr9
@@ -11319,7 +11320,7 @@ fnSignature: function {
     }
     if ret.stringview != "void" then {
         retColId9: fnReturnTidOf :symtab tid: fid
-        if retColId9 == 0 then retColId9 = fnReturnTypeId :symtab :op
+        if retColId9 == 0 then retColId9 = fnReturnTypeId :nodes :symtab :op
         if retColId9 > 0 when (isHeapPtrCollection :symtab :ctx tid: retColId9) then ret = "\{ret}*"
     }
     params: String
@@ -11882,18 +11883,18 @@ fillDataElemsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx nodes: List Node m
         mainOp
     ) case unitdef then {
         biter: mainOp.body.iterate
-        for bmId9: biter loop {
-            bm: nodes.get i: (bmId9 - 1).u64
+        for bm: biter loop {
+            bmNode9: nodes.get i: (bm - 1).u64
             match (
-                bm
+                bmNode9
             ) case namedoperation then {
-                dnm: unitLabel9 o: bm.name
+                dnm: unitLabel9 o: bmNode9.name
                 (fillOneDataElem
                     :nodes
                     :symtab
                     :ctx
                     name: dnm.stringview
-                    op: (nodes.get i: (bm.operation - 1).u64)
+                    op: (nodes.get i: (bmNode9.operation - 1).u64)
                 )
             } else null
         }
@@ -11977,12 +11978,12 @@ fillNeedsIn: function {ctx: Ctx nodes: List Node mainOp: Node} is {
         mainOp
     ) case unitdef then {
         biter: mainOp.body.iterate
-        for bmId9: biter loop {
-            bm: nodes.get i: (bmId9 - 1).u64
+        for bm: biter loop {
+            bmNode9: nodes.get i: (bm - 1).u64
             match (
-                bm
+                bmNode9
             ) case namedoperation then {
-                scanNeeds :nodes :ctx n: (nodes.get i: (bm.operation - 1).u64)
+                scanNeeds :nodes :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
             } else null
         }
     } else null
@@ -12002,7 +12003,8 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
     ) case functiondef then {
         scanNeedsOpt :nodes :ctx o: n.body
     } case objectdef then {
-        with aiter: n.asItems.iterate do for am: aiter loop {
+        with aiter: n.asItems.iterate do for amId9: aiter loop {
+            am: nodes.get i: (amId9 - 1).u64
             match (
                 am
             ) case namedoperation then {
@@ -12123,18 +12125,18 @@ fillMethodReturnsIn: function {
         mainOp
     ) case unitdef then {
         biter: mainOp.body.iterate
-        for bmId9: biter loop {
-            bm: nodes.get i: (bmId9 - 1).u64
+        for bm: biter loop {
+            bmNode9: nodes.get i: (bm - 1).u64
             match (
-                bm
+                bmNode9
             ) case namedoperation then {
-                tnm: unitLabel9 o: bm.name
+                tnm: unitLabel9 o: bmNode9.name
                 (fillTypeMethodReturns
                     :nodes
                     :symtab
                     :ctx
                     typeName: tnm.stringview
-                    op: (nodes.get i: (bm.operation - 1).u64)
+                    op: (nodes.get i: (bmNode9.operation - 1).u64)
                 )
             } else null
         }
@@ -12151,13 +12153,17 @@ fillTypeMethodReturns: function {
     match (
         op
     ) case objectdef then {
-        with aiter: op.asItems.iterate do for am: aiter loop {
+        with aiter: op.asItems.iterate do for amId9: aiter loop {
+            am: nodes.get i: (amId9 - 1).u64
             match (
                 am
             ) case namedoperation then {
                 if (isFunctionDefWithBody9 n: (nodes.get i: (am.operation - 1).u64)) then {
                     mnm: unitLabel9 o: am.name
-                    rbn: ztypecheck.fnReturnBaseNameOf op: (nodes.get i: (am.operation - 1).u64)
+                    rbn: (ztypecheck.fnReturnBaseNameOf
+                        :nodes
+                        op: (nodes.get i: (am.operation - 1).u64)
+                    )
                     if rbn.length > 0 then {
                         k9: "\{typeName}.\{mnm}"
                         rbv: rbn.stringview
@@ -12204,14 +12210,14 @@ fillConstValsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx nodes: List Node m
         mainOp
     ) case unitdef then {
         biter: mainOp.body.iterate
-        for bmId9: biter loop {
-            bm: nodes.get i: (bmId9 - 1).u64
+        for bm: biter loop {
+            bmNode9: nodes.get i: (bm - 1).u64
             match (
-                bm
+                bmNode9
             ) case namedoperation then {
-                if (isConstShape :ctx n: (nodes.get i: (bm.operation - 1).u64)) then {
-                    nm: unitLabel9 o: bm.name
-                    cv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (bm.operation - 1).u64)
+                if (isConstShape :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)) then {
+                    nm: unitLabel9 o: bmNode9.name
+                    cv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
                     nmv: nm.stringview
                     nk: nmv.string
                     cvv: cv.stringview
@@ -12277,12 +12283,12 @@ isGenericTemplateUnitOp: function {nodes: List Node op: Node} out bool is {
         op
     ) case unitdef then {
         mit9: op.body.iterate
-        for m9Id9: mit9 loop {
-            m9: nodes.get i: (m9Id9 - 1).u64
+        for m9: mit9 loop {
+            m9Node9: nodes.get i: (m9 - 1).u64
             match (
-                m9
+                m9Node9
             ) case namedoperation then {
-                if (ztypecheck.isGenericParam op: (nodes.get i: (m9.operation - 1).u64)) then return true
+                if (ztypecheck.isGenericParam op: (nodes.get i: (m9Node9.operation - 1).u64)) then return true
             } else null
         }
     } else null
@@ -12347,13 +12353,13 @@ emitUnitMonoInstances: function {
                 templateUnitOp
             ) case unitdef then {
                 fit9: templateUnitOp.body.iterate
-                for fm9Id9: fit9 loop {
-                    fm9: nodes.get i: (fm9Id9 - 1).u64
+                for fm9: fit9 loop {
+                    fm9Node9: nodes.get i: (fm9 - 1).u64
                     match (
-                        fm9
+                        fm9Node9
                     ) case namedoperation then {
-                        if (isFunctionDefWithBody9 n: (nodes.get i: (fm9.operation - 1).u64)) then {
-                            mname9: unitLabel9 o: fm9.name
+                        if (isFunctionDefWithBody9 n: (nodes.get i: (fm9Node9.operation - 1).u64)) then {
+                            mname9: unitLabel9 o: fm9Node9.name
                             cfo9: symtab.typing.childOf parentTypeId: t9 name: mname9.stringview
                             match (
                                 cfo9
@@ -12362,11 +12368,12 @@ emitUnitMonoInstances: function {
                                 if (symtab.reg.typetypeOf typeId: cfid9) == ztypes.ztypetype.functionType then {
                                     fnm9: typeNameOfReg9 :symtab tid: cfid9
                                     sig9: (fnSignature
+                                        :nodes
                                         :symtab
                                         :ctx
                                         name: fnm9.stringview
                                         fid: cfid9
-                                        op: (nodes.get i: (fm9.operation - 1).u64)
+                                        op: (nodes.get i: (fm9Node9.operation - 1).u64)
                                     )
                                     if declOnly then {
                                         ld9: "\{sig9};\n"
@@ -12382,7 +12389,7 @@ emitUnitMonoInstances: function {
                                             :nodes
                                             :symtab
                                             :ctx
-                                            op: (nodes.get i: (fm9.operation - 1).u64)
+                                            op: (nodes.get i: (fm9Node9.operation - 1).u64)
                                             fid: cfid9
                                             :buf
                                         )
@@ -12496,7 +12503,7 @@ emitFnMonoInstances: function {
         }
         if isMono9 then {
             fnm9: typeNameOfReg9 :symtab tid: t9
-            sig9: fnSignature :symtab :ctx name: fnm9.stringview fid: t9 op: templateFnOp
+            sig9: fnSignature :nodes :symtab :ctx name: fnm9.stringview fid: t9 op: templateFnOp
             if declOnly then {
                 ld9: "\{sig9};\n"
                 buf.append ld9.stringview
@@ -12611,6 +12618,7 @@ emitFnsIn: function {
                     )
                 } else {
                     sig: (fnSignature
+                        :nodes
                         :symtab
                         :ctx
                         name: nm2.stringview
@@ -12947,16 +12955,16 @@ collectUnitLiteralsIn: function {
         mainOp
     ) case unitdef then {
         biter: mainOp.body.iterate
-        for bmId9: biter loop {
-            bm: nodes.get i: (bmId9 - 1).u64
+        for bm: biter loop {
+            bmNode9: nodes.get i: (bm - 1).u64
             match (
-                bm
+                bmNode9
             ) case namedoperation then {
-                bn9: unitLabel9 o: bm.name
+                bn9: unitLabel9 o: bmNode9.name
                 skipU9: stdFnUndemanded :symtab :unitName fnName: bn9.stringview
                 if (skipU9) == false then (collectFnLiterals
                     :nodes
-                    n: (nodes.get i: (bm.operation - 1).u64)
+                    n: (nodes.get i: (bmNode9.operation - 1).u64)
                     :ids
                     :texts
                 )
@@ -12971,7 +12979,8 @@ collectFnLiterals: function {nodes: List Node n: Node ids: List u64 texts: List 
     ) case functiondef then {
         collectLiteralsOpt :nodes o: n.body :ids :texts
     } case objectdef then {
-        with aiter: n.asItems.iterate do for am: aiter loop {
+        with aiter: n.asItems.iterate do for amId9: aiter loop {
+            am: nodes.get i: (amId9 - 1).u64
             match (
                 am
             ) case namedoperation then {
@@ -13267,12 +13276,12 @@ unitHasMain9: function {nodes: List Node mainOp: Node} out bool is {
         mainOp
     ) case unitdef then {
         biter: mainOp.body.iterate
-        for bmId9: biter loop {
-            bm: nodes.get i: (bmId9 - 1).u64
+        for bm: biter loop {
+            bmNode9: nodes.get i: (bm - 1).u64
             match (
-                bm
+                bmNode9
             ) case namedoperation then {
-                bn: unitLabel9 o: bm.name
+                bn: unitLabel9 o: bmNode9.name
                 if bn.stringview == "main" then return true
             } else null
         }
@@ -17869,9 +17878,9 @@ emitRecordDefsIn: function {
         }
         }
         if phase == 2 then {
-        with biterB: mainOp.body.iterate do for bmdId9Id9: biterB loop {
-            bmdId9: nodes.get i: (bmdId9Id9 - 1).u64
-            emitDefMethods :nodes :symtab :ctx bm: bmdId9 declOnly: true :buf
+        with biterB: mainOp.body.iterate do for bmdId9: biterB loop {
+            bmd: nodes.get i: (bmdId9 - 1).u64
+            emitDefMethods :nodes :symtab :ctx bm: bmd declOnly: true :buf
         }
         with biterI: mainOp.body.iterate do for biId9: biterI loop {
             bi: nodes.get i: (biId9 - 1).u64
@@ -17917,6 +17926,7 @@ emitRecordDefsIn: function {
                     }
                     if isGenFnFD9 == false then {
                         fdsig: (fnSignature
+                            :nodes
                             :symtab
                             :ctx
                             name: fdn.stringview
@@ -17931,9 +17941,9 @@ emitRecordDefsIn: function {
         }
         }
         if phase == 3 then {
-        with biterC: mainOp.body.iterate do for bmbId9Id9: biterC loop {
-            bmbId9: nodes.get i: (bmbId9Id9 - 1).u64
-            emitDefMethods :nodes :symtab :ctx bm: bmbId9 declOnly: false :buf
+        with biterC: mainOp.body.iterate do for bmbId9: biterC loop {
+            bmb: nodes.get i: (bmbId9 - 1).u64
+            emitDefMethods :nodes :symtab :ctx bm: bmb declOnly: false :buf
         }
         }
     } else null
@@ -18506,7 +18516,8 @@ emitAsConsts: function {
     match (
         op
     ) case objectdef then {
-        with aiter: op.asItems.iterate do for am: aiter loop {
+        with aiter: op.asItems.iterate do for amId9: aiter loop {
+            am: nodes.get i: (amId9 - 1).u64
             match (
                 am
             ) case namedoperation then {
@@ -18575,7 +18586,8 @@ emitClassMonoMethods: function {
             } case none then null
             if isMono8 then {
                 ait8: op.isItems.iterate
-                for am8: ait8 loop {
+                for am8Id9: ait8 loop {
+                    am8: nodes.get i: (am8Id9 - 1).u64
                     match (
                         am8
                     ) case namedoperation then {
@@ -18589,6 +18601,7 @@ emitClassMonoMethods: function {
                                 if (symtab.reg.typetypeOf typeId: cf8) == ztypes.ztypetype.functionType then {
                                     fn8: typeNameOfReg9 :symtab tid: cf8
                                     sg8: (fnSignature
+                                        :nodes
                                         :symtab
                                         :ctx
                                         name: fn8.stringview
@@ -18647,7 +18660,8 @@ emitRecordMethods: function {
         idxs: (List u64)
         names: (List String)
         ai: u64
-        with aiter: op.asItems.iterate do for am: aiter loop {
+        with aiter: op.asItems.iterate do for amId9: aiter loop {
+            am: nodes.get i: (amId9 - 1).u64
             match (
                 am
             ) case namedoperation then {
@@ -18665,7 +18679,8 @@ emitRecordMethods: function {
         for wi < wn loop {
             midx: idxs.get i: wi
             mname: names.get i: wi
-            am2: op.asItems.get i: midx
+            am2Id9: op.asItems.get i: midx
+            am2: nodes.get i: (am2Id9 - 1).u64
             match (
                 am2
             ) case namedoperation then {
@@ -18690,7 +18705,8 @@ emitRecordMethods: function {
         iidxs9: (List u64)
         inames9: (List String)
         iai9: u64
-        with iiter9: op.isItems.iterate do for im9: iiter9 loop {
+        with iiter9: op.isItems.iterate do for im9Id9: iiter9 loop {
+            im9: nodes.get i: (im9Id9 - 1).u64
             match (
                 im9
             ) case namedoperation then {
@@ -18708,7 +18724,8 @@ emitRecordMethods: function {
         for iwi9 < iwn9 loop {
             imidx9: iidxs9.get i: iwi9
             imname9: inames9.get i: iwi9
-            im2: op.isItems.get i: imidx9
+            im2Id9: op.isItems.get i: imidx9
+            im2: nodes.get i: (im2Id9 - 1).u64
             match (
                 im2
             ) case namedoperation then {
@@ -18791,7 +18808,13 @@ fnYieldCount: function {op: Node} out u64 is {
 # setupGenCtx -- arm the generator state-machine context on ctx when `op` is a
 # generator `call` (its body yields). Resolves the optionval wrapper from the
 # method's return type. Returns false (and disarms) for a normal method.
-setupGenCtx: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 op: Node} out bool is {
+setupGenCtx: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    mid: u64
+    op: Node
+} out bool is {
     gyc: fnYieldCount :op
     if gyc == 0 then {
         ctx.genActive = false
@@ -18830,7 +18853,8 @@ setupGenCtx: function {symtab: zenv.ZSymbolTable ctx: Ctx mid: u64 op: Node} out
     match (
         op
     ) case functiondef then {
-        with piter9: op.parameters.iterate do for pm9: piter9 loop {
+        with piter9: op.parameters.iterate do for pm9Id9: piter9 loop {
+            pm9: nodes.get i: (pm9Id9 - 1).u64
             match (
                 pm9
             ) case namedoperation then {
@@ -19015,14 +19039,14 @@ emitOneMethod: function {
         } case none then null
     }
     if ret.stringview == "void" when thisTid9 > 0 then {
-        rbn0: ztypecheck.fnReturnBaseNameOf :op
+        rbn0: ztypecheck.fnReturnBaseNameOf :nodes :op
         if rbn0.stringview == "this" then {
             tcb: symtab.reg.cnameOf tid: thisTid9
             ret = "\{tcb}_t"
         }
     }
     if ret.stringview == "void" then {
-        rbn: ztypecheck.fnReturnBaseNameOf :op
+        rbn: ztypecheck.fnReturnBaseNameOf :nodes :op
         if rbn.length > 0 then {
             rbi: userFnId :symtab :ctx name: rbn.stringview
             if rbi > 0 then {
@@ -19134,7 +19158,7 @@ emitOneMethod: function {
     } else {
         lo: "static \{ret} \{mc}(\{params}) {\n"
         buf.append lo.stringview
-        isGen9: setupGenCtx :symtab :ctx :mid :op
+        isGen9: setupGenCtx :nodes :symtab :ctx :mid :op
         if isGen9 then emitGenPrologue :ctx :buf
         ctx.curThisTid = thisTid9
         emitFnBody :nodes :symtab :ctx :op fid: mid :buf

@@ -2206,17 +2206,17 @@ Parser: class {
     # path or label-value). Duplicate names rejected. Errors use the
     # operationPaths trailing-sentinel: on failure an error node is the
     # last element (the caller pop-checks and propagates).
-    acceptParamBlock: function {:this lex: zlexer.Lexer} out List Node is {
-        params: (List Node)
+    acceptParamBlock: function {:this lex: zlexer.Lexer} out List u32 is {
+        params: (List u32)
         names: (List String)
         openOpt: lex.accept tt: zlexer.TT.braceOpenTok
         match openOpt case none then {
             bad: lex.peek
-            params.append (this.mkError
+            params.append (this.intern n: (this.mkError
                 tok: bad
                 code: zast.err.badArgument
                 msg: "Expected open brace for parameter block".string
-            )
+            ))
             return params
         } case some then {
             for true loop {
@@ -2228,11 +2228,11 @@ Parser: class {
                     nm: lblTok.tokstr.copy
                     dup: names.contains item: nm
                     if dup then {
-                        params.append (this.mkError
+                        params.append (this.intern n: (this.mkError
                             tok: lblTok
                             code: zast.err.badParameter
                             msg: "Duplicate parameter name".string
-                        )
+                        ))
                         return params
                     }
                     names.append nm
@@ -2245,7 +2245,7 @@ Parser: class {
                         line: lblTok.lineno
                         col: lblTok.colno
                     )
-                    params.append no
+                    params.append (this.intern n: no)
                 } else {
                     isLbl: pktt == zlexer.TT.labelTok
                     if isLbl then {
@@ -2253,11 +2253,11 @@ Parser: class {
                         nm: lblTok.tokstr.copy
                         dup: names.contains item: nm
                         if dup then {
-                            params.append (this.mkError
+                            params.append (this.intern n: (this.mkError
                                 tok: lblTok
                                 code: zast.err.badParameter
                                 msg: "Duplicate parameter name".string
-                            )
+                            ))
                             return params
                         }
                         names.append nm
@@ -2267,7 +2267,7 @@ Parser: class {
                             pathNode: this.parseTyperefOperation :lex
                             pErr: this.isError node: pathNode
                             if pErr then {
-                                params.append pathNode
+                                params.append (this.intern n: pathNode)
                                 return params
                             }
                             no: (this.mkNamedOp
@@ -2276,14 +2276,14 @@ Parser: class {
                                 line: lblTok.lineno
                                 col: lblTok.colno
                             )
-                            params.append no
+                            params.append (this.intern n: no)
                         } else {
                             bad: lex.peek
-                            params.append (this.mkError
+                            params.append (this.intern n: (this.mkError
                                 tok: bad
                                 code: zast.err.badParameter
                                 msg: "Expected type reference for parameter".string
-                            )
+                            ))
                             return params
                         }
                     } else {
@@ -2295,18 +2295,18 @@ Parser: class {
             match closeOpt case none then {
                 bad: lex.peek
                 if (this.isReservedWordTok tok: bad) then {
-                    params.append (this.mkError
+                    params.append (this.intern n: (this.mkError
                         tok: bad
                         code: zast.err.reservedName
                         msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
-                    )
+                    ))
                     return params
                 }
-                params.append (this.mkError
+                params.append (this.intern n: (this.mkError
                     tok: bad
                     code: zast.err.badParameterBlock
                     msg: "Expected closing brace after parameters".string
-                )
+                ))
                 return params
             } case some then {
                 return params
@@ -2319,7 +2319,7 @@ Parser: class {
     # nothing is held across a loop body (E0200) -- mirrors forClausesTail.
     # Each clause rejects a duplicate; an unmatched token terminates and
     # builds the functiondef.
-    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (List Node).take asItems: (List Node).take returntype: (Option Node).take body: (Option Node).take gotIn: bool hasOut: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
+    functionClausesTail: function {:this lex: zlexer.Lexer parameters: (List u32).take asItems: (List u32).take returntype: (Option Node).take body: (Option Node).take gotIn: bool hasOut: bool hasIs: bool isNative: bool hasAs: bool startLine: u32 startCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
         if tt == zlexer.TT.outTok then {
@@ -2404,10 +2404,11 @@ Parser: class {
             ab: this.getObjectBody :lex typeBody: false
             an: ab.length
             if an > 0 then {
-                last: ab.pop
-                le: this.isError node: last
-                if le then return last
-                ab.append last
+                lastId9: ab.pop
+                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                }
+                ab.append lastId9
             }
             return (this.functionClausesTail
                 :lex
@@ -2432,10 +2433,11 @@ Parser: class {
             pb: this.acceptParamBlock :lex
             pn: pb.length
             if pn > 0 then {
-                last: pb.pop
-                le: this.isError node: last
-                if le then return last
-                pb.append last
+                lastId9: pb.pop
+                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                }
+                pb.append lastId9
             }
             return (this.functionClausesTail
                 :lex
@@ -2468,18 +2470,19 @@ Parser: class {
     # leading `{` is an implicit `in` param block; otherwise the clause
     # tail starts with empty accumulators.
     functionDefinitionInner: function {:this lex: zlexer.Lexer startLine: u32 startCol: u32} out Node is {
-        parameters: (List Node)
-        asItems: (List Node)
+        parameters: (List u32)
+        asItems: (List u32)
         pk: lex.peek
         isBrace: pk.toktype == zlexer.TT.braceOpenTok
         if isBrace then {
             pb: this.acceptParamBlock :lex
             pn: pb.length
             if pn > 0 then {
-                last: pb.pop
-                le: this.isError node: last
-                if le then return last
-                pb.append last
+                lastId9: pb.pop
+                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                }
+                pb.append lastId9
             }
             return (this.functionClausesTail
                 :lex
@@ -2542,17 +2545,17 @@ Parser: class {
     # practice; the EOL skip is kept for the filtering-off case. Returns
     # the items as namedoperation arms; a trailing error node flags a
     # malformed item for the caller to detect.
-    getObjectBody: function {:this lex: zlexer.Lexer typeBody: bool} out List Node is {
-        items: (List Node)
+    getObjectBody: function {:this lex: zlexer.Lexer typeBody: bool} out List u32 is {
+        items: (List u32)
         names: (List String)
         openOpt: lex.accept tt: zlexer.TT.braceOpenTok
         match openOpt case none then {
             bad: lex.peek
-            items.append (this.mkError
+            items.append (this.intern n: (this.mkError
                 tok: bad
                 code: zast.err.badObjectBlock
                 msg: "Expected open brace for object body".string
-            )
+            ))
             return items
         } case some then {
             for true loop {
@@ -2564,11 +2567,11 @@ Parser: class {
                     nm: lblTok.tokstr.copy
                     dup: names.contains item: nm
                     if dup then {
-                        items.append (this.mkError
+                        items.append (this.intern n: (this.mkError
                             tok: lblTok
                             code: zast.err.badItem
                             msg: "Duplicate item name".string
-                        )
+                        ))
                         return items
                     }
                     names.append nm
@@ -2581,7 +2584,7 @@ Parser: class {
                         line: lblTok.lineno
                         col: lblTok.colno
                     )
-                    items.append no
+                    items.append (this.intern n: no)
                 } else {
                     isLbl: pktt == zlexer.TT.labelTok
                     if isLbl then {
@@ -2589,11 +2592,11 @@ Parser: class {
                         nm: lblTok.tokstr.copy
                         dup: names.contains item: nm
                         if dup then {
-                            items.append (this.mkError
+                            items.append (this.intern n: (this.mkError
                                 tok: lblTok
                                 code: zast.err.badItem
                                 msg: "Duplicate item name".string
-                            )
+                            ))
                             return items
                         }
                         names.append nm
@@ -2602,7 +2605,7 @@ Parser: class {
                         member: this.objectBodyMember :lex
                         mErr: this.isError node: member
                         if mErr then {
-                            items.append member
+                            items.append (this.intern n: member)
                             return items
                         }
                         if typeBody when (isReservedMemberName name: lblTok.tokstr.stringview) then {
@@ -2612,11 +2615,11 @@ Parser: class {
                             allowed: false
                             if visUnit when (this.isUnitDef node: member) then allowed = true
                             if (allowed) == false then {
-                                items.append (this.mkError
+                                items.append (this.intern n: (this.mkError
                                     tok: lblTok
                                     code: zast.err.reservedMember
                                     msg: "'\{lblTok.tokstr.stringview}' is a reserved member name"
-                                )
+                                ))
                                 return items
                             }
                         }
@@ -2626,7 +2629,7 @@ Parser: class {
                             line: lblTok.lineno
                             col: lblTok.colno
                         )
-                        items.append no
+                        items.append (this.intern n: no)
                     } else {
                         break
                     }
@@ -2636,18 +2639,18 @@ Parser: class {
             match closeOpt case none then {
                 bad: lex.peek
                 if (this.isReservedWordTok tok: bad) then {
-                    items.append (this.mkError
+                    items.append (this.intern n: (this.mkError
                         tok: bad
                         code: zast.err.reservedName
                         msg: "'\{bad.tokstr.stringview}' is a reserved word and cannot be used as a name"
-                    )
+                    ))
                     return items
                 }
-                items.append (this.mkError
+                items.append (this.intern n: (this.mkError
                     tok: bad
                     code: zast.err.badObjectBlock
                     msg: "Expected closing brace for object body".string
-                )
+                ))
                 return items
             } case some then {
                 return items
@@ -2872,8 +2875,8 @@ Parser: class {
     # thin seed so the tail is re-entrant with the keyword already consumed.
     parseItemDefinition: function {:this lex: zlexer.Lexer startTok: zlexer.Token kind: zast.nodetype} out Node is {
         lex.advance
-        isItems: (List Node)
-        asItems: (List Node)
+        isItems: (List u32)
+        asItems: (List u32)
         return (this.acceptItemBodiesTail
             :lex
             :isItems
@@ -2892,7 +2895,7 @@ Parser: class {
     # owned member lists (like functionClausesTail) -- a leading bare `{`
     # defaults to the is-body. An item must carry an is-body or `native`;
     # otherwise the body is malformed. Builds the objectdef at the terminal.
-    acceptItemBodiesTail: function {:this lex: zlexer.Lexer isItems: (List Node).take asItems: (List Node).take isNative: bool hasIs: bool hasAs: bool kind: zast.nodetype startLine: u32 startCol: u32} out Node is {
+    acceptItemBodiesTail: function {:this lex: zlexer.Lexer isItems: (List u32).take asItems: (List u32).take isNative: bool hasIs: bool hasAs: bool kind: zast.nodetype startLine: u32 startCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
         if tt == zlexer.TT.isTok then {
@@ -2928,10 +2931,11 @@ Parser: class {
                 ib: this.getObjectBody :lex typeBody: true
                 ibn: ib.length
                 if ibn > 0 then {
-                    last: ib.pop
-                    le: this.isError node: last
-                    if le then return last
-                    ib.append last
+                    lastId9: ib.pop
+                    if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                        return (zast.tableTake nodes: this.nodes id: lastId9)
+                    }
+                    ib.append lastId9
                 }
                 return (this.acceptItemBodiesTail
                     :lex
@@ -2977,10 +2981,11 @@ Parser: class {
             ab: this.getObjectBody :lex typeBody: true
             abn: ab.length
             if abn > 0 then {
-                last: ab.pop
-                le: this.isError node: last
-                if le then return last
-                ab.append last
+                lastId9: ab.pop
+                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                }
+                ab.append lastId9
             }
             return (this.acceptItemBodiesTail
                 :lex
@@ -3002,10 +3007,11 @@ Parser: class {
                 ib: this.getObjectBody :lex typeBody: true
                 ibn: ib.length
                 if ibn > 0 then {
-                    last: ib.pop
-                    le: this.isError node: last
-                    if le then return last
-                    ib.append last
+                    lastId9: ib.pop
+                    if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
+                        return (zast.tableTake nodes: this.nodes id: lastId9)
+                    }
+                    ib.append lastId9
                 }
                 return (this.acceptItemBodiesTail
                     :lex
@@ -3621,22 +3627,22 @@ ewWalk: function {nodes: List Node externs: List String scope: List String node:
         ewWalk :nodes :externs :scope node: node.statement
     } case functiondef then {
         base: scope.length
-        ewBindNames :scope items: node.parameters
-        ewBindNames :scope items: node.asItems
+        ewBindNameIds :nodes :scope items: node.parameters
+        ewBindNameIds :nodes :scope items: node.asItems
         ewWalkOpt :nodes :externs :scope o: node.returntype
-        ewWalkList :nodes :externs :scope items: node.parameters
+        ewWalkBodyIds :nodes :externs :scope items: node.parameters
         ewWalkOpt :nodes :externs :scope o: node.body
-        ewWalkList :nodes :externs :scope items: node.asItems
+        ewWalkBodyIds :nodes :externs :scope items: node.asItems
         ewTruncate :scope n: base
     } case objectdef then {
         base: scope.length
         scope.append "this".string
         scope.append "type".string
         scope.append "meta".string
-        ewBindNames :scope items: node.isItems
-        ewBindNames :scope items: node.asItems
-        ewWalkList :nodes :externs :scope items: node.isItems
-        ewWalkList :nodes :externs :scope items: node.asItems
+        ewBindNameIds :nodes :scope items: node.isItems
+        ewBindNameIds :nodes :scope items: node.asItems
+        ewWalkBodyIds :nodes :externs :scope items: node.isItems
+        ewWalkBodyIds :nodes :externs :scope items: node.asItems
         ewTruncate :scope n: base
     } case unitdef then {
         base: scope.length

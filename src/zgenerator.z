@@ -210,7 +210,7 @@ leafAtomName: function {n: Node} out String is {
 
 # returnHeadName -- the callable head atom of a parenthesized return-type
 # call (`out (Iterator gives: i64)` -> "Iterator"); "" for other shapes.
-returnHeadName: function {n: Node} out String is {
+returnHeadName: function {nodes: List zast.Node n: Node} out String is {
     match (
         n
     ) case functiondef then {
@@ -625,7 +625,7 @@ buildCreateMethod: function {
     ids: GenIds
     line: u32
     col: u32
-    params: (List Node).take
+    params: (List u32).take
     fwdNames: List String
 } out Node is {
     metaAtom: mkAtom :ids :line :col name: "meta"
@@ -674,7 +674,7 @@ buildCreateMethod: function {
         parameters: params
         body: (Option.some body)
         isNative: false
-        asItems: (List Node))
+        asItems: (List u32))
     )
 }
 
@@ -692,14 +692,14 @@ buildCallMethod: function {
 } out Node is {
     thisP: mkAtom :ids :line :col name: "this"
     thisParam: mkNamedOp :nodes :ids :line :col name: "this" op: thisP
-    params: (List Node)
-    params.append thisParam
+    params: (List u32)
+    params.append (zast.tableAppendRebase :nodes n: thisParam)
     vp9: valueParam.take
     match (
         vp9
     ) case some then {
         vparam: mkNamedOp :nodes :ids :line :col name: "value" op: vp9.take
-        params.append vparam
+        params.append (zast.tableAppendRebase :nodes n: vparam)
     } case none then null
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
@@ -709,7 +709,7 @@ buildCallMethod: function {
         parameters: params
         body: (Option.some body)
         isNative: false
-        asItems: (List Node))
+        asItems: (List u32))
     )
 }
 
@@ -747,7 +747,7 @@ buildFactory: function {
     line: u32
     col: u32
     synthName: StringView
-    params: (List Node).take
+    params: (List u32).take
     fwdNames: List String
     privNames: (Map String value: bool)
 } out Node is {
@@ -798,7 +798,7 @@ buildFactory: function {
         parameters: params
         body: (Option.some body)
         isNative: false
-        asItems: (List Node))
+        asItems: (List u32))
     )
 }
 
@@ -1964,7 +1964,8 @@ canLowerNow: function {nodes: List zast.Node n: Node hasReceiver: bool} out bool
         n
     ) case functiondef then {
         piter: n.parameters.iterate
-        for p0: piter loop {
+        for p0Id9: piter loop {
+            p0: nodes.get i: (p0Id9 - 1).u64
             if (paramHeadIsThis :nodes n: p0) then {
                 if hasReceiver then {
                     if (paramIsThisLock :nodes n: p0) == false then return false
@@ -2101,14 +2102,15 @@ lowerOne: function {
             # captured parameters: names, field paths, create/factory clones
             pNames: (List String)
             pFields: (List Node)
-            createParams: (List Node)
-            factoryParams: (List Node)
+            createParams: (List u32)
+            factoryParams: (List u32)
             noStamp: (List u32)
             innerRefs: (List u32)
             thisFlags: (List bool)
             privNames: (Map String value: bool)
             piter: fn.parameters.iterate
-            for p0: piter loop {
+            for p0Id9: piter loop {
+                p0: nodes.get i: (p0Id9 - 1).u64
                 cp0: cloneCreateParam :nodes :ids n: p0 :receiverType fnLine: line fnCol: col
                 isThP: paramHeadIsThis :nodes n: p0
                 cpid0: paramOpId :nodes n: cp0
@@ -2134,8 +2136,8 @@ lowerOne: function {
                             :receiverType
                         )
                         pFields.append pf0
-                        createParams.append cp0
-                        factoryParams.append fp0
+                        createParams.append (zast.tableAppendRebase :nodes n: cp0)
+                        factoryParams.append (zast.tableAppendRebase :nodes n: fp0)
                         pNames.append pn0
                         tf0: isThP
                         thisFlags.append tf0
@@ -2281,8 +2283,8 @@ lowerOne: function {
                     child: i64Leaf)
                 )
                 stField: mkNamedOp :nodes :ids :line :col name: "state" op: i64Atom
-                isItems: (List Node)
-                isItems.append stField
+                isItems: (List u32)
+                isItems.append (zast.tableAppendRebase :nodes n: stField)
                 fi3: u64
                 fn3: pNames.length
                 for fi3 < fn3 loop {
@@ -2305,7 +2307,7 @@ lowerOne: function {
                         if pfid3 > 0 then noStamp.append pfid3
                     }
                     nf3: mkNamedOp :nodes :ids :line :col name: f3v op: pf3o
-                    isItems.append nf3
+                    isItems.append (zast.tableAppendRebase :nodes n: nf3)
                     fi3 = fi3 + 1
                 }
                 li3: u64
@@ -2330,7 +2332,7 @@ lowerOne: function {
                             source: rc3.take)
                         )
                         nf4: mkNamedOp :nodes :ids :line :col name: l3v op: tof3
-                        isItems.append nf4
+                        isItems.append (zast.tableAppendRebase :nodes n: nf4)
                     } case none then null
                     li3 = li3 + 1
                 }
@@ -2339,13 +2341,13 @@ lowerOne: function {
                     rfg9
                 ) case some then {
                     rfn9: mkNamedOp :nodes :ids :line :col name: "_resume_input" op: rfg9.take
-                    isItems.append rfn9
+                    isItems.append (zast.tableAppendRebase :nodes n: rfn9)
                 } case none then null
                 createNamed: mkNamedOp :nodes :ids :line :col name: "create" op: createM
                 callNamed: mkNamedOp :nodes :ids :line :col name: "call" op: callM
-                asItems: (List Node)
-                asItems.append createNamed
-                asItems.append callNamed
+                asItems: (List u32)
+                asItems.append (zast.tableAppendRebase :nodes n: createNamed)
+                asItems.append (zast.tableAppendRebase :nodes n: callNamed)
                 synthClass: (Node.objectdef (zast.ObjectDefData
                     nodeid: ids.mint
                     lineno: line
