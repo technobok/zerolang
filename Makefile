@@ -2,6 +2,12 @@ CC       := gcc
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types
+# Daily-driver binaries only (bin/zc, bin/zl, bin/zls): light optimization
+# makes self-compilation ~35% faster (1.30s -> 0.86s). -fwrapv and
+# -fno-strict-aliasing pin down the C the emitter relies on. Bootstrap
+# intermediates and the test runner stay -O0: they are built once and run
+# once, so gcc time dominates.
+OPTFLAGS := -O1 -fno-strict-aliasing -fwrapv
 BUILDDIR := out
 
 # Bootstrap compiler for building the .z sources: the committed, Python-free
@@ -105,7 +111,7 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system --emit-c bin/zc.c
-	$(CC) $(CFLAGS) -o bin/zc bin/zc.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc bin/zc.c
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
@@ -117,7 +123,7 @@ zc: bin/zc
 bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zl --src src --system lib/system --emit-c out/zl.c
-	$(CC) $(CFLAGS) -o bin/zl out/zl.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl out/zl.c
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
@@ -126,7 +132,7 @@ bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdi
 bin/zls: bin/zc $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zls --src src --system lib/system --emit-c out/zls.c
-	$(CC) $(CFLAGS) -o bin/zls out/zls.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls out/zls.c
 
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
@@ -214,7 +220,7 @@ docs:
 
 # warn-check -- compile the emitted compiler C with every warning as an error.
 warn-check: bin/zc
-	$(CC) $(CFLAGS) -Werror -c bin/zc.c -o /dev/null
+	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bin/zc.c -o /dev/null
 	@echo "warn-check OK: zero compiler warnings"
 
 # shadow-guard -- ratchet against the user-shadow miscompile class. The C emitter

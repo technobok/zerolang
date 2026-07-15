@@ -26,11 +26,15 @@ static void z_siphash_init(void) {
     n = getrandom(key, sizeof(key), 0);
 #endif
     if (n != (ssize_t)sizeof(key)) {
+        size_t got = 0;
         FILE* f = fopen("/dev/urandom", "rb");
         if (f) {
-            (void)fread(key, 1, sizeof(key), f);
+            got = fread(key, 1, sizeof(key), f);
             fclose(f);
         }
+        /* no entropy source: fall back to a fixed seed (hashing stays
+           correct, only DoS resistance is lost) */
+        if (got != sizeof(key)) memset(key, 0x5a, sizeof(key));
     }
     memcpy(&z_sip_k0, &key[0], 8);
     memcpy(&z_sip_k1, &key[8], 8);
