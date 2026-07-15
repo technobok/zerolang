@@ -14295,6 +14295,69 @@ emitRuntimeSvIter: function {
 # emitRuntimeIo -- the io runtime bodies (need-gated, dependency-ordered). The
 # universal helpers (z_sv_to_cstr inline, errno-map) emit whenever any io call
 # is present; the rest gate on their specific need.
+# upperSnakeOf -- camelCase (or snake_case) to UPPER_SNAKE: `listDir` ->
+# `LIST_DIR`, `spec_create` -> `SPEC_CREATE`. Fragment-name convention.
+upperSnakeOf: function {name: StringView} out String is {
+    r: String
+    i: u64
+    n: name.length
+    for i < n loop {
+        bo: name.byteAt :i
+        match (
+            bo
+        ) case some then {
+            if bo >= 97 when bo <= 122 then {
+                r.appendByte b: (bo - 32)
+            } else {
+                if bo >= 65 when bo <= 90 then r.appendByte b: 95
+                r.appendByte b: bo
+            }
+        } case none then null
+        i = i + 1
+    }
+    return r
+}
+
+# loadConventionFrags -- load the convention-named runtime fragment for
+# every recorded `<unit>_<name>` need: `_Z_<UNIT>_<UPPER_SNAKE(name)>.inc`.
+# Needs whose fragment is a bundle/rename/base (listed in `skip`, bare
+# member names) are the caller's explicit business. Sorted for
+# deterministic output (the needs map iterates in hash order).
+loadConventionFrags: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    runtimeDir: StringView
+    uname: StringView
+    skip: List String
+    buf: String.borrow
+} is {
+    pre9: "\{uname}_"
+    names9: (List String)
+    with kit9: ctx.needs.iterate do for k9: kit9 loop {
+        kv9: k9.stringview
+        if kv9.startsWith pre9.stringview then {
+            rest9: kv9.substring from: pre9.length to: kv9.length
+            skipped9: false
+            with sit9: skip.iterate do for sk9: sit9 loop {
+                if sk9.stringview == rest9 then skipped9 = true
+            }
+            if (skipped9) == false then names9.append rest9.string
+        }
+    }
+    names9.sort
+    un9: upperSnakeOf name: uname
+    ni9: u64
+    nn9: names9.length
+    for ni9 < nn9 loop {
+        nm9: names9.get i: ni9
+        ni9 = ni9 + 1
+        sn9: upperSnakeOf name: nm9.stringview
+        fr9: "_Z_\{un9}_\{sn9}"
+        nd9: "\{uname}_\{nm9}"
+        ioFragIf :symtab :ctx :runtimeDir need: nd9.stringview frag: fr9.stringview :buf
+    }
+}
+
 emitRuntimeIo: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
@@ -14312,7 +14375,6 @@ emitRuntimeIo: function {
     needErr9: ioAct9
     if osEr9 then needErr9 = true
     if needErr9 then ioFrag :symtab :ctx :runtimeDir frag: "_Z_IO_ERRNO_MAP" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_eprintln" frag: "_Z_IO_EPRINTLN" :buf
     needWC: needsHas :ctx name: "io_writeText"
     if (needsHas :ctx name: "io_appendText") then needWC = true
     if needWC then {
@@ -14321,10 +14383,6 @@ emitRuntimeIo: function {
         buf.append f8.stringview
         buf.append "\n"
     }
-    ioFragIf :symtab :ctx :runtimeDir need: "io_readText" frag: "_Z_IO_READ_TEXT" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_writeText" frag: "_Z_IO_WRITE_TEXT" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_appendText" frag: "_Z_IO_APPEND_TEXT" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_open" frag: "_Z_IO_OPEN" :buf
     needU64: needsHas :ctx name: "io_file_read"
     if (needsHas :ctx name: "io_file_write") then needU64 = true
     if (needsHas :ctx name: "io_file_seek") then needU64 = true
@@ -14346,18 +14404,6 @@ emitRuntimeIo: function {
         buf.append fwn.stringview
         buf.append "\n"
     }
-    ioFragIf :symtab :ctx :runtimeDir need: "io_file_close" frag: "_Z_FILE_CLOSE" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_file_write" frag: "_Z_FILE_WRITE" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_file_read" frag: "_Z_FILE_READ" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_file_seek" frag: "_Z_FILE_SEEK" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_file_flush" frag: "_Z_FILE_FLUSH" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_exists" frag: "_Z_IO_EXISTS" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_mkdir" frag: "_Z_IO_MKDIR" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_mkdirp" frag: "_Z_IO_MKDIRP" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_remove" frag: "_Z_IO_REMOVE" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_symlink" frag: "_Z_IO_SYMLINK" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_readlink" frag: "_Z_IO_READLINK" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_rename" frag: "_Z_IO_RENAME" :buf
     needFstat: needsHas :ctx name: "io_stat"
     if (needsHas :ctx name: "io_lstat") then needFstat = true
     if needFstat then {
@@ -14366,9 +14412,25 @@ emitRuntimeIo: function {
         buf.append fsf.stringview
         buf.append "\n"
     }
-    ioFragIf :symtab :ctx :runtimeDir need: "io_stat" frag: "_Z_IO_STAT" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_lstat" frag: "_Z_IO_LSTAT" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "io_listDir" frag: "_Z_IO_LIST_DIR" :buf
+    # every remaining io_<name> need loads its convention fragment
+    # (_Z_IO_<UPPER_SNAKE>); the File-method and stream families load
+    # from their own explicit blocks below
+    ioSkip9: (List String)
+    ioSkip9.append "file_close".string
+    ioSkip9.append "file_write".string
+    ioSkip9.append "file_read".string
+    ioSkip9.append "file_seek".string
+    ioSkip9.append "file_flush".string
+    ioSkip9.append "uses_BufWriter".string
+    ioSkip9.append "uses_BufReader".string
+    ioSkip9.append "uses_TextWriter".string
+    ioSkip9.append "uses_TextReader".string
+    loadConventionFrags :symtab :ctx :runtimeDir uname: "io" skip: ioSkip9 :buf
+    ioFragIf :symtab :ctx :runtimeDir need: "io_file_close" frag: "_Z_FILE_CLOSE" :buf
+    ioFragIf :symtab :ctx :runtimeDir need: "io_file_write" frag: "_Z_FILE_WRITE" :buf
+    ioFragIf :symtab :ctx :runtimeDir need: "io_file_read" frag: "_Z_FILE_READ" :buf
+    ioFragIf :symtab :ctx :runtimeDir need: "io_file_seek" frag: "_Z_FILE_SEEK" :buf
+    ioFragIf :symtab :ctx :runtimeDir need: "io_file_flush" frag: "_Z_FILE_FLUSH" :buf
     if (needsHas :ctx name: "io_uses_BufWriter") then {
         ioFrag :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_CREATE" :buf
         ioFrag :symtab :ctx :runtimeDir frag: "_Z_BUFWRITER_FLUSH" :buf
@@ -14402,13 +14464,17 @@ emitRuntimeCli: function {
     buf: String.borrow
 } is {
     if (needsHas :ctx name: "cli") == false then return
-    ioFragIf :symtab :ctx :runtimeDir need: "cli_spec_create" frag: "_Z_CLI_SPEC_CREATE" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "cli_addFlag" frag: "_Z_CLI_ADD_FLAG" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "cli_addOption" frag: "_Z_CLI_ADD_OPTION" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "cli_addPositional" frag: "_Z_CLI_ADD_POSITIONAL" :buf
+    # parse is a bundle (helpers precede its body); the Parsed methods load
+    # the renamed _Z_PARSED_* family. Every other cli_<name> need is
+    # convention-loaded.
+    cliSkip9: (List String)
+    cliSkip9.append "parse".string
+    cliSkip9.append "hasFlag".string
+    cliSkip9.append "option".string
+    cliSkip9.append "positional".string
+    loadConventionFrags :symtab :ctx :runtimeDir uname: "cli" skip: cliSkip9 :buf
     ioFragIf :symtab :ctx :runtimeDir need: "cli_parse" frag: "_Z_CLI_HELPERS" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "cli_parse" frag: "_Z_CLI_PARSE" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "cli_helpText" frag: "_Z_CLI_HELP_TEXT" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "cli_hasFlag" frag: "_Z_PARSED_HAS_FLAG" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "cli_option" frag: "_Z_PARSED_GET_OPTION" :buf
     ioFragIf :symtab :ctx :runtimeDir need: "cli_positional" frag: "_Z_PARSED_GET_POSITIONAL" :buf
@@ -14428,22 +14494,13 @@ emitRuntimeOs: function {
         ioFrag :symtab :ctx :runtimeDir frag: "_Z_OS_ARGV_GLOBALS" :buf
         ioFrag :symtab :ctx :runtimeDir frag: "_Z_OS_ARGS" :buf
     }
+    # env's fragment is renamed (GET_ENV); args is a bundle -- both above.
+    # Every other os_<name> need is convention-loaded.
     ioFragIf :symtab :ctx :runtimeDir need: "os_env" frag: "_Z_OS_GET_ENV" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_setEnv" frag: "_Z_OS_SET_ENV" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_unsetEnv" frag: "_Z_OS_UNSET_ENV" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_envNames" frag: "_Z_OS_ENV_NAMES" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_cwd" frag: "_Z_OS_CWD" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_exePath" frag: "_Z_OS_EXE_PATH" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_setCwd" frag: "_Z_OS_SET_CWD" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_pid" frag: "_Z_OS_PID" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_ppid" frag: "_Z_OS_PPID" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_userName" frag: "_Z_OS_USER_NAME" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_homeDir" frag: "_Z_OS_HOME_DIR" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_platform" frag: "_Z_OS_PLATFORM" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_arch" frag: "_Z_OS_ARCH" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_hostname" frag: "_Z_OS_HOSTNAME" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_exit" frag: "_Z_OS_EXIT" :buf
-    ioFragIf :symtab :ctx :runtimeDir need: "os_spawn" frag: "_Z_OS_SPAWN" :buf
+    osSkip9: (List String)
+    osSkip9.append "env".string
+    osSkip9.append "args".string
+    loadConventionFrags :symtab :ctx :runtimeDir uname: "os" skip: osSkip9 :buf
 }
 
 # emitRuntimeNet -- the net runtime bodies (need-gated on any net use).
