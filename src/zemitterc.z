@@ -8694,27 +8694,46 @@ resolveTypeIdByName: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringVi
     )
     if lr9 > 0 then return lr9
     # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
-    # walkLookupTyperef's search list. Scan every known unit's resolved scope.
+    # walkLookupTyperef's search list. Pass 1 probes each unit scope by id
+    # (no key composition); the composed-key resolvedByKey pass (which also
+    # follows unit-level aliases) runs only when every direct probe missed.
     found2: u64
-    uks9: (List String)
-    with uit: symtab.reg.unitNameTid.iterateItems do for ue: uit loop {
-        ukc9: ue.key.copy
-        uks9.append ukc9
-    }
+    utids9: (List u64)
+    with uit: symtab.reg.unitNameTid.iterateItems do for ue: uit loop utids9.append ue.value
     uki9: u64
-    ukn9: uks9.length
+    ukn9: utids9.length
     for uki9 < ukn9 loop {
         if found2 == 0 then {
-            uk9: uks9.get i: uki9
-            k2: "\{uk9}.\{name}"
-            r2: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: k2
+            co9: symtab.typing.childOf parentTypeId: (utids9.get i: uki9) :name
             match (
-                r2
+                co9
             ) case some then {
-                found2 = r2
+                found2 = co9
             } case none then null
         }
         uki9 = uki9 + 1
+    }
+    if found2 == 0 then {
+        uks9: (List String)
+        with uit2: symtab.reg.unitNameTid.iterateItems do for ue2: uit2 loop {
+            ukc9: ue2.key.copy
+            uks9.append ukc9
+        }
+        uki8: u64
+        ukn8: uks9.length
+        for uki8 < ukn8 loop {
+            if found2 == 0 then {
+                uk9: uks9.get i: uki8
+                k2: "\{uk9}.\{name}"
+                r2: ztypecheck.resolvedByKey ty: symtab.typing reg: symtab.reg key: k2
+                match (
+                    r2
+                ) case some then {
+                    found2 = r2
+                } case none then null
+            }
+            uki8 = uki8 + 1
+        }
     }
     return found2
 }
