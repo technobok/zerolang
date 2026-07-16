@@ -14,6 +14,11 @@ MAKEFLAGS += -j$(NPROC)
 # intermediates and the test runner stay -O0: they are built once and run
 # once, so gcc time dominates.
 OPTFLAGS := -O1 -fno-strict-aliasing -fwrapv
+# Daily drivers also emit with the wyhash-style fast path for their own
+# Map/Set dispatch (their inputs are trusted source trees). Everything
+# else -- corpus, goldens, bootstrap fixpoint -- emits with the SipHash
+# default; emitted C is byte-identical either way.
+ZCHASH   := --fast-hash
 BUILDDIR := out
 
 # Bootstrap compiler for building the .z sources: the committed, Python-free
@@ -118,7 +123,7 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # self-locates to this repo (lib/system here; runtime falls back to src/runtime).
 bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
 	@mkdir -p bin
-	$(ZC) zc --src src --system lib/system --emit-c bin/zc.c
+	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
 	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc bin/zc.c
 
 # zc -- convenience alias for bin/zc.
@@ -130,7 +135,7 @@ zc: bin/zc
 # the emitter.
 bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
-	bin/zc zl --src src --system lib/system --emit-c out/zl.c
+	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl out/zl.c
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
@@ -139,7 +144,7 @@ bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdi
 # editor-facing binary.
 bin/zls: bin/zc $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
-	bin/zc zls --src src --system lib/system --emit-c out/zls.c
+	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls out/zls.c
 
 # zl -- convenience alias for bin/zl.
