@@ -580,7 +580,7 @@ Parser: class {
         fCol: firstTok.colno
         fDelim: firstTok.tokstr.copy
         lex.advance
-        parts: (List Node)
+        parts: (List u32)
         for true loop {
             t: lex.peek
             tt: t.toktype
@@ -612,7 +612,7 @@ Parser: class {
                     expr: this.parseExpression :lex
                     eErr: this.isError node: expr
                     if eErr then return expr
-                    parts.append expr
+                    parts.append (this.intern n: expr)
                     ct: lex.peek
                     if ct.toktype != zlexer.TT.braceCloseTok then {
                         return (this.mkError
@@ -639,7 +639,7 @@ Parser: class {
                     text: t.tokstr.copy
                     chunkKind: ck
                 )
-                parts.append chunk
+                parts.append (this.intern n: chunk)
                 lex.advance
             } else {
                 bad: lex.acceptAny
@@ -664,7 +664,7 @@ Parser: class {
     # common case needs no rewriting, so this currently returns the
     # parts unchanged; the blank-line/common-prefix trimming lands in a
     # follow-up alongside interpolation.
-    stripStringWhitespace: function {:this parts: (List Node).take} out List Node is {
+    stripStringWhitespace: function {:this parts: (List u32).take} out List u32 is {
         origLen: parts.length
         if origLen == 0 then return parts
 
@@ -674,8 +674,8 @@ Parser: class {
         stop1: false
         for i < origLen loop {
             if (stop1) == false then {
-                el: parts.get :i
-                c: partClass n: el
+                elId9: parts.get :i
+                c: partClass n: (this.nodes.get i: (elId9 - 1).u64)
                 if c == 1 then {
                     startIdx = i + 1
                     stop1 = true
@@ -693,8 +693,8 @@ Parser: class {
         for j > startIdx loop {
             if (stop2) == false then {
                 j2: j - 1
-                el: parts.get i: j2
-                c: partClass n: el
+                elId9: parts.get i: j2
+                c: partClass n: (this.nodes.get i: (elId9 - 1).u64)
                 if c == 1 then {
                     lastEol = true
                     lastEolIdx = j2
@@ -708,7 +708,7 @@ Parser: class {
         if lastEol then {
             m: lastEolIdx + 1
             for m < origLen loop {
-                el: parts.get i: m
+                el: this.nodes.get i: ((parts.get i: m) - 1).u64
                 match (
                     el
                 ) case stringchunk then {
@@ -720,7 +720,7 @@ Parser: class {
         }
 
         if startIdx >= endIdx then {
-            emptyParts: (List Node)
+            emptyParts: (List u32)
             return emptyParts
         }
 
@@ -735,7 +735,8 @@ Parser: class {
             atLineStart: true
             p: startIdx
             for p < endIdx loop {
-                el: parts.get i: p
+                elId9: parts.get i: p
+                el: this.nodes.get i: (elId9 - 1).u64
                 c: partClass n: el
                 if c == 1 then {
                     atLineStart = true
@@ -765,14 +766,14 @@ Parser: class {
         }
 
         # Rebuild: reverse-drain, then pop in original order with an index.
-        rev: (List Node)
+        rev: (List u32)
         for parts.length > 0 loop rev.append parts.pop
-        result: (List Node)
+        result: (List u32)
         atLineStart2: true
         idx: u64
         pfxLen32: prefixLen.u32
         for rev.length > 0 loop {
-            el: rev.pop
+            elId9: rev.pop
             inRange: idx >= startIdx
             if idx >= endIdx then inRange = false
             if inRange then {
@@ -781,52 +782,56 @@ Parser: class {
                 ncLine: u32
                 ncCol: u32
                 ncText: String
-                match (
-                    el
-                ) case stringchunk then {
-                    kk: el.chunkKind
-                    if kk == chunkkind.eol then {
-                        atLineStart2 = true
-                    } else if atLineStart2 then {
-                        if kk == chunkkind.strmid then {
-                            ws: isWsOnlyView sv: el.text.stringview
-                            if (ws) == false then {
-                                if doStrip then {
-                                    sp: el.text.stringview.stripPrefix p: prefixView
-                                    match (
-                                        sp
-                                    ) case some then {
-                                        slen: sp.length
-                                        if slen > 0 then {
-                                            action = 2
-                                            ncNodeId = el.nodeid
-                                            ncLine = el.lineno
-                                            ncCol = el.colno + pfxLen32
-                                            ncText = sp.string
-                                        } else {
-                                            action = 1
-                                        }
-                                    } case none then null
+                {
+                    el: this.nodes.get i: (elId9 - 1).u64
+                    match (
+                        el
+                    ) case stringchunk then {
+                        kk: el.chunkKind
+                        if kk == chunkkind.eol then {
+                            atLineStart2 = true
+                        } else if atLineStart2 then {
+                            if kk == chunkkind.strmid then {
+                                ws: isWsOnlyView sv: el.text.stringview
+                                if (ws) == false then {
+                                    if doStrip then {
+                                        sp: el.text.stringview.stripPrefix p: prefixView
+                                        match (
+                                            sp
+                                        ) case some then {
+                                            slen: sp.length
+                                            if slen > 0 then {
+                                                action = 2
+                                                ncNodeId = el.nodeid
+                                                ncLine = el.lineno
+                                                ncCol = el.colno + pfxLen32
+                                                ncText = sp.string
+                                            } else {
+                                                action = 1
+                                            }
+                                        } case none then null
+                                    }
                                 }
                             }
+                            atLineStart2 = false
+                        } else {
+                            atLineStart2 = false
                         }
-                        atLineStart2 = false
                     } else {
                         atLineStart2 = false
                     }
-                } else {
-                    atLineStart2 = false
                 }
                 if action == 0 then {
-                    result.append el
+                    result.append elId9
                 } else if action != 1 then {
-                    result.append (Node.stringchunk (zast.StringChunkData
+                    nc9: (Node.stringchunk (zast.StringChunkData
                         nodeid: ncNodeId
                         lineno: ncLine
                         colno: ncCol
                         text: ncText.take
                         chunkKind: chunkkind.strmid)
                     )
+                    result.append (this.intern n: nc9)
                 }
             }
             idx = idx + 1
@@ -1963,7 +1968,7 @@ Parser: class {
                     msg: "Expected opening brace for data body".string
                 )
             } case some then {
-                elements: (List Node)
+                elements: (List u32)
                 datanames: (List String)
                 for true loop {
                     et: lex.peek
@@ -1990,7 +1995,7 @@ Parser: class {
                             line: lblTok.lineno
                             col: lblTok.colno
                         )
-                        elements.append no
+                        elements.append (this.intern n: no)
                     } else {
                         isLbl: ett == zlexer.TT.labelTok
                         if isLbl then {
@@ -2018,7 +2023,7 @@ Parser: class {
                                     line: lblTok.lineno
                                     col: lblTok.colno
                                 )
-                                elements.append no
+                                elements.append (this.intern n: no)
                             } else {
                                 bad: lex.peek
                                 return (this.mkError
@@ -2040,7 +2045,7 @@ Parser: class {
                                     line: cp.line
                                     col: cp.col
                                 )
-                                elements.append no
+                                elements.append (this.intern n: no)
                             } else {
                                 break
                             }
@@ -2076,7 +2081,7 @@ Parser: class {
                                 lineno: dLine
                                 colno: dCol
                                 :elements
-                                outType: (Option.some typeNode))
+                                outType: (this.intern n: typeNode))
                             )
                         } else {
                             bad: lex.acceptAny
@@ -2092,7 +2097,7 @@ Parser: class {
                             lineno: dLine
                             colno: dCol
                             :elements
-                            outType: (Option.none Node))
+                            outType: 0)
                         )
                     }
                 }
@@ -3585,19 +3590,19 @@ ewWalk: function {nodes: List Node externs: List String scope: List String node:
         ewWalk :nodes :externs :scope node: (nodes.get i: (node.operator - 1).u64)
         ewWalk :nodes :externs :scope node: (nodes.get i: (node.rhs - 1).u64)
     } case atomstring then {
-        ewWalkList :nodes :externs :scope items: node.stringparts
+        ewWalkBodyIds :nodes :externs :scope items: node.stringparts
     } case dottedpath then {
         ewWalk :nodes :externs :scope node: node.parent
     } case call then {
         ewWalk :nodes :externs :scope node: node.callable
         ewWalkList :nodes :externs :scope items: node.arguments
     } case typeofexpr then {
-        ewWalk :nodes :externs :scope node: node.source
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.source - 1).u64)
     } case namedoperation then {
         ewWalk :nodes :externs :scope node: (nodes.get i: (node.operation - 1).u64)
     } case datablock then {
-        ewWalkList :nodes :externs :scope items: node.elements
-        ewWalkOpt :nodes :externs :scope o: node.outType
+        ewWalkBodyIds :nodes :externs :scope items: node.elements
+        ewWalkOptAt :nodes :externs :scope oId: node.outType
     } case yieldexpr then {
         ewWalk :nodes :externs :scope node: (nodes.get i: (node.expr - 1).u64)
     } case statement then {

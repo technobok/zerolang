@@ -384,9 +384,10 @@ chunkText9: function {n: Node} out String is {
 }
 
 # isInterp -- true when a literal has any non-chunk part.
-isInterp: function {parts: List Node} out bool is {
+isInterp: function {nodes: List Node parts: List u32} out bool is {
     piter: parts.iterate
-    for p: piter loop {
+    for pId9: piter loop {
+        p: nodes.get i: (pId9 - 1).u64
         isC: false
         match (
             p
@@ -399,11 +400,11 @@ isInterp: function {parts: List Node} out bool is {
 }
 
 # wholeText -- a plain literal's joined chunk text.
-wholeText: function {parts: List Node} out String is {
+wholeText: function {nodes: List Node parts: List u32} out String is {
     buf: String
     piter: parts.iterate
-    for p: piter loop {
-        t: chunkText9 n: p
+    for pId9: piter loop {
+        t: chunkText9 n: (nodes.get i: (pId9 - 1).u64)
         buf.append t.stringview
     }
     return buf
@@ -473,14 +474,14 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
             collectLiterals :nodes n: fbl9 :ids :texts
         }
     } case atomstring then {
-        if (isInterp parts: n.stringparts) == false then {
-            t: wholeText parts: n.stringparts
+        if (isInterp :nodes parts: n.stringparts) == false then {
+            t: wholeText :nodes parts: n.stringparts
             nid: n.nodeid.u64
             ids.append nid
             texts.append t
         } else {
             piter: n.stringparts.iterate
-            for p: piter loop collectLiterals :nodes n: p :ids :texts
+            for p: piter loop collectLiterals :nodes n: (nodes.get i: (p - 1).u64) :ids :texts
         }
     } else null
 }
@@ -2915,7 +2916,7 @@ emitInterpArgExpr: function {
     ) case expression then {
         return (emitInterpArgExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomstring then {
-        if (isInterp parts: n.stringparts) then {
+        if (isInterp :nodes parts: n.stringparts) then {
             ltmp: (TmpCtr
                 n: 0
                 frees: (List String)
@@ -2973,7 +2974,7 @@ emitInterpStmtValue: function {
         iex49: nodes.get i: (n.expression - 1).u64
         return (emitInterpStmtValue :nodes :symtab :ctx n: iex49 :ind :tmp :buf)
     } case atomstring then {
-        if (isInterp parts: n.stringparts) then {
+        if (isInterp :nodes parts: n.stringparts) then {
             sB: emitInterpBuild :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
             return "_s\{sB}"
         }
@@ -6520,7 +6521,7 @@ emitInterpPrint: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    parts: List Node
+    parts: List u32
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -6538,13 +6539,14 @@ emitInterpBuild: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    parts: List Node
+    parts: List u32
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } out u64 is {
     est: u64
-    with piter: parts.iterate do for p: piter loop {
+    with piter: parts.iterate do for pId9: piter loop {
+        p: nodes.get i: (pId9 - 1).u64
         isC: false
         match (
             p
@@ -6559,7 +6561,9 @@ emitInterpBuild: function {
     l0: "\{ind}\{ctx.strC}_t _s\{sN} = \{ctx.strC}_create((uint64_t)\{est});\n"
     buf.append l0.stringview
     qiter: parts.iterate
-    for q: qiter loop emitInterpPart :nodes :symtab :ctx n: q :sN :ind :tmp :buf
+    for qId9: qiter loop {
+        emitInterpPart :nodes :symtab :ctx n: (nodes.get i: (qId9 - 1).u64) :sN :ind :tmp :buf
+    }
     return sN
 }
 
@@ -6987,7 +6991,7 @@ emitPrintArg: function {
     ) case expression then {
         emitPrintArg :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64) :ind :tmp :buf
     } case atomstring then {
-        if (isInterp parts: n.stringparts) then {
+        if (isInterp :nodes parts: n.stringparts) then {
             emitInterpPrint :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
         } else {
             li: litIndexOf :ctx nid: n.nodeid.u64
@@ -7095,7 +7099,7 @@ bindLitIndex: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: N
     ) case expression then {
         return (bindLitIndex :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomstring then {
-        if (isInterp parts: n.stringparts) then {
+        if (isInterp :nodes parts: n.stringparts) then {
             return 0
         } else {
             return (litIndexOf :ctx nid: n.nodeid.u64)
@@ -7203,7 +7207,7 @@ emitStringBindValue: function {
         iex9: nodes.get i: (n.expression - 1).u64
         return (emitStringBindValue :nodes :symtab :ctx n: iex9 :nm :ind :tmp :buf)
     } case atomstring then {
-        if (isInterp parts: n.stringparts) then {
+        if (isInterp :nodes parts: n.stringparts) then {
             sB: emitInterpBuild :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
             lst: "\{ind}\{ctx.strC}_t \{nm} = _s\{sB};\n"
             buf.append lst.stringview
@@ -7335,7 +7339,7 @@ emitStringReturnValue: function {
         iexH9: nodes.get i: (n.expression - 1).u64
         return (emitStringReturnValue :nodes :symtab :ctx n: iexH9 :ind :tmp :buf)
     } case atomstring then {
-        if (isInterp parts: n.stringparts) then {
+        if (isInterp :nodes parts: n.stringparts) then {
             sB: emitInterpBuild :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
             rexp9: "_s\{sB}"
             emitReturnCleanup :ctx :tmp retExpr: rexp9.stringview keepRefd: true :ind :buf
@@ -9395,7 +9399,9 @@ scanLoopVar: function {
         scanLoopVar :nodes :symtab n: (nodes.get i: (n.lhs - 1).u64) :lbl :res
         scanLoopVar :nodes :symtab n: (nodes.get i: (n.rhs - 1).u64) :lbl :res
     } case atomstring then {
-        with pit: n.stringparts.iterate do for p: pit loop scanLoopVar :nodes :symtab n: p :lbl :res
+        with pit: n.stringparts.iterate do for pId9: pit loop {
+            scanLoopVar :nodes :symtab n: (nodes.get i: (pId9 - 1).u64) :lbl :res
+        }
     } else null
 }
 
@@ -12060,7 +12066,7 @@ fillOneDataElem: function {
     ) case expression then {
         fillOneDataElem :nodes :symtab :ctx :name op: (nodes.get i: (op.expression - 1).u64)
     } case datablock then {
-        ebn: dataElemBaseName :nodes o: op.outType
+        ebn: dataElemBaseName :nodes oId: op.outType
         k9: name.string
         if ebn.length > 0 then {
             ebv9: ebn.stringview
@@ -12073,11 +12079,11 @@ fillOneDataElem: function {
         idx9: u64
         eiter9: op.elements.iterate
         for e9: eiter9 loop {
-            vx9: emitDataElem :nodes :symtab :ctx n: e9
+            vx9: emitDataElem :nodes :symtab :ctx n: (nodes.get i: (e9 - 1).u64)
             ik9: "\{name}.\{idx9}"
             iv2: vx9.copy
             ctx.dataConst.set key: ik9 value: iv2
-            elbl: dataElemLabel n: e9
+            elbl: dataElemLabel n: (nodes.get i: (e9 - 1).u64)
             if elbl.length > 0 then {
                 lk9: "\{name}.\{elbl}"
                 lv9: vx9.copy
@@ -18115,7 +18121,7 @@ emitDataBlock: function {
         }
         if ri9 then {
             ect: "int64_t".string
-            rbn: dataElemBaseName :nodes o: op.outType
+            rbn: dataElemBaseName :nodes oId: op.outType
             if rbn.length > 0 then {
                 rc: cTypeOf name: rbn.stringview
                 if rc.length > 0 then ect = rc
@@ -18124,7 +18130,7 @@ emitDataBlock: function {
             cnt: u64
             eiter: op.elements.iterate
             for e: eiter loop {
-                ev: emitDataElem :nodes :symtab :ctx n: e
+                ev: emitDataElem :nodes :symtab :ctx n: (nodes.get i: (e - 1).u64)
                 if cnt > 0 then elems.append ", "
                 elems.append ev.stringview
                 cnt = cnt + 1
@@ -18147,14 +18153,9 @@ emitDataElem: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: N
     }
 }
 
-dataElemBaseName: function {nodes: List Node o: Option Node} out String is {
-    match (
-        o
-    ) case some then {
-        return (atomTextDeep :nodes n: o)
-    } case none then {
-        return "".string
-    }
+dataElemBaseName: function {nodes: List Node oId: u32} out String is {
+    if oId == 0 then return "".string
+    return (atomTextDeep :nodes n: (nodes.get i: (oId - 1).u64))
 }
 
 isVariantDef9: function {n: Node} out bool is {

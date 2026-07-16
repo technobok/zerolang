@@ -2577,7 +2577,8 @@ resolveTyperefShellMarked: function {
         typeExpr
     ) case typeofexpr then {
         isTof = true
-        rid9: typeofSourceType :nodes :ty :reg :unitName :ownerId n: typeExpr.source
+        tsx9: nodes.get i: (typeExpr.source - 1).u64
+        rid9: typeofSourceType :nodes :ty :reg :unitName :ownerId n: tsx9
         if rid9 > 0 then {
             # the node's stamp defers to the post-demand pass so it lands
             # on the globally-resolved type, not an early shell
@@ -3388,14 +3389,9 @@ attachMarkers: function {
 # (an atom type-expr), or "" when absent. The Option is BORROWED (param), never
 # bound to a local: a bare bind would move the Option out of the shared AST node
 # and free its payload, corrupting the later dump walk.
-dataOutTypeName: function {o: Option Node} out String is {
-    match (
-        o
-    ) case some then {
-        return (atomName n: o)
-    } case none then {
-        return "".string
-    }
+dataOutTypeName: function {nodes: List Node oId: u32} out String is {
+    if oId == 0 then return "".string
+    return (atomName n: (nodes.get i: (oId - 1).u64))
 }
 
 # resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
@@ -3404,7 +3400,7 @@ dataOutTypeName: function {o: Option Node} out String is {
 # i64 -- mark it a non-valtype, then record its defining unit + `{unit}.{name}` view.
 # Elements stay literal_int (coerced per use); typed / float elements arrive with the
 # examples that exercise them.
-resolveData: function {
+resolveData: function {nodes: List Node
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
@@ -3427,7 +3423,8 @@ resolveData: function {
     litId: ty.literalIntShellId
     ordinal: u64
     eiter: dnode.elements.iterate
-    for el: eiter loop {
+    for elId9: eiter loop {
+        el: nodes.get i: (elId9 - 1).u64
         match (
             el
         ) case namedoperation then {
@@ -3441,7 +3438,7 @@ resolveData: function {
         } else null
         ordinal = ordinal + 1
     }
-    etn: dataOutTypeName o: dnode.outType
+    etn: dataOutTypeName :nodes oId: dnode.outType
     tagName: "tag__i64".string
     if etn.length != 0 then tagName = "tag__\{etn.stringview}"
     tagId: (declareCanonicalType
@@ -4974,7 +4971,7 @@ resolveDef: function {
             ty.nodeType.set key: defn.nodeid.u64 value: exprid
         } case none then null
     } case datablock then {
-        resolveData :ty :reg :unitName :defName dnode: defn
+        resolveData :nodes :ty :reg :unitName :defName dnode: defn
         dbKey: "\{unitName}.\{defName}"
         dbrid: resolvedByKey :ty :reg key: dbKey
         match (
@@ -6055,7 +6052,9 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
             } else null
         }
     } case atomstring then {
-        for sp: node.stringparts.iterate loop scanCallsInNode :nodes :reg node: sp
+        for spId9: node.stringparts.iterate loop {
+            scanCallsInNode :nodes :reg node: (nodes.get i: (spId9 - 1).u64)
+        }
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
@@ -8175,7 +8174,8 @@ checkString: function {
 } out u64 is {
     result: u64
     hasInterp: false
-    for part: node.stringparts.iterate loop {
+    for partId9: node.stringparts.iterate loop {
+        part: nodes.get i: (partId9 - 1).u64
         match (
             part
         ) case stringchunk then null else {
@@ -13425,7 +13425,8 @@ argIsTrivial: function {nodes: List Node op: Node} out bool is {
         return true
     } case atomstring then {
         spiter: op.stringparts.iterate
-        for sp: spiter loop {
+        for spId9: spiter loop {
+            sp: nodes.get i: (spId9 - 1).u64
             match (
                 sp
             ) case stringchunk then null else {
