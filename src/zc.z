@@ -101,6 +101,11 @@ errorMessage: function {
     return buf9
 }
 
+# printPhases -- the --time report: per-phase wall on the monotonic clock.
+printPhases: function {t0: i64 t1: i64 t2: i64 t3: i64} is {
+    io.eprintln "zc --time: parse=\{t1 - t0}ms typecheck=\{t2 - t1}ms emit=\{t3 - t2}ms total=\{t3 - t0}ms"
+}
+
 # isPipelineVerb -- arg1 is a verb that proceeds to flag parsing. build/run/
 # emit/dump compile a unit; env prints settings. version/help/explain are
 # handled before this and exit early, so they are intentionally absent here.
@@ -140,7 +145,7 @@ printUsage: function is {
     io.eprintln ""
     io.eprintln "common flags:"
     io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --target TRIPLE"
-    io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --full"
+    io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --full  --time"
     io.eprintln "  --system DIR  --runtime DIR  -h/--help  -V/--version"
 }
 
@@ -525,6 +530,7 @@ main: function is {
     canon: false
     release: false
     saveTemps: false
+    timed: false
     ccFlag: String
     targetTriple: String
     cflags: String
@@ -591,6 +597,8 @@ main: function is {
             release = true
         } else if a.stringview == "--save-temps" then {
             saveTemps = true
+        } else if a.stringview == "--time" then {
+            timed = true
         } else if unitname.length == 0 then {
             unitname = a.copy
         } else if isRun then {
@@ -659,6 +667,7 @@ main: function is {
     if isEmit then effFull = true
     if (isEmit == false) when (isDump == false) then effFull = true
 
+    tParse0: os.monotonicMillis
     vfs: (zvfs.ZVfs
         providers: (List zvfs.ProviderBox)
         providerRoot: (Map u32 value: String)
@@ -675,6 +684,7 @@ main: function is {
 
     p: zparser.Parser.create
     prog: p.parse :vfs :rootid mainUnitName: unitname
+    tParse1: os.monotonicMillis
     mfn9: "\{unitname.stringview}.z"
     mainFsno: vfs.walk parent: rootid name: mfn9.stringview
 
@@ -688,6 +698,7 @@ main: function is {
     } else {
         reg: ztypes.newRegistry
         st: ztypecheck.typecheck program: prog :reg full: effFull
+        tCheck1: os.monotonicMillis
         nerr: st.typing.errors.length
         if nerr > 0 then {
             with eit: st.typing.errors.iterate do for er: eit loop {
@@ -704,6 +715,7 @@ main: function is {
         }
         if isEmit then {
             csrc: zemitterc.emitC program: prog symtab: st runtimeDir: runtimeDir.stringview
+            if timed then printPhases t0: tParse0 t1: tParse1 t2: tCheck1 t3: os.monotonicMillis
             tgt: emitTarget.copy
             if tgt.length == 0 then tgt = outPath.copy
             if tgt.length == 0 then tgt = "-".string
@@ -721,6 +733,7 @@ main: function is {
             writeOut target: tgt3.stringview content: sql.stringview what: "SQL dump"
         } else {
             csrc2: zemitterc.emitC program: prog symtab: st runtimeDir: runtimeDir.stringview
+            if timed then printPhases t0: tParse0 t1: tParse1 t2: tCheck1 t3: os.monotonicMillis
             tmpc: tempPath uname: unitname.stringview ext: ".c"
             wrc: io.writeText path: tmpc.stringview content: csrc2.stringview
             match (
