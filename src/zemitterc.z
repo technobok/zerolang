@@ -746,6 +746,8 @@ Ctx: class {
     curThisTid: u64
     fastHash: bool
     tailRetActive: bool
+    condDepth: u64
+    emitErrors: (List String)
     emittedUserTypes: (Map u64 value: bool)
     fwdDeclaredTypes: (Map u64 value: bool)
     tmplCache: (Map String value: String)
@@ -7014,6 +7016,177 @@ emitPrintStmt: function {
     if (emitted) == false then buf.append "    /* zemitterc: print with no argument */\n"
 }
 
+# cfold -- an emit-time integer fold result.
+cfold: record {
+    ok: bool
+    val: i64
+}
+
+# evalConstI64 -- best-effort integer fold of an expression at emit time:
+# int literals, unit constants whose pre-rendered C text is a plain integer,
+# and arithmetic/comparison binops over folded operands. ok=false when any
+# part is not provably constant.
+evalConstI64: function {nodes: List Node ctx: Ctx n: Node} out cfold is {
+    match (
+        n
+    ) case expression then {
+        return (evalConstI64 :nodes :ctx n: (nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        at9: n.name.stringview
+        pl9: at9.parseI64
+        match (
+            pl9
+        ) case ok then {
+            return (cfold ok: true val: pl9)
+        } case err then null
+        ck9: at9.string
+        cg9: ctx.constVals.get key: ck9
+        match (
+            cg9
+        ) case some then {
+            cgv9: cg9.stringview
+            pc9: cgv9.parseI64
+            match (
+                pc9
+            ) case ok then {
+                return (cfold ok: true val: pc9)
+            } case err then null
+        } case none then null
+        return (cfold ok: false val: 0)
+    } case binop then {
+        lf9: evalConstI64 :nodes :ctx n: (nodes.get i: (n.lhs - 1).u64)
+        rf9: evalConstI64 :nodes :ctx n: (nodes.get i: (n.rhs - 1).u64)
+        if lf9.ok when rf9.ok then {
+            opt9: atomTextOf n: (nodes.get i: (n.operator - 1).u64)
+            ops9: opt9.stringview
+            if ops9 == "+" then return (cfold ok: true val: lf9.val + rf9.val)
+            if ops9 == "-" then return (cfold ok: true val: lf9.val - rf9.val)
+            if ops9 == "*" then return (cfold ok: true val: lf9.val * rf9.val)
+            cb9: false
+            hit9: false
+            if ops9 == "==" then {
+                cb9 = lf9.val == rf9.val
+                hit9 = true
+            } else if ops9 == "!=" then {
+                cb9 = lf9.val != rf9.val
+                hit9 = true
+            } else if ops9 == "<" then {
+                cb9 = lf9.val < rf9.val
+                hit9 = true
+            } else if ops9 == "<=" then {
+                cb9 = lf9.val <= rf9.val
+                hit9 = true
+            } else if ops9 == ">" then {
+                cb9 = lf9.val > rf9.val
+                hit9 = true
+            } else if ops9 == ">=" then {
+                cb9 = lf9.val >= rf9.val
+                hit9 = true
+            }
+            if hit9 then {
+                if cb9 then return (cfold ok: true val: 1)
+                return (cfold ok: true val: 0)
+            }
+        }
+        return (cfold ok: false val: 0)
+    } else {
+        return (cfold ok: false val: 0)
+    }
+}
+
+# foldIfClause9 -- fold every plain (non-binding) condition of an ifclause;
+# ok only when all fold, val 1 when all are true.
+foldIfClause9: function {nodes: List Node ctx: Ctx conds: List u32} out cfold is {
+    tv9: 1
+    with citer: conds.iterate do for cid9: citer loop {
+        c9: nodes.get i: (cid9 - 1).u64
+        match (
+            c9
+        ) case namedoperation then {
+            cl9: unitLabel9 o: c9.name
+            clv9: cl9.stringview
+            if clv9.length > 0 when clv9 != "when" then return (cfold ok: false val: 0)
+            f9: evalConstI64 :nodes :ctx n: (nodes.get i: (c9.operation - 1).u64)
+            if f9.ok == false then return (cfold ok: false val: 0)
+            if f9.val == 0 then tv9 = 0
+        } else {
+            return (cfold ok: false val: 0)
+        }
+    }
+    return (cfold ok: true val: tv9)
+}
+
+# plainStringLiteral9 -- the text of a single-chunk string literal (through
+# expression wrappers); "" for interpolated or non-literal expressions.
+plainStringLiteral9: function {nodes: List Node n: Node} out String is {
+    match (
+        n
+    ) case expression then {
+        return (plainStringLiteral9 :nodes n: (nodes.get i: (n.expression - 1).u64))
+    } case atomstring then {
+        if n.stringparts.length == 1 then {
+            p9: nodes.get i: ((n.stringparts.get i: 0) - 1).u64
+            match (
+                p9
+            ) case stringchunk then {
+                pt9: p9.text.stringview
+                pc9: pt9.string
+                return pc9
+            } else null
+        }
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# emitErrorStmt -- an `error` call the fold pass could not eliminate. Behind
+# a runtime guard it traps via z_panic (reachability is not provable); in
+# unconditional position the spec says compilation fails: the message is
+# recorded for the driver and the trap emitted as a placeholder.
+emitErrorStmt: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+    ind: StringView
+    buf: String.borrow
+} is {
+    av: String
+    lit: String
+    got: false
+    aiter: call.arguments.iterate
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
+        match (
+            a
+        ) case namedoperation then {
+            if (got) == false then {
+                got = true
+                opn9: nodes.get i: (a.operation - 1).u64
+                av = emitExpr :nodes :symtab :ctx n: opn9
+                lit = plainStringLiteral9 :nodes n: opn9
+            }
+        } else null
+    }
+    okArg: false
+    if got then {
+        if (av.stringview.startsWith prefix: "/*") == false then okArg = true
+    }
+    if okArg then {
+        el9: "\{ind}z_panic((const char*)\{av}.data);\n"
+        buf.append el9.stringview
+    } else {
+        ef9: "\{ind}z_panic(\"(compile-time error)\");\n"
+        buf.append ef9.stringview
+    }
+    if ctx.condDepth == 0 when ctx.genActive == false then {
+        em9: lit.copy
+        if em9.length == 0 then em9 = "compile-time error reached".string
+        ctx.emitErrors.append from: em9
+    }
+}
+
 # emitPanicStmt -- `panic "msg"` routes through the shared z_panic runtime
 # helper. msg is a StringLike (String/StringView); both expose `.data` as a
 # char pointer. A non-string or unhandled arg falls back to a bare marker.
@@ -7508,6 +7681,10 @@ emitCallStmt: function {
     }
     if cn0.stringview == "panic" then {
         emitPanicStmt :nodes :symtab :ctx :call :ind :buf
+        return
+    }
+    if cn0.stringview == "error" then {
+        emitErrorStmt :nodes :symtab :ctx :call :ind :buf
         return
     }
     if cn0.stringview == "return" then {
@@ -8080,6 +8257,46 @@ emitStmt: function {
         s4: "\{ind}}\n"
         buf.append s4.stringview
     } case ifexpr then {
+        # constant guards: when every clause folds at emit time, only the
+        # winning body is emitted -- provably-dead branches (including dead
+        # `error` arms) are eliminated from the C.
+        efold9: true
+        ewin9: u32
+        with pciter: n.clauses.iterate do for pcId9: pciter loop {
+            if efold9 then {
+                pcn9: nodes.get i: (pcId9 - 1).u64
+                match (
+                    pcn9
+                ) case ifclause then {
+                    fr9: foldIfClause9 :nodes :ctx conds: pcn9.conditions
+                    if fr9.ok then {
+                        if fr9.val == 1 when ewin9 == 0 then ewin9 = pcn9.statement
+                    } else {
+                        efold9 = false
+                    }
+                } else {
+                    efold9 = false
+                }
+            }
+        }
+        if efold9 then {
+            ewb9: ewin9
+            if ewb9 == 0 then ewb9 = n.elseclause
+            if ewb9 > 0 then {
+                lfo9: "\{ind}{\n"
+                buf.append lfo9.stringview
+                indE9: "\{ind}    "
+                fLE9: tmp.frees.length
+                lLE9: tmp.listFrees.length
+                ewn9: nodes.get i: (ewb9 - 1).u64
+                emitBodyNode :nodes :symtab :ctx n: ewn9 ind: indE9.stringview :tmp :buf
+                flushBlockFrees :ctx :tmp fL: fLE9 lL: lLE9 :buf
+                lfc9: "\{ind}}\n"
+                buf.append lfc9.stringview
+            }
+            return
+        }
+        ctx.condDepth = ctx.condDepth + 1
         ifAssign: String
         first: true
         with citer: n.clauses.iterate do for cId9: citer loop {
@@ -8131,8 +8348,59 @@ emitStmt: function {
         )
         le: "\{ind}}\n"
         buf.append le.stringview
+        ctx.condDepth = ctx.condDepth - 1
     } case caseexpr then {
+        # constant subject over literal arms: emit only the matching arm.
+        msub9: evalConstI64 :nodes :ctx n: (nodes.get i: (n.subject - 1).u64)
+        melim9: msub9.ok
+        mwin9: u32
+        if melim9 then {
+            with mciter: n.clauses.iterate do for mcId9: mciter loop {
+                if melim9 then {
+                    mcn9: nodes.get i: (mcId9 - 1).u64
+                    match (
+                        mcn9
+                    ) case caseclause then {
+                        if mcn9.name.length > 0 then {
+                            melim9 = false
+                        } else {
+                            maf9: (evalConstI64
+                                :nodes
+                                :ctx
+                                n: (nodes.get i: (mcn9.matcharm - 1).u64)
+                            )
+                            if maf9.ok then {
+                                if maf9.val == msub9.val when mwin9 == 0 then mwin9 = mcn9.statement
+                            } else {
+                                melim9 = false
+                            }
+                        }
+                    } else {
+                        melim9 = false
+                    }
+                }
+            }
+        }
+        if melim9 then {
+            mwb9: mwin9
+            if mwb9 == 0 then mwb9 = n.elseclause
+            if mwb9 > 0 then {
+                lmo9: "\{ind}{\n"
+                buf.append lmo9.stringview
+                indM9: "\{ind}    "
+                fLM9: tmp.frees.length
+                lLM9: tmp.listFrees.length
+                mwn9: nodes.get i: (mwb9 - 1).u64
+                emitBodyNode :nodes :symtab :ctx n: mwn9 ind: indM9.stringview :tmp :buf
+                flushBlockFrees :ctx :tmp fL: fLM9 lL: lLM9 :buf
+                lmc9: "\{ind}}\n"
+                buf.append lmc9.stringview
+            }
+            return
+        }
+        ctx.condDepth = ctx.condDepth + 1
         emitMatchStmt :nodes :symtab :ctx m: n assignTo: "" :ind :tmp :buf
+        ctx.condDepth = ctx.condDepth - 1
     } case withexpr then {
         wn9: n.name.stringview
         wnm: wn9.string
@@ -8148,8 +8416,15 @@ emitStmt: function {
         }
         emitBodyNode :nodes :symtab :ctx n: (nodes.get i: (n.body - 1).u64) :ind :tmp :buf
     } case forexpr then {
-        if (emitObjIterFor :nodes :symtab :ctx m: n :ind :tmp :buf) then return
-        if (emitIntRangeFor :nodes :symtab :ctx m: n :ind :tmp :buf) then return
+        ctx.condDepth = ctx.condDepth + 1
+        if (emitObjIterFor :nodes :symtab :ctx m: n :ind :tmp :buf) then {
+            ctx.condDepth = ctx.condDepth - 1
+            return
+        }
+        if (emitIntRangeFor :nodes :symtab :ctx m: n :ind :tmp :buf) then {
+            ctx.condDepth = ctx.condDepth - 1
+            return
+        }
         # do-while: no pre-conditions, a post-condition (`for loop {...} while C`).
         if n.conditions.length == 0 when n.postconditions.length > 0 then {
             lidDW: pushLoopLabel :ctx :tmp isDo: false
@@ -8175,6 +8450,7 @@ emitStmt: function {
             lpw: "\{ind}} while (\{pcond});\n"
             buf.append lpw.stringview
             popLoopLabel :ctx id: lidDW :ind :buf
+            ctx.condDepth = ctx.condDepth - 1
             return
         }
         cond: String
@@ -8183,9 +8459,9 @@ emitStmt: function {
             k9r: nodes.get i: (kId9 - 1).u64
             emitForCond :nodes :symtab :ctx n: k9r :cond :ind :tmp :buf
         }
-        # `for loop { ... }` -- no conditions, no postconditions: an unconditional
-    # loop that exits via break/return.
-    if cond.length == 0 then cond.append "1"
+        # `for loop { ... }` -- no conditions, no postconditions: an
+        # unconditional loop that exits via break/return.
+        if cond.length == 0 then cond.append "1"
         lidW: pushLoopLabel :ctx :tmp isDo: false
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
@@ -8201,6 +8477,7 @@ emitStmt: function {
         lwc: "\{ind}}\n"
         buf.append lwc.stringview
         popLoopLabel :ctx id: lidW :ind :buf
+        ctx.condDepth = ctx.condDepth - 1
     } case yieldexpr then {
         emitYieldStmt :nodes :symtab :ctx yd: n :ind :tmp :buf
     } else {
@@ -13318,6 +13595,7 @@ emitC: function {
     symtab: zenv.ZSymbolTable
     runtimeDir: StringView
     fastHash: bool
+    errs: List String
 } out String is {
     buf: String
     needsHash: usesHashCollections :symtab
@@ -13445,6 +13723,8 @@ emitC: function {
         usedLits: (Map u64 value: bool)
         constVals: (Map String value: String)
         tailRetActive: false
+        condDepth: 0
+        emitErrors: (List String)
         needs: (Map String value: bool)
         methodReturns: (Map String value: String)
         dataElems: (Map String value: String)
@@ -13572,6 +13852,7 @@ emitC: function {
     buf.append "    z_main();\n"
     buf.append "    return 0;\n"
     buf.append "}\n"
+    with eeit: ctx.emitErrors.iterate do for ee: eeit loop errs.append from: ee.copy
     return buf
 }
 

@@ -101,6 +101,24 @@ errorMessage: function {
     return buf9
 }
 
+# failEmitErrors -- compile-time `error` calls the emitter proved reachable:
+# report each in the checker's format and exit non-zero.
+failEmitErrors: function {errs: List String} is {
+    n9: errs.length
+    if n9 == 0 then return
+    with eit: errs.iterate do for e: eit loop {
+        el9: "error[E0500]: \{e.stringview}"
+        io.eprintln el9.stringview
+    }
+    if n9 == 1 then {
+        io.eprintln "1 error found"
+    } else {
+        es9: "\{n9} errors found"
+        io.eprintln es9.stringview
+    }
+    os.exit code: 1
+}
+
 # printPhases -- the --time report: per-phase wall on the monotonic clock.
 printPhases: function {t0: i64 t1: i64 t2: i64 t3: i64} is {
     io.eprintln "zc --time: parse=\{t1 - t0}ms typecheck=\{t2 - t1}ms emit=\{t3 - t2}ms total=\{t3 - t0}ms"
@@ -717,12 +735,15 @@ main: function is {
             os.exit code: 1
         }
         if isEmit then {
+            emitErrs: (List String)
             csrc: (zemitterc.emitC
                 program: prog
                 symtab: st
                 runtimeDir: runtimeDir.stringview
                 :fastHash
+                errs: emitErrs
             )
+            failEmitErrors errs: emitErrs
             if timed then printPhases t0: tParse0 t1: tParse1 t2: tCheck1 t3: os.monotonicMillis
             tgt: emitTarget.copy
             if tgt.length == 0 then tgt = outPath.copy
@@ -740,12 +761,15 @@ main: function is {
             if tgt3.length == 0 then tgt3 = "-".string
             writeOut target: tgt3.stringview content: sql.stringview what: "SQL dump"
         } else {
+            emitErrs2: (List String)
             csrc2: (zemitterc.emitC
                 program: prog
                 symtab: st
                 runtimeDir: runtimeDir.stringview
                 :fastHash
+                errs: emitErrs2
             )
+            failEmitErrors errs: emitErrs2
             if timed then printPhases t0: tParse0 t1: tParse1 t2: tCheck1 t3: os.monotonicMillis
             tmpc: tempPath uname: unitname.stringview ext: ".c"
             wrc: io.writeText path: tmpc.stringview content: csrc2.stringview

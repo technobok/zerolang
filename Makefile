@@ -299,7 +299,7 @@ emitter-guard:
 # emitted driver C (bin/zc.c, out/zl.c, out/zls.c) must carry ZERO live
 # markers -- lines holding the emitter's own message-string literals
 # (String_append / _zs constants) are excluded from the count.
-FALLBACK_BASELINE := compileerror facets
+FALLBACK_BASELINE := facets
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
