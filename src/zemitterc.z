@@ -746,6 +746,10 @@ Ctx: class {
     curThisTid: u64
     fastHash: bool
     tailRetActive: bool
+    defUnitId: (Map u64 value: u64)
+    unitIdByName: (Map String value: u64)
+    unitIdCtr: u64
+    mainUnitId: u64
     condDepth: u64
     emitErrors: (List String)
     emittedUserTypes: (Map u64 value: bool)
@@ -12798,14 +12802,14 @@ fillConstVals: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
             }
             if opId9 > 0 then {
                 sm9: ctx.mainName.copy
-                ctx.mainName = un9.copy
+                ctxBindMain :ctx name: un9.stringview
                 (fillConstValsIn
                     :symtab
                     :ctx
                     nodes: program.nodes
                     mainOpId: opId9
                 )
-                ctx.mainName = sm9
+                ctxBindMain :ctx name: sm9.stringview
             }
         }
     } else null
@@ -13037,7 +13041,7 @@ emitFnsPass: function {
             }
             if opId9 > 0 then {
                 sm: ctx.mainName.copy
-                ctx.mainName = un9.copy
+                ctxBindMain :ctx name: un9.stringview
                 isTpl9: isGenericTemplateUnitOp nodes: program.nodes opId: opId9
                 if isTpl9 then {
                     (emitUnitMonoInstances
@@ -13059,7 +13063,7 @@ emitFnsPass: function {
                         :buf
                     )
                 }
-                ctx.mainName = sm
+                ctxBindMain :ctx name: sm.stringview
             }
         }
     } else null
@@ -13730,6 +13734,10 @@ emitC: function {
         usedLits: (Map u64 value: bool)
         constVals: (Map String value: String)
         tailRetActive: false
+        defUnitId: (Map u64 value: u64)
+        unitIdByName: (Map String value: u64)
+        unitIdCtr: 0
+        mainUnitId: 0
         condDepth: 0
         emitErrors: (List String)
         needs: (Map String value: bool)
@@ -13789,6 +13797,8 @@ emitC: function {
         :optionvalOriginTid
         :resultvalOriginTid
     )
+    buildDefUnitIndex :symtab :ctx
+    ctxBindMain :ctx name: ctx.realMain.stringview
     fillConstVals :program :symtab :ctx
     fillMethodReturns :program :symtab :ctx
     fillDataElems :program :symtab :ctx
@@ -14479,18 +14489,72 @@ isGenericType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
     }
 }
 
+# internUnitId9 -- the interned id for a unit name; minted on first sight.
+# Ids are >= 1, so 0 is the "no defining unit recorded" sentinel.
+internUnitId9: function {ctx: Ctx name: StringView} out u64 is {
+    k9: name.string
+    {
+        g9: ctx.unitIdByName.get key: k9
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then null
+    }
+    ctx.unitIdCtr = ctx.unitIdCtr + 1
+    nid9: ctx.unitIdCtr
+    ctx.unitIdByName.set key: k9 value: nid9
+    return nid9
+}
+
+# buildDefUnitIndex -- snapshot tid -> interned defining-unit id once per
+# emission. typing.definedInUnit is written only during typecheck, so the
+# index is immutable here; zero-alloc id lookups then serve the hot
+# definedInNonMain path instead of per-query owned-Option rewraps.
+buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx} is {
+    keys9: (List u64)
+    names9: (List String)
+    with dit: symtab.typing.definedInUnit.iterateItems do for de: dit loop {
+        keys9.append de.key
+        dv9: de.value.copy
+        names9.append dv9
+    }
+    di9: u64
+    dn9: keys9.length
+    for di9 < dn9 loop {
+        dnm9: names9.get i: di9
+        uid9: internUnitId9 :ctx name: dnm9.stringview
+        ctx.defUnitId.set key: (keys9.get i: di9) value: uid9
+        di9 = di9 + 1
+    }
+}
+
+# ctxBindMain -- rebind the emission main unit: mainName plus its interned
+# id. Every mainName assignment must route here so mainUnitId never goes
+# stale (definedInNonMain compares against it).
+ctxBindMain: function {ctx: Ctx name: StringView} is {
+    nm9: name.string
+    ctx.mainName = nm9
+    mid9: u64
+    {
+        g9: ctx.unitIdByName.get key: ctx.mainName
+        match (
+            g9
+        ) case some then {
+            mid9 = g9
+        } case none then null
+    }
+    ctx.mainUnitId = mid9
+}
+
 # definedInNonMain -- the type is defined in a non-main (system/io/...)
 # unit (a reachable library type to emit alongside the main closure).
 definedInNonMain: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
-    duo: definedInUnitOf :symtab :tid
+    dgo: ctx.defUnitId.get key: tid
     match (
-        duo
+        dgo
     ) case some then {
-        if duo.stringview == ctx.mainName.stringview then {
-            return false
-        } else {
-            return true
-        }
+        return dgo != ctx.mainUnitId
     } case none then {
         return false
     }
@@ -15826,7 +15890,7 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if nm.length == 0 then return
     tt: symtab.reg.typetypeOf typeId: cid
     smPe: ctx.mainName.copy
-    ctx.mainName = peUnit.copy
+    ctxBindMain :ctx name: peUnit.stringview
     if tt == ztypes.ztypetype.variantType then {
         emitOneVariant :symtab :ctx tid: cid name: nm.stringview :buf
     }
@@ -15845,7 +15909,7 @@ maybePreEmitElem: function {symtab: zenv.ZSymbolTable ctx: Ctx eid: u64 buf: Str
     if tt == ztypes.ztypetype.unionType then {
         emitUnionMono :symtab :ctx tid: cid name: nm.stringview :buf
     }
-    ctx.mainName = smPe
+    ctxBindMain :ctx name: smPe.stringview
 }
 
 # preEmitEmbeddedTypes -- emit the main-unit user types a variant/record/class
@@ -16197,7 +16261,7 @@ emitUserTypeById: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Str
     match (
         duo
     ) case some then {
-        ctx.mainName = duo.copy
+        ctxBindMain :ctx name: duo.stringview
     } case none then null
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.variantType then (emitOneVariant
@@ -16234,7 +16298,7 @@ emitUserTypeById: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Str
     if tt == ztypes.ztypetype.facetType then {
         emitOneFacet :symtab :ctx :tid name: nm.stringview :buf
     }
-    ctx.mainName = sm
+    ctxBindMain :ctx name: sm.stringview
 }
 
 # emitMonoById -- emit one late collection/variant mono by id (dispatch on origin).
@@ -17153,7 +17217,7 @@ emitRecordDefs: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: 
                 }
                 if opId9 > 0 then {
                     sm: ctx.mainName.copy
-                    ctx.mainName = un9.copy
+                    ctxBindMain :ctx name: un9.stringview
                     (emitRecordDefsIn
                         :symtab
                         :ctx
@@ -17162,7 +17226,7 @@ emitRecordDefs: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: 
                         phase: ph
                         :buf
                     )
-                    ctx.mainName = sm
+                    ctxBindMain :ctx name: sm.stringview
                 }
             }
             ph = ph + 1
