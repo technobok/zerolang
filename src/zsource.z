@@ -128,45 +128,53 @@ debraceEligible: function {n: Node} out bool is {
 
 # clauseBodiesOnLine -- every then-body and the else-body of an `if` sit on the
 # construct's start line `ln` (the whole `if ... else` is a one-liner).
-clauseBodiesOnLine: function {clauses: (List Node) elseOpt: (Option Node) ln: u32} out bool is {
+clauseBodiesOnLine: function {
+    nodes: List Node
+    clauses: (List u32)
+    elseclauseId: u32
+    ln: u32
+} out bool is {
     ok: true
     cit: clauses.iterate
-    for cl: cit loop {
+    for clId9: cit loop {
+        cl: nodes.get i: (clId9 - 1).u64
         match (
             cl
         ) case ifclause then {
-            p: stmtPos n: cl.statement
+            p: stmtPos n: (nodes.get i: (cl.statement - 1).u64)
             if p.line != ln then ok = false
         } else null
     }
-    match (
-        elseOpt
-    ) case some then {
-        pe: stmtPos n: elseOpt
+    if elseclauseId > 0 then {
+        pe: stmtPos n: (nodes.get i: (elseclauseId - 1).u64)
         if pe.line != ln then ok = false
-    } case none then null
+    }
     return ok
 }
 
 # caseBodiesOnLine -- every arm-body and the else-body of a `match` sit on the
 # construct's start line `ln` (the whole `match` is a one-liner).
-caseBodiesOnLine: function {clauses: (List Node) elseOpt: (Option Node) ln: u32} out bool is {
+caseBodiesOnLine: function {
+    nodes: List Node
+    clauses: (List u32)
+    elseclauseId: u32
+    ln: u32
+} out bool is {
     ok: true
     cit: clauses.iterate
-    for cl: cit loop {
+    for clId9: cit loop {
+        cl: nodes.get i: (clId9 - 1).u64
         match (
             cl
         ) case caseclause then {
-            p: stmtPos n: cl.statement
+            p: stmtPos n: (nodes.get i: (cl.statement - 1).u64)
             if p.line != ln then ok = false
         } else null
     }
-    match (
-        elseOpt
-    ) case some then {
-        pe: stmtPos n: elseOpt
+    if elseclauseId > 0 then {
+        pe: stmtPos n: (nodes.get i: (elseclauseId - 1).u64)
         if pe.line != ln then ok = false
-    } case none then null
+    }
     return ok
 }
 
@@ -508,35 +516,36 @@ Analysis: class {
 
     # checkEmpty -- L001 empty `else {}` and, for a backwards single-condition `if`,
     # the empty `then {}` (via checkEmptyThen). Receives an ifexpr's else + clauses.
-    checkEmpty: function {:this nodes: List Node elseOpt: Option Node clauses: List Node} is {
-        match (
-            elseOpt
-        ) case some then {
-            if (isEmptyBlock n: elseOpt) then {
-                p: stmtPos n: elseOpt
-                (this.warn
-                    code: "L001"
-                    msg: "empty `else { }` clause".string
-                    line: p.line
-                    col: p.col
-                    width: 2
-                )
-            } else if (isStatementArm n: elseOpt) when (clauses.length == 1) then {
-                if (isElseIfWrap :nodes n: elseOpt) == false then {
-                    citer: clauses.iterate
-                    for c0: citer loop this.checkEmptyThen clause: c0
+    checkEmpty: function {:this nodes: List Node elseclauseId: u32 clauses: List u32} is {
+        if elseclauseId == 0 then return
+        elseNode9: nodes.get i: (elseclauseId - 1).u64
+        if (isEmptyBlock n: elseNode9) then {
+            p: stmtPos n: elseNode9
+            (this.warn
+                code: "L001"
+                msg: "empty `else { }` clause".string
+                line: p.line
+                col: p.col
+                width: 2
+            )
+        } else if (isStatementArm n: elseNode9) when (clauses.length == 1) then {
+            if (isElseIfWrap :nodes n: elseNode9) == false then {
+                citer: clauses.iterate
+                for c0Id9: citer loop {
+                    this.checkEmptyThen :nodes clause: (nodes.get i: (c0Id9 - 1).u64)
                 }
             }
-        } case none then null
+        }
     }
 
     # checkEmptyThen -- L002 a single-condition clause whose `then {}` is empty.
-    checkEmptyThen: function {:this clause: Node} is {
+    checkEmptyThen: function {:this nodes: List Node clause: Node} is {
         match (
             clause
         ) case ifclause then {
-            if (isEmptyBlock n: clause.statement) when (clause.conditions.length == 1) then {
-                p: stmtPos n: clause.statement
+            cst9: nodes.get i: (clause.statement - 1).u64
+            if (isEmptyBlock n: cst9) when (clause.conditions.length == 1) then {
+                p: stmtPos n: (nodes.get i: (clause.statement - 1).u64)
                 (this.warn
                     code: "L002"
                     msg: "empty `then { }` clause".string
@@ -1086,39 +1095,39 @@ Analysis: class {
         } case expression then {
             this.walk :nodes n: n.expression
         } case ifexpr then {
-            this.checkEmpty :nodes elseOpt: n.elseclause clauses: n.clauses
-            this.checkBracesIf :nodes clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
-            this.checkChainBodyBreak :nodes clauses: n.clauses elseOpt: n.elseclause
+            this.checkEmpty :nodes elseclauseId: n.elseclause clauses: n.clauses
+            this.checkBracesIf :nodes clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
+            this.checkChainBodyBreak :nodes clauses: n.clauses elseclauseId: n.elseclause
             clit: n.clauses.iterate
-            for cl: clit loop this.walk :nodes n: cl
-            this.walkOpt :nodes o: n.elseclause
+            for cl: clit loop this.walk :nodes n: (nodes.get i: (cl - 1).u64)
+            this.walkOptAt :nodes oId: n.elseclause
         } case ifclause then {
             coit: n.conditions.iterate
-            for co: coit loop this.walk :nodes n: co
-            this.walk :nodes n: n.statement
+            for co: coit loop this.walk :nodes n: (nodes.get i: (co - 1).u64)
+            this.walk :nodes n: (nodes.get i: (n.statement - 1).u64)
         } case forexpr then {
-            this.checkBracesFor :nodes bodyOpt: n.body
+            this.checkBracesFor :nodes bodyId: n.body
             fcit: n.conditions.iterate
-            for fc: fcit loop this.walk :nodes n: fc
-            this.walkOpt :nodes o: n.body
+            for fc: fcit loop this.walk :nodes n: (nodes.get i: (fc - 1).u64)
+            this.walkOptAt :nodes oId: n.body
             fpit: n.postconditions.iterate
-            for fp: fpit loop this.walk :nodes n: fp
+            for fp: fpit loop this.walk :nodes n: (nodes.get i: (fp - 1).u64)
         } case doexpr then {
-            this.walk :nodes n: n.statement
+            this.walk :nodes n: (nodes.get i: (n.statement - 1).u64)
         } case withexpr then {
-            this.walk :nodes n: n.value
-            this.walk :nodes n: n.body
+            this.walk :nodes n: (nodes.get i: (n.value - 1).u64)
+            this.walk :nodes n: (nodes.get i: (n.body - 1).u64)
         } case caseexpr then {
-            this.checkBracesMatch :nodes clauses: n.clauses elseOpt: n.elseclause ln: n.lineno
-            this.checkChainBodyBreak :nodes clauses: n.clauses elseOpt: n.elseclause
-            this.checkNullArms clauses: n.clauses elseOpt: n.elseclause
-            this.walk :nodes n: n.subject
+            this.checkBracesMatch :nodes clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
+            this.checkChainBodyBreak :nodes clauses: n.clauses elseclauseId: n.elseclause
+            this.checkNullArms :nodes clauses: n.clauses elseclauseId: n.elseclause
+            this.walk :nodes n: (nodes.get i: (n.subject - 1).u64)
             ccit: n.clauses.iterate
-            for cc: ccit loop this.walk :nodes n: cc
-            this.walkOpt :nodes o: n.elseclause
+            for cc: ccit loop this.walk :nodes n: (nodes.get i: (cc - 1).u64)
+            this.walkOptAt :nodes oId: n.elseclause
         } case caseclause then {
-            this.walk :nodes n: n.matcharm
-            this.walk :nodes n: n.statement
+            this.walk :nodes n: (nodes.get i: (n.matcharm - 1).u64)
+            this.walk :nodes n: (nodes.get i: (n.statement - 1).u64)
         } case functiondef then {
             if this.wrapWidth > 0 then (this.tryWrapParams
                 :nodes
@@ -1229,20 +1238,19 @@ Analysis: class {
     # would swallow `then`), detected as a top-level colon inside the paren; those and sub-expression
     # precedence parens are left alone. Removes the `(` and `)`.
     # checkNullArms -- L010 over a match's arm and else bodies.
-    checkNullArms: function {:this clauses: (List Node) elseOpt: (Option Node)} is {
+    checkNullArms: function {:this nodes: List Node clauses: (List u32) elseclauseId: u32} is {
         ccit: clauses.iterate
-        for cc: ccit loop {
+        for ccId9: ccit loop {
+            cc: nodes.get i: (ccId9 - 1).u64
             match (
                 cc
             ) case caseclause then {
-                this.tryNullBody body: cc.statement
+                this.tryNullBody body: (nodes.get i: (cc.statement - 1).u64)
             } else null
         }
-        match (
-            elseOpt
-        ) case some then {
-            this.tryNullBody body: elseOpt
-        } case none then null
+        if elseclauseId > 0 then {
+            this.tryNullBody body: (nodes.get i: (elseclauseId - 1).u64)
+        }
     }
 
     # tryBareZeroInit -- L011: a zero/empty binding initializer written as a
@@ -1512,78 +1520,71 @@ Analysis: class {
     # de-braces only when the whole construct already sits on one line. Unit-level
     # `if`s (funcDepth == 0) keep their braces -- braceless branches are unsafe where
     # EOL filtering is on.
-    checkBracesIf: function {:this nodes: List Node clauses: (List Node) elseOpt: (Option Node) ln: u32} is {
+    checkBracesIf: function {:this nodes: List Node clauses: (List u32) elseclauseId: u32 ln: u32} is {
         if this.funcDepth == 0 then return
-        hasElse: false
-        match (
-            elseOpt
-        ) case some then {
-            hasElse = true
-        } case none then null
+        hasElse: elseclauseId > 0
         if (hasElse == false) when (clauses.length == 1) then {
-            c0: clauses.get i: 0
+            c0Id9: clauses.get i: 0
+            c0: nodes.get i: (c0Id9 - 1).u64
             match (
                 c0
             ) case ifclause then {
-                this.tryDebrace :nodes body: c0.statement collapse: true
+                this.tryDebrace :nodes body: (nodes.get i: (c0.statement - 1).u64) collapse: true
             } else null
             return
         }
-        if (clauseBodiesOnLine :clauses :elseOpt :ln) == false then return
+        if (clauseBodiesOnLine :nodes :clauses :elseclauseId :ln) == false then return
         cit: clauses.iterate
-        for cl: cit loop {
+        for clId9: cit loop {
+            cl: nodes.get i: (clId9 - 1).u64
             match (
                 cl
             ) case ifclause then {
-                this.tryDebrace :nodes body: cl.statement collapse: false
+                this.tryDebrace :nodes body: (nodes.get i: (cl.statement - 1).u64) collapse: false
             } else null
         }
-        match (
-            elseOpt
-        ) case some then {
-            this.tryDebrace :nodes body: elseOpt collapse: false
-        } case none then null
+        if elseclauseId > 0 then {
+            this.tryDebrace :nodes body: (nodes.get i: (elseclauseId - 1).u64) collapse: false
+        }
     }
 
     # checkBracesMatch -- L008 entry for a `match`: always multi-clause, so its arm
     # and else braces are stripped only when the whole match already sits on one line.
-    checkBracesMatch: function {:this nodes: List Node clauses: (List Node) elseOpt: (Option Node) ln: u32} is {
+    checkBracesMatch: function {:this nodes: List Node clauses: (List u32) elseclauseId: u32 ln: u32} is {
         if this.funcDepth == 0 then return
-        if (caseBodiesOnLine :clauses :elseOpt :ln) == false then return
+        if (caseBodiesOnLine :nodes :clauses :elseclauseId :ln) == false then return
         cit: clauses.iterate
-        for cl: cit loop {
+        for clId9: cit loop {
+            cl: nodes.get i: (clId9 - 1).u64
             match (
                 cl
             ) case caseclause then {
-                this.tryDebrace :nodes body: cl.statement collapse: false
+                this.tryDebrace :nodes body: (nodes.get i: (cl.statement - 1).u64) collapse: false
             } else null
         }
-        match (
-            elseOpt
-        ) case some then {
-            this.tryDebrace :nodes body: elseOpt collapse: false
-        } case none then null
+        if elseclauseId > 0 then {
+            this.tryDebrace :nodes body: (nodes.get i: (elseclauseId - 1).u64) collapse: false
+        }
     }
 
     # checkChainBodyBreak -- fmt: in a multi-line `match` or `if`, break any arm/clause
     # body whose first statement clings to the opening `{` onto its own line.
-    checkChainBodyBreak: function {:this nodes: List Node clauses: (List Node) elseOpt: (Option Node)} is {
+    checkChainBodyBreak: function {:this nodes: List Node clauses: (List u32) elseclauseId: u32} is {
         if this.funcDepth == 0 then return
         cit: clauses.iterate
-        for cl: cit loop {
+        for clId9: cit loop {
+            cl: nodes.get i: (clId9 - 1).u64
             match (
                 cl
             ) case caseclause then {
-                this.forceBodyBreak :nodes body: cl.statement
+                this.forceBodyBreak :nodes body: (nodes.get i: (cl.statement - 1).u64)
             } case ifclause then {
-                this.forceBodyBreak :nodes body: cl.statement
+                this.forceBodyBreak :nodes body: (nodes.get i: (cl.statement - 1).u64)
             } else null
         }
-        match (
-            elseOpt
-        ) case some then {
-            this.forceBodyBreak :nodes body: elseOpt
-        } case none then null
+        if elseclauseId > 0 then {
+            this.forceBodyBreak :nodes body: (nodes.get i: (elseclauseId - 1).u64)
+        }
     }
 
     # forceBodyBreak -- a braced body whose closing `}` is not on the opening `{` line (a
@@ -1657,13 +1658,11 @@ Analysis: class {
 
     # checkBracesFor -- L008 entry for a `for ... loop`: a terminal single-clause
     # body that may collapse onto the loop header.
-    checkBracesFor: function {:this nodes: List Node bodyOpt: (Option Node)} is {
+    checkBracesFor: function {:this nodes: List Node bodyId: u32} is {
         if this.funcDepth == 0 then return
-        match (
-            bodyOpt
-        ) case some then {
-            this.tryDebrace :nodes body: bodyOpt collapse: true
-        } case none then null
+        if bodyId > 0 then {
+            this.tryDebrace :nodes body: (nodes.get i: (bodyId - 1).u64) collapse: true
+        }
     }
 
     checkRedundantParens: function {:this} is {
@@ -2028,31 +2027,41 @@ Analysis: class {
             this.walkSuf :nodes n: n.expression :uname :st :funcretId
         } case ifexpr then {
             clit: n.clauses.iterate
-            for cl: clit loop this.walkSuf :nodes n: cl :uname :st :funcretId
-            this.walkSufOpt :nodes o: n.elseclause :uname :st :funcretId
+            for clId9: clit loop {
+                this.walkSuf :nodes n: (nodes.get i: (clId9 - 1).u64) :uname :st :funcretId
+            }
+            this.walkSufOptAt :nodes oId: n.elseclause :uname :st :funcretId
         } case ifclause then {
             coit: n.conditions.iterate
-            for co: coit loop this.walkSuf :nodes n: co :uname :st :funcretId
-            this.walkSuf :nodes n: n.statement :uname :st :funcretId
+            for coId9: coit loop {
+                this.walkSuf :nodes n: (nodes.get i: (coId9 - 1).u64) :uname :st :funcretId
+            }
+            this.walkSuf :nodes n: (nodes.get i: (n.statement - 1).u64) :uname :st :funcretId
         } case forexpr then {
             fcit: n.conditions.iterate
-            for fc: fcit loop this.walkSuf :nodes n: fc :uname :st :funcretId
-            this.walkSufOpt :nodes o: n.body :uname :st :funcretId
+            for fcId9: fcit loop {
+                this.walkSuf :nodes n: (nodes.get i: (fcId9 - 1).u64) :uname :st :funcretId
+            }
+            this.walkSufOptAt :nodes oId: n.body :uname :st :funcretId
             fpit: n.postconditions.iterate
-            for fp: fpit loop this.walkSuf :nodes n: fp :uname :st :funcretId
+            for fpId9: fpit loop {
+                this.walkSuf :nodes n: (nodes.get i: (fpId9 - 1).u64) :uname :st :funcretId
+            }
         } case doexpr then {
-            this.walkSuf :nodes n: n.statement :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.statement - 1).u64) :uname :st :funcretId
         } case withexpr then {
-            this.walkSuf :nodes n: n.value :uname :st :funcretId
-            this.walkSuf :nodes n: n.body :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.value - 1).u64) :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.body - 1).u64) :uname :st :funcretId
         } case caseexpr then {
-            this.walkSuf :nodes n: n.subject :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.subject - 1).u64) :uname :st :funcretId
             ccit: n.clauses.iterate
-            for cc: ccit loop this.walkSuf :nodes n: cc :uname :st :funcretId
-            this.walkSufOpt :nodes o: n.elseclause :uname :st :funcretId
+            for ccId9: ccit loop {
+                this.walkSuf :nodes n: (nodes.get i: (ccId9 - 1).u64) :uname :st :funcretId
+            }
+            this.walkSufOptAt :nodes oId: n.elseclause :uname :st :funcretId
         } case caseclause then {
-            this.walkSuf :nodes n: n.matcharm :uname :st :funcretId
-            this.walkSuf :nodes n: n.statement :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.matcharm - 1).u64) :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.statement - 1).u64) :uname :st :funcretId
         } case functiondef then {
             this.walkSufRet :nodes retId: n.returntype :uname :st
             piter: n.parameters.iterate

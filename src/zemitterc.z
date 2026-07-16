@@ -439,30 +439,39 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
         collectLiterals :nodes n: (nodes.get i: (n.value - 1).u64) :ids :texts
     } case ifexpr then {
         citer: n.clauses.iterate
-        for c: citer loop collectLiterals :nodes n: c :ids :texts
-        collectLiteralsOpt :nodes o: n.elseclause :ids :texts
+        for cId9: citer loop collectLiterals :nodes n: (nodes.get i: (cId9 - 1).u64) :ids :texts
+        if n.elseclause > 0 then {
+            ec9: nodes.get i: (n.elseclause - 1).u64
+            collectLiterals :nodes n: ec9 :ids :texts
+        }
     } case caseexpr then {
-        collectLiterals :nodes n: n.subject :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.subject - 1).u64) :ids :texts
         miter9: n.clauses.iterate
-        for mc9: miter9 loop collectLiterals :nodes n: mc9 :ids :texts
-        collectLiteralsOpt :nodes o: n.elseclause :ids :texts
+        for mc9: miter9 loop collectLiterals :nodes n: (nodes.get i: (mc9 - 1).u64) :ids :texts
+        if n.elseclause > 0 then {
+            ecl9: nodes.get i: (n.elseclause - 1).u64
+            collectLiterals :nodes n: ecl9 :ids :texts
+        }
     } case caseclause then {
-        collectLiterals :nodes n: n.statement :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :texts
     } case ifclause then {
         kiter: n.conditions.iterate
-        for k: kiter loop collectLiterals :nodes n: k :ids :texts
-        collectLiterals :nodes n: n.statement :ids :texts
+        for kId9: kiter loop collectLiterals :nodes n: (nodes.get i: (kId9 - 1).u64) :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :texts
     } case withexpr then {
-        collectLiterals :nodes n: n.value :ids :texts
-        collectLiterals :nodes n: n.body :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.value - 1).u64) :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.body - 1).u64) :ids :texts
     } case doexpr then {
-        collectLiterals :nodes n: n.statement :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :texts
     } case yieldexpr then {
         collectLiterals :nodes n: n.expr :ids :texts
     } case forexpr then {
         fiter: n.conditions.iterate
-        for f: fiter loop collectLiterals :nodes n: f :ids :texts
-        collectLiteralsOpt :nodes o: n.body :ids :texts
+        for f: fiter loop collectLiterals :nodes n: (nodes.get i: (f - 1).u64) :ids :texts
+        if n.body > 0 then {
+            fbl9: nodes.get i: (n.body - 1).u64
+            collectLiterals :nodes n: fbl9 :ids :texts
+        }
     } case atomstring then {
         if (isInterp parts: n.stringparts) == false then {
             t: wholeText parts: n.stringparts
@@ -512,7 +521,8 @@ ternaryClause: function {
     ) case ifclause then {
         cond: String
         kiter: c.conditions.iterate
-        for k: kiter loop {
+        for kId9: kiter loop {
+            k: nodes.get i: (kId9 - 1).u64
             match (
                 k
             ) case namedoperation then {
@@ -521,7 +531,7 @@ ternaryClause: function {
                 cond.append cv.stringview
             } else null
         }
-        vx: emitExpr :nodes :symtab :ctx n: c.statement
+        vx: emitExpr :nodes :symtab :ctx n: (nodes.get i: (c.statement - 1).u64)
         t0: "((\{cond}) ? (\{vx}) : "
         return t0
     } else {
@@ -533,15 +543,13 @@ ternaryElse: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    o: Option Node
+    oId: u32
 } out String is {
-    match (
-        o
-    ) case some then {
-        ev: emitExpr :nodes :symtab :ctx n: o
+    if oId > 0 then {
+        ev: emitExpr :nodes :symtab :ctx n: (nodes.get i: (oId - 1).u64)
         e0: "(\{ev})"
         return e0
-    } case none then {
+    } else {
         return "(0)".string
     }
 }
@@ -6403,12 +6411,13 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
         tx: String
         depth: u64
         citer: n.clauses.iterate
-        for c: citer loop {
-            cx: ternaryClause :nodes :symtab :ctx :c
+        for cId9: citer loop {
+            c9r: nodes.get i: (cId9 - 1).u64
+            cx: ternaryClause :nodes :symtab :ctx c: c9r
             tx.append cx.stringview
             depth = depth + 1
         }
-        ex9: ternaryElse :nodes :symtab :ctx o: n.elseclause
+        ex9: ternaryElse :nodes :symtab :ctx oId: n.elseclause
         tx.append ex9.stringview
         dk: u64
         for dk < depth loop {
@@ -7570,7 +7579,7 @@ emitStmt: function {
             emitStmt :nodes :symtab :ctx n: (nodes.get i: (s9Id9 - 1).u64) :ind :tmp :buf
         }
     } case doexpr then {
-        if (ztypecheck.blockHasBreak :nodes n: n.statement) then {
+        if (ztypecheck.blockHasBreak :nodes n: (nodes.get i: (n.statement - 1).u64)) then {
             ldo9: "\{ind}do {\n"
             buf.append ldo9.stringview
             indd9: "\{ind}    "
@@ -7580,13 +7589,14 @@ emitStmt: function {
             sdoId9: pushLoopLabel :ctx :tmp isDo: true
             sfL9: tmp.frees.length
             slL9: tmp.listFrees.length
-            emitBodyNode :nodes :symtab :ctx n: n.statement ind: indd9.stringview :tmp :buf
+            dst9: nodes.get i: (n.statement - 1).u64
+            emitBodyNode :nodes :symtab :ctx n: dst9 ind: indd9.stringview :tmp :buf
             flushBlockFrees :ctx :tmp fL: sfL9 lL: slL9 :buf
             lwh9: "\{ind}} while (0);\n"
             buf.append lwh9.stringview
             popLoopLabel :ctx id: sdoId9 :ind :buf
         } else {
-            emitBodyNode :nodes :symtab :ctx n: n.statement :ind :tmp :buf
+            emitBodyNode :nodes :symtab :ctx n: (nodes.get i: (n.statement - 1).u64) :ind :tmp :buf
         }
     } case call then {
         emitCallStmt :nodes :symtab :ctx call: n :ind :tmp :buf
@@ -8064,9 +8074,10 @@ emitStmt: function {
     } case ifexpr then {
         ifAssign: String
         first: true
-        with citer: n.clauses.iterate do for c: citer loop {
+        with citer: n.clauses.iterate do for cId9: citer loop {
             isFirst: first
             first = false
+            c: nodes.get i: (cId9 - 1).u64
             (emitIfClause
                 :nodes
                 :symtab
@@ -8099,7 +8110,7 @@ emitStmt: function {
             :nodes
             :symtab
             :ctx
-            o: n.elseclause
+            oId: n.elseclause
             assignTo: ifAssign.stringview
             :ind
             :tmp
@@ -8117,9 +8128,9 @@ emitStmt: function {
     } case withexpr then {
         wn9: n.name.stringview
         wnm: wn9.string
-        wtn: stampNameDeep :symtab n: n.value
+        wtn: stampNameDeep :symtab n: (nodes.get i: (n.value - 1).u64)
         wct: cTypeForName :symtab :ctx name: wtn.stringview
-        wv: emitExpr :nodes :symtab :ctx n: n.value
+        wv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (n.value - 1).u64)
         if wct.length > 0 then {
             lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
             buf.append lwv.stringview
@@ -8127,7 +8138,7 @@ emitStmt: function {
             lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
             buf.append lwv2.stringview
         }
-        emitBodyNode :nodes :symtab :ctx n: n.body :ind :tmp :buf
+        emitBodyNode :nodes :symtab :ctx n: (nodes.get i: (n.body - 1).u64) :ind :tmp :buf
     } case forexpr then {
         if (emitObjIterFor :nodes :symtab :ctx m: n :ind :tmp :buf) then return
         if (emitIntRangeFor :nodes :symtab :ctx m: n :ind :tmp :buf) then return
@@ -8139,12 +8150,15 @@ emitStmt: function {
             ind2d: "\{ind}    "
             fLd9: tmp.frees.length
             lLd9: tmp.listFrees.length
-            emitBodyOpt :nodes :symtab :ctx o: n.body ind: ind2d.stringview :tmp :buf
+            if n.body > 0 then {
+                fbd9: nodes.get i: (n.body - 1).u64
+                emitBodyNode :nodes :symtab :ctx n: fbd9 ind: ind2d.stringview :tmp :buf
+            }
             flushBlockFrees :ctx :tmp fL: fLd9 lL: lLd9 :buf
             pcond: String
             pkiter: n.postconditions.iterate
             for pk: pkiter loop {
-                pcv: emitExpr :nodes :symtab :ctx n: pk
+                pcv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (pk - 1).u64)
                 if pcond.length > 0 then pcond.append " && "
                 pcond.append pcv.stringview
             }
@@ -8157,7 +8171,10 @@ emitStmt: function {
         }
         cond: String
         kiter: n.conditions.iterate
-        for k: kiter loop emitForCond :nodes :symtab :ctx n: k :cond :ind :tmp :buf
+        for kId9: kiter loop {
+            k9r: nodes.get i: (kId9 - 1).u64
+            emitForCond :nodes :symtab :ctx n: k9r :cond :ind :tmp :buf
+        }
         if cond.length == 0 then cond.append "0 /* zemitterc: unhandled loop header */"
         lidW: pushLoopLabel :ctx :tmp isDo: false
         lw: "\{ind}while (\{cond}) {\n"
@@ -8165,7 +8182,10 @@ emitStmt: function {
         ind2: "\{ind}    "
         fLw9: tmp.frees.length
         lLw9: tmp.listFrees.length
-        emitBodyOpt :nodes :symtab :ctx o: n.body ind: ind2.stringview :tmp :buf
+        if n.body > 0 then {
+            fbw9: nodes.get i: (n.body - 1).u64
+            emitBodyNode :nodes :symtab :ctx n: fbw9 ind: ind2.stringview :tmp :buf
+        }
         flushBlockFrees :ctx :tmp fL: fLw9 lL: lLw9 :buf
         emitContLabel :ctx id: lidW ind: ind2.stringview :buf
         lwc: "\{ind}}\n"
@@ -8502,8 +8522,8 @@ emitMatchStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    sx: emitExpr :nodes :symtab :ctx n: m.subject
-    stn: stampNameDeep :symtab n: m.subject
+    sx: emitExpr :nodes :symtab :ctx n: (nodes.get i: (m.subject - 1).u64)
+    stn: stampNameDeep :symtab n: (nodes.get i: (m.subject - 1).u64)
     if stn.stringview == "bool" then {
         emitBoolMatch :nodes :symtab :ctx :m subj: sx.stringview :assignTo :ind :tmp :buf
         return
@@ -8534,9 +8554,10 @@ emitMatchStmt: function {
     buf.append l0.stringview
     l1: "\{ind}switch (_m\{mN}.tag) {\n"
     buf.append l1.stringview
-    sname: atomTextDeep n: m.subject
+    sname: atomTextDeep n: (nodes.get i: (m.subject - 1).u64)
     ind2: "\{ind}    "
-    with citer: m.clauses.iterate do for c: citer loop {
+    with citer: m.clauses.iterate do for cId9: citer loop {
+        c: nodes.get i: (cId9 - 1).u64
         (emitMatchClause
             :nodes
             :symtab
@@ -8553,7 +8574,8 @@ emitMatchStmt: function {
         )
     }
     covA9: (List String)
-    with c3iter: m.clauses.iterate do for c3: c3iter loop {
+    with c3iter: m.clauses.iterate do for c3Id9: c3iter loop {
+        c3: nodes.get i: (c3Id9 - 1).u64
         match (
             c3
         ) case caseclause then {
@@ -8565,9 +8587,7 @@ emitMatchStmt: function {
     meV9: String
     meT9: u64
     meSeed9: false
-    match (
-        m.elseclause
-    ) case some then {
+    if m.elseclause > 0 then {
         if sname.length > 0 then {
             allME9: (List String)
             sumArmNames9 :symtab tid: vtid names: allME9
@@ -8585,7 +8605,12 @@ emitMatchStmt: function {
                 }
             }
             if remME9 == 1 then {
-                if (bodyReassignsOpt9 :nodes o: m.elseclause name: sname.stringview) == false then {
+                mre9: false
+                if m.elseclause > 0 then {
+                    mec9: nodes.get i: (m.elseclause - 1).u64
+                    mre9 = bodyReassigns9 :nodes n: mec9 name: sname.stringview
+                }
+                if (mre9) == false then {
                     mrecv9: "_m\{mN}"
                     alias9: (armAliasText9
                         :symtab
@@ -8607,7 +8632,7 @@ emitMatchStmt: function {
                 }
             }
         }
-    } case none then null
+    }
     mePrevV9: String
     mePrevT9: u64
     if meSeed9 then {
@@ -8622,7 +8647,7 @@ emitMatchStmt: function {
         :nodes
         :symtab
         :ctx
-        o: m.elseclause
+        oId: m.elseclause
         :assignTo
         ind: ind2.stringview
         :tmp
@@ -8662,11 +8687,11 @@ emitScalarMatch: function {
     buf.append l0.stringview
     ind2: "\{ind}    "
     citer: m.clauses.iterate
-    for c: citer loop (emitScalarClause
+    for cId9: citer loop (emitScalarClause
         :nodes
         :symtab
         :ctx
-        :c
+        c: (nodes.get i: (cId9 - 1).u64)
         :assignTo
         ind: ind2.stringview
         :tmp
@@ -8677,7 +8702,7 @@ emitScalarMatch: function {
         :nodes
         :symtab
         :ctx
-        o: m.elseclause
+        oId: m.elseclause
         :assignTo
         ind: ind2.stringview
         :tmp
@@ -8705,7 +8730,8 @@ emitBoolMatch: function {
 } is {
     firstB9: true
     citer: m.clauses.iterate
-    for c: citer loop {
+    for cId9: citer loop {
+        c: nodes.get i: (cId9 - 1).u64
         match (
             c
         ) case caseclause then {
@@ -8718,13 +8744,14 @@ emitBoolMatch: function {
             buf.append lhB9.stringview
             indB9: "\{ind}    "
             if assignTo.length > 0 then {
-                vxB9: emitExpr :nodes :symtab :ctx n: c.statement
+                vxB9: emitExpr :nodes :symtab :ctx n: (nodes.get i: (c.statement - 1).u64)
                 laB9: "\{ind}    \{assignTo} = \{vxB9};\n"
                 buf.append laB9.stringview
             } else {
                 fLB9: tmp.frees.length
                 lLB9: tmp.listFrees.length
-                emitBodyNode :nodes :symtab :ctx n: c.statement ind: indB9.stringview :tmp :buf
+                cstB9: nodes.get i: (c.statement - 1).u64
+                emitBodyNode :nodes :symtab :ctx n: cstB9 ind: indB9.stringview :tmp :buf
                 flushBlockFrees :ctx :tmp fL: fLB9 lL: lLB9 :buf
             }
             lcB9: "\{ind}}\n"
@@ -8732,7 +8759,7 @@ emitBoolMatch: function {
         } else null
     }
     bdvg: matchDiverges :symtab nid: m.nodeid.u64
-    emitBoolElse :nodes :symtab :ctx o: m.elseclause :assignTo :ind :tmp diverges: bdvg :buf
+    emitBoolElse :nodes :symtab :ctx oId: m.elseclause :assignTo :ind :tmp diverges: bdvg :buf
 }
 
 # emitBoolElse -- the trailing `else { ... }` of a bool match (none = nothing).
@@ -8740,16 +8767,15 @@ emitBoolElse: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    o: Option Node
+    oId: u32
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
     diverges: bool
     buf: String.borrow
 } is {
-    match (
-        o
-    ) case some then {
+    if oId > 0 then {
+        o: nodes.get i: (oId - 1).u64
         leB9: "\{ind}else {\n"
         buf.append leB9.stringview
         indE9: "\{ind}    "
@@ -8765,7 +8791,7 @@ emitBoolElse: function {
         }
         lceB9: "\{ind}}\n"
         buf.append lceB9.stringview
-    } case none then {
+    } else {
         if diverges then {
             leD9: "\{ind}else {\n"
             buf.append leD9.stringview
@@ -8874,13 +8900,14 @@ emitScalarClause: function {
         buf.append l2.stringview
         ind3: "\{ind}    "
         if assignTo.length > 0 then {
-            vx9: emitExpr :nodes :symtab :ctx n: c.statement
+            vx9: emitExpr :nodes :symtab :ctx n: (nodes.get i: (c.statement - 1).u64)
             la9: "\{ind}    \{assignTo} = \{vx9};\n"
             buf.append la9.stringview
         } else {
             fL9: tmp.frees.length
             lL9: tmp.listFrees.length
-            emitBodyNode :nodes :symtab :ctx n: c.statement ind: ind3.stringview :tmp :buf
+            cst9: nodes.get i: (c.statement - 1).u64
+            emitBodyNode :nodes :symtab :ctx n: cst9 ind: ind3.stringview :tmp :buf
             flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
         }
         l5: "\{ind}    break;\n"
@@ -8935,13 +8962,14 @@ emitMatchClause: function {
             }
         }
         if assignTo.length > 0 then {
-            vx9: emitExpr :nodes :symtab :ctx n: c.statement
+            vx9: emitExpr :nodes :symtab :ctx n: (nodes.get i: (c.statement - 1).u64)
             la9: "\{ind}    \{assignTo} = \{vx9};\n"
             buf.append la9.stringview
         } else {
             fL9: tmp.frees.length
             lL9: tmp.listFrees.length
-            emitBodyNode :nodes :symtab :ctx n: c.statement ind: ind3.stringview :tmp :buf
+            cst9: nodes.get i: (c.statement - 1).u64
+            emitBodyNode :nodes :symtab :ctx n: cst9 ind: ind3.stringview :tmp :buf
             flushBlockFrees :ctx :tmp fL: fL9 lL: lL9 :buf
         }
         if didSeed then {
@@ -8959,16 +8987,15 @@ emitMatchElse: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    o: Option Node
+    oId: u32
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
     diverges: bool
     buf: String.borrow
 } is {
-    match (
-        o
-    ) case some then {
+    if oId > 0 then {
+        o: nodes.get i: (oId - 1).u64
         l7: "\{ind}default: {\n"
         buf.append l7.stringview
         ind3: "\{ind}    "
@@ -8986,7 +9013,7 @@ emitMatchElse: function {
         buf.append l8.stringview
         l9: "\{ind}}\n"
         buf.append l9.stringview
-    } case none then {
+    } else {
         if diverges then {
             ld0: "\{ind}default: z_unreachable();\n"
             buf.append ld0.stringview
@@ -9079,7 +9106,7 @@ emitDoBindValue: function {
     } case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld.stringview
-        if (ztypecheck.blockHasBreak :nodes n: n.statement) then {
+        if (ztypecheck.blockHasBreak :nodes n: (nodes.get i: (n.statement - 1).u64)) then {
             noneTag: variantTag :symtab :tid arm: "none"
             someTag: variantTag :symtab :tid arm: "some"
             # a reftype value wraps in Option: the payload lives in a
@@ -9113,7 +9140,7 @@ emitDoBindValue: function {
                 :nodes
                 :symtab
                 :ctx
-                n: n.statement
+                n: (nodes.get i: (n.statement - 1).u64)
                 target: nm
                 someTag: someTag.stringview
                 payC: boxedC9.stringview
@@ -9144,7 +9171,7 @@ emitDoBindValue: function {
                 :nodes
                 :symtab
                 :ctx
-                n: n.statement
+                n: (nodes.get i: (n.statement - 1).u64)
                 target: nm
                 ind: ind3.stringview
                 :tmp
@@ -9208,10 +9235,20 @@ emitIfBindValue: function {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld.stringview
         first: true
-        with citer: n.clauses.iterate do for c: citer loop {
+        with citer: n.clauses.iterate do for cId9: citer loop {
             isFirst: first
             first = false
-            emitIfClause :nodes :symtab :ctx n: c :isFirst assignTo: nm :ind :tmp :buf
+            (emitIfClause
+                :nodes
+                :symtab
+                :ctx
+                n: (nodes.get i: (cId9 - 1).u64)
+                :isFirst
+                assignTo: nm
+                :ind
+                :tmp
+                :buf
+            )
         }
         chS9: (List String)
         chA9: (List String)
@@ -9233,7 +9270,7 @@ emitIfBindValue: function {
             :nodes
             :symtab
             :ctx
-            o: n.elseclause
+            oId: n.elseclause
             assignTo: nm
             :ind
             :tmp
@@ -9269,15 +9306,14 @@ childExists: function {symtab: zenv.ZSymbolTable tid: u64 name: StringView} out 
 loopVarTypeName: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
-    body: Option Node
+    bodyId: u32
     lbl: StringView
 } out String is {
     res: String
-    match (
-        body
-    ) case some then {
-        scanLoopVar :nodes :symtab n: body :lbl :res
-    } case none then null
+    if bodyId > 0 then {
+        b9: nodes.get i: (bodyId - 1).u64
+        scanLoopVar :nodes :symtab n: b9 :lbl :res
+    }
     return res
 }
 
@@ -9374,7 +9410,8 @@ emitObjIterFor: function {
     buf: String.borrow
 } out bool is {
     if m.conditions.length != 1 then return false
-    c0: m.conditions.get i: 0
+    c0Id9: m.conditions.get i: 0
+    c0: nodes.get i: (c0Id9 - 1).u64
     match (
         c0
     ) case namedoperation then {
@@ -9453,7 +9490,7 @@ emitObjIterFor: function {
             if ovid == 0 then {
                 # native iterator call: returnTypeId unset. Resolve the
                 # yield type from the loop var's body usage -> optionval_T.
-                ytn: loopVarTypeName :nodes :symtab body: m.body lbl: lbl.stringview
+                ytn: loopVarTypeName :nodes :symtab bodyId: m.body lbl: lbl.stringview
                 if ytn.length == 0 then return false
                 ovnm: "optionval_\{ytn}"
                 ovo: (ztypecheck.resolveSystemChild
@@ -9596,7 +9633,10 @@ emitObjIterFor: function {
             ind2: "\{ind}    "
             fLO9: tmp.frees.length
             lLO9: tmp.listFrees.length
-            emitBodyOpt :nodes :symtab :ctx o: m.body ind: ind2.stringview :tmp :buf
+            if m.body > 0 then {
+                mb9: nodes.get i: (m.body - 1).u64
+                emitBodyNode :nodes :symtab :ctx n: mb9 ind: ind2.stringview :tmp :buf
+            }
             if payCleanup9.length > 0 then {
                 l3od: "\{ind}    \{payCleanup9}"
                 buf.append l3od.stringview
@@ -9629,7 +9669,8 @@ emitIntRangeFor: function {
     buf: String.borrow
 } out bool is {
     if m.conditions.length != 1 then return false
-    c0: m.conditions.get i: 0
+    c0Id9: m.conditions.get i: 0
+    c0: nodes.get i: (c0Id9 - 1).u64
     match (
         c0
     ) case namedoperation then {
@@ -9642,7 +9683,10 @@ emitIntRangeFor: function {
         lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
-        emitBodyOpt :nodes :symtab :ctx o: m.body ind: ind2.stringview :tmp :buf
+        if m.body > 0 then {
+            mb29: nodes.get i: (m.body - 1).u64
+            emitBodyNode :nodes :symtab :ctx n: mb29 ind: ind2.stringview :tmp :buf
+        }
         emitContLabel :ctx id: lidR ind: ind2.stringview :buf
         lc: "\{ind}}\n"
         buf.append lc.stringview
@@ -9891,27 +9935,30 @@ bodyReassigns9: function {nodes: List Node n: Node name: StringView} out bool is
     } case ifexpr then {
         hif9: false
         with cit9: n.clauses.iterate do for c9: cit9 loop {
-            if (bodyReassigns9 :nodes n: c9 :name) then hif9 = true
+            if (bodyReassigns9 :nodes n: (nodes.get i: (c9 - 1).u64) :name) then hif9 = true
         }
         if hif9 then return true
-        return (bodyReassignsOpt9 :nodes o: n.elseclause :name)
+        if n.elseclause == 0 then return false
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.elseclause - 1).u64) :name)
     } case ifclause then {
-        return (bodyReassigns9 :nodes n: n.statement :name)
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.statement - 1).u64) :name)
     } case caseexpr then {
         hce9: false
         with kit9: n.clauses.iterate do for k9: kit9 loop {
-            if (bodyReassigns9 :nodes n: k9 :name) then hce9 = true
+            if (bodyReassigns9 :nodes n: (nodes.get i: (k9 - 1).u64) :name) then hce9 = true
         }
         if hce9 then return true
-        return (bodyReassignsOpt9 :nodes o: n.elseclause :name)
+        if n.elseclause == 0 then return false
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.elseclause - 1).u64) :name)
     } case caseclause then {
-        return (bodyReassigns9 :nodes n: n.statement :name)
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.statement - 1).u64) :name)
     } case forexpr then {
-        return (bodyReassignsOpt9 :nodes o: n.body :name)
+        if n.body == 0 then return false
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.body - 1).u64) :name)
     } case doexpr then {
-        return (bodyReassigns9 :nodes n: n.statement :name)
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.statement - 1).u64) :name)
     } case withexpr then {
-        return (bodyReassigns9 :nodes n: n.body :name)
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.body - 1).u64) :name)
     } else {
         return false
     }
@@ -10138,13 +10185,15 @@ ifPredSeeds9: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    conds: List Node
-    body: Node
+    conds: List u32
+    bodyId: u32
     names: List String
     vals: List String
     tids: List u64
 } is {
-    with kit9: conds.iterate do for k9: kit9 loop {
+    body: nodes.get i: (bodyId - 1).u64
+    with kit9: conds.iterate do for k9Id9: kit9 loop {
+        k9: nodes.get i: (k9Id9 - 1).u64
         match (
             k9
         ) case namedoperation then {
@@ -10169,14 +10218,15 @@ chainFactsOfClauses9: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    clauses: List Node
+    clauses: List u32
     subjects: List String
     arms: List String
     tids: List u64
     negs: List bool
     recvs: List String
 } is {
-    with cit9: clauses.iterate do for c9: cit9 loop {
+    with cit9: clauses.iterate do for c9Id9: cit9 loop {
+        c9: nodes.get i: (c9Id9 - 1).u64
         match (
             c9
         ) case ifclause then {
@@ -10186,7 +10236,8 @@ chainFactsOfClauses9: function {
                 tT9: (List u64)
                 tN9: (List bool)
                 tR9: (List String)
-                with kit9: c9.conditions.iterate do for k9: kit9 loop {
+                with kit9: c9.conditions.iterate do for k9Id9: kit9 loop {
+                    k9: nodes.get i: (k9Id9 - 1).u64
                     match (
                         k9
                     ) case namedoperation then {
@@ -10432,7 +10483,8 @@ emitIfClause: function {
         n
     ) case ifclause then {
         cond: String
-        with kiter: n.conditions.iterate do for k: kiter loop {
+        with kiter: n.conditions.iterate do for kId9: kiter loop {
+            k: nodes.get i: (kId9 - 1).u64
             match (
                 k
             ) case namedoperation then {
@@ -10458,7 +10510,7 @@ emitIfClause: function {
             :symtab
             :ctx
             conds: n.conditions
-            body: n.statement
+            bodyId: n.statement
             names: sN9
             vals: sV9
             tids: sT9
@@ -10480,12 +10532,13 @@ emitIfClause: function {
             buf.append cmtS9.stringview
             si9 = si9 + 1
         }
+        cst9: nodes.get i: (n.statement - 1).u64
         if assignTo.length > 0 then {
             (emitBranchAssign
                 :nodes
                 :symtab
                 :ctx
-                n: n.statement
+                n: cst9
                 target: assignTo
                 ind: ind2.stringview
                 :tmp
@@ -10494,7 +10547,7 @@ emitIfClause: function {
         } else {
             fLi9: tmp.frees.length
             lLi9: tmp.listFrees.length
-            emitBodyNode :nodes :symtab :ctx n: n.statement ind: ind2.stringview :tmp :buf
+            emitBodyNode :nodes :symtab :ctx n: cst9 ind: ind2.stringview :tmp :buf
             flushBlockFrees :ctx :tmp fL: fLi9 lL: lLi9 :buf
         }
         ri9: u64
@@ -10521,7 +10574,7 @@ emitElse9: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    o: Option Node
+    oId: u32
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
@@ -10532,9 +10585,8 @@ emitElse9: function {
     chRecvs: List String
     buf: String.borrow
 } is {
-    match (
-        o
-    ) case some then {
+    if oId > 0 then {
+        o: nodes.get i: (oId - 1).u64
         lh: "\{ind}} else {\n"
         buf.append lh.stringview
         ind2: "\{ind}    "
@@ -10692,7 +10744,7 @@ emitElse9: function {
                 ntRemove xs: ctx.exclTids name: xn9.stringview
             }
         }
-    } case none then null
+    }
 }
 
 # emitBranchAssign -- emit an if/match branch whose final value assigns
@@ -10949,18 +11001,14 @@ emitComprehensionBody: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    body: Option Node
+    body: Node
     listCb: StringView
     listVar: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    match (
-        body
-    ) case some then {
-        emitComprehensionNode :nodes :symtab :ctx n: body :listCb :listVar :ind :tmp :buf
-    } case none then null
+    emitComprehensionNode :nodes :symtab :ctx n: body :listCb :listVar :ind :tmp :buf
 }
 
 # emitComprehensionNode -- the body's statements: each but the last emits
@@ -11029,7 +11077,8 @@ emitListComprehension: function {
         )
     } case forexpr then {
         if forNode.conditions.length != 1 then return
-        c0: forNode.conditions.get i: 0
+        c0Id9: forNode.conditions.get i: 0
+        c0: nodes.get i: (c0Id9 - 1).u64
         match (
             c0
         ) case namedoperation then {
@@ -11044,7 +11093,7 @@ emitListComprehension: function {
                 :nodes
                 :symtab
                 :ctx
-                body: forNode.body
+                body: (nodes.get i: (forNode.body - 1).u64)
                 :listCb
                 :listVar
                 ind: ind2.stringview
@@ -12102,28 +12151,28 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
         scanNeeds :nodes :ctx n: (nodes.get i: (n.value - 1).u64)
     } case ifexpr then {
         citer: n.clauses.iterate
-        for c: citer loop scanNeeds :nodes :ctx n: c
-        scanNeedsOpt :nodes :ctx o: n.elseclause
+        for cId9: citer loop scanNeeds :nodes :ctx n: (nodes.get i: (cId9 - 1).u64)
+        if n.elseclause > 0 then scanNeeds :nodes :ctx n: (nodes.get i: (n.elseclause - 1).u64)
     } case caseexpr then {
-        scanNeeds :nodes :ctx n: n.subject
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.subject - 1).u64)
         miter9: n.clauses.iterate
-        for mc9: miter9 loop scanNeeds :nodes :ctx n: mc9
-        scanNeedsOpt :nodes :ctx o: n.elseclause
+        for mc9Id9: miter9 loop scanNeeds :nodes :ctx n: (nodes.get i: (mc9Id9 - 1).u64)
+        if n.elseclause > 0 then scanNeeds :nodes :ctx n: (nodes.get i: (n.elseclause - 1).u64)
     } case caseclause then {
-        scanNeeds :nodes :ctx n: n.statement
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.statement - 1).u64)
     } case ifclause then {
         kiter: n.conditions.iterate
-        for k: kiter loop scanNeeds :nodes :ctx n: k
-        scanNeeds :nodes :ctx n: n.statement
+        for kId9: kiter loop scanNeeds :nodes :ctx n: (nodes.get i: (kId9 - 1).u64)
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.statement - 1).u64)
     } case withexpr then {
-        scanNeeds :nodes :ctx n: n.value
-        scanNeeds :nodes :ctx n: n.body
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.value - 1).u64)
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.body - 1).u64)
     } case doexpr then {
-        scanNeeds :nodes :ctx n: n.statement
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.statement - 1).u64)
     } case forexpr then {
         fiter: n.conditions.iterate
-        for f: fiter loop scanNeeds :nodes :ctx n: f
-        scanNeedsOpt :nodes :ctx o: n.body
+        for fId9: fiter loop scanNeeds :nodes :ctx n: (nodes.get i: (fId9 - 1).u64)
+        if n.body > 0 then scanNeeds :nodes :ctx n: (nodes.get i: (n.body - 1).u64)
     } else null
 }
 
@@ -18808,15 +18857,22 @@ nodeYieldCount: function {nodes: List Node n: Node} out u64 is {
     } case assignment then {
         return (nodeYieldCount :nodes n: (nodes.get i: (n.value - 1).u64))
     } case forexpr then {
-        return (optNodeYieldCount :nodes o: n.body)
+        if n.body == 0 then return 0
+        return (nodeYieldCount :nodes n: (nodes.get i: (n.body - 1).u64))
     } case ifexpr then {
         c2: u64
         cliter: n.clauses.iterate
-        for cl: cliter loop c2 = c2 + (nodeYieldCount :nodes n: cl)
-        c2 = c2 + (optNodeYieldCount :nodes o: n.elseclause)
+        for clId9: cliter loop {
+            cl9r: nodes.get i: (clId9 - 1).u64
+            c2 = c2 + (nodeYieldCount :nodes n: cl9r)
+        }
+        if n.elseclause > 0 then {
+            ec9: nodes.get i: (n.elseclause - 1).u64
+            c2 = c2 + (nodeYieldCount :nodes n: ec9)
+        }
         return c2
     } case ifclause then {
-        return (nodeYieldCount :nodes n: n.statement)
+        return (nodeYieldCount :nodes n: (nodes.get i: (n.statement - 1).u64))
     } else {
         return 0
     }

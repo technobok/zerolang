@@ -1346,7 +1346,7 @@ Parser: class {
             nodeid: this.nextId
             lineno: sLine
             colno: sCol
-            statement: blk)
+            statement: (this.intern n: blk))
         )
     }
 
@@ -1414,7 +1414,7 @@ Parser: class {
     # moved into the IfClause and a fresh one passed on, never reassigned).
     # `when` adds a condition; `then` closes a clause and starts a fresh one;
     # otherwise the clauses end and an optional `else` is parsed.
-    ifClausesTail: function {:this lex: zlexer.Lexer clauses: (List Node).take conditions: (List Node).take clauseLine: u32 clauseCol: u32 ifLine: u32 ifCol: u32} out Node is {
+    ifClausesTail: function {:this lex: zlexer.Lexer clauses: (List u32).take conditions: (List u32).take clauseLine: u32 clauseCol: u32 ifLine: u32 ifCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
         if tt == zlexer.TT.whenTok then {
@@ -1435,7 +1435,7 @@ Parser: class {
             if cErr then return cond
             cp: zast.posOf n: cond
             no: this.mkNamedOp name: (Option.none String) operation: cond line: cp.line col: cp.col
-            conditions.append no
+            conditions.append (this.intern n: no)
             return (this.ifClausesTail
                 :lex
                 :clauses
@@ -1456,14 +1456,14 @@ Parser: class {
                 lineno: clauseLine
                 colno: clauseCol
                 :conditions
-                statement: stmt
+                statement: (this.intern n: stmt)
             )
-            clauses.append clause
+            clauses.append (this.intern n: clause)
             nextTok: lex.peek
             return (this.ifClausesTail
                 :lex
                 :clauses
-                conditions: (List Node)
+                conditions: (List u32)
                 clauseLine: nextTok.lineno
                 clauseCol: nextTok.colno
                 :ifLine
@@ -1488,7 +1488,7 @@ Parser: class {
                 lineno: ifLine
                 colno: ifCol
                 :clauses
-                elseclause: (Option.some estmt))
+                elseclause: (this.intern n: estmt))
             )
         }
         return (Node.ifexpr (zast.IfData
@@ -1496,7 +1496,7 @@ Parser: class {
             lineno: ifLine
             colno: ifCol
             :clauses
-            elseclause: (Option.none Node))
+            elseclause: 0)
         )
     }
 
@@ -1532,9 +1532,9 @@ Parser: class {
             if cErr then return cond
             cp: zast.posOf n: cond
             no: this.mkNamedOp name: (Option.none String) operation: cond line: cp.line col: cp.col
-            conditions: (List Node)
-            conditions.append no
-            clauses: (List Node)
+            conditions: (List u32)
+            conditions.append (this.intern n: no)
+            clauses: (List u32)
             return (this.ifClausesTail
                 :lex
                 :clauses
@@ -1552,7 +1552,7 @@ Parser: class {
     # CaseClause, the list moves on), so neither is held across a loop
     # body -- mirrors ifClausesTail. `case` adds a clause; anything else
     # ends the clauses and parses an optional `else`.
-    caseClausesTail: function {:this lex: zlexer.Lexer subject: Node.take clauses: (List Node).take mLine: u32 mCol: u32} out Node is {
+    caseClausesTail: function {:this lex: zlexer.Lexer subjectId: u32 clauses: (List u32).take mLine: u32 mCol: u32} out Node is {
         clStart: lex.peek
         isCase: clStart.toktype == zlexer.TT.caseTok
         if isCase then {
@@ -1581,11 +1581,11 @@ Parser: class {
                         lineno: cLine
                         colno: cCol
                         name: nm
-                        matcharm: armNode
-                        statement: body
+                        matcharm: (this.intern n: armNode)
+                        statement: (this.intern n: body)
                     )
-                    clauses.append clause
-                    return (this.caseClausesTail :lex :subject :clauses :mLine :mCol)
+                    clauses.append (this.intern n: clause)
+                    return (this.caseClausesTail :lex :subjectId :clauses :mLine :mCol)
                 } else {
                     bad: lex.acceptAny
                     return (this.mkError
@@ -1612,18 +1612,18 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: mLine
                 colno: mCol
-                :subject
+                subject: subjectId
                 :clauses
-                elseclause: (Option.some estmt))
+                elseclause: (this.intern n: estmt))
             )
         } case none then {
             return (Node.caseexpr (zast.CaseData
                 nodeid: this.nextId
                 lineno: mLine
                 colno: mCol
-                :subject
+                subject: subjectId
                 :clauses
-                elseclause: (Option.none Node))
+                elseclause: 0)
             )
         }
     }
@@ -1661,8 +1661,14 @@ Parser: class {
             subject: this.operationFromPaths paths: spaths :lex
             sErr: this.isError node: subject
             if sErr then return subject
-            clauses: (List Node)
-            return (this.caseClausesTail :lex :subject :clauses :mLine :mCol)
+            clauses: (List u32)
+            return (this.caseClausesTail
+                :lex
+                subjectId: (this.intern n: subject)
+                :clauses
+                :mLine
+                :mCol
+            )
         }
     }
 
@@ -1672,7 +1678,7 @@ Parser: class {
     # body is a condition, after it a postcondition; `label op` is the
     # at-most-one binding; `loop primary` is the body. `hasBody` mirrors
     # Python's `if loop:` truthiness without inspecting the owned body.
-    forClausesTail: function {:this lex: zlexer.Lexer conditions: (List Node).take postconditions: (List Node).take body: (Option Node).take hasBody: bool bound: bool forLine: u32 forCol: u32} out Node is {
+    forClausesTail: function {:this lex: zlexer.Lexer conditions: (List u32).take postconditions: (List u32).take bodyId: u32 hasBody: bool bound: bool forLine: u32 forCol: u32} out Node is {
         t: lex.peek
         tt: t.toktype
         if tt == zlexer.TT.whileTok then {
@@ -1692,7 +1698,7 @@ Parser: class {
             oErr: this.isError node: op
             if oErr then return op
             if hasBody then {
-                postconditions.append op
+                postconditions.append (this.intern n: op)
             } else {
                 cp: zast.posOf n: op
                 no: (this.mkNamedOp
@@ -1701,13 +1707,13 @@ Parser: class {
                     line: cp.line
                     col: cp.col
                 )
-                conditions.append no
+                conditions.append (this.intern n: no)
             }
             return (this.forClausesTail
                 :lex
                 :conditions
                 :postconditions
-                :body
+                :bodyId
                 :hasBody
                 :bound
                 :forLine
@@ -1751,12 +1757,12 @@ Parser: class {
                 line: lblTok.lineno
                 col: lblTok.colno
             )
-            conditions.append no
+            conditions.append (this.intern n: no)
             return (this.forClausesTail
                 :lex
                 :conditions
                 :postconditions
-                :body
+                :bodyId
                 :hasBody
                 bound: true
                 :forLine
@@ -1776,7 +1782,7 @@ Parser: class {
                 :lex
                 :conditions
                 :postconditions
-                body: (Option.some stmt)
+                bodyId: (this.intern n: stmt)
                 hasBody: true
                 :bound
                 :forLine
@@ -1791,7 +1797,7 @@ Parser: class {
                     lineno: forLine
                     colno: forCol
                     :conditions
-                    :body
+                    body: bodyId
                     :postconditions)
                 )
             }
@@ -1807,7 +1813,7 @@ Parser: class {
             lineno: forLine
             colno: forCol
             :conditions
-            :body
+            body: bodyId
             :postconditions)
         )
     }
@@ -1830,8 +1836,8 @@ Parser: class {
                 msg: "Expected for".string
             )
         } case some then {
-            conditions: (List Node)
-            postconditions: (List Node)
+            conditions: (List u32)
+            postconditions: (List u32)
             paths: this.operationPaths :lex
             n: paths.length
             if n == 0 then {
@@ -1839,7 +1845,7 @@ Parser: class {
                     :lex
                     :conditions
                     :postconditions
-                    body: (Option.none Node)
+                    bodyId: 0
                     hasBody: false
                     bound: false
                     :forLine
@@ -1851,12 +1857,12 @@ Parser: class {
             if oErr then return op
             cp: zast.posOf n: op
             no: this.mkNamedOp name: (Option.none String) operation: op line: cp.line col: cp.col
-            conditions.append no
+            conditions.append (this.intern n: no)
             return (this.forClausesTail
                 :lex
                 :conditions
                 :postconditions
-                body: (Option.none Node)
+                bodyId: 0
                 hasBody: false
                 bound: false
                 :forLine
@@ -1916,8 +1922,8 @@ Parser: class {
                         lineno: wLine
                         colno: wCol
                         name: nm
-                        :value
-                        :body)
+                        value: (this.intern n: value)
+                        body: (this.intern n: body))
                     )
                 }
             }
@@ -3612,32 +3618,32 @@ ewWalk: function {nodes: List Node externs: List String scope: List String node:
     } case expression then {
         ewWalk :nodes :externs :scope node: node.expression
     } case ifexpr then {
-        ewWalkList :nodes :externs :scope items: node.clauses
-        ewWalkOpt :nodes :externs :scope o: node.elseclause
+        ewWalkBodyIds :nodes :externs :scope items: node.clauses
+        ewWalkOptAt :nodes :externs :scope oId: node.elseclause
     } case ifclause then {
-        ewWalkList :nodes :externs :scope items: node.conditions
-        ewWalk :nodes :externs :scope node: node.statement
+        ewWalkBodyIds :nodes :externs :scope items: node.conditions
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statement - 1).u64)
     } case forexpr then {
         base: scope.length
         fit: node.conditions.iterate
-        for fc: fit loop ewWalkForCond :nodes :externs :scope cond: fc
-        ewWalkOpt :nodes :externs :scope o: node.body
-        ewWalkList :nodes :externs :scope items: node.postconditions
+        for fc: fit loop ewWalkForCond :nodes :externs :scope cond: (nodes.get i: (fc - 1).u64)
+        ewWalkOptAt :nodes :externs :scope oId: node.body
+        ewWalkBodyIds :nodes :externs :scope items: node.postconditions
         ewTruncate :scope n: base
     } case doexpr then {
-        ewWalk :nodes :externs :scope node: node.statement
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statement - 1).u64)
     } case withexpr then {
         base: scope.length
-        ewWalk :nodes :externs :scope node: node.value
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.value - 1).u64)
         scope.append node.name.copy
-        ewWalk :nodes :externs :scope node: node.body
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.body - 1).u64)
         ewTruncate :scope n: base
     } case caseexpr then {
-        ewWalk :nodes :externs :scope node: node.subject
-        ewWalkList :nodes :externs :scope items: node.clauses
-        ewWalkOpt :nodes :externs :scope o: node.elseclause
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.subject - 1).u64)
+        ewWalkBodyIds :nodes :externs :scope items: node.clauses
+        ewWalkOptAt :nodes :externs :scope oId: node.elseclause
     } case caseclause then {
-        ewWalk :nodes :externs :scope node: node.statement
+        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statement - 1).u64)
     } case functiondef then {
         base: scope.length
         ewBindNameIds :nodes :scope items: node.parameters

@@ -1228,27 +1228,27 @@ nodeMentionsName: function {nodes: List Node n: Node name: StringView} out bool 
     } case reassignment then {
         return (nodeMentionsName :nodes n: (nodes.get i: (n.value - 1).u64) :name)
     } case caseexpr then {
-        if (nodeMentionsName :nodes n: n.subject :name) then return true
+        if (nodeMentionsName :nodes n: (nodes.get i: (n.subject - 1).u64) :name) then return true
         citer: n.clauses.iterate
         for cm: citer loop {
-            if (nodeMentionsName :nodes n: cm :name) then return true
+            if (nodeMentionsName :nodes n: (nodes.get i: (cm - 1).u64) :name) then return true
         }
         return false
     } case caseclause then {
-        return (nodeMentionsName :nodes n: n.statement :name)
+        return (nodeMentionsName :nodes n: (nodes.get i: (n.statement - 1).u64) :name)
     } case ifexpr then {
         citer2: n.clauses.iterate
-        for cm2: citer2 loop {
-            if (nodeMentionsName :nodes n: cm2 :name) then return true
+        for cm2Id9: citer2 loop {
+            if (nodeMentionsName :nodes n: (nodes.get i: (cm2Id9 - 1).u64) :name) then return true
         }
         return false
     } case forexpr then {
-        return (nodeMentionsNameOpt :nodes o: n.body :name)
+        return (nodeMentionsNameOptAt :nodes oId: n.body :name)
     } case withexpr then {
-        if (nodeMentionsName :nodes n: n.value :name) then return true
-        return (nodeMentionsName :nodes n: n.body :name)
+        if (nodeMentionsName :nodes n: (nodes.get i: (n.value - 1).u64) :name) then return true
+        return (nodeMentionsName :nodes n: (nodes.get i: (n.body - 1).u64) :name)
     } case doexpr then {
-        return (nodeMentionsName :nodes n: n.statement :name)
+        return (nodeMentionsName :nodes n: (nodes.get i: (n.statement - 1).u64) :name)
     } else {
         return false
     }
@@ -6041,19 +6041,23 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
         scanCallsInNode :nodes :reg node: (nodes.get i: (node.topath - 1).u64)
         scanCallsInNode :nodes :reg node: (nodes.get i: (node.value - 1).u64)
     } case ifexpr then {
-        for cl: node.clauses.iterate loop scanCallsInNode :nodes :reg node: cl
-        scanBodyOpt :nodes :reg bodyOpt: node.elseclause
+        for clId9: node.clauses.iterate loop {
+            scanCallsInNode :nodes :reg node: (nodes.get i: (clId9 - 1).u64)
+        }
+        scanBodyAt :nodes :reg bodyId: node.elseclause
     } case forexpr then {
         reg.recordDemand name: "never"
-        for fc: node.conditions.iterate loop {
+        for fcId9: node.conditions.iterate loop {
+            fc: nodes.get i: (fcId9 - 1).u64
             match (
                 fc
             ) case namedoperation then {
                 scanCallsInNode :nodes :reg node: (nodes.get i: (fc.operation - 1).u64)
             } else null
         }
-        scanBodyOpt :nodes :reg bodyOpt: node.body
-        for fp: node.postconditions.iterate loop {
+        scanBodyAt :nodes :reg bodyId: node.body
+        for fpId9: node.postconditions.iterate loop {
+            fp: nodes.get i: (fpId9 - 1).u64
             match (
                 fp
             ) case namedoperation then {
@@ -6062,11 +6066,13 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
         }
     } case doexpr then {
         reg.recordDemand name: "never"
-        if (blockHasBreak :nodes n: node.statement) then reg.recordDemand name: "optionval"
-        scanCallsInNode :nodes :reg node: node.statement
+        if (blockHasBreak :nodes n: (nodes.get i: (node.statement - 1).u64)) then {
+            reg.recordDemand name: "optionval"
+        }
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.statement - 1).u64)
     } case withexpr then {
-        scanCallsInNode :nodes :reg node: node.value
-        scanCallsInNode :nodes :reg node: node.body
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.value - 1).u64)
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.body - 1).u64)
     } case dottedpath then {
         bn: atomName n: node.parent
         if bn.length > 0 then {
@@ -6085,20 +6091,23 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
         }
         scanCallsInNode :nodes :reg node: node.parent
     } case caseexpr then {
-        scanCallsInNode :nodes :reg node: node.subject
-        for cl: node.clauses.iterate loop scanCallsInNode :nodes :reg node: cl
-        scanBodyOpt :nodes :reg bodyOpt: node.elseclause
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.subject - 1).u64)
+        for clId9: node.clauses.iterate loop {
+            scanCallsInNode :nodes :reg node: (nodes.get i: (clId9 - 1).u64)
+        }
+        scanBodyAt :nodes :reg bodyId: node.elseclause
     } case caseclause then {
-        scanCallsInNode :nodes :reg node: node.statement
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.statement - 1).u64)
     } case ifclause then {
-        for cnd: node.conditions.iterate loop {
+        for cndId9: node.conditions.iterate loop {
+            cnd: nodes.get i: (cndId9 - 1).u64
             match (
                 cnd
             ) case namedoperation then {
                 scanCallsInNode :nodes :reg node: (nodes.get i: (cnd.operation - 1).u64)
             } else null
         }
-        scanCallsInNode :nodes :reg node: node.statement
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.statement - 1).u64)
     } else null
 }
 
@@ -6632,15 +6641,17 @@ subtreeHasYield: function {nodes: List Node node: Node} out bool is {
     } case expression then {
         return (subtreeHasYield :nodes node: node.expression)
     } case forexpr then {
-        return (optHasYield :nodes o: node.body)
+        if node.body == 0 then return false
+        return (subtreeHasYield :nodes node: (nodes.get i: (node.body - 1).u64))
     } case ifexpr then {
         cliter: node.clauses.iterate
-        for cl: cliter loop {
-            if (subtreeHasYield :nodes node: cl) then return true
+        for clId9: cliter loop {
+            if (subtreeHasYield :nodes node: (nodes.get i: (clId9 - 1).u64)) then return true
         }
-        return (optHasYield :nodes o: node.elseclause)
+        if node.elseclause == 0 then return false
+        return (subtreeHasYield :nodes node: (nodes.get i: (node.elseclause - 1).u64))
     } case ifclause then {
-        return (subtreeHasYield :nodes node: node.statement)
+        return (subtreeHasYield :nodes node: (nodes.get i: (node.statement - 1).u64))
     } else {
         return false
     }
@@ -6668,7 +6679,8 @@ nodeIsYieldingLoop: function {nodes: List Node node: Node} out bool is {
     } case expression then {
         return (nodeIsYieldingLoop :nodes node: node.expression)
     } case forexpr then {
-        return (optHasYield :nodes o: node.body)
+        if node.body == 0 then return false
+        return (subtreeHasYield :nodes node: (nodes.get i: (node.body - 1).u64))
     } else {
         return false
     }
@@ -6824,9 +6836,10 @@ addResumeInputExpr: function {
 
 # condIterableCallable -- the callable name of a for-loop's inline iterable (a
 # `binding: (gen ...)` condition), or "". A `while` condition (no binding) yields "".
-condIterableCallable: function {nodes: List Node conds: List Node} out String is {
+condIterableCallable: function {nodes: List Node conds: List u32} out String is {
     citer: conds.iterate
-    for c: citer loop {
+    for cId9: citer loop {
+        c: nodes.get i: (cId9 - 1).u64
         match (
             c
         ) case namedoperation then {
@@ -6848,7 +6861,12 @@ forIterableCallable: function {nodes: List Node e: Node} out String is {
     } case expression then {
         return (forIterableCallable :nodes e: e.expression)
     } case forexpr then {
-        if (optHasYield :nodes o: e.body) then {
+        hy9: false
+        if e.body > 0 then {
+            eb9: nodes.get i: (e.body - 1).u64
+            hy9 = subtreeHasYield :nodes node: eb9
+        }
+        if hy9 then {
             return (condIterableCallable :nodes conds: e.conditions)
         } else {
             return "".string
@@ -12207,7 +12225,8 @@ checkClause: function {
     match (
         clause
     ) case ifclause then {
-        with coiter: clause.conditions.iterate do for cond: coiter loop {
+        with coiter: clause.conditions.iterate do for condId9: coiter loop {
+            cond: nodes.get i: (condId9 - 1).u64
             match (
                 cond
             ) case namedoperation then {
@@ -12220,7 +12239,8 @@ checkClause: function {
                 )
             } else null
         }
-        with cfit9: clause.conditions.iterate do for cnd9: cfit9 loop {
+        with cfit9: clause.conditions.iterate do for cnd9Id9: cfit9 loop {
+            cnd9: nodes.get i: (cnd9Id9 - 1).u64
             match (
                 cnd9
             ) case namedoperation then {
@@ -12233,8 +12253,9 @@ checkClause: function {
             } else null
         }
         with afit9: factsOut.iterate do for af9: afit9 loop applyPredFact :st f: af9 holds: true
-        checkStatement :st :unitName :nodes :unitBody block: clause.statement
-        return (lastStmtType :st :nodes block: clause.statement)
+        cs9: nodes.get i: (clause.statement - 1).u64
+        checkStatement :st :unitName :nodes :unitBody block: cs9
+        return (lastStmtType :st :nodes block: cs9)
     } else {
         return 0
     }
@@ -12610,16 +12631,18 @@ checkWith: function {
     withnode: zast.WithData
 } out u64 is {
     withMarker: st.pushBlock name: "with"
-    vt: checkValue :st :unitName :nodes :unitBody node: withnode.value
+    vt: checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (withnode.value - 1).u64)
     if vt > 0 then {
-        own: withValueOwnership :st v: withnode.value
+        own: withValueOwnership :st v: (nodes.get i: (withnode.value - 1).u64)
         # The borrow target: a BORROW-returning auto-call reported the receiver
         # source; a plain-path value locks its full dotted tuple. Valtype
         # borrows are copies -- no lock.
         btgt: (List String)
         takePendingBorrow :st dst: btgt
         if btgt.length == 0 then {
-            if own == ztypes.zownership.borrowed then appendValueTuple n: withnode.value dst: btgt
+            if own == ztypes.zownership.borrowed then {
+                appendValueTuple n: (nodes.get i: (withnode.value - 1).u64) dst: btgt
+            }
         } else {
             # A pending borrow from the value's call (a lock-param transfer
             # or a borrow-marked return) makes the with-binding borrowed.
@@ -12647,7 +12670,7 @@ checkWith: function {
         setk: vt
         st.typing.nodeType.set key: withnode.nodeid.u64 value: setk
     }
-    dt: checkValue :st :unitName :nodes :unitBody node: withnode.body
+    dt: checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (withnode.body - 1).u64)
     st.popTo marker: withMarker
     return dt
 }
@@ -12672,26 +12695,30 @@ blockHasBreak: function {nodes: List Node n: Node} out bool is {
         return (n.name.stringview == "break")
     } case ifexpr then {
         cliter: n.clauses.iterate
-        for cl0: cliter loop {
+        for cl0Id9: cliter loop {
+            cl0: nodes.get i: (cl0Id9 - 1).u64
             match (
                 cl0
             ) case ifclause then {
-                if (blockHasBreak :nodes n: cl0.statement) then return true
+                if (blockHasBreak :nodes n: (nodes.get i: (cl0.statement - 1).u64)) then return true
             } else null
         }
-        return (blockHasBreakOpt :nodes bodyOpt: n.elseclause)
+        if n.elseclause == 0 then return false
+        return (blockHasBreak :nodes n: (nodes.get i: (n.elseclause - 1).u64))
     } case caseexpr then {
         mliter: n.clauses.iterate
-        for ml0: mliter loop {
+        for ml0Id9: mliter loop {
+            ml0: nodes.get i: (ml0Id9 - 1).u64
             match (
                 ml0
             ) case caseclause then {
-                if (blockHasBreak :nodes n: ml0.statement) then return true
+                if (blockHasBreak :nodes n: (nodes.get i: (ml0.statement - 1).u64)) then return true
             } else null
         }
-        return (blockHasBreakOpt :nodes bodyOpt: n.elseclause)
+        if n.elseclause == 0 then return false
+        return (blockHasBreak :nodes n: (nodes.get i: (n.elseclause - 1).u64))
     } case withexpr then {
-        return (blockHasBreak :nodes n: n.body)
+        return (blockHasBreak :nodes n: (nodes.get i: (n.body - 1).u64))
     } else {
         return false
     }
@@ -12720,13 +12747,13 @@ checkDo: function {
     doMarker: st.pushBlock name: "block"
     dbk: st.reg.allocType
     st.define name: "break" ztypeId: dbk
-    checkStatement :st :unitName :nodes :unitBody block: donode.statement
-    result: lastStmtType :st :nodes block: donode.statement
+    checkStatement :st :unitName :nodes :unitBody block: (nodes.get i: (donode.statement - 1).u64)
+    result: lastStmtType :st :nodes block: (nodes.get i: (donode.statement - 1).u64)
     st.popTo marker: doMarker
     # A break-carrying do-block's value wraps in optionval (early exit =
     # none); the literal pseudo keys the instance as literal_int/float.
     # A REFTYPE block value wraps in Option instead (boxed payload).
-    if result > 0 when (blockHasBreak :nodes n: donode.statement) then {
+    if result > 0 when (blockHasBreak :nodes n: (nodes.get i: (donode.statement - 1).u64)) then {
         vtn0: typeNameOf :st tid: result
         payId0: result
         if result == literalIntId then {
@@ -12818,7 +12845,8 @@ checkFor: function {
     ct: st.reg.allocType
     st.define name: "continue" ztypeId: ct
     citer: fornode.conditions.iterate
-    for cond: citer loop {
+    for condId9: citer loop {
+        cond: nodes.get i: (condId9 - 1).u64
         match (
             cond
         ) case namedoperation then {
@@ -12965,7 +12993,8 @@ checkFor: function {
         } else null
     }
     piter: fornode.postconditions.iterate
-    for pc: piter loop {
+    for pcId9: piter loop {
+        pc: nodes.get i: (pcId9 - 1).u64
         match (
             pc
         ) case namedoperation then {
@@ -12974,8 +13003,12 @@ checkFor: function {
             checkValue :st :unitName :nodes :unitBody node: pc
         }
     }
-    walkBody :st :unitName :nodes :unitBody bodyOpt: fornode.body
-    elemT9: lastStmtTypeOpt :st :nodes bodyOpt: fornode.body
+    walkBodyAt :st :unitName :nodes :unitBody bodyId: fornode.body
+    elemT9: u64
+    if fornode.body > 0 then {
+        fb9: nodes.get i: (fornode.body - 1).u64
+        elemT9 = lastStmtType :st :nodes block: fb9
+    }
     if st.isUnreachable then st.discardTakenInCurrentScope
     st.popTo marker: forMarker
     # for-as-expression: a value-producing body makes the loop a List of
@@ -13075,11 +13108,12 @@ checkIf: function {
     branchTypes: (List u64)
     allDiverge: true
     cliter: ifnode.clauses.iterate
-    for clause: cliter loop {
+    for clauseId9: cliter loop {
+        clause: nodes.get i: (clauseId9 - 1).u64
         match (
             clause
         ) case ifclause then {
-            if (isEmptyBody n: clause.statement) then anyEmpty = true
+            if (isEmptyBody n: (nodes.get i: (clause.statement - 1).u64)) then anyEmpty = true
         } else null
         bm: st.pushBlock name: "if_branch"
         with pfit9: accFacts.iterate do for pf9: pfit9 loop applyPredFact :st f: pf9 holds: false
@@ -13120,15 +13154,13 @@ checkIf: function {
         }
     }
     hasElse: false
-    match (
-        ifnode.elseclause
-    ) case some then {
+    if ifnode.elseclause > 0 then {
         hasElse = true
-        if (isEmptyBodyOpt bodyOpt: ifnode.elseclause) then anyEmpty = true
+        if (isEmptyBody n: (nodes.get i: (ifnode.elseclause - 1).u64)) then anyEmpty = true
         ebm: st.pushBlock name: "if_else"
         with efit9: accFacts.iterate do for ef9: efit9 loop applyPredFact :st f: ef9 holds: false
-        walkBody :st :unitName :nodes :unitBody bodyOpt: ifnode.elseclause
-        et9: lastStmtTypeOpt :st :nodes bodyOpt: ifnode.elseclause
+        walkBodyAt :st :unitName :nodes :unitBody bodyId: ifnode.elseclause
+        et9: lastStmtType :st :nodes block: (nodes.get i: (ifnode.elseclause - 1).u64)
         if st.isUnreachable then elseDvg9 = true
         etc9: et9
         branchTypes.append etc9
@@ -13139,7 +13171,7 @@ checkIf: function {
             restoreTakenArm :st :liveBefore taken: takenAcross
         }
         st.popTo marker: ebm
-    } case none then {
+    } else {
         allDiverge = false
     }
     result: u64
@@ -16196,7 +16228,7 @@ checkCase: function {
     casenode: zast.CaseData
 } out u64 is {
     matchMarker: st.pushBlock name: "match"
-    subjT: checkValue :st :unitName :nodes :unitBody node: casenode.subject
+    subjT: checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (casenode.subject - 1).u64)
     isSum: false
     if subjT > 0 then {
         stt: st.reg.typetypeOf typeId: subjT
@@ -16205,7 +16237,7 @@ checkCase: function {
     }
     targetName: String
     if isSum then {
-        tn: subjectAtomName n: casenode.subject
+        tn: subjectAtomName n: (nodes.get i: (casenode.subject - 1).u64)
         targetName = tn
     }
     neverId: u64
@@ -16227,17 +16259,18 @@ checkCase: function {
     armTypes: (List u64)
     allDiverge: true
     cliter: casenode.clauses.iterate
-    for clause: cliter loop {
+    for clauseId9: cliter loop {
+        clause: nodes.get i: (clauseId9 - 1).u64
         match (
             clause
         ) case caseclause then {
-            armName: atomName n: clause.matcharm
-            if (isEmptyBody n: clause.statement) then anyEmpty = true
+            armName: atomName n: (nodes.get i: (clause.matcharm - 1).u64)
+            if (isEmptyBody n: (nodes.get i: (clause.statement - 1).u64)) then anyEmpty = true
             # A value-match literal arm wears the subject's concrete type.
             if (isSum) == false then {
                 if (isNumericLiteralName name: armName.stringview) when subjT > 0 then {
                     if (isLiteralTypeId :st tid: subjT) == false then {
-                        amid9: nodeId n: clause.matcharm
+                        amid9: clause.matcharm
                         if amid9 > 0 then {
                             seta9: subjT
                             st.typing.nodeType.set key: amid9.u64 value: seta9
@@ -16260,8 +16293,9 @@ checkCase: function {
                     )
                 } case none then null
             }
-            checkStatement :st :unitName :nodes :unitBody block: clause.statement
-            at: lastStmtType :st :nodes block: clause.statement
+            cstC9: nodes.get i: (clause.statement - 1).u64
+            checkStatement :st :unitName :nodes :unitBody block: cstC9
+            at: lastStmtType :st :nodes block: cstC9
             atc: at
             armTypes.append atc
             if at > 0 when at == neverId then {
@@ -16276,14 +16310,9 @@ checkCase: function {
             st.popTo marker: armMarker
         } else null
     }
-    hasElse: false
-    match (
-        casenode.elseclause
-    ) case some then {
-        hasElse = true
-    } case none then null
+    hasElse: casenode.elseclause > 0
     if hasElse then {
-        if (isEmptyBodyOpt bodyOpt: casenode.elseclause) then anyEmpty = true
+        if (isEmptyBody n: (nodes.get i: (casenode.elseclause - 1).u64)) then anyEmpty = true
         elseMarker: st.pushBlock name: "arm:else"
         if targetName.length > 0 when subjT > 0 then {
             with eiter: covered.iterate do for en2: eiter loop {
@@ -16291,8 +16320,9 @@ checkCase: function {
             }
             shadowCollapseIfSingle :st name: targetName.stringview fullTid: subjT
         }
-        walkBody :st :unitName :nodes :unitBody bodyOpt: casenode.elseclause
-        et: lastStmtTypeOpt :st :nodes bodyOpt: casenode.elseclause
+        walkBodyAt :st :unitName :nodes :unitBody bodyId: casenode.elseclause
+        ecr9: nodes.get i: (casenode.elseclause - 1).u64
+        et: lastStmtType :st :nodes block: ecr9
         armTypes.append et
         if st.isUnreachable then st.discardTakenInCurrentScope
         st.popTo marker: elseMarker
@@ -17783,12 +17813,14 @@ resolveUnitIfDef: function {
     ) case ifexpr then {
         t9: u64
         cliter: n.clauses.iterate
-        for clause: cliter loop {
+        for clauseId9: cliter loop {
+            clause: nodes.get i: (clauseId9 - 1).u64
             match (
                 clause
             ) case ifclause then {
                 coiter: clause.conditions.iterate
-                for cond: coiter loop {
+                for condId9: coiter loop {
+                    cond: nodes.get i: (condId9 - 1).u64
                     match (
                         cond
                     ) case namedoperation then {
@@ -17800,12 +17832,26 @@ resolveUnitIfDef: function {
                         )
                     } else null
                 }
-                bt9: constantBranchWalk :ty :reg :nodes :mainName block: clause.statement
+                bt9: (constantBranchWalk
+                    :ty
+                    :reg
+                    :nodes
+                    :mainName
+                    block: (nodes.get i: (clause.statement - 1).u64)
+                )
                 if t9 == 0 then t9 = bt9
             } else null
         }
-        et9: constantBranchWalkOpt :ty :reg :nodes :mainName bodyOpt: n.elseclause
-        if t9 == 0 then t9 = et9
+        if n.elseclause > 0 then {
+            et9: (constantBranchWalk
+                :ty
+                :reg
+                :nodes
+                :mainName
+                block: (nodes.get i: (n.elseclause - 1).u64)
+            )
+            if t9 == 0 then t9 = et9
+        }
         if t9 > 0 then {
             setw9: t9
             ty.nodeType.set key: wrapperId.u64 value: setw9
