@@ -152,12 +152,13 @@ slIsBareNull: function {sl: Node} out bool is {
 
 # True when a clause body is exactly the bare atom `null` (one wrapped
 # expression statement): the empty-body spelling.
-isBareNullBody: function {body: Node} out bool is {
+isBareNullBody: function {nodes: List Node body: Node} out bool is {
     match (
         body
     ) case statement then {
         if body.statements.length != 1 then return false
-        return (slIsBareNull sl: (body.statements.get i: 0))
+        slId9: body.statements.get i: 0
+        return (slIsBareNull sl: (nodes.get i: (slId9 - 1).u64))
     } else {
         return false
     }
@@ -1291,7 +1292,7 @@ Parser: class {
         match openOpt case some then {
             prevFilter: lex.filterEolState
             lex.setFilterEol enabled: false
-            statements: (List Node)
+            statements: (List u32)
             for true loop {
                 for (this.atSeparator :lex) loop lex.advance
                 la: this.blocklineLookahead :lex
@@ -1302,7 +1303,7 @@ Parser: class {
                         lex.setFilterEol enabled: prevFilter
                         return sl
                     }
-                    statements.append sl
+                    statements.append (this.intern n: sl)
                 } else {
                     break
                 }
@@ -1359,8 +1360,8 @@ Parser: class {
         body: this.acceptPrimaryExpression :lex
         bErr: this.isError node: body
         if bErr then return body
-        if (isBareNullBody :body) then {
-            stmts0: (List Node)
+        if (isBareNullBody nodes: this.nodes :body) then {
+            stmts0: (List u32)
             return (Node.statement (zast.StatementData
                 nodeid: this.nextId
                 lineno: bLine
@@ -1391,8 +1392,8 @@ Parser: class {
                 colno: sCol
                 statementline: expr
             )
-            one: (List Node)
-            one.append sl
+            one: (List u32)
+            one.append (this.intern n: sl)
             return (Node.statement (zast.StatementData
                 nodeid: this.nextId
                 lineno: sLine
@@ -3596,7 +3597,7 @@ ewWalk: function {nodes: List Node externs: List String scope: List String node:
     } case statement then {
         base: scope.length
         sit: node.statements.iterate
-        for line: sit loop ewWalkLine :nodes :externs :scope :line
+        for lnId9: sit loop ewWalkLine :nodes :externs :scope line: (nodes.get i: (lnId9 - 1).u64)
         ewTruncate :scope n: base
     } case statementline then {
         ewWalk :nodes :externs :scope node: node.statementline

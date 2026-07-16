@@ -417,7 +417,7 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
         n
     ) case statement then {
         siter: n.statements.iterate
-        for s: siter loop collectLiterals :nodes n: s :ids :texts
+        for sId9: siter loop collectLiterals :nodes n: (nodes.get i: (sId9 - 1).u64) :ids :texts
     } case statementline then {
         collectLiterals :nodes n: n.statementline :ids :texts
     } case expression then {
@@ -5362,8 +5362,8 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
         return (emitExpr :nodes :symtab :ctx n: n.statementline)
     } case statement then {
         if n.statements.length == 1 then {
-            s0: n.statements.get i: 0
-            return (emitExpr :nodes :symtab :ctx n: s0)
+            s0Id9: n.statements.get i: 0
+            return (emitExpr :nodes :symtab :ctx n: (nodes.get i: (s0Id9 - 1).u64))
         }
         return "/* zemitterc: unhandled expr */0".string
     } case atomid then {
@@ -7533,9 +7533,11 @@ emitStmt: function {
         emitStmt :nodes :symtab :ctx n: n.expression :ind :tmp :buf
     } case statement then {
         siter9: n.statements.iterate
-        for s9: siter9 loop emitStmt :nodes :symtab :ctx n: s9 :ind :tmp :buf
+        for s9Id9: siter9 loop {
+            emitStmt :nodes :symtab :ctx n: (nodes.get i: (s9Id9 - 1).u64) :ind :tmp :buf
+        }
     } case doexpr then {
-        if (ztypecheck.blockHasBreak n: n.statement) then {
+        if (ztypecheck.blockHasBreak :nodes n: n.statement) then {
             ldo9: "\{ind}do {\n"
             buf.append ldo9.stringview
             indd9: "\{ind}    "
@@ -8545,7 +8547,7 @@ emitMatchStmt: function {
                 }
             }
             if remME9 == 1 then {
-                if (bodyReassignsOpt9 o: m.elseclause name: sname.stringview) == false then {
+                if (bodyReassignsOpt9 :nodes o: m.elseclause name: sname.stringview) == false then {
                     mrecv9: "_m\{mN}"
                     alias9: (armAliasText9
                         :symtab
@@ -8998,7 +9000,8 @@ emitBranchAssignOptional: function {
         cnt: n.statements.length
         si: u64
         for si < cnt loop {
-            sx: n.statements.get i: si
+            sxId9: n.statements.get i: si
+            sx: nodes.get i: (sxId9 - 1).u64
             if si + 1 == cnt then {
                 vx: emitExpr :nodes :symtab :ctx n: sx
                 emitOptionalAssign :target :someTag :payC vx: vx.stringview :ind :buf
@@ -9038,7 +9041,7 @@ emitDoBindValue: function {
     } case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld.stringview
-        if (ztypecheck.blockHasBreak n: n.statement) then {
+        if (ztypecheck.blockHasBreak :nodes n: n.statement) then {
             noneTag: variantTag :symtab :tid arm: "none"
             someTag: variantTag :symtab :tid arm: "some"
             # a reftype value wraps in Option: the payload lives in a
@@ -9264,7 +9267,9 @@ scanLoopVar: function {
     } case expression then {
         scanLoopVar :nodes :symtab n: n.expression :lbl :res
     } case statement then {
-        with sit: n.statements.iterate do for s: sit loop scanLoopVar :nodes :symtab n: s :lbl :res
+        with sit: n.statements.iterate do for sId9: sit loop {
+            scanLoopVar :nodes :symtab n: (nodes.get i: (sId9 - 1).u64) :lbl :res
+        }
     } case statementline then {
         scanLoopVar :nodes :symtab n: n.statementline :lbl :res
     } case call then {
@@ -9826,19 +9831,19 @@ svHasWord9: function {hay: StringView word: StringView} out bool is {
 # bodyReassigns9 -- true when the body (at any depth through the common
 # statement containers) reassigns `name`, which would stale a narrowBox
 # alias for it.
-bodyReassigns9: function {n: Node name: StringView} out bool is {
+bodyReassigns9: function {nodes: List Node n: Node name: StringView} out bool is {
     match (
         n
     ) case statement then {
         hit9: false
-        with sit9: n.statements.iterate do for s9: sit9 loop {
-            if (bodyReassigns9 n: s9 :name) then hit9 = true
+        with sit9: n.statements.iterate do for s9Id9: sit9 loop {
+            if (bodyReassigns9 :nodes n: (nodes.get i: (s9Id9 - 1).u64) :name) then hit9 = true
         }
         return hit9
     } case statementline then {
-        return (bodyReassigns9 n: n.statementline :name)
+        return (bodyReassigns9 :nodes n: n.statementline :name)
     } case expression then {
-        return (bodyReassigns9 n: n.expression :name)
+        return (bodyReassigns9 :nodes n: n.expression :name)
     } case reassignment then {
         rb9: atomTextOf n: n.topath
         if rb9.length == 0 then rb9 = dottedBaseAtom n: n.topath
@@ -9846,38 +9851,38 @@ bodyReassigns9: function {n: Node name: StringView} out bool is {
     } case ifexpr then {
         hif9: false
         with cit9: n.clauses.iterate do for c9: cit9 loop {
-            if (bodyReassigns9 n: c9 :name) then hif9 = true
+            if (bodyReassigns9 :nodes n: c9 :name) then hif9 = true
         }
         if hif9 then return true
-        return (bodyReassignsOpt9 o: n.elseclause :name)
+        return (bodyReassignsOpt9 :nodes o: n.elseclause :name)
     } case ifclause then {
-        return (bodyReassigns9 n: n.statement :name)
+        return (bodyReassigns9 :nodes n: n.statement :name)
     } case caseexpr then {
         hce9: false
         with kit9: n.clauses.iterate do for k9: kit9 loop {
-            if (bodyReassigns9 n: k9 :name) then hce9 = true
+            if (bodyReassigns9 :nodes n: k9 :name) then hce9 = true
         }
         if hce9 then return true
-        return (bodyReassignsOpt9 o: n.elseclause :name)
+        return (bodyReassignsOpt9 :nodes o: n.elseclause :name)
     } case caseclause then {
-        return (bodyReassigns9 n: n.statement :name)
+        return (bodyReassigns9 :nodes n: n.statement :name)
     } case forexpr then {
-        return (bodyReassignsOpt9 o: n.body :name)
+        return (bodyReassignsOpt9 :nodes o: n.body :name)
     } case doexpr then {
-        return (bodyReassigns9 n: n.statement :name)
+        return (bodyReassigns9 :nodes n: n.statement :name)
     } case withexpr then {
-        return (bodyReassigns9 n: n.body :name)
+        return (bodyReassigns9 :nodes n: n.body :name)
     } else {
         return false
     }
 }
 
 # bodyReassignsOpt9 -- bodyReassigns9 through an optional node.
-bodyReassignsOpt9: function {o: Option Node name: StringView} out bool is {
+bodyReassignsOpt9: function {nodes: List Node o: Option Node name: StringView} out bool is {
     match (
         o
     ) case some then {
-        return (bodyReassigns9 n: o :name)
+        return (bodyReassigns9 :nodes n: o :name)
     } case none then {
         return false
     }
@@ -9938,7 +9943,7 @@ seedPosCore9: function {
     if bsn9.stringview == "bool" then return
     subj9: atomTextOf n: parent
     if subj9.length == 0 then return
-    if (bodyReassigns9 n: body name: subj9.stringview) then return
+    if (bodyReassigns9 :nodes n: body name: subj9.stringview) then return
     recv9: emitExpr :nodes :symtab :ctx n: parent
     acc9: ".".string
     if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
@@ -9990,7 +9995,7 @@ seedNegFromPred9: function {
             extra: arm9.stringview
         )
         if rem9.length == 0 then return
-        if (bodyReassigns9 n: body name: subj9.stringview) then return
+        if (bodyReassigns9 :nodes n: body name: subj9.stringview) then return
         recv9: emitExpr :nodes :symtab :ctx n: n.parent
         acc9: ".".string
         if (isPtrVar :ctx name: subj9.stringview) then acc9 = "->".string
@@ -10559,7 +10564,7 @@ emitElse9: function {
                     fArm9 = rr9
                 }
                 if fArm9.length > 0 then {
-                    if (bodyReassigns9 n: o name: gs9.stringview) == false then {
+                    if (bodyReassigns9 :nodes n: o name: gs9.stringview) == false then {
                         mrecv9: chRecvs.get i: gi9
                         macc9: ".".string
                         if (isPtrVar :ctx name: gs9.stringview) then macc9 = "->".string
@@ -10669,7 +10674,8 @@ emitBranchAssign: function {
         cnt: n.statements.length
         si: u64
         for si < cnt loop {
-            sx: n.statements.get i: si
+            sxId9: n.statements.get i: si
+            sx: nodes.get i: (sxId9 - 1).u64
             if si + 1 == cnt then {
                 vx: emitExpr :nodes :symtab :ctx n: sx
                 la: "\{ind}\{target} = \{vx};\n"
@@ -10739,13 +10745,14 @@ emitBodyNode: function {
         i9: u64
         nst9: n.statements.length
         for i9 < nst9 loop {
-            s9: n.statements.get i: i9
+            s9Id9: n.statements.get i: i9
+            s9: nodes.get i: (s9Id9 - 1).u64
             # a reassignment of a seeded name ends its post-guard alias
             ri9: u64
             for ri9 < pgN9.length loop {
                 rn9: pgN9.get i: ri9
                 if (pgDead9.has item: rn9) == false then {
-                    if (bodyReassigns9 n: s9 name: rn9.stringview) then {
+                    if (bodyReassigns9 :nodes n: s9 name: rn9.stringview) then {
                         rv9: pgPrevV9.get i: ri9
                         if rv9.length > 0 then {
                             nvSet xs: ctx.narrowBox name: rn9.stringview val: rv9.stringview
@@ -10935,7 +10942,8 @@ emitComprehensionNode: function {
         cnt: n.statements.length
         si: u64
         for si < cnt loop {
-            st: n.statements.get i: si
+            stId9: n.statements.get i: si
+            st: nodes.get i: (stId9 - 1).u64
             if si == (cnt - 1) then {
                 av: emitExpr :nodes :symtab :ctx n: st
                 la: "\{ind}\{listCb}_append(&\{listVar}, (\{av}));\n"
@@ -12009,7 +12017,7 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
         }
     } case statement then {
         siter: n.statements.iterate
-        for s: siter loop scanNeeds :nodes :ctx n: s
+        for sId9: siter loop scanNeeds :nodes :ctx n: (nodes.get i: (sId9 - 1).u64)
     } case statementline then {
         scanNeeds :nodes :ctx n: n.statementline
     } case expression then {
@@ -18739,7 +18747,7 @@ emitRecordMethods: function {
 # nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
 # not nest). Mirrors the typechecker's subtreeHasYield walk. Used to detect a
 # generator `call` body and size its resume-state switch.
-nodeYieldCount: function {n: Node} out u64 is {
+nodeYieldCount: function {nodes: List Node n: Node} out u64 is {
     match (
         n
     ) case yieldexpr then {
@@ -18747,34 +18755,37 @@ nodeYieldCount: function {n: Node} out u64 is {
     } case statement then {
         c: u64
         siter: n.statements.iterate
-        for st: siter loop c = c + (nodeYieldCount n: st)
+        for stId9: siter loop {
+            st: nodes.get i: (stId9 - 1).u64
+            c = c + (nodeYieldCount :nodes n: st)
+        }
         return c
     } case statementline then {
-        return (nodeYieldCount n: n.statementline)
+        return (nodeYieldCount :nodes n: n.statementline)
     } case expression then {
-        return (nodeYieldCount n: n.expression)
+        return (nodeYieldCount :nodes n: n.expression)
     } case assignment then {
-        return (nodeYieldCount n: n.value)
+        return (nodeYieldCount :nodes n: n.value)
     } case forexpr then {
-        return (optNodeYieldCount o: n.body)
+        return (optNodeYieldCount :nodes o: n.body)
     } case ifexpr then {
         c2: u64
         cliter: n.clauses.iterate
-        for cl: cliter loop c2 = c2 + (nodeYieldCount n: cl)
-        c2 = c2 + (optNodeYieldCount o: n.elseclause)
+        for cl: cliter loop c2 = c2 + (nodeYieldCount :nodes n: cl)
+        c2 = c2 + (optNodeYieldCount :nodes o: n.elseclause)
         return c2
     } case ifclause then {
-        return (nodeYieldCount n: n.statement)
+        return (nodeYieldCount :nodes n: n.statement)
     } else {
         return 0
     }
 }
 
-optNodeYieldCount: function {o: Option Node} out u64 is {
+optNodeYieldCount: function {nodes: List Node o: Option Node} out u64 is {
     match (
         o
     ) case some then {
-        return (nodeYieldCount n: o)
+        return (nodeYieldCount :nodes n: o)
     } case none then {
         return 0
     }
@@ -18786,7 +18797,7 @@ fnYieldCount: function {nodes: List Node op: Node} out u64 is {
         op
     ) case functiondef then {
         if op.body == 0 then return 0
-        return (nodeYieldCount n: (nodes.get i: (op.body - 1).u64))
+        return (nodeYieldCount :nodes n: (nodes.get i: (op.body - 1).u64))
     } else {
         return 0
     }

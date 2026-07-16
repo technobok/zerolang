@@ -1216,8 +1216,8 @@ nodeMentionsName: function {nodes: List Node n: Node name: StringView} out bool 
         return (nodeMentionsName :nodes n: n.rhs :name)
     } case statement then {
         siter: n.statements.iterate
-        for sm: siter loop {
-            if (nodeMentionsName :nodes n: sm :name) then return true
+        for smId9: siter loop {
+            if (nodeMentionsName :nodes n: (nodes.get i: (smId9 - 1).u64) :name) then return true
         }
         return false
     } case statementline then {
@@ -5876,16 +5876,17 @@ fixupCustomTags: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
 # needs; no stamps are made).
 bodyEndsInReturn: function {nodes: List Node bodyId: u32} out bool is {
     if bodyId == 0 then return false
-    return (blockEndsInReturn block: (nodes.get i: (bodyId - 1).u64))
+    return (blockEndsInReturn :nodes block: (nodes.get i: (bodyId - 1).u64))
 }
 
-blockEndsInReturn: function {block: Node} out bool is {
+blockEndsInReturn: function {nodes: List Node block: Node} out bool is {
     match (
         block
     ) case statement then {
         ne: block.statements.length
         if ne > 0 then {
-            last: block.statements.get i: (ne - 1)
+            lastId9: block.statements.get i: (ne - 1)
+            last: nodes.get i: (lastId9 - 1).u64
             match (
                 last
             ) case statementline then {
@@ -5995,7 +5996,9 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
     match (
         node
     ) case statement then {
-        for stm: node.statements.iterate loop scanCallsInNode :nodes :reg node: stm
+        for stmId9: node.statements.iterate loop {
+            scanCallsInNode :nodes :reg node: (nodes.get i: (stmId9 - 1).u64)
+        }
     } case statementline then {
         scanCallsInNode :nodes :reg node: node.statementline
     } case expression then {
@@ -6058,7 +6061,7 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
         }
     } case doexpr then {
         reg.recordDemand name: "never"
-        if (blockHasBreak n: node.statement) then reg.recordDemand name: "optionval"
+        if (blockHasBreak :nodes n: node.statement) then reg.recordDemand name: "optionval"
         scanCallsInNode :nodes :reg node: node.statement
     } case withexpr then {
         scanCallsInNode :nodes :reg node: node.value
@@ -6611,42 +6614,42 @@ isGeneratorReturn: function {nodes: List Node oId: u32} out bool is {
 }
 
 # subtreeHasYield -- true if a node subtree contains a yield expression.
-subtreeHasYield: function {node: Node} out bool is {
+subtreeHasYield: function {nodes: List Node node: Node} out bool is {
     match (
         node
     ) case yieldexpr then {
         return true
     } case statement then {
         siter: node.statements.iterate
-        for st: siter loop {
-            if (subtreeHasYield node: st) then return true
+        for stId9: siter loop {
+            if (subtreeHasYield :nodes node: (nodes.get i: (stId9 - 1).u64)) then return true
         }
         return false
     } case statementline then {
-        return (subtreeHasYield node: node.statementline)
+        return (subtreeHasYield :nodes node: node.statementline)
     } case expression then {
-        return (subtreeHasYield node: node.expression)
+        return (subtreeHasYield :nodes node: node.expression)
     } case forexpr then {
-        return (optHasYield o: node.body)
+        return (optHasYield :nodes o: node.body)
     } case ifexpr then {
         cliter: node.clauses.iterate
         for cl: cliter loop {
-            if (subtreeHasYield node: cl) then return true
+            if (subtreeHasYield :nodes node: cl) then return true
         }
-        return (optHasYield o: node.elseclause)
+        return (optHasYield :nodes o: node.elseclause)
     } case ifclause then {
-        return (subtreeHasYield node: node.statement)
+        return (subtreeHasYield :nodes node: node.statement)
     } else {
         return false
     }
 }
 
 # optHasYield -- subtreeHasYield over an optional node (a for-loop body).
-optHasYield: function {o: Option Node} out bool is {
+optHasYield: function {nodes: List Node o: Option Node} out bool is {
     match (
         o
     ) case some then {
-        return (subtreeHasYield node: o)
+        return (subtreeHasYield :nodes node: o)
     } case none then {
         return false
     }
@@ -6654,15 +6657,15 @@ optHasYield: function {o: Option Node} out bool is {
 
 # nodeIsYieldingLoop -- true when a statement (peeling statementline/expression) is a
 # for-loop whose body contains a yield.
-nodeIsYieldingLoop: function {node: Node} out bool is {
+nodeIsYieldingLoop: function {nodes: List Node node: Node} out bool is {
     match (
         node
     ) case statementline then {
-        return (nodeIsYieldingLoop node: node.statementline)
+        return (nodeIsYieldingLoop :nodes node: node.statementline)
     } case expression then {
-        return (nodeIsYieldingLoop node: node.expression)
+        return (nodeIsYieldingLoop :nodes node: node.expression)
     } case forexpr then {
-        return (optHasYield o: node.body)
+        return (optHasYield :nodes o: node.body)
     } else {
         return false
     }
@@ -6672,15 +6675,15 @@ nodeIsYieldingLoop: function {node: Node} out bool is {
 # yielding loop. Generators with one promote their straight-line locals to fields.
 bodyHasYieldingLoop: function {nodes: List Node bodyId: u32} out bool is {
     if bodyId == 0 then return false
-    return (blockHasYieldingLoop blk: (nodes.get i: (bodyId - 1).u64))
+    return (blockHasYieldingLoop :nodes blk: (nodes.get i: (bodyId - 1).u64))
 }
-blockHasYieldingLoop: function {blk: Node} out bool is {
+blockHasYieldingLoop: function {nodes: List Node blk: Node} out bool is {
     match (
         blk
     ) case statement then {
         siter: blk.statements.iterate
-        for st: siter loop {
-            if (nodeIsYieldingLoop node: st) then return true
+        for stId9: siter loop {
+            if (nodeIsYieldingLoop :nodes node: (nodes.get i: (stId9 - 1).u64)) then return true
         }
         return false
     } else {
@@ -6732,8 +6735,8 @@ addPromotedLocalsBlk: function {
         blk
     ) case statement then {
         siter: blk.statements.iterate
-        for st: siter loop {
-            nm: assignmentLocalName line: st
+        for stId9: siter loop {
+            nm: assignmentLocalName line: (nodes.get i: (stId9 - 1).u64)
             if nm.length != 0 then {
                 lf: resolveAtomType :ty :reg :nodes :units unitName: "" nm: "i64" thisName: ""
                 ty.setChild parentTypeId: iterId childName: nm.stringview childTypeId: lf
@@ -6841,7 +6844,7 @@ forIterableCallable: function {nodes: List Node e: Node} out String is {
     } case expression then {
         return (forIterableCallable :nodes e: e.expression)
     } case forexpr then {
-        if (optHasYield o: e.body) then {
+        if (optHasYield :nodes o: e.body) then {
             return (condIterableCallable :nodes conds: e.conditions)
         } else {
             return "".string
@@ -6878,8 +6881,8 @@ addInlineIterFieldsBlk: function {
     ) case statement then {
         n: u64
         siter: blk.statements.iterate
-        for st: siter loop {
-            cb: forIterableCallable :nodes e: st
+        for stId9: siter loop {
+            cb: forIterableCallable :nodes e: (nodes.get i: (stId9 - 1).u64)
             if cb.length != 0 then {
                 fieldName: "_iter\{n}"
                 fieldType: "\{cb.stringview}_iter"
@@ -12227,7 +12230,7 @@ checkClause: function {
         }
         with afit9: factsOut.iterate do for af9: afit9 loop applyPredFact :st f: af9 holds: true
         checkStatement :st :unitName :nodes :unitBody block: clause.statement
-        return (lastStmtType :st block: clause.statement)
+        return (lastStmtType :st :nodes block: clause.statement)
     } else {
         return 0
     }
@@ -12235,14 +12238,15 @@ checkClause: function {
 
 # lastStmtType -- the resolved type id of a statement block's last statement
 # (the value of a do-block), or 0 when empty/untyped.
-lastStmtType: function {st: zenv.ZSymbolTable block: Node} out u64 is {
+lastStmtType: function {st: zenv.ZSymbolTable nodes: List Node block: Node} out u64 is {
     result: u64
     match (
         block
     ) case statement then {
         ne: block.statements.length
         if ne > 0 then {
-            last: block.statements.get i: (ne - 1)
+            lastId9: block.statements.get i: (ne - 1)
+            last: nodes.get i: (lastId9 - 1).u64
             match (
                 last
             ) case statementline then {
@@ -12644,19 +12648,19 @@ checkWith: function {
 # blockHasBreak -- a bare `break` statement somewhere in this block's own
 # control flow (descending if/match/with bodies but NOT nested do/for, whose
 # breaks bind to them). Drives the do-block's optionval wrapping.
-blockHasBreak: function {n: Node} out bool is {
+blockHasBreak: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case statement then {
         siter: n.statements.iterate
-        for s0: siter loop {
-            if (blockHasBreak n: s0) then return true
+        for s0Id9: siter loop {
+            if (blockHasBreak :nodes n: (nodes.get i: (s0Id9 - 1).u64)) then return true
         }
         return false
     } case statementline then {
-        return (blockHasBreak n: n.statementline)
+        return (blockHasBreak :nodes n: n.statementline)
     } case expression then {
-        return (blockHasBreak n: n.expression)
+        return (blockHasBreak :nodes n: n.expression)
     } case atomid then {
         return (n.name.stringview == "break")
     } case ifexpr then {
@@ -12665,33 +12669,33 @@ blockHasBreak: function {n: Node} out bool is {
             match (
                 cl0
             ) case ifclause then {
-                if (blockHasBreak n: cl0.statement) then return true
+                if (blockHasBreak :nodes n: cl0.statement) then return true
             } else null
         }
-        return (blockHasBreakOpt bodyOpt: n.elseclause)
+        return (blockHasBreakOpt :nodes bodyOpt: n.elseclause)
     } case caseexpr then {
         mliter: n.clauses.iterate
         for ml0: mliter loop {
             match (
                 ml0
             ) case caseclause then {
-                if (blockHasBreak n: ml0.statement) then return true
+                if (blockHasBreak :nodes n: ml0.statement) then return true
             } else null
         }
-        return (blockHasBreakOpt bodyOpt: n.elseclause)
+        return (blockHasBreakOpt :nodes bodyOpt: n.elseclause)
     } case withexpr then {
-        return (blockHasBreak n: n.body)
+        return (blockHasBreak :nodes n: n.body)
     } else {
         return false
     }
 }
 
 # blockHasBreakOpt -- blockHasBreak over an optional body.
-blockHasBreakOpt: function {bodyOpt: Option Node} out bool is {
+blockHasBreakOpt: function {nodes: List Node bodyOpt: Option Node} out bool is {
     match (
         bodyOpt
     ) case some then {
-        return (blockHasBreak n: bodyOpt)
+        return (blockHasBreak :nodes n: bodyOpt)
     } case none then {
         return false
     }
@@ -12710,12 +12714,12 @@ checkDo: function {
     dbk: st.reg.allocType
     st.define name: "break" ztypeId: dbk
     checkStatement :st :unitName :nodes :unitBody block: donode.statement
-    result: lastStmtType :st block: donode.statement
+    result: lastStmtType :st :nodes block: donode.statement
     st.popTo marker: doMarker
     # A break-carrying do-block's value wraps in optionval (early exit =
     # none); the literal pseudo keys the instance as literal_int/float.
     # A REFTYPE block value wraps in Option instead (boxed payload).
-    if result > 0 when (blockHasBreak n: donode.statement) then {
+    if result > 0 when (blockHasBreak :nodes n: donode.statement) then {
         vtn0: typeNameOf :st tid: result
         payId0: result
         if result == literalIntId then {
@@ -12964,7 +12968,7 @@ checkFor: function {
         }
     }
     walkBody :st :unitName :nodes :unitBody bodyOpt: fornode.body
-    elemT9: lastStmtTypeOpt :st bodyOpt: fornode.body
+    elemT9: lastStmtTypeOpt :st :nodes bodyOpt: fornode.body
     if st.isUnreachable then st.discardTakenInCurrentScope
     st.popTo marker: forMarker
     # for-as-expression: a value-producing body makes the loop a List of
@@ -13117,7 +13121,7 @@ checkIf: function {
         ebm: st.pushBlock name: "if_else"
         with efit9: accFacts.iterate do for ef9: efit9 loop applyPredFact :st f: ef9 holds: false
         walkBody :st :unitName :nodes :unitBody bodyOpt: ifnode.elseclause
-        et9: lastStmtTypeOpt :st bodyOpt: ifnode.elseclause
+        et9: lastStmtTypeOpt :st :nodes bodyOpt: ifnode.elseclause
         if st.isUnreachable then elseDvg9 = true
         etc9: et9
         branchTypes.append etc9
@@ -16160,11 +16164,11 @@ isEmptyBodyOpt: function {bodyOpt: Option Node} out bool is {
 }
 
 # lastStmtTypeOpt -- lastStmtType over an optional block (0 when absent).
-lastStmtTypeOpt: function {st: zenv.ZSymbolTable bodyOpt: Option Node} out u64 is {
+lastStmtTypeOpt: function {st: zenv.ZSymbolTable nodes: List Node bodyOpt: Option Node} out u64 is {
     match (
         bodyOpt
     ) case some then {
-        return (lastStmtType :st block: bodyOpt)
+        return (lastStmtType :st :nodes block: bodyOpt)
     } case none then {
         return 0
     }
@@ -16250,7 +16254,7 @@ checkCase: function {
                 } case none then null
             }
             checkStatement :st :unitName :nodes :unitBody block: clause.statement
-            at: lastStmtType :st block: clause.statement
+            at: lastStmtType :st :nodes block: clause.statement
             atc: at
             armTypes.append atc
             if at > 0 when at == neverId then {
@@ -16281,7 +16285,7 @@ checkCase: function {
             shadowCollapseIfSingle :st name: targetName.stringview fullTid: subjT
         }
         walkBody :st :unitName :nodes :unitBody bodyOpt: casenode.elseclause
-        et: lastStmtTypeOpt :st bodyOpt: casenode.elseclause
+        et: lastStmtTypeOpt :st :nodes bodyOpt: casenode.elseclause
         armTypes.append et
         if st.isUnreachable then st.discardTakenInCurrentScope
         st.popTo marker: elseMarker
@@ -16571,7 +16575,8 @@ checkStatement: function {
         block
     ) case statement then {
         siter: block.statements.iterate
-        for sline: siter loop {
+        for slnId9: siter loop {
+            sline: nodes.get i: (slnId9 - 1).u64
             isRet: checkStatementLine :st :unitName :nodes :unitBody :sline
             drainPendingBorrow :st
             if isRet then st.markUnreachable
@@ -16904,13 +16909,14 @@ checkMethodBodies: function {
 
 # lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last
 # statement line (the implicit-return position), or 0 when absent.
-lastStmtLineId: function {block: Node} out u32 is {
+lastStmtLineId: function {nodes: List Node block: Node} out u32 is {
     match (
         block
     ) case statement then {
         ne: block.statements.length
         if ne > 0 then {
-            last: block.statements.get i: (ne - 1)
+            lastId9: block.statements.get i: (ne - 1)
+            last: nodes.get i: (lastId9 - 1).u64
             match (
                 last
             ) case statementline then {
@@ -16923,7 +16929,7 @@ lastStmtLineId: function {block: Node} out u32 is {
 
 lastStmtLineIdAt: function {nodes: List Node oId: u32} out u32 is {
     if oId == 0 then return 0
-    return (lastStmtLineId block: (nodes.get i: (oId - 1).u64))
+    return (lastStmtLineId :nodes block: (nodes.get i: (oId - 1).u64))
 }
 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
@@ -17675,6 +17681,7 @@ constantOperandType: function {
 constantBranchWalk: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
+    nodes: List Node
     mainName: StringView
     block: Node
 } out u64 is {
@@ -17683,7 +17690,8 @@ constantBranchWalk: function {
     ) case statement then {
         result: u64
         siter: block.statements.iterate
-        for s9: siter loop {
+        for s9Id9: siter loop {
+            s9: nodes.get i: (s9Id9 - 1).u64
             match (
                 s9
             ) case statementline then {
@@ -17734,13 +17742,14 @@ constantBranchWalk: function {
 constantBranchWalkOpt: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
+    nodes: List Node
     mainName: StringView
     bodyOpt: Option Node
 } out u64 is {
     match (
         bodyOpt
     ) case some then {
-        return (constantBranchWalk :ty :reg :mainName block: bodyOpt)
+        return (constantBranchWalk :ty :reg :nodes :mainName block: bodyOpt)
     } case none then {
         return 0
     }
@@ -17782,11 +17791,11 @@ resolveUnitIfDef: function {
                         )
                     } else null
                 }
-                bt9: constantBranchWalk :ty :reg :mainName block: clause.statement
+                bt9: constantBranchWalk :ty :reg :nodes :mainName block: clause.statement
                 if t9 == 0 then t9 = bt9
             } else null
         }
-        et9: constantBranchWalkOpt :ty :reg :mainName bodyOpt: n.elseclause
+        et9: constantBranchWalkOpt :ty :reg :nodes :mainName bodyOpt: n.elseclause
         if t9 == 0 then t9 = et9
         if t9 > 0 then {
             setw9: t9
