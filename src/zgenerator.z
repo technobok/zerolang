@@ -159,10 +159,10 @@ bodyContainsYield: function {nodes: List zast.Node n: Node} out bool is {
     } case namedoperation then {
         return (bodyContainsYield :nodes n: (nodes.get i: (n.operation - 1).u64))
     } case call then {
-        if (bodyContainsYield :nodes n: n.callable) then return true
+        if (bodyContainsYield :nodes n: (nodes.get i: (n.callable - 1).u64)) then return true
         aiter: n.arguments.iterate
         for a0: aiter loop {
-            if (bodyContainsYield :nodes n: a0) then return true
+            if (bodyContainsYield :nodes n: (nodes.get i: (a0 - 1).u64)) then return true
         }
         return false
     } case binop then {
@@ -238,7 +238,7 @@ returnHeadOf: function {nodes: List zast.Node n: Node} out String is {
     ) case expression then {
         return (returnHeadOf :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
-        return (leafAtomName n: n.callable)
+        return (leafAtomName n: (nodes.get i: (n.callable - 1).u64))
     } else {
         return "".string
     }
@@ -309,18 +309,18 @@ clonePath: function {nodes: List zast.Node ids: GenIds n: Node} out Node is {
     } case call then {
         ln4: n.lineno
         co4: n.colno
-        ncal: clonePath :nodes :ids n: n.callable
-        nargs: (List Node)
+        ncal: clonePath :nodes :ids n: (nodes.get i: (n.callable - 1).u64)
+        nargs: (List u32)
         aiter: n.arguments.iterate
-        for a0: aiter loop {
-            na0: clonePath :nodes :ids n: a0
-            nargs.append na0
+        for a0Id9: aiter loop {
+            na0: clonePath :nodes :ids n: (nodes.get i: (a0Id9 - 1).u64)
+            nargs.append (zast.tableAppendRebase :nodes n: na0)
         }
         return (Node.call (zast.CallData
             nodeid: ids.mint
             lineno: ln4
             colno: co4
-            callable: ncal
+            callable: (zast.tableAppendRebase :nodes n: ncal)
             arguments: nargs)
         )
     } case namedoperation then {
@@ -440,7 +440,8 @@ givesPartsOf: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesPart
         givesPartsOf :nodes :ids n: (nodes.get i: (n.expression - 1).u64) :dst
     } case call then {
         aiter: n.arguments.iterate
-        for a0: aiter loop {
+        for a0Id9: aiter loop {
+            a0: nodes.get i: (a0Id9 - 1).u64
             match (
                 a0
             ) case namedoperation then {
@@ -586,13 +587,13 @@ mkReturnBody: function {
 } out Node is {
     retCal: mkAtom :ids :line :col name: "return"
     retArg: mkBareOp :nodes :ids :line :col op: inner
-    retArgs: (List Node)
-    retArgs.append retArg
+    retArgs: (List u32)
+    retArgs.append (zast.tableAppendRebase :nodes n: retArg)
     retCall: (Node.call (zast.CallData
         nodeid: ids.mint
         lineno: line
         colno: col
-        callable: retCal
+        callable: (zast.tableAppendRebase :nodes n: retCal)
         arguments: retArgs)
     )
     retExpr: (Node.expression (zast.ExpressionData
@@ -640,8 +641,8 @@ buildCreateMethod: function {
     )
     zeroAtom: mkAtom :ids :line :col name: "0"
     stArg: mkNamedOp :nodes :ids :line :col name: "state" op: zeroAtom
-    cargs: (List Node)
-    cargs.append stArg
+    cargs: (List u32)
+    cargs.append (zast.tableAppendRebase :nodes n: stArg)
     fi: u64
     fn: fwdNames.length
     for fi < fn loop {
@@ -655,14 +656,14 @@ buildCreateMethod: function {
             name: f0s)
         )
         fa0: mkNamedOp :nodes :ids :line :col name: f0v op: lv0
-        cargs.append fa0
+        cargs.append (zast.tableAppendRebase :nodes n: fa0)
         fi = fi + 1
     }
     icall: (Node.call (zast.CallData
         nodeid: ids.mint
         lineno: line
         colno: col
-        callable: metaCreate
+        callable: (zast.tableAppendRebase :nodes n: metaCreate)
         arguments: cargs)
     )
     body: mkReturnBody :nodes :ids :line :col inner: icall
@@ -729,13 +730,13 @@ buildWrapper: function {
     if leaf == "take" then wn = "Option"
     wAtom: mkAtom :ids :line :col name: wn
     tArg: mkNamedOp :nodes :ids :line :col name: "t" op: base
-    wargs: (List Node)
-    wargs.append tArg
+    wargs: (List u32)
+    wargs.append (zast.tableAppendRebase :nodes n: tArg)
     return (Node.call (zast.CallData
         nodeid: ids.mint
         lineno: line
         colno: col
-        callable: wAtom
+        callable: (zast.tableAppendRebase :nodes n: wAtom)
         arguments: wargs)
     )
 }
@@ -754,7 +755,7 @@ buildFactory: function {
     privNames: (Map String value: bool)
 } out Node is {
     synthAtom: mkAtom :ids :line :col name: synthName
-    fargs: (List Node)
+    fargs: (List u32)
     fi: u64
     fn: fwdNames.length
     for fi < fn loop {
@@ -776,10 +777,10 @@ buildFactory: function {
                 child: (zast.tableAppendRebase :nodes n: pa0))
             )
             fa1: mkNamedOp :nodes :ids :line :col name: f0v op: vp0
-            fargs.append fa1
+            fargs.append (zast.tableAppendRebase :nodes n: fa1)
         } else {
             fa0: mkNamedOp :nodes :ids :line :col name: f0v op: va0
-            fargs.append fa0
+            fargs.append (zast.tableAppendRebase :nodes n: fa0)
         }
         fi = fi + 1
     }
@@ -787,7 +788,7 @@ buildFactory: function {
         nodeid: ids.mint
         lineno: line
         colno: col
-        callable: synthAtom
+        callable: (zast.tableAppendRebase :nodes n: synthAtom)
         arguments: fargs)
     )
     body: mkReturnBody :nodes :ids :line :col inner: icall
@@ -946,7 +947,7 @@ crossWalk: function {nodes: List zast.Node gc: GenCross n: Node inYieldLoop: boo
     } case call then {
         cciter: n.arguments.iterate
         for cc0: cciter loop {
-            crossWalk :nodes :gc n: cc0 :inYieldLoop
+            crossWalk :nodes :gc n: (nodes.get i: (cc0 - 1).u64) :inYieldLoop
         }
     } case namedoperation then {
         crossWalk :nodes :gc n: (nodes.get i: (n.operation - 1).u64) :inYieldLoop
@@ -1501,18 +1502,18 @@ rewriteToThis: function {
     } case call then {
         ln4: n.lineno
         co4: n.colno
-        ncal: rewriteToThis :nodes :ids n: n.callable :promoted
-        nargs: (List Node)
+        ncal: rewriteToThis :nodes :ids n: (nodes.get i: (n.callable - 1).u64) :promoted
+        nargs: (List u32)
         aiter: n.arguments.iterate
-        for a0: aiter loop {
-            na0: rewriteToThis :nodes :ids n: a0 :promoted
-            nargs.append na0
+        for a0Id9: aiter loop {
+            na0: rewriteToThis :nodes :ids n: (nodes.get i: (a0Id9 - 1).u64) :promoted
+            nargs.append (zast.tableAppendRebase :nodes n: na0)
         }
         return (Node.call (zast.CallData
             nodeid: ids.mint
             lineno: ln4
             colno: co4
-            callable: ncal
+            callable: (zast.tableAppendRebase :nodes n: ncal)
             arguments: nargs)
         )
     } case namedoperation then {
@@ -2107,7 +2108,8 @@ returnHasAcceptsOf: function {nodes: List zast.Node n: Node} out bool is {
         return (returnHasAcceptsOf :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         aiter: n.arguments.iterate
-        for a0: aiter loop {
+        for a0Id9: aiter loop {
+            a0: nodes.get i: (a0Id9 - 1).u64
             match (
                 a0
             ) case namedoperation then {

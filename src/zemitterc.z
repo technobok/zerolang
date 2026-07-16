@@ -426,9 +426,9 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
     } case namedoperation then {
         collectLiterals :nodes n: (nodes.get i: (n.operation - 1).u64) :ids :texts
     } case call then {
-        collectLiterals :nodes n: n.callable :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.callable - 1).u64) :ids :texts
         aiter: n.arguments.iterate
-        for a: aiter loop collectLiterals :nodes n: a :ids :texts
+        for a: aiter loop collectLiterals :nodes n: (nodes.get i: (a - 1).u64) :ids :texts
     } case dottedpath then {
         collectLiterals :nodes n: (nodes.get i: (n.parent - 1).u64) :ids :texts
     } case binop then {
@@ -1125,7 +1125,8 @@ emitNarrowedTakeZero: function {
         }
     } case call then {
         aiter9: n.arguments.iterate
-        for a9: aiter9 loop {
+        for a9Id9: aiter9 loop {
+            a9: nodes.get i: (a9Id9 - 1).u64
             match (
                 a9
             ) case namedoperation then {
@@ -1197,16 +1198,17 @@ implicitTakeFnId: function {
     ctx: Ctx
     call: zast.CallData
 } out u64 is {
-    cn0: atomTextOf n: call.callable
+    cn0: atomTextOf n: (nodes.get i: (call.callable - 1).u64)
     ct: userFnId :symtab :ctx name: cn0.stringview
     if ct == 0 then {
         # A dotted method call resolves the method through the receiver's type,
         # not a bare-name lookup: a free function sharing the method's name
         # (zast.mkNamedOp vs the Parser.mkNamedOp method) otherwise wins below,
         # and its mismatched param names leave a moved-in owned arg un-zeroed.
-        mdch0: dottedChildText :nodes n: call.callable
+        mdch0: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
         if mdch0.length > 0 then {
-            mrcv0: dottedReceiverStampId :nodes :symtab callable: call.callable
+            xq229: nodes.get i: (call.callable - 1).u64
+            mrcv0: dottedReceiverStampId :nodes :symtab callable: xq229
             if mrcv0 > 0 then {
                 mmco0: symtab.typing.childOf parentTypeId: mrcv0 name: mdch0.stringview
                 match (
@@ -1225,13 +1227,14 @@ implicitTakeFnId: function {
         # child name to reach its consuming `create` below (the same-unit path
         # resolves via the bare-atom userFnId above). Without this the moved-in
         # owned arg is never zeroed -> double free at the owner's destructor.
-        dn0: dottedChildText :nodes n: call.callable
+        dn0: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
         if dn0.length > 0 then {
             rt0: resolveTypeIdByName :symtab :ctx name: dn0.stringview
             if rt0 > 0 then ct = rt0
         }
     }
-    if ct == 0 then return (stampIdOf :symtab nid: (nodeIdOf9 n: call.callable))
+    xq219: nodes.get i: (call.callable - 1).u64
+    if ct == 0 then return (stampIdOf :symtab nid: (nodeIdOf9 n: xq219))
     if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.functionType then return ct
     cco: symtab.typing.childOf parentTypeId: ct name: "create"
     match (
@@ -1255,8 +1258,8 @@ isCtorOwnerCall: function {
 } out bool is {
     smidO: stampIdOf :symtab nid: call.nodeid.u64
     soO: monoOriginName :symtab tid: smidO
-    bnO: dottedBaseAtom :nodes n: call.callable
-    mcO9: dottedChildText :nodes n: call.callable
+    bnO: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    mcO9: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bnO.stringview == "meta" when mcO9.stringview == "create" then return true
     if (originIsTid
         :symtab
@@ -1278,7 +1281,7 @@ isCtorOwnerCall: function {
             if (symtab.reg.typetypeOf typeId: uctO) == ztypes.ztypetype.unionType then {
                 monoLk1: monoOriginName :symtab tid: uctO
                 if monoLk1.length == 0 then {
-                    uarmO: dottedChildText :nodes n: call.callable
+                    uarmO: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
                     if (symtab.typing.isChildLockArm
                         parentTypeId: uctO
                         name: uarmO.stringview
@@ -1287,13 +1290,13 @@ isCtorOwnerCall: function {
             }
         }
     }
-    cn0: atomTextOf n: call.callable
+    cn0: atomTextOf n: (nodes.get i: (call.callable - 1).u64)
     ct: userFnId :symtab :ctx name: cn0.stringview
     if ct == 0 then {
         # cross-unit construction (dotted callable, e.g. `zast.UnitData`):
         # resolve the constructed type by its child name so an owned arg moved
         # into a record/variant/class/union field is zeroed (else double free).
-        dn0: dottedChildText :nodes n: call.callable
+        dn0: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
         if dn0.length > 0 then {
             rt0: resolveTypeIdByName :symtab :ctx name: dn0.stringview
             if rt0 > 0 then ct = rt0
@@ -1317,7 +1320,7 @@ emitCallTakeInvalidations: function {
 } is {
     ftid9: implicitTakeFnId :nodes :symtab :ctx :call
     ctorOwner9: isCtorOwnerCall :nodes :symtab :ctx :call
-    mmn9: dottedChildText :nodes n: call.callable
+    mmn9: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     collMove9: false
     if mmn9.stringview == "append" then collMove9 = true
     if mmn9.stringview == "insert" then collMove9 = true
@@ -1325,15 +1328,17 @@ emitCallTakeInvalidations: function {
     if collMove9 then {
         # The collection-move rule is for container elements; String.append
         # borrows its StringLike arg (byte copy), it never moves it.
+        xr9: nodes.get i: (call.callable - 1).u64
         rcm9: (chaseColMono
             :symtab
-            tid: (dottedReceiverStampId :nodes :symtab callable: call.callable)
+            tid: (dottedReceiverStampId :nodes :symtab callable: xr9)
         )
         if rcm9 == ctx.strTid then collMove9 = false
     }
     posI9: u64
     aiter9: call.arguments.iterate
-    for a9: aiter9 loop {
+    for a9Id9: aiter9 loop {
+        a9: nodes.get i: (a9Id9 - 1).u64
         match (
             a9
         ) case namedoperation then {
@@ -1639,22 +1644,23 @@ emitDottedCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
-    mn: dottedChildText :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     btid: u64
     if bn.length == 0 then {
         # nested/projected base (el.text.stringview.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
-        rsid9: dottedReceiverStampId :nodes :symtab callable: call.callable
+        rsid9: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
         if (isStringyTid :ctx tid: rsid9) then {
-            bn = emitDottedReceiver :nodes :symtab :ctx callable: call.callable
+            xq199: nodes.get i: (call.callable - 1).u64
+            bn = emitDottedReceiver :nodes :symtab :ctx callable: xq199
             btid = rsid9
         } else {
             return "".string
         }
     } else {
-        bnid: dottedBaseNodeId :nodes n: call.callable
+        bnid: dottedBaseNodeId :nodes n: (nodes.get i: (call.callable - 1).u64)
         btid = stampIdOf :symtab nid: bnid
         # C-keyword-mangle the simple-atom receiver for emission (the bn.length==0
         # leg already routes through emitDottedReceiver). bn is emission-only below.
@@ -1666,7 +1672,8 @@ emitDottedCall: function {
         bf: svValueForm :ctx expr: bn.stringview isStr: btIsStr9
         cargs: String
         citer: call.arguments.iterate
-        for ca: citer loop {
+        for caId9: citer loop {
+            ca: nodes.get i: (caId9 - 1).u64
             match (
                 ca
             ) case namedoperation then {
@@ -1705,7 +1712,8 @@ emitDottedCall: function {
     if (isStringyTid :ctx tid: btid) when mn.stringview == "split" then {
         needsAdd :ctx name: "sv_split"
         sepx9: String
-        with siter9: call.arguments.iterate do for sa9: siter9 loop {
+        with siter9: call.arguments.iterate do for sa9Id9: siter9 loop {
+            sa9: nodes.get i: (sa9Id9 - 1).u64
             match (
                 sa9
             ) case namedoperation then {
@@ -1757,7 +1765,8 @@ emitDottedCall: function {
         bf: svValueForm :ctx expr: bn.stringview isStr: btIsStr9
         needsAdd :ctx name: mn.stringview
         argx: String
-        with aiter9: call.arguments.iterate do for a9: aiter9 loop {
+        with aiter9: call.arguments.iterate do for a9Id9: aiter9 loop {
+            a9: nodes.get i: (a9Id9 - 1).u64
             match (
                 a9
             ) case namedoperation then {
@@ -1793,7 +1802,8 @@ emitDottedCall: function {
         }
         if mn.stringview == "byteAt" then {
             barg: String
-            with biter: call.arguments.iterate do for ba: biter loop {
+            with biter: call.arguments.iterate do for baId9: biter loop {
+                ba: nodes.get i: (baId9 - 1).u64
                 match (
                     ba
                 ) case namedoperation then {
@@ -1824,7 +1834,8 @@ emitDottedCall: function {
             }
             args: String
             aiter: call.arguments.iterate
-            for a: aiter loop {
+            for aId9: aiter loop {
+                a: nodes.get i: (aId9 - 1).u64
                 match (
                     a
                 ) case namedoperation then {
@@ -1873,17 +1884,18 @@ emitDataIndexCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
-    mn: dottedChildText :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    bnid: dottedBaseNodeId :nodes n: call.callable
+    bnid: dottedBaseNodeId :nodes n: (nodes.get i: (call.callable - 1).u64)
     bt: stampNameOf :symtab nid: bnid
     isData: ctx.dataElems.has key: bn.copy
     if (isData) == false then return "".string
     if mn.stringview == "index" then {
         ax: "0".string
         aiter: call.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -1906,7 +1918,8 @@ listCapArg: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Nod
         return (listCapArg :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         aiter: n.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -1991,27 +2004,29 @@ emitStringArgMethod: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     nativeM: String
     if mn.stringview == "appendByte" then nativeM = "append_byte".string
     if mn.stringview == "reserve" then nativeM = "reserve".string
     if mn.stringview == "append" then nativeM = "append".string
     if nativeM.length == 0 then return "".string
-    recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
+    xq189: nodes.get i: (call.callable - 1).u64
+    recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: xq189
     if recvExpr.length == 0 then return "".string
-    rtid0: dottedReceiverStampId :nodes :symtab callable: call.callable
+    rtid0: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     rtid: chaseColMono :symtab tid: rtid0
     rtid = chaseStrTypedef :symtab :ctx tid: rtid
     rtn: typeNameOfReg9 :symtab tid: rtid
     if rtn.stringview != "String" then return "".string
-    rptr: dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable
+    rptr: dottedReceiverIsPtr :nodes :symtab :ctx callable: (nodes.get i: (call.callable - 1).u64)
     recvAddr: "&\{recvExpr}"
     if rptr then recvAddr = "\{recvExpr}"
     argval: String
     argTid9: u64
     argBor9: false
     argPtr9: false
-    with aiter: call.arguments.iterate do for a: aiter loop {
+    with aiter: call.arguments.iterate do for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -2252,11 +2267,12 @@ emitInstanceMethodCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
-    recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
+    xq179: nodes.get i: (call.callable - 1).u64
+    recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: xq179
     if recvExpr.length == 0 then return "".string
-    rtid0: dottedReceiverStampId :nodes :symtab callable: call.callable
+    rtid0: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     rtidc: chaseColMono :symtab tid: rtid0
     rtid: methodOwnerId :symtab :ctx rtid: rtidc mn: mn.stringview
     if rtid == 0 then return "".string
@@ -2281,7 +2297,8 @@ emitInstanceMethodCall: function {
         mco9
     ) case some then {
         if (symtab.reg.typetypeOf typeId: mco9) == ztypes.ztypetype.functionType then {
-            rptr9: dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable
+            xq169: nodes.get i: (call.callable - 1).u64
+            rptr9: dottedReceiverIsPtr :nodes :symtab :ctx callable: xq169
             mcn9: symtab.reg.cnameOf tid: mco9
             pnames: (List String)
             pids: (List u64)
@@ -2302,7 +2319,7 @@ emitInstanceMethodCall: function {
                         args.append ra9.stringview
                     }
                 } else {
-                    isLbl9b: ctorHasLabel :call label: pname9.stringview
+                    isLbl9b: ctorHasLabel :nodes :call label: pname9.stringview
                     iiVal9: String
                     if isLbl9b then {
                         iiVal9 = (ctorInterpArgByLabel
@@ -2472,12 +2489,12 @@ collectionValueCallRhs: function {nodes: List Node n: Node} out bool is {
         atc9: atomTextOf n: (nodes.get i: (n.child - 1).u64)
         return atc9.length > 0
     } case call then {
-        cn: atomTextOf n: n.callable
+        cn: atomTextOf n: (nodes.get i: (n.callable - 1).u64)
         if cn.length == 0 then {
             # a dotted-path method callable (e.g. `p.operationPaths lex: lx`)
             # returning a List is a value-producing call, not a construction --
             # emit the call rather than falling to the empty-collection default.
-            dct9: dottedChildText :nodes n: n.callable
+            dct9: dottedChildText :nodes n: (nodes.get i: (n.callable - 1).u64)
             return dct9.length > 0
         }
         if cn.stringview == "List" then return false
@@ -2550,16 +2567,16 @@ callRhsIsBorrow: function {
     ctx: Ctx
     call: zast.CallData
 } out bool is {
-    cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
+    cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: (nodes.get i: (call.callable - 1).u64))
     if (funcBorrowFlag :symtab tid: cstid9) then return true
-    cnm9: atomTextOf n: call.callable
+    cnm9: atomTextOf n: (nodes.get i: (call.callable - 1).u64)
     if cnm9.length > 0 then {
         ufid9: userFnId :symtab :ctx name: cnm9.stringview
         if (funcBorrowFlag :symtab tid: ufid9) then return true
     }
-    ch: dottedChildText :nodes n: call.callable
+    ch: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if ch.length == 0 then return false
-    rid: dottedReceiverStampId :nodes :symtab callable: call.callable
+    rid: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     rid = chaseColMono :symtab tid: rid
     mfid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: rid name: ch.stringview)
     return (funcBorrowFlag :symtab tid: mfid9)
@@ -2627,7 +2644,7 @@ emitStrConvCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if mn.stringview != "str" then return "".string
     rid0: stampIdOf :symtab nid: call.nodeid.u64
     rid: chaseColMono :symtab tid: rid0
@@ -2635,8 +2652,8 @@ emitStrConvCall: function {
     if (originIsTid :symtab tid: rid originTid: ctx.strOriginTid) == false then return "".string
     rmn: typeNameOfReg9 :symtab tid: rid
     rnm: cbaseNoPrefix tid: rid name: rmn.stringview
-    pv: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
-    ptid: dottedReceiverStampId :nodes :symtab callable: call.callable
+    pv: emitDottedReceiver :nodes :symtab :ctx callable: (nodes.get i: (call.callable - 1).u64)
+    ptid: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     ptn: typeNameOfReg9 :symtab tid: ptid
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size".string
@@ -2699,14 +2716,14 @@ emitBoxCreate: function {
 # emitEmptyColCreate -- an empty collection construction `(List of: T)` /
 # `(Set of: T)` / `(Map ...)` as a value: emit the collection mono's create with
 # capacity 0, resolved from the call-node stamp. "" when not such a construction.
-emitEmptyColCreate: function {
+emitEmptyColCreate: function {nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     call: zast.CallData
     cn0: StringView
 } out String is {
     if cn0 == "array" then {
-        amid0: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
+        amid0: stampIdOf :symtab nid: (nodeIdOf9 n: (nodes.get i: (call.callable - 1).u64))
         amid9: chaseColMono :symtab tid: amid0
         amo9: monoOriginName :symtab tid: amid9
         if (originIsTid :symtab tid: amid9 originTid: ctx.arrayOriginTid) then {
@@ -2715,7 +2732,7 @@ emitEmptyColCreate: function {
         }
     }
     if cn0 == "str" then {
-        smid0: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
+        smid0: stampIdOf :symtab nid: (nodeIdOf9 n: (nodes.get i: (call.callable - 1).u64))
         smid9: chaseColMono :symtab tid: smid0
         smo9: monoOriginName :symtab tid: smid9
         if (originIsTid :symtab tid: smid9 originTid: ctx.strOriginTid) then {
@@ -2754,10 +2771,10 @@ emitCollectionMethodCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
+    bn: emitDottedReceiver :nodes :symtab :ctx callable: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
-    brid9: dottedReceiverStampId :nodes :symtab callable: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
+    brid9: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     bt: chaseColMono :symtab tid: brid9
     # classify by the mono's ORIGIN NAME (the graph-independent identity):
     # a by-name-resolved origin tid can diverge from the mono's captured
@@ -3116,7 +3133,8 @@ colArg: function {
     posFirst: String
     havePos: false
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -3166,7 +3184,8 @@ listArg: function {
     posFirst: String
     havePos: false
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -3200,7 +3219,8 @@ listTakeArgBase: function {
     label: StringView
 } out String is {
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -3238,8 +3258,9 @@ emitTypedefCreateCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
-    if bn.length == 0 then bn = atomTextOf n: call.callable
+    calr9: nodes.get i: (call.callable - 1).u64
+    bn: dottedBaseAtom :nodes n: calr9
+    if bn.length == 0 then bn = atomTextOf n: calr9
     if bn.length == 0 then return "".string
     tid: userFnId :symtab :ctx name: bn.stringview
     if tid == 0 then {
@@ -3253,7 +3274,8 @@ emitTypedefCreateCall: function {
     if tid == 0 then return "".string
     if (isTypedefType :symtab :tid) == false then return "".string
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -3284,7 +3306,8 @@ emitInlineVariantCtor: function {
         av: "0".string
         aiter: call.arguments.iterate
         got: false
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -3313,9 +3336,9 @@ emitUnionCtor: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
     smid0: stampIdOf :symtab nid: call.nodeid.u64
     smOrig9: monoOriginName :symtab tid: smid0
@@ -3344,7 +3367,8 @@ emitUnionCtor: function {
         av: String
         got: false
         aiter: call.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -3375,8 +3399,8 @@ emitVariantCtorCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
-    mn: dottedChildText :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
     # system monos (optionval/resultval inline, Option none) -- the call node is
     # stamped with the concrete mono id (userFnId fails for these). Option.some
@@ -3416,7 +3440,8 @@ emitVariantCtorCall: function {
             oav9: "0".string
             ogot9: false
             oaiter9: call.arguments.iterate
-            for oa9: oaiter9 loop {
+            for oa9Id9: oaiter9 loop {
+                oa9: nodes.get i: (oa9Id9 - 1).u64
                 match (
                     oa9
                 ) case namedoperation then {
@@ -3454,9 +3479,9 @@ emitColTypedefCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     isBC: false
     if mn.stringview == "borrow" then isBC = true
     if mn.stringview == "create" then isBC = true
@@ -3477,8 +3502,8 @@ emitTypeQualCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
-    mn: dottedChildText :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
     btid: userFnId :symtab :ctx name: bn.stringview
     if btid == 0 then return "".string
@@ -3516,7 +3541,8 @@ emitTypeQualCall: function {
                 # a method: positional args; a CLASS receiver passes by address
                 clsNmQ: typeNameOfReg9 :symtab tid: btid
                 ai9: u64
-                with aiterQ: call.arguments.iterate do for aQ: aiterQ loop {
+                with aiterQ: call.arguments.iterate do for aQId9: aiterQ loop {
+                    aQ: nodes.get i: (aQId9 - 1).u64
                     match (
                         aQ
                     ) case namedoperation then {
@@ -3835,7 +3861,7 @@ emitRecordCtor: function {
                 for ci < ccn loop {
                     cpname: cpn.get i: ci
                     cav: ctorArgByLabel :nodes :symtab :ctx :call label: cpname.stringview
-                    if (ctorHasLabel :call label: cpname.stringview) == false then {
+                    if (ctorHasLabel :nodes :call label: cpname.stringview) == false then {
                         cposUsed: false
                         cpv: ctorArgByPosition :nodes :symtab :ctx :call idx: cposIdx
                         if cpv.length > 0 then {
@@ -3885,7 +3911,7 @@ emitRecordCtor: function {
         av: ctorArgByLabel :nodes :symtab :ctx :call label: fname.stringview
         # an absent label binds the next positional (unlabeled) arg by cursor; then a
         # registered default; then an fnptr slot's method address; else the "0" fallback.
-        if (ctorHasLabel :call label: fname.stringview) == false then {
+        if (ctorHasLabel :nodes :call label: fname.stringview) == false then {
             fposUsed: false
             fpv: ctorArgByPosition :nodes :symtab :ctx :call idx: fposIdx
             if fpv.length > 0 then {
@@ -3925,7 +3951,8 @@ ctorArgIsBorrow: function {
     label: StringView
 } out bool is {
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -3950,7 +3977,8 @@ ctorArgIsBorrowPos: function {
 } out bool is {
     seen9: u64
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -3977,7 +4005,8 @@ ctorArgByLabel: function {
     label: StringView
 } out String is {
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4005,7 +4034,8 @@ argIsPointerByLabel: function {
     label: StringView
 } out bool is {
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4033,7 +4063,8 @@ ctorArgByPosition: function {
 } out String is {
     seen9: u64
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4070,7 +4101,8 @@ ctorInterpArgByLabel: function {
     pid: u64
 } out String is {
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4104,7 +4136,8 @@ ctorInterpArgByPosition: function {
 } out String is {
     seen9: u64
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4134,7 +4167,7 @@ ctorInterpArgByPosition: function {
 # elision). Returns `fpNames.length` (an out-of-range sentinel) for an argument
 # that binds no value slot (e.g. a generic type-arg, whose name is not a value
 # param). Lets a call's named args be emitted to C in PARAMETER order.
-argSlotList: function {call: zast.CallData fpNames: List String} out List u64 is {
+argSlotList: function {nodes: List Node call: zast.CallData fpNames: List String} out List u64 is {
     out9: (List u64)
     cn9: fpNames.length
     consumed9: (List bool)
@@ -4145,7 +4178,8 @@ argSlotList: function {call: zast.CallData fpNames: List String} out List u64 is
     }
     cursor9: u64
     aiter9: call.arguments.iterate
-    for a9: aiter9 loop {
+    for a9Id9: aiter9 loop {
+        a9: nodes.get i: (a9Id9 - 1).u64
         match (
             a9
         ) case namedoperation then {
@@ -4212,9 +4246,10 @@ nodeConstText: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
 # with that type; emit `{type}_meta_create(args)` (never `_create`, which the
 # user's own create may override -> recursion). "" when not a meta.create.
 # ctorHasLabel -- whether a call carries a named argument with this label.
-ctorHasLabel: function {call: zast.CallData label: StringView} out bool is {
+ctorHasLabel: function {nodes: List Node call: zast.CallData label: StringView} out bool is {
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4231,7 +4266,7 @@ emitMetaCreateCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mcb: ztypecheck.metaCreateBaseId :nodes n: call.callable
+    mcb: ztypecheck.metaCreateBaseId :nodes n: (nodes.get i: (call.callable - 1).u64)
     match (
         mcb
     ) case some then {
@@ -4247,7 +4282,7 @@ emitMetaCreateCall: function {
         for fi < fn0 loop {
             fname: fnames.get i: fi
             av: String
-            if (ctorHasLabel :call label: fname.stringview) then {
+            if (ctorHasLabel :nodes :call label: fname.stringview) then {
                 av = ctorArgByLabel :nodes :symtab :ctx :call label: fname.stringview
             } else {
                 # a field absent from the meta.create args (a generator's promoted
@@ -4347,9 +4382,9 @@ emitGenericFnCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    gdc9: dottedChildText :nodes n: call.callable
+    gdc9: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if gdc9.length > 0 then return "".string
-    gmf9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
+    gmf9: stampIdOf :symtab nid: (nodeIdOf9 n: (nodes.get i: (call.callable - 1).u64))
     if gmf9 == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: gmf9) != ztypes.ztypetype.functionType then return "".string
     gmo9: monoOriginName :symtab tid: gmf9
@@ -4359,11 +4394,12 @@ emitGenericFnCall: function {
     fpNames9: (List String)
     fpIds9: (List u64)
     recFieldLists :symtab tid: gmf9 names: fpNames9 ids: fpIds9
-    slots9g: argSlotList :call fpNames: fpNames9
+    slots9g: argSlotList :nodes :call fpNames: fpNames9
     valBySlot9g: (Map u64 value: String)
     ai9: u64
     aiter9: call.arguments.iterate
-    for a9: aiter9 loop {
+    for a9Id9: aiter9 loop {
+        a9: nodes.get i: (a9Id9 - 1).u64
         match (
             a9
         ) case namedoperation then {
@@ -4478,12 +4514,12 @@ emitUnitMethodCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    rsid9: dottedReceiverStampId :nodes :symtab callable: call.callable
+    rsid9: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     if rsid9 == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: rsid9) != ztypes.ztypetype.unitType then return "".string
     rmo9: monoOriginName :symtab tid: rsid9
     if rmo9.length == 0 then return "".string
-    child9: dottedChildText :nodes n: call.callable
+    child9: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if child9.length == 0 then return "".string
     co9: symtab.typing.childOf parentTypeId: rsid9 name: child9.stringview
     fid9: u64
@@ -4498,11 +4534,12 @@ emitUnitMethodCall: function {
     fpNames9: (List String)
     fpIds9: (List u64)
     recFieldLists :symtab tid: fid9 names: fpNames9 ids: fpIds9
-    slots9g: argSlotList :call fpNames: fpNames9
+    slots9g: argSlotList :nodes :call fpNames: fpNames9
     valBySlot9g: (Map u64 value: String)
     ai9: u64
     aiter9: call.arguments.iterate
-    for a9: aiter9 loop {
+    for a9Id9: aiter9 loop {
+        a9: nodes.get i: (a9Id9 - 1).u64
         match (
             a9
         ) case namedoperation then {
@@ -4614,8 +4651,8 @@ emitCrossUnitFnCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    base: dottedBaseAtom :nodes n: call.callable
-    child: dottedChildText :nodes n: call.callable
+    base: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    child: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if base.length == 0 then return "".string
     if child.length == 0 then return "".string
     if (symtab.reg.isUnitName name: base.stringview) == false then return "".string
@@ -4633,11 +4670,12 @@ emitCrossUnitFnCall: function {
     fpNames: (List String)
     fpIds: (List u64)
     recFieldLists :symtab tid: fid names: fpNames ids: fpIds
-    slots9c: argSlotList :call :fpNames
+    slots9c: argSlotList :nodes :call :fpNames
     valBySlot9c: (Map u64 value: String)
     ai8: u64
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -4803,8 +4841,8 @@ emitCrossUnitExplicitCreate: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    pbase: dottedBaseAtom :nodes n: call.callable
-    ptype: dottedParentChild :nodes n: call.callable
+    pbase: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    ptype: dottedParentChild :nodes n: (nodes.get i: (call.callable - 1).u64)
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
     if (symtab.reg.isUnitName name: pbase.stringview) == false then return "".string
@@ -4866,11 +4904,11 @@ emitCrossUnitUnionCtor: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    pbase: outerBaseAtom :nodes n: call.callable
-    ptype: dottedParentChild :nodes n: call.callable
+    pbase: outerBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    ptype: dottedParentChild :nodes n: (nodes.get i: (call.callable - 1).u64)
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
-    arm9: dottedChildText :nodes n: call.callable
+    arm9: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if arm9.length == 0 then return "".string
     if arm9.stringview == "create" then return "".string
     if arm9.stringview == "borrow" then return "".string
@@ -4892,7 +4930,8 @@ emitCrossUnitUnionCtor: function {
         av: String
         got: false
         aiter: call.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -4921,8 +4960,8 @@ emitCrossUnitCtor: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    base: dottedBaseAtom :nodes n: call.callable
-    child: dottedChildText :nodes n: call.callable
+    base: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
+    child: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if base.length == 0 then return "".string
     if child.length == 0 then return "".string
     if child.stringview == "create" then {
@@ -4999,23 +5038,25 @@ emitFnptrFieldCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
-    rtid0: dottedReceiverStampId :nodes :symtab callable: call.callable
+    rtid0: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     rtid: chaseColMono :symtab tid: rtid0
     if rtid == 0 then return "".string
     if (symtab.typing.isChildFnptrField parentTypeId: rtid name: mn.stringview) == false then {
         return "".string
     }
-    recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
+    xq159: nodes.get i: (call.callable - 1).u64
+    recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: xq159
     if recvExpr.length == 0 then return "".string
-    rptr: dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable
+    rptr: dottedReceiverIsPtr :nodes :symtab :ctx callable: (nodes.get i: (call.callable - 1).u64)
     acc: ".".string
     if rptr then acc = "->".string
     args: String
     ai: u64
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -5041,9 +5082,9 @@ emitFnptrLocalCall: function {
     cn0: StringView
 } out String is {
     if fid > 0 then return "".string
-    dct: dottedChildText :nodes n: call.callable
+    dct: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if dct.length > 0 then return "".string
-    cnid: nodeIdOf9 n: call.callable
+    cnid: nodeIdOf9 n: (nodes.get i: (call.callable - 1).u64)
     cTid: stampIdOf :symtab nid: cnid
     if cTid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return "".string
@@ -5053,7 +5094,8 @@ emitFnptrLocalCall: function {
     args: String
     ai: u64
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -5139,8 +5181,8 @@ emitCallValue: function {
     if cuct.length > 0 then return cuct
     bxc9: emitBoxCreate :nodes :symtab :ctx :call
     if bxc9.length > 0 then return bxc9
-    cn0: atomTextOf n: call.callable
-    ecc9: emitEmptyColCreate :symtab :ctx :call cn0: cn0.stringview
+    cn0: atomTextOf n: (nodes.get i: (call.callable - 1).u64)
+    ecc9: emitEmptyColCreate :nodes :symtab :ctx :call cn0: cn0.stringview
     if ecc9.length > 0 then return ecc9
     fid: userFnId :symtab :ctx name: cn0.stringview
     # a native fn (or generic native template) never takes the resolved-cname
@@ -5160,7 +5202,7 @@ emitCallValue: function {
     # val: 42`: the callable is a stamped Call/Expression (cn0 empty, fid 0), so
     # resolve the mono from the callable-node stamp and construct it.
     if fid == 0 then {
-        cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: call.callable)
+        cstid9: stampIdOf :symtab nid: (nodeIdOf9 n: (nodes.get i: (call.callable - 1).u64))
         cstmn9: monoOriginName :symtab tid: cstid9
         if cstid9 > 0 when cstmn9.length > 0 then {
             cstt9: symtab.reg.typetypeOf typeId: cstid9
@@ -5199,11 +5241,12 @@ emitCallValue: function {
         fpNames: (List String)
         fpIds: (List u64)
         recFieldLists :symtab tid: fid names: fpNames ids: fpIds
-        slots9: argSlotList :call :fpNames
+        slots9: argSlotList :nodes :call :fpNames
         valBySlot9: (Map u64 value: String)
         ai8: u64
         aiter: call.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -5358,7 +5401,8 @@ emitCallValue: function {
             needsAdd :ctx name: "coll_join"
             sjargs9: String
             sji9: u64
-            with sjiter9: call.arguments.iterate do for sja9: sjiter9 loop {
+            with sjiter9: call.arguments.iterate do for sja9Id9: sjiter9 loop {
+                sja9: nodes.get i: (sja9Id9 - 1).u64
                 match (
                     sja9
                 ) case namedoperation then {
@@ -6644,9 +6688,9 @@ dataIndexElemName: function {
     ) case expression then {
         return (dataIndexElemName :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
-        mn: dottedChildText :nodes n: n.callable
+        mn: dottedChildText :nodes n: (nodes.get i: (n.callable - 1).u64)
         if mn.stringview == "index" then {
-            bn: dottedBaseAtom :nodes n: n.callable
+            bn: dottedBaseAtom :nodes n: (nodes.get i: (n.callable - 1).u64)
             dk: bn.copy
             go: ctx.dataElems.get key: dk
             match (
@@ -6954,7 +6998,8 @@ emitPrintStmt: function {
 } is {
     emitted: false
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -6989,7 +7034,8 @@ emitPanicStmt: function {
     av: String
     got: false
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -7308,7 +7354,7 @@ emitOptionBoxHoist: function {
         sln9: nodes.get i: (n.statementline - 1).u64
         return (emitOptionBoxHoist :nodes :symtab :ctx n: sln9 :ind :tmp :buf)
     } case call then {
-        cn: dottedChildText :nodes n: n.callable
+        cn: dottedChildText :nodes n: (nodes.get i: (n.callable - 1).u64)
         if cn.stringview != "some" then return "".string
         mid: stampIdOf :symtab nid: n.nodeid.u64
         mo9: monoOriginName :symtab tid: mid
@@ -7318,7 +7364,8 @@ emitOptionBoxHoist: function {
         av: "0".string
         got: false
         aiter9: n.arguments.iterate
-        for a9: aiter9 loop {
+        for a9Id9: aiter9 loop {
+            a9: nodes.get i: (a9Id9 - 1).u64
             match (
                 a9
             ) case namedoperation then {
@@ -7454,13 +7501,13 @@ emitCallStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    relmn: dottedChildText :nodes n: call.callable
+    relmn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if relmn.stringview == "release" then {
-        relbnid: dottedBaseNodeId :nodes n: call.callable
+        relbnid: dottedBaseNodeId :nodes n: (nodes.get i: (call.callable - 1).u64)
         reltid: stampIdOf :symtab nid: relbnid
         if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
     }
-    cn0: atomTextOf n: call.callable
+    cn0: atomTextOf n: (nodes.get i: (call.callable - 1).u64)
     if cn0.stringview == "print" then {
         emitPrintStmt :nodes :symtab :ctx :call :ind :tmp :buf
         return
@@ -7472,7 +7519,8 @@ emitCallStmt: function {
     if cn0.stringview == "return" then {
         hasArg: false
         aiter: call.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -9430,7 +9478,10 @@ scanLoopVar: function {
     } case statementline then {
         scanLoopVar :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64) :lbl :res
     } case call then {
-        with ait: n.arguments.iterate do for a: ait loop scanLoopVar :nodes :symtab n: a :lbl :res
+        with ait: n.arguments.iterate do for a: ait loop {
+            xq149: nodes.get i: (a - 1).u64
+            scxq149nLoopVxq149r :nodes :symtxq149b n: xq149 :lbl :res
+        }
     } case namedoperation then {
         scanLoopVar :nodes :symtab n: (nodes.get i: (n.operation - 1).u64) :lbl :res
     } case binop then {
@@ -9795,8 +9846,9 @@ rangeBoundExpr: function {
     ) case expression then {
         return (rangeBoundExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
-        mn: dottedChildText :nodes n: n.callable
-        if mn.stringview == "iterate" then return (rangeReceiver :nodes :symtab :ctx n: n.callable)
+        mn: dottedChildText :nodes n: (nodes.get i: (n.callable - 1).u64)
+        xq139: nodes.get i: (n.callable - 1).u64
+        if mn.stringview == "iterate" then return (rangeReceiver :nodes :symtab :ctx n: xq139)
         return "".string
     } case dottedpath then {
         cmn: atomTextOf n: (nodes.get i: (n.child - 1).u64)
@@ -9845,7 +9897,8 @@ rangeFromExpr: function {
         return (rangeFromExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         aiter: n.arguments.iterate
-        for a: aiter loop {
+        for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -12212,8 +12265,8 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
     } case namedoperation then {
         scanNeeds :nodes :ctx n: (nodes.get i: (n.operation - 1).u64)
     } case call then {
-        bn0: dottedBaseAtom :nodes n: n.callable
-        mn0: dottedChildText :nodes n: n.callable
+        bn0: dottedBaseAtom :nodes n: (nodes.get i: (n.callable - 1).u64)
+        mn0: dottedChildText :nodes n: (nodes.get i: (n.callable - 1).u64)
         if bn0.stringview == "io" when mn0.length > 0 then {
             needsAdd :ctx name: "io"
             iname0: "io_\{mn0}"
@@ -12229,10 +12282,10 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
         if (isSvSimpleNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvParseNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
         if (isSvNoArgNative name: mn0.stringview) then needsAdd :ctx name: mn0.stringview
-        cjn0: atomTextOf n: n.callable
+        cjn0: atomTextOf n: (nodes.get i: (n.callable - 1).u64)
         if cjn0.stringview == "stringJoin" then needsAdd :ctx name: "coll_join"
         aiter2: n.arguments.iterate
-        for a: aiter2 loop scanNeeds :nodes :ctx n: a
+        for a: aiter2 loop scanNeeds :nodes :ctx n: (nodes.get i: (a - 1).u64)
     } case dottedpath then {
         pdm9: atomTextOf n: (nodes.get i: (n.child - 1).u64)
         if pdm9.stringview == "parseF64" then needsAdd :ctx name: "parseF64"
@@ -17140,7 +17193,8 @@ fileFromArgCoerce: function {
     call: zast.CallData
     av: StringView
 } out String is {
-    with fiter9: call.arguments.iterate do for fa9: fiter9 loop {
+    with fiter9: call.arguments.iterate do for fa9Id9: fiter9 loop {
+        fa9: nodes.get i: (fa9Id9 - 1).u64
         match (
             fa9
         ) case namedoperation then {
@@ -17178,9 +17232,9 @@ emitFileMethodCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     isFM: false
     if mn.stringview == "close" then isFM = true
     if mn.stringview == "read" then isFM = true
@@ -17190,7 +17244,7 @@ emitFileMethodCall: function {
     if mn.stringview == "writeLine" then isFM = true
     if mn.stringview == "accept" then isFM = true
     if (isFM) == false then return "".string
-    bnid: dottedBaseNodeId :nodes n: call.callable
+    bnid: dottedBaseNodeId :nodes n: (nodes.get i: (call.callable - 1).u64)
     fid: fileTypeIdOf :symtab :ctx nid: bnid
     if fid == 0 then return "".string
     fc: symtab.reg.cnameOf tid: fid
@@ -17280,7 +17334,8 @@ wrapperCreateArg: function {
     prtn: typeNameOfReg9 :symtab tid: ptid
     prtid: resolveTypeIdByName :symtab :ctx name: prtn.stringview
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -17322,7 +17377,7 @@ emitIoWrapperCreate: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    wn: ioCreateWrapper :nodes n: call.callable
+    wn: ioCreateWrapper :nodes n: (nodes.get i: (call.callable - 1).u64)
     if wn.length == 0 then return "".string
     wid: resolveTypeIdByName :symtab :ctx name: wn.stringview
     if wid == 0 then return "".string
@@ -17501,7 +17556,8 @@ emitNativeArg: function {
     posIdx: u64
 } out String is {
     seen9: u64
-    with aiter: call.arguments.iterate do for a: aiter loop {
+    with aiter: call.arguments.iterate do for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
@@ -17553,13 +17609,14 @@ emitNativeFreeFnCall: function {
 } out String is {
     un: String
     mn: String
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length > 0 then {
         if (isNativeRuntimeUnit name: bn.stringview) == false then return "".string
-        mn = dottedChildText :nodes n: call.callable
+        calr9: nodes.get i: (call.callable - 1).u64
+        mn = dottedChildText :nodes n: calr9
         un = bn
     } else {
-        cn0: atomTextOf n: call.callable
+        cn0: atomTextOf n: (nodes.get i: (call.callable - 1).u64)
         if cn0.length == 0 then return "".string
         fid0: userFnId :symtab :ctx name: cn0.stringview
         if fid0 == 0 then return "".string
@@ -17602,7 +17659,7 @@ emitNativeFreeFnCall: function {
         pname: pn.get i: j
         pid: pidl.get i: j
         j = j + 1
-        hasL9: ctorHasLabel :call label: pname.stringview
+        hasL9: ctorHasLabel :nodes :call label: pname.stringview
         av: String
         if hasL9 then {
             av = (emitNativeArg
@@ -17660,7 +17717,7 @@ emitCliSpecCreate: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    cn: cliCreateClass :nodes n: call.callable
+    cn: cliCreateClass :nodes n: (nodes.get i: (call.callable - 1).u64)
     if cn.length == 0 then return "".string
     cid: cliClassTypeId :symtab :ctx name: cn.stringview
     if cid == 0 then return "".string
@@ -17700,15 +17757,15 @@ emitParsedMethodCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     isPM: false
     if mn.stringview == "hasFlag" then isPM = true
     if mn.stringview == "option" then isPM = true
     if mn.stringview == "positional" then isPM = true
     if (isPM) == false then return "".string
-    bnid: dottedBaseNodeId :nodes n: call.callable
+    bnid: dottedBaseNodeId :nodes n: (nodes.get i: (call.callable - 1).u64)
     pid: fileTypeIdOf :symtab :ctx nid: bnid
     if pid == 0 then return "".string
     pcn: typeNameOfReg9 :symtab tid: pid
@@ -17749,11 +17806,11 @@ emitUserIterCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if mn.stringview != "call" then return "".string
-    bnid: dottedBaseNodeId :nodes n: call.callable
+    bnid: dottedBaseNodeId :nodes n: (nodes.get i: (call.callable - 1).u64)
     rid0: stampIdOf :symtab nid: bnid
     if rid0 == 0 then return "".string
     iterId: rid0
@@ -17785,7 +17842,8 @@ emitUserIterCall: function {
         if (isPtrVar :ctx name: recv9.stringview) then recvExpr9 = recvC9
         valArg9: String
         hasVal9: false
-        with aiter9: call.arguments.iterate do for av9: aiter9 loop {
+        with aiter9: call.arguments.iterate do for av9Id9: aiter9 loop {
+            av9: nodes.get i: (av9Id9 - 1).u64
             match (
                 av9
             ) case namedoperation then {
@@ -17818,12 +17876,12 @@ emitProtocolDispatch: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
     if mn.stringview == "create" then return "".string
     if mn.stringview == "borrow" then return "".string
     if mn.stringview == "release" then return "".string
-    rtid: dottedReceiverStampId :nodes :symtab callable: call.callable
+    rtid: dottedReceiverStampId :nodes :symtab callable: (nodes.get i: (call.callable - 1).u64)
     if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.protocolType then {
         rtn0: typeNameOfReg9 :symtab tid: rtid
         if rtn0.length > 0 then {
@@ -17832,10 +17890,11 @@ emitProtocolDispatch: function {
         }
     }
     if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.protocolType then return "".string
-    recv: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
+    recv: emitDottedReceiver :nodes :symtab :ctx callable: (nodes.get i: (call.callable - 1).u64)
     if recv.length == 0 then return "".string
     acc: ".".string
-    if (dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable) then acc = "->".string
+    xq129: nodes.get i: (call.callable - 1).u64
+    if (dottedReceiverIsPtr :nodes :symtab :ctx callable: xq129) then acc = "->".string
     dargs: "\{recv}\{acc}data"
     mtid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: rtid name: mn.stringview)
     mpNames9: (List String)
@@ -17849,10 +17908,11 @@ emitProtocolDispatch: function {
         vi9 = vi9 + 1
     }
     if vpn9.length > 0 then {
-        slots9p: argSlotList :call fpNames: vpn9
+        slots9p: argSlotList :nodes :call fpNames: vpn9
         valBySlot9p: (Map u64 value: String)
         ai9p: u64
-        with aiter: call.arguments.iterate do for a: aiter loop {
+        with aiter: call.arguments.iterate do for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -17895,7 +17955,8 @@ emitProtocolDispatch: function {
             pp9p = pp9p + 1
         }
     } else {
-        with aiter: call.arguments.iterate do for a: aiter loop {
+        with aiter: call.arguments.iterate do for aId9: aiter loop {
+            a: nodes.get i: (aId9 - 1).u64
             match (
                 a
             ) case namedoperation then {
@@ -17932,9 +17993,9 @@ emitProtocolCreateCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    bn: dottedBaseAtom :nodes n: call.callable
+    bn: dottedBaseAtom :nodes n: (nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :nodes n: call.callable
+    mn: dottedChildText :nodes n: (nodes.get i: (call.callable - 1).u64)
     isCreate: false
     if mn.stringview == "create" then isCreate = true
     if mn.stringview == "borrow" then isCreate = true
@@ -17944,7 +18005,8 @@ emitProtocolCreateCall: function {
     suffix: "create_owned".string
     if mn.stringview == "borrow" then suffix = "create".string
     aiter: call.arguments.iterate
-    for a: aiter loop {
+    for aId9: aiter loop {
+        a: nodes.get i: (aId9 - 1).u64
         match (
             a
         ) case namedoperation then {
