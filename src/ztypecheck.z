@@ -5527,28 +5527,34 @@ registerAndResolveMain: function {
         muI0: u64
         for muI0 < muN0 loop {
             muId9: program.units.get i: muI0
-            mu: program.nodes.get i: (muId9 - 1).u64
             muI0 = muI0 + 1
-            match (
-                mu
-            ) case namedoperation then {
-                nm: unitLabel o: mu.name
-                if (isStdlibUnitName name: nm.stringview) then {
+            opId9: u32
+            nm9: String
+            {
+                mu: program.nodes.get i: (muId9 - 1).u64
+                if mu.namedoperation then {
+                    nm: unitLabel o: mu.name
+                    opId9 = mu.operation
+                    nm9 = nm.copy
+                }
+            }
+            if opId9 > 0 then {
+                if (isStdlibUnitName name: nm9.stringview) then {
                     (checkNativeOnlyUnitBodies
                         :ty
                         nodes: program.nodes
-                        unitName: nm.stringview
-                        unitdefId: mu.operation
+                        unitName: nm9.stringview
+                        unitdefId: opId9
                     )
                 }
-                eager9: isFileUnit name: nm.stringview
-                if nm.stringview == mainName then {
+                eager9: isFileUnit name: nm9.stringview
+                if nm9.stringview == mainName then {
                     # a stdlib unit opened as main: demand all of its
                     # defs so every signature typeref resolves + stamps.
                     if (eager9) == false then (demandAllUnitDefs
                         :reg
                         nodes: program.nodes
-                        unitdefId: mu.operation
+                        unitdefId: opId9
                     )
                     eager9 = true
                 }
@@ -5559,10 +5565,10 @@ registerAndResolveMain: function {
                     # (the reference does too), so leave it on there.
                     supp: false
                     if (full) == false then {
-                        if (nm.stringview == mainName) == false then {
+                        if (nm9.stringview == mainName) == false then {
                             if (unitDefIsGeneric
                                 nodes: program.nodes
-                                oId: mu.operation
+                                oId: opId9
                             ) == false then supp = true
                         }
                     }
@@ -5572,13 +5578,13 @@ registerAndResolveMain: function {
                         :reg
                         nodes: program.nodes
                                 units: program.units
-                        unitName: nm.stringview
-                        unitdefId: mu.operation
+                        unitName: nm9.stringview
+                        unitdefId: opId9
                         :full
                     )
                     ty.suppressSigStamp = false
                 }
-            } else null
+            }
         }
     } else null
 }
@@ -6324,29 +6330,31 @@ resolveDemandsByDescent: function {
             mdI9: u64
             for mdI9 < mdN9 loop {
                 mu9Id9: program.units.get i: mdI9
-                mu9: program.nodes.get i: (mu9Id9 - 1).u64
                 mdI9 = mdI9 + 1
-                match (
-                    mu9
-                ) case namedoperation then {
-                    mnm9: unitLabel o: mu9.name
-                    if mnm9.stringview == mainName9 then {
-                        againM9: true
-                        for againM9 loop {
-                            beforeM9: reg.nextTypeId
-                            (resolveDemandedUnitBody
-                                :ty
-                                :reg
-                                nodes: program.nodes
-                                units: program.units
-                                unitName: mainName9
-                                shadowUnit: ""
-                                unitdefId: mu9.operation
-                            )
-                            if reg.nextTypeId == beforeM9 then againM9 = false
-                        }
+                mOpId9: u32
+                {
+                    mu9: program.nodes.get i: (mu9Id9 - 1).u64
+                    if mu9.namedoperation then {
+                        mnm9: unitLabel o: mu9.name
+                        if mnm9.stringview == mainName9 then mOpId9 = mu9.operation
                     }
-                } else null
+                }
+                if mOpId9 > 0 then {
+                    againM9: true
+                    for againM9 loop {
+                        beforeM9: reg.nextTypeId
+                        (resolveDemandedUnitBody
+                            :ty
+                            :reg
+                            nodes: program.nodes
+                            units: program.units
+                            unitName: mainName9
+                            shadowUnit: ""
+                            unitdefId: mOpId9
+                        )
+                        if reg.nextTypeId == beforeM9 then againM9 = false
+                    }
+                }
             }
         }
         againU9: true
@@ -6358,40 +6366,46 @@ resolveDemandsByDescent: function {
             udI9: u64
             for udI9 < udN9 loop {
                 u9Id9: program.units.get i: udI9
-                u9: program.nodes.get i: (u9Id9 - 1).u64
                 udI9 = udI9 + 1
-                match (
-                    u9
-                ) case namedoperation then {
-                    un9: unitLabel o: u9.name
-                    isDep9: true
-                    if un9.stringview == mainName9 then isDep9 = false
-                    if un9.stringview == "core" then isDep9 = false
-                    if isDep9 then {
-                        anyDem9: (resolveDemandedUnitBody
+                uOpId9: u32
+                un9: String
+                {
+                    u9: program.nodes.get i: (u9Id9 - 1).u64
+                    if u9.namedoperation then {
+                        un0: unitLabel o: u9.name
+                        isDep0: true
+                        if un0.stringview == mainName9 then isDep0 = false
+                        if un0.stringview == "core" then isDep0 = false
+                        if isDep0 then {
+                            uOpId9 = u9.operation
+                            un9 = un0.copy
+                        }
+                    }
+                }
+                if uOpId9 > 0 then {
+                    anyDem9: (resolveDemandedUnitBody
+                        :ty
+                        :reg
+                        nodes: program.nodes
+                            units: program.units
+                        unitName: un9.stringview
+                        shadowUnit: mainName9
+                        unitdefId: uOpId9
+                    )
+                    if anyDem9 then {
+                        (onFirstEntry
                             :ty
                             :reg
                             nodes: program.nodes
-                                units: program.units
+                            units: program.units
                             unitName: un9.stringview
-                            shadowUnit: mainName9
-                            unitdefId: u9.operation
+                            mainName: mainName9
+                            unitdefId: uOpId9
+                            :full
+                            entered: entered9
                         )
-                        if anyDem9 then {
-                            (onFirstEntry
-                                :ty
-                                :reg
-                                nodes: program.nodes
-                                units: program.units
-                                unitName: un9.stringview
-                                mainName: mainName9
-                                unitdefId: u9.operation
-                                :full
-                                entered: entered9
-                            )
-                        }
                     }
-                } else null
+                }
             }
             if reg.nextTypeId == beforeU9 then againU9 = false
         }
@@ -17340,18 +17354,20 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
         }
         if found0 then {
             muId9: program.units.get i: mainIdx
-            mu: program.nodes.get i: (muId9 - 1).u64
-            match (
-                mu
-            ) case namedoperation then {
+            mOpId9: u32
+            {
+                mu: program.nodes.get i: (muId9 - 1).u64
+                if mu.namedoperation then mOpId9 = mu.operation
+            }
+            if mOpId9 > 0 then {
                 (checkUnitBodies
                     :st
                     unitName: mainName
-                    unitdefId: mu.operation
+                    unitdefId: mOpId9
                     nodes: program.nodes
                     depUnits: program.units
                 )
-            } else null
+            }
         }
         # runtime-backed dep units with bodied free fns: demand, resolve,
         # and walk them AFTER the main unit completes, so main's name,
@@ -17361,27 +17377,33 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
         hasStd9: false
         for di9 < dn9 loop {
             du9Id9: program.units.get i: di9
-            du9: program.nodes.get i: (du9Id9 - 1).u64
             di9 = di9 + 1
-            match (
-                du9
-            ) case namedoperation then {
-                dun9: unitLabel o: du9.name
-                if (isStdlibUnitName name: dun9.stringview) when (unitHasDemandedBodiedFn
-                    ty: st.typing
+            dOpId9: u32
+            dun9: String
+            {
+                du9: program.nodes.get i: (du9Id9 - 1).u64
+                if du9.namedoperation then {
+                    dun0: unitLabel o: du9.name
+                    if (isStdlibUnitName name: dun0.stringview) then {
+                        dOpId9 = du9.operation
+                        dun9 = dun0.copy
+                    }
+                }
+            }
+            if dOpId9 > 0 when (unitHasDemandedBodiedFn
+                ty: st.typing
+                reg: st.reg
+                nodes: program.nodes
+                unitName: dun9.stringview
+                unitdefId: dOpId9
+            ) then {
+                (demandAllUnitDefs
                     reg: st.reg
                     nodes: program.nodes
-                    unitName: dun9.stringview
-                    unitdefId: du9.operation
-                ) then {
-                    (demandAllUnitDefs
-                        reg: st.reg
-                        nodes: program.nodes
-                        unitdefId: du9.operation
-                    )
-                    hasStd9 = true
-                }
-            } else null
+                    unitdefId: dOpId9
+                )
+                hasStd9 = true
+            }
         }
         if hasStd9 then {
             againS9: true
@@ -17399,27 +17421,33 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             wi9: u64
             for wi9 < wn9 loop {
                 wu9Id9: program.units.get i: wi9
-                wu9: program.nodes.get i: (wu9Id9 - 1).u64
                 wi9 = wi9 + 1
-                match (
-                    wu9
-                ) case namedoperation then {
-                    wun9: unitLabel o: wu9.name
-                    if (isStdlibUnitName name: wun9.stringview) when (unitHasDemandedBodiedFn
-                        ty: st.typing
-                        reg: st.reg
-                        nodes: program.nodes
-                        unitName: wun9.stringview
-                        unitdefId: wu9.operation
-                    ) then {
-                        (depWalkUnit
-                            :st
-                            nodes: program.nodes
-                            depName: wun9.stringview
-                            unitOpId: wu9.operation
-                        )
+                wOpId9: u32
+                wun9: String
+                {
+                    wu9: program.nodes.get i: (wu9Id9 - 1).u64
+                    if wu9.namedoperation then {
+                        wun0: unitLabel o: wu9.name
+                        if (isStdlibUnitName name: wun0.stringview) then {
+                            wOpId9 = wu9.operation
+                            wun9 = wun0.copy
+                        }
                     }
-                } else null
+                }
+                if wOpId9 > 0 when (unitHasDemandedBodiedFn
+                    ty: st.typing
+                    reg: st.reg
+                    nodes: program.nodes
+                    unitName: wun9.stringview
+                    unitdefId: wOpId9
+                ) then {
+                    (depWalkUnit
+                        :st
+                        nodes: program.nodes
+                        depName: wun9.stringview
+                        unitOpId: wOpId9
+                    )
+                }
             }
         }
     } else null
@@ -18035,40 +18063,44 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
     ) case program then {
         anyYield: false
         with yiter: program.units.iterate do for yuId9: yiter loop {
-            yu: program.nodes.get i: (yuId9 - 1).u64
-            match (
-                yu
-            ) case namedoperation then {
+            yOpId9: u32
+            {
+                yu: program.nodes.get i: (yuId9 - 1).u64
+                if yu.namedoperation then yOpId9 = yu.operation
+            }
+            if yOpId9 > 0 then {
                 if (unitHasYieldFn
                     nodes: program.nodes
-                    unitdefId: yu.operation
+                    unitdefId: yOpId9
                 ) then anyYield = true
-            } else null
+            }
         }
         if (anyYield) == false then return
         suN0: program.units.length
         suI0: u64
         for suI0 < suN0 loop {
             suId9: program.units.get i: suI0
-            su: program.nodes.get i: (suId9 - 1).u64
             suI0 = suI0 + 1
-            match (
-                su
-            ) case namedoperation then {
-                snm: unitLabel o: su.name
-                if snm.stringview == "system" then {
-                    (resolveNamedDefsIn
-                        :ty
-                        :reg
-                        nodes: program.nodes
-                                units: program.units
-                        unitName: "system"
-                        unitdefId: su.operation
-                        wantA: "Iterator"
-                        wantB: "optionval"
-                    )
+            sOpId9: u32
+            {
+                su: program.nodes.get i: (suId9 - 1).u64
+                if su.namedoperation then {
+                    snm: unitLabel o: su.name
+                    if snm.stringview == "system" then sOpId9 = su.operation
                 }
-            } else null
+            }
+            if sOpId9 > 0 then {
+                (resolveNamedDefsIn
+                    :ty
+                    :reg
+                    nodes: program.nodes
+                            units: program.units
+                    unitName: "system"
+                    unitdefId: sOpId9
+                    wantA: "Iterator"
+                    wantB: "optionval"
+                )
+            }
         }
         ik: "system.Iterator".string
         iterTid: optU64Or o: (resolvedByKey :ty :reg key: ik) d: 0
@@ -18078,18 +18110,20 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
         un: program.units.length
         for ui < un loop {
             uelId9: program.units.get i: ui
-            uel: program.nodes.get i: (uelId9 - 1).u64
-            match (
-                uel
-            ) case namedoperation then {
+            ui = ui + 1
+            uOpId9: u32
+            {
+                uel: program.nodes.get i: (uelId9 - 1).u64
+                if uel.namedoperation then uOpId9 = uel.operation
+            }
+            if uOpId9 > 0 then {
                 (lowerGeneratorsInUnit
                     :ty
                     :ids
                     nodes: program.nodes
-                    unitdefId: uel.operation
+                    unitdefId: uOpId9
                 )
-            } else null
-            ui = ui + 1
+            }
         }
     } else null
 }

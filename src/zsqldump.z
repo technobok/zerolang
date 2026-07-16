@@ -489,23 +489,21 @@ ZDumper: class {
         ) case program then {
             uiter: program.units.iterate
             for uId9: uiter loop {
-                u: program.nodes.get i: (uId9 - 1).u64
-                this.appendUnitFromNamedOp nodes: program.nodes unitNamedOp: u
+                this.appendUnitFromNamedOp nodes: program.nodes unitNamedOpId: uId9
             }
         } else null
     }
 
-    appendUnitFromNamedOp: function {:this nodes: List Node unitNamedOp: Node} is {
-        match (
-            unitNamedOp
-        ) case namedoperation then {
+    appendUnitFromNamedOp: function {:this nodes: List Node unitNamedOpId: u32} is {
+        unitNamedOp: nodes.get i: (unitNamedOpId - 1).u64
+        if unitNamedOp.namedoperation then {
             uname: optLabel o: unitNamedOp.name
             (this.appendUnitDefAndBody
                 :nodes
                 unitdef: (nodes.get i: (unitNamedOp.operation - 1).u64)
                 uname: uname.stringview
             )
-        } else null
+        }
     }
 
     # unit stage.
@@ -515,9 +513,8 @@ ZDumper: class {
         ) case program then {
             uiter: program.units.iterate
             for uId9: uiter loop {
-                u: program.nodes.get i: (uId9 - 1).u64
                 (this.appendUnitRow nodes: program.nodes
-                    unitNamedOp: u
+                    unitNamedOpId: uId9
                     mainName: program.mainUnitName.stringview
                     :typing
                 )
@@ -525,10 +522,15 @@ ZDumper: class {
         } else null
     }
 
-    appendUnitRow: function {:this nodes: List Node unitNamedOp: Node mainName: StringView typing: ztyping.ZTyping} is {
-        match (
-            unitNamedOp
-        ) case namedoperation then {
+    appendUnitRow: function {
+        :this
+        nodes: List Node
+        unitNamedOpId: u32
+        mainName: StringView
+        typing: ztyping.ZTyping
+    } is {
+        unitNamedOp: nodes.get i: (unitNamedOpId - 1).u64
+        if unitNamedOp.namedoperation then {
             uname: optLabel o: unitNamedOp.name
             uid: unitdefNodeId :nodes nId: unitNamedOp.operation
             isMain: uname.stringview == mainName
@@ -537,7 +539,7 @@ ZDumper: class {
             utidStr: optIdStr o: (typing.unitTypesById.get key: uid.u64)
             row: "INSERT INTO unit VALUES (\{uid}, \{unameSql}, \{isMainStr}, \{utidStr});\n"
             this.acc.append s: row.stringview
-        } else null
+        }
     }
 
     # appendTypes -- one row per registered type, read by sequential id from
@@ -1153,6 +1155,19 @@ ZDumper: class {
 # each node's effective stamp so nested wrappers see through inner wrappers;
 # overrides are collected and applied to nodeType after the walk (check-time
 # propagation has already read the original values).
+# walkExprStampsAt -- the id-taking entry: the row view is this frame's, so a
+# caller can lend the table exclusively.
+walkExprStampsAt: function {
+    typing: ztyping.ZTyping
+    nodes: List Node
+    nId: u32
+    ids: List u64
+    vals: List u64
+} out optionval u64 is {
+    n9: nodes.get i: (nId - 1).u64
+    return (walkExprStamps :typing :nodes n: n9 :ids :vals)
+}
+
 walkExprStamps: function {
     typing: ztyping.ZTyping
     nodes: List Node
@@ -1346,8 +1361,7 @@ overrideExpressionStamps: function {typing: ztyping.ZTyping program: Node} is {
     ) case program then {
         uiter: program.units.iterate
         for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            walkExprStamps :typing nodes: program.nodes n: u :ids :vals
+            walkExprStampsAt :typing nodes: program.nodes nId: uId9 :ids :vals
         }
     } else null
     i: u64
