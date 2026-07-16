@@ -12404,6 +12404,46 @@ recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String i
     } case none then null
 }
 
+# regNameIs -- compare a type's registry name without materializing it
+# (borrowed typeById view, StringView compare). The none arm mirrors
+# comparing against the empty string.
+regNameIs: function {symtab: zenv.ZSymbolTable tid: u64 name: StringView} out bool is {
+    t: symtab.reg.typeById.get key: tid
+    match (
+        t
+    ) case some then {
+        return t.name.stringview == name
+    } case none then {
+        return name.length == 0
+    }
+}
+
+# unitIdOf9 -- the interned id for a unit name; 0 when never recorded as a
+# defining unit.
+unitIdOf9: function {ctx: Ctx name: StringView} out u64 is {
+    k9: name.string
+    g9: ctx.unitIdByName.get key: k9
+    match (
+        g9
+    ) case some then {
+        return g9
+    } case none then {
+        return 0
+    }
+}
+
+# defUnitIdOf9 -- the interned defining-unit id for tid (0 when none).
+defUnitIdOf9: function {ctx: Ctx tid: u64} out u64 is {
+    g9: ctx.defUnitId.get key: tid
+    match (
+        g9
+    ) case some then {
+        return g9
+    } case none then {
+        return 0
+    }
+}
+
 typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
     t: symtab.reg.typeById.get key: tid
     match (
@@ -15218,8 +15258,7 @@ ioCanonCname: function {symtab: zenv.ZSymbolTable ctx: Ctx canon: StringView} ou
     for ti < last loop {
         if found == 0 then {
             if (definedInNonMain :symtab :ctx tid: ti) then {
-                tn: typeNameOfReg9 :symtab tid: ti
-                if tn.stringview == canon then found = ti
+                if (regNameIs :symtab tid: ti name: canon) then found = ti
             }
         }
         ti = ti + 1
@@ -15327,8 +15366,9 @@ ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx} out u64 is {
     ti: 1.u64
     for ti < last loop {
         if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
-            tn: typeNameOfReg9 :symtab tid: ti
-            if tn.stringview == "File" when (definedInNonMain :symtab :ctx tid: ti) then return ti
+            if (regNameIs :symtab tid: ti name: "File") then {
+                if (definedInNonMain :symtab :ctx tid: ti) then return ti
+            }
         }
         ti = ti + 1
     }
@@ -15367,18 +15407,14 @@ ioFileLive: function {symtab: zenv.ZSymbolTable ctx: Ctx} out bool is {
 
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
 cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64 is {
+    cliUid9: unitIdOf9 :ctx name: "cli"
+    if cliUid9 == 0 then return 0
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
         if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
-            tn: typeNameOfReg9 :symtab tid: ti
-            if tn.stringview == name then {
-                duo: definedInUnitOf :symtab tid: ti
-                match (
-                    duo
-                ) case some then {
-                    if duo.stringview == "cli" then return ti
-                } case none then null
+            if (regNameIs :symtab tid: ti :name) then {
+                if (defUnitIdOf9 :ctx tid: ti) == cliUid9 then return ti
             }
         }
         ti = ti + 1
@@ -15448,21 +15484,22 @@ ioFrag: function {
 # class (File -> Reader/Writer/Closer/Seeker; BufWriter -> Writer; BufReader ->
 # Reader), emitted after the io natives the wrappers forward to.
 emitIoFileConformance: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow} is {
+    ioUid9: unitIdOf9 :ctx name: "io"
+    osUid9: unitIdOf9 :ctx name: "os"
+    cliUid9: unitIdOf9 :ctx name: "cli"
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
         if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
             cmo9: monoOriginName :symtab tid: ti
             if cmo9.length == 0 then {
-                duo9: definedInUnitOf :symtab tid: ti
+                duId9: defUnitIdOf9 :ctx tid: ti
                 isIoC9: false
-                match (
-                    duo9
-                ) case some then {
-                    if duo9.stringview == "io" then isIoC9 = true
-                    if duo9.stringview == "os" then isIoC9 = true
-                    if duo9.stringview == "cli" then isIoC9 = true
-                } case none then null
+                if duId9 > 0 then {
+                    if duId9 == ioUid9 then isIoC9 = true
+                    if duId9 == osUid9 then isIoC9 = true
+                    if duId9 == cliUid9 then isIoC9 = true
+                }
                 if isIoC9 then {
                     cn9: typeNameOfReg9 :symtab tid: ti
                     okEmit9: false
@@ -15526,8 +15563,7 @@ emitIoFileClass: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borrow
     for ti < last loop {
         if fid == 0 then {
             if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
-                tn: typeNameOfReg9 :symtab tid: ti
-                if tn.stringview == "File" then {
+                if (regNameIs :symtab tid: ti name: "File") then {
                     if (definedInNonMain :symtab :ctx tid: ti) then fid = ti
                 }
             }
@@ -15553,19 +15589,17 @@ emitNetFdClass: function {
     name: StringView
     buf: String.borrow
 } is {
+    netUid9: unitIdOf9 :ctx name: "net"
     last: symtab.reg.nextTypeId
     fid: u64
     ti: 1.u64
     for ti < last loop {
         if fid == 0 then {
             if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType then {
-                tn: typeNameOfReg9 :symtab tid: ti
-                duo9: definedInUnitOf :symtab tid: ti
-                match (
-                    duo9
-                ) case some then {
-                    if tn.stringview == name when duo9.stringview == "net" then fid = ti
-                } case none then null
+                if (regNameIs :symtab tid: ti :name) then {
+                    duId9: defUnitIdOf9 :ctx tid: ti
+                    if duId9 > 0 when duId9 == netUid9 then fid = ti
+                }
             }
         }
         ti = ti + 1
