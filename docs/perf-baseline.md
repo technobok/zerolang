@@ -35,6 +35,18 @@ Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
 | 2026-07-17 | 3bcaba2 | W1: id-space queries, regNameIs scans, mainBodyMentions hoist, childOfWalk fast path, Map.getv | 0.69s | — | 126MB / — | 92 / 234 / 354 (total 680) | 11,210,996 | 546MB | — |
 | 2026-07-17 | 1b7c6d0 | W2: emitter buffer reserves, Map/Set/List capacity:, stamp-map pre-size | 0.69s | 0.75s | 117MB / 116MB | 84 / 242 / 351 (total 677) | 11,217,951 | 527MB | 10.7s |
 | 2026-07-17 | fbb3426 | capacity-inference fix + value-position capacity threading + right-sized stamp maps (the 1b7c6d0 pre-size was inert: value-position constructions dropped capacity) | 0.68s | — | 118MB / — | — | 11,222,033 | 501MB | — |
+| 2026-07-17 | 81b9297 | A: tokenizer source-span token text (goldens byte-identical) | 0.67s | — | 118MB / — | — | 11,010,123 | 492MB | — |
+| 2026-07-17 | ab2d177 | B: move-on-advance + parser payload moves (+ D: ctor-arg move gap proved stale, pinned in corpus) | 0.65s | — | 119MB / — | — | 10,597,979 | 489MB | — |
+| 2026-07-17 | 7f8524f | C: child-edge name interning (pool + id-keyed buckets) | 0.65s | — | 117MB / — | — | 10,093,238 | 482MB | — |
+
+Token/name arc total: 11.22M -> 10.09M allocs (-10%), wall 0.68 -> ~0.65s.
+Notes: the tokenizer's 570k "reserve" census line was mostly first-allocs that
+the span-slice replaces 1:1 -- A's real win was deleting the word-path copy
+staging. The construction-arg move restriction documented in old zlexer
+comments does NOT exist in the self-hosted checker (pinned by
+emitc_corpus/ctor_arg_move). Parser label-fanout clusters keep their copies
+(bespoke hoisting per site; ~50-150k remaining, diminishing). Raw-string
+tokens keep appendByte (rare; negligible).
 
 Arc total (GROUND -> W2): allocations -52.5%, bytes churned -32%, wall
 (mimalloc) -10%, wall (glibc) -16%, peak RSS -8MB, emit phase -17%.
