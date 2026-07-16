@@ -54,13 +54,13 @@ stmtPos: function {n: Node} out zast.nodepos is {
 }
 
 # isIfArm -- the node is an `if` (through an `expression` wrapper).
-isIfArm: function {n: Node} out bool is {
+isIfArm: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case ifexpr then {
         return true
     } case expression then {
-        return (isIfArm n: n.expression)
+        return (isIfArm :nodes n: (nodes.get i: (n.expression - 1).u64))
     } else {
         return false
     }
@@ -71,7 +71,7 @@ slIsIf: function {nodes: List Node sl: Node} out bool is {
     match (
         sl
     ) case statementline then {
-        return (isIfArm n: (nodes.get i: (sl.statementline - 1).u64))
+        return (isIfArm :nodes n: (nodes.get i: (sl.statementline - 1).u64))
     } else {
         return false
     }
@@ -102,11 +102,11 @@ isElseIfWrap: function {nodes: List Node n: Node} out bool is {
 # statement that de-braces safely: a call (including return/break/yield), a
 # reassignment, a swap, a binop, a dotted path, or a bare atom -- never a binding
 # `x: y`, a control-flow construct, or a data block.
-debraceEligible: function {n: Node} out bool is {
+debraceEligible: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (debraceEligible n: n.expression)
+        return (debraceEligible :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         return true
     } case reassignment then {
@@ -1076,7 +1076,7 @@ Analysis: class {
             for el: elit loop this.walk :nodes n: el
             this.walkOpt :nodes o: n.outType
         } case yieldexpr then {
-            this.walk :nodes n: n.expr
+            this.walk :nodes n: (nodes.get i: (n.expr - 1).u64)
         } case statement then {
             stit: n.statements.iterate
             for stlnId9: stit loop this.walk :nodes n: (nodes.get i: (stlnId9 - 1).u64)
@@ -1093,7 +1093,7 @@ Analysis: class {
             this.walk :nodes n: (nodes.get i: (n.lhs - 1).u64)
             this.walk :nodes n: (nodes.get i: (n.rhs - 1).u64)
         } case expression then {
-            this.walk :nodes n: n.expression
+            this.walk :nodes n: (nodes.get i: (n.expression - 1).u64)
         } case ifexpr then {
             this.checkEmpty :nodes elseclauseId: n.elseclause clauses: n.clauses
             this.checkBracesIf :nodes clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
@@ -1264,7 +1264,7 @@ Analysis: class {
         match (
             value
         ) case expression then {
-            this.tryBareZeroInit :nodes value: value.expression
+            this.tryBareZeroInit :nodes value: (nodes.get i: (value.expression - 1).u64)
         } case statementline then {
             this.tryBareZeroInit :nodes value: (nodes.get i: (value.statementline - 1).u64)
         } case statement then {
@@ -1397,7 +1397,10 @@ Analysis: class {
             match (
                 sl0
             ) case statementline then {
-                if (debraceEligible n: (nodes.get i: (sl0.statementline - 1).u64)) == false then return
+                if (debraceEligible
+                    :nodes
+                    n: (nodes.get i: (sl0.statementline - 1).u64)
+                ) == false then return
                 srcOwned: this.source.copy
                 srcv: srcOwned.stringview
                 openByte: (tokByteStart
@@ -1865,20 +1868,34 @@ Analysis: class {
 
     # sufBinop -- a binop operand whose numeric suffix the other (non-literal, same-type)
     # operand makes redundant.
-    sufBinop: function {:this lhs: Node rhs: Node uname: StringView st: zenv.ZSymbolTable} is {
-        ls: operandSuffix n: lhs
+    sufBinop: function {
+        nodes: List Node
+        :this
+        lhs: Node
+        rhs: Node
+        uname: StringView
+        st: zenv.ZSymbolTable
+    } is {
+        ls: operandSuffix :nodes n: lhs
         if ls.tname.length > 0 when (isAnchor n: rhs tname: ls.tname.stringview :st) then {
             this.emitSuf :uname ln: ls.line col: ls.col tname: ls.tname.stringview
         }
-        rs: operandSuffix n: rhs
+        rs: operandSuffix :nodes n: rhs
         if rs.tname.length > 0 when (isAnchor n: lhs tname: rs.tname.stringview :st) then {
             this.emitSuf :uname ln: rs.line col: rs.col tname: rs.tname.stringview
         }
     }
 
     # sufReassign -- a reassignment value whose suffix the target's type fixes.
-    sufReassign: function {:this topath: Node value: Node uname: StringView st: zenv.ZSymbolTable} is {
-        vs: operandSuffix n: value
+    sufReassign: function {
+        nodes: List Node
+        :this
+        topath: Node
+        value: Node
+        uname: StringView
+        st: zenv.ZSymbolTable
+    } is {
+        vs: operandSuffix :nodes n: value
         if vs.tname.length > 0 then {
             tn: typeNameOfNode n: topath :st
             if tn.length > 0 when (tn.stringview == vs.tname.stringview) then {
@@ -1895,7 +1912,7 @@ Analysis: class {
         ) case namedoperation then {
             an: optName o: arg.name
             if an.length > 0 then {
-                s9: operandSuffix n: (nodes.get i: (arg.operation - 1).u64)
+                s9: operandSuffix :nodes n: (nodes.get i: (arg.operation - 1).u64)
                 if s9.tname.length > 0 then {
                     pto: st.typing.childOf parentTypeId: calleeType name: an.stringview
                     match (
@@ -1917,12 +1934,12 @@ Analysis: class {
         match (
             arg
         ) case namedoperation then {
-            s9: operandSuffix n: (nodes.get i: (arg.operation - 1).u64)
+            s9: operandSuffix :nodes n: (nodes.get i: (arg.operation - 1).u64)
             if s9.tname.length > 0 when (s9.tname.stringview == rtName) then {
                 this.emitSuf :uname ln: s9.line col: s9.col tname: s9.tname.stringview
             }
         } else {
-            s8: operandSuffix n: arg
+            s8: operandSuffix :nodes n: arg
             if s8.tname.length > 0 when (s8.tname.stringview == rtName) then {
                 this.emitSuf :uname ln: s8.line col: s8.col tname: s8.tname.stringview
             }
@@ -1972,7 +1989,7 @@ Analysis: class {
         match (
             n
         ) case error then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
-            this.sufBinop lhs: n.lhs rhs: n.rhs :uname :st
+            this.sufBinop :nodes lhs: n.lhs rhs: n.rhs :uname :st
             this.walkSuf :nodes n: n.lhs :uname :st :funcretId
             this.walkSuf :nodes n: n.operator :uname :st :funcretId
             this.walkSuf :nodes n: n.rhs :uname :st :funcretId
@@ -2003,7 +2020,7 @@ Analysis: class {
             for el: eiter loop this.walkSuf :nodes n: el :uname :st :funcretId
             this.walkSufOpt :nodes o: n.outType :uname :st :funcretId
         } case yieldexpr then {
-            this.walkSuf :nodes n: n.expr :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.expr - 1).u64) :uname :st :funcretId
         } case statement then {
             siter: n.statements.iterate
             for slnId9: siter loop {
@@ -2017,14 +2034,14 @@ Analysis: class {
         } case reassignment then {
             tpn9: nodes.get i: (n.topath - 1).u64
             rvn9: nodes.get i: (n.value - 1).u64
-            this.sufReassign topath: tpn9 value: rvn9 :uname :st
+            this.sufReassign :nodes topath: tpn9 value: rvn9 :uname :st
             this.walkSuf :nodes n: tpn9 :uname :st :funcretId
             this.walkSuf :nodes n: rvn9 :uname :st :funcretId
         } case swapstmt then {
             this.walkSuf :nodes n: (nodes.get i: (n.lhs - 1).u64) :uname :st :funcretId
             this.walkSuf :nodes n: (nodes.get i: (n.rhs - 1).u64) :uname :st :funcretId
         } case expression then {
-            this.walkSuf :nodes n: n.expression :uname :st :funcretId
+            this.walkSuf :nodes n: (nodes.get i: (n.expression - 1).u64) :uname :st :funcretId
         } case ifexpr then {
             clit: n.clauses.iterate
             for clId9: clit loop {
@@ -2210,7 +2227,7 @@ Analysis: class {
             prog
         ) case error then null else {
             reg: ztypes.newRegistry
-            st: ztypecheck.typecheck program: prog :reg full: true
+            st: ztypecheck.typecheck :nodes program: prog :reg full: true
             this.lintSuffixUnit :prog :uname :st
         }
     }
@@ -2374,11 +2391,11 @@ sufrec: class {
 
 # operandSuffix -- peel an `expression` wrapper and report whether the operand is a redundant
 # -suffix dotted path, with the type token's position.
-operandSuffix: function {n: Node} out sufrec is {
+operandSuffix: function {nodes: List Node n: Node} out sufrec is {
     match (
         n
     ) case expression then {
-        return (operandSuffix n: n.expression)
+        return (operandSuffix :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         cn: atomName n: n.child
         if (isNumericTypeName name: cn.stringview) == false then {

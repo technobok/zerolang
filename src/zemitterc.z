@@ -421,7 +421,7 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
     } case statementline then {
         collectLiterals :nodes n: (nodes.get i: (n.statementline - 1).u64) :ids :texts
     } case expression then {
-        collectLiterals :nodes n: n.expression :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.expression - 1).u64) :ids :texts
     } case namedoperation then {
         collectLiterals :nodes n: (nodes.get i: (n.operation - 1).u64) :ids :texts
     } case call then {
@@ -464,7 +464,7 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
     } case doexpr then {
         collectLiterals :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :texts
     } case yieldexpr then {
-        collectLiterals :nodes n: n.expr :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.expr - 1).u64) :ids :texts
     } case forexpr then {
         fiter: n.conditions.iterate
         for f: fiter loop collectLiterals :nodes n: (nodes.get i: (f - 1).u64) :ids :texts
@@ -568,11 +568,11 @@ atomTextOf: function {n: Node} out String is {
 }
 
 # atomTextDeep -- atom text through expression wrappers.
-atomTextDeep: function {n: Node} out String is {
+atomTextDeep: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (atomTextDeep n: n.expression)
+        return (atomTextDeep :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         av: n.name.stringview
         ac: av.string
@@ -823,11 +823,11 @@ isPtrVar: function {ctx: Ctx name: StringView} out bool is {
 # pathIsPointer -- does the expression evaluate to a C pointer? A ptrVar atom
 # (pointer receiver / lock param) or a dotted read of a `.lock` field both do,
 # so field access on them chains with `->`.
-pathIsPointer: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+pathIsPointer: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (pathIsPointer :symtab :ctx n: n.expression)
+        return (pathIsPointer :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         rn: aliasResolve :ctx name: n.name.stringview
         return (isPtrVar :ctx name: rn.stringview)
@@ -980,7 +980,7 @@ takeAliasBase: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} out
     match (
         n
     ) case expression then {
-        return (takeAliasBase :nodes :symtab n: n.expression)
+        return (takeAliasBase :nodes :symtab n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (takeAliasBase :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -1017,7 +1017,7 @@ takeStringSource: function {
     match (
         n
     ) case expression then {
-        return (takeStringSource :nodes :symtab :ctx n: n.expression)
+        return (takeStringSource :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (takeStringSource :nodes :symtab :ctx n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -1052,7 +1052,7 @@ takeMoveCtype: function {
     match (
         n
     ) case expression then {
-        return (takeMoveCtype :nodes :symtab :ctx n: n.expression)
+        return (takeMoveCtype :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (takeMoveCtype :nodes :symtab :ctx n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -1072,7 +1072,7 @@ isFieldTake: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (isFieldTake :nodes n: n.expression)
+        return (isFieldTake :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (isFieldTake :nodes n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -1102,7 +1102,7 @@ emitNarrowedTakeZero: function {
     match (
         n
     ) case expression then {
-        emitNarrowedTakeZero :nodes :symtab :ctx n: n.expression :ind :buf
+        emitNarrowedTakeZero :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64) :ind :buf
     } case statementline then {
         sln9: nodes.get i: (n.statementline - 1).u64
         emitNarrowedTakeZero :nodes :symtab :ctx n: sln9 :ind :buf
@@ -1168,11 +1168,16 @@ implicitTakeSourceAtom: function {
     return (takeSourceResolve :ctx name: nm)
 }
 
-implicitTakeSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+implicitTakeSource: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out String is {
     match (
         n
     ) case expression then {
-        return (implicitTakeSource :symtab :ctx n: n.expression)
+        return (implicitTakeSource :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         return (implicitTakeSourceAtom :symtab :ctx nid: n.nodeid.u64 nm: n.name.stringview)
     } case labelvalue then {
@@ -1363,7 +1368,12 @@ emitCallTakeInvalidations: function {
                     }
                 }
                 if isTake9 then {
-                    isrc9: implicitTakeSource :symtab :ctx n: (nodes.get i: (a9.operation - 1).u64)
+                    isrc9: (implicitTakeSource
+                        :nodes
+                        :symtab
+                        :ctx
+                        n: (nodes.get i: (a9.operation - 1).u64)
+                    )
                     if isrc9.length > 0 then {
                         istid9: (stampIdOf
                             :symtab
@@ -1408,7 +1418,8 @@ emitValueTakeInvalidations: function {
     match (
         n
     ) case expression then {
-        emitValueTakeInvalidations :nodes :symtab :ctx n: n.expression :ind :buf
+        iex69: nodes.get i: (n.expression - 1).u64
+        emitValueTakeInvalidations :nodes :symtab :ctx n: iex69 :ind :buf
     } case statementline then {
         sln29: nodes.get i: (n.statementline - 1).u64
         emitValueTakeInvalidations :nodes :symtab :ctx n: sln29 :ind :buf
@@ -1562,7 +1573,7 @@ svArgAddr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node
     match (
         n
     ) case expression then {
-        return (svArgAddr :nodes :symtab :ctx n: n.expression)
+        return (svArgAddr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid.u64
         if li > 0 then {
@@ -1646,7 +1657,7 @@ emitDottedCall: function {
                 ca
             ) case namedoperation then {
                 cae: emitExpr :nodes :symtab :ctx n: (nodes.get i: (ca.operation - 1).u64)
-                cat: stampNameDeep :symtab n: (nodes.get i: (ca.operation - 1).u64)
+                cat: stampNameDeep :nodes :symtab n: (nodes.get i: (ca.operation - 1).u64)
                 caIsStr9: cat.stringview == "String"
                 caf: svValueForm :ctx expr: cae.stringview isStr: caIsStr9
                 if cargs.length == 0 then cargs.append caf.stringview
@@ -1878,7 +1889,7 @@ listCapArg: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Nod
     match (
         n
     ) case expression then {
-        return (listCapArg :nodes :symtab :ctx n: n.expression)
+        return (listCapArg :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         aiter: n.arguments.iterate
         for a: aiter loop {
@@ -1937,11 +1948,16 @@ dottedReceiverStampId: function {symtab: zenv.ZSymbolTable callable: Node} out u
 # dottedReceiverIsPtr -- true when a dotted method call's receiver is already a
 # C pointer (a ptrVar like `this`, or a `.lock` field), so the call passes it
 # directly rather than taking its address.
-dottedReceiverIsPtr: function {symtab: zenv.ZSymbolTable ctx: Ctx callable: Node} out bool is {
+dottedReceiverIsPtr: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    callable: Node
+} out bool is {
     match (
         callable
     ) case dottedpath then {
-        return (pathIsPointer :symtab :ctx n: callable.parent)
+        return (pathIsPointer :nodes :symtab :ctx n: callable.parent)
     } else {
         return false
     }
@@ -1970,7 +1986,7 @@ emitStringArgMethod: function {
     rtid = chaseStrTypedef :symtab :ctx tid: rtid
     rtn: typeNameOfReg9 :symtab tid: rtid
     if rtn.stringview != "String" then return "".string
-    rptr: dottedReceiverIsPtr :symtab :ctx callable: call.callable
+    rptr: dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable
     recvAddr: "&\{recvExpr}"
     if rptr then recvAddr = "\{recvExpr}"
     argval: String
@@ -2003,7 +2019,7 @@ emitStringArgMethod: function {
                     opf99: nodes.get i: (a.operation - 1).u64
                     argTid9 = stampIdOf :symtab nid: (nodeIdOf9 n: opf99)
                     opf109: nodes.get i: (a.operation - 1).u64
-                    argPtr9 = pathIsPointer :symtab :ctx n: opf109
+                    argPtr9 = pathIsPointer :nodes :symtab :ctx n: opf109
                 }
             }
         } else null
@@ -2247,7 +2263,7 @@ emitInstanceMethodCall: function {
         mco9
     ) case some then {
         if (symtab.reg.typetypeOf typeId: mco9) == ztypes.ztypetype.functionType then {
-            rptr9: dottedReceiverIsPtr :symtab :ctx callable: call.callable
+            rptr9: dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable
             mcn9: symtab.reg.cnameOf tid: mco9
             pnames: (List String)
             pids: (List u64)
@@ -2429,7 +2445,7 @@ collectionValueCallRhs: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (collectionValueCallRhs :nodes n: n.expression)
+        return (collectionValueCallRhs :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (collectionValueCallRhs :nodes n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -2491,7 +2507,8 @@ hoistExprIsBorrowRooted: function {
     match (
         n
     ) case expression then {
-        return (hoistExprIsBorrowRooted :nodes :symtab :ctx n: n.expression)
+        iex59: nodes.get i: (n.expression - 1).u64
+        return (hoistExprIsBorrowRooted :nodes :symtab :ctx n: iex59)
     } case statementline then {
         sln9: nodes.get i: (n.statementline - 1).u64
         return (hoistExprIsBorrowRooted :nodes :symtab :ctx n: sln9)
@@ -2534,7 +2551,7 @@ bindingRhsIsBorrow: function {
     match (
         n
     ) case expression then {
-        return (bindingRhsIsBorrow :nodes :symtab :ctx n: n.expression)
+        return (bindingRhsIsBorrow :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         sln9: nodes.get i: (n.statementline - 1).u64
         return (bindingRhsIsBorrow :nodes :symtab :ctx n: sln9)
@@ -2896,7 +2913,7 @@ emitInterpArgExpr: function {
     match (
         n
     ) case expression then {
-        return (emitInterpArgExpr :nodes :symtab :ctx n: n.expression)
+        return (emitInterpArgExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
             ltmp: (TmpCtr
@@ -2953,7 +2970,8 @@ emitInterpStmtValue: function {
     match (
         n
     ) case expression then {
-        return (emitInterpStmtValue :nodes :symtab :ctx n: n.expression :ind :tmp :buf)
+        iex49: nodes.get i: (n.expression - 1).u64
+        return (emitInterpStmtValue :nodes :symtab :ctx n: iex49 :ind :tmp :buf)
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
             sB: emitInterpBuild :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
@@ -2989,7 +3007,7 @@ emitColInterpArg: function {
     sx: emitInterpArgExpr :nodes :symtab :ctx :n
     if sx.length == 0 then {
         if consumes then return "".string
-        tn9: stampNameDeep :symtab :n
+        tn9: stampNameDeep :nodes :symtab :n
         if tn9.stringview != "String" then return "".string
         ex9: emitExpr :nodes :symtab :ctx :n
         if (isNonLvalueArg s: ex9.stringview) == false then return "".string
@@ -3159,17 +3177,20 @@ listTakeArgBase: function {
             a
         ) case namedoperation then {
             an: unitLabel9 o: a.name
-            if an.stringview == label then return (takeArgBase n: (nodes.get i: (a.operation - 1).u64))
+            if an.stringview == label then return (takeArgBase
+                :nodes
+                n: (nodes.get i: (a.operation - 1).u64)
+            )
         } else null
     }
     return "0".string
 }
 
-takeArgBase: function {n: Node} out String is {
+takeArgBase: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (takeArgBase n: n.expression)
+        return (takeArgBase :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         return (atomTextOf n: n.parent)
     } case atomid then {
@@ -3481,6 +3502,7 @@ emitTypeQualCall: function {
                             if ppid9 == btid then byRef9 = true
                         }
                         if (pathIsPointer
+                            :nodes
                             :symtab
                             :ctx
                             n: (nodes.get i: (aQ.operation - 1).u64)
@@ -3961,6 +3983,7 @@ argIsPointerByLabel: function {
         ) case namedoperation then {
             an: unitLabel9 o: a.name
             if an.stringview == label then return (pathIsPointer
+                :nodes
                 :symtab
                 :ctx
                 n: (nodes.get i: (a.operation - 1).u64)
@@ -4695,11 +4718,11 @@ emitCrossUnitFnCall: function {
 # (or user-create) constructor. "" when not such a construction.
 # dottedParentChild -- the middle segment of a 3-segment dotted path `a.b.c`:
 # the child text of the parent (`b`). "" when not a nested dotted path.
-dottedParentChild: function {n: Node} out String is {
+dottedParentChild: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (dottedParentChild n: n.expression)
+        return (dottedParentChild :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         return (dottedChildText n: n.parent)
     } else {
@@ -4753,7 +4776,7 @@ emitCrossUnitExplicitCreate: function {
     call: zast.CallData
 } out String is {
     pbase: dottedBaseAtom n: call.callable
-    ptype: dottedParentChild n: call.callable
+    ptype: dottedParentChild :nodes n: call.callable
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
     if (symtab.reg.isUnitName name: pbase.stringview) == false then return "".string
@@ -4793,11 +4816,11 @@ emitCrossUnitExplicitCreate: function {
 
 # outerBaseAtom -- the leftmost atom of a LEFT-nested three-segment
 # dotted path `(a.B).c`: "a". "" for shallower shapes.
-outerBaseAtom: function {n: Node} out String is {
+outerBaseAtom: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (outerBaseAtom n: n.expression)
+        return (outerBaseAtom :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         return (dottedBaseAtom n: n.parent)
     } else {
@@ -4815,8 +4838,8 @@ emitCrossUnitUnionCtor: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    pbase: outerBaseAtom n: call.callable
-    ptype: dottedParentChild n: call.callable
+    pbase: outerBaseAtom :nodes n: call.callable
+    ptype: dottedParentChild :nodes n: call.callable
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
     arm9: dottedChildText n: call.callable
@@ -4958,7 +4981,7 @@ emitFnptrFieldCall: function {
     }
     recvExpr: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
     if recvExpr.length == 0 then return "".string
-    rptr: dottedReceiverIsPtr :symtab :ctx callable: call.callable
+    rptr: dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable
     acc: ".".string
     if rptr then acc = "->".string
     args: String
@@ -5391,7 +5414,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
     match (
         n
     ) case expression then {
-        return (emitExpr :nodes :symtab :ctx n: n.expression)
+        return (emitExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (emitExpr :nodes :symtab :ctx n: (nodes.get i: (n.statementline - 1).u64))
     } case statement then {
@@ -5640,7 +5663,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
             }
         }
         if mnc0.stringview == "string" then {
-            scl: bindLitIndex :symtab :ctx n: n.parent
+            scl: bindLitIndex :nodes :symtab :ctx n: n.parent
             if scl > 0 then {
                 se0: "\{ctx.strC}_from_view(_zs\{scl})"
                 return se0
@@ -5691,7 +5714,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
         dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
         if dap9 > 0 then {
             recvP9: emitExpr :nodes :symtab :ctx n: n.parent
-            bsnP9: stampNameDeep :symtab n: n.parent
+            bsnP9: stampNameDeep :nodes :symtab n: n.parent
             if bsnP9.stringview == "bool" then {
                 if mnc0.stringview == "true" then return "(\{recvP9})"
                 if mnc0.stringview == "false" then return "(!(\{recvP9}))"
@@ -5719,7 +5742,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
                 tatE9 = tato9
             } case none then null
             castT9: typeRefC :symtab :ctx tid: tatE9 thisTid: 0
-            bsnT9: stampNameDeep :symtab n: n.parent
+            bsnT9: stampNameDeep :nodes :symtab n: n.parent
             if bsnT9.stringview == "bool" then return "((\{castT9})(\{recvT9}))"
             accT9: ".".string
             rootT9: atomTextOf n: n.parent
@@ -6233,7 +6256,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
                 # (`(*__borrow_e)`, a value), so access uses `.`; a genuine
                 # entry pointer base keeps `->`.
                 entryAcc: ".".string
-                if (pathIsPointer :symtab :ctx n: n.parent) then entryAcc = "->".string
+                if (pathIsPointer :nodes :symtab :ctx n: n.parent) then entryAcc = "->".string
                 if mn2.stringview == "key" then {
                     eek: "\{bn2}\{entryAcc}key"
                     return eek
@@ -6301,9 +6324,9 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
         if (base9.stringview.startsWith prefix: "/*") then {
             return "/* zemitterc: unhandled dotted */0".string
         }
-        nptn9: stampNameDeep :symtab n: n.parent
+        nptn9: stampNameDeep :nodes :symtab n: n.parent
         if nptn9.stringview == "String" then {
-            nptr9: pathIsPointer :symtab :ctx n: n.parent
+            nptr9: pathIsPointer :nodes :symtab :ctx n: n.parent
             nsm9: emitStringMethod :ctx recv: base9.stringview recvIsPtr: nptr9 mn: mn2.stringview
             if nsm9.length > 0 then return nsm9
         }
@@ -6380,7 +6403,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
                         nrttM9: symtab.reg.typetypeOf typeId: nlidM9
                         nmrecv9: "\{base9}"
                         if nrttM9 == ztypes.ztypetype.classType then {
-                            if (pathIsPointer :symtab :ctx n: n.parent) == false then {
+                            if (pathIsPointer :nodes :symtab :ctx n: n.parent) == false then {
                                 nmrecv9 = "&\{base9}"
                             }
                         }
@@ -6391,7 +6414,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
         }
         # a Map/Set-typed base is a heap pointer regardless of how it was
         # reached (a field path fails pathIsPointer's lock-field test)
-        nstPtr9: pathIsPointer :symtab :ctx n: n.parent
+        nstPtr9: pathIsPointer :nodes :symtab :ctx n: n.parent
         if nstPtr9 == false then nstPtr9 = isHeapPtrCollection :symtab :ctx tid: nlid9
         if nstPtr9 then {
             ep9: "\{base9}->\{mn2}"
@@ -6429,10 +6452,10 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
         l: emitExpr :nodes :symtab :ctx n: n.lhs
         op: atomTextOf n: n.operator
         r: emitExpr :nodes :symtab :ctx n: n.rhs
-        if (nodeIsAtomBox :symtab :ctx n: n.lhs) then l = "(*\{l})"
-        if (nodeIsAtomBox :symtab :ctx n: n.rhs) then r = "(*\{r})"
+        if (nodeIsAtomBox :nodes :symtab :ctx n: n.lhs) then l = "(*\{l})"
+        if (nodeIsAtomBox :nodes :symtab :ctx n: n.rhs) then r = "(*\{r})"
         if (isCompareOp name: op.stringview) then {
-            lt: stampNameDeep :symtab n: n.lhs
+            lt: stampNameDeep :nodes :symtab n: n.lhs
             lti: userFnId :symtab :ctx name: lt.stringview
             if lti == 0 then {
                 ltSc9: cTypeOf name: lt.stringview
@@ -6465,7 +6488,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
                 }
             }
             if (isStringy name: lt.stringview) then {
-                rt: stampNameDeep :symtab n: n.rhs
+                rt: stampNameDeep :nodes :symtab n: n.rhs
                 ltIsStr9: lt.stringview == "String"
                 rtIsStr9: rt.stringview == "String"
                 lf: svValueForm :ctx expr: l.stringview isStr: ltIsStr9
@@ -6570,11 +6593,16 @@ numericFormatName: function {symtab: zenv.ZSymbolTable ctx: Ctx tn: StringView} 
     return rr
 }
 
-dataIndexElemName: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+dataIndexElemName: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out String is {
     match (
         n
     ) case expression then {
-        return (dataIndexElemName :symtab :ctx n: n.expression)
+        return (dataIndexElemName :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         mn: dottedChildText n: n.callable
         if mn.stringview == "index" then {
@@ -6602,7 +6630,7 @@ interpBaseIsMapEntry: function {nodes: List Node symtab: zenv.ZSymbolTable n: No
     match (
         n
     ) case expression then {
-        return (interpBaseIsMapEntry :nodes :symtab n: n.expression)
+        return (interpBaseIsMapEntry :nodes :symtab n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (interpBaseIsMapEntry :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -6628,7 +6656,8 @@ interpBaseIsOwnedStructField: function {
     match (
         n
     ) case expression then {
-        return (interpBaseIsOwnedStructField :nodes :symtab n: n.expression)
+        iex39: nodes.get i: (n.expression - 1).u64
+        return (interpBaseIsOwnedStructField :nodes :symtab n: iex39)
     } case statementline then {
         sln9: nodes.get i: (n.statementline - 1).u64
         return (interpBaseIsOwnedStructField :nodes :symtab n: sln9)
@@ -6682,8 +6711,8 @@ emitInterpPart: function {
         l3: "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
         buf.append l3.stringview
     } else {
-        di0: dataIndexElemName :symtab :ctx :n
-        tn0: stampNameDeep :symtab :n
+        di0: dataIndexElemName :nodes :symtab :ctx :n
+        tn0: stampNameDeep :nodes :symtab :n
         tn: numericFormatName :symtab :ctx tn: tn0.stringview
         if di0.length > 0 then tn = di0
         val: emitExpr :nodes :symtab :ctx :n
@@ -6709,7 +6738,7 @@ emitInterpPart: function {
             buf.append lsv.stringview
         } else if tn.stringview == "String" then {
             isAtomP: false
-            an0: atomTextDeep :n
+            an0: atomTextDeep :nodes :n
             if an0.length > 0 then isAtomP = true
             if (interpBaseIsMapEntry :nodes :symtab :n) then isAtomP = true
             if (interpBaseIsOwnedStructField :nodes :symtab :n) then isAtomP = true
@@ -6840,7 +6869,7 @@ methodReturnByName: function {symtab: zenv.ZSymbolTable dotted: StringView} out 
     return "".string
 }
 
-stampNameDeep: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+stampNameDeep: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} out String is {
     nid: nodeIdOf9 :n
     sid: stampIdOf :symtab :nid
     if sid > 0 then {
@@ -6867,7 +6896,7 @@ stampNameDeep: function {symtab: zenv.ZSymbolTable n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (stampNameDeep :symtab n: n.expression)
+        return (stampNameDeep :nodes :symtab n: (nodes.get i: (n.expression - 1).u64))
     } else {
         return "".string
     }
@@ -6956,7 +6985,7 @@ emitPrintArg: function {
     match (
         n
     ) case expression then {
-        emitPrintArg :nodes :symtab :ctx n: n.expression :ind :tmp :buf
+        emitPrintArg :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64) :ind :tmp :buf
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
             emitInterpPrint :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
@@ -7060,11 +7089,11 @@ emitPrintArg: function {
 }
 
 # bindLitIndex -- the pool index of a plain-literal value node (0 = none).
-bindLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
+bindLitIndex: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
     match (
         n
     ) case expression then {
-        return (bindLitIndex :symtab :ctx n: n.expression)
+        return (bindLitIndex :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
             return 0
@@ -7078,11 +7107,11 @@ bindLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
 
 # stringviewOfBase -- the base name of `X.stringview` over a String local
 # ("" otherwise).
-stringviewOfBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+stringviewOfBase: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (stringviewOfBase :symtab n: n.expression)
+        return (stringviewOfBase :nodes :symtab n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         mn: atomTextOf n: n.child
         if mn.stringview == "stringview" then {
@@ -7099,15 +7128,20 @@ stringviewOfBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
 }
 
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
-stringCopyLitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out u64 is {
+stringCopyLitIndex: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out u64 is {
     match (
         n
     ) case expression then {
-        return (stringCopyLitIndex :symtab :ctx n: n.expression)
+        return (stringCopyLitIndex :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         mn: atomTextOf n: n.child
         if mn.stringview == "string" then {
-            return (bindLitIndex :symtab :ctx n: n.parent)
+            return (bindLitIndex :nodes :symtab :ctx n: n.parent)
         } else {
             return 0
         }
@@ -7130,11 +7164,12 @@ copyRvalueHoist: function {
     match (
         n
     ) case expression then {
-        return (copyRvalueHoist :nodes :symtab :ctx n: n.expression :ind :buf)
+        iex29: nodes.get i: (n.expression - 1).u64
+        return (copyRvalueHoist :nodes :symtab :ctx n: iex29 :ind :buf)
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview != "copy" then return "".string
-        pnm9: stampNameDeep :symtab n: n.parent
+        pnm9: stampNameDeep :nodes :symtab n: n.parent
         if pnm9.stringview != "String" then return "".string
         pv9: emitExpr :nodes :symtab :ctx n: n.parent
         if (isNonLvalueArg s: pv9.stringview) == false then return "".string
@@ -7165,7 +7200,8 @@ emitStringBindValue: function {
     match (
         n
     ) case expression then {
-        return (emitStringBindValue :nodes :symtab :ctx n: n.expression :nm :ind :tmp :buf)
+        iex9: nodes.get i: (n.expression - 1).u64
+        return (emitStringBindValue :nodes :symtab :ctx n: iex9 :nm :ind :tmp :buf)
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
             sB: emitInterpBuild :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
@@ -7186,7 +7222,7 @@ emitStringBindValue: function {
             # `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`): the
             # receiver is a non-lvalue, so hoist it to a borrowed temp (List.get
             # returns a shallow view -- never freed) before String_copy(&temp).
-            pnm9: stampNameDeep :symtab n: n.parent
+            pnm9: stampNameDeep :nodes :symtab n: n.parent
             if pnm9.stringview == "String" then {
                 pv9: emitExpr :nodes :symtab :ctx n: n.parent
                 if (isNonLvalueArg s: pv9.stringview) then {
@@ -7225,7 +7261,8 @@ emitOptionBoxHoist: function {
     match (
         n
     ) case expression then {
-        return (emitOptionBoxHoist :nodes :symtab :ctx n: n.expression :ind :tmp :buf)
+        iexG9: nodes.get i: (n.expression - 1).u64
+        return (emitOptionBoxHoist :nodes :symtab :ctx n: iexG9 :ind :tmp :buf)
     } case statementline then {
         sln9: nodes.get i: (n.statementline - 1).u64
         return (emitOptionBoxHoist :nodes :symtab :ctx n: sln9 :ind :tmp :buf)
@@ -7295,7 +7332,8 @@ emitStringReturnValue: function {
     match (
         n
     ) case expression then {
-        return (emitStringReturnValue :nodes :symtab :ctx n: n.expression :ind :tmp :buf)
+        iexH9: nodes.get i: (n.expression - 1).u64
+        return (emitStringReturnValue :nodes :symtab :ctx n: iexH9 :ind :tmp :buf)
     } case atomstring then {
         if (isInterp parts: n.stringparts) then {
             sB: emitInterpBuild :nodes :symtab :ctx parts: n.stringparts :ind :tmp :buf
@@ -7572,7 +7610,7 @@ emitStmt: function {
         sln9: nodes.get i: (n.statementline - 1).u64
         emitStmt :nodes :symtab :ctx n: sln9 :ind :tmp :buf
     } case expression then {
-        emitStmt :nodes :symtab :ctx n: n.expression :ind :tmp :buf
+        emitStmt :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64) :ind :tmp :buf
     } case statement then {
         siter9: n.statements.iterate
         for s9Id9: siter9 loop {
@@ -7635,7 +7673,7 @@ emitStmt: function {
         nm: ztypes.mangleVarName name: n.name.stringview
         nbrw9: bindingRhsIsBorrow :nodes :symtab :ctx n: avn9
         ctx.borrowedVars.set key: nm.copy value: nbrw9
-        if ctx.genActive when (isYieldNode n: avn9) then {
+        if ctx.genActive when (isYieldNode :nodes n: avn9) then {
             (emitExprFormYield
                 :nodes
                 :symtab
@@ -7695,7 +7733,7 @@ emitStmt: function {
                 losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
                 buf.append losb.stringview
             } else {
-                if (forexprValue n: avn9) then {
+                if (forexprValue :nodes n: avn9) then {
                     # list comprehension: `xs: for ... loop { expr }` create + populate
                     lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
                     buf.append lc0.stringview
@@ -7769,13 +7807,13 @@ emitStmt: function {
             return
         }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.svTid then {
-            lvN: bindLitIndex :symtab :ctx n: avn9
+            lvN: bindLitIndex :nodes :symtab :ctx n: avn9
             if lvN > 0 then {
                 lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
                 buf.append lsv2.stringview
                 return
             }
-            svb: stringviewOfBase :symtab n: avn9
+            svb: stringviewOfBase :nodes :symtab n: avn9
             if svb.length > 0 then {
                 svacc4: ".".string
                 if (isPtrVar :ctx name: svb.stringview) then svacc4 = "->".string
@@ -7797,7 +7835,7 @@ emitStmt: function {
             return
         }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.strTid then {
-            fvN: stringCopyLitIndex :symtab :ctx n: avn9
+            fvN: stringCopyLitIndex :nodes :symtab :ctx n: avn9
             if fvN > 0 then {
                 lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
                 buf.append lsc.stringview
@@ -8025,7 +8063,7 @@ emitStmt: function {
         # scope-exit free no-ops (the lvalue -- a local or a struct field appended
         # into a container -- now owns the heap). Scalars/valtypes have no
         # destructor and are left untouched.
-        zsrc9: implicitTakeSource :symtab :ctx n: rvn29
+        zsrc9: implicitTakeSource :nodes :symtab :ctx n: rvn29
         if zsrc9.length > 0 then {
             znid9: nodeIdOf9 n: rvn29
             zid9: stampIdOf :symtab nid: znid9
@@ -8128,7 +8166,7 @@ emitStmt: function {
     } case withexpr then {
         wn9: n.name.stringview
         wnm: wn9.string
-        wtn: stampNameDeep :symtab n: (nodes.get i: (n.value - 1).u64)
+        wtn: stampNameDeep :nodes :symtab n: (nodes.get i: (n.value - 1).u64)
         wct: cTypeForName :symtab :ctx name: wtn.stringview
         wv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (n.value - 1).u64)
         if wct.length > 0 then {
@@ -8523,7 +8561,7 @@ emitMatchStmt: function {
     buf: String.borrow
 } is {
     sx: emitExpr :nodes :symtab :ctx n: (nodes.get i: (m.subject - 1).u64)
-    stn: stampNameDeep :symtab n: (nodes.get i: (m.subject - 1).u64)
+    stn: stampNameDeep :nodes :symtab n: (nodes.get i: (m.subject - 1).u64)
     if stn.stringview == "bool" then {
         emitBoolMatch :nodes :symtab :ctx :m subj: sx.stringview :assignTo :ind :tmp :buf
         return
@@ -8554,7 +8592,7 @@ emitMatchStmt: function {
     buf.append l0.stringview
     l1: "\{ind}switch (_m\{mN}.tag) {\n"
     buf.append l1.stringview
-    sname: atomTextDeep n: (nodes.get i: (m.subject - 1).u64)
+    sname: atomTextDeep :nodes n: (nodes.get i: (m.subject - 1).u64)
     ind2: "\{ind}    "
     with citer: m.clauses.iterate do for cId9: citer loop {
         c: nodes.get i: (cId9 - 1).u64
@@ -9102,7 +9140,8 @@ emitDoBindValue: function {
     match (
         n
     ) case expression then {
-        return (emitDoBindValue :nodes :symtab :ctx n: n.expression :nm :ct :tid :ind :tmp :buf)
+        iexK9: nodes.get i: (n.expression - 1).u64
+        return (emitDoBindValue :nodes :symtab :ctx n: iexK9 :nm :ct :tid :ind :tmp :buf)
     } case doexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld.stringview
@@ -9203,7 +9242,8 @@ emitMatchBindValue: function {
     match (
         n
     ) case expression then {
-        return (emitMatchBindValue :nodes :symtab :ctx n: n.expression :nm :ct :ind :tmp :buf)
+        iexJ9: nodes.get i: (n.expression - 1).u64
+        return (emitMatchBindValue :nodes :symtab :ctx n: iexJ9 :nm :ct :ind :tmp :buf)
     } case caseexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld.stringview
@@ -9230,7 +9270,8 @@ emitIfBindValue: function {
     match (
         n
     ) case expression then {
-        return (emitIfBindValue :nodes :symtab :ctx n: n.expression :nm :ct :ind :tmp :buf)
+        iexI9: nodes.get i: (n.expression - 1).u64
+        return (emitIfBindValue :nodes :symtab :ctx n: iexI9 :nm :ct :ind :tmp :buf)
     } case ifexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld.stringview
@@ -9339,7 +9380,7 @@ scanLoopVar: function {
             }
         }
     } case expression then {
-        scanLoopVar :nodes :symtab n: n.expression :lbl :res
+        scanLoopVar :nodes :symtab n: (nodes.get i: (n.expression - 1).u64) :lbl :res
     } case statement then {
         with sit: n.statements.iterate do for sId9: sit loop {
             scanLoopVar :nodes :symtab n: (nodes.get i: (sId9 - 1).u64) :lbl :res
@@ -9366,11 +9407,11 @@ scanLoopVar: function {
 # iterableNodeId -- the stamped node id of a for-loop iterable: peel expression
 # wrappers, then take the inner atom / dotted-field / call node (the expression
 # wrapper itself may be unstamped for a `this._iterN` field iterator).
-iterableNodeId: function {n: Node} out u64 is {
+iterableNodeId: function {nodes: List Node n: Node} out u64 is {
     match (
         n
     ) case expression then {
-        return (iterableNodeId n: n.expression)
+        return (iterableNodeId :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         return n.nodeid.u64
     } case dottedpath then {
@@ -9385,11 +9426,11 @@ iterableNodeId: function {n: Node} out u64 is {
 # isForIterCall -- the for-loop iterable is a call expression (an rvalue that
 # must be hoisted to a temp before `&recv`); a bare atom / dotted field is an
 # lvalue used directly.
-isForIterCall: function {n: Node} out bool is {
+isForIterCall: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (isForIterCall n: n.expression)
+        return (isForIterCall :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         return true
     } case dottedpath then {
@@ -9417,7 +9458,7 @@ emitObjIterFor: function {
     ) case namedoperation then {
         lbl: unitLabel9 o: c0.name
         if lbl.length == 0 then return false
-        oeid: iterableNodeId n: (nodes.get i: (c0.operation - 1).u64)
+        oeid: iterableNodeId :nodes n: (nodes.get i: (c0.operation - 1).u64)
         itid0: stampIdOf :symtab nid: oeid
         if itid0 == 0 then {
             oeidF: exprNodeId9 n: (nodes.get i: (c0.operation - 1).u64)
@@ -9541,7 +9582,7 @@ emitObjIterFor: function {
                 ownGit9 = true
             } else {
                 ivex9: emitExpr :nodes :symtab :ctx n: (nodes.get i: (c0.operation - 1).u64)
-                if (isForIterCall n: (nodes.get i: (c0.operation - 1).u64)) then {
+                if (isForIterCall :nodes n: (nodes.get i: (c0.operation - 1).u64)) then {
                     lgi9: "\{ind}\{itCb9}_t _git\{mN} = \{ivex9};\n"
                     buf.append lgi9.stringview
                     iterRecv9 = "_git\{mN}"
@@ -9708,7 +9749,7 @@ rangeBoundExpr: function {
     match (
         n
     ) case expression then {
-        return (rangeBoundExpr :nodes :symtab :ctx n: n.expression)
+        return (rangeBoundExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         mn: dottedChildText n: n.callable
         if mn.stringview == "iterate" then return (rangeReceiver :nodes :symtab :ctx n: n.callable)
@@ -9718,7 +9759,7 @@ rangeBoundExpr: function {
         if cmn.stringview == "iterate" then {
             # the receiver may be a dotted-path itself (squares.length.iterate)
             # -- stampNameDeep resolves its scalar type either way.
-            btn: stampNameDeep :symtab n: n.parent
+            btn: stampNameDeep :nodes :symtab n: n.parent
             cTypeLk1: cTypeOf name: btn.stringview
             if cTypeLk1.length > 0 then return (emitExpr :nodes :symtab :ctx n: n.parent)
         }
@@ -9755,7 +9796,7 @@ rangeFromExpr: function {
     match (
         n
     ) case expression then {
-        return (rangeFromExpr :nodes :symtab :ctx n: n.expression)
+        return (rangeFromExpr :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
         aiter: n.arguments.iterate
         for a: aiter loop {
@@ -9926,7 +9967,7 @@ bodyReassigns9: function {nodes: List Node n: Node name: StringView} out bool is
         sln9: nodes.get i: (n.statementline - 1).u64
         return (bodyReassigns9 :nodes n: sln9 :name)
     } case expression then {
-        return (bodyReassigns9 :nodes n: n.expression :name)
+        return (bodyReassigns9 :nodes n: (nodes.get i: (n.expression - 1).u64) :name)
     } case reassignment then {
         tpn9: nodes.get i: (n.topath - 1).u64
         rb9: atomTextOf n: tpn9
@@ -9993,7 +10034,8 @@ seedFromPred9: function {
     match (
         n
     ) case expression then {
-        seedFromPred9 :nodes :symtab :ctx n: n.expression :body :names :vals :tids
+        iexA9: nodes.get i: (n.expression - 1).u64
+        seedFromPred9 :nodes :symtab :ctx n: iexA9 :body :names :vals :tids
     } case dottedpath then {
         arm0: atomTextOf n: n.child
         (seedPosCore9
@@ -10026,7 +10068,7 @@ seedPosCore9: function {
 } is {
     dap9: dpArmPredicateOf9 :symtab :nid
     if dap9 == 0 then return
-    bsn9: stampNameDeep :symtab n: parent
+    bsn9: stampNameDeep :nodes :symtab n: parent
     if bsn9.stringview == "bool" then return
     subj9: atomTextOf n: parent
     if subj9.length == 0 then return
@@ -10065,11 +10107,12 @@ seedNegFromPred9: function {
     match (
         n
     ) case expression then {
-        seedNegFromPred9 :nodes :symtab :ctx n: n.expression :body :names :vals :tids
+        iexB9: nodes.get i: (n.expression - 1).u64
+        seedNegFromPred9 :nodes :symtab :ctx n: iexB9 :body :names :vals :tids
     } case dottedpath then {
         dap9: dpArmPredicateOf9 :symtab nid: n.nodeid.u64
         if dap9 == 0 then return
-        bsn9: stampNameDeep :symtab n: n.parent
+        bsn9: stampNameDeep :nodes :symtab n: n.parent
         if bsn9.stringview == "bool" then return
         subj9: atomTextOf n: n.parent
         if subj9.length == 0 then return
@@ -10118,7 +10161,8 @@ seedCondOp9: function {
     match (
         n
     ) case expression then {
-        seedCondOp9 :nodes :symtab :ctx n: n.expression :body :names :vals :tids
+        iexC9: nodes.get i: (n.expression - 1).u64
+        seedCondOp9 :nodes :symtab :ctx n: iexC9 :body :names :vals :tids
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview == "true" then {
@@ -10142,10 +10186,10 @@ seedCondOp9: function {
             :tids
         )
     } case binop then {
-        opn9: bareAtomText9 n: n.operator
+        opn9: bareAtomText9 :nodes n: n.operator
         if opn9.stringview == "==" then {
-            ln9: bareAtomText9 n: n.lhs
-            rn9: bareAtomText9 n: n.rhs
+            ln9: bareAtomText9 :nodes n: n.lhs
+            rn9: bareAtomText9 :nodes n: n.rhs
             if rn9.stringview == "true" then {
                 seedFromPred9 :nodes :symtab :ctx n: n.lhs :body :names :vals :tids
                 return
@@ -10167,11 +10211,11 @@ seedCondOp9: function {
 
 # bareAtomText9 -- the expression-unwrapped bare atom text of a node,
 # "" for any other shape.
-bareAtomText9: function {n: Node} out String is {
+bareAtomText9: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (bareAtomText9 n: n.expression)
+        return (bareAtomText9 :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         return n.name.copy
     } else {
@@ -10285,7 +10329,8 @@ chainCondFact9: function {
     match (
         n
     ) case expression then {
-        chainCondFact9 :nodes :symtab :ctx n: n.expression :subjects :arms :tids :negs :recvs
+        iexD9: nodes.get i: (n.expression - 1).u64
+        chainCondFact9 :nodes :symtab :ctx n: iexD9 :subjects :arms :tids :negs :recvs
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview == "true" then {
@@ -10333,10 +10378,10 @@ chainCondFact9: function {
             :recvs
         )
     } case binop then {
-        opn9: bareAtomText9 n: n.operator
+        opn9: bareAtomText9 :nodes n: n.operator
         if opn9.stringview == "==" then {
-            ln9: bareAtomText9 n: n.lhs
-            rn9: bareAtomText9 n: n.rhs
+            ln9: bareAtomText9 :nodes n: n.lhs
+            rn9: bareAtomText9 :nodes n: n.rhs
             if rn9.stringview == "true" then {
                 (chainInnerFact9
                     :nodes
@@ -10416,7 +10461,8 @@ chainInnerFact9: function {
     match (
         n
     ) case expression then {
-        chainInnerFact9 :nodes :symtab :ctx n: n.expression :neg :subjects :arms :tids :negs :recvs
+        iexE9: nodes.get i: (n.expression - 1).u64
+        chainInnerFact9 :nodes :symtab :ctx n: iexE9 :neg :subjects :arms :tids :negs :recvs
     } case dottedpath then {
         arm0: atomTextOf n: n.child
         (chainFactCore9
@@ -10455,7 +10501,7 @@ chainFactCore9: function {
 } is {
     dap9: dpArmPredicateOf9 :symtab :nid
     if dap9 == 0 then return
-    bsn9: stampNameDeep :symtab n: parent
+    bsn9: stampNameDeep :nodes :symtab n: parent
     if bsn9.stringview == "bool" then return
     subj9: atomTextOf n: parent
     if subj9.length == 0 then return
@@ -10794,7 +10840,7 @@ postGuardStmtId9: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} 
     ) case statementline then {
         return (postGuardStmtId9 :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64))
     } case expression then {
-        return (postGuardStmtId9 :nodes :symtab n: n.expression)
+        return (postGuardStmtId9 :nodes :symtab n: (nodes.get i: (n.expression - 1).u64))
     } case ifexpr then {
         po9: symtab.typing.postGuardName.get key: n.nodeid.u64
         match (
@@ -10983,11 +11029,11 @@ emitBodyOpt: function {
 }
 
 # forexprValue -- the value being bound is a for-loop (a list comprehension).
-forexprValue: function {n: Node} out bool is {
+forexprValue: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (forexprValue n: n.expression)
+        return (forexprValue :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case forexpr then {
         return true
     } else {
@@ -11068,7 +11114,7 @@ emitListComprehension: function {
             :nodes
             :symtab
             :ctx
-            forNode: forNode.expression
+            forNode: (nodes.get i: (forNode.expression - 1).u64)
             :listCb
             :listVar
             :ind
@@ -11529,11 +11575,11 @@ isBoxTid: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
 
 # nodeIsAtomBox -- n is a bare atom whose type is a builtin Box (a heap pointer),
 # so an arithmetic/compare operand must auto-deref (`b` -> `(*b)`).
-nodeIsAtomBox: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+nodeIsAtomBox: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (nodeIsAtomBox :symtab :ctx n: n.expression)
+        return (nodeIsAtomBox :nodes :symtab :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         bxt9: stampIdOf :symtab nid: n.nodeid.u64
         return (isBoxTid :symtab tid: bxt9)
@@ -11895,11 +11941,11 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
 # isConstShape -- a unit member value that folds to a C constant
 # expression: numeric/float atoms, already-rendered constant names, and
 # binop trees over those.
-isConstShape: function {ctx: Ctx n: Node} out bool is {
+isConstShape: function {nodes: List Node ctx: Ctx n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (isConstShape :ctx n: n.expression)
+        return (isConstShape :nodes :ctx n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
         av: n.name.stringview
         b0: av.byteAt i: 0
@@ -11920,8 +11966,8 @@ isConstShape: function {ctx: Ctx n: Node} out bool is {
             return false
         }
     } case binop then {
-        if (isConstShape :ctx n: n.lhs) then {
-            return (isConstShape :ctx n: n.rhs)
+        if (isConstShape :nodes :ctx n: n.lhs) then {
+            return (isConstShape :nodes :ctx n: n.rhs)
         } else {
             return false
         }
@@ -12008,9 +12054,9 @@ fillOneDataElem: function {
     match (
         op
     ) case expression then {
-        fillOneDataElem :nodes :symtab :ctx :name op: op.expression
+        fillOneDataElem :nodes :symtab :ctx :name op: (nodes.get i: (op.expression - 1).u64)
     } case datablock then {
-        ebn: dataElemBaseName o: op.outType
+        ebn: dataElemBaseName :nodes o: op.outType
         k9: name.string
         if ebn.length > 0 then {
             ebv9: ebn.stringview
@@ -12110,7 +12156,7 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
     } case statementline then {
         scanNeeds :nodes :ctx n: (nodes.get i: (n.statementline - 1).u64)
     } case expression then {
-        scanNeeds :nodes :ctx n: n.expression
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.expression - 1).u64)
     } case namedoperation then {
         scanNeeds :nodes :ctx n: (nodes.get i: (n.operation - 1).u64)
     } case call then {
@@ -12310,7 +12356,7 @@ fillConstValsIn: function {
     with biter: bodyIds9.iterate do for bm: biter loop {
         bmNode9: nodes.get i: (bm - 1).u64
         if bmNode9.namedoperation then {
-            if (isConstShape :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)) then {
+            if (isConstShape :nodes :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)) then {
                 nm: unitLabel9 o: bmNode9.name
                 cv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
                 nmv: nm.stringview
@@ -12378,7 +12424,10 @@ isGenericTemplateUnitOp: function {nodes: List Node opId: u32} out bool is {
     for m9: mit9 loop {
         m9Node9: nodes.get i: (m9 - 1).u64
         if m9Node9.namedoperation then {
-            if (ztypecheck.isGenericParam op: (nodes.get i: (m9Node9.operation - 1).u64)) then return true
+            if (ztypecheck.isGenericParam
+                :nodes
+                op: (nodes.get i: (m9Node9.operation - 1).u64)
+            ) then return true
         }
     }
     return false
@@ -17280,7 +17329,7 @@ osNoArgCallRhs: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (osNoArgCallRhs :nodes n: n.expression)
+        return (osNoArgCallRhs :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case statementline then {
         return (osNoArgCallRhs :nodes n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
@@ -17380,7 +17429,7 @@ lowerNativeArg: function {
         if (isListPtrParam :symtab :fid :pname tid: pid) then needAmp9 = true
     }
     av1: emitExpr :nodes :symtab :ctx n: op
-    if needAmp9 when (pathIsPointer :symtab :ctx n: op) == false then return "&\{av1}"
+    if needAmp9 when (pathIsPointer :nodes :symtab :ctx n: op) == false then return "&\{av1}"
     return av1
 }
 
@@ -17622,11 +17671,11 @@ emitParsedMethodCall: function {
 
 # isLockArg -- the argument (through expression wrappers) is an `x.lock` borrow
 # projection; such a value passes by address to a borrow param.
-isLockArg: function {n: Node} out bool is {
+isLockArg: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (isLockArg n: n.expression)
+        return (isLockArg :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         return cn9.stringview == "lock"
@@ -17688,7 +17737,7 @@ emitUserIterCall: function {
                 if al9.stringview == "value" then {
                     hasVal9 = true
                     ve9: emitExpr :nodes :symtab :ctx n: (nodes.get i: (av9.operation - 1).u64)
-                    if (isLockArg n: (nodes.get i: (av9.operation - 1).u64)) then {
+                    if (isLockArg :nodes n: (nodes.get i: (av9.operation - 1).u64)) then {
                         vbase9: dottedBaseAtom n: (nodes.get i: (av9.operation - 1).u64)
                         vbr9: aliasResolve :ctx name: vbase9.stringview
                         vpfx9: "&".string
@@ -17730,7 +17779,7 @@ emitProtocolDispatch: function {
     recv: emitDottedReceiver :nodes :symtab :ctx callable: call.callable
     if recv.length == 0 then return "".string
     acc: ".".string
-    if (dottedReceiverIsPtr :symtab :ctx callable: call.callable) then acc = "->".string
+    if (dottedReceiverIsPtr :nodes :symtab :ctx callable: call.callable) then acc = "->".string
     dargs: "\{recv}\{acc}data"
     mtid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: rtid name: mn.stringview)
     mpNames9: (List String)
@@ -17766,6 +17815,7 @@ emitProtocolDispatch: function {
                         originTid: (originTidOf :symtab tid: atid9)
                     ) then apfx9 = "&".string
                     if (pathIsPointer
+                        :nodes
                         :symtab
                         :ctx
                         n: (nodes.get i: (a.operation - 1).u64)
@@ -17802,6 +17852,7 @@ emitProtocolDispatch: function {
                     apfx9 = "&".string
                 }
                 if (pathIsPointer
+                    :nodes
                     :symtab
                     :ctx
                     n: (nodes.get i: (a.operation - 1).u64)
@@ -17848,7 +17899,7 @@ emitProtocolCreateCall: function {
                     opf1049: nodes.get i: (a.operation - 1).u64
                     fromBase = (atomTextOf n: opf1049)
                 }
-                fdn: stampNameDeep :symtab n: (nodes.get i: (a.operation - 1).u64)
+                fdn: stampNameDeep :nodes :symtab n: (nodes.get i: (a.operation - 1).u64)
                 fromTid: resolveTypeIdByName :symtab :ctx name: fdn.stringview
                 if fromTid == 0 then return "".string
                 implBase: symtab.reg.cnameOf tid: fromTid
@@ -18046,7 +18097,7 @@ emitDataBlock: function {
     match (
         op
     ) case expression then {
-        emitDataBlock :nodes :symtab :ctx :name op: op.expression :buf
+        emitDataBlock :nodes :symtab :ctx :name op: (nodes.get i: (op.expression - 1).u64) :buf
     } case datablock then {
         ridtid9: userFnId :symtab :ctx :name
         ri9: false
@@ -18060,7 +18111,7 @@ emitDataBlock: function {
         }
         if ri9 then {
             ect: "int64_t".string
-            rbn: dataElemBaseName o: op.outType
+            rbn: dataElemBaseName :nodes o: op.outType
             if rbn.length > 0 then {
                 rc: cTypeOf name: rbn.stringview
                 if rc.length > 0 then ect = rc
@@ -18092,11 +18143,11 @@ emitDataElem: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: N
     }
 }
 
-dataElemBaseName: function {o: Option Node} out String is {
+dataElemBaseName: function {nodes: List Node o: Option Node} out String is {
     match (
         o
     ) case some then {
-        return (atomTextDeep n: o)
+        return (atomTextDeep :nodes n: o)
     } case none then {
         return "".string
     }
@@ -18853,7 +18904,7 @@ nodeYieldCount: function {nodes: List Node n: Node} out u64 is {
         sln9: nodes.get i: (n.statementline - 1).u64
         return (nodeYieldCount :nodes n: sln9)
     } case expression then {
-        return (nodeYieldCount :nodes n: n.expression)
+        return (nodeYieldCount :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case assignment then {
         return (nodeYieldCount :nodes n: (nodes.get i: (n.value - 1).u64))
     } case forexpr then {
@@ -18991,11 +19042,11 @@ emitGenEpilogue: function {ctx: Ctx buf: String.borrow} is {
 }
 
 # isYieldNode -- the node (through expression wrappers) is a yield expression.
-isYieldNode: function {n: Node} out bool is {
+isYieldNode: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (isYieldNode n: n.expression)
+        return (isYieldNode :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case yieldexpr then {
         return true
     } else {
@@ -19017,7 +19068,8 @@ emitYieldFromNode: function {
     match (
         n
     ) case expression then {
-        emitYieldFromNode :nodes :symtab :ctx n: n.expression :ind :tmp :buf
+        iexF9: nodes.get i: (n.expression - 1).u64
+        emitYieldFromNode :nodes :symtab :ctx n: iexF9 :ind :tmp :buf
     } case yieldexpr then {
         emitYieldStmt :nodes :symtab :ctx yd: n :ind :tmp :buf
     } else null
@@ -19074,8 +19126,9 @@ emitYieldStmt: function {
     ctx.genYieldNext = k + 1
     # an interpolated yield value builds via a self-contained statement
     # expression (emitExpr :nodes cannot emit the chain)
-    ve: emitInterpArgExpr :nodes :symtab :ctx n: yd.expr
-    if ve.length == 0 then ve = emitExpr :nodes :symtab :ctx n: yd.expr
+    yx9: nodes.get i: (yd.expr - 1).u64
+    ve: emitInterpArgExpr :nodes :symtab :ctx n: yx9
+    if ve.length == 0 then ve = emitExpr :nodes :symtab :ctx n: yx9
     ls: "\{ind}this->state = \{k};\n"
     buf.append ls.stringview
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
