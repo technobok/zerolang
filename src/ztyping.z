@@ -21,10 +21,12 @@ Node: zast.Node
 
 # One edge of the children table: a (parent, child-name) -> child-type
 # link. Append-only; the mutable child-type id and the sidecars live in
-# id-keyed Maps on ZTyping, keyed by childNameId.
+# id-keyed Maps on ZTyping, keyed by childNameId. nameId indexes the
+# shared ZTyping.nameTexts intern pool (one String per DISTINCT name);
+# childNameId stays a per-(parent, name) edge id -- two id spaces.
 ZTypeChild: class {
     parentTypeId: u64
-    childName: String
+    nameId: u64
     childNameId: u64
     position: u64
 }
@@ -40,7 +42,7 @@ bucketScanMax: 16
 
 ChildBucket: class {
     rows: (List u64)
-    byName: (Map String value: u64)
+    byName: (Map u64 value: u64)
 }
 
 # One edge of the generic-args table: a (parent, param-name) link. The
@@ -198,6 +200,10 @@ ZTyping: class {
     # generic arg-type id, keyed by "parentTypeId:paramName"
     genericArgTypeBy: (Map String value: u64)
 
+    # child-name intern pool: one String per distinct edge name;
+    # ZTypeChild.nameId indexes nameTexts
+    nameTexts: (List String)
+    nameIdByText: (Map String value: u64)
     # per-node single-valued stamps, keyed by parsed-AST nodeid
     nodeType: (Map u64 value: u64)
     nodeLiteralBase: (Map u64 value: ztypes.numbase)
@@ -285,10 +291,40 @@ ZTyping: class {
         }
     }
 
+    # internName -- the pool id for an edge name (minted on first sight).
+    internName: function {:this name: StringView} out u64 is {
+        {
+            g9: this.nameIdByText.getv key: name
+            match (
+                g9
+            ) case some then {
+                return g9
+            } case none then null
+        }
+        nid9: this.nameTexts.length
+        this.nameTexts.append name.string
+        k9: name.string
+        this.nameIdByText.set key: k9 value: nid9
+        return nid9
+    }
+
     # Resolve the childNameId of an existing (parent, name) edge.
     # Small buckets scan their rows (StringView compares, no allocation);
     # large buckets probe the byName index.
     childNameIdOf: function {:this parentTypeId: u64 name: StringView} out optionval u64 is {
+        nid9: u64
+        {
+            ng9: this.nameIdByText.getv key: name
+            match (
+                ng9
+            ) case some then {
+                nid9 = ng9 + 1
+            } case none then {
+                # a name interned nowhere cannot label any edge
+                return (optionval.none u64)
+            }
+        }
+        nid9 = nid9 - 1
         b: this.childIndex.get key: parentTypeId
         match (
             b
@@ -297,10 +333,10 @@ ZTyping: class {
                 ridx: b.rows.iterate
                 for ri: ridx loop {
                     row: this.typeChild.get i: ri
-                    if row.childName.stringview == name then return (optionval.some row.childNameId)
+                    if row.nameId == nid9 then return (optionval.some row.childNameId)
                 }
             } else {
-                got: b.byName.getv key: name
+                got: b.byName.get key: nid9
                 match (
                     got
                 ) case some then {
@@ -325,7 +361,7 @@ ZTyping: class {
             pos: this.childCount :parentTypeId
             this.typeChild.append (ZTypeChild
                 :parentTypeId
-                childName: childName.string
+                nameId: (this.internName name: childName)
                 childNameId: cid
                 position: pos
             )
@@ -353,11 +389,11 @@ ZTyping: class {
                         bri9: b.rows.iterate
                         for bi9: bri9 loop {
                             brow9: this.typeChild.get i: bi9
-                            b.byName.set key: brow9.childName.copy value: brow9.childNameId
+                            b.byName.set key: brow9.nameId value: brow9.childNameId
                         }
                     } else {
                         nrow9: this.typeChild.get i: rowIdx
-                        b.byName.set key: nrow9.childName.copy value: nrow9.childNameId
+                        b.byName.set key: nrow9.nameId value: nrow9.childNameId
                     }
                 }
             } case none then {
@@ -365,7 +401,7 @@ ZTyping: class {
             }
         }
         if needNew9 then {
-            nb: (ChildBucket rows: (List u64) byName: (Map String value: u64))
+            nb: (ChildBucket rows: (List u64) byName: (Map u64 value: u64))
             nb.rows.append rowIdx
             this.childIndex.set key: parentTypeId value: nb
         }
@@ -823,6 +859,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         genericArgTypeBy: (Map String value: u64)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
+        nameTexts: (List String)
+        nameIdByText: (Map String value: u64)
         nodeType: (Map u64 value: u64 capacity: nodeEst)
         nodeLiteralBase: (Map u64 value: ztypes.numbase)
         callKind: (Map u64 value: zast.callkind)
@@ -1066,9 +1104,11 @@ dumpChildren: function {ty: ZTyping parentTypeId: u64} is {
             match (
                 ctOpt
             ) case some then {
-                print "  child \{row.position} \{row.childName} -> \{ctOpt}"
+                rnB9: ty.nameTexts.get i: row.nameId
+                print "  child \{row.position} \{rnB9} -> \{ctOpt}"
             } case none then {
-                print "  child \{row.position} \{row.childName} -> none"
+                rnB8: ty.nameTexts.get i: row.nameId
+                print "  child \{row.position} \{rnB8} -> none"
             }
         }
     }
