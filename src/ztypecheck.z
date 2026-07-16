@@ -8603,6 +8603,13 @@ mintMono: function {
     cn3: cNames.length
     for ci < cn3 loop {
         chName: cNames.get i: ci
+        # getv: concrete-param native with an inexpressible return -- the
+        # Map fixup re-mints it per mono; the generic-target machinery
+        # (respecialize on the raw template child) must not touch it
+        if chName.stringview == "getv" then {
+            ci = ci + 1
+            continue
+        }
         chId: cIds.get i: ci
         target: chId
         ido9: idSubs.get key: chId
@@ -9528,26 +9535,25 @@ mintCollectionChildren: function {
                 )
             } case none then null
         } case none then null
-        mgvoM: ty.childOf parentTypeId: monoId name: "getv"
+        # getv has concrete params, so the clone pass leaves the raw template
+        # child in place; re-mint it as a per-mono native (args unchecked,
+        # like length/key/value) and heal the return by value kind.
+        gvIdM: mintCollectionMethod :ty :reg :monoName :monoId m: "getv"
+        wtvM: mapGetWrapperName :ty :reg :valArg
+        wtvoM: walkLookupTyperef :ty :reg currentUnit: mainName base: wtvM.stringview
         match (
-            mgvoM
+            wtvoM
         ) case some then {
-            wtvM: mapGetWrapperName :ty :reg :valArg
-            wtvoM: walkLookupTyperef :ty :reg currentUnit: mainName base: wtvM.stringview
-            match (
-                wtvoM
-            ) case some then {
-                wvnM: "\{wtvM}_\{vnM}"
-                (mintReturnWrapper
-                    :ty
-                    :reg
-                    :mainName
-                    targetId: mgvoM
-                    name: wvnM.stringview
-                    templateId: wtvoM
-                    fallbackArg: valArg
-                )
-            } case none then null
+            wvnM: "\{wtvM}_\{vnM}"
+            (mintReturnWrapper
+                :ty
+                :reg
+                :mainName
+                targetId: gvIdM
+                name: wvnM.stringview
+                templateId: wtvoM
+                fallbackArg: valArg
+            )
         } case none then null
         mrmoM: ty.childOf parentTypeId: monoId name: "remove"
         match (
@@ -18607,41 +18613,74 @@ lowerGeneratorItems: function {
 # order. It serves internal/mangled queries (mono names, dotted member keys)
 # beyond the source-level prelude surface, so it keeps the full root list
 # where the index side (definingUnitFor) narrowed to current-unit + prelude.
+# walkUnitProbe9 -- one unit-scope probe of the typeref walk: none when the
+# unit is unknown or has no such child.
+walkUnitProbe9: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    uname: StringView
+    base: StringView
+} out optionval u64 is {
+    uk0: uname.string
+    uido: reg.unitNameTid.get key: uk0
+    match (
+        uido
+    ) case some then {
+        return (ty.childOf parentTypeId: uido name: base)
+    } case none then {
+        return (optionval.none u64)
+    }
+}
+
 walkLookupTyperef: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     currentUnit: StringView
     base: StringView
 } out optionval u64 is {
-    units: (List String)
-    units.append currentUnit.string
-    units.append "system".string
-    units.append "collections".string
-    units.append "io".string
-    units.append "core".string
-    units.append "os".string
-    units.append "cli".string
-    found: (optionval.none u64)
-    done: false
-    uit: units.iterate
-    for u: uit loop {
-        if (done) == false then {
-            uc: u.copy
-            uido: reg.unitNameTid.get key: uc
-            match (
-                uido
-            ) case some then {
-                co: ty.childOf parentTypeId: uido name: base
-                match (
-                    co
-                ) case some then {
-                    found = (optionval.some co)
-                    done = true
-                } case none then null
-            } case none then null
-        }
-    }
-    return found
+    r9: walkUnitProbe9 :ty :reg uname: currentUnit :base
+    match (
+        r9
+    ) case some then {
+        return (optionval.some r9)
+    } case none then null
+    r8: walkUnitProbe9 :ty :reg uname: "system" :base
+    match (
+        r8
+    ) case some then {
+        return (optionval.some r8)
+    } case none then null
+    r7: walkUnitProbe9 :ty :reg uname: "collections" :base
+    match (
+        r7
+    ) case some then {
+        return (optionval.some r7)
+    } case none then null
+    r6: walkUnitProbe9 :ty :reg uname: "io" :base
+    match (
+        r6
+    ) case some then {
+        return (optionval.some r6)
+    } case none then null
+    r5: walkUnitProbe9 :ty :reg uname: "core" :base
+    match (
+        r5
+    ) case some then {
+        return (optionval.some r5)
+    } case none then null
+    r4: walkUnitProbe9 :ty :reg uname: "os" :base
+    match (
+        r4
+    ) case some then {
+        return (optionval.some r4)
+    } case none then null
+    r3: walkUnitProbe9 :ty :reg uname: "cli" :base
+    match (
+        r3
+    ) case some then {
+        return (optionval.some r3)
+    } case none then null
+    return (optionval.none u64)
 }
 
 # resolvedByKey -- resolve a "unit.name[.member]" key by walking childOf from the
@@ -18714,17 +18753,27 @@ childOfWalk: function {
                 ) case some then null case none then twoSeg9 = true
             }
             if twoSeg9 then {
-                uk9: String
+                ro9: u64
+                roOk9: false
                 {
                     useg9: kv9.substring from: 0 to: d1
-                    uk9 = useg9.string
+                    uk8: useg9.string
+                    rg9: reg.unitNameTid.get key: uk8
+                    match (
+                        rg9
+                    ) case some then {
+                        ro9 = rg9
+                        roOk9 = true
+                    } case none then null
                 }
-                ro9: reg.unitNameTid.get key: uk9
+                rox9: (optionval.none u64)
+                if roOk9 then rox9 = (optionval.some ro9)
+                roN9: rox9
                 match (
-                    ro9
+                    roN9
                 ) case some then {
                     rest9: kv9.substring from: d1 + 1 to: kv9.length
-                    return (ty.childOf parentTypeId: ro9 name: rest9)
+                    return (ty.childOf parentTypeId: roN9 name: rest9)
                 } case none then {
                     return (optionval.none u64)
                 }
@@ -18779,12 +18828,20 @@ resolvedByKey: function {
     # target walk does NOT recurse through this alias-follow, so it always terminates
     # and a cyclic alias (whose target never has a childOf edge) falls through to the
     # existing cycle diagnostic rather than being silently followed.
-    aok: key.copy
-    ao: ty.funcAliases.get key: aok
-    match (
-        ao
-    ) case some then {
-        tgo: childOfWalk :ty :reg key: ao.copy
+    alTgt9: String
+    alHit9: false
+    {
+        aok9: key.copy
+        ao: ty.funcAliases.get key: aok9
+        match (
+            ao
+        ) case some then {
+            alTgt9 = ao.copy
+            alHit9 = true
+        } case none then null
+    }
+    if alHit9 then {
+        tgo: childOfWalk :ty :reg key: alTgt9
         match (
             tgo
         ) case some then {
@@ -18805,7 +18862,7 @@ resolvedByKey: function {
             } case none then null
             return (optionval.some tgo)
         } case none then null
-    } case none then null
+    }
     return (optionval.none u64)
 }
 
