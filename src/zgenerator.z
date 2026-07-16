@@ -38,32 +38,6 @@ GenLowered: class {
     synthClass: Node
     wrapperNodeId: u32
     noStamp: (List u32)
-    # inner dotted nodes of receiver-lock field spines: each stamps the
-    # receiver type through the deferred typeref pass (the reference's
-    # marker-path stamps cover them).
-    innerRefs: (List u32)
-}
-
-# innerDpId -- the parent dotted node's id of a two-level marker path
-# (`Bag.private.lock` -> the `Bag.private` node); 0 otherwise.
-innerDpId: function {nodes: List zast.Node n: Node} out u32 is {
-    match (
-        n
-    ) case dottedpath then {
-        return (dpNodeId n: (nodes.get i: (n.parent - 1).u64))
-    } else {
-        return 0
-    }
-}
-
-dpNodeId: function {n: Node} out u32 is {
-    match (
-        n
-    ) case dottedpath then {
-        return n.nodeid
-    } else {
-        return 0
-    }
 }
 
 # topNodeId -- a cloned type-path's top node id (the typeref-stamp key the
@@ -169,16 +143,6 @@ bodyContainsYield: function {nodes: List zast.Node n: Node} out bool is {
         if (bodyContainsYield :nodes n: (nodes.get i: (n.lhs - 1).u64)) then return true
         return (bodyContainsYield :nodes n: (nodes.get i: (n.rhs - 1).u64))
     } else {
-        return false
-    }
-}
-
-bodyContainsYieldOpt: function {nodes: List zast.Node o: Option Node} out bool is {
-    match (
-        o
-    ) case some then {
-        return (bodyContainsYield :nodes n: o)
-    } case none then {
         return false
     }
 }
@@ -1132,22 +1096,6 @@ promoteIterables: function {nodes: List zast.Node ids: GenIds ctr: GenIds n: Nod
     }
 }
 
-promoteIterablesOpt: function {
-    nodes: List zast.Node
-    ids: GenIds
-    ctr: GenIds
-    o: Option Node
-} out Option Node is {
-    match (
-        o
-    ) case some then {
-        r: promoteIterables :nodes :ids :ctr n: o
-        return (Option.some r)
-    } case none then {
-        return (Option.none Node)
-    }
-}
-
 # promoteIterablesOptAt -- the id-taking entry (0 = absent); the promoted
 # clone comes back owned.
 promoteIterablesOptAt: function {
@@ -2089,43 +2037,6 @@ canLowerNow: function {nodes: List zast.Node n: Node hasReceiver: bool} out bool
     }
 }
 
-# returnHasAccepts -- a non-null accepts: argument on the iterator return
-# (the bidirectional form).
-returnHasAccepts: function {nodes: List zast.Node o: Option Node} out bool is {
-    match (
-        o
-    ) case some then {
-        return (returnHasAcceptsOf :nodes n: o)
-    } case none then {
-        return false
-    }
-}
-
-returnHasAcceptsOf: function {nodes: List zast.Node n: Node} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (returnHasAcceptsOf :nodes n: (nodes.get i: (n.expression - 1).u64))
-    } case call then {
-        aiter: n.arguments.iterate
-        for a0Id9: aiter loop {
-            a0: nodes.get i: (a0Id9 - 1).u64
-            match (
-                a0
-            ) case namedoperation then {
-                an: optStringOr o: a0.name d: ""
-                if an.stringview == "accepts" then {
-                    nv0: leafAtomName n: (nodes.get i: (a0.operation - 1).u64)
-                    if nv0.stringview != "null" then return true
-                }
-            } else null
-        }
-        return false
-    } else {
-        return false
-    }
-}
-
 paramHeadIsThis: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
@@ -2207,7 +2118,6 @@ lowerOne: function {
             createParams: (List u32)
             factoryParams: (List u32)
             noStamp: (List u32)
-            innerRefs: (List u32)
             thisFlags: (List bool)
             privNames: (Map String value: bool)
             piter: fn.parameters.iterate
@@ -2402,12 +2312,6 @@ lowerOne: function {
                     # receiver-lock fields stamp (the reference builds them
                     # fresh); ordinary param fields share the factory's stamp
                     tf3: thisFlags.get i: fi3
-                    if tf3 then {
-                        # the installed clone's inner spine node stamps the
-                        # receiver type through the deferred pass
-                        idp3: innerDpId :nodes n: pf3o
-                        if idp3 > 0 then innerRefs.append idp3
-                    }
                     nf3: mkNamedOp :nodes :ids :line :col name: f3v op: pf3o
                     if (tf3) == false then {
                         pfid3: paramOpId :nodes n: nf3
@@ -2481,8 +2385,7 @@ lowerOne: function {
                     :factory
                     :synthClass
                     wrapperNodeId: wid
-                    :noStamp
-                    :innerRefs)
+                    :noStamp)
                 )
             } case none then {
                 return (Option.none GenLowered)
