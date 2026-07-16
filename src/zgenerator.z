@@ -116,9 +116,9 @@ bodyContainsYield: function {nodes: List zast.Node n: Node} out bool is {
     } case expression then {
         return (bodyContainsYield :nodes n: n.expression)
     } case assignment then {
-        return (bodyContainsYield :nodes n: n.value)
+        return (bodyContainsYield :nodes n: (nodes.get i: (n.value - 1).u64))
     } case reassignment then {
-        return (bodyContainsYield :nodes n: n.value)
+        return (bodyContainsYield :nodes n: (nodes.get i: (n.value - 1).u64))
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0: cliter loop {
@@ -842,9 +842,10 @@ crossWalk: function {nodes: List zast.Node gc: GenCross n: Node inYieldLoop: boo
         crossWalk :nodes :gc n: n.expr :inYieldLoop
         gc.yieldCount = gc.yieldCount + 1
     } case assignment then {
-        crossWalk :nodes :gc n: n.value :inYieldLoop
+        av9: nodes.get i: (n.value - 1).u64
+        crossWalk :nodes :gc n: av9 :inYieldLoop
         anv: n.name.stringview
-        if (isYieldValue n: n.value) then {
+        if (isYieldValue n: av9) then {
             ybk: anv.string
             ybv: true
             gc.yieldBound.set key: ybk value: ybv
@@ -902,11 +903,11 @@ crossWalk: function {nodes: List zast.Node gc: GenCross n: Node inYieldLoop: boo
     } case expression then {
         crossWalk :nodes :gc n: n.expression :inYieldLoop
     } case reassignment then {
-        crossWalk :nodes :gc n: n.topath :inYieldLoop
-        crossWalk :nodes :gc n: n.value :inYieldLoop
+        crossWalk :nodes :gc n: (nodes.get i: (n.topath - 1).u64) :inYieldLoop
+        crossWalk :nodes :gc n: (nodes.get i: (n.value - 1).u64) :inYieldLoop
     } case swapstmt then {
-        crossWalk :nodes :gc n: n.lhs :inYieldLoop
-        crossWalk :nodes :gc n: n.rhs :inYieldLoop
+        crossWalk :nodes :gc n: (nodes.get i: (n.lhs - 1).u64) :inYieldLoop
+        crossWalk :nodes :gc n: (nodes.get i: (n.rhs - 1).u64) :inYieldLoop
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0: cliter loop {
@@ -1018,7 +1019,7 @@ firstRhsOf: function {
         } case none then null
         if (already) == false then {
             if n.name.stringview == name then {
-                rc: cloneInner :nodes :ids n: n.value
+                rc: cloneInner :nodes :ids n: (nodes.get i: (n.value - 1).u64)
                 dst.base = (Option.some rc)
             }
         }
@@ -1262,7 +1263,7 @@ promoteFor: function {
                         lineno: hl0
                         colno: hc0
                         name: sno0
-                        value: rhsE)
+                        value: (zast.tableAppendRebase :nodes n: rhsE))
                     )
                     sl0: (Node.statementline (zast.StatementLineData
                         nodeid: ids.mint
@@ -1517,7 +1518,8 @@ rewriteToThis: function {
     } case assignment then {
         ln9c: n.lineno
         co9c: n.colno
-        nval: rewriteToThis :nodes :ids n: n.value :promoted
+        nval: rewriteToThis :nodes :ids n: (nodes.get i: (n.value - 1).u64) :promoted
+        nvalId9: zast.tableAppendRebase :nodes n: nval
         anv9: n.name.stringview
         isP9: optBoolOr2 o: (promoted.get key: anv9.string) d: false
         if isP9 then {
@@ -1526,8 +1528,8 @@ rewriteToThis: function {
                 nodeid: ids.mint
                 lineno: ln9c
                 colno: co9c
-                :topath
-                value: nval)
+                topath: (zast.tableAppendRebase :nodes n: topath)
+                value: nvalId9)
             )
         } else {
             an9: anv9.string
@@ -1536,32 +1538,32 @@ rewriteToThis: function {
                 lineno: ln9c
                 colno: co9c
                 name: an9
-                value: nval)
+                value: nvalId9)
             )
         }
     } case reassignment then {
         lnA: n.lineno
         coA: n.colno
-        ntp: rewriteToThis :nodes :ids n: n.topath :promoted
-        nvA: rewriteToThis :nodes :ids n: n.value :promoted
+        ntp: rewriteToThis :nodes :ids n: (nodes.get i: (n.topath - 1).u64) :promoted
+        nvA: rewriteToThis :nodes :ids n: (nodes.get i: (n.value - 1).u64) :promoted
         return (Node.reassignment (zast.ReassignmentData
             nodeid: ids.mint
             lineno: lnA
             colno: coA
-            topath: ntp
-            value: nvA)
+            topath: (zast.tableAppendRebase :nodes n: ntp)
+            value: (zast.tableAppendRebase :nodes n: nvA))
         )
     } case swapstmt then {
         lnB: n.lineno
         coB: n.colno
-        nlB: rewriteToThis :nodes :ids n: n.lhs :promoted
-        nrB: rewriteToThis :nodes :ids n: n.rhs :promoted
+        nlB: rewriteToThis :nodes :ids n: (nodes.get i: (n.lhs - 1).u64) :promoted
+        nrB: rewriteToThis :nodes :ids n: (nodes.get i: (n.rhs - 1).u64) :promoted
         return (Node.swapstmt (zast.SwapStmtData
             nodeid: ids.mint
             lineno: lnB
             colno: coB
-            lhs: nlB
-            rhs: nrB)
+            lhs: (zast.tableAppendRebase :nodes n: nlB)
+            rhs: (zast.tableAppendRebase :nodes n: nrB))
         )
     } case ifexpr then {
         lnC: n.lineno

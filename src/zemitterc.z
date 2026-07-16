@@ -434,9 +434,9 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
         collectLiterals :nodes n: n.lhs :ids :texts
         collectLiterals :nodes n: n.rhs :ids :texts
     } case assignment then {
-        collectLiterals :nodes n: n.value :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.value - 1).u64) :ids :texts
     } case reassignment then {
-        collectLiterals :nodes n: n.value :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.value - 1).u64) :ids :texts
     } case ifexpr then {
         citer: n.clauses.iterate
         for c: citer loop collectLiterals :nodes n: c :ids :texts
@@ -7591,6 +7591,7 @@ emitStmt: function {
     } case call then {
         emitCallStmt :nodes :symtab :ctx call: n :ind :tmp :buf
     } case assignment then {
+        avn9: nodes.get i: (n.value - 1).u64
         tn: stampNameOf :symtab nid: n.nodeid.u64
         ct: cTypeOf name: tn.stringview
         if ct.length > 0 then {
@@ -7613,7 +7614,7 @@ emitStmt: function {
             ) case some then {
                 ct = typeRefC :symtab :ctx tid: tgo thisTid: 0
             } case none then {
-                vgo9: symtab.typing.nodeType.get key: (nodeIdOf9 n: n.value)
+                vgo9: symtab.typing.nodeType.get key: (nodeIdOf9 n: avn9)
                 match (
                     vgo9
                 ) case some then {
@@ -7622,14 +7623,14 @@ emitStmt: function {
             }
         }
         nm: ztypes.mangleVarName name: n.name.stringview
-        nbrw9: bindingRhsIsBorrow :nodes :symtab :ctx n: n.value
+        nbrw9: bindingRhsIsBorrow :nodes :symtab :ctx n: avn9
         ctx.borrowedVars.set key: nm.copy value: nbrw9
-        if ctx.genActive when (isYieldNode n: n.value) then {
+        if ctx.genActive when (isYieldNode n: avn9) then {
             (emitExprFormYield
                 :nodes
                 :symtab
                 :ctx
-                value: n.value
+                value: avn9
                 aid: n.nodeid.u64
                 nm: nm.stringview
                 :ind
@@ -7640,7 +7641,7 @@ emitStmt: function {
         }
         # `x: <inst>.take` over a record/class is an ownership alias: record
         # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
-        tabA: takeAliasBase :nodes :symtab n: n.value
+        tabA: takeAliasBase :nodes :symtab n: avn9
         if tabA.length > 0 then {
             # a narrowed-subject `.take` binding MOVES the payload out of
             # the match arm's box: real storage from the narrowed cast plus
@@ -7673,18 +7674,18 @@ emitStmt: function {
             return
         }
         ltid: stampIdOf :symtab nid: n.nodeid.u64
-        if ltid == 0 then ltid = stampIdOf :symtab nid: (nodeIdOf9 n: n.value)
+        if ltid == 0 then ltid = stampIdOf :symtab nid: (nodeIdOf9 n: avn9)
         ltid = chaseColMono :symtab tid: ltid
         ltmn: monoOriginName :symtab tid: ltid
         if (originIsTid :symtab tid: ltid originTid: ctx.listOriginTid) then {
             lcb: symtab.reg.cnameOf tid: ltid
-            if (osNoArgCallRhs :nodes n: n.value) then {
+            if (osNoArgCallRhs :nodes n: avn9) then {
                 # owned List returned by os.args / os.envNames: emit the call.
-                losr: emitExpr :nodes :symtab :ctx n: n.value
+                losr: emitExpr :nodes :symtab :ctx n: avn9
                 losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
                 buf.append losb.stringview
             } else {
-                if (forexprValue n: n.value) then {
+                if (forexprValue n: avn9) then {
                     # list comprehension: `xs: for ... loop { expr }` create + populate
                     lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
                     buf.append lc0.stringview
@@ -7692,7 +7693,7 @@ emitStmt: function {
                         :nodes
                         :symtab
                         :ctx
-                        forNode: n.value
+                        forNode: avn9
                         listCb: lcb.stringview
                         listVar: nm.stringview
                         :ind
@@ -7700,13 +7701,13 @@ emitStmt: function {
                         :buf
                     )
                 } else {
-                    if (collectionValueCallRhs :nodes n: n.value) then {
-                        lvr0: emitExpr :nodes :symtab :ctx n: n.value
+                    if (collectionValueCallRhs :nodes n: avn9) then {
+                        lvr0: emitExpr :nodes :symtab :ctx n: avn9
                         lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
                         buf.append lb0.stringview
-                        emitValueTakeInvalidations :nodes :symtab :ctx n: n.value :ind :buf
+                        emitValueTakeInvalidations :nodes :symtab :ctx n: avn9 :ind :buf
                     } else {
-                        lcap: listCapArg :nodes :symtab :ctx n: n.value
+                        lcap: listCapArg :nodes :symtab :ctx n: avn9
                         lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
                         buf.append lb1.stringview
                     }
@@ -7721,13 +7722,13 @@ emitStmt: function {
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.setOriginTid) then {
             scb: symtab.reg.cnameOf tid: ltid
-            if (collectionValueCallRhs :nodes n: n.value) then {
-                svr: emitExpr :nodes :symtab :ctx n: n.value
+            if (collectionValueCallRhs :nodes n: avn9) then {
+                svr: emitExpr :nodes :symtab :ctx n: avn9
                 sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
                 buf.append sbc.stringview
-                emitValueTakeInvalidations :nodes :symtab :ctx n: n.value :ind :buf
+                emitValueTakeInvalidations :nodes :symtab :ctx n: avn9 :ind :buf
             } else {
-                scap: listCapArg :nodes :symtab :ctx n: n.value
+                scap: listCapArg :nodes :symtab :ctx n: avn9
                 sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
                 buf.append sb0.stringview
             }
@@ -7740,13 +7741,13 @@ emitStmt: function {
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.mapOriginTid) then {
             mcb: symtab.reg.cnameOf tid: ltid
-            if (collectionValueCallRhs :nodes n: n.value) then {
-                mvr: emitExpr :nodes :symtab :ctx n: n.value
+            if (collectionValueCallRhs :nodes n: avn9) then {
+                mvr: emitExpr :nodes :symtab :ctx n: avn9
                 mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
                 buf.append mbc.stringview
-                emitValueTakeInvalidations :nodes :symtab :ctx n: n.value :ind :buf
+                emitValueTakeInvalidations :nodes :symtab :ctx n: avn9 :ind :buf
             } else {
-                mcap: listCapArg :nodes :symtab :ctx n: n.value
+                mcap: listCapArg :nodes :symtab :ctx n: avn9
                 mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
                 buf.append mb0.stringview
             }
@@ -7758,13 +7759,13 @@ emitStmt: function {
             return
         }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.svTid then {
-            lvN: bindLitIndex :symtab :ctx n: n.value
+            lvN: bindLitIndex :symtab :ctx n: avn9
             if lvN > 0 then {
                 lsv2: "\{ind}\{ctx.svC}_t \{nm} = _zs\{lvN};\n"
                 buf.append lsv2.stringview
                 return
             }
-            svb: stringviewOfBase :symtab n: n.value
+            svb: stringviewOfBase :symtab n: avn9
             if svb.length > 0 then {
                 svacc4: ".".string
                 if (isPtrVar :ctx name: svb.stringview) then svacc4 = "->".string
@@ -7774,7 +7775,7 @@ emitStmt: function {
                 buf.append lsv4.stringview
                 return
             }
-            vx: emitExpr :nodes :symtab :ctx n: n.value
+            vx: emitExpr :nodes :symtab :ctx n: avn9
             flushArgHoists :ctx :ind :tmp :buf
             if (vx.stringview.startsWith prefix: "/*") then {
                 lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
@@ -7786,7 +7787,7 @@ emitStmt: function {
             return
         }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.strTid then {
-            fvN: stringCopyLitIndex :symtab :ctx n: n.value
+            fvN: stringCopyLitIndex :symtab :ctx n: avn9
             if fvN > 0 then {
                 lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
                 buf.append lsc.stringview
@@ -7798,14 +7799,14 @@ emitStmt: function {
                 :nodes
                 :symtab
                 :ctx
-                n: n.value
+                n: avn9
                 nm: nm.stringview
                 :ind
                 :tmp
                 :buf
             )
             if did9 then return
-            sx: emitExpr :nodes :symtab :ctx n: n.value
+            sx: emitExpr :nodes :symtab :ctx n: avn9
             flushArgHoists :ctx :ind :tmp :buf
             if (sx.stringview.startsWith prefix: "/*") then {
                 lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
@@ -7813,7 +7814,7 @@ emitStmt: function {
             } else {
                 lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
                 buf.append lst3.stringview
-                if (bindingRhsIsBorrow :nodes :symtab :ctx n: n.value) == false then {
+                if (bindingRhsIsBorrow :nodes :symtab :ctx n: avn9) == false then {
                     nmc3: nm.copy
                     tmp.frees.append nmc3
                 }
@@ -7825,7 +7826,7 @@ emitStmt: function {
                 :nodes
                 :symtab
                 :ctx
-                n: n.value
+                n: avn9
                 nm: nm.stringview
                 ct: ct.stringview
                 :ind
@@ -7837,7 +7838,7 @@ emitStmt: function {
                 :nodes
                 :symtab
                 :ctx
-                n: n.value
+                n: avn9
                 nm: nm.stringview
                 ct: ct.stringview
                 :ind
@@ -7849,7 +7850,7 @@ emitStmt: function {
                 :nodes
                 :symtab
                 :ctx
-                n: n.value
+                n: avn9
                 nm: nm.stringview
                 ct: ct.stringview
                 tid: ltid
@@ -7859,14 +7860,14 @@ emitStmt: function {
             )
             if dd9 then return
         }
-        rv: emitExpr :nodes :symtab :ctx n: n.value
+        rv: emitExpr :nodes :symtab :ctx n: avn9
         flushArgHoists :ctx :ind :tmp :buf
         if ct.length > 0 then {
             la: "\{ind}\{ct} \{nm} = \{rv};\n"
             buf.append la.stringview
-            emitValueTakeInvalidations :nodes :symtab :ctx n: n.value :ind :buf
+            emitValueTakeInvalidations :nodes :symtab :ctx n: avn9 :ind :buf
             ftFn9: false
-            ftnid9: nodeIdOf9 n: n.value
+            ftnid9: nodeIdOf9 n: avn9
             if ftnid9 > 0 then {
                 ftst9: stampIdOf :symtab nid: ftnid9
                 if ftst9 > 0 then {
@@ -7878,11 +7879,11 @@ emitStmt: function {
                     }
                 }
             }
-            if (isFieldTake :nodes n: n.value) when ftFn9 == false then {
+            if (isFieldTake :nodes n: avn9) when ftFn9 == false then {
                 ftz9: "\{ind}\{rv} = (\{ct}){0};\n"
                 buf.append ftz9.stringview
             } else {
-                bts9: takeStringSource :nodes :symtab :ctx n: n.value
+                bts9: takeStringSource :nodes :symtab :ctx n: avn9
                 if bts9.length > 0 then {
                     bzz9: "\{ind}\{rv} = (\{ct}){0};\n"
                     buf.append bzz9.stringview
@@ -7897,7 +7898,7 @@ emitStmt: function {
                 ltHasDtor9 = true
             }
             if ltHasDtor9 then {
-                if (bindingRhsIsBorrow :nodes :symtab :ctx n: n.value) == false then {
+                if (bindingRhsIsBorrow :nodes :symtab :ctx n: avn9) == false then {
                     ldcb: cnameOf tid: ltid name: tn.stringview
                     ldRef9: "&\{nm}"
                     if (isBoxTid :symtab tid: ltid) then ldRef9 = "\{nm}"
@@ -7912,20 +7913,22 @@ emitStmt: function {
             buf.append lb.stringview
         }
     } case reassignment then {
-        nm2: emitReassignLvalue :nodes :symtab :ctx n: n.topath
-        rcph9: copyRvalueHoist :nodes :symtab :ctx n: n.value :ind :buf
+        tpn29: nodes.get i: (n.topath - 1).u64
+        rvn29: nodes.get i: (n.value - 1).u64
+        nm2: emitReassignLvalue :nodes :symtab :ctx n: tpn29
+        rcph9: copyRvalueHoist :nodes :symtab :ctx n: rvn29 :ind :buf
         rv2: String
         if rcph9.length > 0 then {
             rv2 = rcph9
         } else {
-            rvi9: emitInterpStmtValue :nodes :symtab :ctx n: n.value :ind :tmp :buf
+            rvi9: emitInterpStmtValue :nodes :symtab :ctx n: rvn29 :ind :tmp :buf
             if rvi9.length > 0 then {
                 rv2 = rvi9
             } else {
-                rv2 = emitExpr :nodes :symtab :ctx n: n.value
+                rv2 = emitExpr :nodes :symtab :ctx n: rvn29
             }
         }
-        rtnid9: nodeIdOf9 n: n.topath
+        rtnid9: nodeIdOf9 n: tpn29
         rtsid9: stampIdOf :symtab nid: rtnid9
         rttn9: stampNameOf :symtab nid: rtnid9
         # a collection-typedef lvalue (Bytes) stores and destroys as its
@@ -7980,7 +7983,7 @@ emitStmt: function {
         # double-free the payload (mirrors the binding case; fn-typed fields
         # are POD references and move nothing).
         rftFn9: false
-        rftnid9: nodeIdOf9 n: n.value
+        rftnid9: nodeIdOf9 n: rvn29
         if rftnid9 > 0 then {
             rftst9: stampIdOf :symtab nid: rftnid9
             if rftst9 > 0 then {
@@ -7989,7 +7992,7 @@ emitStmt: function {
                 }
             }
         }
-        if (isFieldTake :nodes n: n.value) when rftFn9 == false then {
+        if (isFieldTake :nodes n: rvn29) when rftFn9 == false then {
             if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
                 rftzh9: "\{ind}\{rv2} = NULL;\n"
                 buf.append rftzh9.stringview
@@ -8006,15 +8009,15 @@ emitStmt: function {
         # are consumed by it -- invalidate each moved source so its scope-exit
         # free no-ops (mirrors the binding case; disjoint from the bare-local
         # move below, which a construction RHS never matches).
-        emitValueTakeInvalidations :nodes :symtab :ctx n: n.value :ind :buf
-        emitNarrowedTakeZero :nodes :symtab :ctx n: n.value :ind :buf
+        emitValueTakeInvalidations :nodes :symtab :ctx n: rvn29 :ind :buf
+        emitNarrowedTakeZero :nodes :symtab :ctx n: rvn29 :ind :buf
         # a reassignment from a bare owned local is a MOVE: zero the source so its
         # scope-exit free no-ops (the lvalue -- a local or a struct field appended
         # into a container -- now owns the heap). Scalars/valtypes have no
         # destructor and are left untouched.
-        zsrc9: implicitTakeSource :symtab :ctx n: n.value
+        zsrc9: implicitTakeSource :symtab :ctx n: rvn29
         if zsrc9.length > 0 then {
-            znid9: nodeIdOf9 n: n.value
+            znid9: nodeIdOf9 n: rvn29
             zid9: stampIdOf :symtab nid: znid9
             znm9: stampNameOf :symtab nid: znid9
             if (isHeapPtrCollection :symtab :ctx tid: zid9) then {
@@ -8036,9 +8039,11 @@ emitStmt: function {
             }
         }
     } case swapstmt then {
-        lx: emitExpr :nodes :symtab :ctx n: n.lhs
-        rx: emitExpr :nodes :symtab :ctx n: n.rhs
-        lnid: nodeIdOf9 n: n.lhs
+        lhn9: nodes.get i: (n.lhs - 1).u64
+        rhn9: nodes.get i: (n.rhs - 1).u64
+        lx: emitExpr :nodes :symtab :ctx n: lhn9
+        rx: emitExpr :nodes :symtab :ctx n: rhn9
+        lnid: nodeIdOf9 n: lhn9
         lsid: stampIdOf :symtab nid: lnid
         lct: typeRefC :symtab :ctx tid: lsid thisTid: 0
         if lct.length == 0 then {
@@ -9879,8 +9884,9 @@ bodyReassigns9: function {nodes: List Node n: Node name: StringView} out bool is
     } case expression then {
         return (bodyReassigns9 :nodes n: n.expression :name)
     } case reassignment then {
-        rb9: atomTextOf n: n.topath
-        if rb9.length == 0 then rb9 = dottedBaseAtom n: n.topath
+        tpn9: nodes.get i: (n.topath - 1).u64
+        rb9: atomTextOf n: tpn9
+        if rb9.length == 0 then rb9 = dottedBaseAtom n: tpn9
         return rb9.stringview == name
     } case ifexpr then {
         hif9: false
@@ -12091,9 +12097,9 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
         scanNeeds :nodes :ctx n: n.lhs
         scanNeeds :nodes :ctx n: n.rhs
     } case assignment then {
-        scanNeeds :nodes :ctx n: n.value
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.value - 1).u64)
     } case reassignment then {
-        scanNeeds :nodes :ctx n: n.value
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.value - 1).u64)
     } case ifexpr then {
         citer: n.clauses.iterate
         for c: citer loop scanNeeds :nodes :ctx n: c
@@ -18800,7 +18806,7 @@ nodeYieldCount: function {nodes: List Node n: Node} out u64 is {
     } case expression then {
         return (nodeYieldCount :nodes n: n.expression)
     } case assignment then {
-        return (nodeYieldCount :nodes n: n.value)
+        return (nodeYieldCount :nodes n: (nodes.get i: (n.value - 1).u64))
     } case forexpr then {
         return (optNodeYieldCount :nodes o: n.body)
     } case ifexpr then {

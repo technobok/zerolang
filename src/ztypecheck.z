@@ -1224,9 +1224,9 @@ nodeMentionsName: function {nodes: List Node n: Node name: StringView} out bool 
         sln9: nodes.get i: (n.statementline - 1).u64
         return (nodeMentionsName :nodes n: sln9 :name)
     } case assignment then {
-        return (nodeMentionsName :nodes n: n.value :name)
+        return (nodeMentionsName :nodes n: (nodes.get i: (n.value - 1).u64) :name)
     } case reassignment then {
-        return (nodeMentionsName :nodes n: n.value :name)
+        return (nodeMentionsName :nodes n: (nodes.get i: (n.value - 1).u64) :name)
     } case caseexpr then {
         if (nodeMentionsName :nodes n: n.subject :name) then return true
         citer: n.clauses.iterate
@@ -6036,10 +6036,10 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
         scanCallsInNode :nodes :reg node: node.lhs
         scanCallsInNode :nodes :reg node: node.rhs
     } case assignment then {
-        scanCallsInNode :nodes :reg node: node.value
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.value - 1).u64)
     } case reassignment then {
-        scanCallsInNode :nodes :reg node: node.topath
-        scanCallsInNode :nodes :reg node: node.value
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.topath - 1).u64)
+        scanCallsInNode :nodes :reg node: (nodes.get i: (node.value - 1).u64)
     } case ifexpr then {
         for cl: node.clauses.iterate loop scanCallsInNode :nodes :reg node: cl
         scanBodyOpt :nodes :reg bodyOpt: node.elseclause
@@ -12290,14 +12290,15 @@ checkAssignment: function {
     asgn: zast.AssignmentData
 } is {
     drainPendingBorrow :st
-    vt: checkValue :st :unitName :nodes :unitBody node: asgn.value
+    av9: nodes.get i: (asgn.value - 1).u64
+    vt: checkValue :st :unitName :nodes :unitBody node: av9
     if vt == 0 then {
-        ubn9: unresolvedBareCallable :st :unitName n: asgn.value
+        ubn9: unresolvedBareCallable :st :unitName n: av9
         if ubn9.length > 0 then {
             ubm9: "Unknown reference '\{ubn9}'"
-            ubid9: nodeId n: asgn.value
-            ubln9: nodeLine n: asgn.value
-            ubcl9: nodeCol n: asgn.value
+            ubid9: nodeId n: av9
+            ubln9: nodeLine n: av9
+            ubcl9: nodeCol n: av9
             (addError
                 :st
                 nodeid: ubid9
@@ -12312,9 +12313,9 @@ checkAssignment: function {
     vt = mvt
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.nullType then {
         m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        vln1: nodeLine n: asgn.value
-        vcl1: nodeCol n: asgn.value
-        vid1: nodeId n: asgn.value
+        vln1: nodeLine n: av9
+        vcl1: nodeCol n: av9
+        vid1: nodeId n: av9
         en1: String
         eh1: String
         (addErrorH
@@ -12347,7 +12348,7 @@ checkAssignment: function {
         st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
         setk: vt
         st.typing.nodeType.set key: asgn.nodeid.u64 value: setk
-        rn5: bareAtomName n: asgn.value
+        rn5: bareAtomName n: av9
         if rn5.length > 0 when (typeIsReftype
             :st
             tid: vt
@@ -12389,7 +12390,7 @@ checkAssignment: function {
         # Binding a tagged-subtype construction narrows the name to the
         # constructed arm (assignment-based narrowing: the overlay keeps the
         # subject's type with the narrowed-subtype sidecar).
-        ucArm: unionCreateArmName :st n: asgn.value
+        ucArm: unionCreateArmName :st n: av9
         if ucArm.length > 0 then {
             (st.narrow
                 name: asgn.name.stringview
@@ -12411,15 +12412,17 @@ checkReassignment: function {
     rasgn: zast.ReassignmentData
 } is {
     st.typing.inAssignTarget = true
-    lvt: checkValue :st :unitName :nodes :unitBody node: rasgn.topath
+    tpn9: nodes.get i: (rasgn.topath - 1).u64
+    rvn9: nodes.get i: (rasgn.value - 1).u64
+    lvt: checkValue :st :unitName :nodes :unitBody node: tpn9
     st.typing.inAssignTarget = false
-    rvt: checkValue :st :unitName :nodes :unitBody node: rasgn.value
+    rvt: checkValue :st :unitName :nodes :unitBody node: rvn9
     mrv0: materialiseLiteral :st :unitName t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
         m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        vln0: nodeLine n: rasgn.value
-        vcl0: nodeCol n: rasgn.value
-        vid0: nodeId n: rasgn.value
+        vln0: nodeLine n: rvn9
+        vcl0: nodeCol n: rvn9
+        vid0: nodeId n: rvn9
         en0: String
         eh0: String
         (addErrorH
@@ -12442,13 +12445,13 @@ checkReassignment: function {
         match (
             tso
         ) case some then {
-            troot: methodReceiverRoot n: rasgn.topath
+            troot: methodReceiverRoot n: tpn9
             if troot.length > 0 then {
                 tto: st.lookup name: troot.stringview
                 match (
                     tto
                 ) case some then {
-                    tfn: dottedChildName n: rasgn.topath
+                    tfn: dottedChildName n: tpn9
                     if tfn.length > 0 then {
                         mrvt: materialiseLiteral :st :unitName t: rvt
                         (st.typing.setChild
@@ -12458,7 +12461,7 @@ checkReassignment: function {
                         )
                         settof: mrvt
                         st.typing.nodeType.set key: tso.u64 value: settof
-                        tpid: nodeId n: rasgn.topath
+                        tpid: nodeId n: tpn9
                         if tpid > 0 then {
                             settp: mrvt
                             st.typing.nodeType.set key: tpid.u64 value: settp
@@ -12473,14 +12476,14 @@ checkReassignment: function {
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
     if lvt > 0 when rvt > 0 when (isLiteralTypeId :st tid: rvt) then {
         if (isLiteralTypeId :st tid: lvt) == false then {
-            iid: innermostNodeId n: rasgn.value
+            iid: innermostNodeId n: rvn9
             if iid > 0 then {
                 setc: lvt
                 st.typing.nodeType.set key: iid.u64 value: setc
             }
         }
     }
-    nm: atomName n: rasgn.topath
+    nm: atomName n: tpn9
     if nm.length > 0 then {
         st.resetNarrowing name: nm.stringview
         nvo9: st.lookupVarId name: nm.stringview
@@ -12506,8 +12509,8 @@ checkReassignment: function {
             }
         } case none then null
     }
-    troot9: methodReceiverRoot n: rasgn.topath
-    tfn9: dottedChildName n: rasgn.topath
+    troot9: methodReceiverRoot n: tpn9
+    tfn9: dottedChildName n: tpn9
     if troot9.length > 0 when tfn9.length > 0 then {
         tto9: st.lookup name: troot9.stringview
         match (
@@ -12529,7 +12532,7 @@ checkReassignment: function {
     }
     # A bare-name reftype RHS is a move: the source invalidates (the symtab
     # appends its taken overlay entry).
-    rn: bareAtomName n: rasgn.value
+    rn: bareAtomName n: rvn9
     if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
         vo: st.lookupVarId name: rn.stringview
         match (
@@ -12562,8 +12565,8 @@ checkSwap: function {
     nodes: List Node unitBody: List u32
     swapnode: zast.SwapStmtData
 } is {
-    checkValue :st :unitName :nodes :unitBody node: swapnode.lhs
-    checkValue :st :unitName :nodes :unitBody node: swapnode.rhs
+    checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (swapnode.lhs - 1).u64)
+    checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (swapnode.rhs - 1).u64)
 }
 
 # withValueOwnership -- the with-binding's ownership from the bound value's
