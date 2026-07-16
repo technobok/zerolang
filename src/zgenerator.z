@@ -214,20 +214,17 @@ returnHeadName: function {nodes: List zast.Node n: Node} out String is {
     match (
         n
     ) case functiondef then {
-        return (returnHeadOpt o: n.returntype)
+        return (returnHeadOpt :nodes oId: n.returntype)
     } else {
         return "".string
     }
 }
 
-returnHeadOpt: function {o: Option Node} out String is {
-    match (
-        o
-    ) case some then {
-        return (returnHeadOf n: o)
-    } case none then {
-        return "".string
-    }
+returnHeadOpt: function {nodes: List Node oId: u32} out String is {
+    if oId == 0 then return "".string
+    o: nodes.get i: (oId - 1).u64
+    return (returnHeadOf n: o)
+
 }
 
 returnHeadOf: function {n: Node} out String is {
@@ -419,17 +416,16 @@ givesParts: function {nodes: List zast.Node ids: GenIds n: Node} out GivesParts 
     match (
         n
     ) case functiondef then {
-        givesPartsOpt :nodes :ids o: n.returntype dst: result
+        givesPartsOpt :nodes :ids oId: n.returntype dst: result
     } else null
     return result
 }
 
-givesPartsOpt: function {nodes: List zast.Node ids: GenIds o: Option Node dst: GivesParts} is {
-    match (
-        o
-    ) case some then {
-        givesPartsOf :nodes :ids n: o :dst
-    } case none then null
+givesPartsOpt: function {nodes: List zast.Node ids: GenIds oId: u32 dst: GivesParts} is {
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    givesPartsOf :nodes :ids n: o :dst
+
 }
 
 givesPartsOf: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesParts} is {
@@ -666,11 +662,12 @@ buildCreateMethod: function {
     )
     body: mkReturnBody :nodes :ids :line :col inner: icall
     thisRet: mkAtom :ids :line :col name: "this"
+    thisRetId: zast.tableAppendRebase :nodes n: thisRet
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
         lineno: line
         colno: col
-        returntype: (Option.some thisRet)
+        returntype: thisRetId
         parameters: params
         body: (Option.some body)
         isNative: false
@@ -687,7 +684,7 @@ buildCallMethod: function {
     line: u32
     col: u32
     body: Node.take
-    wrapExpr: Node.take
+    wrapExprId: u32
     valueParam: (Option Node).take
 } out Node is {
     thisP: mkAtom :ids :line :col name: "this"
@@ -705,7 +702,7 @@ buildCallMethod: function {
         nodeid: ids.mint
         lineno: line
         colno: col
-        returntype: (Option.some wrapExpr)
+        returntype: wrapExprId
         parameters: params
         body: (Option.some body)
         isNative: false
@@ -790,11 +787,12 @@ buildFactory: function {
     )
     body: mkReturnBody :nodes :ids :line :col inner: icall
     retAtom: mkAtom :ids :line :col name: synthName
+    retAtomId: zast.tableAppendRebase :nodes n: retAtom
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
         lineno: line
         colno: col
-        returntype: (Option.some retAtom)
+        returntype: retAtomId
         parameters: params
         body: (Option.some body)
         isNative: false
@@ -1700,6 +1698,20 @@ rewriteToThis: function {
     }
 }
 
+# rewriteOptToThisAt -- rewrite a child named by id and intern the result,
+# returning its id (0 = absent). The clone's own id is the one it carries.
+rewriteOptToThisAt: function {
+    nodes: List zast.Node
+    ids: GenIds
+    oId: u32
+    promoted: (Map String value: bool)
+} out u32 is {
+    if oId == 0 then return 0
+    o9: nodes.get i: (oId - 1).u64
+    r9: rewriteToThis :nodes :ids n: o9 :promoted
+    return (zast.tableAppendRebase :nodes n: r9)
+}
+
 rewriteOptToThis: function {
     nodes: List zast.Node
     ids: GenIds
@@ -1974,7 +1986,7 @@ canLowerNow: function {nodes: List zast.Node n: Node hasReceiver: bool} out bool
                 }
             }
         }
-        hd: returnHeadOpt o: n.returntype
+        hd: returnHeadOpt :nodes oId: n.returntype
         if hd.length == 0 then return false
 
         match (
@@ -2090,15 +2102,16 @@ lowerOne: function {
             gbase
         ) case some then {
             wrapper: buildWrapper :nodes :ids :line :col base: gbase.take leaf: gp.leaf.stringview
-            # the EXPRESSION wrapper's id keys the pendingMono record; the
-            # typechecker's valtype collapse looks it up there.
-            wid: ids.mint
+            # the EXPRESSION wrapper keys the valtype collapse the
+            # typechecker applies to the `.call` return, and interning is
+            # what settles its id -- so key on what it carries afterwards
             wrapExpr: (Node.expression (zast.ExpressionData
-                nodeid: wid
+                nodeid: ids.mint
                 lineno: line
                 colno: col
                 expression: wrapper)
             )
+            wid: zast.tableAppendRebase :nodes n: wrapExpr
             # captured parameters: names, field paths, create/factory clones
             pNames: (List String)
             pFields: (List Node)
@@ -2260,7 +2273,7 @@ lowerOne: function {
                     :line
                     :col
                     body: newBodyOpt.take
-                    :wrapExpr
+                    wrapExprId: wid
                     :valueParam
                 )
                 createM: (buildCreateMethod

@@ -2056,26 +2056,30 @@ recordTyperef: function {
 
 # returnParamTid -- when a return typeref names one of the enclosing
 # template's generic parameters, its canonical parameter type id; else 0.
-returnParamTid: function {reg: ztypes.ZTypeRegistry enclKey: StringView o: Option Node} out u64 is {
-    match (
-        o
-    ) case some then {
-        bn: atomName n: o
-        # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
-        # base name through the peeled parent.
-        if bn.length == 0 then bn = markerPeeledBase n: o
-        if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
-            po: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
-            match (
-                po
-            ) case some then {
-                return po
-            } case none then null
-            rpt7: reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
-            reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: rpt7
-            return rpt7
-        }
-    } case none then null
+returnParamTid: function {
+    reg: ztypes.ZTypeRegistry
+    enclKey: StringView
+    nodes: List Node
+    oId: u32
+} out u64 is {
+    if oId == 0 then return 0
+    o: nodes.get i: (oId - 1).u64
+    bn: atomName n: o
+    # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
+    # base name through the peeled parent.
+    if bn.length == 0 then bn = markerPeeledBase n: o
+    if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
+        po: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
+        match (
+            po
+        ) case some then {
+            return po
+        } case none then null
+        rpt7: reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
+        reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: rpt7
+        return rpt7
+    }
+
     return 0
 }
 
@@ -2129,13 +2133,12 @@ partialReturnTid: function {
     nodes: List Node units: List u32
     unitName: StringView
     enclKey: StringView
-    o: Option Node
+    oId: u32
 } out u64 is {
-    match (
-        o
-    ) case some then {
-        return (partialTyperefTid :ty :reg :nodes :units :unitName :enclKey n: o)
-    } case none then null
+    if oId == 0 then return 0
+    o: nodes.get i: (oId - 1).u64
+    return (partialTyperefTid :ty :reg :nodes :units :unitName :enclKey n: o)
+
     return 0
 }
 
@@ -2192,32 +2195,31 @@ stampGenericParamRef: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     enclKey: StringView
-    o: Option Node
+    nodes: List Node oId: u32
 } is {
-    match (
-        o
-    ) case some then {
-        bn: atomName n: o
-        # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
-        # base name through the peeled parent; the marker dp wears the stamp,
-        # matching recordTyperef's convention for concrete marked returns.
-        if bn.length == 0 then bn = markerPeeledBase n: o
-        if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
-            gpt3: u64
-            gpo3: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
-            match (
-                gpo3
-            ) case some then {
-                gpt3 = gpo3
-            } case none then {
-                gpt3 = reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
-                reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: gpt3
-            }
-            gnid3: nodeId n: o
-            gpv3b: gpt3
-            ty.nodeType.set key: gnid3.u64 value: gpv3b
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    bn: atomName n: o
+    # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
+    # base name through the peeled parent; the marker dp wears the stamp,
+    # matching recordTyperef's convention for concrete marked returns.
+    if bn.length == 0 then bn = markerPeeledBase n: o
+    if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
+        gpt3: u64
+        gpo3: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
+        match (
+            gpo3
+        ) case some then {
+            gpt3 = gpo3
+        } case none then {
+            gpt3 = reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
+            reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: gpt3
         }
-    } case none then null
+        gnid3: nodeId n: o
+        gpv3b: gpt3
+        ty.nodeType.set key: gnid3.u64 value: gpv3b
+    }
+
 }
 
 # recordGenericMarkerReturn -- a marker-suffixed generic-param return
@@ -2230,29 +2232,27 @@ recordGenericMarkerReturn: function {
     reg: ztypes.ZTypeRegistry
     unitName: StringView
     enclKey: StringView
-    o: Option Node
+    nodes: List Node oId: u32
 } is {
-    match (
-        o
-    ) case some then {
-        mpb3: markerPeeledBase n: o
-        if mpb3.length > 0 when (reg.isGenericParamOf typeKey: enclKey name: mpb3.stringview) then {
-            mnid3: nodeId n: o
-            recordNodeName :ty :unitName name: mpb3.stringview nid: mnid3.u64
-        }
-    } case none then null
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    mpb3: markerPeeledBase n: o
+    if mpb3.length > 0 when (reg.isGenericParamOf typeKey: enclKey name: mpb3.stringview) then {
+        mnid3: nodeId n: o
+        recordNodeName :ty :unitName name: mpb3.stringview nid: mnid3.u64
+    }
+
 }
 
 # recordFuncReturnNode -- map a function type id to its return type-ref's node id
 # so a call site can read the resolved return type (node_type, post stampTyperefs).
-recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 o: Option Node} is {
-    match (
-        o
-    ) case some then {
-        rn: nodeId n: o
-        fidc: fid
-        ty.funcReturnNode.set key: fidc value: rn.u64
-    } case none then null
+recordFuncReturnNode: function {ty: ztyping.ZTyping fid: u64 nodes: List Node oId: u32} is {
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    rn: nodeId n: o
+    fidc: fid
+    ty.funcReturnNode.set key: fidc value: rn.u64
+
 }
 
 # recordReturnType -- record a function's `out T` return type-ref (mirrors
@@ -2264,13 +2264,12 @@ recordReturnType: function {
     nodes: List Node units: List u32
     unitName: StringView
     thisName: StringView
-    o: Option Node
+    oId: u32
 } is {
-    match (
-        o
-    ) case some then {
-        recordTyperef :ty :reg :nodes :units :unitName :thisName node: o
-    } case none then null
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    recordTyperef :ty :reg :nodes :units :unitName :thisName node: o
+
 }
 
 # demandTyperefNames -- record demands for every name a type-expr
@@ -2626,14 +2625,11 @@ returnHasBorrowMarkerNode: function {n: Node} out bool is {
     }
 }
 
-returnHasBorrowMarker: function {o: Option Node} out bool is {
-    match (
-        o
-    ) case some then {
-        return (returnHasBorrowMarkerNode n: o)
-    } case none then {
-        return false
-    }
+returnHasBorrowMarker: function {nodes: List Node oId: u32} out bool is {
+    if oId == 0 then return false
+    o: nodes.get i: (oId - 1).u64
+    return (returnHasBorrowMarkerNode n: o)
+
 }
 
 # paramIsThisReceiver -- the parameter's type names the receiver: bare `this`
@@ -2707,13 +2703,12 @@ demandReturnType: function {
     nodes: List Node
     reg: ztypes.ZTypeRegistry
     unitName: StringView
-    o: Option Node
+    oId: u32
 } is {
-    match (
-        o
-    ) case some then {
-        demandTyperefNames :nodes :reg :unitName typeExpr: o
-    } case none then null
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    demandTyperefNames :nodes :reg :unitName typeExpr: o
+
 }
 
 # resolveFunction -- resolve a function definition signature into a FUNCTION
@@ -2963,7 +2958,7 @@ resolveFunction: function {
             }
         } else null
     }
-    demandReturnType :nodes :reg :unitName o: fnode.returntype
+    demandReturnType :nodes :reg :unitName oId: fnode.returntype
     (recordReturnType
         :ty
         :reg
@@ -2971,30 +2966,32 @@ resolveFunction: function {
         :units
         :unitName
         :thisName
-        o: fnode.returntype
+        oId: fnode.returntype
     )
-    recordFuncReturnNode :ty :fid o: fnode.returntype
+    recordFuncReturnNode :nodes :ty :fid oId: fnode.returntype
     (stampGenericParamRef
         :ty
         :reg
+        :nodes
         enclKey: enclKey.stringview
-        o: fnode.returntype
+        oId: fnode.returntype
     )
     (recordGenericMarkerReturn
         :ty
         :reg
+        :nodes
         :unitName
         enclKey: enclKey.stringview
-        o: fnode.returntype
+        oId: fnode.returntype
     )
     rpt4: u64
     frOpt9: fnode.returntype
     if isgen then {
-        rpt4 = returnParamTid :reg enclKey: fnKey9.stringview o: frOpt9
+        rpt4 = returnParamTid :nodes :reg enclKey: fnKey9.stringview oId: frOpt9
     }
     if rpt4 == 0 then {
         frOpt9b: fnode.returntype
-        rpt4 = returnParamTid :reg enclKey: enclKey.stringview o: frOpt9b
+        rpt4 = returnParamTid :nodes :reg enclKey: enclKey.stringview oId: frOpt9b
     }
     if rpt4 > 0 then reg.setReturnType typeId: fid value: rpt4
     if rpt4 == 0 when unitName == "collections" then {
@@ -3013,12 +3010,12 @@ resolveFunction: function {
                 :nodes :units
                 :unitName
                 enclKey: enclKey.stringview
-                o: fnode.returntype
+                oId: fnode.returntype
             )
             if prt4 > 0 then reg.setReturnType typeId: fid value: prt4
         }
     }
-    if (returnHasBorrowMarker o: fnode.returntype) then {
+    if (returnHasBorrowMarker :nodes oId: fnode.returntype) then {
         fbk: fid
         fbv: true
         ty.funcReturnsBorrow.set key: fbk value: fbv
@@ -4929,7 +4926,7 @@ resolveDef: function {
             skipThisType: false
         )
         ty.nodeType.set key: defn.nodeid.u64 value: fid
-        if (isGeneratorReturn o: defn.returntype) then {
+        if (isGeneratorReturn :nodes oId: defn.returntype) then {
             (synthGeneratorIterClass
                 :ty
                 :reg
@@ -6616,14 +6613,11 @@ isIteratorCall: function {op: Node} out bool is {
 
 # isGeneratorReturn -- true when a function's return type is the Iterator protocol
 # (i.e. the function is a generator that lowers to a synth iterator class).
-isGeneratorReturn: function {o: Option Node} out bool is {
-    match (
-        o
-    ) case some then {
-        return (isIteratorCall op: o)
-    } case none then {
-        return false
-    }
+isGeneratorReturn: function {nodes: List Node oId: u32} out bool is {
+    if oId == 0 then return false
+    o: nodes.get i: (oId - 1).u64
+    return (isIteratorCall op: o)
+
 }
 
 # subtreeHasYield -- true if a node subtree contains a yield expression.
@@ -6779,13 +6773,12 @@ addResumeInput: function {
     nodes: List Node units: List u32
     iterId: u64
     callId: u64
-    returntype: Option Node
+    returntypeId: u32
 } is {
-    match (
-        returntype
-    ) case some then {
-        addResumeInputExpr :ty :reg :nodes :units :iterId :callId rt: returntype
-    } case none then null
+    if returntypeId == 0 then return
+    returntype: nodes.get i: (returntypeId - 1).u64
+    addResumeInputExpr :ty :reg :nodes :units :iterId :callId rt: returntype
+
 }
 addResumeInputExpr: function {
     ty: ztyping.ZTyping
@@ -6939,7 +6932,7 @@ synthGeneratorForMethod: function {
     match (
         op
     ) case functiondef then {
-        if (isGeneratorReturn o: op.returntype) then {
+        if (isGeneratorReturn :nodes oId: op.returntype) then {
             synthGeneratorIterClass :ty :reg :nodes :units :unitName :fnName :thisName fnode: op
         }
     } else null
@@ -7004,7 +6997,7 @@ synthGeneratorIterClass: function {
         :units
         :iterId
         :callId
-        returntype: fnode.returntype
+        returntypeId: fnode.returntype
     )
     if (bodyHasYieldingLoop body: fnode.body) then {
         addPromotedLocals :ty :reg :nodes :units :iterId body: fnode.body
@@ -7300,21 +7293,18 @@ typeNameOfReg: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
 # fnReturnBaseName -- the base type name of a function's return typeref
 # ("" when absent), for completing substituted signatures whose template
 # return was still unresolved at signature time.
-fnReturnBaseName: function {o: Option Node} out String is {
-    match (
-        o
-    ) case some then {
-        return (baseTypeName n: o)
-    } case none then {
-        return "".string
-    }
+fnReturnBaseName: function {nodes: List Node oId: u32} out String is {
+    if oId == 0 then return "".string
+    o: nodes.get i: (oId - 1).u64
+    return (baseTypeName n: o)
+
 }
 
 fnReturnBaseNameOf: function {nodes: List Node op: Node} out String is {
     match (
         op
     ) case functiondef then {
-        return (fnReturnBaseName o: op.returntype)
+        return (fnReturnBaseName :nodes oId: op.returntype)
     } else {
         return "".string
     }
@@ -7334,10 +7324,10 @@ cloneUnitMethod: function {nodes: List Node ids: zgenerator.GenIds op: Node} out
             pc: zgenerator.clonePath :nodes :ids n: pp
             params9.append (zast.tableAppendRebase :nodes n: pc)
         }
-        rt9: (zgenerator.rewriteOptToThis
+        rt9: (zgenerator.rewriteOptToThisAt
             :nodes
             :ids
-            o: op.returntype
+            oId: op.returntype
             promoted: pm9
         )
         body9: zgenerator.rewriteOptToThis :nodes :ids o: op.body promoted: pm9
@@ -16650,14 +16640,13 @@ scanTypeNameOpt: function {
     st: zenv.ZSymbolTable
     unitName: StringView
     nodes: List Node unitBody: List u32
-    o: Option Node
+    oId: u32
 } is {
-    match (
-        o
-    ) case some then {
-        bn: baseTypeName n: o
-        if bn.length > 0 then maybeWalkMethods :st :unitName :nodes :unitBody name: bn.stringview
-    } case none then null
+    if oId == 0 then return
+    o: nodes.get i: (oId - 1).u64
+    bn: baseTypeName n: o
+    if bn.length > 0 then maybeWalkMethods :st :unitName :nodes :unitBody name: bn.stringview
+
 }
 
 # scanFnSig -- recurse the method-walk trigger through a function signature in
@@ -16672,7 +16661,7 @@ scanFnSig: function {
     match (
         op
     ) case functiondef then {
-        scanTypeNameOpt :st :unitName :nodes :unitBody o: op.returntype
+        scanTypeNameOpt :st :unitName :nodes :unitBody oId: op.returntype
         piter: op.parameters.iterate
         for pmId9: piter loop {
             pm: nodes.get i: (pmId9 - 1).u64
