@@ -284,6 +284,9 @@ utf8_encode_append: function {cp: u64 dst: String} is {
 Tokenizer: class {
     source: String
     pos: u64
+    # source index of the byte in .atchar (== source.length at EOF);
+    # token spans are [tokpos-at-start, tokpos-after) slices of source
+    tokpos: u64
     atchar: u8
     fsno: u32
     lineno: u32
@@ -300,6 +303,7 @@ Tokenizer: class {
         return (meta.create
             :source
             pos: 0
+            tokpos: 0
             atchar: ascii.nul
             :fsno
             lineno: 1
@@ -338,6 +342,7 @@ Tokenizer: class {
     # (ascii.nul if past end of source).
     # which returns the byte so call sites can write `c = self._accept()`.
     accept: function {:this} out u8 is {
+        this.tokpos = this.pos
         sv: this.source.stringview
         b: sv.byteAt this.pos
         match (
@@ -370,27 +375,22 @@ Tokenizer: class {
         col: this.colno
         c: this.atchar
         if c == ascii.backslash then return this.acceptcharescape
-        buf: String
-        for (isstrc this.atchar) loop {
-            buf.appendByte this.atchar
-            this.accept
-        }
-        if buf.length > 0 then {
+        s0: this.tokpos
+        for (isstrc this.atchar) loop this.accept
+        if this.tokpos > s0 then {
             return (Token
                 toktype: TT.strMidTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
                 tokenid: 0
             )
         }
-        err: String
-        err.appendByte this.atchar
         this.accept
         return (Token
             toktype: TT.errTok
-            tokstr: err
+            tokstr: (this.tokSpan s: s0 e: s0 + 1)
             fsno: this.fsno
             lineno: line
             colno: col
@@ -716,6 +716,12 @@ Tokenizer: class {
         )
     }
 
+    # tokSpan -- the source bytes [s, e) as one right-sized owned String.
+    tokSpan: function {:this s: u64 e: u64} out String is {
+        sv: this.source.stringview
+        return ((sv.substring from: s to: e).string)
+    }
+
     token: function {:this} out Token is {
         # Drain the lookahead slot first if a token is staged.
         # Inlined fields make this straightforward: copy out the
@@ -749,6 +755,7 @@ Tokenizer: class {
         line: this.lineno
         col: this.colno
         c: this.atchar
+        s0: this.tokpos
 
         if c == ascii.nul then {
             return (Token
@@ -762,14 +769,12 @@ Tokenizer: class {
         }
 
         if c == ascii.lf then {
-            buf: String
-            buf.appendByte c
             this.accept
             this.lineno = this.lineno + 1
             this.colno = 1
             return (Token
                 toktype: TT.eolTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -777,18 +782,13 @@ Tokenizer: class {
             )
         }
         if c == ascii.cr then {
-            buf: String
-            buf.appendByte c
             this.accept
-            if this.atchar == ascii.lf then {
-                buf.appendByte this.atchar
-                this.accept
-            }
+            if this.atchar == ascii.lf then this.accept
             this.lineno = this.lineno + 1
             this.colno = 1
             return (Token
                 toktype: TT.eolTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -819,13 +819,11 @@ Tokenizer: class {
         }
         if in_string then {
             if c == ascii.doubleQuote then {
-                end: String
-                end.appendByte c
                 this.accept
                 this.statepop
                 return (Token
                     toktype: TT.strEndTok
-                    tokstr: end
+                    tokstr: (this.tokSpan s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -837,14 +835,10 @@ Tokenizer: class {
         if raw_delim > 0 then return (this.acceptstringrawtoken delim_len: raw_delim)
 
         if (isws b: c) then {
-            buf: String
-            for (isws b: this.atchar) loop {
-                buf.appendByte this.atchar
-                this.accept
-            }
+            for (isws b: this.atchar) loop this.accept
             return (Token
                 toktype: TT.wsTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -853,14 +847,10 @@ Tokenizer: class {
         }
 
         if c == ascii.hash then {
-            buf: String
-            for (iscommentbody b: this.atchar) loop {
-                buf.appendByte this.atchar
-                this.accept
-            }
+            for (iscommentbody b: this.atchar) loop this.accept
             return (Token
                 toktype: TT.commentTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -874,24 +864,17 @@ Tokenizer: class {
         # STRINGRAW carrying the run length so the inner scanner can
         # match the closer.
         if c == ascii.doubleQuote then {
-            buf: String
             n: u64
             for this.atchar == ascii.doubleQuote loop {
-                buf.appendByte this.atchar
                 n = n + 1
                 this.accept
             }
             if n == 2 then {
-                # Empty string: emit STRBEG with a single `"` (matching
-                # the open-quote token) and stash a STREND for the next
-                # call. buf holds both consumed quotes, so build fresh.
-                beg: String
-                beg.appendByte ascii.doubleQuote
-                end: String
-                end.appendByte ascii.doubleQuote
+                # Empty string: emit STRBEG with the first quote and
+                # stash a STREND with the second for the next call.
                 this.nexttok = (Token
                     toktype: TT.strEndTok
-                    tokstr: end
+                    tokstr: (this.tokSpan s: s0 + 1 e: s0 + 2)
                     fsno: this.fsno
                     lineno: line
                     colno: col + 1
@@ -900,7 +883,7 @@ Tokenizer: class {
                 this.hasnext = true
                 return (Token
                     toktype: TT.strBegTok
-                    tokstr: beg
+                    tokstr: (this.tokSpan s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -911,7 +894,7 @@ Tokenizer: class {
                 this.statepush s: tokstatetype.string
                 return (Token
                     toktype: TT.strBegTok
-                    tokstr: buf
+                    tokstr: (this.tokSpan s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -924,7 +907,7 @@ Tokenizer: class {
             this.statepush s: tokstatetype.stringraw n.u8
             return (Token
                 toktype: TT.strBegTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -933,17 +916,15 @@ Tokenizer: class {
         }
 
         if c == ascii.dot then {
-            buf: String
             n: u64
             for this.atchar == ascii.dot loop {
-                buf.appendByte this.atchar
                 n = n + 1
                 this.accept
             }
             if n == 1 then {
                 return (Token
                     toktype: TT.dotTok
-                    tokstr: buf
+                    tokstr: (this.tokSpan s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -953,7 +934,7 @@ Tokenizer: class {
             if n == 3 then {
                 return (Token
                     toktype: TT.dotDotDotTok
-                    tokstr: buf
+                    tokstr: (this.tokSpan s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -962,7 +943,7 @@ Tokenizer: class {
             }
             return (Token
                 toktype: TT.errTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -971,12 +952,10 @@ Tokenizer: class {
         }
 
         if c == ascii.parenOpen then {
-            buf: String
-            buf.appendByte c
             this.accept
             return (Token
                 toktype: TT.parenOpenTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -984,12 +963,10 @@ Tokenizer: class {
             )
         }
         if c == ascii.parenClose then {
-            buf: String
-            buf.appendByte c
             this.accept
             return (Token
                 toktype: TT.parenCloseTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -997,8 +974,6 @@ Tokenizer: class {
             )
         }
         if c == ascii.braceOpen then {
-            buf: String
-            buf.appendByte c
             # If we are already inside an interpolation context, the `{`
             # opens a nested brace scope that must be tracked so the
             # matching `}` returns us to STRING (rather than ending the
@@ -1017,7 +992,7 @@ Tokenizer: class {
             if push_brace then this.statepush s: tokstatetype.stringexprbrace
             return (Token
                 toktype: TT.braceOpenTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1025,8 +1000,6 @@ Tokenizer: class {
             )
         }
         if c == ascii.braceClose then {
-            buf: String
-            buf.appendByte c
             # If the matching `{` was inside an interpolation, pop one
             # STRINGEXPRBRACE; if that was the last brace under
             # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
@@ -1054,7 +1027,7 @@ Tokenizer: class {
             }
             return (Token
                 toktype: TT.braceCloseTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1062,12 +1035,10 @@ Tokenizer: class {
             )
         }
         if c == ascii.semicolon then {
-            buf: String
-            buf.appendByte c
             this.accept
             return (Token
                 toktype: TT.semicolonTok
-                tokstr: buf
+                tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1096,16 +1067,13 @@ Tokenizer: class {
 
         word_line: this.lineno
         word_col: this.colno
+        s_word: this.tokpos
 
-        buf: String
-
-        # Optional +/- prefix (consumed into the buf if present).
+        # Optional +/- prefix.
         if c == ascii.plus then {
-            buf.appendByte c
             this.accept
             c = this.atchar
         } else if c == ascii.minus then {
-            buf.appendByte c
             this.accept
             c = this.atchar
         }
@@ -1116,10 +1084,8 @@ Tokenizer: class {
         if isdigit c then numbershaped = true
 
         # IDEN body.
-        for (isidchar this.atchar) loop {
-            buf.appendByte this.atchar
-            this.accept
-        }
+        for (isidchar this.atchar) loop this.accept
+        e_word: this.tokpos
 
         # Dot-continuation: if the word is number-shaped and the loop
         # ended on `.`, consume the dot only if the *next* char is also
@@ -1134,14 +1100,8 @@ Tokenizer: class {
             dot_col: this.colno
             this.accept
             if isdigit this.atchar then {
-                buf.appendByte ascii.dot
-                for (isidchar this.atchar) loop {
-                    buf.appendByte this.atchar
-                    this.accept
-                }
-                # Tail-assignment to keep both if-branches' last-stmt
-                # types aligned (else branch ends with an assignment).
-                this.hasnext = this.hasnext
+                for (isidchar this.atchar) loop this.accept
+                e_word = this.tokpos
             } else {
                 this.nexttok = (Token
                     toktype: TT.dotTok
@@ -1158,26 +1118,22 @@ Tokenizer: class {
         # Empty word: lone `:` after colonpre becomes ERR, stray
         # byte (we consumed nothing) emits ERR with the current
         # byte and advances to make progress.
-        if buf.length == 0 then {
+        if e_word == s_word then {
             if has_colonpre then {
                 # Lone colon: emit the colon as ERR.
-                err: String
-                err.appendByte ascii.colon
                 return (Token
                     toktype: TT.errTok
-                    tokstr: err
+                    tokstr: (this.tokSpan s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: colonpre_line
                     colno: colonpre_col
                     tokenid: 0
                 )
             }
-            err: String
-            err.appendByte c
             this.accept
             return (Token
                 toktype: TT.errTok
-                tokstr: err
+                tokstr: (this.tokSpan s: s_word e: s_word + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1185,35 +1141,37 @@ Tokenizer: class {
             )
         }
 
-        # Word is non-empty. Decide token type. Three mutually-
-        # exclusive early returns -- buf is consumed via `.copy`
-        # in exactly one place per execution path.
+        # Word is non-empty. Decide token type via the word's source
+        # span; the views stay scoped so no lock outlives the lookups.
+        kwfound: false
+        kwtt: TT.errTok
+        reservedfound: false
+        {
+            wsv: this.source.stringview
+            wv: wsv.substring from: s_word to: e_word
+            kw_res: kwlookup wv
+            kwfound = kw_res.found
+            kwtt = kw_res.tt
+            reservedfound = islookupReserved sv: wv
+        }
 
-        kw_res: kwlookup buf.stringview
-        kwfound: kw_res.found
-        reservedfound: islookupReserved sv: buf.stringview
-
-        # Path 1: colonpre. Stash the word, return ascii.colon-as-ERR.
-        # `.copy` here so `buf` survives for the path-3 fallthrough
-        # caller (a take would consume it on the conditional branch).
+        # Path 1: colonpre. Stash the word, return the colon.
         if has_colonpre then {
             stage_tt: TT.labelPreTok
             if kwfound then stage_tt = TT.errTok
             if reservedfound then stage_tt = TT.errTok
             this.nexttok = (Token
                 toktype: stage_tt
-                tokstr: buf.copy
+                tokstr: (this.tokSpan s: s_word e: e_word)
                 fsno: this.fsno
                 lineno: word_line
                 colno: word_col
                 tokenid: 0
             )
             this.hasnext = true
-            colon_only: String
-            colon_only.appendByte ascii.colon
             return (Token
                 toktype: TT.colonTok
-                tokstr: colon_only
+                tokstr: (this.tokSpan s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: colonpre_line
                 colno: colonpre_col
@@ -1242,16 +1200,9 @@ Tokenizer: class {
             )
             this.hasnext = true
             this.accept
-            # Inline `tokstr: buf.copy` here over-propagates the take
-            # through the conditional to the path-3 fallthrough below.
-            # The Item-2 compiler fix exempted `.copy` for field
-            # reassignments but not yet for class-construction call
-            # args in conditional branches; keep the local binding
-            # until that gap closes.
-            labelbuf: buf.copy
             return (Token
                 toktype: TT.labelTok
-                tokstr: labelbuf
+                tokstr: (this.tokSpan s: s_word e: e_word)
                 fsno: this.fsno
                 lineno: word_line
                 colno: word_col
@@ -1262,11 +1213,11 @@ Tokenizer: class {
         # Path 3: no colonpre, no trailing-colon-label. REFID, keyword,
         # or reserved-as-ERR via a single computed `tt`.
         ret_tt: TT.refIdTok
-        if kwfound then ret_tt = kw_res.tt
+        if kwfound then ret_tt = kwtt
         if reservedfound then ret_tt = TT.errTok
         return (Token
             toktype: ret_tt
-            tokstr: buf.copy
+            tokstr: (this.tokSpan s: s_word e: e_word)
             fsno: this.fsno
             lineno: word_line
             colno: word_col
