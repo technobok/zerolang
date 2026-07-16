@@ -19,7 +19,18 @@ OPTFLAGS := -O1 -fno-strict-aliasing -fwrapv
 # else -- corpus, goldens, bootstrap fixpoint -- emits with the SipHash
 # default; emitted C is byte-identical either way.
 ZCHASH   := --fast-hash
+# Daily drivers link the vendored mimalloc (vendor/mimalloc, one TU via
+# src/static.c) ahead of libc so its malloc/free override glibc's:
+# self-compile 0.93s -> 0.80s. `make MIMALLOC=0` builds pure-glibc
+# drivers. Everything else (bootstrap intermediates, ztestrunner, corpus
+# and user emission) stays glibc; the allocator never changes emitted C.
 BUILDDIR := out
+MIMALLOC ?= 1
+ifeq ($(MIMALLOC),1)
+MIMALLOC_OBJ := $(BUILDDIR)/mimalloc.o
+else
+MIMALLOC_OBJ :=
+endif
 
 # Bootstrap compiler for building the .z sources: the committed, Python-free
 # seed (bootstrap/zc.c -> $(BUILDDIR)/zc-seed; see bootstrap/README.md). A C
@@ -112,6 +123,14 @@ $(EXDIR)/%.bin: $(EXDIR)/%.c
 build: $(EXBINS)
 	@echo "$(words $(EXBINS)) examples built ($(EXDIR)/)"
 
+# out/mimalloc.o -- the vendored allocator, one TU (own flags: third-party
+# code is exempt from the project -Werror set). zc_tune.c is the option hook.
+$(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $(wildcard vendor/mimalloc/src/*.c) $(wildcard vendor/mimalloc/include/*.h)
+	@mkdir -p $(BUILDDIR)
+	$(CC) -O2 -DNDEBUG -DMI_MALLOC_OVERRIDE -I vendor/mimalloc/include -c vendor/mimalloc/src/static.c -o $(BUILDDIR)/mimalloc-core.o
+	$(CC) -O2 -DNDEBUG -I vendor/mimalloc/include -c vendor/mimalloc/zc_tune.c -o $(BUILDDIR)/mimalloc-tune.o
+	ld -r $(BUILDDIR)/mimalloc-core.o $(BUILDDIR)/mimalloc-tune.o -o $@
+
 # out/zc-seed -- the bootstrap compiler built from the committed, Python-free
 # seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
@@ -121,10 +140,10 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
 # self-locates to this repo (lib/system here; runtime falls back to src/runtime).
-bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP)
+bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP) $(MIMALLOC_OBJ)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc bin/zc.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc $(MIMALLOC_OBJ) bin/zc.c -lpthread
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
@@ -133,19 +152,19 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-bin/zl: bin/zc $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
+bin/zl: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl out/zl.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl $(MIMALLOC_OBJ) out/zl.c -lpthread
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-bin/zls: bin/zc $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
+bin/zls: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls out/zls.c
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls $(MIMALLOC_OBJ) out/zls.c -lpthread
 
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
