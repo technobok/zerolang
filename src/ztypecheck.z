@@ -699,32 +699,27 @@ populatePreludeBody: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     nodes: List Node
-    unitop: Node
+    unitopId: u32
 } is {
-    match (
-        unitop
-    ) case unitdef then {
-        with bit: unitop.body.iterate do for bmId9: bit loop {
-            bm: nodes.get i: (bmId9 - 1).u64
-            match (
-                bm
-            ) case namedoperation then {
-                dn: unitLabel o: bm.name
-                atgt0: dottedDefTarget n: (nodes.get i: (bm.operation - 1).u64)
-                if atgt0.length > 0 then {
-                    ps0: String
-                    with pit: (atgt0.stringview.split sep: ".") do for pseg: pit loop {
-                        if ps0.length == 0 then ps0 = pseg.string
-                    }
-                    pchk0: ps0.copy
-                    if (reg.unitNameTid.has key: pchk0) then {
-                        pk0: dn.copy
-                        ty.preludeUnit.set key: pk0 value: ps0
-                    }
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitopId
+    with bit: bodyIds9.iterate do for bmId9: bit loop {
+        bm: nodes.get i: (bmId9 - 1).u64
+        if bm.namedoperation then {
+            dn: unitLabel o: bm.name
+            atgt0: dottedDefTarget n: (nodes.get i: (bm.operation - 1).u64)
+            if atgt0.length > 0 then {
+                ps0: String
+                with pit: (atgt0.stringview.split sep: ".") do for pseg: pit loop {
+                    if ps0.length == 0 then ps0 = pseg.string
                 }
-            } else null
+                pchk0: ps0.copy
+                if (reg.unitNameTid.has key: pchk0) then {
+                    pk0: dn.copy
+                    ty.preludeUnit.set key: pk0 value: ps0
+                }
+            }
         }
-    } else null
+    }
 }
 
 # populatePrelude -- fill ty.preludeUnit from core's re-exports BEFORE any
@@ -735,18 +730,22 @@ populatePrelude: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
         program
     ) case program then {
         with uit: program.units.iterate do for ruId9: uit loop {
-            ru: program.nodes.get i: (ruId9 - 1).u64
-            match (
-                ru
-            ) case namedoperation then {
-                unm: unitLabel o: ru.name
-                if unm.stringview == "core" then (populatePreludeBody
+            opId9: u32
+            {
+                ru: program.nodes.get i: (ruId9 - 1).u64
+                if ru.namedoperation then {
+                    unm: unitLabel o: ru.name
+                    if unm.stringview == "core" then opId9 = ru.operation
+                }
+            }
+            if opId9 > 0 then {
+                (populatePreludeBody
                     :ty
                     :reg
                     nodes: program.nodes
-                    unitop: (program.nodes.get i: (ru.operation - 1).u64)
+                    unitopId: opId9
                 )
-            } else null
+            }
         }
     } else null
 }
@@ -762,19 +761,25 @@ indexUnitDefs: function {ty: ztyping.ZTyping program: Node} is {
     ) case program then {
         uidx0: u64
         with uit: program.units.iterate do for ruId9: uit loop {
-            ru: program.nodes.get i: (ruId9 - 1).u64
-            match (
-                ru
-            ) case namedoperation then {
-                unm: unitLabel o: ru.name
+            opId9: u32
+            unm9: String
+            {
+                ru: program.nodes.get i: (ruId9 - 1).u64
+                if ru.namedoperation then {
+                    unm: unitLabel o: ru.name
+                    opId9 = ru.operation
+                    unm9 = unm.copy
+                }
+            }
+            if opId9 > 0 then {
                 (indexUnitBody
                     :ty
                     nodes: program.nodes
-                    unitName: unm.stringview
+                    unitName: unm9.stringview
                     unitIdx: uidx0
-                    unitop: (program.nodes.get i: (ru.operation - 1).u64)
+                    unitopId: opId9
                 )
-            } else null
+            }
             uidx0 = uidx0 + 1
         }
         ty.defNodeIndexBuilt = true
@@ -788,17 +793,14 @@ indexUnitBody: function {
     nodes: List Node
     unitName: StringView
     unitIdx: u64
-    unitop: Node
+    unitopId: u32
 } is {
-    match (
-        unitop
-    ) case unitdef then {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitopId
+    {
         bidx0: u64
-        with bit: unitop.body.iterate do for bmId9: bit loop {
+        with bit: bodyIds9.iterate do for bmId9: bit loop {
             bm: nodes.get i: (bmId9 - 1).u64
-            match (
-                bm
-            ) case namedoperation then {
+            if bm.namedoperation then {
                 dn: unitLabel o: bm.name
                 tto: defTypetypeOf defn: (nodes.get i: (bm.operation - 1).u64) name: dn.stringview
                 match (
@@ -822,10 +824,10 @@ indexUnitBody: function {
                 sk1: "\{unitName}.\{dn}"
                 bv1: bidx0
                 ty.defNodeBodyIdx.set key: sk1 value: bv1
-            } else null
+            }
             bidx0 = bidx0 + 1
         }
-    } else null
+    }
 }
 
 # defTypetypeOf -- the typetype a top-level definition node declares, mirroring
@@ -1477,14 +1479,9 @@ registerGenericParams: function {
 # unitDefIsGeneric -- a unit definition is generic when its body declares a generic
 # param. Mirrors objectdefIsGeneric; gates dep-signature-stamp suppression off generic
 # units, whose template signatures resolve differently.
-unitDefIsGeneric: function {nodes: List Node o: Node} out bool is {
-    match (
-        o
-    ) case unitdef then {
-        return (hasGenericParam :nodes items: o.body)
-    } else {
-        return false
-    }
+unitDefIsGeneric: function {nodes: List Node oId: u32} out bool is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: oId
+    return (hasGenericParam :nodes items: bodyIds9)
 }
 
 # pathOwnership -- the ownership a param/field type expr declares via a `.lock`/
@@ -4789,30 +4786,26 @@ descendIntoUnit: function {
     unitName: StringView
     defName: StringView
     bodyIdx: u64
-    unitdef: Node
+    unitdefId: u32
 } is {
-    match (
-        unitdef
-    ) case unitdef then {
-        bm9Id9: unitdef.body.get i: bodyIdx
-        bm9: nodes.get i: (bm9Id9 - 1).u64
-        match (
-            bm9
-        ) case namedoperation then {
-            dn9: unitLabel o: bm9.name
-            if dn9.stringview == defName then {
-                (resolveDef
-                    :ty
-                    :reg
-                    :nodes
-                    :units
-                    :unitName
-                    :defName
-                    defn: (nodes.get i: (bm9.operation - 1).u64)
-                )
-            }
-        } else null
-    } else null
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    if bodyIdx >= bodyIds9.length then return
+    bm9Id9: bodyIds9.get i: bodyIdx
+    bm9: nodes.get i: (bm9Id9 - 1).u64
+    if bm9.namedoperation then {
+        dn9: unitLabel o: bm9.name
+        if dn9.stringview == defName then {
+            (resolveDef
+                :ty
+                :reg
+                :nodes
+                :units
+                :unitName
+                :defName
+                defn: (nodes.get i: (bm9.operation - 1).u64)
+            )
+        }
+    }
 }
 
 # descendNamed -- reference-level DFS entry: resolve a named top-level def's
@@ -4892,7 +4885,7 @@ descendNamed: function {
             unitName: defUnit
             defName: name
             bodyIdx: bidx9
-            unitdef: (nodes.get i: (ue9.operation - 1).u64)
+            unitdefId: ue9.operation
         )
     } else null
     ty.suppressSigStamp = sup9
@@ -5361,20 +5354,15 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
 # when a stdlib unit is the MAIN unit (an editor opened it): its type
 # defs have no in-graph consumers, so nothing would demand them and
 # their signature typerefs would never stamp.
-demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry nodes: List Node unitdef: Node} is {
-    match (
-        unitdef
-    ) case unitdef then {
-        with dit9: unitdef.body.iterate do for bm9Id9: dit9 loop {
-            bm9: nodes.get i: (bm9Id9 - 1).u64
-            match (
-                bm9
-            ) case namedoperation then {
-                dn9: unitLabel o: bm9.name
-                if dn9.length > 0 then reg.recordDemand name: dn9.stringview
-            } else null
+demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry nodes: List Node unitdefId: u32} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    with dit9: bodyIds9.iterate do for bm9Id9: dit9 loop {
+        bm9: nodes.get i: (bm9Id9 - 1).u64
+        if bm9.namedoperation then {
+            dn9: unitLabel o: bm9.name
+            if dn9.length > 0 then reg.recordDemand name: dn9.stringview
         }
-    } else null
+    }
 }
 
 # nativeOnlyBodyError -- one diagnostic for a bodied function declared in a
@@ -5472,45 +5460,22 @@ checkNativeOnlyUnitBodies: function {
     nodes: List Node
     ty: ztyping.ZTyping
     unitName: StringView
-    unitdef: Node
+    unitdefId: u32
 } is {
-    match (
-        unitdef
-    ) case unitdef then {
-        with dit9: unitdef.body.iterate do for dm9Id9: dit9 loop {
-            dm9: nodes.get i: (dm9Id9 - 1).u64
-            match (
-                dm9
-            ) case namedoperation then {
-                dn9: unitLabel o: dm9.name
-                (nativeOnlyCheckOp
-                    :nodes
-                    :ty
-                    :unitName
-                    defName: dn9.stringview
-                    op: (nodes.get i: (dm9.operation - 1).u64)
-                )
-            } else null
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    with dit9: bodyIds9.iterate do for dm9Id9: dit9 loop {
+        dm9: nodes.get i: (dm9Id9 - 1).u64
+        if dm9.namedoperation then {
+            dn9: unitLabel o: dm9.name
+            (nativeOnlyCheckOp
+                :nodes
+                :ty
+                :unitName
+                defName: dn9.stringview
+                op: (nodes.get i: (dm9.operation - 1).u64)
+            )
         }
-    } else null
-}
-
-# unitHasBodiedFreeFn -- a unit carries at least one top-level bodied
-# function (ordinary emitted code inside a runtime-backed unit).
-unitHasBodiedFreeFn: function {nodes: List Node unitdef: Node} out bool is {
-    match (
-        unitdef
-    ) case unitdef then {
-        with bit9: unitdef.body.iterate do for bm9Id9: bit9 loop {
-            bm9: nodes.get i: (bm9Id9 - 1).u64
-            match (
-                bm9
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (nodes.get i: (bm9.operation - 1).u64)) then return true
-            } else null
-        }
-    } else null
-    return false
+    }
 }
 
 # unitHasDemandedBodiedFn -- a unit carries a top-level bodied function the
@@ -5522,29 +5487,20 @@ unitHasDemandedBodiedFn: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
-    unitdef: Node
+    unitdefId: u32
 } out bool is {
-    match (
-        unitdef
-    ) case unitdef then {
-        with bit9: unitdef.body.iterate do for bm9Id9: bit9 loop {
-            bm9: nodes.get i: (bm9Id9 - 1).u64
-            match (
-                bm9
-            ) case namedoperation then {
-                if (isFunctionDefWithBody o: (nodes.get i: (bm9.operation - 1).u64)) then {
-                    bn9: unitLabel o: bm9.name
-                    bk9: "\{unitName}.\{bn9}"
-                    ro9: resolvedByKey :ty :reg key: bk9
-                    match (
-                        ro9
-                    ) case some then {
-                        return true
-                    } case none then null
-                }
-            } else null
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    with bit9: bodyIds9.iterate do for bm9Id9: bit9 loop {
+        bm9: nodes.get i: (bm9Id9 - 1).u64
+        if bm9.namedoperation then {
+            if (isFunctionDefWithBody o: (nodes.get i: (bm9.operation - 1).u64)) then {
+                bn9: unitLabel o: bm9.name
+                bk9: "\{unitName}.\{bn9}"
+                ro9: resolvedByKey :ty :reg key: bk9
+                if ro9.some then return true
+            }
         }
-    } else null
+    }
     return false
 }
 
@@ -5577,7 +5533,7 @@ registerAndResolveMain: function {
                         :ty
                         nodes: program.nodes
                         unitName: nm.stringview
-                        unitdef: (program.nodes.get i: (mu.operation - 1).u64)
+                        unitdefId: mu.operation
                     )
                 }
                 eager9: isFileUnit name: nm.stringview
@@ -5587,7 +5543,7 @@ registerAndResolveMain: function {
                     if (eager9) == false then (demandAllUnitDefs
                         :reg
                         nodes: program.nodes
-                        unitdef: (program.nodes.get i: (mu.operation - 1).u64)
+                        unitdefId: mu.operation
                     )
                     eager9 = true
                 }
@@ -5601,7 +5557,7 @@ registerAndResolveMain: function {
                         if (nm.stringview == mainName) == false then {
                             if (unitDefIsGeneric
                                 nodes: program.nodes
-                                o: (program.nodes.get i: (mu.operation - 1).u64)
+                                oId: mu.operation
                             ) == false then supp = true
                         }
                     }
@@ -5728,37 +5684,32 @@ resolveConformanceDefs: function {
     reg: ztypes.ZTypeRegistry
     nodes: List Node units: List u32
     unitName: StringView
-    unitdef: Node
+    unitdefId: u32
 } is {
-    match (
-        unitdef
-    ) case unitdef then {
-        biter: unitdef.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                if (declaresConformance
-                    :nodes
-                    op: (nodes.get i: (bmNode9.operation - 1).u64)
-                ) then {
-                    dn: unitLabel o: bmNode9.name
-                    rkey: "\{unitName}.\{dn}"
-                    if (ty.definedKeys.has item: rkey) == false then {
-                        (resolveDef
-                            :ty
-                            :reg
-                            :nodes :units
-                            :unitName
-                            defName: dn.stringview
-                            defn: (nodes.get i: (bmNode9.operation - 1).u64)
-                        )
-                    }
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    biter: bodyIds9.iterate
+    for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            if (declaresConformance
+                :nodes
+                op: (nodes.get i: (bmNode9.operation - 1).u64)
+            ) then {
+                dn: unitLabel o: bmNode9.name
+                rkey: "\{unitName}.\{dn}"
+                if (ty.definedKeys.has item: rkey) == false then {
+                    (resolveDef
+                        :ty
+                        :reg
+                        :nodes :units
+                        :unitName
+                        defName: dn.stringview
+                        defn: (nodes.get i: (bmNode9.operation - 1).u64)
+                    )
                 }
-            } else null
+            }
         }
-    } else null
+    }
 }
 
 # seedIteratorDemands -- a collection template's produced methods carry
@@ -6024,26 +5975,19 @@ objectHasMethodBody: function {nodes: List Node op: Node} out bool is {
 }
 
 # unitHasObjectMethodBody -- true when a unit body holds an objectdef with a method-body.
-unitHasObjectMethodBody: function {nodes: List Node def: Node} out bool is {
-    match (
-        def
-    ) case unitdef then {
-        biter: def.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                if (objectHasMethodBody
-                    :nodes
-                    op: (nodes.get i: (bmNode9.operation - 1).u64)
-                ) then return true
-            } else null
+unitHasObjectMethodBody: function {nodes: List Node defId: u32} out bool is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: defId
+    biter: bodyIds9.iterate
+    for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            if (objectHasMethodBody
+                :nodes
+                op: (nodes.get i: (bmNode9.operation - 1).u64)
+            ) then return true
         }
-        return false
-    } else {
-        return false
     }
+    return false
 }
 
 # seedBodyWalkDemands -- the reference WALKS objectdef method bodies during
@@ -6216,27 +6160,26 @@ scanDefCalls: function {nodes: List Node reg: ztypes.ZTypeRegistry op: Node} is 
 # over the reached (isDemanded) non-generic objectdef members; the cross-unit
 # demand fixpoint then resolves the newly-demanded types and depWalkUnit walks
 # them. The isDemanded gate matches the reference's reached-only closure.
-scanDemandedDepClassBodies: function {reg: ztypes.ZTypeRegistry nodes: List Node unitdef: Node} is {
-    match (
-        unitdef
-    ) case unitdef then {
-        for bmId9: unitdef.body.iterate loop {
-            bm: nodes.get i: (bmId9 - 1).u64
-            match (
-                bm
-            ) case namedoperation then {
-                cn: unitLabel o: bm.name
-                if (reg.isDemanded name: cn.stringview) then {
-                    hasm: objectdefHasMethodBodies :nodes op: (nodes.get i: (bm.operation - 1).u64)
-                    if hasm when (objectdefIsGeneric
-                        :nodes
-                        o: (nodes.get i: (bm.operation - 1).u64)
-                    ) then hasm = false
-                    if hasm then scanDefCalls :nodes :reg op: (nodes.get i: (bm.operation - 1).u64)
-                }
-            } else null
+scanDemandedDepClassBodies: function {
+    reg: ztypes.ZTypeRegistry
+    nodes: List Node
+    unitdefId: u32
+} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    for bmId9: bodyIds9.iterate loop {
+        bm: nodes.get i: (bmId9 - 1).u64
+        if bm.namedoperation then {
+            cn: unitLabel o: bm.name
+            if (reg.isDemanded name: cn.stringview) then {
+                hasm: objectdefHasMethodBodies :nodes op: (nodes.get i: (bm.operation - 1).u64)
+                if hasm when (objectdefIsGeneric
+                    :nodes
+                    o: (nodes.get i: (bm.operation - 1).u64)
+                ) then hasm = false
+                if hasm then scanDefCalls :nodes :reg op: (nodes.get i: (bm.operation - 1).u64)
+            }
         }
-    } else null
+    }
 }
 
 
@@ -6259,7 +6202,7 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
                 if eager9 then (scanUnitCalls
                     :reg
                     nodes: program.nodes
-                    unitdef: (program.nodes.get i: (u.operation - 1).u64)
+                    unitdefId: u.operation
                 )
             } else null
         }
@@ -6267,19 +6210,14 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
 }
 
 # scanUnitCalls -- scan each function definition's body in a unit for call demands.
-scanUnitCalls: function {reg: ztypes.ZTypeRegistry nodes: List Node unitdef: Node} is {
-    match (
-        unitdef
-    ) case unitdef then {
-        for bmId9: unitdef.body.iterate loop {
-            bm: nodes.get i: (bmId9 - 1).u64
-            match (
-                bm
-            ) case namedoperation then {
-                scanDefCalls :nodes :reg op: (nodes.get i: (bm.operation - 1).u64)
-            } else null
+scanUnitCalls: function {reg: ztypes.ZTypeRegistry nodes: List Node unitdefId: u32} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    for bmId9: bodyIds9.iterate loop {
+        bm: nodes.get i: (bmId9 - 1).u64
+        if bm.namedoperation then {
+            scanDefCalls :nodes :reg op: (nodes.get i: (bm.operation - 1).u64)
         }
-    } else null
+    }
 }
 
 seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
@@ -6298,7 +6236,7 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
                 if nm.stringview == mainName then {
                     if (unitHasObjectMethodBody
                         nodes: program.nodes
-                        def: (program.nodes.get i: (u.operation - 1).u64)
+                        defId: u.operation
                     ) then found = true
                 }
             } else null
@@ -6321,7 +6259,7 @@ onFirstEntry: function {
     nodes: List Node units: List u32
     unitName: StringView
     mainName: StringView
-    unitdef: Node
+    unitdefId: u32
     full: bool
     entered: Set String
 } is {
@@ -6329,15 +6267,15 @@ onFirstEntry: function {
     entered.add item: unitName.string
     if unitName == "io" then {
         if full then seedIoDemands :reg
-        resolveConformanceDefs :ty :reg :nodes :units unitName: "io" :unitdef
+        resolveConformanceDefs :ty :reg :nodes :units unitName: "io" :unitdefId
         return
     }
     if unitName == "collections" then {
-        resolveConformanceDefs :ty :reg :nodes :units unitName: "collections" :unitdef
+        resolveConformanceDefs :ty :reg :nodes :units unitName: "collections" :unitdefId
         return
     }
     if unitName == "system" then {
-        resolveConformanceDefs :ty :reg :nodes :units unitName: "system" :unitdef
+        resolveConformanceDefs :ty :reg :nodes :units unitName: "system" :unitdefId
         return
     }
     if unitName == "os" then return
@@ -6345,7 +6283,7 @@ onFirstEntry: function {
     if unitName == mainName then return
     reg.recordDemand name: "return"
     reg.recordDemand name: "never"
-    scanDemandedDepClassBodies :reg :nodes :unitdef
+    scanDemandedDepClassBodies :reg :nodes :unitdefId
 }
 
 # resolveDemandsByDescent -- the descent-era demand worklist. Seeds the body-walk
@@ -6438,7 +6376,7 @@ resolveDemandsByDescent: function {
                                 units: program.units
                                 unitName: un9.stringview
                                 mainName: mainName9
-                                unitdef: (program.nodes.get i: (u9.operation - 1).u64)
+                                unitdefId: u9.operation
                                 :full
                                 entered: entered9
                             )
@@ -17425,12 +17363,12 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                     reg: st.reg
                     nodes: program.nodes
                     unitName: dun9.stringview
-                    unitdef: (program.nodes.get i: (du9.operation - 1).u64)
+                    unitdefId: du9.operation
                 ) then {
                     (demandAllUnitDefs
                         reg: st.reg
                         nodes: program.nodes
-                        unitdef: (program.nodes.get i: (du9.operation - 1).u64)
+                        unitdefId: du9.operation
                     )
                     hasStd9 = true
                 }
@@ -17463,7 +17401,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                         reg: st.reg
                         nodes: program.nodes
                         unitName: wun9.stringview
-                        unitdef: (program.nodes.get i: (wu9.operation - 1).u64)
+                        unitdefId: wu9.operation
                     ) then {
                         (depWalkUnit
                             :st
@@ -17922,12 +17860,11 @@ resolveConstantDefsInUnit: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     mainName: StringView
-    unitdef: Node
+    unitdefId: u32
 } is {
-    match (
-        unitdef
-    ) case unitdef then {
-        biter: unitdef.body.iterate
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    {
+        biter: bodyIds9.iterate
         for bm: biter loop {
             bmNode9: nodes.get i: (bm - 1).u64
             match (
@@ -17946,7 +17883,7 @@ resolveConstantDefsInUnit: function {
                 }
             } else null
         }
-    } else null
+    }
 }
 
 # resolveConstantDefs -- under the full driver, materialise the main unit's numeric
@@ -17970,7 +17907,7 @@ resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
                         :reg
                         nodes: program.nodes
                         :mainName
-                        unitdef: (program.nodes.get i: (u.operation - 1).u64)
+                        unitdefId: u.operation
                     )
                 }
             } else null
@@ -17979,30 +17916,23 @@ resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
 }
 
 # unitHasYieldFn -- any function member of this unit whose body suspends.
-unitHasYieldFn: function {nodes: List Node unitdef: Node} out bool is {
-    match (
-        unitdef
-    ) case unitdef then {
-        biter: unitdef.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                if (zgenerator.fnBodyHasYield
-                    :nodes
-                    n: (nodes.get i: (bmNode9.operation - 1).u64)
-                ) then return true
-                if (objectHasYieldMethod
-                    :nodes
-                    n: (nodes.get i: (bmNode9.operation - 1).u64)
-                ) then return true
-            } else null
+unitHasYieldFn: function {nodes: List Node unitdefId: u32} out bool is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitdefId
+    biter: bodyIds9.iterate
+    for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            if (zgenerator.fnBodyHasYield
+                :nodes
+                n: (nodes.get i: (bmNode9.operation - 1).u64)
+            ) then return true
+            if (objectHasYieldMethod
+                :nodes
+                n: (nodes.get i: (bmNode9.operation - 1).u64)
+            ) then return true
         }
-        return false
-    } else {
-        return false
     }
+    return false
 }
 
 # objectHasYieldMethod -- any is/as member of an object definition whose
@@ -18103,7 +18033,7 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             ) case namedoperation then {
                 if (unitHasYieldFn
                     nodes: program.nodes
-                    unitdef: (program.nodes.get i: (yu.operation - 1).u64)
+                    unitdefId: yu.operation
                 ) then anyYield = true
             } else null
         }
