@@ -11997,7 +11997,7 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
     match (
         n
     ) case functiondef then {
-        scanNeedsOpt :nodes :ctx o: n.body
+        if n.body > 0 then scanNeeds :nodes :ctx n: (nodes.get i: (n.body - 1).u64)
     } case objectdef then {
         with aiter: n.asItems.iterate do for amId9: aiter loop {
             am: nodes.get i: (amId9 - 1).u64
@@ -12648,13 +12648,7 @@ isFunctionDefWithBody9: function {n: Node} out bool is {
     match (
         n
     ) case functiondef then {
-        match (
-            n.body
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
+        return n.body > 0
     } else {
         return false
     }
@@ -12891,7 +12885,10 @@ emitFnBody: function {
             }
             pj9 = pj9 + 1
         }
-        emitBodyOpt :nodes :symtab :ctx o: op.body ind: "    " :tmp :buf
+        if op.body > 0 then {
+            opb9: nodes.get i: (op.body - 1).u64
+            emitBodyNode :nodes :symtab :ctx n: opb9 ind: "    " :tmp :buf
+        }
         fiter9: tmp.frees.iterate
         for fv: fiter9 loop {
             lf9: "    \{ctx.strC}_free(&\{fv});\n"
@@ -12969,7 +12966,7 @@ collectFnLiterals: function {nodes: List Node n: Node ids: List u64 texts: List 
     match (
         n
     ) case functiondef then {
-        collectLiteralsOpt :nodes o: n.body :ids :texts
+        if n.body > 0 then collectLiterals :nodes n: (nodes.get i: (n.body - 1).u64) :ids :texts
     } case objectdef then {
         with aiter: n.asItems.iterate do for amId9: aiter loop {
             am: nodes.get i: (amId9 - 1).u64
@@ -18784,11 +18781,12 @@ optNodeYieldCount: function {o: Option Node} out u64 is {
 }
 
 # fnYieldCount -- yields in a functiondef body (0 for a non-generator).
-fnYieldCount: function {op: Node} out u64 is {
+fnYieldCount: function {nodes: List Node op: Node} out u64 is {
     match (
         op
     ) case functiondef then {
-        return (optNodeYieldCount o: op.body)
+        if op.body == 0 then return 0
+        return (nodeYieldCount n: (nodes.get i: (op.body - 1).u64))
     } else {
         return 0
     }
@@ -18804,7 +18802,7 @@ setupGenCtx: function {
     mid: u64
     op: Node
 } out bool is {
-    gyc: fnYieldCount :op
+    gyc: fnYieldCount :nodes :op
     if gyc == 0 then {
         ctx.genActive = false
         return false

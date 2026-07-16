@@ -1264,12 +1264,18 @@ nodeMentionsNameOpt: function {nodes: List Node o: Option Node name: StringView}
     }
 }
 
+# nodeMentionsNameOptAt -- nodeMentionsName over a table id (0 = absent).
+nodeMentionsNameOptAt: function {nodes: List Node oId: u32 name: StringView} out bool is {
+    if oId == 0 then return false
+    return (nodeMentionsName :nodes n: (nodes.get i: (oId - 1).u64) :name)
+}
+
 # fnBodyMentions -- nodeMentionsName over a function definition's body.
 fnBodyMentions: function {nodes: List Node op: Node name: StringView} out bool is {
     match (
         op
     ) case functiondef then {
-        return (nodeMentionsNameOpt :nodes o: op.body :name)
+        return (nodeMentionsNameOptAt :nodes oId: op.body :name)
     } else {
         return false
     }
@@ -2736,12 +2742,7 @@ resolveFunction: function {
     )
     reg.setNative typeId: fid value: fnode.isNative
     {
-        fhbV: false
-        match (
-            fnode.body
-        ) case some then {
-            fhbV = true
-        } case none then null
+        fhbV: fnode.body > 0
         fhbK: fid
         ty.fnHasBody.set key: fhbK value: fhbV
     }
@@ -2766,14 +2767,9 @@ resolveFunction: function {
                 }
             } else null
         }
-        hasB: false
-        match (
-            fnode.body
-        ) case some then {
-            hasB = true
-        } case none then null
+        hasB: fnode.body > 0
         if hasB then {
-            dvg: bodyEndsInReturn bodyOpt: fnode.body
+            dvg: bodyEndsInReturn :nodes bodyId: fnode.body
             fidd: fid
             ty.fnBodyDiverges.set key: fidd value: dvg
         }
@@ -5875,17 +5871,12 @@ fixupCustomTags: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry mainNam
     }
 }
 
-# bodyEndsInReturn -- true when an optional body block's last statement is a
+# bodyEndsInReturn -- true when a function body's last statement is a
 # bare `return ...` call (the syntactic divergence the clone-scope synthesis
 # needs; no stamps are made).
-bodyEndsInReturn: function {bodyOpt: Option Node} out bool is {
-    match (
-        bodyOpt
-    ) case some then {
-        return (blockEndsInReturn block: bodyOpt)
-    } case none then {
-        return false
-    }
+bodyEndsInReturn: function {nodes: List Node bodyId: u32} out bool is {
+    if bodyId == 0 then return false
+    return (blockEndsInReturn block: (nodes.get i: (bodyId - 1).u64))
 }
 
 blockEndsInReturn: function {block: Node} out bool is {
@@ -5939,13 +5930,7 @@ isFunctionDefWithBody: function {o: Node} out bool is {
     match (
         o
     ) case functiondef then {
-        match (
-            o.body
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
+        return o.body > 0
     } else {
         return false
     }
@@ -6122,6 +6107,11 @@ scanBodyOpt: function {nodes: List Node reg: ztypes.ZTypeRegistry bodyOpt: Optio
     } case none then null
 }
 
+# scanBodyAt -- scan a function body table id for call demands (0 = absent).
+scanBodyAt: function {nodes: List Node reg: ztypes.ZTypeRegistry bodyId: u32} is {
+    if bodyId > 0 then scanCallsInNode :nodes :reg node: (nodes.get i: (bodyId - 1).u64)
+}
+
 # scanDefCalls -- scan a functiondef's body, or an objectdef's is/as method
 # bodies, for call demands. A type constructed only inside a method body must be
 # demanded here or it never resolves and the construction stamps type 0.
@@ -6129,7 +6119,7 @@ scanDefCalls: function {nodes: List Node reg: ztypes.ZTypeRegistry op: Node} is 
     match (
         op
     ) case functiondef then {
-        scanBodyOpt :nodes :reg bodyOpt: op.body
+        scanBodyAt :nodes :reg bodyId: op.body
     } case objectdef then {
         iiter: op.isItems.iterate
         for imId9: iiter loop {
@@ -6678,16 +6668,11 @@ nodeIsYieldingLoop: function {node: Node} out bool is {
     }
 }
 
-# bodyHasYieldingLoop -- true when a function body (optional statement block) contains a
+# bodyHasYieldingLoop -- true when a function body (a table id, 0 = absent) contains a
 # yielding loop. Generators with one promote their straight-line locals to fields.
-bodyHasYieldingLoop: function {body: Option Node} out bool is {
-    match (
-        body
-    ) case some then {
-        return (blockHasYieldingLoop blk: body)
-    } case none then {
-        return false
-    }
+bodyHasYieldingLoop: function {nodes: List Node bodyId: u32} out bool is {
+    if bodyId == 0 then return false
+    return (blockHasYieldingLoop blk: (nodes.get i: (bodyId - 1).u64))
 }
 blockHasYieldingLoop: function {blk: Node} out bool is {
     match (
@@ -6730,13 +6715,11 @@ addPromotedLocals: function {
     reg: ztypes.ZTypeRegistry
     nodes: List Node units: List u32
     iterId: u64
-    body: Option Node
+    bodyId: u32
 } is {
-    match (
-        body
-    ) case some then {
-        addPromotedLocalsBlk :ty :reg :nodes :units :iterId blk: body
-    } case none then null
+    if bodyId > 0 then {
+        addPromotedLocalsBlk :ty :reg :nodes :units :iterId blk: (nodes.get i: (bodyId - 1).u64)
+    }
 }
 addPromotedLocalsBlk: function {
     ty: ztyping.ZTyping
@@ -6877,13 +6860,11 @@ addInlineIterFields: function {
     reg: ztypes.ZTypeRegistry
     nodes: List Node units: List u32
     iterId: u64
-    body: Option Node
+    bodyId: u32
 } is {
-    match (
-        body
-    ) case some then {
-        addInlineIterFieldsBlk :ty :reg :nodes :units :iterId blk: body
-    } case none then null
+    if bodyId > 0 then {
+        addInlineIterFieldsBlk :ty :reg :nodes :units :iterId blk: (nodes.get i: (bodyId - 1).u64)
+    }
 }
 addInlineIterFieldsBlk: function {
     ty: ztyping.ZTyping
@@ -6999,10 +6980,10 @@ synthGeneratorIterClass: function {
         :callId
         returntypeId: fnode.returntype
     )
-    if (bodyHasYieldingLoop body: fnode.body) then {
-        addPromotedLocals :ty :reg :nodes :units :iterId body: fnode.body
+    if (bodyHasYieldingLoop :nodes bodyId: fnode.body) then {
+        addPromotedLocals :ty :reg :nodes :units :iterId bodyId: fnode.body
     }
-    addInlineIterFields :ty :reg :nodes :units :iterId body: fnode.body
+    addInlineIterFields :ty :reg :nodes :units :iterId bodyId: fnode.body
     ty.setChild parentTypeId: iterId childName: "create" childTypeId: createId
     ty.setChild parentTypeId: iterId childName: "call" childTypeId: callId
     if needsDtor then {
@@ -7311,8 +7292,9 @@ fnReturnBaseNameOf: function {nodes: List Node op: Node} out String is {
 }
 
 # cloneUnitMethod -- deep-clone a template method functiondef with fresh synth
-# nodeids. The clone never registers in ast_nodes, so its body's stamps stay
-# out of the dump; only its walk's scope/entry/variable rows are visible.
+# nodeids. The clone's rows never become reachable from the program roots, so
+# its body's stamps stay out of the dump; only its walk's scope/entry/variable
+# rows are visible.
 cloneUnitMethod: function {nodes: List Node ids: zgenerator.GenIds op: Node} out Option Node is {
     match (
         op
@@ -7330,7 +7312,7 @@ cloneUnitMethod: function {nodes: List Node ids: zgenerator.GenIds op: Node} out
             oId: op.returntype
             promoted: pm9
         )
-        body9: zgenerator.rewriteOptToThis :nodes :ids o: op.body promoted: pm9
+        body9: zgenerator.rewriteOptToThisAt :nodes :ids oId: op.body promoted: pm9
         ln9: op.lineno
         cn9: op.colno
         fnew: (Node.functiondef (zast.FunctionData
@@ -16611,6 +16593,19 @@ walkBody: function {
     } case none then null
 }
 
+# walkBodyAt -- walkBody over a body table id (0 = a spec method, no body).
+walkBodyAt: function {
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    nodes: List Node unitBody: List u32
+    bodyId: u32
+} is {
+    if bodyId > 0 then {
+        b9: nodes.get i: (bodyId - 1).u64
+        checkStatement :st :unitName :nodes :unitBody block: b9
+    }
+}
+
 # nodeIsFunctiondef -- kind test that keeps the caller's un-narrowed handle.
 nodeIsFunctiondef: function {o: Node} out bool is {
     match (
@@ -16907,7 +16902,7 @@ checkMethodBodies: function {
     } else null
 }
 
-# lastStmtLineId / lastStmtLineIdOpt -- the node id of a function body's last
+# lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last
 # statement line (the implicit-return position), or 0 when absent.
 lastStmtLineId: function {block: Node} out u32 is {
     match (
@@ -16926,14 +16921,9 @@ lastStmtLineId: function {block: Node} out u32 is {
     return 0
 }
 
-lastStmtLineIdOpt: function {o: Option Node} out u32 is {
-    match (
-        o
-    ) case some then {
-        return (lastStmtLineId block: o)
-    } case none then {
-        return 0
-    }
+lastStmtLineIdAt: function {nodes: List Node oId: u32} out u32 is {
+    if oId == 0 then return 0
+    return (lastStmtLineId block: (nodes.get i: (oId - 1).u64))
 }
 
 # checkFunctionBody -- type-check one function body. Pushes a scope, binds each
@@ -16952,12 +16942,7 @@ checkFunctionBody: function {
         defn
     ) case functiondef then {
         maybeWalkMethods :st :unitName :nodes :unitBody name: defName
-        hasBody: false
-        match (
-            defn.body
-        ) case some then {
-            hasBody = true
-        } case none then null
+        hasBody: defn.body > 0
         isGenDef: false
         rkey: "\{unitName}.\{defName}"
         rgot: resolvedByKey ty: st.typing reg: st.reg key: rkey
@@ -17094,7 +17079,7 @@ checkFunctionBody: function {
                 o: (st.typing.funcReturnsBorrow.get key: fitid9)
                 d: false
             )
-            walkBody :st :unitName :nodes :unitBody bodyOpt: defn.body
+            walkBodyAt :st :unitName :nodes :unitBody bodyId: defn.body
             st.typing.currentReturnTypeId = prevRet9
             st.typing.currentReturnsBorrow = prevRb9
             # Implicit-return coercion: a literal-typed last statement takes
@@ -17107,7 +17092,7 @@ checkFunctionBody: function {
                 match (
                     ro
                 ) case some then {
-                    lsid: lastStmtLineIdOpt o: defn.body
+                    lsid: lastStmtLineIdAt :nodes oId: defn.body
                     if lsid > 0 then {
                         cur: st.typing.nodeType.get key: lsid.u64
                         match (

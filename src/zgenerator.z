@@ -183,13 +183,18 @@ bodyContainsYieldOpt: function {nodes: List zast.Node o: Option Node} out bool i
     }
 }
 
+bodyContainsYieldOptAt: function {nodes: List zast.Node oId: u32} out bool is {
+    if oId == 0 then return false
+    return (bodyContainsYield :nodes n: (nodes.get i: (oId - 1).u64))
+}
+
 # fnBodyHasYield -- the cheap structural generator pre-test on a
 # functiondef Node (spec/native bodies are never generators).
 fnBodyHasYield: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case functiondef then {
-        return (bodyContainsYieldOpt :nodes o: n.body)
+        return (bodyContainsYieldOptAt :nodes oId: n.body)
     } else {
         return false
     }
@@ -669,7 +674,7 @@ buildCreateMethod: function {
         colno: col
         returntype: thisRetId
         parameters: params
-        body: (Option.some body)
+        body: (zast.tableAppendRebase :nodes n: body)
         isNative: false
         asItems: (List u32))
     )
@@ -704,7 +709,7 @@ buildCallMethod: function {
         colno: col
         returntype: wrapExprId
         parameters: params
-        body: (Option.some body)
+        body: (zast.tableAppendRebase :nodes n: body)
         isNative: false
         asItems: (List u32))
     )
@@ -794,7 +799,7 @@ buildFactory: function {
         colno: col
         returntype: retAtomId
         parameters: params
-        body: (Option.some body)
+        body: (zast.tableAppendRebase :nodes n: body)
         isNative: false
         asItems: (List u32))
     )
@@ -1121,6 +1126,20 @@ promoteIterablesOpt: function {
     } case none then {
         return (Option.none Node)
     }
+}
+
+# promoteIterablesOptAt -- the id-taking entry (0 = absent); the promoted
+# clone comes back owned.
+promoteIterablesOptAt: function {
+    nodes: List zast.Node
+    ids: GenIds
+    ctr: GenIds
+    oId: u32
+} out Option Node is {
+    if oId == 0 then return (Option.none Node)
+    b9: nodes.get i: (oId - 1).u64
+    r9: promoteIterables :nodes :ids :ctr n: b9
+    return (Option.some r9)
 }
 
 # promoteLine -- one statement line: a for-statement transforms (possibly
@@ -1989,13 +2008,7 @@ canLowerNow: function {nodes: List zast.Node n: Node hasReceiver: bool} out bool
         hd: returnHeadOpt :nodes oId: n.returntype
         if hd.length == 0 then return false
 
-        match (
-            n.body
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
+        return n.body > 0
     } else {
         return false
     }
@@ -2160,7 +2173,7 @@ lowerOne: function {
             # the suspending-iterable promotion runs first; the analyses and
             # the this-rewrite read the promoted body.
             ictr: (GenIds nextId: 0)
-            pBody: promoteIterablesOpt :nodes :ids ctr: ictr o: fn.body
+            pBody: promoteIterablesOptAt :nodes :ids ctr: ictr oId: fn.body
             # promoted = parameters + yield-crossing locals
             gc: (GenCross
                 yieldCount: 0
