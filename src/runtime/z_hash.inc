@@ -93,6 +93,85 @@ static uint64_t z_siphash_stringview(z_StringView_t v) {
     return z_siphash_bytes(v.data, v.length);
 }
 
+/* wyhash-style fast path, selected by `zc --fast-hash` for Map / Set
+   bucket dispatch. Seeded from the same per-process entropy as
+   SipHash but NOT hash-flood resistant: use only when map keys are
+   trusted input. SipHash stays the default. */
+
+static inline uint64_t z_fh_mix(uint64_t a, uint64_t b) {
+    __uint128_t m = (__uint128_t)a * b;
+    return (uint64_t)m ^ (uint64_t)(m >> 64);
+}
+
+static inline uint64_t z_fh_r8(const uint8_t* p) {
+    uint64_t v;
+    memcpy(&v, p, 8);
+    return v;
+}
+
+static inline uint64_t z_fh_r4(const uint8_t* p) {
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return v;
+}
+
+static uint64_t z_fasthash_bytes(const void* in, uint64_t inlen) {
+    const uint64_t c0 = 0xa0761d6478bd642fULL;
+    const uint64_t c1 = 0xe7037ed1a0b428dbULL;
+    const uint64_t c2 = 0x8ebc6af09c88c6e3ULL;
+    const uint64_t c3 = 0x589965cc75374cc3ULL;
+    const uint8_t* p = (const uint8_t*)in;
+    uint64_t seed = z_sip_k0 ^ c0;
+    uint64_t i = inlen;
+    uint64_t a, b;
+    if (i <= 16) {
+        if (i >= 4) {
+            a = (z_fh_r4(p) << 32) | z_fh_r4(p + ((i >> 3) << 2));
+            b = (z_fh_r4(p + i - 4) << 32) | z_fh_r4(p + i - 4 - ((i >> 3) << 2));
+        } else if (i > 0) {
+            a = (((uint64_t)p[0]) << 16) | (((uint64_t)p[i >> 1]) << 8) | p[i - 1];
+            b = 0;
+        } else {
+            a = 0;
+            b = 0;
+        }
+    } else {
+        if (i > 48) {
+            uint64_t s1 = seed;
+            uint64_t s2 = seed;
+            do {
+                seed = z_fh_mix(z_fh_r8(p) ^ c1, z_fh_r8(p + 8) ^ seed);
+                s1 = z_fh_mix(z_fh_r8(p + 16) ^ c2, z_fh_r8(p + 24) ^ s1);
+                s2 = z_fh_mix(z_fh_r8(p + 32) ^ c3, z_fh_r8(p + 40) ^ s2);
+                p += 48;
+                i -= 48;
+            } while (i > 48);
+            seed ^= s1 ^ s2;
+        }
+        while (i > 16) {
+            seed = z_fh_mix(z_fh_r8(p) ^ c1, z_fh_r8(p + 8) ^ seed);
+            p += 16;
+            i -= 16;
+        }
+        a = z_fh_r8(p + i - 16);
+        b = z_fh_r8(p + i - 8);
+    }
+    a ^= c1;
+    b ^= seed;
+    __uint128_t m = (__uint128_t)a * b;
+    a = (uint64_t)m;
+    b = (uint64_t)(m >> 64);
+    return z_fh_mix(a ^ c0 ^ inlen, b ^ c1);
+}
+
+static uint64_t z_fasthash_string(z_String_t s) {
+    return z_fasthash_bytes(s.data, s.size);
+}
+
+static uint64_t z_fasthash_stringview(z_StringView_t v) {
+    return z_fasthash_bytes(v.data, v.length);
+}
+
 /* splitmix64 finalizer -- single-block mixer for 64-bit integer
    keys. Not SipHash: bare integers have no length axis to exploit
    so the security premium isn't worth ~5x the cost. Matches Rust's
