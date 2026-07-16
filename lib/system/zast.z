@@ -150,6 +150,10 @@ Node: union {
     objectdef: ObjectDefData
     unitdef: UnitData
     program: ProgramData
+    # box-free parser placeholder: a reserved table slot carries this
+    # arm (payload-less, no allocation) until intern moves the real
+    # row in (see tableSet / zparser.nextId)
+    placeholder: null
 }
 
 # astkind -- flat tag mirror of the Node union arms, for id-based
@@ -184,6 +188,7 @@ astkind: variant {
     objectdef: null
     unitdef: null
     program: null
+    placeholder: null
 } as { tag: u8.tag }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -988,6 +993,8 @@ printNode: function {nodes: List Node n: Node} is {
         n
     ) case error then {
         print "\{n.nodeid}: error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
+    } case placeholder then {
+        print "placeholder"
     } case atomid then {
         print "\{n.nodeid}: atomid @\{n.lineno}:\{n.colno} name=\{n.name}"
     } case labelvalue then {
@@ -1142,6 +1149,8 @@ printNodeCanonical: function {nodes: List Node n: Node} is {
         n
     ) case error then {
         print "error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
+    } case placeholder then {
+        print "placeholder"
     } case atomid then {
         print "atomid @\{n.lineno}:\{n.colno} name=\{n.name}"
     } case labelvalue then {
@@ -1286,17 +1295,7 @@ main: function is {
     nodes: (List Node)
     npf9: u32
     for npf9 < 92 loop {
-        nodes.append from: (Node.error (ErrorData
-            nodeid: 0
-            lineno: 0
-            colno: 0
-            width: 0
-            err: err.badUnit
-            msg: String
-            fsno: 0
-            note: String
-            hint: String
-        ))
+        nodes.append from: Node.placeholder
         npf9 = npf9 + 1
     }
     print "=== err ==="
@@ -1907,9 +1906,10 @@ printProgramCanonicalRoot: function {prog: Node} is {
 }
 
 # ---- id-linked master node table (ECS migration) ----
-# The parser reserves one table slot per minted nodeid; placeholder rows
-# carry nodeid 0 until a converted parent moves the real child into its
-# slot. A real row's nodeid == index + 1. Node id 0 means "absent".
+# The parser reserves one table slot per minted nodeid; a reserved slot
+# holds the payload-less placeholder arm until a converted parent moves
+# the real child into it. A real row's nodeid == index + 1. Node id 0
+# means "absent".
 
 # tableSet -- move a converted parent's child into its reserved slot
 # (the displaced placeholder is destroyed here).
@@ -1923,6 +1923,8 @@ nodeIdOf: function {n: Node} out u32 is {
         n
     ) case error then {
         return n.nodeid
+    } case placeholder then {
+        return 0
     } case atomid then {
         return n.nodeid
     } case labelvalue then {
@@ -1992,17 +1994,7 @@ tableAdd: function {nodes: List Node n: Node.take} out u32 is {
 # tableTake -- swap a row out of the table (a placeholder goes back in);
 # used to propagate an error node up out of a converted list.
 tableTake: function {nodes: List Node id: u32} out Node is {
-    return (nodes.set i: (id - 1).u64 val: (Node.error (ErrorData
-        nodeid: 0
-        lineno: 0
-        colno: 0
-        width: 0
-        err: err.badUnit
-        msg: String
-        fsno: 0
-        note: String
-        hint: String
-    )))
+    return (nodes.set i: (id - 1).u64 val: Node.placeholder)
 }
 
 # tableAppendRebase -- append a synthesized node, rewriting its root
@@ -2014,7 +2006,7 @@ tableAppendRebase: function {nodes: List Node n: Node.take} out u32 is {
         n
     ) case error then {
         n.nodeid = did9
-    } case atomid then {
+    } case placeholder then null case atomid then {
         n.nodeid = did9
     } case labelvalue then {
         n.nodeid = did9
@@ -2138,6 +2130,8 @@ kindOf: function {nodes: List Node id: u32} out astkind is {
         return astkind.unitdef
     } case program then {
         return astkind.program
+    } case placeholder then {
+        return astkind.placeholder
     }
 }
 
