@@ -13824,9 +13824,34 @@ hoistArg: function {
     }
     vid: v.variableId
     st.defineVar name: tname.stringview var: v
-    # No borrow locks for the hoisted temp: it lives only for the call, whose
-    # own arg/receiver locks already cover the path -- a VAR-holder lock here
-    # would conflict with the call's CALL-holder locks on the same path.
+    # the hoisted temp is the user-written hoist made explicit: it borrows
+    # its source path for the call scope (SHARED prefixes, leaf kind from
+    # the side channel), so aliasing between arguments -- or with a live
+    # view of the source -- conflicts exactly as the call-scoped locking
+    # algorithm in ownership.pdoc requires
+    # install only when the consumed side-channel path belongs to THIS
+    # argument (its root atom): a stale residue from receiver evaluation
+    # must stay drained-without-locks, or it would double the call's own
+    # receiver locks under a temp holder
+    if hown == ztypes.zownership.borrowed then {
+        hrt9: rootNameOf n: argNode
+        okInstall9: false
+        if hrt9.length > 0 when hbsrc.length > 0 then {
+            h0c9: (hbsrc.get i: 0).copy
+            if h0c9.stringview == hrt9.stringview then okInstall9 = true
+        }
+        if okInstall9 then {
+            (installBorrowLocks
+                :st
+                src: hbsrc
+                :vid
+                leafShared: st.typing.pendingBorrowShared
+                nodeid: (nodeId n: argNode)
+                lineno: (nodeLine n: argNode)
+                colno: (nodeCol n: argNode)
+            )
+        }
+    }
     st.typing.defVariableId.set key: assignId.u64 value: vid
     if consumes then st.invalidate name: tname.stringview loc: (optionval.none ztypes.zsrcpos)
     return tname
@@ -14385,6 +14410,34 @@ walkCallArgsHoist: function {
                             if isDeclLock then {
                                 xlc9: lsb9.copy
                                 st.typing.lastLockParamRoot = xlc9
+                            }
+                        }
+                    }
+                    # a plain field-path argument behaves as its user-
+                    # written hoist would: seed the borrow side channel with
+                    # the real source tuple so the synth temp installs the
+                    # spec's SHARED-prefix + EXCLUSIVE-leaf locks on it
+                    if isLockish when (typeIsReftype :st tid: vt) then {
+                        if st.typing.pendingBorrowPath.length == 0 then {
+                            an9: nodes.get i: (arg.operation - 1).u64
+                            src9: (List String)
+                            appendValueTuple n: an9 dst: src9
+                            if src9.length > 0 then {
+                                rt9: rootNameOf n: an9
+                                rvo9: st.lookupVarId name: rt9.stringview
+                                match (
+                                    rvo9
+                                ) case some then {
+                                    drainPendingBorrow :st
+                                    si9: u64
+                                    sn9: src9.length
+                                    for si9 < sn9 loop {
+                                        se9: src9.get i: si9
+                                        sec9: se9.copy
+                                        st.typing.pendingBorrowPath.append sec9
+                                        si9 = si9 + 1
+                                    }
+                                } case none then null
                             }
                         }
                     }

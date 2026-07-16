@@ -1050,10 +1050,17 @@ Spans: class {
             wpn9: prog.units.length
             for wpi9 < wpn9 loop {
                 wpid9: prog.units.get i: wpi9
-                this.walk nodes: prog.nodes n: (prog.nodes.get i: (wpid9 - 1).u64)
+                this.walkAt nodes: prog.nodes nId: wpid9
                 wpi9 = wpi9 + 1
             }
         } else null
+    }
+
+    # walkAt -- the id-taking entry: the row view is this frame's, so a
+    # caller can lend the table in the same call.
+    walkAt: function {:this nodes: List zast.Node nId: u32} is {
+        n9: nodes.get i: (nId - 1).u64
+        this.walk :nodes n: n9
     }
 
     walk: function {:this nodes: List zast.Node n: zast.Node} is {
@@ -1547,7 +1554,8 @@ navUnitDef: function {nodes: List zast.Node ud: zast.Node bidx: u64 member: Stri
     }
 }
 
-navWrapper: function {nodes: List zast.Node w: zast.Node bidx: u64 member: StringView} out u64 is {
+navWrapper: function {nodes: List zast.Node wId: u32 bidx: u64 member: StringView} out u64 is {
+    w: nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
@@ -1563,8 +1571,7 @@ navBody: function {prog: zast.Node uidx: u64 bidx: u64 member: StringView} out u
     ) case program then {
         if uidx >= prog.units.length then return 0
         u9Id9: prog.units.get i: uidx
-        u9: prog.nodes.get i: (u9Id9 - 1).u64
-        return (navWrapper nodes: prog.nodes w: u9 :bidx :member)
+        return (navWrapper nodes: prog.nodes wId: u9Id9 :bidx :member)
     } else {
         return 0
     }
@@ -1812,7 +1819,8 @@ unitFsnoByName: function {snap: zcheck.CheckResult name: StringView} out u32 is 
 
 # unitGenericParamsOf -- a unitdef's generic parameters rendered " {T U}"
 # (its `T: base.generic` body declarations); "" when it has none.
-unitGenericParamsOf: function {nodes: List zast.Node ud: zast.Node} out String is {
+unitGenericParamsOf: function {nodes: List zast.Node udId: u32} out String is {
+    ud: nodes.get i: (udId - 1).u64
     out9: String
     match (
         ud
@@ -1844,19 +1852,21 @@ unitGenericSuffix: function {prog: zast.Node name: StringView} out String is {
     ) case program then {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop {
-            u9: prog.nodes.get i: (u9Id9 - 1).u64
-            match (
-                u9
-            ) case namedoperation then {
-                lb9: optLabel o: u9.name
-                if lb9.stringview == name then {
-                    gs9: (unitGenericParamsOf
-                        nodes: prog.nodes
-                        ud: (prog.nodes.get i: (u9.operation - 1).u64)
-                    )
-                    if gs9.length > 0 then out9 = gs9
+            opId9: u32
+            {
+                u9: prog.nodes.get i: (u9Id9 - 1).u64
+                if u9.namedoperation then {
+                    lb9: optLabel o: u9.name
+                    if lb9.stringview == name then opId9 = u9.operation
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                gs9: (unitGenericParamsOf
+                    nodes: prog.nodes
+                    udId: opId9
+                )
+                if gs9.length > 0 then out9 = gs9
+            }
         }
     } else null
     return out9
@@ -2186,7 +2196,7 @@ collectUnitSymbols: function {
         for u9Id9: uit9 loop {
             (collectUnitSymbolsIn
                 nodes: prog.nodes
-                w: (prog.nodes.get i: (u9Id9 - 1).u64)
+                wId: u9Id9
                 :unitName
                 :docText
                 :utf32
@@ -2198,12 +2208,13 @@ collectUnitSymbols: function {
 
 collectUnitSymbolsIn: function {
     nodes: List zast.Node
-    w: zast.Node
+    wId: u32
     unitName: StringView
     docText: StringView
     utf32: bool
     arr: Arr
 } is {
+    w: nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
@@ -2499,13 +2510,14 @@ collectTopDefs: function {prog: zast.Node sink: (Map String value: u8)} is {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop (collectUnitDefs
             nodes: prog.nodes
-            w: (prog.nodes.get i: (u9Id9 - 1).u64)
+            wId: u9Id9
             :sink
         )
     } else null
 }
 
-collectUnitDefs: function {nodes: List zast.Node w: zast.Node sink: (Map String value: u8)} is {
+collectUnitDefs: function {nodes: List zast.Node wId: u32 sink: (Map String value: u8)} is {
+    w: nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
@@ -2551,8 +2563,7 @@ enclosingDefStart: function {
     ) case program then {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop {
-            u9: prog.nodes.get i: (u9Id9 - 1).u64
-            r9: enclosingInUnit nodes: prog.nodes w: u9 :unitName :l1u :sink
+            r9: enclosingInUnit nodes: prog.nodes wId: u9Id9 :unitName :l1u :sink
             if r9 > 0 then return r9
         }
         return 0
@@ -2563,11 +2574,12 @@ enclosingDefStart: function {
 
 enclosingInUnit: function {
     nodes: List zast.Node
-    w: zast.Node
+    wId: u32
     unitName: StringView
     l1u: u32
     sink: (Map String value: u8)
 } out u32 is {
+    w: nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
