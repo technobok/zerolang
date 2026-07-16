@@ -745,6 +745,7 @@ Ctx: class {
     genHasValue: bool
     curThisTid: u64
     fastHash: bool
+    tailRetActive: bool
     emittedUserTypes: (Map u64 value: bool)
     fwdDeclaredTypes: (Map u64 value: bool)
     tmplCache: (Map String value: String)
@@ -7480,7 +7481,7 @@ emitDiscardedResult: function {
         buf.append dcdecl9.stringview
         buf.append dcfree9.stringview
     } else {
-        lc: "\{ind}\{ce};\n"
+        lc: "\{ind}(void)(\{ce});\n"
         buf.append lc.stringview
     }
 }
@@ -7519,121 +7520,7 @@ emitCallStmt: function {
             ) case namedoperation then {
                 if (hasArg) == false then {
                     hasArg = true
-                    bx: (emitOptionBoxHoist
-                        :nodes
-                        :symtab
-                        :ctx
-                        n: (nodes.get i: (a.operation - 1).u64)
-                        :ind
-                        :tmp
-                        :buf
-                    )
-                    if bx.length > 0 then {
-                        (emitValueTakeInvalidations
-                            :nodes
-                            :symtab
-                            :ctx
-                            n: (nodes.get i: (a.operation - 1).u64)
-                            :ind
-                            :buf
-                        )
-                        emitReturnCleanup :ctx :tmp retExpr: bx.stringview keepRefd: true :ind :buf
-                        lrb: "\{ind}return \{bx};\n"
-                        buf.append lrb.stringview
-                    } else {
-                        sret: (emitStringReturnValue
-                            :nodes
-                            :symtab
-                            :ctx
-                            n: (nodes.get i: (a.operation - 1).u64)
-                            :ind
-                            :tmp
-                            :buf
-                        )
-                        if (sret) == false then {
-                            rv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (a.operation - 1).u64)
-                            flushArgHoists :ctx :ind :tmp :buf
-                            # A non-trivial value-type return may read an owned local the
-                            # cleanup would free -- a borrowed element or view (e.g.
-                            # `container.get idx`, or a StringView into a local String).
-                            # Materialize rv into a temp FIRST, then free. When an owned
-                            # local is named in rv (leakFix9), free ALL owned locals
-                            # (clFull9) after zeroing the moved-in call-arg sources
-                            # (emitValueTakeInvalidations): a read-from local is reclaimed
-                            # and a moved-in local's free is a no-op. Pointer returns
-                            # (protocol / Map / Set / by-ref class -- isPtr9) arrive as bare
-                            # temps; hoisting a shallow pointer copy then freeing it would
-                            # dangle, so they keep the refsLocal (clProbe9) cleanup inline.
-                            clProbe9: String
-                            (emitReturnCleanup
-                                :ctx
-                                :tmp
-                                retExpr: rv.stringview
-                                keepRefd: true
-                                :ind
-                                buf: clProbe9
-                            )
-                            clFull9: String
-                            (emitReturnCleanup
-                                :ctx
-                                :tmp
-                                retExpr: rv.stringview
-                                keepRefd: false
-                                :ind
-                                buf: clFull9
-                            )
-                            leakFix9: false
-                            if clFull9.length > clProbe9.length then leakFix9 = true
-                            rtid9: (stampIdOf
-                                :symtab
-                                nid: (nodeIdOf9 n: (nodes.get i: (a.operation - 1).u64))
-                            )
-                            retCt9: typeRefC :symtab :ctx tid: rtid9 thisTid: 0
-                            isPtr9: ctEndsWithStar ct: retCt9.stringview
-                            if (isHeapPtrCollection :symtab :ctx tid: rtid9) then isPtr9 = true
-                            trivial9: isBareCName s: rv.stringview
-                            hoist9: false
-                            if (trivial9 == false) when (isPtr9 == false) when (retCt9.size > 0) then {
-                                if clProbe9.length > 0 then hoist9 = true
-                                if leakFix9 then hoist9 = true
-                            }
-                            if hoist9 then {
-                                rtmpN9: tmp.next
-                                retNm9: "_ret\{rtmpN9}"
-                                hdecl9: "\{ind}\{retCt9} \{retNm9} = \{rv};\n"
-                                buf.append hdecl9.stringview
-                                if leakFix9 then {
-                                    (emitValueTakeInvalidations
-                                        :nodes
-                                        :symtab
-                                        :ctx
-                                        n: (nodes.get i: (a.operation - 1).u64)
-                                        :ind
-                                        :buf
-                                    )
-                                }
-                                (emitNarrowedTakeZero
-                                    :nodes
-                                    :symtab
-                                    :ctx
-                                    n: (nodes.get i: (a.operation - 1).u64)
-                                    :ind
-                                    :buf
-                                )
-                                if leakFix9 then {
-                                    buf.append clFull9.stringview
-                                } else {
-                                    buf.append clProbe9.stringview
-                                }
-                                hret9: "\{ind}return \{retNm9};\n"
-                                buf.append hret9.stringview
-                            } else {
-                                buf.append clProbe9.stringview
-                                lr: "\{ind}return \{rv};\n"
-                                buf.append lr.stringview
-                            }
-                        }
-                    }
+                    emitReturnOfNode :nodes :symtab :ctx vid: a.operation :ind :tmp :buf
                 }
             } else null
         }
@@ -8296,7 +8183,9 @@ emitStmt: function {
             k9r: nodes.get i: (kId9 - 1).u64
             emitForCond :nodes :symtab :ctx n: k9r :cond :ind :tmp :buf
         }
-        if cond.length == 0 then cond.append "0 /* zemitterc: unhandled loop header */"
+        # `for loop { ... }` -- no conditions, no postconditions: an unconditional
+    # loop that exits via break/return.
+    if cond.length == 0 then cond.append "1"
         lidW: pushLoopLabel :ctx :tmp isDo: false
         lw: "\{ind}while (\{cond}) {\n"
         buf.append lw.stringview
@@ -8480,8 +8369,23 @@ emitStmt: function {
                         buf.append lct9.stringview
                     }
                 } else {
-                    lu: "\{ind}/* zemitterc: unhandled statement */\n"
-                    buf.append lu.stringview
+                    ue9: emitExpr :nodes :symtab :ctx :n
+                    if (ue9.stringview.startsWith prefix: "/*") then {
+                        lu: "\{ind}/* zemitterc: unhandled statement */\n"
+                        buf.append lu.stringview
+                    } else {
+                        urtid9: stampIdOf :symtab nid: (nodeIdOf9 :n)
+                        (emitDiscardedResult
+                            :symtab
+                            :ctx
+                            isBorrow: (bindingRhsIsBorrow :nodes :symtab :ctx :n)
+                            ce: ue9.stringview
+                            rtid: urtid9
+                            :ind
+                            :tmp
+                            :buf
+                        )
+                    }
                 }
             }
         }
@@ -10883,6 +10787,212 @@ emitElse9: function {
 # emitBranchAssign -- emit an if/match branch whose final value assigns
 # to a target: a block emits all but its last statement normally, the
 # last as `target = <value>`; a single node assigns directly.
+# emitReturnOfNode -- `return <value of node vid>;` with the explicit-return
+# machinery: option-box hoist, string-return fast path, and the leak-safe
+# temp-materialization + cleanup ordering. Shared by the `return` call arm
+# and tail-position value yields.
+emitReturnOfNode: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    vid: u32
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    bx: (emitOptionBoxHoist
+        :nodes
+        :symtab
+        :ctx
+        n: (nodes.get i: (vid - 1).u64)
+        :ind
+        :tmp
+        :buf
+    )
+    if bx.length > 0 then {
+        (emitValueTakeInvalidations
+            :nodes
+            :symtab
+            :ctx
+            n: (nodes.get i: (vid - 1).u64)
+            :ind
+            :buf
+        )
+        emitReturnCleanup :ctx :tmp retExpr: bx.stringview keepRefd: true :ind :buf
+        lrb: "\{ind}return \{bx};\n"
+        buf.append lrb.stringview
+    } else {
+        sret: (emitStringReturnValue
+            :nodes
+            :symtab
+            :ctx
+            n: (nodes.get i: (vid - 1).u64)
+            :ind
+            :tmp
+            :buf
+        )
+        if (sret) == false then {
+            rv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (vid - 1).u64)
+            flushArgHoists :ctx :ind :tmp :buf
+            # A non-trivial value-type return may read an owned local the
+            # cleanup would free -- a borrowed element or view (e.g.
+            # `container.get idx`, or a StringView into a local String).
+            # Materialize rv into a temp FIRST, then free. When an owned
+            # local is named in rv (leakFix9), free ALL owned locals
+            # (clFull9) after zeroing the moved-in call-arg sources
+            # (emitValueTakeInvalidations): a read-from local is reclaimed
+            # and a moved-in local's free is a no-op. Pointer returns
+            # (protocol / Map / Set / by-ref class -- isPtr9) arrive as bare
+            # temps; hoisting a shallow pointer copy then freeing it would
+            # dangle, so they keep the refsLocal (clProbe9) cleanup inline.
+            clProbe9: String
+            (emitReturnCleanup
+                :ctx
+                :tmp
+                retExpr: rv.stringview
+                keepRefd: true
+                :ind
+                buf: clProbe9
+            )
+            clFull9: String
+            (emitReturnCleanup
+                :ctx
+                :tmp
+                retExpr: rv.stringview
+                keepRefd: false
+                :ind
+                buf: clFull9
+            )
+            leakFix9: false
+            if clFull9.length > clProbe9.length then leakFix9 = true
+            rtid9: (stampIdOf
+                :symtab
+                nid: (nodeIdOf9 n: (nodes.get i: (vid - 1).u64))
+            )
+            retCt9: typeRefC :symtab :ctx tid: rtid9 thisTid: 0
+            isPtr9: ctEndsWithStar ct: retCt9.stringview
+            if (isHeapPtrCollection :symtab :ctx tid: rtid9) then isPtr9 = true
+            trivial9: isBareCName s: rv.stringview
+            hoist9: false
+            if (trivial9 == false) when (isPtr9 == false) when (retCt9.size > 0) then {
+                if clProbe9.length > 0 then hoist9 = true
+                if leakFix9 then hoist9 = true
+            }
+            if hoist9 then {
+                rtmpN9: tmp.next
+                retNm9: "_ret\{rtmpN9}"
+                hdecl9: "\{ind}\{retCt9} \{retNm9} = \{rv};\n"
+                buf.append hdecl9.stringview
+                if leakFix9 then {
+                    (emitValueTakeInvalidations
+                        :nodes
+                        :symtab
+                        :ctx
+                        n: (nodes.get i: (vid - 1).u64)
+                        :ind
+                        :buf
+                    )
+                }
+                (emitNarrowedTakeZero
+                    :nodes
+                    :symtab
+                    :ctx
+                    n: (nodes.get i: (vid - 1).u64)
+                    :ind
+                    :buf
+                )
+                if leakFix9 then {
+                    buf.append clFull9.stringview
+                } else {
+                    buf.append clProbe9.stringview
+                }
+                hret9: "\{ind}return \{retNm9};\n"
+                buf.append hret9.stringview
+            } else {
+                buf.append clProbe9.stringview
+                lr: "\{ind}return \{rv};\n"
+                buf.append lr.stringview
+            }
+        }
+    }
+}
+
+# emitTailStmt -- the last statement of an `out`-typed function body sits in
+# return position: a bare value expression becomes `return <expr>;`, and a
+# with/do block forwards return position into its own final statement. False
+# when the statement is not a tail-value shape (the caller emits it normally).
+emitTailStmt: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    match (
+        n
+    ) case statementline then {
+        return (emitTailStmt
+            :nodes
+            :symtab
+            :ctx
+            n: (nodes.get i: (n.statementline - 1).u64)
+            :ind
+            :tmp
+            :buf
+        )
+    } case expression then {
+        return (emitTailStmt
+            :nodes
+            :symtab
+            :ctx
+            n: (nodes.get i: (n.expression - 1).u64)
+            :ind
+            :tmp
+            :buf
+        )
+    } case atomid then {
+        anm0: n.name.stringview
+        if anm0 == "return" then return false
+        if anm0 == "break" then return false
+        if anm0 == "continue" then return false
+        if anm0 == "null" then return false
+        emitReturnOfNode :nodes :symtab :ctx vid: n.nodeid :ind :tmp :buf
+        return true
+    } case binop then {
+        emitReturnOfNode :nodes :symtab :ctx vid: n.nodeid :ind :tmp :buf
+        return true
+    } case atomstring then {
+        emitReturnOfNode :nodes :symtab :ctx vid: n.nodeid :ind :tmp :buf
+        return true
+    } case withexpr then {
+        wnT9: n.name.stringview
+        wnmT9: wnT9.string
+        wtnT9: stampNameDeep :nodes :symtab n: (nodes.get i: (n.value - 1).u64)
+        wctT9: cTypeForName :symtab :ctx name: wtnT9.stringview
+        wvT9: emitExpr :nodes :symtab :ctx n: (nodes.get i: (n.value - 1).u64)
+        if wctT9.length > 0 then {
+            lwT9: "\{ind}\{wctT9} \{wnmT9} = \{wvT9};\n"
+            buf.append lwT9.stringview
+        } else {
+            lwT8: "\{ind}int64_t \{wnmT9} = \{wvT9};\n"
+            buf.append lwT8.stringview
+        }
+        ctx.tailRetActive = true
+        emitBodyNode :nodes :symtab :ctx n: (nodes.get i: (n.body - 1).u64) :ind :tmp :buf
+        return true
+    } case doexpr then {
+        dstT9: nodes.get i: (n.statement - 1).u64
+        if (ztypecheck.blockHasBreak :nodes n: dstT9) then return false
+        ctx.tailRetActive = true
+        emitBodyNode :nodes :symtab :ctx n: dstT9 :ind :tmp :buf
+        return true
+    } else {
+        return false
+    }
+}
+
 emitBranchAssign: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
@@ -10963,6 +11073,8 @@ emitBodyNode: function {
     match (
         n
     ) case statement then {
+        trTail9: ctx.tailRetActive
+        ctx.tailRetActive = false
         pgN9: (List String)
         pgPrevV9: (List String)
         pgPrevT9: (List u64)
@@ -10996,7 +11108,13 @@ emitBodyNode: function {
                 }
                 ri9 = ri9 + 1
             }
-            emitStmt :nodes :symtab :ctx n: s9 :ind :tmp :buf
+            tailNow9: false
+            if trTail9 when i9 + 1 == nst9 then tailNow9 = true
+            handled9: false
+            if tailNow9 then {
+                handled9 = emitTailStmt :nodes :symtab :ctx n: s9 :ind :tmp :buf
+            }
+            if handled9 == false then emitStmt :nodes :symtab :ctx n: s9 :ind :tmp :buf
             pgid9: postGuardStmtId9 :nodes :symtab n: s9
             if pgid9 > 0 then {
                 pgRawN9: String
@@ -13096,7 +13214,13 @@ emitFnBody: function {
         }
         if op.body > 0 then {
             opb9: nodes.get i: (op.body - 1).u64
+            rbnT9: (ztypecheck.fnReturnBaseNameOf
+                :nodes
+                op: (nodes.get i: (op.nodeid - 1).u64)
+            )
+            if rbnT9.length > 0 when ctx.genActive == false then ctx.tailRetActive = true
             emitBodyNode :nodes :symtab :ctx n: opb9 ind: "    " :tmp :buf
+            ctx.tailRetActive = false
         }
         fiter9: tmp.frees.iterate
         for fv: fiter9 loop {
@@ -13320,6 +13444,7 @@ emitC: function {
         :litIds
         usedLits: (Map u64 value: bool)
         constVals: (Map String value: String)
+        tailRetActive: false
         needs: (Map String value: bool)
         methodReturns: (Map String value: String)
         dataElems: (Map String value: String)
