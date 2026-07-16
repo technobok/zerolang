@@ -27,15 +27,15 @@ unitLabel: function {o: Option String} out String is {
     }
 }
 
-# unitdefNodeId -- the nodeid of a unitdef Node (0 when not a unitdef).
-unitdefNodeId: function {n: Node} out u32 is {
-    match (
-        n
-    ) case unitdef then {
-        return n.nodeid
-    } else {
-        return 0
+# unitdefNodeId -- the nodeid of the unit row an id names (0 when the id does
+# not name a unit). The row view is scoped to the fetch.
+unitdefNodeId: function {nodes: List Node nId: u32} out u32 is {
+    out9: u32
+    {
+        n9: nodes.get i: (nId - 1).u64
+        if n9.unitdef then out9 = n9.nodeid
     }
+    return out9
 }
 
 # nodeId -- the nodeid of an arbitrary type-ref / definition Node. Covers the
@@ -5282,7 +5282,7 @@ resolveUnitBody: function {
                             :nodes :units
                             :unitName
                             defName: defName.stringview
-                            unitOp: (nodes.get i: (bmNode9.operation - 1).u64)
+                            unitOpId: bmNode9.operation
                         )
                     } else {
                         rkeyE: "\{unitName}.\{defName}"
@@ -5341,7 +5341,7 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
             ) case namedoperation then {
                 nm: unitLabel o: ru.name
                 uid: reg.newType name: nm.stringview typetype: ztypes.ztypetype.unitType
-                opid: unitdefNodeId n: (program.nodes.get i: (ru.operation - 1).u64)
+                opid: unitdefNodeId nodes: program.nodes nId: ru.operation
                 ty.unitTypesById.set key: opid.u64 value: uid
                 uid3: uid
                 reg.setUnitName name: nm.stringview uid: uid3
@@ -6548,12 +6548,11 @@ attachMonoUnitFuncs: function {
     nodes: List Node
     monoId: u64
     monoName: StringView
-    templateOp: Node
+    templateOpId: u32
 } is {
-    match (
-        templateOp
-    ) case unitdef then {
-        fiter: templateOp.body.iterate
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: templateOpId
+    {
+        fiter: bodyIds9.iterate
         for fm: fiter loop {
             fmNode9: nodes.get i: (fm - 1).u64
             match (
@@ -6570,7 +6569,7 @@ attachMonoUnitFuncs: function {
                 }
             } else null
         }
-    } else null
+    }
 }
 
 # resolveUnitMono -- create a mono UNIT (mangled name, defined_in_unit=the instantiating
@@ -7019,24 +7018,23 @@ resolveInlineGenericUnit: function {
     nodes: List Node units: List u32
     unitName: StringView
     defName: StringView
-    unitOp: Node
+    unitOpId: u32
 } is {
-    match (
-        unitOp
-    ) case unitdef then {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitOpId
+    {
         uid: reg.newType name: defName typetype: ztypes.ztypetype.unitType
         did: uid
         rid: uid
-        if (hasGenericParam :nodes items: unitOp.body) then {
+        if (hasGenericParam :nodes items: bodyIds9) then {
             reg.setGeneric typeId: uid value: true
             if ty.fullMainUnit.length > 0 then {
                 # full mode mirrors the reference's inline-template touch:
                 # the unit node and each bare generic-param def stamp, and
                 # the param name resolves so signature t-refs stamp.
-                udnid: unitOp.nodeid
+                udnid: unitdefNodeId :nodes nId: unitOpId
                 uidv: uid
                 ty.nodeType.set key: udnid.u64 value: uidv
-                with gpiter: unitOp.body.iterate do for gmId9: gpiter loop {
+                with gpiter: bodyIds9.iterate do for gmId9: gpiter loop {
                     gm: nodes.get i: (gmId9 - 1).u64
                     match (
                         gm
@@ -7076,7 +7074,7 @@ resolveInlineGenericUnit: function {
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
-        if (hasGenericParam :nodes items: unitOp.body) == false then {
+        if (hasGenericParam :nodes items: bodyIds9) == false then {
             icu0: reg.unitNameTid.get key: unitName.string
             match (
                 icu0
@@ -7084,7 +7082,7 @@ resolveInlineGenericUnit: function {
                 ty.setChild parentTypeId: icu0 childName: defName childTypeId: rid
             } case none then null
         }
-        biter: unitOp.body.iterate
+        biter: bodyIds9.iterate
         for bm: biter loop {
             bmNode9: nodes.get i: (bm - 1).u64
             match (
@@ -7108,7 +7106,7 @@ resolveInlineGenericUnit: function {
                 } case none then null
             } else null
         }
-    } else null
+    }
 }
 
 # createUnitMono -- create a mono UNIT (defined_in_unit=the instantiating unit) with
@@ -7121,7 +7119,7 @@ createUnitMono: function {
     unitName: StringView
     monoName: StringView
     templateName: StringView
-    templateOp: Node
+    templateOpId: u32
 } is {
     rkey: "\{unitName}.\{monoName}"
     got: resolvedByKey :ty :reg key: rkey
@@ -7163,7 +7161,7 @@ createUnitMono: function {
                 # inline generic template: no childOf edge and not a unit
                 # root -- its id lives only in the full-mode def-node stamp
                 # laid by resolveInlineGenericUnit.
-                itnid: unitdefNodeId n: templateOp
+                itnid: unitdefNodeId :nodes nId: templateOpId
                 itso: ty.nodeType.get key: itnid.u64
                 match (
                     itso
@@ -7172,7 +7170,7 @@ createUnitMono: function {
                 } case none then null
             }
         }
-        attachMonoUnitFuncs :ty :reg :nodes :monoId :monoName :templateOp
+        attachMonoUnitFuncs :ty :reg :nodes :monoId :monoName :templateOpId
         reg.recordDemand name: "return"
         reg.recordDemand name: "never"
     }
@@ -7187,12 +7185,11 @@ resolveInlineMono: function {
     unitName: StringView
     monoName: StringView
     templateName: StringView
-    mainOp: Node
+    mainOpId: u32
 } is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    {
+        biter: bodyIds9.iterate
         for bm: biter loop {
             bmNode9: nodes.get i: (bm - 1).u64
             match (
@@ -7208,13 +7205,13 @@ resolveInlineMono: function {
                             :unitName
                             :monoName
                             :templateName
-                            templateOp: (nodes.get i: (bmNode9.operation - 1).u64)
+                            templateOpId: bmNode9.operation
                         )
                     }
                 }
             } else null
         }
-    } else null
+    }
 }
 
 # resolveUnitMono -- create the mono UNIT for a generic-unit instantiation. The template
@@ -7246,7 +7243,7 @@ resolveUnitMono: function {
                         :unitName
                         :monoName
                         :templateName
-                        templateOp: (program.nodes.get i: (u.operation - 1).u64)
+                        templateOpId: u.operation
                     )
                 }
                 if un.stringview == unitName then {
@@ -7257,7 +7254,7 @@ resolveUnitMono: function {
                         :unitName
                         :monoName
                         :templateName
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
+                        mainOpId: u.operation
                     )
                 }
             } else null
@@ -7389,18 +7386,17 @@ buildUnitMonoFull: function {
     monoName: StringView
     tplId: u64
     argId: u64
-    templateOp: Node
+    templateOpId: u32
 } is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: templateOpId
     bgot9: ty.collectionChildrenBuilt.get key: monoId
     if (optBoolOr o: bgot9 d: false) then return
     bk0: monoId
     ty.collectionChildrenBuilt.set key: bk0 value: true
     gpNames: (Map String value: bool)
     gpFirst: String
-    match (
-        templateOp
-    ) case unitdef then {
-        with giter: templateOp.body.iterate do for gmId9: giter loop {
+    {
+        with giter: bodyIds9.iterate do for gmId9: giter loop {
             gm: nodes.get i: (gmId9 - 1).u64
             match (
                 gm
@@ -7418,7 +7414,7 @@ buildUnitMonoFull: function {
             } else null
         }
         ids9: (zgenerator.GenIds nextId: ty.nextSynthNodeId)
-        fiter: templateOp.body.iterate
+        fiter: bodyIds9.iterate
         for fm: fiter loop {
             fmNode9: nodes.get i: (fm - 1).u64
             match (
@@ -7587,7 +7583,7 @@ buildUnitMonoFull: function {
             } else null
         }
         ty.nextSynthNodeId = ids9.nextId
-    } else null
+    }
 }
 
 # completeInlineReq -- locate an inline template member by name in the main
@@ -7602,12 +7598,11 @@ completeInlineReq: function {
     tmplName: StringView
     tplId: u64
     argId: u64
-    mainOp: Node
+    mainOpId: u32
 } is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    {
+        biter: bodyIds9.iterate
         for bm: biter loop {
             bmNode9: nodes.get i: (bm - 1).u64
             match (
@@ -7626,13 +7621,13 @@ completeInlineReq: function {
                             :monoName
                             :tplId
                             :argId
-                            templateOp: (nodes.get i: (bmNode9.operation - 1).u64)
+                            templateOpId: bmNode9.operation
                         )
                     }
                 }
             } else null
         }
-    } else null
+    }
 }
 
 # inlineTemplateTid -- the canonical id of an inline generic-unit template
@@ -7643,14 +7638,13 @@ completeInlineReq: function {
 inlineTemplateTid: function {
     ty: ztyping.ZTyping
     nodes: List Node
-    mainOp: Node
+    mainOpId: u32
     tmplName: StringView
 } out u64 is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
     found: u64
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
+    {
+        biter: bodyIds9.iterate
         for bm: biter loop {
             bmNode9: nodes.get i: (bm - 1).u64
             match (
@@ -7659,7 +7653,7 @@ inlineTemplateTid: function {
                 bn: unitLabel o: bmNode9.name
                 if bn.stringview == tmplName then {
                     if (isUnitOp op: (nodes.get i: (bmNode9.operation - 1).u64)) then {
-                        tnid: unitdefNodeId n: (nodes.get i: (bmNode9.operation - 1).u64)
+                        tnid: unitdefNodeId :nodes nId: bmNode9.operation
                         tso: ty.nodeType.get key: tnid.u64
                         match (
                             tso
@@ -7670,7 +7664,7 @@ inlineTemplateTid: function {
                 }
             } else null
         }
-    } else null
+    }
     return found
 }
 
@@ -7745,11 +7739,10 @@ completeUnitInstantiations: function {
                         ) case namedoperation then {
                             tun: unitLabel o: tu.name
                             if tun.stringview == mainName.stringview then {
-                                top9: program.nodes.get i: (tu.operation - 1).u64
                                 tplId = (inlineTemplateTid
                                     :ty
                                     nodes: program.nodes
-                                    mainOp: top9
+                                    mainOpId: tu.operation
                                     tmplName: rt.stringview
                                 )
                             }
@@ -7783,7 +7776,7 @@ completeUnitInstantiations: function {
                                     monoName: rm.stringview
                                     :tplId
                                     :argId
-                                    templateOp: (program.nodes.get i: (u9.operation - 1).u64)
+                                    templateOpId: u9.operation
                                 )
                             }
                             if un9.stringview == mainName.stringview then {
@@ -7798,7 +7791,7 @@ completeUnitInstantiations: function {
                                     tmplName: rt.stringview
                                     :tplId
                                     :argId
-                                    mainOp: (program.nodes.get i: (u9.operation - 1).u64)
+                                    mainOpId: u9.operation
                                 )
                             }
                         } else null
@@ -17131,7 +17124,7 @@ runDepUnitWalks: function {
                 :st
                 :nodes
                 depName: dn.stringview
-                unitOp: (nodes.get i: (du.operation - 1).u64)
+                unitOpId: du.operation
             )
         } else null
     }
@@ -17139,15 +17132,19 @@ runDepUnitWalks: function {
 
 # depWalkUnit -- walk one dependency unit's resolved function bodies (two
 # passes: indices first, so the body list is free for the walk itself).
-depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringView unitOp: Node} is {
-    match (
-        unitOp
-    ) case unitdef then {
-        if (hasGenericParam :nodes items: unitOp.body) then return
+depWalkUnit: function {
+    st: zenv.ZSymbolTable
+    nodes: List Node
+    depName: StringView
+    unitOpId: u32
+} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: unitOpId
+    {
+        if (hasGenericParam :nodes items: bodyIds9) then return
         emptyD: (List u32)
         idxs: (List u64)
         di0: u64
-        with biter: unitOp.body.iterate do for bmId9: biter loop {
+        with biter: bodyIds9.iterate do for bmId9: biter loop {
             bm: nodes.get i: (bmId9 - 1).u64
             match (
                 bm
@@ -17172,7 +17169,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
         wi: u64
         for wi < idxs.length loop {
             bidx: idxs.get i: wi
-            bm2Id9: unitOp.body.get i: bidx
+            bm2Id9: bodyIds9.get i: bidx
             bm2: nodes.get i: (bm2Id9 - 1).u64
             match (
                 bm2
@@ -17197,7 +17194,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
                                 defn: (nodes.get i: (bm2.operation - 1).u64)
                                 thisName: ""
                                 :nodes
-                                unitBody: unitOp.body
+                                unitBody: bodyIds9
                                 depUnits: emptyD
                             )
                         }
@@ -17220,7 +17217,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
                                 :st
                                 unitName: depName
                                 :nodes
-                                unitBody: unitOp.body
+                                unitBody: bodyIds9
                                 typeName: cls.stringview
                                 op: (nodes.get i: (bm2.operation - 1).u64)
                             )
@@ -17232,7 +17229,7 @@ depWalkUnit: function {st: zenv.ZSymbolTable nodes: List Node depName: StringVie
             } else null
             wi = wi + 1
         }
-    } else null
+    }
 }
 
 # checkUnitBodies -- walk every function definition with a body in one unit.
@@ -17407,7 +17404,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                             :st
                             nodes: program.nodes
                             depName: wun9.stringview
-                            unitOp: (program.nodes.get i: (wu9.operation - 1).u64)
+                            unitOpId: wu9.operation
                         )
                     }
                 } else null
