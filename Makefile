@@ -2,6 +2,12 @@ CC       := gcc
 CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
             -Werror=implicit-function-declaration -Werror=implicit-int \
             -Werror=int-conversion -Werror=incompatible-pointer-types
+
+# Parallel by default: make fans out independent targets and the corpus runner
+# fans out its per-case pipelines (--jobs). `make NPROC=1` forces everything
+# serial (NPROC feeds both -j and the runner's --jobs).
+NPROC    ?= $(shell nproc 2>/dev/null || echo 1)
+MAKEFLAGS += -j$(NPROC)
 # Daily-driver binaries only (bin/zc, bin/zl, bin/zls): light optimization
 # makes self-compilation ~35% faster (1.30s -> 0.86s). -fwrapv and
 # -fno-strict-aliasing pin down the C the emitter relies on. Bootstrap
@@ -25,7 +31,10 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard
+
+# Keep pattern-chain intermediates (the per-example .c files) for debugging.
+.SECONDARY:
 
 # ZLSCOPE -- what the zl *linter* checks: the tool + compiler sources and the relocated
 # front-end. The stdlib proper (io/os/collections/system/cli/core) is not linted (it carries
@@ -56,48 +65,47 @@ style-lint: bin/zl
 	bin/zl lint --full --src src --system lib/system $(ZLSCOPE)
 	bin/zl fmt --check $(FMTSCOPE)
 
-# test -- build the compiler + the self-hosted test runner (src/ztestrunner.z),
-# then run the fast corpus gate (run/leak/error/dump/smoke/differential kinds,
-# all driven via os.spawn; no Python, no shell). Run before every commit.
-test: bin/zc
+# out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
+# on demand; test/ci run it with --jobs so per-case pipelines fan out (heavy
+# kinds -- differential, selfhost-asan, fixpoint -- stay serial inside it).
+$(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
 	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
-	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root .
+
+# test -- build the compiler + the corpus runner, then run the fast corpus gate
+# (run/leak/error/dump/smoke/differential kinds, all driven via os.spawn; no
+# Python, no shell). Run before every commit.
+test: bin/zc $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC)
 
 # ci -- the consolidated gate, runnable in one command with only a C toolchain:
 # the full style-lint, the heavy corpus gate (--heavy adds the self-host ASan +
 # byte-identity fixpoint kinds to run/leak/error/dump/smoke/differential), and
-# the Python-free seed bootstrap.
-ci: bin/zc
-	$(MAKE) --no-print-directory style-lint
-	$(MAKE) --no-print-directory shadow-guard
-	$(MAKE) --no-print-directory emitter-guard
-	$(MAKE) --no-print-directory native-guard
-	@mkdir -p $(BUILDDIR)
-	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
-	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy
+# the Python-free seed bootstrap. The lint + guard + corpus phases are plain
+# prerequisites so -j overlaps them; test-bootstrap stays last (and is
+# internally serial -- b1 -> b2 -> b3 is a chain by nature).
+ci: style-lint shadow-guard emitter-guard native-guard ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
-# compile all examples: .z -> .c -> binary
-build: bin/zc
-	@mkdir -p $(BUILDDIR)
-	@ok=0; fail=0; \
-	for name in $(NAMES); do \
-		bin/zc $$name --src examples --system lib/system --emit-c $(BUILDDIR)/$$name.c 2>/dev/null; \
-		if [ $$? -ne 0 ]; then \
-			echo "FAIL zc   $$name"; fail=$$((fail+1)); continue; \
-		fi; \
-		$(CC) $(CFLAGS) -o $(BUILDDIR)/$$name $(BUILDDIR)/$$name.c 2>/dev/null; \
-		if [ $$? -ne 0 ]; then \
-			echo "FAIL gcc  $$name"; fail=$$((fail+1)); continue; \
-		fi; \
-		echo "OK        $$name"; ok=$$((ok+1)); \
-	done; \
-	echo ""; \
-	echo "$$ok passed, $$fail failed ($(BUILDDIR)/)"
+ci-corpus: bin/zc $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
+
+# compile all examples: .z -> .c -> binary, one pattern-rule chain per example
+# so -j fans out the emits and gcc's. Binaries land in $(BUILDDIR)/ex/.
+EXDIR  := $(BUILDDIR)/ex
+EXBINS := $(NAMES:%=$(EXDIR)/%.bin)
+
+$(EXDIR)/%.c: examples/%.z bin/zc
+	@mkdir -p $(EXDIR)
+	bin/zc $* --src examples --system lib/system --emit-c $@
+
+$(EXDIR)/%.bin: $(EXDIR)/%.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+build: $(EXBINS)
+	@echo "$(words $(EXBINS)) examples built ($(EXDIR)/)"
 
 # out/zc-seed -- the bootstrap compiler built from the committed, Python-free
 # seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
