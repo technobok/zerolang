@@ -235,7 +235,7 @@ runJobs: function {jobs: List PoolJob maxJobs: u64 statuses: List i32 failSteps:
                         dl: os.monotonicMillis + (st.timeoutSecs.i64 * 1000)
                         deadlines.set i: ji val: dl
                     } else {
-                        deadlines.set i: ji val: 0.i64
+                        deadlines.set i: ji val: 0
                     }
                     inflight = inflight + 1
                 }
@@ -685,6 +685,7 @@ main: function is {
     leakDirs: (List String)
     leakDirs.append from: examplesDir.copy
     leakDirs.append from: corpusDir.copy
+    leakPool: (List PoolJob)
     di: u64
     for di < leakDirs.length loop {
         ld: (leakDirs.get i: di).copy
@@ -703,6 +704,10 @@ main: function is {
                     lc: "\{d.stringview}/L_\{nm.stringview}.c"
                     lb: "\{d.stringview}/L_\{nm.stringview}.bin"
                     lerr: "\{d.stringview}/L_\{nm.stringview}.err"
+                    rdir2: "\{d.stringview}/leak_\{nm.stringview}"
+                    io.mkdirp path: rdir2.stringview
+                    argsFile2: "\{rungold.stringview}/\{nm.stringview}.args"
+                    steps: (List PoolStep)
                     za2: (zcArgv
                         zc: zc.stringview
                         name: nm.stringview
@@ -710,72 +715,83 @@ main: function is {
                         sys: sys.stringview
                         outc: lc.stringview
                     )
-                    ec2: (os.spawn
+                    steps.append (mkStep
                         argv: za2
                         cwd: ""
                         outPath: "/dev/null"
                         errPath: "/dev/null"
                         timeoutSecs: 0
+                        allowFail: false
                     )
-                    if ec2 == 0 then {
-                        ga2: (gccArgv
-                            cc: cc.stringview
-                            bin: lb.stringview
-                            csrc: lc.stringview
-                            asan: true
-                        )
-                        bc2: (os.spawn
-                            argv: ga2
-                            cwd: ""
-                            outPath: "/dev/null"
-                            errPath: "/dev/null"
-                            timeoutSecs: 0
-                        )
-                        if bc2 == 0 then {
-                            rdir2: "\{d.stringview}/leak_\{nm.stringview}"
-                            io.mkdirp path: rdir2.stringview
-                            argsFile2: "\{rungold.stringview}/\{nm.stringview}.args"
-                            ba2: binArgv bin: lb.stringview argsFile: argsFile2.stringview
-                            os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
-                            (os.spawn
-                                argv: ba2
-                                cwd: rdir2.stringview
-                                outPath: "/dev/null"
-                                errPath: lerr.stringview
-                                :timeoutSecs
-                            )
-                            os.unsetEnv key: "ASAN_OPTIONS"
-                            errC: slurp path: lerr.stringview
-                            isKnown: false
-                            if (isUnsafe s: errC.stringview) then {
-                                print "FAIL(unsafe) \{nm.stringview}"
-                                fails = fails + 1
-                            } else if (isLeak s: errC.stringview) then {
-                                if isKnown then {
-                                    xleak = xleak + 1
-                                } else {
-                                    print "FAIL(leak) \{nm.stringview}"
-                                    fails = fails + 1
-                                }
-                            } else {
-                                if isKnown then {
-                                    print "FAIL(ratchet) \{nm.stringview} now leak-CLEAN"
-                                    fails = fails + 1
-                                } else {
-                                    leakclean = leakclean + 1
-                                }
-                            }
-                        }
-                    }
+                    ga2: (gccArgv
+                        cc: cc.stringview
+                        bin: lb.stringview
+                        csrc: lc.stringview
+                        asan: true
+                    )
+                    steps.append (mkStep
+                        argv: ga2
+                        cwd: ""
+                        outPath: "/dev/null"
+                        errPath: "/dev/null"
+                        timeoutSecs: 0
+                        allowFail: false
+                    )
+                    ba2: binArgv bin: lb.stringview argsFile: argsFile2.stringview
+                    steps.append (mkStep
+                        argv: ba2
+                        cwd: rdir2.stringview
+                        outPath: "/dev/null"
+                        errPath: lerr.stringview
+                        :timeoutSecs
+                        allowFail: true
+                    )
+                    leakPool.append (mkJob name: nm.stringview :steps)
                 } case none then null
                 li = li + 1
             }
         } case err then null
         di = di + 1
     }
+    leakStatuses: (List i32)
+    leakFailSteps: (List i64)
+    os.setEnv key: "ASAN_OPTIONS" value: "detect_leaks=1"
+    runJobs jobs: leakPool maxJobs: jobsMax statuses: leakStatuses failSteps: leakFailSteps
+    os.unsetEnv key: "ASAN_OPTIONS"
+    lji: u64
+    for lji < leakPool.length loop {
+        ljob: leakPool.get i: lji
+        lnm: ljob.name.stringview
+        lfail: leakFailSteps.get i: lji
+        if lfail == -1 then {
+            lerr: "\{d.stringview}/L_\{lnm}.err"
+            errC: slurp path: lerr.stringview
+            isKnown: false
+            if (isUnsafe s: errC.stringview) then {
+                print "FAIL(unsafe) \{lnm}"
+                fails = fails + 1
+            } else if (isLeak s: errC.stringview) then {
+                if isKnown then {
+                    xleak = xleak + 1
+                } else {
+                    print "FAIL(leak) \{lnm}"
+                    fails = fails + 1
+                }
+            } else {
+                if isKnown then {
+                    print "FAIL(ratchet) \{lnm} now leak-CLEAN"
+                    fails = fails + 1
+                } else {
+                    leakclean = leakclean + 1
+                }
+            }
+        }
+        lji = lji + 1
+    }
 
     # ---------------- ERROR (negative) cases ----------------
     er: io.listDir path: errors.stringview
+    errPool: (List PoolJob)
     match (
         er
     ) case ok then {
@@ -788,6 +804,7 @@ main: function is {
             ) case some then {
                 enm: esfx.string
                 epe: "\{d.stringview}/\{enm.stringview}.pe"
+                steps: (List PoolStep)
                 eza: (zcArgv
                     zc: zc.stringview
                     name: enm.stringview
@@ -795,46 +812,59 @@ main: function is {
                     sys: sys.stringview
                     outc: "/dev/null"
                 )
-                ecode: (os.spawn
+                steps.append (mkStep
                     argv: eza
                     cwd: ""
                     outPath: "/dev/null"
                     errPath: epe.stringview
                     timeoutSecs: 0
+                    allowFail: true
                 )
-                egold: "\{errors.stringview}/\{enm.stringview}.err"
-                ematch: false
-                if ecode != 0 then {
-                    peC: slurp path: epe.stringview
-                    goldC2: slurp path: egold.stringview
-                    ne: normErr content: peC.stringview
-                    if ne.stringview == goldC2.stringview then ematch = true
-                }
-                if ematch then {
-                    passN = passN + 1
-                } else {
-                    print "FAIL(error) \{enm.stringview}"
-                    fails = fails + 1
-                }
-                efull: "\{errors.stringview}/\{enm.stringview}.full"
-                if (io.exists path: efull.stringview) then {
-                    fpeC: slurp path: epe.stringview
-                    fgoldC: slurp path: efull.stringview
-                    if fpeC.stringview == fgoldC.stringview then {
-                        passN = passN + 1
-                    } else {
-                        print "FAIL(error-full) \{enm.stringview}"
-                        fails = fails + 1
-                    }
-                }
+                errPool.append (mkJob name: enm.stringview :steps)
             } case none then null
             ei = ei + 1
         }
     } case err then null
+    errStatuses: (List i32)
+    errFailSteps: (List i64)
+    runJobs jobs: errPool maxJobs: jobsMax statuses: errStatuses failSteps: errFailSteps
+    eji: u64
+    for eji < errPool.length loop {
+        ejob: errPool.get i: eji
+        enmv: ejob.name.stringview
+        epe: "\{d.stringview}/\{enmv}.pe"
+        egold: "\{errors.stringview}/\{enmv}.err"
+        ematch: false
+        if (errStatuses.get i: eji) != 0 then {
+            peC: slurp path: epe.stringview
+            goldC2: slurp path: egold.stringview
+            ne: normErr content: peC.stringview
+            if ne.stringview == goldC2.stringview then ematch = true
+        }
+        if ematch then {
+            passN = passN + 1
+        } else {
+            print "FAIL(error) \{enmv}"
+            fails = fails + 1
+        }
+        efull: "\{errors.stringview}/\{enmv}.full"
+        if (io.exists path: efull.stringview) then {
+            fpeC: slurp path: epe.stringview
+            fgoldC: slurp path: efull.stringview
+            if fpeC.stringview == fgoldC.stringview then {
+                passN = passN + 1
+            } else {
+                print "FAIL(error-full) \{enmv}"
+                fails = fails + 1
+            }
+        }
+        eji = eji + 1
+    }
 
     # ---------------- DUMP (canonical state) cases ----------------
     ddC: slurp path: dumpcases.stringview
     ddv: ddC.stringview
+    dumpPool: (List PoolJob)
     with ddit: ddv.lines do for ln: ddit loop {
         if ln.length > 0 then {
             nameStr: String
@@ -851,38 +881,51 @@ main: function is {
             if idx >= 2 then {
                 srcAbs: "\{root.stringview}/\{dirStr.stringview}"
                 dpath: "\{d.stringview}/\{nameStr.stringview}.canon"
+                steps: (List PoolStep)
                 da: (dumpArgv
                     zc: zc.stringview
                     name: nameStr.stringview
                     srcdir: srcAbs.stringview
                     sys: sys.stringview
                 )
-                dco: (os.spawn
+                steps.append (mkStep
                     argv: da
                     cwd: ""
                     outPath: dpath.stringview
                     errPath: "/dev/null"
                     :timeoutSecs
+                    allowFail: true
                 )
-                dgold: "\{dumpgold.stringview}/\{nameStr.stringview}.canon"
-                if (io.exists path: dgold.stringview) == false then {
-                    skip = skip + 1
-                } else {
-                    gC: slurp path: dgold.stringview
-                    oC: slurp path: dpath.stringview
-                    okd: false
-                    if dco == 0 then {
-                        if oC.stringview == gC.stringview then okd = true
-                    }
-                    if okd then {
-                        passN = passN + 1
-                    } else {
-                        print "FAIL(dump) \{nameStr.stringview}"
-                        fails = fails + 1
-                    }
-                }
+                dumpPool.append (mkJob name: nameStr.stringview :steps)
             }
         }
+    }
+    dumpStatuses: (List i32)
+    dumpFailSteps: (List i64)
+    runJobs jobs: dumpPool maxJobs: jobsMax statuses: dumpStatuses failSteps: dumpFailSteps
+    dji: u64
+    for dji < dumpPool.length loop {
+        djob: dumpPool.get i: dji
+        dnm: djob.name.stringview
+        dpath: "\{d.stringview}/\{dnm}.canon"
+        dgold: "\{dumpgold.stringview}/\{dnm}.canon"
+        if (io.exists path: dgold.stringview) == false then {
+            skip = skip + 1
+        } else {
+            gC: slurp path: dgold.stringview
+            oC: slurp path: dpath.stringview
+            okd: false
+            if (dumpStatuses.get i: dji) == 0 then {
+                if oC.stringview == gC.stringview then okd = true
+            }
+            if okd then {
+                passN = passN + 1
+            } else {
+                print "FAIL(dump) \{dnm}"
+                fails = fails + 1
+            }
+        }
+        dji = dji + 1
     }
 
     # ---------------- DIFFERENTIAL (lexer / parser / program goldens) ----------------
@@ -1149,6 +1192,7 @@ main: function is {
     smokecases: "\{root.stringview}/tests/fixtures/smoke_cases.txt"
     scC: slurp path: smokecases.stringview
     scv: scC.stringview
+    smokePool: (List PoolJob)
     with scit: scv.lines do for sln: scit loop {
         if sln.length > 0 then {
             nameStr: String
@@ -1167,6 +1211,7 @@ main: function is {
                 cpath: "\{d.stringview}/S_\{nameStr.stringview}.c"
                 bpath: "\{d.stringview}/S_\{nameStr.stringview}.bin"
                 opath: "\{d.stringview}/S_\{nameStr.stringview}.out"
+                steps: (List PoolStep)
                 za: (zcArgv
                     zc: zc.stringview
                     name: nameStr.stringview
@@ -1174,60 +1219,73 @@ main: function is {
                     sys: sys.stringview
                     outc: cpath.stringview
                 )
-                ec: (os.spawn
+                steps.append (mkStep
                     argv: za
                     cwd: ""
                     outPath: "/dev/null"
                     errPath: "/dev/null"
                     timeoutSecs: 0
+                    allowFail: false
                 )
-                if ec != 0 then {
-                    print "FAIL(smoke-emit) \{nameStr.stringview}"
-                    fails = fails + 1
+                ga: (gccArgv
+                    cc: cc.stringview
+                    bin: bpath.stringview
+                    csrc: cpath.stringview
+                    asan: false
+                )
+                steps.append (mkStep
+                    argv: ga
+                    cwd: ""
+                    outPath: "/dev/null"
+                    errPath: "/dev/null"
+                    timeoutSecs: 0
+                    allowFail: false
+                )
+                ba: binArgv bin: bpath.stringview argsFile: ""
+                steps.append (mkStep
+                    argv: ba
+                    cwd: ""
+                    outPath: opath.stringview
+                    errPath: "/dev/null"
+                    :timeoutSecs
+                    allowFail: true
+                )
+                smokePool.append (mkJob name: nameStr.stringview :steps)
+            }
+        }
+    }
+    smokeStatuses: (List i32)
+    smokeFailSteps: (List i64)
+    runJobs jobs: smokePool maxJobs: jobsMax statuses: smokeStatuses failSteps: smokeFailSteps
+    sji: u64
+    for sji < smokePool.length loop {
+        sjob: smokePool.get i: sji
+        snm: sjob.name.stringview
+        sfail: smokeFailSteps.get i: sji
+        if sfail == 0 then {
+            print "FAIL(smoke-emit) \{snm}"
+            fails = fails + 1
+        } else if sfail == 1 then {
+            print "FAIL(smoke-build) \{snm}"
+            fails = fails + 1
+        } else {
+            opath: "\{d.stringview}/S_\{snm}.out"
+            gold: "\{root.stringview}/tests/fixtures/\{snm}_z/smoke.expected"
+            if (io.exists path: gold.stringview) == false then {
+                skip = skip + 1
+            } else {
+                goldC: slurp path: gold.stringview
+                outC: slurp path: opath.stringview
+                sameS: outC.stringview == goldC.stringview
+                if sameS when (smokeStatuses.get i: sji) == 0 then {
+                    passN = passN + 1
                 } else {
-                    ga: (gccArgv
-                        cc: cc.stringview
-                        bin: bpath.stringview
-                        csrc: cpath.stringview
-                        asan: false
-                    )
-                    bc: (os.spawn
-                        argv: ga
-                        cwd: ""
-                        outPath: "/dev/null"
-                        errPath: "/dev/null"
-                        timeoutSecs: 0
-                    )
-                    if bc != 0 then {
-                        print "FAIL(smoke-build) \{nameStr.stringview}"
-                        fails = fails + 1
-                    } else {
-                        ba: binArgv bin: bpath.stringview argsFile: ""
-                        rcode: (os.spawn
-                            argv: ba
-                            cwd: ""
-                            outPath: opath.stringview
-                            errPath: "/dev/null"
-                            :timeoutSecs
-                        )
-                        gold: "\{root.stringview}/tests/fixtures/\{nameStr.stringview}_z/smoke.expected"
-                        if (io.exists path: gold.stringview) == false then {
-                            skip = skip + 1
-                        } else {
-                            goldC: slurp path: gold.stringview
-                            outC: slurp path: opath.stringview
-                            sameS: outC.stringview == goldC.stringview
-                            if sameS when rcode == 0 then {
-                                passN = passN + 1
-                            } else {
-                                print "FAIL(smoke) \{nameStr.stringview}"
-                                fails = fails + 1
-                            }
-                        }
-                    }
+                    print "FAIL(smoke) \{snm}"
+                    fails = fails + 1
                 }
             }
         }
+        sji = sji + 1
     }
 
     # ---------------- SELFHOST-ASAN (heavy) ----------------
