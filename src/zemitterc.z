@@ -419,7 +419,7 @@ collectLiterals: function {nodes: List Node n: Node ids: List u64 texts: List St
         siter: n.statements.iterate
         for sId9: siter loop collectLiterals :nodes n: (nodes.get i: (sId9 - 1).u64) :ids :texts
     } case statementline then {
-        collectLiterals :nodes n: n.statementline :ids :texts
+        collectLiterals :nodes n: (nodes.get i: (n.statementline - 1).u64) :ids :texts
     } case expression then {
         collectLiterals :nodes n: n.expression :ids :texts
     } case namedoperation then {
@@ -968,13 +968,13 @@ takeSourceResolve: function {ctx: Ctx name: StringView} out String is {
 
 # takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
 # ownership-transfer alias: the binding reuses the source storage), else "".
-takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
+takeAliasBase: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} out String is {
     match (
         n
     ) case expression then {
-        return (takeAliasBase :symtab n: n.expression)
+        return (takeAliasBase :nodes :symtab n: n.expression)
     } case statementline then {
-        return (takeAliasBase :symtab n: n.statementline)
+        return (takeAliasBase :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview != "take" then return "".string
@@ -1000,13 +1000,18 @@ takeAliasBase: function {symtab: zenv.ZSymbolTable n: Node} out String is {
 # takeStringSource -- if `n` is a `<atom>.take` over a String value, the resolved
 # C name of the source local to zero after the move (the callee now owns the
 # heap buffer), else "". Used at the statement level to suppress a double free.
-takeStringSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+takeStringSource: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out String is {
     match (
         n
     ) case expression then {
-        return (takeStringSource :symtab :ctx n: n.expression)
+        return (takeStringSource :nodes :symtab :ctx n: n.expression)
     } case statementline then {
-        return (takeStringSource :symtab :ctx n: n.statementline)
+        return (takeStringSource :nodes :symtab :ctx n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview != "take" then return "".string
@@ -1030,13 +1035,18 @@ takeStringSource: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Stri
 
 # takeMoveCtype -- the C type of a `<atom>.take` source (for the `(T){0}`
 # zeroing), via typeRefC on the base's stamp (canonicalizes String to strC).
-takeMoveCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String is {
+takeMoveCtype: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out String is {
     match (
         n
     ) case expression then {
-        return (takeMoveCtype :symtab :ctx n: n.expression)
+        return (takeMoveCtype :nodes :symtab :ctx n: n.expression)
     } case statementline then {
-        return (takeMoveCtype :symtab :ctx n: n.statementline)
+        return (takeMoveCtype :nodes :symtab :ctx n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         bnid: atomNodeId9 n: n.parent
         bid: stampIdOf :symtab nid: bnid
@@ -1050,13 +1060,13 @@ takeMoveCtype: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out String 
 # itself a dotted path (a field, not a bare atom). The field lvalue is zeroed
 # after the move so the owner's destructor does not double-free the payload the
 # take aliased out (a bare `<x>.take` is handled by takeStringSource).
-isFieldTake: function {n: Node} out bool is {
+isFieldTake: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (isFieldTake n: n.expression)
+        return (isFieldTake :nodes n: n.expression)
     } case statementline then {
-        return (isFieldTake n: n.statementline)
+        return (isFieldTake :nodes n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview != "take" then return false
@@ -1086,7 +1096,8 @@ emitNarrowedTakeZero: function {
     ) case expression then {
         emitNarrowedTakeZero :nodes :symtab :ctx n: n.expression :ind :buf
     } case statementline then {
-        emitNarrowedTakeZero :nodes :symtab :ctx n: n.statementline :ind :buf
+        sln9: nodes.get i: (n.statementline - 1).u64
+        emitNarrowedTakeZero :nodes :symtab :ctx n: sln9 :ind :buf
     } case dottedpath then {
         cn9: atomTextOf n: n.child
         if cn9.stringview == "take" then {
@@ -1299,9 +1310,9 @@ emitCallTakeInvalidations: function {
         match (
             a9
         ) case namedoperation then {
-            ts9: takeStringSource :symtab :ctx n: (nodes.get i: (a9.operation - 1).u64)
+            ts9: takeStringSource :nodes :symtab :ctx n: (nodes.get i: (a9.operation - 1).u64)
             if ts9.length > 0 then {
-                tc9: takeMoveCtype :symtab :ctx n: (nodes.get i: (a9.operation - 1).u64)
+                tc9: takeMoveCtype :nodes :symtab :ctx n: (nodes.get i: (a9.operation - 1).u64)
                 inv9: "\{ind}\{ts9} = (\{tc9}){0};\n"
                 buf.append inv9.stringview
             } else {
@@ -1391,7 +1402,8 @@ emitValueTakeInvalidations: function {
     ) case expression then {
         emitValueTakeInvalidations :nodes :symtab :ctx n: n.expression :ind :buf
     } case statementline then {
-        emitValueTakeInvalidations :nodes :symtab :ctx n: n.statementline :ind :buf
+        sln29: nodes.get i: (n.statementline - 1).u64
+        emitValueTakeInvalidations :nodes :symtab :ctx n: sln29 :ind :buf
     } case call then {
         emitCallTakeInvalidations :nodes :symtab :ctx call: n :ind :buf
     } else null
@@ -1679,7 +1691,7 @@ emitDottedCall: function {
                             sph9: (hoistBorrowValArg
                                 :symtab
                                 :ctx
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2019)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2019)
                                 av: sxe9.stringview
                                 pid: ctx.strTid
                                 paramTake: false
@@ -1730,7 +1742,7 @@ emitDottedCall: function {
                             sxh9: (hoistBorrowValArg
                                 :symtab
                                 :ctx
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2029)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2029)
                                 av: sx9.stringview
                                 pid: ctx.strTid
                                 paramTake: false
@@ -1798,7 +1810,7 @@ emitDottedCall: function {
                             svh9: (hoistBorrowValArg
                                 :symtab
                                 :ctx
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2039)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2039)
                                 av: sv9.stringview
                                 pid: ctx.strTid
                                 paramTake: false
@@ -1979,7 +1991,7 @@ emitStringArgMethod: function {
                     av: emitExpr :nodes :symtab :ctx n: (nodes.get i: (a.operation - 1).u64)
                     argval = av
                     opf89: nodes.get i: (a.operation - 1).u64
-                    argBor9 = hoistExprIsBorrowRooted :symtab :ctx n: opf89
+                    argBor9 = hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf89
                     opf99: nodes.get i: (a.operation - 1).u64
                     argTid9 = stampIdOf :symtab nid: (nodeIdOf9 n: opf99)
                     opf109: nodes.get i: (a.operation - 1).u64
@@ -2405,13 +2417,13 @@ emitInstanceMethodCall: function {
 # atom like `Bytes` / `ByteView`). A value call must be emitted as the call;
 # constructions emit the binding's mono create. Used by the List/Set/Map binding
 # branches to choose between emitting the RHS expression and an empty create.
-collectionValueCallRhs: function {n: Node} out bool is {
+collectionValueCallRhs: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (collectionValueCallRhs n: n.expression)
+        return (collectionValueCallRhs :nodes n: n.expression)
     } case statementline then {
-        return (collectionValueCallRhs n: n.statementline)
+        return (collectionValueCallRhs :nodes n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         # a bare dotted path returning a collection (e.g. `st.allNames`) is a
         # no-arg method auto-call or field access -- a value, never a construction.
@@ -2462,17 +2474,23 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
 # hoist is a shared view and must not register a free. Field chains off
 # NAMED bases keep their existing legs untouched (a destructor-less box's
 # field interp-free is load-bearing today).
-hoistExprIsBorrowRooted: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+hoistExprIsBorrowRooted: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out bool is {
     match (
         n
     ) case expression then {
-        return (hoistExprIsBorrowRooted :symtab :ctx n: n.expression)
+        return (hoistExprIsBorrowRooted :nodes :symtab :ctx n: n.expression)
     } case statementline then {
-        return (hoistExprIsBorrowRooted :symtab :ctx n: n.statementline)
+        sln9: nodes.get i: (n.statementline - 1).u64
+        return (hoistExprIsBorrowRooted :nodes :symtab :ctx n: sln9)
     } case call then {
         return (callRhsIsBorrow :symtab :ctx call: n)
     } case dottedpath then {
-        return (hoistExprIsBorrowRooted :symtab :ctx n: n.parent)
+        return (hoistExprIsBorrowRooted :nodes :symtab :ctx n: n.parent)
     } else {
         return false
     }
@@ -2499,13 +2517,19 @@ callRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx call: zast.CallDat
     return (funcBorrowFlag :symtab tid: mfid9)
 }
 
-bindingRhsIsBorrow: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out bool is {
+bindingRhsIsBorrow: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out bool is {
     match (
         n
     ) case expression then {
-        return (bindingRhsIsBorrow :symtab :ctx n: n.expression)
+        return (bindingRhsIsBorrow :nodes :symtab :ctx n: n.expression)
     } case statementline then {
-        return (bindingRhsIsBorrow :symtab :ctx n: n.statementline)
+        sln9: nodes.get i: (n.statementline - 1).u64
+        return (bindingRhsIsBorrow :nodes :symtab :ctx n: sln9)
     } case call then {
         return (callRhsIsBorrow :symtab :ctx call: n)
     } case dottedpath then {
@@ -2967,7 +2991,7 @@ emitColInterpArg: function {
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     nmH: "_ah\{hn}"
     hdt: String
-    if (consumes) == false when (hoistExprIsBorrowRooted :symtab :ctx :n) == false then {
+    if (consumes) == false when (hoistExprIsBorrowRooted :nodes :symtab :ctx :n) == false then {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     }
     retx: nmH.copy
@@ -3849,6 +3873,7 @@ ctorArgIsBorrow: function {
         ) case namedoperation then {
             an: unitLabel9 o: a.name
             if an.stringview == label then return (hoistExprIsBorrowRooted
+                :nodes
                 :symtab
                 :ctx
                 n: (nodes.get i: (a.operation - 1).u64)
@@ -3874,6 +3899,7 @@ ctorArgIsBorrowPos: function {
             an: unitLabel9 o: a.name
             if an.length == 0 then {
                 if seen9 == idx then return (hoistExprIsBorrowRooted
+                    :nodes
                     :symtab
                     :ctx
                     n: (nodes.get i: (a.operation - 1).u64)
@@ -4334,7 +4360,7 @@ emitGenericFnCall: function {
                                 :ctx
                                 av: av9.stringview
                                 pid: fpid9
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2049)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2049)
                             )
                         }
                     }
@@ -4350,7 +4376,7 @@ emitGenericFnCall: function {
                                 name: fpnO9.stringview
                                 own: ztypes.zparamownership.takeMode
                             )
-                            isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2059)
+                            isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2059)
                         )
                     }
                     finalS9g: av9.copy
@@ -4473,7 +4499,7 @@ emitUnitMethodCall: function {
                                 :ctx
                                 av: av9.stringview
                                 pid: fpid9
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2069)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2069)
                             )
                         }
                     }
@@ -4489,7 +4515,7 @@ emitUnitMethodCall: function {
                                 name: fpnO9.stringview
                                 own: ztypes.zparamownership.takeMode
                             )
-                            isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2079)
+                            isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2079)
                         )
                     }
                     finalS9g: av9.copy
@@ -4606,7 +4632,7 @@ emitCrossUnitFnCall: function {
                                 :ctx
                                 av: av9.stringview
                                 pid: fpid8
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2089)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2089)
                             )
                         }
                     }
@@ -4621,7 +4647,7 @@ emitCrossUnitFnCall: function {
                                 name: fpnO8.stringview
                                 own: ztypes.zparamownership.takeMode
                             )
-                            isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2099)
+                            isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2099)
                         )
                     }
                     finalS9c: av9.copy
@@ -5211,7 +5237,7 @@ emitCallValue: function {
                                 :ctx
                                 av: av9.stringview
                                 pid: fpid8
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2109)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2109)
                             )
                             }
                         }
@@ -5222,7 +5248,7 @@ emitCallValue: function {
                                 av: av9.stringview
                                 pid: fpid8
                                 paramTake: pTake8
-                                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2119)
+                                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2119)
                             )
                         }
                     }
@@ -5359,7 +5385,7 @@ emitExpr: function {nodes: List Node symtab: zenv.ZSymbolTable ctx: Ctx n: Node}
     ) case expression then {
         return (emitExpr :nodes :symtab :ctx n: n.expression)
     } case statementline then {
-        return (emitExpr :nodes :symtab :ctx n: n.statementline)
+        return (emitExpr :nodes :symtab :ctx n: (nodes.get i: (n.statementline - 1).u64))
     } case statement then {
         if n.statements.length == 1 then {
             s0Id9: n.statements.get i: 0
@@ -6563,13 +6589,13 @@ dataIndexElemName: function {symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
 # interpBaseIsMapEntry -- true when an interp part is `<entry>.key`/`.value`
 # off a borrowed MapEntry: the projected String views the bucket, so it must
 # be appended inline (freeing the hoisted copy would double-free the bucket key).
-interpBaseIsMapEntry: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+interpBaseIsMapEntry: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (interpBaseIsMapEntry :symtab n: n.expression)
+        return (interpBaseIsMapEntry :nodes :symtab n: n.expression)
     } case statementline then {
-        return (interpBaseIsMapEntry :symtab n: n.statementline)
+        return (interpBaseIsMapEntry :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         bnid: atomNodeId9 n: n.parent
         bt: stampIdOf :symtab nid: bnid
@@ -6585,13 +6611,18 @@ interpBaseIsMapEntry: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
 # interpBaseIsOwnedStructField -- a `<inst>.field` read off a user record/class:
 # the projected String VIEWS the owner's field (freed by the owner's destructor),
 # so it appends inline -- freeing a hoisted copy would double-free the field.
-interpBaseIsOwnedStructField: function {symtab: zenv.ZSymbolTable n: Node} out bool is {
+interpBaseIsOwnedStructField: function {
+    nodes: List Node
+    symtab: zenv.ZSymbolTable
+    n: Node
+} out bool is {
     match (
         n
     ) case expression then {
-        return (interpBaseIsOwnedStructField :symtab n: n.expression)
+        return (interpBaseIsOwnedStructField :nodes :symtab n: n.expression)
     } case statementline then {
-        return (interpBaseIsOwnedStructField :symtab n: n.statementline)
+        sln9: nodes.get i: (n.statementline - 1).u64
+        return (interpBaseIsOwnedStructField :nodes :symtab n: sln9)
     } case dottedpath then {
         bnid: atomNodeId9 n: n.parent
         bt: stampIdOf :symtab nid: bnid
@@ -6671,8 +6702,8 @@ emitInterpPart: function {
             isAtomP: false
             an0: atomTextDeep :n
             if an0.length > 0 then isAtomP = true
-            if (interpBaseIsMapEntry :symtab :n) then isAtomP = true
-            if (interpBaseIsOwnedStructField :symtab :n) then isAtomP = true
+            if (interpBaseIsMapEntry :nodes :symtab :n) then isAtomP = true
+            if (interpBaseIsOwnedStructField :nodes :symtab :n) then isAtomP = true
             if isAtomP then {
                 # a borrowed String param is a pointer (isBorrowStringParam
                 # registers the raw name); compound bases (map-entry deref,
@@ -6681,7 +6712,7 @@ emitInterpPart: function {
                 if an0.length > 0 when (isPtrVar :ctx name: an0.stringview) then sAcc9 = "->".string
                 lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc9}data, \{val}\{sAcc9}size);\n"
                 buf.append lss.stringview
-            } else if (hoistExprIsBorrowRooted :symtab :ctx :n) then {
+            } else if (hoistExprIsBorrowRooted :nodes :symtab :ctx :n) then {
                 # borrow-returning call result (a shared element view): hoist
                 # for single evaluation and append -- the container owns the
                 # storage, so no free (the MapEntry exemption, generalized by
@@ -7187,7 +7218,8 @@ emitOptionBoxHoist: function {
     ) case expression then {
         return (emitOptionBoxHoist :nodes :symtab :ctx n: n.expression :ind :tmp :buf)
     } case statementline then {
-        return (emitOptionBoxHoist :nodes :symtab :ctx n: n.statementline :ind :tmp :buf)
+        sln9: nodes.get i: (n.statementline - 1).u64
+        return (emitOptionBoxHoist :nodes :symtab :ctx n: sln9 :ind :tmp :buf)
     } case call then {
         cn: dottedChildText n: n.callable
         if cn.stringview != "some" then return "".string
@@ -7528,7 +7560,8 @@ emitStmt: function {
     match (
         n
     ) case statementline then {
-        emitStmt :nodes :symtab :ctx n: n.statementline :ind :tmp :buf
+        sln9: nodes.get i: (n.statementline - 1).u64
+        emitStmt :nodes :symtab :ctx n: sln9 :ind :tmp :buf
     } case expression then {
         emitStmt :nodes :symtab :ctx n: n.expression :ind :tmp :buf
     } case statement then {
@@ -7589,7 +7622,7 @@ emitStmt: function {
             }
         }
         nm: ztypes.mangleVarName name: n.name.stringview
-        nbrw9: bindingRhsIsBorrow :symtab :ctx n: n.value
+        nbrw9: bindingRhsIsBorrow :nodes :symtab :ctx n: n.value
         ctx.borrowedVars.set key: nm.copy value: nbrw9
         if ctx.genActive when (isYieldNode n: n.value) then {
             (emitExprFormYield
@@ -7607,7 +7640,7 @@ emitStmt: function {
         }
         # `x: <inst>.take` over a record/class is an ownership alias: record
         # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
-        tabA: takeAliasBase :symtab n: n.value
+        tabA: takeAliasBase :nodes :symtab n: n.value
         if tabA.length > 0 then {
             # a narrowed-subject `.take` binding MOVES the payload out of
             # the match arm's box: real storage from the narrowed cast plus
@@ -7645,7 +7678,7 @@ emitStmt: function {
         ltmn: monoOriginName :symtab tid: ltid
         if (originIsTid :symtab tid: ltid originTid: ctx.listOriginTid) then {
             lcb: symtab.reg.cnameOf tid: ltid
-            if (osNoArgCallRhs n: n.value) then {
+            if (osNoArgCallRhs :nodes n: n.value) then {
                 # owned List returned by os.args / os.envNames: emit the call.
                 losr: emitExpr :nodes :symtab :ctx n: n.value
                 losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
@@ -7667,7 +7700,7 @@ emitStmt: function {
                         :buf
                     )
                 } else {
-                    if (collectionValueCallRhs n: n.value) then {
+                    if (collectionValueCallRhs :nodes n: n.value) then {
                         lvr0: emitExpr :nodes :symtab :ctx n: n.value
                         lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
                         buf.append lb0.stringview
@@ -7688,7 +7721,7 @@ emitStmt: function {
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.setOriginTid) then {
             scb: symtab.reg.cnameOf tid: ltid
-            if (collectionValueCallRhs n: n.value) then {
+            if (collectionValueCallRhs :nodes n: n.value) then {
                 svr: emitExpr :nodes :symtab :ctx n: n.value
                 sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
                 buf.append sbc.stringview
@@ -7707,7 +7740,7 @@ emitStmt: function {
         }
         if (originIsTid :symtab tid: ltid originTid: ctx.mapOriginTid) then {
             mcb: symtab.reg.cnameOf tid: ltid
-            if (collectionValueCallRhs n: n.value) then {
+            if (collectionValueCallRhs :nodes n: n.value) then {
                 mvr: emitExpr :nodes :symtab :ctx n: n.value
                 mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
                 buf.append mbc.stringview
@@ -7780,7 +7813,7 @@ emitStmt: function {
             } else {
                 lst3: "\{ind}\{ctx.strC}_t \{nm} = \{sx};\n"
                 buf.append lst3.stringview
-                if (bindingRhsIsBorrow :symtab :ctx n: n.value) == false then {
+                if (bindingRhsIsBorrow :nodes :symtab :ctx n: n.value) == false then {
                     nmc3: nm.copy
                     tmp.frees.append nmc3
                 }
@@ -7845,11 +7878,11 @@ emitStmt: function {
                     }
                 }
             }
-            if (isFieldTake n: n.value) when ftFn9 == false then {
+            if (isFieldTake :nodes n: n.value) when ftFn9 == false then {
                 ftz9: "\{ind}\{rv} = (\{ct}){0};\n"
                 buf.append ftz9.stringview
             } else {
-                bts9: takeStringSource :symtab :ctx n: n.value
+                bts9: takeStringSource :nodes :symtab :ctx n: n.value
                 if bts9.length > 0 then {
                     bzz9: "\{ind}\{rv} = (\{ct}){0};\n"
                     buf.append bzz9.stringview
@@ -7864,7 +7897,7 @@ emitStmt: function {
                 ltHasDtor9 = true
             }
             if ltHasDtor9 then {
-                if (bindingRhsIsBorrow :symtab :ctx n: n.value) == false then {
+                if (bindingRhsIsBorrow :nodes :symtab :ctx n: n.value) == false then {
                     ldcb: cnameOf tid: ltid name: tn.stringview
                     ldRef9: "&\{nm}"
                     if (isBoxTid :symtab tid: ltid) then ldRef9 = "\{nm}"
@@ -7956,7 +7989,7 @@ emitStmt: function {
                 }
             }
         }
-        if (isFieldTake n: n.value) when rftFn9 == false then {
+        if (isFieldTake :nodes n: n.value) when rftFn9 == false then {
             if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
                 rftzh9: "\{ind}\{rv2} = NULL;\n"
                 buf.append rftzh9.stringview
@@ -8190,7 +8223,7 @@ emitStmt: function {
                 (emitDiscardedResult
                     :symtab
                     :ctx
-                    isBorrow: (bindingRhsIsBorrow :symtab :ctx :n)
+                    isBorrow: (bindingRhsIsBorrow :nodes :symtab :ctx :n)
                     ce: de9.stringview
                     rtid: drtid9
                     :ind
@@ -8211,7 +8244,7 @@ emitStmt: function {
                 (emitDiscardedResult
                     :symtab
                     :ctx
-                    isBorrow: (bindingRhsIsBorrow :symtab :ctx :n)
+                    isBorrow: (bindingRhsIsBorrow :nodes :symtab :ctx :n)
                     ce: fce9.stringview
                     rtid: artid9
                     :ind
@@ -9271,7 +9304,7 @@ scanLoopVar: function {
             scanLoopVar :nodes :symtab n: (nodes.get i: (sId9 - 1).u64) :lbl :res
         }
     } case statementline then {
-        scanLoopVar :nodes :symtab n: n.statementline :lbl :res
+        scanLoopVar :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64) :lbl :res
     } case call then {
         with ait: n.arguments.iterate do for a: ait loop scanLoopVar :nodes :symtab n: a :lbl :res
     } case namedoperation then {
@@ -9841,7 +9874,8 @@ bodyReassigns9: function {nodes: List Node n: Node name: StringView} out bool is
         }
         return hit9
     } case statementline then {
-        return (bodyReassigns9 :nodes n: n.statementline :name)
+        sln9: nodes.get i: (n.statementline - 1).u64
+        return (bodyReassigns9 :nodes n: sln9 :name)
     } case expression then {
         return (bodyReassigns9 :nodes n: n.expression :name)
     } case reassignment then {
@@ -10696,13 +10730,13 @@ emitBranchAssign: function {
 
 # postGuardStmtId9 -- the node id of a guarding if/match statement that
 # recorded a post-guard narrowing; 0 otherwise.
-postGuardStmtId9: function {symtab: zenv.ZSymbolTable n: Node} out u64 is {
+postGuardStmtId9: function {nodes: List Node symtab: zenv.ZSymbolTable n: Node} out u64 is {
     match (
         n
     ) case statementline then {
-        return (postGuardStmtId9 :symtab n: n.statementline)
+        return (postGuardStmtId9 :nodes :symtab n: (nodes.get i: (n.statementline - 1).u64))
     } case expression then {
-        return (postGuardStmtId9 :symtab n: n.expression)
+        return (postGuardStmtId9 :nodes :symtab n: n.expression)
     } case ifexpr then {
         po9: symtab.typing.postGuardName.get key: n.nodeid.u64
         match (
@@ -10772,7 +10806,7 @@ emitBodyNode: function {
                 ri9 = ri9 + 1
             }
             emitStmt :nodes :symtab :ctx n: s9 :ind :tmp :buf
-            pgid9: postGuardStmtId9 :symtab n: s9
+            pgid9: postGuardStmtId9 :nodes :symtab n: s9
             if pgid9 > 0 then {
                 pgRawN9: String
                 {
@@ -12019,7 +12053,7 @@ scanNeeds: function {nodes: List Node ctx: Ctx n: Node} is {
         siter: n.statements.iterate
         for sId9: siter loop scanNeeds :nodes :ctx n: (nodes.get i: (sId9 - 1).u64)
     } case statementline then {
-        scanNeeds :nodes :ctx n: n.statementline
+        scanNeeds :nodes :ctx n: (nodes.get i: (n.statementline - 1).u64)
     } case expression then {
         scanNeeds :nodes :ctx n: n.expression
     } case namedoperation then {
@@ -16967,7 +17001,7 @@ fileFromArgCoerce: function {
                         :av
                         pid: ctx.strTid
                         paramTake: false
-                        isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: opf2129)
+                        isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: opf2129)
                     )
                     fb9: av.string
                     if fh9.length > 0 then fb9 = fh9
@@ -17187,13 +17221,13 @@ isOsNoArgFn: function {name: StringView} out bool is {
 # osNoArgCallRhs -- a binding RHS that is a bare `os.<noArgFn>` auto-call
 # (os.args / os.envNames return an owned List, so the binding's List branch
 # must emit the call, not a fresh empty list).
-osNoArgCallRhs: function {n: Node} out bool is {
+osNoArgCallRhs: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case expression then {
-        return (osNoArgCallRhs n: n.expression)
+        return (osNoArgCallRhs :nodes n: n.expression)
     } case statementline then {
-        return (osNoArgCallRhs n: n.statementline)
+        return (osNoArgCallRhs :nodes n: (nodes.get i: (n.statementline - 1).u64))
     } case dottedpath then {
         base9: atomTextOf n: n.parent
         if base9.stringview != "os" then return false
@@ -17271,7 +17305,7 @@ lowerNativeArg: function {
                 av: av0.stringview
                 pid: ctx.strTid
                 paramTake: false
-                isBorrow: (hoistExprIsBorrowRooted :symtab :ctx n: op)
+                isBorrow: (hoistExprIsBorrowRooted :nodes :symtab :ctx n: op)
             )
             if hb9.length > 0 then av0 = hb9
             return (svValueForm :ctx expr: av0.stringview isStr: true)
@@ -18761,7 +18795,8 @@ nodeYieldCount: function {nodes: List Node n: Node} out u64 is {
         }
         return c
     } case statementline then {
-        return (nodeYieldCount :nodes n: n.statementline)
+        sln9: nodes.get i: (n.statementline - 1).u64
+        return (nodeYieldCount :nodes n: sln9)
     } case expression then {
         return (nodeYieldCount :nodes n: n.expression)
     } case assignment then {
