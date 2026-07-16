@@ -108,6 +108,11 @@ Accessed via qualified names only -- #~"os.args", #~"os.env
 #ul:
   [#*: #> to=exit: #b:"os.exit" -- #~"function {code: i32}"]
   [#*: #> to=spawn: #b:"os.spawn" -- #~"function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32"]
+  [#*: #> to=spawn-async: #b:"os.spawnAsync" -- #~"function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView} out i32"]
+  [#*: #> to=wait-any: #b:"os.waitAny" -- #~"function out procexit"]
+  [#*: #> to=kill: #b:"os.kill" -- #~"function {pid: i32}"]
+  [#*: #> to=sleep-millis: #b:"os.sleepMillis" -- #~"function {ms: i64}"]
+  [#*: #> to=monotonic-millis: #b:"os.monotonicMillis" -- #~"function out i64"]
 
 
 #--: args
@@ -386,3 +391,68 @@ run-to-completion call, not a separate spawn / wait split.
 Captured output is read back with #~"io.readText"; the child
 inherits the environment, so set variables with #~"os.setEnv"
 beforehand. There is no streaming / pipe interface in v1.
+
+#--: spawn_async
+
+#code language=zerolang: """
+  spawnAsync: function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView} out i32 is native
+"""
+
+Fork and exec #~"argv" like #> to=spawn: #~"os.spawn" -- same
+#~"PATH" resolution, redirection and #~"cwd" rules -- but return
+immediately with the child's pid (#~"-1" on setup / fork failure).
+There is no timeout parameter: reap with
+#> to=wait-any: #~"os.waitAny" and enforce deadlines with
+#> to=monotonic-millis: #~"os.monotonicMillis" plus
+#> to=kill: #~"os.kill". Together the four calls form a worker
+pool's primitive set (see #~"src/ztestrunner.z" for the canonical
+poll loop).
+
+#--: wait_any
+
+#code language=zerolang: """
+  procexit: record {
+      pid: i32
+      status: i32
+  }
+
+  waitAny: function out procexit is native
+"""
+
+Reap one exited child without blocking
+(#~"waitpid(-1, WNOHANG)"). A #~"pid" of #~"0" means nothing has
+exited (or there are no children). #~"status" decodes like
+#~"os.spawn": the exit code; #~"127" for exec / setup failure; a
+signalled child reports #~"128 + signo".
+
+#--: kill
+
+#code language=zerolang: """
+  kill: function {pid: i32} is native
+"""
+
+#~"SIGKILL" a child by pid; reap it with
+#> to=wait-any: #~"os.waitAny" afterwards. A #~"pid" of zero or
+below is a no-op, so a cleared handle can never signal a process
+group by accident.
+
+#--: sleep_millis
+
+#code language=zerolang: """
+  sleepMillis: function {ms: i64} is native
+"""
+
+Suspend the calling process for #~"ms" milliseconds
+(#~"nanosleep", restarted after #~"EINTR" so the full duration
+always elapses). Non-positive #~"ms" returns immediately.
+
+#--: monotonic_millis
+
+#code language=zerolang: """
+  monotonicMillis: function out i64 is native
+"""
+
+Milliseconds on the monotonic clock
+(#~"CLOCK_MONOTONIC"). Only differences are meaningful -- the
+epoch is arbitrary (typically boot time). This is the clock behind
+#~"zc --time" and the test runner's deadlines.

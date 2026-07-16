@@ -123,6 +123,16 @@ Table of Contents</div>
 </li>
 <li><a href="#spawn">spawn</a>
 </li>
+<li><a href="#spawn-async">spawn_async</a>
+</li>
+<li><a href="#wait-any">wait_any</a>
+</li>
+<li><a href="#kill">kill</a>
+</li>
+<li><a href="#sleep-millis">sleep_millis</a>
+</li>
+<li><a href="#monotonic-millis">monotonic_millis</a>
+</li>
 </ul>
 </li>
 </ul>
@@ -194,6 +204,11 @@ Windows stubs are a v2 concern</li>
 <ul>
 <li><a href="#exit"><strong>os.exit</strong> -- <code>function {code: i32}</code></a></li>
 <li><a href="#spawn"><strong>os.spawn</strong> -- <code>function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView timeoutSecs: i32} out i32</code></a></li>
+<li><a href="#spawn-async"><strong>os.spawnAsync</strong> -- <code>function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView} out i32</code></a></li>
+<li><a href="#wait-any"><strong>os.waitAny</strong> -- <code>function out procexit</code></a></li>
+<li><a href="#kill"><strong>os.kill</strong> -- <code>function {pid: i32}</code></a></li>
+<li><a href="#sleep-millis"><strong>os.sleepMillis</strong> -- <code>function {ms: i64}</code></a></li>
+<li><a href="#monotonic-millis"><strong>os.monotonicMillis</strong> -- <code>function out i64</code></a></li>
 </ul>
 <h2 id="args"><a href="#args">3. args</a></h2>
 <pre><code class="language-zerolang">  args: function out (List of: String) is native</code></pre>
@@ -340,6 +355,46 @@ run-to-completion call, not a separate spawn / wait split.</p>
 <p>Captured output is read back with <code>io.readText</code>; the child
 inherits the environment, so set variables with <code>os.setEnv</code>
 beforehand. There is no streaming / pipe interface in v1.</p>
+<h2 id="spawn-async"><a href="#spawn-async">22. spawn_async</a></h2>
+<pre><code class="language-zerolang">  spawnAsync: function {argv: (List of: String) cwd: StringView outPath: StringView errPath: StringView} out i32 is native</code></pre>
+<p>Fork and exec <code>argv</code> like <a href="#spawn"><code>os.spawn</code> -- same</a>
+<code>PATH</code> resolution, redirection and <code>cwd</code> rules -- but return
+immediately with the child's pid (<code>-1</code> on setup / fork failure).
+There is no timeout parameter: reap with
+<a href="#wait-any"><code>os.waitAny</code> and enforce deadlines with</a>
+<a href="#monotonic-millis"><code>os.monotonicMillis</code> plus</a>
+<a href="#kill"><code>os.kill</code>. Together the four calls form a worker</a>
+pool's primitive set (see <code>src/ztestrunner.z</code> for the canonical
+poll loop).</p>
+<h2 id="wait-any"><a href="#wait-any">23. wait_any</a></h2>
+<pre><code class="language-zerolang">  procexit: record {
+      pid: i32
+      status: i32
+  }
+
+  waitAny: function out procexit is native</code></pre>
+<p>Reap one exited child without blocking
+(<code>waitpid(-1, WNOHANG)</code>). A <code>pid</code> of <code>0</code> means nothing has
+exited (or there are no children). <code>status</code> decodes like
+<code>os.spawn</code>: the exit code; <code>127</code> for exec / setup failure; a
+signalled child reports <code>128 + signo</code>.</p>
+<h2 id="kill"><a href="#kill">24. kill</a></h2>
+<pre><code class="language-zerolang">  kill: function {pid: i32} is native</code></pre>
+<p><code>SIGKILL</code> a child by pid; reap it with
+<a href="#wait-any"><code>os.waitAny</code> afterwards. A <code>pid</code> of zero or</a>
+below is a no-op, so a cleared handle can never signal a process
+group by accident.</p>
+<h2 id="sleep-millis"><a href="#sleep-millis">25. sleep_millis</a></h2>
+<pre><code class="language-zerolang">  sleepMillis: function {ms: i64} is native</code></pre>
+<p>Suspend the calling process for <code>ms</code> milliseconds
+(<code>nanosleep</code>, restarted after <code>EINTR</code> so the full duration
+always elapses). Non-positive <code>ms</code> returns immediately.</p>
+<h2 id="monotonic-millis"><a href="#monotonic-millis">26. monotonic_millis</a></h2>
+<pre><code class="language-zerolang">  monotonicMillis: function out i64 is native</code></pre>
+<p>Milliseconds on the monotonic clock
+(<code>CLOCK_MONOTONIC</code>). Only differences are meaningful -- the
+epoch is arbitrary (typically boot time). This is the clock behind
+<code>zc --time</code> and the test runner's deadlines.</p>
 </main>
 </body>
 </html>
