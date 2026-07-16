@@ -27,6 +27,17 @@ unitLabel: function {o: Option String} out String is {
     }
 }
 
+# labelIs -- compare a namedoperation label without materializing it.
+labelIs: function {o: Option String name: StringView} out bool is {
+    match (
+        o
+    ) case some then {
+        return o.stringview == name
+    } case none then {
+        return name.length == 0
+    }
+}
+
 # unitdefNodeId -- the nodeid of the unit row an id names (0 when the id does
 # not name a unit). The row view is scoped to the fetch.
 unitdefNodeId: function {nodes: List Node nId: u32} out u32 is {
@@ -1288,8 +1299,7 @@ mainBodyMentions: function {nodes: List Node unitBody: List u32 name: StringView
             match (
                 mm
             ) case namedoperation then {
-                mn: unitLabel o: mm.name
-                if mn.stringview == "main" then return (fnBodyMentions
+                if (labelIs o: mm.name name: "main") then return (fnBodyMentions
                     :nodes
                     op: (nodes.get i: (mm.operation - 1).u64)
                     :name
@@ -5261,12 +5271,27 @@ resolveUnitBody: function {
                 } else null
                 ccNames.append ccn0
             }
+            mainOp9: u32
+            with cmit0: bodyIds9.iterate do for cmm0: cmit0 loop {
+                if mainOp9 == 0 then {
+                    cmn0: nodes.get i: (cmm0 - 1).u64
+                    match (
+                        cmn0
+                    ) case namedoperation then {
+                        if (labelIs o: cmn0.name name: "main") then mainOp9 = cmn0.operation
+                    } else null
+                }
+            }
             cci: u64
             ccTotal: ccNames.length
             for cci < ccTotal loop {
                 cnm2: ccNames.get i: cci
-                if cnm2.length > 0 then {
-                    if (mainBodyMentions :nodes unitBody: bodyIds9 name: cnm2.stringview) then {
+                if cnm2.length > 0 when mainOp9 > 0 then {
+                    if (fnBodyMentions
+                        :nodes
+                        op: (nodes.get i: (mainOp9 - 1).u64)
+                        name: cnm2.stringview
+                    ) then {
                         mem2Id9: bodyIds9.get i: cci
                         mem2: nodes.get i: (mem2Id9 - 1).u64
                         match (
