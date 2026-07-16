@@ -11860,45 +11860,46 @@ fillDataElems: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
         program
     ) case program then {
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if (isEmittableFileUnit name: un.stringview) then {
-                    (fillDataElemsIn
-                        :symtab
-                        :ctx
-                        nodes: program.nodes
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                    )
+            opId9: u32
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if (isEmittableFileUnit name: un.stringview) then opId9 = u.operation
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                (fillDataElemsIn
+                    :symtab
+                    :ctx
+                    nodes: program.nodes
+                    mainOpId: opId9
+                )
+            }
         }
     } else null
 }
 
-fillDataElemsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx nodes: List Node mainOp: Node} is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                dnm: unitLabel9 o: bmNode9.name
-                (fillOneDataElem
-                    :nodes
-                    :symtab
-                    :ctx
-                    name: dnm.stringview
-                    op: (nodes.get i: (bmNode9.operation - 1).u64)
-                )
-            } else null
+fillDataElemsIn: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nodes: List Node
+    mainOpId: u32
+} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    with biter: bodyIds9.iterate do for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            dnm: unitLabel9 o: bmNode9.name
+            (fillOneDataElem
+                :nodes
+                :symtab
+                :ctx
+                name: dnm.stringview
+                op: (nodes.get i: (bmNode9.operation - 1).u64)
+            )
         }
-    } else null
+    }
 }
 
 fillOneDataElem: function {
@@ -11956,37 +11957,33 @@ fillNeeds: function {program: Node ctx: Ctx} is {
         program
     ) case program then {
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if (isEmittableFileUnit name: un.stringview) then {
-                    (fillNeedsIn
-                        :ctx
-                        nodes: program.nodes
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                    )
+            opId9: u32
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if (isEmittableFileUnit name: un.stringview) then opId9 = u.operation
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                (fillNeedsIn
+                    :ctx
+                    nodes: program.nodes
+                    mainOpId: opId9
+                )
+            }
         }
     } else null
 }
 
-fillNeedsIn: function {ctx: Ctx nodes: List Node mainOp: Node} is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                scanNeeds :nodes :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
-            } else null
+fillNeedsIn: function {ctx: Ctx nodes: List Node mainOpId: u32} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    with biter: bodyIds9.iterate do for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            scanNeeds :nodes :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
         }
-    } else null
+    }
 }
 
 # scanNeeds -- recursively register io/os native needs for every call in a
@@ -12097,20 +12094,22 @@ fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} i
     ) case program then {
         mainName: program.mainUnitName.stringview
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if un.stringview == mainName then {
-                    (fillMethodReturnsIn
-                        :symtab
-                        :ctx
-                        nodes: program.nodes
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                    )
+            opId9: u32
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if un.stringview == mainName then opId9 = u.operation
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                (fillMethodReturnsIn
+                    :symtab
+                    :ctx
+                    nodes: program.nodes
+                    mainOpId: opId9
+                )
+            }
         }
     } else null
 }
@@ -12119,28 +12118,22 @@ fillMethodReturnsIn: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     nodes: List Node
-    mainOp: Node
+    mainOpId: u32
 } is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                tnm: unitLabel9 o: bmNode9.name
-                (fillTypeMethodReturns
-                    :nodes
-                    :symtab
-                    :ctx
-                    typeName: tnm.stringview
-                    op: (nodes.get i: (bmNode9.operation - 1).u64)
-                )
-            } else null
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    with biter: bodyIds9.iterate do for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            tnm: unitLabel9 o: bmNode9.name
+            (fillTypeMethodReturns
+                :nodes
+                :symtab
+                :ctx
+                typeName: tnm.stringview
+                op: (nodes.get i: (bmNode9.operation - 1).u64)
+            )
         }
-    } else null
+    }
 }
 
 fillTypeMethodReturns: function {
@@ -12184,49 +12177,54 @@ fillConstVals: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
         program
     ) case program then {
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if (isEmittableFileUnit name: un.stringview) then {
-                    sm9: ctx.mainName.copy
-                    ctx.mainName = un.copy
-                    (fillConstValsIn
-                        :symtab
-                        :ctx
-                        nodes: program.nodes
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                    )
-                    ctx.mainName = sm9
+            opId9: u32
+            un9: String
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if (isEmittableFileUnit name: un.stringview) then {
+                        opId9 = u.operation
+                        un9 = un.copy
+                    }
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                sm9: ctx.mainName.copy
+                ctx.mainName = un9.copy
+                (fillConstValsIn
+                    :symtab
+                    :ctx
+                    nodes: program.nodes
+                    mainOpId: opId9
+                )
+                ctx.mainName = sm9
+            }
         }
     } else null
 }
 
-fillConstValsIn: function {symtab: zenv.ZSymbolTable ctx: Ctx nodes: List Node mainOp: Node} is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                if (isConstShape :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)) then {
-                    nm: unitLabel9 o: bmNode9.name
-                    cv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
-                    nmv: nm.stringview
-                    nk: nmv.string
-                    cvv: cv.stringview
-                    ck: cvv.string
-                    ctx.constVals.set key: nk value: ck
-                }
-            } else null
+fillConstValsIn: function {
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nodes: List Node
+    mainOpId: u32
+} is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    with biter: bodyIds9.iterate do for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            if (isConstShape :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)) then {
+                nm: unitLabel9 o: bmNode9.name
+                cv: emitExpr :nodes :symtab :ctx n: (nodes.get i: (bmNode9.operation - 1).u64)
+                nmv: nm.stringview
+                nk: nmv.string
+                cvv: cv.stringview
+                ck: cvv.string
+                ctx.constVals.set key: nk value: ck
+            }
         }
-    } else null
+    }
 }
 
 # emitFns -- the main unit's function declarations then definitions
@@ -12278,20 +12276,15 @@ stdFnUndemanded: function {
 # bare `t: Any.generic` member). Its raw functions reference the unbound type
 # param, so they are not emitted directly; emitUnitMonoInstances emits one
 # concrete C function per (instantiation, method) instead.
-isGenericTemplateUnitOp: function {nodes: List Node op: Node} out bool is {
-    match (
-        op
-    ) case unitdef then {
-        mit9: op.body.iterate
-        for m9: mit9 loop {
-            m9Node9: nodes.get i: (m9 - 1).u64
-            match (
-                m9Node9
-            ) case namedoperation then {
-                if (ztypecheck.isGenericParam op: (nodes.get i: (m9Node9.operation - 1).u64)) then return true
-            } else null
+isGenericTemplateUnitOp: function {nodes: List Node opId: u32} out bool is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: opId
+    mit9: bodyIds9.iterate
+    for m9: mit9 loop {
+        m9Node9: nodes.get i: (m9 - 1).u64
+        if m9Node9.namedoperation then {
+            if (ztypecheck.isGenericParam op: (nodes.get i: (m9Node9.operation - 1).u64)) then return true
         }
-    } else null
+    }
     return false
 }
 
@@ -12306,10 +12299,11 @@ emitUnitMonoInstances: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     templateName: StringView
-    templateUnitOp: Node
+    templateUnitOpId: u32
     declOnly: bool
     buf: String.borrow
 } is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: templateUnitOpId
     tplId9: u64
     tk9: templateName.string
     tgo9: symtab.reg.unitNameTid.get key: tk9
@@ -12320,11 +12314,12 @@ emitUnitMonoInstances: function {
     } case none then null
     if tplId9 == 0 then {
         sgo9: u64
-        match (
-            templateUnitOp
-        ) case unitdef then {
-            sgo9 = stampIdOf :symtab nid: templateUnitOp.nodeid.u64
-        } else null
+        rid9: u32
+        {
+            tuo9: nodes.get i: (templateUnitOpId - 1).u64
+            if tuo9.unitdef then rid9 = tuo9.nodeid
+        }
+        if rid9 > 0 then sgo9 = stampIdOf :symtab nid: rid9.u64
         if sgo9 > 0 then tplId9 = sgo9
     }
     if tplId9 == 0 then return
@@ -12349,10 +12344,8 @@ emitUnitMonoInstances: function {
             } case none then null
         }
         if isMono9 then {
-            match (
-                templateUnitOp
-            ) case unitdef then {
-                fit9: templateUnitOp.body.iterate
+            {
+                fit9: bodyIds9.iterate
                 for fm9: fit9 loop {
                     fm9Node9: nodes.get i: (fm9 - 1).u64
                     match (
@@ -12400,7 +12393,7 @@ emitUnitMonoInstances: function {
                         }
                     } else null
                 }
-            } else null
+            }
         }
         t9 = t9 + 1
     }
@@ -12420,40 +12413,44 @@ emitFnsPass: function {
         program
     ) case program then {
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if (isEmittableUnitFns name: un.stringview) then {
-                    sm: ctx.mainName.copy
-                    ctx.mainName = un.copy
-                    if (isGenericTemplateUnitOp
-                        nodes: program.nodes
-                        op: (program.nodes.get i: (u.operation - 1).u64)
-                    ) then {
-                        (emitUnitMonoInstances
-                            :symtab
-                            nodes: program.nodes
-                            :ctx
-                            templateName: un.stringview
-                            templateUnitOp: (program.nodes.get i: (u.operation - 1).u64)
-                            :declOnly
-                            :buf
-                        )
-                    } else {
-                        (emitFnsIn
-                            :symtab
-                            :ctx
-                            nodes: program.nodes
-                            mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                            :declOnly
-                            :buf
-                        )
+            opId9: u32
+            un9: String
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if (isEmittableUnitFns name: un.stringview) then {
+                        opId9 = u.operation
+                        un9 = un.copy
                     }
-                    ctx.mainName = sm
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                sm: ctx.mainName.copy
+                ctx.mainName = un9.copy
+                isTpl9: isGenericTemplateUnitOp nodes: program.nodes opId: opId9
+                if isTpl9 then {
+                    (emitUnitMonoInstances
+                        :symtab
+                        nodes: program.nodes
+                        :ctx
+                        templateName: un9.stringview
+                        templateUnitOpId: opId9
+                        :declOnly
+                        :buf
+                    )
+                } else {
+                    (emitFnsIn
+                        :symtab
+                        :ctx
+                        nodes: program.nodes
+                        mainOpId: opId9
+                        :declOnly
+                        :buf
+                    )
+                }
+                ctx.mainName = sm
+            }
         }
     } else null
 }
@@ -12526,39 +12523,34 @@ emitFnsIn: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    mainOp: Node
+    mainOpId: u32
     declOnly: bool
     buf: String.borrow
 } is {
-    match (
-        mainOp
-    ) case unitdef then {
-        with iuit9: mainOp.body.iterate do for ium9Id9: iuit9 loop {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    {
+        with iuit9: bodyIds9.iterate do for ium9Id9: iuit9 loop {
             ium9: nodes.get i: (ium9Id9 - 1).u64
-            match (
-                ium9
-            ) case namedoperation then {
-                if (isGenericTemplateUnitOp
-                    :nodes
-                    op: (nodes.get i: (ium9.operation - 1).u64)
-                ) then {
+            if ium9.namedoperation then {
+                iuOpId9: ium9.operation
+                if (isGenericTemplateUnitOp :nodes opId: iuOpId9) then {
                     iunm9: unitLabel9 o: ium9.name
                     (emitUnitMonoInstances
                         :symtab
                         :nodes
                         :ctx
                         templateName: iunm9.stringview
-                        templateUnitOp: (nodes.get i: (ium9.operation - 1).u64)
+                        templateUnitOpId: iuOpId9
                         :declOnly
                         :buf
                     )
                 }
-            } else null
+            }
         }
         idxs: (List u64)
         names: (List String)
         di: u64
-        with biter: mainOp.body.iterate do for bmId9: biter loop {
+        with biter: bodyIds9.iterate do for bmId9: biter loop {
             bm: nodes.get i: (bmId9 - 1).u64
             match (
                 bm
@@ -12592,7 +12584,7 @@ emitFnsIn: function {
         for wi < wn loop {
             nm2: names.get i: wi
             didx: idxs.get i: wi
-            dm2Id9: mainOp.body.get i: didx
+            dm2Id9: bodyIds9.get i: didx
             dm2: nodes.get i: (dm2Id9 - 1).u64
             match (
                 dm2
@@ -12650,7 +12642,7 @@ emitFnsIn: function {
             wi = wi + 1
         }
         if declOnly then buf.append "\n"
-    } else null
+    }
 }
 
 isFunctionDefWithBody9: function {n: Node} out bool is {
@@ -12923,54 +12915,55 @@ collectUnitLiterals: function {
         program
     ) case program then {
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if (isEmittableUnitFns name: un.stringview) then {
-                    (collectUnitLiteralsIn
-                        nodes: program.nodes
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                        :symtab
-                        unitName: un.stringview
-                        :ids
-                        :texts
-                    )
+            opId9: u32
+            un9: String
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if (isEmittableUnitFns name: un.stringview) then {
+                        opId9 = u.operation
+                        un9 = un.copy
+                    }
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                (collectUnitLiteralsIn
+                    nodes: program.nodes
+                    mainOpId: opId9
+                    :symtab
+                    unitName: un9.stringview
+                    :ids
+                    :texts
+                )
+            }
         }
     } else null
 }
 
 collectUnitLiteralsIn: function {
     nodes: List Node
-    mainOp: Node
+    mainOpId: u32
     symtab: zenv.ZSymbolTable
     unitName: StringView
     ids: List u64
     texts: List String
 } is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                bn9: unitLabel9 o: bmNode9.name
-                skipU9: stdFnUndemanded :symtab :unitName fnName: bn9.stringview
-                if (skipU9) == false then (collectFnLiterals
-                    :nodes
-                    n: (nodes.get i: (bmNode9.operation - 1).u64)
-                    :ids
-                    :texts
-                )
-            } else null
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    biter: bodyIds9.iterate
+    for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            bn9: unitLabel9 o: bmNode9.name
+            skipU9: stdFnUndemanded :symtab :unitName fnName: bn9.stringview
+            if (skipU9) == false then (collectFnLiterals
+                :nodes
+                n: (nodes.get i: (bmNode9.operation - 1).u64)
+                :ids
+                :texts
+            )
         }
-    } else null
+    }
 }
 
 collectFnLiterals: function {nodes: List Node n: Node ids: List u64 texts: List String} is {
@@ -13252,18 +13245,17 @@ programHasMain: function {program: Node} out bool is {
     ) case program then {
         mainName: program.mainUnitName.stringview
         with uiter: program.units.iterate do for uId9: uiter loop {
-            u: program.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                un: unitLabel9 o: u.name
-                if un.stringview == mainName then {
-                    if (unitHasMain9
-                        nodes: program.nodes
-                        mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                    ) then return true
+            opId9: u32
+            {
+                u: program.nodes.get i: (uId9 - 1).u64
+                if u.namedoperation then {
+                    un: unitLabel9 o: u.name
+                    if un.stringview == mainName then opId9 = u.operation
                 }
-            } else null
+            }
+            if opId9 > 0 then {
+                if (unitHasMain9 nodes: program.nodes mainOpId: opId9) then return true
+            }
         }
         return false
     } else {
@@ -13271,24 +13263,17 @@ programHasMain: function {program: Node} out bool is {
     }
 }
 
-unitHasMain9: function {nodes: List Node mainOp: Node} out bool is {
-    match (
-        mainOp
-    ) case unitdef then {
-        biter: mainOp.body.iterate
-        for bm: biter loop {
-            bmNode9: nodes.get i: (bm - 1).u64
-            match (
-                bmNode9
-            ) case namedoperation then {
-                bn: unitLabel9 o: bmNode9.name
-                if bn.stringview == "main" then return true
-            } else null
+unitHasMain9: function {nodes: List Node mainOpId: u32} out bool is {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    biter: bodyIds9.iterate
+    for bm: biter loop {
+        bmNode9: nodes.get i: (bm - 1).u64
+        if bmNode9.namedoperation then {
+            bn: unitLabel9 o: bmNode9.name
+            if bn.stringview == "main" then return true
         }
-        return false
-    } else {
-        return false
     }
+    return false
 }
 
 # emitNeededNatives -- the gated native fragments for the needs the body
@@ -16511,25 +16496,31 @@ emitRecordDefs: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx buf: 
         ph: 1.u64
         for ph <= 3 loop {
             with uiter: program.units.iterate do for uId9: uiter loop {
-                u: program.nodes.get i: (uId9 - 1).u64
-                match (
-                    u
-                ) case namedoperation then {
-                    un: unitLabel9 o: u.name
-                    if (isEmittableFileUnit name: un.stringview) then {
-                        sm: ctx.mainName.copy
-                        ctx.mainName = un.copy
-                        (emitRecordDefsIn
-                            :symtab
-                            :ctx
-                            nodes: program.nodes
-                            mainOp: (program.nodes.get i: (u.operation - 1).u64)
-                            phase: ph
-                            :buf
-                        )
-                        ctx.mainName = sm
+                opId9: u32
+                un9: String
+                {
+                    u: program.nodes.get i: (uId9 - 1).u64
+                    if u.namedoperation then {
+                        un: unitLabel9 o: u.name
+                        if (isEmittableFileUnit name: un.stringview) then {
+                            opId9 = u.operation
+                            un9 = un.copy
+                        }
                     }
-                } else null
+                }
+                if opId9 > 0 then {
+                    sm: ctx.mainName.copy
+                    ctx.mainName = un9.copy
+                    (emitRecordDefsIn
+                        :symtab
+                        :ctx
+                        nodes: program.nodes
+                        mainOpId: opId9
+                        phase: ph
+                        :buf
+                    )
+                    ctx.mainName = sm
+                }
             }
             ph = ph + 1
         }
@@ -17789,15 +17780,14 @@ emitRecordDefsIn: function {
     nodes: List Node
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    mainOp: Node
+    mainOpId: u32
     phase: u64
     buf: String.borrow
 } is {
-    match (
-        mainOp
-    ) case unitdef then {
+    bodyIds9: zast.unitBodyIdsAt :nodes unitId: mainOpId
+    {
         if phase == 1 then {
-        with biterU: mainOp.body.iterate do for buId9: biterU loop {
+        with biterU: bodyIds9.iterate do for buId9: biterU loop {
             bu: nodes.get i: (buId9 - 1).u64
             match (
                 bu
@@ -17809,7 +17799,7 @@ emitRecordDefsIn: function {
                 }
             } else null
         }
-        with biterP: mainOp.body.iterate do for bpId9: biterP loop {
+        with biterP: bodyIds9.iterate do for bpId9: biterP loop {
             bp: nodes.get i: (bpId9 - 1).u64
             match (
                 bp
@@ -17823,7 +17813,7 @@ emitRecordDefsIn: function {
                 }
             } else null
         }
-        with biterA: mainOp.body.iterate do for bmId9: biterA loop {
+        with biterA: bodyIds9.iterate do for bmId9: biterA loop {
             bm: nodes.get i: (bmId9 - 1).u64
             match (
                 bm
@@ -17878,11 +17868,11 @@ emitRecordDefsIn: function {
         }
         }
         if phase == 2 then {
-        with biterB: mainOp.body.iterate do for bmdId9: biterB loop {
+        with biterB: bodyIds9.iterate do for bmdId9: biterB loop {
             bmd: nodes.get i: (bmdId9 - 1).u64
             emitDefMethods :nodes :symtab :ctx bm: bmd declOnly: true :buf
         }
-        with biterI: mainOp.body.iterate do for biId9: biterI loop {
+        with biterI: bodyIds9.iterate do for biId9: biterI loop {
             bi: nodes.get i: (biId9 - 1).u64
             match (
                 bi
@@ -17908,7 +17898,7 @@ emitRecordDefsIn: function {
         # main-unit function forward decls, after the struct defs (so a generator
         # function returning its synth iter class resolves) and before the method
         # bodies (a synth iterator's call body may call another generator's fn).
-        with biterFD: mainOp.body.iterate do for bfdId9: biterFD loop {
+        with biterFD: bodyIds9.iterate do for bfdId9: biterFD loop {
             bfd: nodes.get i: (bfdId9 - 1).u64
             match (
                 bfd
@@ -17941,12 +17931,12 @@ emitRecordDefsIn: function {
         }
         }
         if phase == 3 then {
-        with biterC: mainOp.body.iterate do for bmbId9: biterC loop {
+        with biterC: bodyIds9.iterate do for bmbId9: biterC loop {
             bmb: nodes.get i: (bmbId9 - 1).u64
             emitDefMethods :nodes :symtab :ctx bm: bmb declOnly: false :buf
         }
         }
-    } else null
+    }
 }
 
 # emitDataBlock -- `name: data { e0 e1 ... } out T`: a static const array
