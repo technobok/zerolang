@@ -36,7 +36,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard fallback-guard
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -90,7 +90,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard fallback-guard ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -291,6 +291,39 @@ emitter-guard:
 	  exit 1; \
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
+
+# fallback-guard -- the emitter must never silently degrade: a construct it
+# cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C. Leg 1:
+# no example emit outside the known baseline may carry a marker (the baseline
+# holds the known gaps and shrinks to empty as they are fixed). Leg 2: the
+# emitted driver C (bin/zc.c, out/zl.c, out/zls.c) must carry ZERO live
+# markers -- lines holding the emitter's own message-string literals
+# (String_append / _zs constants) are excluded from the count.
+FALLBACK_BASELINE := arbprec_constants compileerror dobreak doctl facets withctl
+EXCS := $(NAMES:%=$(EXDIR)/%.c)
+fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
+	@fail=0; \
+	for f in $(EXCS); do \
+	  if grep -q 'zemitterc: unhandled' $$f; then \
+	    name=$$(basename $$f .c); \
+	    case " $(FALLBACK_BASELINE) " in \
+	      *" $$name "*) ;; \
+	      *) echo "fallback-guard FAIL: $$name.c carries an unhandled-construct marker"; fail=1;; \
+	    esac; \
+	  fi; \
+	done; \
+	for d in bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
+	  n=$$(grep 'zemitterc: unhandled' $$d | grep -v 'String_append' | grep -cv '_zs'); \
+	  if [ "$$n" -gt 0 ]; then \
+	    echo "fallback-guard FAIL: $$d carries $$n live unhandled-construct marker(s)"; fail=1; \
+	  fi; \
+	done; \
+	if [ "$$fail" = "1" ]; then \
+	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap (or,"; \
+	  echo "  for a known example gap being tracked, add it to FALLBACK_BASELINE)."; \
+	  exit 1; \
+	fi; \
+	echo "fallback-guard OK: no unhandled-construct markers outside the baseline ($(words $(FALLBACK_BASELINE)) known)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
