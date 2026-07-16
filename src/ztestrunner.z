@@ -141,6 +141,153 @@ binArgv: function {bin: StringView argsFile: StringView} out List String is {
     return a
 }
 
+# PoolStep -- one spawn in a job's pipeline. allowFail steps record a
+# nonzero exit without ending the job (a run step's exit code is data,
+# compared against the golden -- only zc/cc steps are hard gates).
+PoolStep: class {
+    argv: (List String)
+    cwd: String
+    outPath: String
+    errPath: String
+    timeoutSecs: i32
+    allowFail: bool
+}
+
+mkStep: function {
+    argv: (List String).take
+    cwd: StringView
+    outPath: StringView
+    errPath: StringView
+    timeoutSecs: i32
+    allowFail: bool
+} out PoolStep is {
+    return (PoolStep
+        :argv
+        cwd: cwd.string
+        outPath: outPath.string
+        errPath: errPath.string
+        :timeoutSecs
+        :allowFail
+    )
+}
+
+# PoolJob -- a test case's sequential spawn pipeline (immutable; the
+# pool's mutable per-job state lives in runJobs-local parallel arrays,
+# since a list `get` hands back a non-owning shallow copy).
+PoolJob: class {
+    name: String
+    steps: (List PoolStep)
+}
+
+mkJob: function {name: StringView steps: (List PoolStep).take} out PoolJob is {
+    return (PoolJob name: name.string :steps)
+}
+
+# runJobs -- drive every job through its steps with at most maxJobs
+# children in flight. Steps within a job stay sequential; jobs overlap.
+# A step past its deadline is SIGKILLed and recorded as 124 (spawn's
+# timeout convention). Results land in the caller's statuses/failSteps,
+# indexed by job: failStep -1 = every step ran (status = the LAST
+# step's exit); otherwise the index of the hard-failing step.
+runJobs: function {jobs: List PoolJob maxJobs: u64 statuses: List i32 failSteps: List i64} is {
+    cap: maxJobs
+    if cap == 0 then cap = 1
+    total: jobs.length
+    pids: (List i32)
+    stepIdxs: (List u64)
+    deadlines: (List i64)
+    killeds: (List bool)
+    pi: u64
+    for pi < total loop {
+        pids.append 0
+        stepIdxs.append 0.u64
+        deadlines.append 0.i64
+        killeds.append false
+        statuses.append 0
+        failSteps.append -1
+        pi = pi + 1
+    }
+    doneN: u64
+    inflight: u64
+    for doneN < total loop {
+        ji: u64
+        for ji < total while inflight < cap loop {
+            jpid: pids.get i: ji
+            jfail: failSteps.get i: ji
+            jstep: stepIdxs.get i: ji
+            j: jobs.get i: ji
+            if jpid == 0 when jfail == -1 when jstep < j.steps.length then {
+                st: j.steps.get i: jstep
+                pid: (os.spawnAsync
+                    argv: st.argv
+                    cwd: st.cwd.stringview
+                    outPath: st.outPath.stringview
+                    errPath: st.errPath.stringview
+                )
+                if pid <= 0 then {
+                    statuses.set i: ji val: 127
+                    failSteps.set i: ji val: jstep.i64
+                    doneN = doneN + 1
+                } else {
+                    pids.set i: ji val: pid
+                    killeds.set i: ji val: false
+                    if st.timeoutSecs > 0 then {
+                        dl: os.monotonicMillis + (st.timeoutSecs.i64 * 1000)
+                        deadlines.set i: ji val: dl
+                    } else {
+                        deadlines.set i: ji val: 0.i64
+                    }
+                    inflight = inflight + 1
+                }
+            }
+            ji = ji + 1
+        }
+        if inflight == 0 then return
+        r: os.waitAny
+        if r.pid > 0 then {
+            jk: u64
+            hit: false
+            for jk < total while hit.false loop {
+                if (pids.get i: jk) == r.pid then {
+                    hit = true
+                    pids.set i: jk val: 0
+                    inflight = inflight - 1
+                    kstep: stepIdxs.get i: jk
+                    j2: jobs.get i: jk
+                    stw: j2.steps.get i: kstep
+                    stStatus: r.status
+                    if (killeds.get i: jk) then stStatus = 124
+                    statuses.set i: jk val: stStatus
+                    ended: false
+                    if stStatus != 0 when stw.allowFail.false then {
+                        failSteps.set i: jk val: kstep.i64
+                        ended = true
+                    } else {
+                        kn: kstep + 1
+                        stepIdxs.set i: jk val: kn
+                        if kn >= j2.steps.length then ended = true
+                    }
+                    if ended then doneN = doneN + 1
+                }
+                jk = jk + 1
+            }
+        } else {
+            now: os.monotonicMillis
+            jm: u64
+            for jm < total loop {
+                mpid: pids.get i: jm
+                mdl: deadlines.get i: jm
+                if mpid > 0 when mdl > 0 when now > mdl when (killeds.get i: jm).false then {
+                    os.kill pid: mpid
+                    killeds.set i: jm val: true
+                }
+                jm = jm + 1
+            }
+            os.sleepMillis ms: 5
+        }
+    }
+}
+
 # frameLsp -- wrap each non-empty line of a .msgs transcript in LSP
 # Content-Length framing (the bytes zls reads on its --replay input).
 frameLsp: function {src: StringView} out String is {
@@ -228,6 +375,7 @@ main: function is {
     heavy: false
     saveTemps: false
     timeoutSecs: 60.i32
+    jobsMax: 1.u64
     i: 1.u64
     for i < n loop {
         a: argv.get :i
@@ -247,6 +395,16 @@ main: function is {
             heavy = true
         } else if av == "--save-temps" then {
             saveTemps = true
+        } else if av == "--jobs" then {
+            i = i + 1
+            jval: (argv.get :i).copy
+            jsv: jval.stringview
+            jv: jsv.parseI64
+            match (
+                jv
+            ) case ok then {
+                if jv > 0 then jobsMax = jv.u64
+            } case err then null
         } else if av == "--timeout" then {
             i = i + 1
             tval: (argv.get :i).copy
@@ -304,6 +462,7 @@ main: function is {
     # ---------------- RUN cases ----------------
     rcC: slurp path: runcases.stringview
     rcv: rcC.stringview
+    runPool: (List PoolJob)
     with rit: rcv.lines do for ln: rit loop {
         if ln.length > 0 then {
             nameStr: String
@@ -322,6 +481,10 @@ main: function is {
                 cpath: "\{d.stringview}/\{nameStr.stringview}.c"
                 bpath: "\{d.stringview}/\{nameStr.stringview}.bin"
                 opath: "\{d.stringview}/\{nameStr.stringview}.out"
+                rdir: "\{d.stringview}/run_\{nameStr.stringview}"
+                io.mkdirp path: rdir.stringview
+                argsFile: "\{rungold.stringview}/\{nameStr.stringview}.args"
+                steps: (List PoolStep)
                 za: (zcArgv
                     zc: zc.stringview
                     name: nameStr.stringview
@@ -329,73 +492,83 @@ main: function is {
                     sys: sys.stringview
                     outc: cpath.stringview
                 )
-                ec: (os.spawn
+                steps.append (mkStep
                     argv: za
                     cwd: ""
                     outPath: "/dev/null"
                     errPath: "/dev/null"
                     timeoutSecs: 0
+                    allowFail: false
                 )
-                if ec != 0 then {
-                    print "FAIL(run) \{nameStr.stringview} (zc)"
-                    fails = fails + 1
+                ga: (gccArgv
+                    cc: cc.stringview
+                    bin: bpath.stringview
+                    csrc: cpath.stringview
+                    asan: false
+                )
+                steps.append (mkStep
+                    argv: ga
+                    cwd: ""
+                    outPath: "/dev/null"
+                    errPath: "/dev/null"
+                    timeoutSecs: 0
+                    allowFail: false
+                )
+                ba: binArgv bin: bpath.stringview argsFile: argsFile.stringview
+                steps.append (mkStep
+                    argv: ba
+                    cwd: rdir.stringview
+                    outPath: opath.stringview
+                    errPath: "/dev/null"
+                    :timeoutSecs
+                    allowFail: true
+                )
+                runPool.append (mkJob name: nameStr.stringview :steps)
+            }
+        }
+    }
+    runStatuses: (List i32)
+    runFailSteps: (List i64)
+    runJobs jobs: runPool maxJobs: jobsMax statuses: runStatuses failSteps: runFailSteps
+    rji: u64
+    for rji < runPool.length loop {
+        rjob: runPool.get i: rji
+        rnm: rjob.name.stringview
+        rfail: runFailSteps.get i: rji
+        if rfail == 0 then {
+            print "FAIL(run) \{rnm} (zc)"
+            fails = fails + 1
+        } else if rfail == 1 then {
+            print "FAIL(run) \{rnm} (cc)"
+            fails = fails + 1
+        } else {
+            opath: "\{d.stringview}/\{rnm}.out"
+            gold: "\{rungold.stringview}/\{rnm}.out"
+            exitFile: "\{rungold.stringview}/\{rnm}.exit"
+            if (io.exists path: gold.stringview) == false then {
+                skip = skip + 1
+            } else {
+                goldC: slurp path: gold.stringview
+                outC: slurp path: opath.stringview
+                expStr: "0".string
+                if (io.exists path: exitFile.stringview) then {
+                    rawx: slurp path: exitFile.stringview
+                    rxv: rawx.stringview
+                    tvw: rxv.trim
+                    expStr = tvw.string
+                }
+                codeStr: "\{runStatuses.get i: rji}"
+                sameOut: outC.stringview == goldC.stringview
+                sameExit: codeStr.stringview == expStr.stringview
+                if sameOut when sameExit then {
+                    passN = passN + 1
                 } else {
-                    ga: (gccArgv
-                        cc: cc.stringview
-                        bin: bpath.stringview
-                        csrc: cpath.stringview
-                        asan: false
-                    )
-                    bc: (os.spawn
-                        argv: ga
-                        cwd: ""
-                        outPath: "/dev/null"
-                        errPath: "/dev/null"
-                        timeoutSecs: 0
-                    )
-                    if bc != 0 then {
-                        print "FAIL(run) \{nameStr.stringview} (cc)"
-                        fails = fails + 1
-                    } else {
-                        rdir: "\{d.stringview}/run_\{nameStr.stringview}"
-                        io.mkdirp path: rdir.stringview
-                        argsFile: "\{rungold.stringview}/\{nameStr.stringview}.args"
-                        ba: binArgv bin: bpath.stringview argsFile: argsFile.stringview
-                        rcode: (os.spawn
-                            argv: ba
-                            cwd: rdir.stringview
-                            outPath: opath.stringview
-                            errPath: "/dev/null"
-                            :timeoutSecs
-                        )
-                        gold: "\{rungold.stringview}/\{nameStr.stringview}.out"
-                        exitFile: "\{rungold.stringview}/\{nameStr.stringview}.exit"
-                        if (io.exists path: gold.stringview) == false then {
-                            skip = skip + 1
-                        } else {
-                            goldC: slurp path: gold.stringview
-                            outC: slurp path: opath.stringview
-                            expStr: "0".string
-                            if (io.exists path: exitFile.stringview) then {
-                                rawx: slurp path: exitFile.stringview
-                                rxv: rawx.stringview
-                                tvw: rxv.trim
-                                expStr = tvw.string
-                            }
-                            codeStr: "\{rcode}"
-                            sameOut: outC.stringview == goldC.stringview
-                            sameExit: codeStr.stringview == expStr.stringview
-                            if sameOut when sameExit then {
-                                passN = passN + 1
-                            } else {
-                                print "FAIL(run) \{nameStr.stringview}"
-                                fails = fails + 1
-                            }
-                        }
-                    }
+                    print "FAIL(run) \{rnm}"
+                    fails = fails + 1
                 }
             }
         }
+        rji = rji + 1
     }
 
     # ---------------- LSP (framed transcript) cases ----------------
