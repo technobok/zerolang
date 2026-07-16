@@ -737,10 +737,23 @@ Tokenizer: class {
             } else {
                 is_eof = false
             }
-            if (is_eof) == false then this.hasnext = false
+            if is_eof then {
+                # EOF's staged tokstr is always empty
+                return (Token
+                    toktype: this.nexttok.toktype
+                    tokstr: "".string
+                    fsno: this.fsno
+                    lineno: this.nexttok.lineno
+                    colno: this.nexttok.colno
+                    tokenid: 0
+                )
+            }
+            this.hasnext = false
+            ds: String
+            ds swap this.nexttok.tokstr
             return (Token
                 toktype: this.nexttok.toktype
-                tokstr: this.nexttok.tokstr.copy
+                tokstr: ds
                 fsno: this.fsno
                 lineno: this.nexttok.lineno
                 colno: this.nexttok.colno
@@ -1282,7 +1295,7 @@ Lexer: class {
     # Accept and advance if the buffered token matches tt; else none.
     accept: function {:this tt: TT} out Option Token is {
         if this.thistoken.toktype == tt then {
-            tok: this.currentCopy
+            tok: this.takeCurrent
             this.advance
             return (Option.some tok)
         }
@@ -1291,7 +1304,7 @@ Lexer: class {
 
     # Accept and return the buffered token unconditionally, advancing.
     acceptAny: function {:this} out Token is {
-        tok: this.currentCopy
+        tok: this.takeCurrent
         this.advance
         return tok
     }
@@ -1314,6 +1327,21 @@ Lexer: class {
     # field subvalues into a fresh Token mirrors Tokenizer.token; a
     # free helper taking a borrowed Token param is rejected (the
     # projection would alias the caller's still-owned value).
+    # Move the buffered token out (tokstr swaps into a fresh String;
+    # advance overwrites the emptied husk immediately after).
+    takeCurrent: function {:this} out Token is {
+        s: String
+        s swap this.thistoken.tokstr
+        return (Token
+            toktype: this.thistoken.toktype
+            tokstr: s
+            fsno: this.thistoken.fsno
+            lineno: this.thistoken.lineno
+            colno: this.thistoken.colno
+            tokenid: this.thistoken.tokenid
+        )
+    }
+
     currentCopy: function {:this} out Token is {
         return (Token
             toktype: this.thistoken.toktype
