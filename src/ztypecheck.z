@@ -11105,6 +11105,7 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     if cnt == 0 then return true
     if cnt != 1 then return false
     soleName: String
+    soleId: u64
     bm9: st.typing.childIndex.get key: mid
     match (
         bm9
@@ -11113,9 +11114,10 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
             tc: st.typing.typeChild.get i: rmi9
             snB9: st.typing.edgeText.get i: tc.nameId
             soleName = snB9.copy
+            soleId = tc.nameId
         }
     } case none then null
-    if soleName.stringview == "this" then return true
+    if soleId == wkThis.u64 then return true
     zo: st.reg.typeById.get key: mid
     match (
         zo
@@ -11134,7 +11136,8 @@ fnAutoCallable: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     if (methodHasNoUserArgs :st :mid) then return true
     names: (List String)
     ids: (List u64)
-    dataFieldNames :st tid: mid :names :ids
+    idsNm: (List u64)
+    dataFieldNames :st tid: mid :names :ids nameIds: idsNm
     thisPn9: String
     {
         zo9: st.reg.typeById.get key: mid
@@ -11149,13 +11152,14 @@ fnAutoCallable: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     userSeen9: false
     for i9 < n9 loop {
         pname: names.get i: i9
+        pnameId: idsNm.get i: i9
         i9 = i9 + 1
         isRecv9: false
-        if pname.stringview == "this" then isRecv9 = true
+        if pnameId == wkThis.u64 then isRecv9 = true
         if thisPn9.length > 0 when thisPn9.stringview == pname.stringview then isRecv9 = true
         if (isRecv9) == false then {
             userSeen9 = true
-            hd9: st.typing.hasChildDefault parentTypeId: mid name: pname.stringview
+            hd9: st.typing.hasChildDefaultId parentTypeId: mid nameId: pnameId
             if (hd9) == false then return false
         }
     }
@@ -14314,7 +14318,13 @@ isConfMarkerId: function {conf: List ztypes.ZConformance tid: u64 name: StringVi
 # ztypecheck-side mirror of the emitter's recFieldLists): for a FUNCTION, all
 # params; for a record/class, fnptr fields plus non-FUNCTION fields, excluding
 # as-block constants (asConstClone) and conformance markers.
-dataFieldNames: function {st: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
+dataFieldNames: function {
+    st: zenv.ZSymbolTable
+    tid: u64
+    names: List String
+    ids: List u64
+    nameIds: List u64
+} is {
     isFn: false
     if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then isFn = true
     # this type's conformance-marker labels, collected once (the per-field
@@ -14373,6 +14383,8 @@ dataFieldNames: function {st: zenv.ZSymbolTable tid: u64 names: List String ids:
                 names.append cnx
                 idx0: cto
                 ids.append idx0
+                nid0: tc.nameId
+                nameIds.append nid0
             }
         }
     } case none then null
@@ -14418,7 +14430,8 @@ missingCtorFields: function {
     }
     names: (List String)
     ids: (List u64)
-    dataFieldNames :st tid: effId :names :ids
+    idsNm: (List u64)
+    dataFieldNames :st tid: effId :names :ids nameIds: idsNm
     pcnt: names.length
     if pcnt == 0 then return
     thisPn9: String
@@ -14435,9 +14448,10 @@ missingCtorFields: function {
     for i < pcnt loop {
         pname: names.get :i
         pcid: ids.get :i
+        pnameId: idsNm.get :i
         i = i + 1
         isRecv9: false
-        if pname.stringview == "this" then isRecv9 = true
+        if pnameId == wkThis.u64 then isRecv9 = true
         if thisPn9.length > 0 when thisPn9.stringview == pname.stringview then isRecv9 = true
         if (isRecv9) == false then {
             posI: vpos
@@ -14455,9 +14469,7 @@ missingCtorFields: function {
                 if effTT9 == ztypes.ztypetype.classType then ctorFill9 = true
                 if fhbOk9 when ctorFill9 then need = false
             }
-            if (st.typing.hasChildDefault parentTypeId: effId name: pname.stringview) then {
-                need = false
-            }
+            if (st.typing.hasChildDefaultId parentTypeId: effId nameId: pnameId) then need = false
             if need then {
                 prov: false
                 if posI < posCount then prov = true
@@ -15044,6 +15056,7 @@ checkBoxConstruction: function {
         # table being iterated.
         cNames2: (List String)
         cIds2: (List u64)
+        cNid2: (List u64)
         {
             bxb9: st.typing.childIndex.get key: vt
             match (
@@ -15060,6 +15073,8 @@ checkBoxConstruction: function {
                         cNames2.append cn2
                         cid3: cto2
                         cIds2.append cid3
+                        nid2: tc2.nameId
+                        cNid2.append nid2
                     } case none then null
                 }
             } case none then null
@@ -15069,7 +15084,8 @@ checkBoxConstruction: function {
         for bi < bn2 loop {
             chn: cNames2.get i: bi
             chi: cIds2.get i: bi
-            ext9: st.typing.childOf parentTypeId: mid name: chn.stringview
+            chnId: cNid2.get i: bi
+            ext9: st.typing.childOfId parentTypeId: mid nameId: chnId
             match (
                 ext9
             ) case some then null case none then {

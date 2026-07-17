@@ -35,6 +35,8 @@ wkListview: 26.u64
 wkIterate: 27.u64
 wkIterateItems: 28.u64
 wkOpEq: 29.u64
+wkTag: 22.u64
+wkBorrow: 6.u64
 
 
 # TmpCtr -- per-function temp name counter.
@@ -1406,7 +1408,8 @@ emitCallTakeInvalidations: function {
                 } else {
                     pnames9: (List String)
                     pids9: (List u64)
-                    recFieldLists :symtab tid: ftid9 names: pnames9 ids: pids9
+                    pids9Nm: (List u64)
+                    recFieldLists :symtab tid: ftid9 names: pnames9 ids: pids9 nameIds: pids9Nm
                     off9: u64
                     if pnames9.length > 0 then {
                         p09: pnames9.get i: 0
@@ -2350,7 +2353,8 @@ emitInstanceMethodCall: function {
             mcn9: symtab.reg.cnameOf tid: mco9
             pnames: (List String)
             pids: (List u64)
-            recFieldLists :symtab tid: mco9 names: pnames ids: pids
+            pidsNm: (List u64)
+            recFieldLists :symtab tid: mco9 names: pnames ids: pids nameIds: pidsNm
             args: String
             posIdx9: u64
             pi9: u64
@@ -3571,7 +3575,8 @@ emitTypeQualCall: function {
         if (symtab.reg.typetypeOf typeId: mco) == ztypes.ztypetype.functionType then {
             pnames: (List String)
             pids: (List u64)
-            recFieldLists :symtab tid: mco names: pnames ids: pids
+            pidsNm: (List u64)
+            recFieldLists :symtab tid: mco names: pnames ids: pids nameIds: pidsNm
             # the default (synth) `create` carries no params -- route it to the
             # type's ctor (field-label args), the same path bare-name uses.
             if mn.stringview == "create" when pnames.length == 0 then {
@@ -3729,14 +3734,15 @@ emitAllDefaultedCall: function {
 } out String is {
     pn: (List String)
     pidl: (List u64)
-    recFieldLists :symtab tid: fnTid names: pn ids: pidl
+    pidlNm: (List u64)
+    recFieldLists :symtab tid: fnTid names: pn ids: pidl nameIds: pidlNm
     m: pn.length
     if m == 0 then return "".string
     j: u64
     allDef: true
     for j < m loop {
-        pnj: pn.get i: j
-        if (symtab.typing.hasChildDefault parentTypeId: fnTid name: pnj.stringview) == false then {
+        pnjId: pidlNm.get i: j
+        if (symtab.typing.hasChildDefaultId parentTypeId: fnTid nameId: pnjId) == false then {
             allDef = false
         }
         j = j + 1
@@ -3745,9 +3751,9 @@ emitAllDefaultedCall: function {
     args: String
     k: u64
     for k < m loop {
-        pnk: pn.get i: k
         pik: pidl.get i: k
-        dt: symtab.typing.childDefaultText parentTypeId: fnTid name: pnk.stringview
+        pnkId: pidlNm.get i: k
+        dt: symtab.typing.childDefaultTextId parentTypeId: fnTid nameId: pnkId
         rv: renderDefault :symtab :ctx default: dt.stringview targetTid: pik
         if k > 0 then args.append ", "
         args.append rv.stringview
@@ -3767,7 +3773,8 @@ renderedMethodDefaultArgs: function {
 } out String is {
     pn: (List String)
     pidl: (List u64)
-    recFieldLists :symtab tid: fnTid names: pn ids: pidl
+    pidlNm: (List u64)
+    recFieldLists :symtab tid: fnTid names: pn ids: pidl nameIds: pidlNm
     thisPn9: String
     {
         zo9: symtab.reg.typeById.get key: fnTid
@@ -3784,15 +3791,16 @@ renderedMethodDefaultArgs: function {
     for j < m loop {
         pnj: pn.get i: j
         pij: pidl.get i: j
+        pnjId: pidlNm.get i: j
         j = j + 1
         isRecv9: false
-        if pnj.stringview == "this" then isRecv9 = true
+        if pnjId == wkThis.u64 then isRecv9 = true
         if thisPn9.length > 0 when thisPn9.stringview == pnj.stringview then isRecv9 = true
         if (isRecv9) == false then {
             userSeen9 = true
-            hd9: symtab.typing.hasChildDefault parentTypeId: fnTid name: pnj.stringview
+            hd9: symtab.typing.hasChildDefaultId parentTypeId: fnTid nameId: pnjId
             if (hd9) == false then return "".string
-            dt: symtab.typing.childDefaultText parentTypeId: fnTid name: pnj.stringview
+            dt: symtab.typing.childDefaultTextId parentTypeId: fnTid nameId: pnjId
             rv: renderDefault :symtab :ctx default: dt.stringview targetTid: pij
             if args.length > 0 then args.append ", "
             args.append rv.stringview
@@ -3833,23 +3841,18 @@ emitCtorDefaultsFill: function {
             if crB9 then {
                 cpn: (List String)
                 cpi: (List u64)
-                recFieldLists :symtab tid: cco names: cpn ids: cpi
+                cpiNm: (List u64)
+                recFieldLists :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
                 cargs: String
                 ci: u64
                 ccn: cpn.length
                 for ci < ccn loop {
-                    cpname: cpn.get i: ci
                     cpid: cpi.get i: ci
+                    cpnameId: cpiNm.get i: ci
                     ci = ci + 1
                     cav: "0".string
-                    if (symtab.typing.hasChildDefault
-                        parentTypeId: tid
-                        name: cpname.stringview
-                    ) then {
-                        cdt: (symtab.typing.childDefaultText
-                            parentTypeId: tid
-                            name: cpname.stringview
-                        )
+                    if (symtab.typing.hasChildDefaultId parentTypeId: tid nameId: cpnameId) then {
+                        cdt: symtab.typing.childDefaultTextId parentTypeId: tid nameId: cpnameId
                         cav = renderDefault :symtab :ctx default: cdt.stringview targetTid: cpid
                     }
                     if cargs.length > 0 then cargs.append ", "
@@ -3862,23 +3865,23 @@ emitCtorDefaultsFill: function {
     } case none then null
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab :tid names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids nameIds: fidsNm
     args: String
     fi: u64
     fn0: fnames.length
     for fi < fn0 loop {
-        fname: fnames.get i: fi
         ffid: fids.get i: fi
+        fnameId: fidsNm.get i: fi
         fi = fi + 1
         av: "0".string
-        if (symtab.typing.hasChildDefault parentTypeId: tid name: fname.stringview) then {
-            cdt1: symtab.typing.childDefaultText parentTypeId: tid name: fname.stringview
+        if (symtab.typing.hasChildDefaultId parentTypeId: tid nameId: fnameId) then {
+            cdt1: symtab.typing.childDefaultTextId parentTypeId: tid nameId: fnameId
             av = renderDefault :symtab :ctx default: cdt1.stringview targetTid: ffid
         } else {
-            if (symtab.typing.isChildFnptrField
-                parentTypeId: tid
-                name: fname.stringview
-            ) then av = symtab.reg.cnameOf tid: ffid
+            if (symtab.typing.isChildFnptrFieldId parentTypeId: tid nameId: fnameId) then {
+                av = symtab.reg.cnameOf tid: ffid
+            }
         }
         if args.length > 0 then args.append ", "
         args.append av.stringview
@@ -3904,7 +3907,8 @@ emitRecordCtor: function {
         if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
             cpn: (List String)
             cpi: (List u64)
-            recFieldLists :symtab tid: cco names: cpn ids: cpi
+            cpiNm: (List u64)
+            recFieldLists :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
             if cpn.length > 0 then {
                 cargs: String
                 ci: u64
@@ -3912,6 +3916,7 @@ emitRecordCtor: function {
                 cposIdx: u64
                 for ci < ccn loop {
                     cpname: cpn.get i: ci
+                    cpnameId: cpiNm.get i: ci
                     cav: ctorArgByLabel :ast :symtab :ctx :call label: cpname.stringview
                     if (ctorHasLabel :ast :call label: cpname.stringview) == false then {
                         cposUsed: false
@@ -3922,13 +3927,13 @@ emitRecordCtor: function {
                         }
                         cposIdx = cposIdx + 1
                         if (cposUsed) == false then {
-                            if (symtab.typing.hasChildDefault
+                            if (symtab.typing.hasChildDefaultId
                                 parentTypeId: tid
-                                name: cpname.stringview
+                                nameId: cpnameId
                             ) then {
-                                cdt0: (symtab.typing.childDefaultText
+                                cdt0: (symtab.typing.childDefaultTextId
                                     parentTypeId: tid
-                                    name: cpname.stringview
+                                    nameId: cpnameId
                                 )
                                 cpid0: cpi.get i: ci
                                 cav = (renderDefault
@@ -3952,7 +3957,8 @@ emitRecordCtor: function {
     } case none then null
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab :tid names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids nameIds: fidsNm
     args: String
     fi: u64
     fn0: fnames.length
@@ -3960,6 +3966,7 @@ emitRecordCtor: function {
     for fi < fn0 loop {
         fname: fnames.get i: fi
         ffid0: fids.get i: fi
+        fnameId: fidsNm.get i: fi
         av: ctorArgByLabel :ast :symtab :ctx :call label: fname.stringview
         # an absent label binds the next positional (unlabeled) arg by cursor; then a
         # registered default; then an fnptr slot's method address; else the "0" fallback.
@@ -3972,14 +3979,13 @@ emitRecordCtor: function {
             }
             fposIdx = fposIdx + 1
             if (fposUsed) == false then {
-                if (symtab.typing.hasChildDefault parentTypeId: tid name: fname.stringview) then {
-                    cdt1: symtab.typing.childDefaultText parentTypeId: tid name: fname.stringview
+                if (symtab.typing.hasChildDefaultId parentTypeId: tid nameId: fnameId) then {
+                    cdt1: symtab.typing.childDefaultTextId parentTypeId: tid nameId: fnameId
                     av = renderDefault :symtab :ctx default: cdt1.stringview targetTid: ffid0
                 } else {
-                    if (symtab.typing.isChildFnptrField
-                        parentTypeId: tid
-                        name: fname.stringview
-                    ) then av = symtab.reg.cnameOf tid: ffid0
+                    if (symtab.typing.isChildFnptrFieldId parentTypeId: tid nameId: fnameId) then {
+                        av = symtab.reg.cnameOf tid: ffid0
+                    }
                 }
             }
         }
@@ -4327,7 +4333,8 @@ emitMetaCreateCall: function {
         etn: typeNameOfReg9 :symtab tid: et
         fnames: (List String)
         fids: (List u64)
-        recFieldLists :symtab tid: et names: fnames ids: fids
+        fidsNm: (List u64)
+        recFieldLists :symtab tid: et names: fnames ids: fids nameIds: fidsNm
         args: String
         fi: u64
         fn0: fnames.length
@@ -4445,7 +4452,8 @@ emitGenericFnCall: function {
     fc9: symtab.reg.cnameOf tid: gmf9
     fpNames9: (List String)
     fpIds9: (List u64)
-    recFieldLists :symtab tid: gmf9 names: fpNames9 ids: fpIds9
+    fpIds9Nm: (List u64)
+    recFieldLists :symtab tid: gmf9 names: fpNames9 ids: fpIds9 nameIds: fpIds9Nm
     slots9g: argSlotList :ast :call fpNames: fpNames9
     valBySlot9g: (Map u64 value: String)
     ai9: u64
@@ -4585,7 +4593,8 @@ emitUnitMethodCall: function {
     fc9: symtab.reg.cnameOf tid: fid9
     fpNames9: (List String)
     fpIds9: (List u64)
-    recFieldLists :symtab tid: fid9 names: fpNames9 ids: fpIds9
+    fpIds9Nm: (List u64)
+    recFieldLists :symtab tid: fid9 names: fpNames9 ids: fpIds9 nameIds: fpIds9Nm
     slots9g: argSlotList :ast :call fpNames: fpNames9
     valBySlot9g: (Map u64 value: String)
     ai9: u64
@@ -4721,7 +4730,8 @@ emitCrossUnitFnCall: function {
     fc: cnameOf tid: fid name: child.stringview
     fpNames: (List String)
     fpIds: (List u64)
-    recFieldLists :symtab tid: fid names: fpNames ids: fpIds
+    fpIdsNm: (List u64)
+    recFieldLists :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIdsNm
     slots9c: argSlotList :ast :call :fpNames
     valBySlot9c: (Map u64 value: String)
     ai8: u64
@@ -4914,7 +4924,8 @@ emitCrossUnitExplicitCreate: function {
         if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
             cpn: (List String)
             cpi: (List u64)
-            recFieldLists :symtab tid: cco names: cpn ids: cpi
+            cpiNm: (List u64)
+            recFieldLists :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
             cargs: String
             ci: u64
             ccn: cpn.length
@@ -5294,7 +5305,8 @@ emitCallValue: function {
         fc: cnameOf tid: fid name: cn0.stringview
         fpNames: (List String)
         fpIds: (List u64)
-        recFieldLists :symtab tid: fid names: fpNames ids: fpIds
+        fpIdsNm: (List u64)
+        recFieldLists :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIdsNm
         slots9: argSlotList :ast :call :fpNames
         valBySlot9: (Map u64 value: String)
         ai8: u64
@@ -5436,9 +5448,9 @@ emitCallValue: function {
                 args.append vo9.stringview
                 emitted9 = emitted9 + 1
             } case none then {
-                pdpn9: fpNames.get i: pp9
-                if (symtab.typing.hasChildDefault parentTypeId: fid name: pdpn9.stringview) then {
-                    pddt9: symtab.typing.childDefaultText parentTypeId: fid name: pdpn9.stringview
+                pdpn9Id: fpIdsNm.get i: pp9
+                if (symtab.typing.hasChildDefaultId parentTypeId: fid nameId: pdpn9Id) then {
+                    pddt9: symtab.typing.childDefaultTextId parentTypeId: fid nameId: pdpn9Id
                     pdpid9: fpIds.get i: pp9
                     pdrv9: renderDefault :symtab :ctx default: pddt9.stringview targetTid: pdpid9
                     if emitted9 > 0 then args.append ", "
@@ -5669,7 +5681,8 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if adCo9.length > 0 then return adCo9
             fpn9: (List String)
             fpi9: (List u64)
-            recFieldLists :symtab tid: brid names: fpn9 ids: fpi9
+            fpi9Nm: (List u64)
+            recFieldLists :symtab tid: brid names: fpn9 ids: fpi9 nameIds: fpi9Nm
             if fpn9.length == 0 then return "\{fbcn9}()"
         }
         # a stamped implicit zero-create on a String atom is the empty
@@ -12357,7 +12370,13 @@ typeRefC: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 thisTid: u64} ou
 
 # variantArms -- a variant's arm names and payload ids in order
 # (non-FUNCTION children, the tag child excluded).
-variantArms: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
+variantArms: function {
+    symtab: zenv.ZSymbolTable
+    tid: u64
+    names: List String
+    ids: List u64
+    nameIds: List u64
+} is {
     b1: symtab.typing.childIndex.get key: tid
     match (
         b1
@@ -12369,12 +12388,14 @@ variantArms: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids
                 cto
             ) case some then {
                 if (symtab.reg.typetypeOf typeId: cto) != ztypes.ztypetype.functionType then {
-                    cnBe1: symtab.typing.edgeText.get i: tc.nameId
-                    if cnBe1.stringview != "tag" then {
+                    if tc.nameId != wkTag then {
+                        cnBe1: symtab.typing.edgeText.get i: tc.nameId
                         cn0: cnBe1.copy
                         names.append cn0
                         cid0: cto
                         ids.append cid0
+                        nid0: tc.nameId
+                        nameIds.append nid0
                     }
                 }
             } case none then null
@@ -12422,7 +12443,13 @@ isConformanceMarker: function {
 
 # recFieldLists -- a record type's field names and type ids in order
 # (non-FUNCTION children, conformance markers excluded).
-recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String ids: List u64} is {
+recFieldLists: function {
+    symtab: zenv.ZSymbolTable
+    tid: u64
+    names: List String
+    ids: List u64
+    nameIds: List u64
+} is {
     parentFn0: false
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then parentFn0 = true
     # this type's conformance-marker labels, collected once (the per-field
@@ -12486,6 +12513,8 @@ recFieldLists: function {symtab: zenv.ZSymbolTable tid: u64 names: List String i
                     names.append cn0
                     cid0: cto
                     ids.append cid0
+                    nid0: tc.nameId
+                    nameIds.append nid0
                 }
             } case none then null
         }
@@ -13613,7 +13642,8 @@ emitFnBody: function {
         tmp: (TmpCtr n: 0 frees: (List String) listFrees: (List String) listFreeVars: (List String))
         pnames9: (List String)
         pids9: (List u64)
-        recFieldLists :symtab tid: fid names: pnames9 ids: pids9
+        pids9Nm: (List u64)
+        recFieldLists :symtab tid: fid names: pnames9 ids: pids9 nameIds: pids9Nm
         pj9: u64
         pn9: pnames9.length
         for pj9 < pn9 loop {
@@ -14744,7 +14774,8 @@ emitUnionMono: function {
     ctx.emittedUserTypes.set key: tid.u64 value: true
     anames: (List String)
     aids: (List u64)
-    variantArms :symtab :tid names: anames ids: aids
+    aidsNm: (List u64)
+    variantArms :symtab :tid names: anames ids: aids nameIds: aidsNm
     vc: cnameOf :tid :name
     buf.append "typedef enum {\n"
     ai: u64
@@ -15557,7 +15588,8 @@ isHeapPtrCollection: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out 
 cliClassIsComposite: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab :tid names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids nameIds: fidsNm
     fi: u64
     fn0: fnames.length
     for fi < fn0 loop {
@@ -16226,7 +16258,8 @@ monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: Lis
     if isWrap then {
         anames: (List String)
         aids: (List u64)
-        variantArms :symtab tid: monoId names: anames ids: aids
+        aidsNm: (List u64)
+        variantArms :symtab tid: monoId names: anames ids: aids nameIds: aidsNm
         ai: u64
         an: aids.length
         for ai < an loop {
@@ -16238,7 +16271,8 @@ monoElemIdsOf: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: Lis
     }
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab tid: monoId names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab tid: monoId names: fnames ids: fids nameIds: fidsNm
     fi: u64
     fn: fids.length
     for fi < fn loop {
@@ -16347,13 +16381,15 @@ userDefnRefsUnemitted: function {
     fnames: (List String)
     fids: (List u64)
     if tt == ztypes.ztypetype.variantType then {
-        variantArms :symtab tid: typeId names: fnames ids: fids
+        fidsNm: (List u64)
+        variantArms :symtab tid: typeId names: fnames ids: fids nameIds: fidsNm
     } else if tt == ztypes.ztypetype.facetType then {
         # a facet's ordering edges are its conforming impls (embedded by
         # value in the data union), not record fields
         facetImplTids :symtab tid: typeId acc: fids
     } else {
-        recFieldLists :symtab tid: typeId names: fnames ids: fids
+        fidsNm: (List u64)
+        recFieldLists :symtab tid: typeId names: fnames ids: fids nameIds: fidsNm
     }
     fi: u64
     fn: fids.length
@@ -16702,7 +16738,8 @@ emitOneFnptrTypedef: function {
     seen.append tid.u64
     pNames: (List String)
     pIds: (List u64)
-    recFieldLists :symtab :tid names: pNames ids: pIds
+    pIdsNm: (List u64)
+    recFieldLists :symtab :tid names: pNames ids: pIds nameIds: pIdsNm
     # A method's `this`/self-typed receiver child is a fresh shell named after
     # the owner; resolve it to the owner's canonical id so the typedef matches
     # the method's emitted signature (a by-name canonicalization can land on an
@@ -17458,6 +17495,7 @@ protoChildMethods: function {
     tid: u64
     names: List String
     ids: List u64
+    nameIds: List u64
 } is {
     b4: symtab.typing.childIndex.get key: tid
     match (
@@ -17470,14 +17508,16 @@ protoChildMethods: function {
                 cto
             ) case some then {
                 if (symtab.reg.typetypeOf typeId: cto) == ztypes.ztypetype.functionType then {
-                    cnBe4: symtab.typing.edgeText.get i: tc.nameId
-                    cn0: cnBe4.copy
                     isSynth: false
-                    if cn0.stringview == "create" then isSynth = true
-                    if cn0.stringview == "borrow" then isSynth = true
+                    if tc.nameId == wkCreate then isSynth = true
+                    if tc.nameId == wkBorrow then isSynth = true
                     if (isSynth) == false then {
+                        cnBe4: symtab.typing.edgeText.get i: tc.nameId
+                        cn0: cnBe4.copy
                         names.append cn0
                         ids.append cto
+                        nid0: tc.nameId
+                        nameIds.append nid0
                     }
                 }
             } case none then null
@@ -17569,7 +17609,8 @@ emitOneFacet: function {
     preEmitEmbeddedTypes :symtab :ctx ids: impls9 :buf
     mnames: (List String)
     mids: (List u64)
-    protoChildMethods :symtab :tid names: mnames ids: mids
+    midsNm: (List u64)
+    protoChildMethods :symtab :tid names: mnames ids: mids nameIds: midsNm
     vfuncs: String
     mi: u64
     mn: mnames.length
@@ -17586,7 +17627,8 @@ emitOneFacet: function {
         vparams: "void*".string
         pnames: (List String)
         pids: (List u64)
-        recFieldLists :symtab tid: smid names: pnames ids: pids
+        pidsNm: (List u64)
+        recFieldLists :symtab tid: smid names: pnames ids: pids nameIds: pidsNm
         preEmitEmbeddedTypes :symtab :ctx ids: pids :buf
         pi: u64
         pn: pnames.length
@@ -17641,7 +17683,8 @@ emitOneProtocol: function {
     pbase: cnameOf :tid :name
     mnames: (List String)
     mids: (List u64)
-    protoChildMethods :symtab :tid names: mnames ids: mids
+    midsNm: (List u64)
+    protoChildMethods :symtab :tid names: mnames ids: mids nameIds: midsNm
     vfuncs: String
     mi: u64
     mn: mnames.length
@@ -17658,7 +17701,8 @@ emitOneProtocol: function {
         vparams: "void*".string
         pnames: (List String)
         pids: (List u64)
-        recFieldLists :symtab tid: smid names: pnames ids: pids
+        pidsNm: (List u64)
+        recFieldLists :symtab tid: smid names: pnames ids: pids nameIds: pidsNm
         preEmitEmbeddedTypes :symtab :ctx ids: pids :buf
         pi: u64
         pn: pnames.length
@@ -17716,11 +17760,13 @@ emitProtocolImpl: function {
     if (symtab.reg.typetypeOf typeId: implTid) == ztypes.ztypetype.classType then implIsClass = true
     mnames: (List String)
     mids: (List u64)
-    protoChildMethods :symtab tid: protoTid names: mnames ids: mids
+    midsNm: (List u64)
+    protoChildMethods :symtab tid: protoTid names: mnames ids: mids nameIds: midsNm
     mi: u64
     mn: mnames.length
     for mi < mn loop {
         mname: mnames.get i: mi
+        mnameId: midsNm.get i: mi
         smid: mids.get i: mi
         ret: methodRetCtype :symtab :ctx mid: smid thisTid: protoTid
         wparams: "void* _data".string
@@ -17728,7 +17774,8 @@ emitProtocolImpl: function {
         if (implIsClass) == false then cargs = "(*_self)".string
         pnames: (List String)
         pids: (List u64)
-        recFieldLists :symtab tid: smid names: pnames ids: pids
+        pidsNm: (List u64)
+        recFieldLists :symtab tid: smid names: pnames ids: pids nameIds: pidsNm
         pi: u64
         pn: pnames.length
         for pi < pn loop {
@@ -17752,7 +17799,7 @@ emitProtocolImpl: function {
             pi = pi + 1
         }
         implMid: u64
-        imo: symtab.typing.childOf parentTypeId: implTid name: mname.stringview
+        imo: symtab.typing.childOfId parentTypeId: implTid nameId: mnameId
         match (
             imo
         ) case some then {
@@ -17841,18 +17888,21 @@ emitFacetImpl: function {
     wbase: "\{implBase}_\{label}"
     mnames: (List String)
     mids: (List u64)
-    protoChildMethods :symtab tid: facetTid names: mnames ids: mids
+    midsNm: (List u64)
+    protoChildMethods :symtab tid: facetTid names: mnames ids: mids nameIds: midsNm
     mi: u64
     mn: mnames.length
     for mi < mn loop {
         mname: mnames.get i: mi
+        mnameId: midsNm.get i: mi
         smid: mids.get i: mi
         ret: methodRetCtype :symtab :ctx mid: smid thisTid: facetTid
         wparams: "void* _data".string
         cargs: "(*_self)".string
         pnames: (List String)
         pids: (List u64)
-        recFieldLists :symtab tid: smid names: pnames ids: pids
+        pidsNm: (List u64)
+        recFieldLists :symtab tid: smid names: pnames ids: pids nameIds: pidsNm
         pi: u64
         pn: pnames.length
         for pi < pn loop {
@@ -17873,7 +17923,7 @@ emitFacetImpl: function {
             pi = pi + 1
         }
         implMid: u64
-        imo: symtab.typing.childOf parentTypeId: implTid name: mname.stringview
+        imo: symtab.typing.childOfId parentTypeId: implTid nameId: mnameId
         match (
             imo
         ) case some then {
@@ -18254,7 +18304,8 @@ emitIoWrapperCreate: function {
     if cid == 0 then return "".string
     pnames: (List String)
     pids: (List u64)
-    recFieldLists :symtab tid: cid names: pnames ids: pids
+    pidsNm: (List u64)
+    recFieldLists :symtab tid: cid names: pnames ids: pids nameIds: pidsNm
     args: String
     pi: u64
     pn: pnames.length
@@ -18514,7 +18565,8 @@ emitNativeFreeFnCall: function {
     needsAdd :ctx name: nk9.stringview
     pn: (List String)
     pidl: (List u64)
-    recFieldLists :symtab tid: fid names: pn ids: pidl
+    pidlNm: (List u64)
+    recFieldLists :symtab tid: fid names: pn ids: pidl nameIds: pidlNm
     args: String
     m: pn.length
     j: u64
@@ -18595,7 +18647,8 @@ emitCliSpecCreate: function {
     if crid == 0 then return "".string
     pnames: (List String)
     pids: (List u64)
-    recFieldLists :symtab tid: crid names: pnames ids: pids
+    pidsNm: (List u64)
+    recFieldLists :symtab tid: crid names: pnames ids: pids nameIds: pidsNm
     args: String
     pi: u64
     pn: pnames.length
@@ -18772,7 +18825,8 @@ emitProtocolDispatch: function {
     mtid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: rtid name: mn.stringview)
     mpNames9: (List String)
     mpIds9: (List u64)
-    if mtid9 > 0 then recFieldLists :symtab tid: mtid9 names: mpNames9 ids: mpIds9
+    mpIds9Nm: (List u64)
+    if mtid9 > 0 then recFieldLists :symtab tid: mtid9 names: mpNames9 ids: mpIds9 nameIds: mpIds9Nm
     vpn9: (List String)
     vi9: u64
     for vi9 < mpNames9.length loop {
@@ -19199,7 +19253,8 @@ emitOneVariant: function {
     ctx.emittedUserTypes.set key: tid.u64 value: true
     anames: (List String)
     aids: (List u64)
-    variantArms :symtab :tid names: anames ids: aids
+    aidsNm: (List u64)
+    variantArms :symtab :tid names: anames ids: aids nameIds: aidsNm
     preEmitEmbeddedTypes :symtab :ctx ids: aids :buf
     vc: cnameOf :tid :name
     buf.append "typedef enum {\n"
@@ -19243,10 +19298,11 @@ emitOneVariant: function {
         qk: u64
         for qk < an loop {
             qname: anames.get i: qk
+            qnameId: aidsNm.get i: qk
             qc: armPayloadC :symtab :ctx :tid arm: qname.stringview
             if qc.length > 0 then {
                 qtg: variantTag :symtab :tid arm: qname.stringview
-                qco: symtab.typing.childOf parentTypeId: tid name: qname.stringview
+                qco: symtab.typing.childOfId parentTypeId: tid nameId: qnameId
                 qeq: String
                 match (
                     qco
@@ -19321,13 +19377,14 @@ isRecordDef9: function {n: Node} out bool is {
 structDestroyNontrivial: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab :tid names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids nameIds: fidsNm
     fi: u64
     fn0: fnames.length
     for fi < fn0 loop {
-        fname: fnames.get i: fi
         fid: fids.get i: fi
-        if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) == false then {
+        fnameId: fidsNm.get i: fi
+        if (symtab.typing.isChildLockFieldId parentTypeId: tid nameId: fnameId) == false then {
             if fid == ctx.strTid then return true
             fmid9: chaseColMono :symtab tid: fid
             if (symtab.reg.hasDestructorName typeId: fmid9) then return true
@@ -19420,7 +19477,8 @@ emitOneRecord: function {
     if (isTypedefType :symtab :tid) then return
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab :tid names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids nameIds: fidsNm
     preEmitEmbeddedTypes :symtab :ctx ids: fids :buf
     rc: cnameOf :tid :name
     if (isFwdDeclared :ctx :tid) then {
@@ -19434,11 +19492,12 @@ emitOneRecord: function {
     for fi < fn0 loop {
         fname: fnames.get i: fi
         fid: fids.get i: fi
+        fnameId: fidsNm.get i: fi
         fct: typeRefC :symtab :ctx tid: fid thisTid: 0
         if fct.length == 0 then fct = "int64_t".string
         # a `.lock` field borrows the container: protocol-typed -> fat pointer by
         # value; class-typed -> a pointer to the container.
-        if (symtab.typing.isChildLockField parentTypeId: tid name: fname.stringview) then {
+        if (symtab.typing.isChildLockFieldId parentTypeId: tid nameId: fnameId) then {
             if (lockFieldIsReftypePtr :symtab :ctx :fid) then fct = "\{fct}*"
         }
         if (isHeapPtrCollection :symtab :ctx tid: fid) then fct = "\{fct}*"
@@ -19458,10 +19517,11 @@ emitOneRecord: function {
     for fj < fn0 loop {
         fname2: fnames.get i: fj
         fid2: fids.get i: fj
+        fname2Id: fidsNm.get i: fj
         fct2: typeRefC :symtab :ctx tid: fid2 thisTid: 0
         if fct2.length == 0 then fct2 = "int64_t".string
         # a `.lock` field's meta_create param matches the field (protocol by value).
-        if (symtab.typing.isChildLockField parentTypeId: tid name: fname2.stringview) then {
+        if (symtab.typing.isChildLockFieldId parentTypeId: tid nameId: fname2Id) then {
             if (lockFieldIsReftypePtr :symtab :ctx fid: fid2) then fct2 = "\{fct2}*"
         }
         if (isHeapPtrCollection :symtab :ctx tid: fid2) then fct2 = "\{fct2}*"
@@ -19549,7 +19609,8 @@ emitCliCompositeClass: function {
 } is {
     fnames: (List String)
     fids: (List u64)
-    recFieldLists :symtab :tid names: fnames ids: fids
+    fidsNm: (List u64)
+    recFieldLists :symtab :tid names: fnames ids: fids nameIds: fidsNm
     rc: cnameOf :tid :name
     if (fwdDeclared) == false then {
         lt: "typedef struct \{rc}_t \{rc}_t;\n"
@@ -20226,7 +20287,8 @@ emitOneMethod: function {
     params: String
     pnames: (List String)
     pids: (List u64)
-    recFieldLists :symtab tid: mid names: pnames ids: pids
+    pidsNm: (List u64)
+    recFieldLists :symtab tid: mid names: pnames ids: pids nameIds: pidsNm
     # a CLASS method takes its `this` receiver by pointer (reference semantics):
     # the receiver param gets a `*` and its name is recorded so the body emits
     # `c->field`. Reset for this method (names must not leak into other bodies).
