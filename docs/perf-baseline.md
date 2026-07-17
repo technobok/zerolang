@@ -130,3 +130,25 @@ arm may be deleted.
 Single largest chain: ~5.85M blocks (25%) under the emitter's
 `ioCanonCname` → `definedInNonMain`/`definedInUnitOf`/`typeNameOfReg9` queries
 (linear registry scan with per-iteration String materialization).
+
+## String-side census (DHAT, 2026-07-17 @ 8bd3aef, post-carrier arc)
+
+10.29M blocks total; no single chain exceeds 0.5%. Where owned Strings
+still come from, by subsystem (chains containing the frame):
+
+| frames containing | blocks | share | note |
+|---|---|---|---|
+| resolveTypeIdByName (emitter) | 1.46M | 14.2% | name-keyed type resolution: composed "unit.name" String keys + split iterators; REGISTRY names, not pool names |
+| nameTextCopy | 776k | 7.5% | consumers copying pool text OUT (keys, diagnostics, name lists) instead of borrowing/id-comparing |
+| tokSpan (tokenizer) | 556k | 5.4% | one owned String per token from the source span |
+| dataFieldNames | 293k | 2.8% | copies edge-name texts into List String on the auto-call path |
+| resolvedByKey/childOfWalk | 282k | 2.7% | String keys + Splitter under the emitter resolution chain |
+| ZSymbolTable exclude | 134k | 1.3% | narrowing subtype-name copies |
+| registerEdgeText + StringPool.set (C3c cost) | 27k | 0.3% | edge caches + interning -- the whole arc bookkeeping |
+
+The pool is the single authoritative copy of AST identifier text; the
+remaining churn is (a) the emitter resolving types by NAME over registry
+Strings -- migrating registry type names to pool ids is the big lever and
+would also dissolve ZTyping's edgeNameId/edgeText caches -- and (b)
+nameTextCopy call sites that could borrow or id-compare instead.
+
