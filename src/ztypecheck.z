@@ -150,6 +150,20 @@ atomName: function {ast: Ast n: Node} out String is {
     }
 }
 
+# atomNameId -- the Ast.names pool id of an atomid/labelvalue node's name
+# (0 when the node is neither; no pool id is 0, so lookups by it miss).
+atomNameId: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case atomid then {
+        return n.name.u64
+    } case labelvalue then {
+        return n.name.u64
+    } else {
+        return 0
+    }
+}
+
 # addError -- append a typecheck diagnostic to the typing's error list,
 # deduped by node position so a spec resolved more than once reports once.
 # addResolveError -- a diagnostic raised from the resolution core, which
@@ -2575,8 +2589,7 @@ typeofSourceType: function {ast: Ast
         )
     } case atomid then {
         if ownerId == 0 then return 0
-        coN9: ast.names.texts.get i: (n.name - 1).u64
-        co: ty.childOf parentTypeId: ownerId name: coN9.stringview
+        co: ty.childOfId parentTypeId: ownerId nameId: n.name.u64
         match (
             co
         ) case some then {
@@ -10681,6 +10694,18 @@ dottedChildName: function {ast: Ast n: Node} out String is {
     }
 }
 
+# dottedChildNameId -- the pool id of a dotted path's child atom name
+# (0 when the shape differs).
+dottedChildNameId: function {ast: Ast n: Node} out u64 is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomNameId :ast n: (ast.nodes.get i: (n.child - 1).u64))
+    } else {
+        return 0
+    }
+}
+
 # unionCreateArmName -- the constructed arm's name when a value is a tagged
 # subtype construction (a UNION_CREATE-stamped call's dotted child), or "".
 unionCreateArmName: function {ast: Ast st: zenv.ZSymbolTable n: Node} out String is {
@@ -11052,7 +11077,7 @@ checkTypedefBorrow: function {
 # `this` param (shorthand) or a recorded long-form receiver name. A this-less
 # function member is a callable field, not a method.
 methodHasThisReceiver: function {st: zenv.ZSymbolTable mid: u64} out bool is {
-    if (st.typing.hasChild parentTypeId: mid name: "this") then return true
+    if (st.typing.hasChildId parentTypeId: mid nameId: wkThis.u64) then return true
     zo: st.reg.typeById.get key: mid
     match (
         zo
@@ -11320,6 +11345,7 @@ checkDotted: function {
     }
     cn: atomName :ast n: (ast.nodes.get i: (dp.child - 1).u64)
     if cn.length == 0 then return 0
+    cnId9: atomNameId :ast n: (ast.nodes.get i: (dp.child - 1).u64)
     # `.private` / `.public` access markers: the path carries the base's
     # type (the access view is a dump-filtered shell, not a member).
     if cn.stringview == "private" then {
@@ -11794,7 +11820,7 @@ checkDotted: function {
     }
     # a typedef member that isn't on the wrapper delegates to the base
     # (Bytes.append is List_u8.append).
-    tdw9: st.typing.childOf parentTypeId: bt name: cn.stringview
+    tdw9: st.typing.childOfId parentTypeId: bt nameId: cnId9
     match (
         tdw9
     ) case some then null case none then {
@@ -11867,7 +11893,7 @@ checkDotted: function {
     # children are not registered (cross-unit demand mints a shell id distinct
     # from the canonical defining-unit id); on a member miss retarget the base
     # to a same-named type in another unit's resolved scope that has the member.
-    preMo9: st.typing.childOf parentTypeId: bt name: cn.stringview
+    preMo9: st.typing.childOfId parentTypeId: bt nameId: cnId9
     preHas9: false
     match (
         preMo9
@@ -11880,7 +11906,7 @@ checkDotted: function {
             if cb9 > 0 then bt = cb9
         }
     }
-    mo: st.typing.childOf parentTypeId: bt name: cn.stringview
+    mo: st.typing.childOfId parentTypeId: bt nameId: cnId9
     # String's readonly surface: a member missing on String retries on
     # StringView (the emitter's native legs make the same projection)
     moMiss9: true
@@ -11892,7 +11918,7 @@ checkDotted: function {
     if moMiss9 then {
         if bt == (builtinTidT ty: st.typing reg: st.reg base: "String") then {
             svT9: builtinTidT ty: st.typing reg: st.reg base: "StringView"
-            mo2: st.typing.childOf parentTypeId: svT9 name: cn.stringview
+            mo2: st.typing.childOfId parentTypeId: svT9 nameId: cnId9
             match (
                 mo2
             ) case some then {
@@ -12133,7 +12159,7 @@ checkDotted: function {
                 # re-probe before declaring the member unknown
                 btnMm0: typeNameOf :st tid: bt
                 maybeWalkMethods :st :unitName :ast :unitBody name: btnMm0.stringview
-                moMm9: st.typing.childOf parentTypeId: bt name: cn.stringview
+                moMm9: st.typing.childOfId parentTypeId: bt nameId: cnId9
                 stillMiss9: true
                 match (
                     moMm9
@@ -13673,6 +13699,7 @@ checkBinop: function {
     lt: checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (binop.lhs - 1).u64)
     rt: checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (binop.rhs - 1).u64)
     opn: atomName :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
+    opnId9: atomNameId :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
     if (isComparisonOp name: opn.stringview) then {
         boOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "bool"
         match (
@@ -13711,7 +13738,7 @@ checkBinop: function {
         result = lt
         # Operator children delegate (a boxed value's `+` is the element's,
         # so the result is the element type, not the box).
-        opo: st.typing.childOf parentTypeId: lt name: opn.stringview
+        opo: st.typing.childOfId parentTypeId: lt nameId: opnId9
         match (
             opo
         ) case some then {
@@ -15088,12 +15115,13 @@ returnedBareFieldName: function {ast: Ast st: zenv.ZSymbolTable n: Node} out Str
         return (returnedBareFieldName :ast :st n: (ast.nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
         bfc9: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        bfcId9: atomNameId :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if bfc9.length == 0 then return "".string
         if (isStripMarker name: bfc9.stringview) then return "".string
         bfp9: nodeId n: (ast.nodes.get i: (n.parent - 1).u64)
         bft9: optU64Or o: (st.typing.nodeType.get key: bfp9.u64) d: 0
         if bft9 == 0 then return "".string
-        bfo9: st.typing.childOf parentTypeId: bft9 name: bfc9.stringview
+        bfo9: st.typing.childOfId parentTypeId: bft9 nameId: bfcId9
         match (
             bfo9
         ) case some then {
@@ -15690,8 +15718,11 @@ checkCall: function {
                             # arm with an argument names the type EXPLICITLY
                             # (resolved as a type, never value-walked); a
                             # param-payload arm infers from the value's type.
-                            armn: dottedChildName :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-                            co: st.typing.childOf parentTypeId: dtp name: armn.stringview
+                            armnId9: (dottedChildNameId
+                                :ast
+                                n: (ast.nodes.get i: (call.callable - 1).u64)
+                            )
+                            co: st.typing.childOfId parentTypeId: dtp nameId: armnId9
                             payId: optU64Or o: co d: 0
                             if payId > 0 then {
                                 pn0: typeNameOf :st tid: payId
@@ -16681,6 +16712,7 @@ checkCase: function {
             clause
         ) case caseclause then {
             armName: atomName :ast n: (ast.nodes.get i: (clause.matcharm - 1).u64)
+            armId9: atomNameId :ast n: (ast.nodes.get i: (clause.matcharm - 1).u64)
             if (isEmptyBody n: (ast.nodes.get i: (clause.statement - 1).u64)) then anyEmpty = true
             # A value-match literal arm wears the subject's concrete type.
             if (isSum) == false then {
@@ -16697,7 +16729,7 @@ checkCase: function {
             asname: "arm:\{armName}"
             armMarker: st.pushBlock name: asname.stringview
             if targetName.length > 0 when subjT > 0 then {
-                po: st.typing.childOf parentTypeId: subjT name: armName.stringview
+                po: st.typing.childOfId parentTypeId: subjT nameId: armId9
                 match (
                     po
                 ) case some then {
