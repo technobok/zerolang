@@ -25,15 +25,22 @@ wkContinue: 4.u32
 
 # Well-known member-name pool ids (zast.z is the authority; append-only),
 # widened to u64 for ZTypeChild.nameId keys.
+wkThisMember: 1.u64
 wkCreate: 5.u64
 wkBorrow: 6.u64
 wkCall: 7.u64
 wkGet: 8.u64
 wkRemove: 11.u64
+wkLength: 15.u64
+wkCapacity: 16.u64
+wkSize: 17.u64
 wkValue: 19.u64
 wkSome: 21.u64
 wkTag: 22.u64
+wkState: 23.u64
 wkOpEq: 29.u64
+wkOpNe: 30.u64
+wkResumeInput: 31.u64
 
 # unitdefNodeId -- the nodeid of the unit row an id names (0 when the id does
 # not name a unit). The row view is scoped to the fetch.
@@ -993,7 +1000,7 @@ declareCanonicalType: function {
     match (
         cud0
     ) case some then {
-        ty.setChild pool: ast.names parentTypeId: cud0 childName: name childTypeId: id
+        ty.setChildId parentTypeId: cud0 nameId: (ast.internString text: name).u64 childTypeId: id
     } case none then null
     idu: id
     duv: defUnit.string
@@ -2944,10 +2951,9 @@ resolveFunction: function {
                             tid: fpt9
                         )
                     }
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: fid
-                        childName: pnameF9.stringview
+                        nameId: pm.name.u64
                         childTypeId: fpt9
                     )
                 }
@@ -2990,10 +2996,9 @@ resolveFunction: function {
                     typeExpr: (ast.nodes.get i: (pm.operation - 1).u64)
                     :thisName
                 )
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: fid
-                    childName: pname.stringview
+                    nameId: pm.name.u64
                     childTypeId: cid
                 )
                 if (isNumericLiteralName name: ptn.stringview) then {
@@ -3364,10 +3369,9 @@ attachMethods: function {
             match (
                 mido
             ) case some then {
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: parentId
-                    childName: mname.stringview
+                    nameId: am.name.u64
                     childTypeId: mido
                 )
             } case none then {
@@ -3379,10 +3383,9 @@ attachMethods: function {
                     clname: "i64"
                     if (isFloatLiteralName name: cn.stringview) then clname = "f64"
                     cid: reg.newType name: clname typetype: ztypes.ztypetype.recordType
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: parentId
-                        childName: mname.stringview
+                        nameId: am.name.u64
                         childTypeId: cid
                     )
                     ty.markAsConstClone typeId: cid
@@ -3475,10 +3478,9 @@ attachMarkers: function {
                 mtid
             ) case some then {
                 mlbl: zast.nameTextCopy :ast ref: mm.name
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: parentId
-                    childName: mlbl.stringview
+                    nameId: mm.name.u64
                     childTypeId: mtid
                 )
                 if (reg.hasDestructorName typeId: mtid) then needsDtor = true
@@ -3500,10 +3502,9 @@ attachMarkers: function {
                         nm: amlbl.stringview
                         thisName: ""
                     )
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: parentId
-                        childName: amlbl.stringview
+                        nameId: mm.name.u64
                         childTypeId: amlid
                     )
                     acf: (reg.newConformance
@@ -3560,28 +3561,26 @@ resolveData: function {ast: Ast
     ordinal: u64
     eiter: dnode.elements.iterate
     for elId9: eiter loop {
-        el: ast.nodes.get i: (elId9 - 1).u64
-        match (
-            el
-        ) case namedoperation then {
-            nm: zast.nameTextCopy :ast ref: el.name
-            if nm.length == 0 then {
+        nmRef9: u32
+        isNo9: false
+        {
+            el: ast.nodes.get i: (elId9 - 1).u64
+            match (
+                el
+            ) case namedoperation then {
+                nmRef9 = el.name
+                isNo9 = true
+            } else null
+        }
+        if isNo9 then {
+            if nmRef9 == 0 then {
                 ord: "\{ordinal}"
-                (ty.setChild
-                    pool: ast.names
-                    parentTypeId: did
-                    childName: ord.stringview
-                    childTypeId: litId
-                )
+                oid9: (ast.internString text: ord.stringview).u64
+                ty.setChildId parentTypeId: did nameId: oid9 childTypeId: litId
             } else {
-                (ty.setChild
-                    pool: ast.names
-                    parentTypeId: did
-                    childName: nm.stringview
-                    childTypeId: litId
-                )
+                ty.setChildId parentTypeId: did nameId: nmRef9.u64 childTypeId: litId
             }
-        } else null
+        }
         ordinal = ordinal + 1
     }
     etn: dataOutTypeName :ast oId: dnode.outType
@@ -3595,7 +3594,7 @@ resolveData: function {ast: Ast
         name: tagName.stringview
         typetype: ztypes.ztypetype.recordType
     )
-    ty.setChild pool: ast.names parentTypeId: did childName: "tag" childTypeId: tagId
+    ty.setChildId parentTypeId: did nameId: wkTag childTypeId: tagId
     ty.definedInUnit.set key: ddid value: unitName.string
 }
 
@@ -3807,10 +3806,9 @@ resolveRecord: function {
                 ) case some then {
                     if fname.stringview == "create" then hasCreateIs = true
                     if fname.stringview == "==" then hasEqIs = true
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: rid
-                        childName: fname.stringview
+                        nameId: fm.name.u64
                         childTypeId: mido
                     )
                     if (fnFieldFlaggableName name: fname.stringview) then {
@@ -3828,10 +3826,9 @@ resolveRecord: function {
                     match (
                         mrefR9
                     ) case some then {
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: rid
-                            childName: fname.stringview
+                            nameId: fm.name.u64
                             childTypeId: mrefR9
                         )
                         if (reg.typetypeOf typeId: mrefR9) == ztypes.ztypetype.functionType then {
@@ -3859,10 +3856,9 @@ resolveRecord: function {
                             typeExpr: (ast.nodes.get i: (fm.operation - 1).u64)
                             thisName: defName
                         )
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: rid
-                            childName: fname.stringview
+                            nameId: fm.name.u64
                             childTypeId: cid
                         )
                         if (reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
@@ -3929,21 +3925,21 @@ resolveRecord: function {
     if (hasCreate) == false then {
         createName: "\{defName}.create"
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: rid childName: "create" childTypeId: createId
+        ty.setChildId parentTypeId: rid nameId: wkCreate childTypeId: createId
     }
     if istd then {
         borrowName: "\{defName}.borrow"
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: rid childName: "borrow" childTypeId: borrowId
+        ty.setChildId parentTypeId: rid nameId: wkBorrow childTypeId: borrowId
     } else {
         if (isgen) == false then {
             if (hasEqIs) == false then {
                 eqName: "\{defName}.=="
                 eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.functionType
-                ty.setChild pool: ast.names parentTypeId: rid childName: "==" childTypeId: eqId
+                ty.setChildId parentTypeId: rid nameId: wkOpEq childTypeId: eqId
                 neqName: "\{defName}.!="
                 neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.functionType
-                ty.setChild pool: ast.names parentTypeId: rid childName: "!=" childTypeId: neqId
+                ty.setChildId parentTypeId: rid nameId: wkOpNe childTypeId: neqId
             }
         }
     }
@@ -4055,10 +4051,9 @@ resolveVariant: function {
                 typeExpr: (ast.nodes.get i: (fm.operation - 1).u64)
                 thisName: defName
             )
-            (ty.setChild
-                pool: ast.names
+            (ty.setChildId
                 parentTypeId: vid
-                childName: aname.stringview
+                nameId: fm.name.u64
                 childTypeId: cid
             )
             (recordTyperef
@@ -4082,7 +4077,7 @@ resolveVariant: function {
             tagName: "\{defName}:tag:data"
             tagId = reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
         }
-        ty.setChild pool: ast.names parentTypeId: vid childName: "tag" childTypeId: tagId
+        ty.setChildId parentTypeId: vid nameId: wkTag childTypeId: tagId
     }
     aiter: vnode.asItems.iterate
     for amId9: aiter loop {
@@ -4127,10 +4122,9 @@ resolveVariant: function {
                         width: 3
                     )
                 } else {
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: vid
-                        childName: mname.stringview
+                        nameId: am.name.u64
                         childTypeId: mido
                     )
                 }
@@ -4153,10 +4147,10 @@ resolveVariant: function {
     if (isgen) == false then {
         eqName: "\{defName}.=="
         eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: vid childName: "==" childTypeId: eqId
+        ty.setChildId parentTypeId: vid nameId: wkOpEq childTypeId: eqId
         neqName: "\{defName}.!="
         neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: vid childName: "!=" childTypeId: neqId
+        ty.setChildId parentTypeId: vid nameId: wkOpNe childTypeId: neqId
     }
     ty.definedInUnit.set key: vvid value: unitName.string
 }
@@ -4336,10 +4330,9 @@ resolveUnion: function {
                 typeExpr: (ast.nodes.get i: (fm.operation - 1).u64)
                 thisName: defName
             )
-            (ty.setChild
-                pool: ast.names
+            (ty.setChildId
                 parentTypeId: uid
-                childName: aname.stringview
+                nameId: fm.name.u64
                 childTypeId: cid
             )
             (recordTyperef
@@ -4363,7 +4356,7 @@ resolveUnion: function {
             tagName: "\{defName}:tag:data"
             tagId = reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
         }
-        ty.setChild pool: ast.names parentTypeId: uid childName: "tag" childTypeId: tagId
+        ty.setChildId parentTypeId: uid nameId: wkTag childTypeId: tagId
     }
     aiter: vnode.asItems.iterate
     for amId9: aiter loop {
@@ -4408,10 +4401,9 @@ resolveUnion: function {
                         width: 3
                     )
                 } else {
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: uid
-                        childName: mname.stringview
+                        nameId: am.name.u64
                         childTypeId: mido
                     )
                 }
@@ -4591,10 +4583,9 @@ resolveClass: function {
                     match (
                         mido
                     ) case some then {
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: cid
-                            childName: fname.stringview
+                            nameId: fm.name.u64
                             childTypeId: mido
                         )
                         if isgen then reg.setGeneric typeId: mido value: true
@@ -4622,10 +4613,9 @@ resolveClass: function {
                 match (
                     mref
                 ) case some then {
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: cid
-                        childName: fname.stringview
+                        nameId: fm.name.u64
                         childTypeId: mref
                     )
                     if (reg.typetypeOf typeId: mref) == ztypes.ztypetype.functionType then {
@@ -4680,10 +4670,9 @@ resolveClass: function {
                             typeExpr: (ast.nodes.get i: (fm.operation - 1).u64)
                             thisName: defName
                         )
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: cid
-                            childName: fname.stringview
+                            nameId: fm.name.u64
                             childTypeId: cidf
                         )
                         if (reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
@@ -4782,10 +4771,9 @@ resolveClass: function {
                     match (
                         amidP4
                     ) case some then {
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: cid
-                            childName: afnP4.stringview
+                            nameId: amP4.name.u64
                             childTypeId: amidP4
                         )
                         reg.setGeneric typeId: amidP4 value: true
@@ -4830,13 +4818,13 @@ resolveClass: function {
                 name: createName.stringview
                 typetype: ztypes.ztypetype.functionType
             )
-            ty.setChild pool: ast.names parentTypeId: cid childName: "create" childTypeId: createId
+            ty.setChildId parentTypeId: cid nameId: wkCreate childTypeId: createId
         }
     }
     if istd then {
         borrowName: "\{defName}.borrow"
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: cid childName: "borrow" childTypeId: borrowId
+        ty.setChildId parentTypeId: cid nameId: wkBorrow childTypeId: borrowId
     }
     if defName == "String" then needsDtor = true
     if needsDtor then {
@@ -4903,10 +4891,9 @@ resolveFacet: function {
             match (
                 sido
             ) case some then {
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: fid
-                    childName: mname.stringview
+                    nameId: sm.name.u64
                     childTypeId: sido
                 )
             } else null
@@ -4915,10 +4902,10 @@ resolveFacet: function {
     if (isgen) == false then {
         createName: "\{defName}.create"
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: fid childName: "create" childTypeId: createId
+        ty.setChildId parentTypeId: fid nameId: wkCreate childTypeId: createId
         borrowName: "\{defName}.borrow"
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: fid childName: "borrow" childTypeId: borrowId
+        ty.setChildId parentTypeId: fid nameId: wkBorrow childTypeId: borrowId
     }
     ty.definedInUnit.set key: ffid value: unitName.string
 }
@@ -4989,10 +4976,9 @@ resolveProtocol: function {
             match (
                 sido
             ) case some then {
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: pid
-                    childName: mname.stringview
+                    nameId: sm.name.u64
                     childTypeId: sido
                 )
             } else null
@@ -5001,10 +4987,10 @@ resolveProtocol: function {
     if (isgen) == false then {
         createName: "\{defName}.create"
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: pid childName: "create" childTypeId: createId
+        ty.setChildId parentTypeId: pid nameId: wkCreate childTypeId: createId
         borrowName: "\{defName}.borrow"
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: pid childName: "borrow" childTypeId: borrowId
+        ty.setChildId parentTypeId: pid nameId: wkBorrow childTypeId: borrowId
     }
     dn: "\{defName}_destroy"
     reg.setDestructorName typeId: pid name: dn.stringview
@@ -5030,7 +5016,7 @@ registerEmptyType: function {
         reg.setValtype typeId: ex0 value: true
         ccn0: "\{name}.create"
         cci0: reg.newType name: ccn0.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: ex0 childName: "create" childTypeId: cci0
+        ty.setChildId parentTypeId: ex0 nameId: wkCreate childTypeId: cci0
         ty.definedInUnit.set key: ex0 value: unitName.string
         return ex0
     } case none then null
@@ -5039,7 +5025,7 @@ registerEmptyType: function {
     reg.setValtype typeId: nid value: true
     ccname: "\{name}.create"
     ccid: reg.newType name: ccname.stringview typetype: ztypes.ztypetype.functionType
-    ty.setChild pool: ast.names parentTypeId: nid childName: "create" childTypeId: ccid
+    ty.setChildId parentTypeId: nid nameId: wkCreate childTypeId: ccid
     ty.definedInUnit.set key: nnid value: unitName.string
     return nid
 }
@@ -5365,10 +5351,9 @@ resolveTypeAliases: function {ast: Ast ty: ztyping.ZTyping reg: ztypes.ZTypeRegi
             match (
                 uro
             ) case some then {
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: uro
-                    childName: an.stringview
+                    nameId: (zast.poolFind pool: ast.names text: an.stringview).u64
                     childTypeId: tv
                 )
             } case none then null
@@ -5413,10 +5398,9 @@ resolveTypeAliases: function {ast: Ast ty: ztyping.ZTyping reg: ztypes.ZTypeRegi
                             match (
                                 vuro
                             ) case some then {
-                                (ty.setChild
-                                    pool: ast.names
+                                (ty.setChildId
                                     parentTypeId: vuro
-                                    childName: van.stringview
+                                    nameId: (zast.poolFind pool: ast.names text: van.stringview).u64
                                     childTypeId: tto
                                 )
                             } case none then null
@@ -6163,7 +6147,7 @@ fixupCustomTags: function {
         if ctid > 0 then {
             if (reg.typetypeOf typeId: ctid) == ztypes.ztypetype.dataType then {
                 cuidc: cuid
-                ty.setChild pool: ast.names parentTypeId: cuidc childName: "tag" childTypeId: ctid
+                ty.setChildId parentTypeId: cuidc nameId: wkTag childTypeId: ctid
             } else {
                 cuidn: cuid
                 cngo: ty.pendingCustomTagNode.get key: cuidn
@@ -6900,10 +6884,9 @@ attachMonoUnitFuncs: function {
                         name: shellName.stringview
                         typetype: ztypes.ztypetype.functionType
                     )
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: monoId
-                        childName: fn.stringview
+                        nameId: fmNode9.name.u64
                         childTypeId: shellId
                     )
                 }
@@ -7060,10 +7043,9 @@ addPromotedLocalsBlk: function {
             nm: assignmentLocalName :ast line: (ast.nodes.get i: (stId9 - 1).u64)
             if nm.length != 0 then {
                 lf: resolveAtomType :ty :reg :ast unitName: "" nm: "i64" thisName: ""
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: iterId
-                    childName: nm.stringview
+                    nameId: (zast.poolFind pool: ast.names text: nm.stringview).u64
                     childTypeId: lf
                 )
             }
@@ -7123,10 +7105,9 @@ addResumeInputExpr: function {
                         nm: tn.stringview
                         thisName: ""
                     )
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: iterId
-                        childName: "_resume_input"
+                        nameId: wkResumeInput
                         childTypeId: rf
                     )
                     vf: (resolveAtomType
@@ -7137,10 +7118,9 @@ addResumeInputExpr: function {
                         nm: tn.stringview
                         thisName: ""
                     )
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: callId
-                        childName: "value"
+                        nameId: wkValue
                         childTypeId: vf
                     )
                     own: pathOwnership :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -7237,10 +7217,9 @@ addInlineIterFieldsBlk: function {
                     nm: fieldType.stringview
                     thisName: ""
                 )
-                (ty.setChild
-                    pool: ast.names
+                (ty.setChildId
                     parentTypeId: iterId
-                    childName: fieldName.stringview
+                    nameId: (ast.internString text: fieldName.stringview).u64
                     childTypeId: ft
                 )
                 n = n + 1
@@ -7286,7 +7265,7 @@ synthGeneratorIterClass: function {
     ty.definedInUnit.set key: iid value: unitName.string
     needsDtor: false
     st1: resolveAtomType :ty :reg :ast :unitName nm: "i64" thisName: ""
-    ty.setChild pool: ast.names parentTypeId: iterId childName: "state" childTypeId: st1
+    ty.setChildId parentTypeId: iterId nameId: wkState childTypeId: st1
     createName: "\{iterName}.create"
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
     cdid: createId
@@ -7295,7 +7274,7 @@ synthGeneratorIterClass: function {
     callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.functionType
     clid: callId
     ty.definedInUnit.set key: clid value: unitName.string
-    ty.setChild pool: ast.names parentTypeId: callId childName: "this" childTypeId: iterId
+    ty.setChildId parentTypeId: callId nameId: wkThisMember childTypeId: iterId
     (ty.setChildOwnershipId
         parentTypeId: callId
         nameId: wkThis.u64
@@ -7310,17 +7289,15 @@ synthGeneratorIterClass: function {
             pn: zast.nameTextCopy :ast ref: pm.name
             ptn: baseTypeName :ast n: (ast.nodes.get i: (pm.operation - 1).u64)
             f1: resolveAtomType :ty :reg :ast :unitName nm: ptn.stringview :thisName
-            (ty.setChild
-                pool: ast.names
+            (ty.setChildId
                 parentTypeId: iterId
-                childName: pn.stringview
+                nameId: pm.name.u64
                 childTypeId: f1
             )
             f2: resolveAtomType :ty :reg :ast :unitName nm: ptn.stringview :thisName
-            (ty.setChild
-                pool: ast.names
+            (ty.setChildId
                 parentTypeId: createId
-                childName: pn.stringview
+                nameId: pm.name.u64
                 childTypeId: f2
             )
             pown: pathOwnership :ast n: (ast.nodes.get i: (pm.operation - 1).u64)
@@ -7349,8 +7326,8 @@ synthGeneratorIterClass: function {
         addPromotedLocals :ty :reg :ast :iterId bodyId: fnode.body
     }
     addInlineIterFields :ty :reg :ast :iterId bodyId: fnode.body
-    ty.setChild pool: ast.names parentTypeId: iterId childName: "create" childTypeId: createId
-    ty.setChild pool: ast.names parentTypeId: iterId childName: "call" childTypeId: callId
+    ty.setChildId parentTypeId: iterId nameId: wkCreate childTypeId: createId
+    ty.setChildId parentTypeId: iterId nameId: wkCall childTypeId: callId
     if needsDtor then {
         dn: "\{iterName}_destroy"
         reg.setDestructorName typeId: iterId name: dn.stringview
@@ -7444,7 +7421,11 @@ resolveInlineGenericUnit: function {
             match (
                 icu0
             ) case some then {
-                ty.setChild pool: ast.names parentTypeId: icu0 childName: defName childTypeId: rid
+                (ty.setChildId
+                    parentTypeId: icu0
+                    nameId: (zast.poolFind pool: ast.names text: defName).u64
+                    childTypeId: rid
+                )
             } case none then null
         }
         biter: bodyIds9.iterate
@@ -7467,10 +7448,9 @@ resolveInlineGenericUnit: function {
                 match (
                     mido
                 ) case some then {
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: uid
-                        childName: fn.stringview
+                        nameId: bmNode9.name.u64
                         childTypeId: mido
                     )
                 } case none then null
@@ -7510,7 +7490,11 @@ createUnitMono: function {
         match (
             ccu2
         ) case some then {
-            ty.setChild pool: ast.names parentTypeId: ccu2 childName: monoName childTypeId: rid
+            (ty.setChildId
+                parentTypeId: ccu2
+                nameId: (ast.internString text: monoName).u64
+                childTypeId: rid
+            )
         } case none then null
         # link the mono to its template (inline templates register under
         # the main unit; file templates carry the per-unit UNIT type).
@@ -7736,10 +7720,9 @@ registerMonoFnParams: function {
                 ) case some then {
                     if argId > 0 then {
                         ppnm: zast.nameTextCopy :ast ref: ppm.name
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: fnId
-                            childName: ppnm.stringview
+                            nameId: ppm.name.u64
                             childTypeId: argId
                         )
                     }
@@ -7817,10 +7800,9 @@ buildUnitMonoFull: function {
                             mo0
                         ) case some then {
                             srcId = mo0
-                            (ty.setChild
-                                pool: ast.names
+                            (ty.setChildId
                                 parentTypeId: tplId
-                                childName: fn.stringview
+                                nameId: fmNode9.name.u64
                                 childTypeId: mo0
                             )
                         } case none then null
@@ -7862,10 +7844,9 @@ buildUnitMonoFull: function {
                             ) case some then {
                                 if argId > 0 then target = argId
                             } case none then null
-                            (ty.setChild
-                                pool: ast.names
+                            (ty.setChildId
                                 parentTypeId: newFnId
-                                childName: chName.stringview
+                                nameId: (zast.poolFind pool: ast.names text: chName.stringview).u64
                                 childTypeId: target
                             )
                             ci = ci + 1
@@ -7931,10 +7912,9 @@ buildUnitMonoFull: function {
                         :gpNames
                         :argId
                     )
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: monoId
-                        childName: fn.stringview
+                        nameId: fmNode9.name.u64
                         childTypeId: newFnId
                     )
                     co9: (cloneUnitMethod
@@ -8688,7 +8668,11 @@ cloneMethodInto: function {
                 if rs5 > 0 then tgt5 = rs5
             }
         }
-        ty.setChild pool: ast.names parentTypeId: fid5 childName: pnm5.stringview childTypeId: tgt5
+        (ty.setChildId
+            parentTypeId: fid5
+            nameId: (zast.poolFind pool: ast.names text: pnm5.stringview).u64
+            childTypeId: tgt5
+        )
         if (cOh5.get i: pi5) then {
             pov5: cOv5.get i: pi5
             (ty.setChildOwnership
@@ -8737,7 +8721,11 @@ cloneMethodInto: function {
             reg.setReturnType typeId: fid5 value: rt5
         }
     }
-    ty.setChild pool: ast.names parentTypeId: specId childName: m childTypeId: fid5
+    (ty.setChildId
+        parentTypeId: specId
+        nameId: (zast.poolFind pool: ast.names text: m).u64
+        childTypeId: fid5
+    )
 }
 
 # respecialize -- a type that is itself a specialization (nonempty genericArgs)
@@ -8895,7 +8883,7 @@ mintMono: function {
     match (
         mcu9
     ) case some then {
-        ty.setChild pool: ast.names parentTypeId: mcu9 childName: name childTypeId: mid
+        ty.setChildId parentTypeId: mcu9 nameId: (ast.internString text: name).u64 childTypeId: mid
     } case none then null
     # monos are global (defined_in_unit NULL): the system-keyed alias makes
     # them resolvable from every unit's lookup chain (a pending instantiation
@@ -8904,7 +8892,7 @@ mintMono: function {
     match (
         mcu8
     ) case some then {
-        ty.setChild pool: ast.names parentTypeId: mcu8 childName: name childTypeId: mid
+        ty.setChildId parentTypeId: mcu8 nameId: (ast.internString text: name).u64 childTypeId: mid
     } case none then null
     # A heap-owning generic instance carries a destructor (so a holder/local
     # frees it; the emitter builds the cname). Collections own native heap;
@@ -9055,10 +9043,9 @@ mintMono: function {
             }
         }
         if deep5 == false then {
-            (ty.setChild
-                pool: ast.names
+            (ty.setChildId
                 parentTypeId: mid
-                childName: chName.stringview
+                nameId: (zast.poolFind pool: ast.names text: chName.stringview).u64
                 childTypeId: target
             )
         }
@@ -9117,10 +9104,9 @@ mintMono: function {
                     match (
                         cno9
                     ) case some then {
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: mid
-                            childName: pname9.stringview
+                            nameId: (zast.poolFind pool: ast.names text: pname9.stringview).u64
                             childTypeId: cno9
                         )
                     } case none then null
@@ -9131,17 +9117,17 @@ mintMono: function {
         if (isSized9) == false then {
             crq9: "\{name}.create"
             crId9: reg.newType name: crq9.stringview typetype: ztypes.ztypetype.functionType
-            ty.setChild pool: ast.names parentTypeId: mid childName: "create" childTypeId: crId9
+            ty.setChildId parentTypeId: mid nameId: wkCreate childTypeId: crId9
             eqo9: ty.childOfId parentTypeId: mid nameId: wkOpEq
             match (
                 eqo9
             ) case some then null case none then {
                 req9: "\{name}.=="
                 reqId9: reg.newType name: req9.stringview typetype: ztypes.ztypetype.functionType
-                ty.setChild pool: ast.names parentTypeId: mid childName: "==" childTypeId: reqId9
+                ty.setChildId parentTypeId: mid nameId: wkOpEq childTypeId: reqId9
                 rne9: "\{name}.!="
                 rneId9: reg.newType name: rne9.stringview typetype: ztypes.ztypetype.functionType
-                ty.setChild pool: ast.names parentTypeId: mid childName: "!=" childTypeId: rneId9
+                ty.setChildId parentTypeId: mid nameId: wkOpNe childTypeId: rneId9
             }
         }
     }
@@ -9151,15 +9137,15 @@ mintMono: function {
     if wantTag then {
         tagName: "\{name}:tag:data"
         tagId: reg.newType name: tagName.stringview typetype: ztypes.ztypetype.dataType
-        ty.setChild pool: ast.names parentTypeId: mid childName: "tag" childTypeId: tagId
+        ty.setChildId parentTypeId: mid nameId: wkTag childTypeId: tagId
     }
     if tt == ztypes.ztypetype.variantType then {
         eqName: "\{name}.=="
         eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: mid childName: "==" childTypeId: eqId
+        ty.setChildId parentTypeId: mid nameId: wkOpEq childTypeId: eqId
         neName: "\{name}.!="
         neId: reg.newType name: neName.stringview typetype: ztypes.ztypetype.functionType
-        ty.setChild pool: ast.names parentTypeId: mid childName: "!=" childTypeId: neId
+        ty.setChildId parentTypeId: mid nameId: wkOpNe childTypeId: neId
     }
     return mid
 }
@@ -9233,7 +9219,11 @@ mintCollectionMethod: function {
     fname: "\{monoName}.\{m}"
     fid: reg.newType name: fname.stringview typetype: ztypes.ztypetype.functionType
     reg.setNative typeId: fid value: true
-    ty.setChild pool: ast.names parentTypeId: monoId childName: m childTypeId: fid
+    (ty.setChildId
+        parentTypeId: monoId
+        nameId: (zast.poolFind pool: ast.names text: m).u64
+        childTypeId: fid
+    )
     return fid
 }
 
@@ -9858,8 +9848,8 @@ mintCollectionChildren: function {
             u64L = uoL
         } case none then null
         if u64L > 0 then {
-            ty.setChild pool: ast.names parentTypeId: monoId childName: "length" childTypeId: u64L
-            ty.setChild pool: ast.names parentTypeId: monoId childName: "capacity" childTypeId: u64L
+            ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64L
+            ty.setChildId parentTypeId: monoId nameId: wkCapacity childTypeId: u64L
         }
         return
     }
@@ -9883,7 +9873,7 @@ mintCollectionChildren: function {
     # length field (the canonical u64) and the create child materialize here,
     # once per mono (post-memo: this arm mints).
     if templateId == listViewTid then {
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "length" childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoName :monoId m: "create"
         return
     }
@@ -9891,8 +9881,8 @@ mintCollectionChildren: function {
     # by respecialize); the length/capacity fields (the canonical u64) and
     # the create child materialize here, once per mono.
     if templateId == setTid then {
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "length" childTypeId: u64id
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "capacity" childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkCapacity childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoName :monoId m: "create"
         return
     }
@@ -9910,8 +9900,8 @@ mintCollectionChildren: function {
     # here, once per mono. Map has no create child (its construction path
     # is separate).
     if templateId == mapTid when valArg > 0 then {
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "length" childTypeId: u64id
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "capacity" childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkCapacity childTypeId: u64id
         vnM: monoValName :ast :ty :reg tid: valArg
         mgoM: ty.childOfId parentTypeId: monoId nameId: wkGet
         match (
@@ -10018,7 +10008,7 @@ mintCollectionChildren: function {
         reg.setReturnType typeId: agId value: elemArg
         asId: mintCollectionMethod :ast :ty :reg :monoName :monoId m: "set"
         reg.setReturnType typeId: asId value: elemArg
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "length" childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
         mintCollectionMethod :ast :ty :reg :monoName :monoId m: "create"
         aeqId: mintCollectionMethod :ast :ty :reg :monoName :monoId m: "=="
         reg.setReturnType typeId: aeqId value: boolid
@@ -10026,8 +10016,8 @@ mintCollectionChildren: function {
         reg.setReturnType typeId: aneId value: boolid
     }
     if templateId == strTid then {
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "length" childTypeId: u64id
-        ty.setChild pool: ast.names parentTypeId: monoId childName: "size" childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
+        ty.setChildId parentTypeId: monoId nameId: wkSize childTypeId: u64id
         tstId: mintCollectionMethod :ast :ty :reg :monoName :monoId m: "string"
         sgo: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "String"
         sgid: optU64Or o: sgo d: 0
@@ -10313,7 +10303,7 @@ inferGenericConstruction: function {
     ) case some then null case none then {
         crn: "\{mname}.create"
         crId: st.reg.newType name: crn.stringview typetype: ztypes.ztypetype.functionType
-        st.typing.setChild pool: ast.names parentTypeId: mid childName: "create" childTypeId: crId
+        st.typing.setChildId parentTypeId: mid nameId: wkCreate childTypeId: crId
     }
     return mid
 }
@@ -13111,10 +13101,9 @@ checkReassignment: function {
                     tfn: dottedChildName :ast n: tpn9
                     if tfn.length > 0 then {
                         mrvt: materialiseLiteral :ast :st :unitName t: rvt
-                        (st.typing.setChild
-                            pool: ast.names
+                        (st.typing.setChildId
                             parentTypeId: tto
-                            childName: tfn.stringview
+                            nameId: (zast.poolFind pool: ast.names text: tfn.stringview).u64
                             childTypeId: mrvt
                         )
                         settof: mrvt
@@ -15328,7 +15317,7 @@ checkBoxConstruction: function {
     if (st.typing.childCount parentTypeId: mid) <= 0 then {
         crn: "\{mname}.create"
         crId: st.reg.newType name: crn.stringview typetype: ztypes.ztypetype.functionType
-        st.typing.setChild pool: ast.names parentTypeId: mid childName: "create" childTypeId: crId
+        st.typing.setChildId parentTypeId: mid nameId: wkCreate childTypeId: crId
         # Stage the element's children first: setChild appends to the very
         # table being iterated.
         cNames2: (List String)
@@ -15366,10 +15355,9 @@ checkBoxConstruction: function {
             match (
                 ext9
             ) case some then null case none then {
-                (st.typing.setChild
-                    pool: ast.names
+                (st.typing.setChildId
                     parentTypeId: mid
-                    childName: chn.stringview
+                    nameId: (zast.poolFind pool: ast.names text: chn.stringview).u64
                     childTypeId: chi
                 )
             }
@@ -18700,7 +18688,11 @@ resolveUnitIfDef: function {
             match (
                 cu9
             ) case some then {
-                ty.setChild pool: ast.names parentTypeId: cu9 childName: defName childTypeId: t9
+                (ty.setChildId
+                    parentTypeId: cu9
+                    nameId: (zast.poolFind pool: ast.names text: defName).u64
+                    childTypeId: t9
+                )
             } case none then null
         }
     } else null
@@ -18746,10 +18738,9 @@ resolveConstantDef: function {
                 match (
                     cu
                 ) case some then {
-                    (ty.setChild
-                        pool: ast.names
+                    (ty.setChildId
                         parentTypeId: cu
-                        childName: defName
+                        nameId: (zast.poolFind pool: ast.names text: defName).u64
                         childTypeId: tOpt
                     )
                 } case none then null
@@ -18813,10 +18804,9 @@ resolveConstantDef: function {
                     match (
                         cu2
                     ) case some then {
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: cu2
-                            childName: defName
+                            nameId: (zast.poolFind pool: ast.names text: defName).u64
                             childTypeId: mOpt
                         )
                     } case none then null
@@ -18827,10 +18817,9 @@ resolveConstantDef: function {
                     match (
                         cu3
                     ) case some then {
-                        (ty.setChild
-                            pool: ast.names
+                        (ty.setChildId
                             parentTypeId: cu3
-                            childName: defName
+                            nameId: (zast.poolFind pool: ast.names text: defName).u64
                             childTypeId: bt
                         )
                     } case none then null

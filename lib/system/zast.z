@@ -510,6 +510,17 @@ Ast: class {
     # the innermost containing segment (subunit ranges nest inside their
     # parent's, so the largest containing startId wins). 0 when no segment
     # contains it (synthesized nodes minted after parsing).
+    # internString -- intern a name at a MINT site (a synthesized name not
+    # guaranteed to be in the pool yet: a mono mangle, an element ordinal).
+    # The one sanctioned intern in an analysis stage; returns the 1-based pool
+    # id. Reads use zast.poolFind (0 on miss) and never intern. Takes an
+    # exclusive lock on `this` for the call, so no node view (this.nodes.get)
+    # may be live at the call site -- mint sites hold none (the ordinal site
+    # drops its view first).
+    internString: function {:this text: StringView} out u32 is {
+        return (this.names.set s: text)
+    }
+
     fsnoForNode: function {:this nodeid: u32} out u32 is {
         best9: u32
         bestStart9: u32
@@ -1230,6 +1241,13 @@ posOf: function {n: Node} out nodepos is {
     } else {
         return (nodepos line: 0 col: 0)
     }
+}
+
+# poolFind -- the pool id of an already-interned name (0 when absent). Takes
+# the pool as a sibling arg so a caller holding a view into another Ast field
+# (the node table) does not lock the whole carrier -- read-only, never interns.
+poolFind: function {pool: StringPool text: StringView} out u32 is {
+    return (pool.find s: text)
 }
 
 # poolTextEq -- compare an interned name's text without copying. Takes the
