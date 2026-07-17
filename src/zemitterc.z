@@ -776,6 +776,9 @@ Ctx: class {
     tailRetActive: bool
     defUnitId: (Map u64 value: u64)
     unitIdByName: (Map String value: u64)
+    unitTidsC: (List u64)
+    unitKeysC: (List String)
+    unitCacheBuilt: bool
     unitIdCtr: u64
     mainUnitId: u64
     condDepth: u64
@@ -8906,6 +8909,20 @@ emitStmt: function {
     }
 }
 
+# ensureUnitCache -- build the emit-stable unit lists (tids for the id probe,
+# keys for the composed-key fallback) once per Ctx. unitNameTid is populated in
+# typecheck and never mutated during emit, so the snapshot stays valid; this
+# replaces the per-resolve List rebuild that iterated unitNameTid every call.
+ensureUnitCache: function {ctx: Ctx reg: ztypes.ZTypeRegistry} is {
+    if ctx.unitCacheBuilt then return
+    with uit: reg.unitNameTid.iterateItems do for ue: uit loop {
+        ukc9: ue.key.copy
+        ctx.unitKeysC.append ukc9
+        ctx.unitTidsC.append ue.value
+    }
+    ctx.unitCacheBuilt = true
+}
+
 # resolveTypeIdByNameId -- a type id for an already-interned name (Ast.names
 # pool id): main-unit, then system, then the cross-unit lookup. 0 when
 # unresolved (incl. a 0 id -- a name not in the pool matches no child edge).
@@ -8939,13 +8956,15 @@ resolveTypeIdByNameId: function {
     # (no key composition); the composed-key resolvedByKey pass (which also
     # follows unit-level aliases) runs only when every direct probe missed.
     found2: u64
-    utids9: (List u64)
-    with uit: symtab.reg.unitNameTid.iterateItems do for ue: uit loop utids9.append ue.value
+    ensureUnitCache :ctx reg: symtab.reg
     uki9: u64
-    ukn9: utids9.length
+    ukn9: ctx.unitTidsC.length
     for uki9 < ukn9 loop {
         if found2 == 0 then {
-            co9: symtab.typing.childOfId parentTypeId: (utids9.get i: uki9) nameId: nameId.u64
+            co9: (symtab.typing.childOfId
+                parentTypeId: (ctx.unitTidsC.get i: uki9)
+                nameId: nameId.u64
+            )
             match (
                 co9
             ) case some then {
@@ -8956,16 +8975,11 @@ resolveTypeIdByNameId: function {
     }
     if found2 == 0 then {
         nmTxt9: zast.poolTextCopy pool: ast.names ref: nameId
-        uks9: (List String)
-        with uit2: symtab.reg.unitNameTid.iterateItems do for ue2: uit2 loop {
-            ukc9: ue2.key.copy
-            uks9.append ukc9
-        }
         uki8: u64
-        ukn8: uks9.length
+        ukn8: ctx.unitKeysC.length
         for uki8 < ukn8 loop {
             if found2 == 0 then {
-                uk9: uks9.get i: uki8
+                uk9: ctx.unitKeysC.get i: uki8
                 k2: "\{uk9}.\{nmTxt9}"
                 r2: (ztypecheck.resolvedByKey
                     :ast
@@ -14207,6 +14221,9 @@ emitC: function {
         tailRetActive: false
         defUnitId: (Map u64 value: u64)
         unitIdByName: (Map String value: u64)
+        unitTidsC: (List u64)
+        unitKeysC: (List String)
+        unitCacheBuilt: false
         unitIdCtr: 0
         mainUnitId: 0
         condDepth: 0
