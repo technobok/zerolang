@@ -154,7 +154,6 @@ Node: union {
     # arm (payload-less, no allocation) until intern moves the real
     # row in (see tableSet / zparser.nextId)
     placeholder: null
-    nameentry: NameEntryData
 }
 
 # astkind -- flat tag mirror of the Node union arms, for id-based
@@ -190,7 +189,6 @@ astkind: variant {
     unitdef: null
     program: null
     placeholder: null
-    nameentry: null
 } as { tag: u8.tag }
 
 # Per-arm Node payload carriers. Each carries a synthetic nodeid
@@ -409,23 +407,19 @@ LabelValueData: class {
 }
 
 # Interned-name row: the single owner of one distinct identifier's text.
-# AtomIdData.name / LabelValueData.name are nodeids of nameentry rows, so
+# AtomIdData.name / LabelValueData.name are Ast.names pool ids, so
 # every occurrence of an identifier shares one String (position = first
 # sight). The parser interns; synthesized atoms append via
 # tableAppendRebase.
-NameEntryData: class {
-    nodeid: u32
-    text: String
-}
-
 # Ast -- the parse artifact carrier threaded through every reader: the
 # master node table, plus (as the carrier grows) the other tree-scoped
 # state produced by parsing.
 Ast: class {
     nodes: (List Node)
+    names: StringPool
 } as {
     create: function {} out this is {
-        return (meta.create nodes: (List Node))
+        return (meta.create nodes: (List Node) names: StringPool.create)
     }
 }
 
@@ -1123,29 +1117,14 @@ posOf: function {n: Node} out nodepos is {
 
 # nameTextEq -- compare an interned name's text without copying.
 nameTextEq: function {ast: Ast ref: u32 s: StringView} out bool is {
-    if ref == 0 then return s.length == 0
-    n9: ast.nodes.get i: (ref - 1).u64
-    match (
-        n9
-    ) case nameentry then {
-        return n9.text.stringview == s
-    } else {
-        return false
-    }
+    return (ast.names.eq id: ref :s)
 }
 
 # nameTextCopy -- an owned copy of an interned name's text ("" when the
-# ref is absent or not a nameentry row).
+# ref is absent).
 nameTextCopy: function {ast: Ast ref: u32} out String is {
     if ref == 0 then return "".string
-    n9: ast.nodes.get i: (ref - 1).u64
-    match (
-        n9
-    ) case nameentry then {
-        return n9.text.copy
-    } else {
-        return "".string
-    }
+    return (ast.names.get id: ref)
 }
 
 # Print one line per Node in the form
@@ -1158,8 +1137,6 @@ printNode: function {ast: Ast n: Node} is {
         print "\{n.nodeid}: error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
     } case placeholder then {
         print "placeholder"
-    } case nameentry then {
-        print "\{n.nodeid}: nameentry text=\{n.text}"
     } case atomid then {
         anm9: nameTextCopy :ast ref: n.name
         print "\{n.nodeid}: atomid @\{n.lineno}:\{n.colno} name=\{anm9}"
@@ -1318,8 +1295,6 @@ printNodeCanonical: function {ast: Ast n: Node} is {
         print "error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
     } case placeholder then {
         print "placeholder"
-    } case nameentry then {
-        print "nameentry text=\{n.text}"
     } case atomid then {
         anc9: nameTextCopy :ast ref: n.name
         print "atomid @\{n.lineno}:\{n.colno} name=\{anc9}"
@@ -1460,13 +1435,9 @@ printNodeCanonical: function {ast: Ast n: Node} is {
 # Smoke main: construct one instance of every variant arm and
 # print a deterministic dump for the harness to compare against
 # tests/fixtures/zast_z/smoke.expected.
-# smokeNameRef -- intern a hand-built smoke node's name (appends past the
-# pre-filled slots).
+# smokeNameRef -- intern a hand-built smoke node's name.
 smokeNameRef: function {ast: Ast text: StringView} out u32 is {
-    return (tableAppendRebase
-        :ast
-        n: (Node.nameentry (NameEntryData nodeid: 0 text: text.string))
-    )
+    return (ast.names.set s: text)
 }
 
 main: function is {
@@ -2318,8 +2289,6 @@ nodeIdOf: function {n: Node} out u32 is {
         return n.nodeid
     } case placeholder then {
         return 0
-    } case nameentry then {
-        return n.nodeid
     } case atomid then {
         return n.nodeid
     } case labelvalue then {
@@ -2401,9 +2370,7 @@ tableAppendRebase: function {ast: Ast n: Node.take} out u32 is {
         n
     ) case error then {
         n.nodeid = did9
-    } case placeholder then null case nameentry then {
-        n.nodeid = did9
-    } case atomid then {
+    } case placeholder then null case atomid then {
         n.nodeid = did9
     } case labelvalue then {
         n.nodeid = did9
@@ -2529,8 +2496,6 @@ kindOf: function {ast: Ast id: u32} out astkind is {
         return astkind.program
     } case placeholder then {
         return astkind.placeholder
-    } case nameentry then {
-        return astkind.nameentry
     }
 }
 
