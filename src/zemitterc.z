@@ -837,6 +837,24 @@ userFnId: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx name: StringView
     }
 }
 
+# userFnIdById -- id-keyed userFnId: the child name is already an Ast.names id.
+userFnIdById: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx nameId: u32} out u64 is {
+    go: (ztypecheck.resolveUnitChildById
+        :ast
+        ty: symtab.typing
+        reg: symtab.reg
+        unitName: ctx.mainName.stringview
+        :nameId
+    )
+    match (
+        go
+    ) case some then {
+        return go
+    } case none then {
+        return 0
+    }
+}
+
 # isPtrVar -- true when a local name is a pointer-receiver param of the current
 # class method body (so field reads emit `->` instead of `.`).
 isPtrVar: function {ctx: Ctx name: StringView} out bool is {
@@ -8888,32 +8906,36 @@ emitStmt: function {
     }
 }
 
-# resolveTypeIdByName -- a type id for a name: main-unit, then mono table,
-# then the cross-unit lookup. 0 when unresolved.
-resolveTypeIdByName: function {
+# resolveTypeIdByNameId -- a type id for an already-interned name (Ast.names
+# pool id): main-unit, then system, then the cross-unit lookup. 0 when
+# unresolved (incl. a 0 id -- a name not in the pool matches no child edge).
+# Every stage is id-keyed (childOfId); the name text is materialised only on
+# the rare composed-key fallback.
+resolveTypeIdByNameId: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    name: StringView
+    nameId: u32
 } out u64 is {
-    f: userFnId :ast :symtab :ctx :name
+    if nameId == 0 then return 0
+    f: userFnIdById :ast :symtab :ctx :nameId
     if f > 0 then return f
-    mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg :name
+    mo: ztypecheck.resolveSystemChildById :ast ty: symtab.typing reg: symtab.reg :nameId
     match (
         mo
     ) case some then {
         return mo
     } case none then null
-    lr9: optU64Or9 o: (ztypecheck.walkLookupTyperef
+    lr9: optU64Or9 o: (ztypecheck.walkLookupTyperefById
         :ast
         ty: symtab.typing
         reg: symtab.reg
         currentUnit: ctx.mainName.stringview
-        base: name
+        baseId: nameId
     )
     if lr9 > 0 then return lr9
     # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
-    # walkLookupTyperef's search list. Pass 1 probes each unit scope by id
+    # walkLookupTyperefById's search list. Pass 1 probes each unit scope by id
     # (no key composition); the composed-key resolvedByKey pass (which also
     # follows unit-level aliases) runs only when every direct probe missed.
     found2: u64
@@ -8923,7 +8945,7 @@ resolveTypeIdByName: function {
     ukn9: utids9.length
     for uki9 < ukn9 loop {
         if found2 == 0 then {
-            co9: symtab.typing.childOf pool: ast.names parentTypeId: (utids9.get i: uki9) :name
+            co9: symtab.typing.childOfId parentTypeId: (utids9.get i: uki9) nameId: nameId.u64
             match (
                 co9
             ) case some then {
@@ -8933,6 +8955,7 @@ resolveTypeIdByName: function {
         uki9 = uki9 + 1
     }
     if found2 == 0 then {
+        nmTxt9: zast.poolTextCopy pool: ast.names ref: nameId
         uks9: (List String)
         with uit2: symtab.reg.unitNameTid.iterateItems do for ue2: uit2 loop {
             ukc9: ue2.key.copy
@@ -8943,7 +8966,7 @@ resolveTypeIdByName: function {
         for uki8 < ukn8 loop {
             if found2 == 0 then {
                 uk9: uks9.get i: uki8
-                k2: "\{uk9}.\{name}"
+                k2: "\{uk9}.\{nmTxt9}"
                 r2: (ztypecheck.resolvedByKey
                     :ast
                     ty: symtab.typing
@@ -8960,6 +8983,21 @@ resolveTypeIdByName: function {
         }
     }
     return found2
+}
+
+# resolveTypeIdByName -- text entry point: intern-probe the name to a pool id
+# (a name not in the pool matches no interned child edge, so 0 resolves to 0,
+# preserving the old text behaviour) and resolve id-keyed. The per-stage
+# StringPool.find the old body paid once per stage collapses to this single
+# probe.
+resolveTypeIdByName: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    name: StringView
+} out u64 is {
+    nid9: (zast.poolFind pool: ast.names text: name)
+    return (resolveTypeIdByNameId :ast :symtab :ctx nameId: nid9)
 }
 
 # fnReturnTidOf -- the registry-recorded return tid for a FUNCTION id, 0 when
