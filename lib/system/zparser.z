@@ -238,23 +238,11 @@ isValidUnitName: function {name: StringView} out bool is {
     return true
 }
 
-# FileSeg -- one parsed file's contiguous nodeid range [startId, endId) and
-# its VFS fsno. Subunit loads nest child ranges inside the parent's; the
-# innermost containing range wins (fsnoForNode).
-FileSeg: class {
-    startId: u32
-    endId: u32
-    fsno: u32
-}
-
 Parser: class {
     # Monotonic source-node id, assigned in parse order.
     nextNodeId: u32
     # Nesting depth of function bodies (reserved for later slices).
     functionBodyDepth: u32
-    # Per-file nodeid segments: diagnostics map an erroring node back to
-    # the file whose parse allocated it.
-    fileSegs: (List FileSeg)
     # Master node table: one slot per minted id (a reserved slot holds
     # the payload-less placeholder arm until a converted parent moves
     # the real child in).
@@ -264,7 +252,6 @@ Parser: class {
         return (meta.create
             nextNodeId: 1
             functionBodyDepth: 0
-            fileSegs: (List FileSeg)
             ast: Ast.create
         )
     }
@@ -288,32 +275,6 @@ Parser: class {
         return (this.ast.names.set s: name)
     }
 
-    # fsnoForNode -- the fsno of the file whose parse allocated `nodeid`:
-    # the innermost containing segment (subunit ranges nest inside their
-    # parent's, so the largest containing startId wins). 0 when no segment
-    # contains it (synthesized nodes minted after parsing).
-    fsnoForNode: function {:this nodeid: u32} out u32 is {
-        best9: u32
-        bestStart9: u32
-        n9: this.fileSegs.length
-        i9: u64
-        for i9 < n9 loop {
-            sg9: this.fileSegs.get i: i9
-            i9 = i9 + 1
-            if sg9.startId <= nodeid when nodeid < sg9.endId then {
-                if best9 == 0 then {
-                    best9 = sg9.fsno
-                    bestStart9 = sg9.startId
-                } else {
-                    if sg9.startId >= bestStart9 then {
-                        best9 = sg9.fsno
-                        bestStart9 = sg9.startId
-                    }
-                }
-            }
-        }
-        return best9
-    }
 
     # Build an error node located at `tok`.
     # isReservedWordTok -- true when tok names a keyword or a future-reserved
@@ -3252,7 +3213,11 @@ Parser: class {
                     msg: "Expected EOF at end of unit file".string
                 )
             } case some then null
-            this.fileSegs.append (FileSeg startId: segStart9 endId: this.nextNodeId fsno: fsid)
+            this.ast.fileSegs.append (zast.FileSeg
+                startId: segStart9
+                endId: this.nextNodeId
+                fsno: fsid
+            )
             ewBindNameIds ast: this.ast scope: outNames items: body
             raw: collectExterns ast: this.ast :body
             dirid: vfs.walk parent: parentid name: unitname.stringview

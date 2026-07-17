@@ -411,6 +411,15 @@ LabelValueData: class {
 # every occurrence of an identifier shares one String (position = first
 # sight). The parser interns; synthesized atoms append via
 # tableAppendRebase.
+# FileSeg -- one parsed file's contiguous nodeid range [startId, endId) and
+# its VFS fsno. Subunit loads nest child ranges inside the parent's; the
+# innermost containing range wins (fsnoForNode).
+FileSeg: class {
+    startId: u32
+    endId: u32
+    fsno: u32
+}
+
 # Ast -- the parse artifact carrier threaded through every reader: the
 # master node table, plus (as the carrier grows) the other tree-scoped
 # state produced by parsing.
@@ -418,9 +427,43 @@ Ast: class {
     nodes: (List Node)
     names: StringPool
     units: (List u32)
+    # Per-file nodeid segments: diagnostics map an erroring node back to
+    # the file whose parse allocated it.
+    fileSegs: (List FileSeg)
 } as {
     create: function {} out this is {
-        return (meta.create nodes: (List Node) names: StringPool.create units: (List u32))
+        return (meta.create
+            nodes: (List Node)
+            names: StringPool.create
+            units: (List u32)
+            fileSegs: (List FileSeg)
+        )
+    }
+    # fsnoForNode -- the fsno of the file whose parse allocated `nodeid`:
+    # the innermost containing segment (subunit ranges nest inside their
+    # parent's, so the largest containing startId wins). 0 when no segment
+    # contains it (synthesized nodes minted after parsing).
+    fsnoForNode: function {:this nodeid: u32} out u32 is {
+        best9: u32
+        bestStart9: u32
+        n9: this.fileSegs.length
+        i9: u64
+        for i9 < n9 loop {
+            sg9: this.fileSegs.get i: i9
+            i9 = i9 + 1
+            if sg9.startId <= nodeid when nodeid < sg9.endId then {
+                if best9 == 0 then {
+                    best9 = sg9.fsno
+                    bestStart9 = sg9.startId
+                } else {
+                    if sg9.startId >= bestStart9 then {
+                        best9 = sg9.fsno
+                        bestStart9 = sg9.startId
+                    }
+                }
+            }
+        }
+        return best9
     }
 }
 

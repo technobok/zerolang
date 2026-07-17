@@ -9,6 +9,18 @@
 
 Node: zast.Node
 
+# fsnoFor -- nodeid -> fsno through the snapshot: the program's carrier
+# on a successful parse, the parser's partial carrier on a parse error.
+fsnoFor: function {r: CheckResult nodeid: u32} out u32 is {
+    pg9: r.prog
+    match (
+        pg9
+    ) case program then {
+        return (pg9.ast.fsnoForNode :nodeid)
+    } else null
+    return (r.parser.ast.fsnoForNode :nodeid)
+}
+
 # One check pass over one main unit. On a parse failure `prog` is the
 # parser's error node and `st` is none; otherwise `prog` is the program
 # root and `st` carries the symbol table whose `typing.errors` holds
@@ -114,7 +126,7 @@ diagsOf: function {r: CheckResult rows: (List diagrow) msgs: (List String)} is {
     if r.parseOk == false then {
         appendParseError n: r.prog :rows :msgs
     }
-    diagsOfSt o: r.st :rows :msgs parser: r.parser
+    diagsOfSt o: r.st :rows :msgs :r
 }
 
 appendParseError: function {n: Node rows: (List diagrow) msgs: (List String)} is {
@@ -147,7 +159,7 @@ diagsOfSt: function {
     o: (Option zenv.ZSymbolTable)
     rows: (List diagrow)
     msgs: (List String)
-    parser: zparser.Parser
+    r: CheckResult
 } is {
     match (
         o
@@ -155,7 +167,7 @@ diagsOfSt: function {
         with eit: o.typing.errors.iterate do for er: eit loop {
             fno: er.fsno
             if fno == 0 when er.nodeid > 0 then {
-                sf: parser.fsnoForNode nodeid: er.nodeid
+                sf: fsnoFor :r nodeid: er.nodeid
                 if sf > 0 then fno = sf
             }
             m: er.msg.copy
