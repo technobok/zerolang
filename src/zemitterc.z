@@ -16,6 +16,26 @@ wkReturn: 2.u32
 wkBreak: 3.u32
 wkContinue: 4.u32
 
+# Well-known member-name pool ids (zast.z is the authority; append-only),
+# widened to u64 for ZTypeChild.nameId keys.
+wkCreate: 5.u64
+wkCall: 7.u64
+wkGet: 8.u64
+wkSet: 9.u64
+wkRemove: 11.u64
+wkAdd: 12.u64
+wkContains: 13.u64
+wkSort: 14.u64
+wkKey: 18.u64
+wkValue: 19.u64
+wkItem: 20.u64
+wkSome: 21.u64
+wkStringview: 25.u64
+wkListview: 26.u64
+wkIterate: 27.u64
+wkIterateItems: 28.u64
+wkOpEq: 29.u64
+
 
 # TmpCtr -- per-function temp name counter.
 TmpCtr: class {
@@ -1252,7 +1272,7 @@ implicitTakeFnId: function {
     xq219: ast.nodes.get i: (call.callable - 1).u64
     if ct == 0 then return (stampIdOf :symtab nid: (nodeIdOf9 n: xq219))
     if (symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.functionType then return ct
-    cco: symtab.typing.childOf parentTypeId: ct name: "create"
+    cco: symtab.typing.childOfId parentTypeId: ct nameId: wkCreate
     match (
         cco
     ) case some then {
@@ -3798,7 +3818,7 @@ emitCtorDefaultsFill: function {
     ctx: Ctx
     tid: u64
 } out String is {
-    cco: symtab.typing.childOf parentTypeId: tid name: "create"
+    cco: symtab.typing.childOfId parentTypeId: tid nameId: wkCreate
     match (
         cco
     ) case some then {
@@ -3877,7 +3897,7 @@ emitRecordCtor: function {
 } out String is {
     # a user-defined `create` (non-empty params) overrides the field-wise ctor:
     # bare-name construction routes through it, args by the create's own labels.
-    cco: symtab.typing.childOf parentTypeId: tid name: "create"
+    cco: symtab.typing.childOfId parentTypeId: tid nameId: wkCreate
     match (
         cco
     ) case some then {
@@ -4852,7 +4872,7 @@ emitCrossUnitBareCreate: function {ast: Ast
         tid9 = go9
     } case none then null
     if tid9 == 0 then return "".string
-    cco9: symtab.typing.childOf parentTypeId: tid9 name: "create"
+    cco9: symtab.typing.childOfId parentTypeId: tid9 nameId: wkCreate
     match (
         cco9
     ) case some then {
@@ -4887,7 +4907,7 @@ emitCrossUnitExplicitCreate: function {
         tid = go
     } case none then null
     if tid == 0 then return "".string
-    cco: symtab.typing.childOf parentTypeId: tid name: "create"
+    cco: symtab.typing.childOfId parentTypeId: tid nameId: wkCreate
     match (
         cco
     ) case some then {
@@ -7325,7 +7345,7 @@ emitPrintArg: function {
                 buf.append lpstr9.stringview
                 return
             }
-            svco: symtab.typing.childOf parentTypeId: argTid name: "stringview"
+            svco: symtab.typing.childOfId parentTypeId: argTid nameId: wkStringview
             match (
                 svco
             ) case some then {
@@ -9672,18 +9692,6 @@ emitIfBindValue: function {
     }
 }
 
-# childExists -- does the type have a child of this name.
-childExists: function {symtab: zenv.ZSymbolTable tid: u64 name: StringView} out bool is {
-    co: symtab.typing.childOf parentTypeId: tid :name
-    match (
-        co
-    ) case some then {
-        return true
-    } case none then {
-        return false
-    }
-}
-
 # loopVarTypeName -- the yield type name of an iterator loop, read from
 # the loop variable's first stamped reference in the body ("" if none).
 loopVarTypeName: function {
@@ -9827,7 +9835,7 @@ emitObjIterFor: function {
                     brt9 = mro9
                 } case none then null
             }
-            if brt9 > 0 when (childExists :symtab tid: brt9 name: "call") then {
+            if brt9 > 0 when (symtab.typing.hasChildId parentTypeId: brt9 nameId: wkCall) then {
                 itid = brt9
                 bareFnId9 = itid0
             }
@@ -9844,10 +9852,10 @@ emitObjIterFor: function {
             match (
                 cano
             ) case some then {
-                if (childExists :symtab tid: cano name: "call") then itid = cano
+                if (symtab.typing.hasChildId parentTypeId: cano nameId: wkCall) then itid = cano
             } case none then null
         }
-        cco: symtab.typing.childOf parentTypeId: itid name: "call"
+        cco: symtab.typing.childOfId parentTypeId: itid nameId: wkCall
         match (
             cco
         ) case some then {
@@ -9989,7 +9997,10 @@ emitObjIterFor: function {
                 # are never double-freed).
                 payElemPfx: oovorig.length + 1
                 payElemName: monoElemName full: ovn prefixLen: payElemPfx
-                payElemTid9: optU64Or9 o: (symtab.typing.childOf parentTypeId: ovid name: "some")
+                payElemTid9: optU64Or9 o: (symtab.typing.childOfId
+                    parentTypeId: ovid
+                    nameId: wkSome
+                )
                 payScalarC: (cTypeForNameTid
                     :symtab
                     :ctx
@@ -14248,7 +14259,7 @@ monoOriginName: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
 # listElemType -- a List/ListView mono's element type id (the get-child
 # return), 0 when absent.
 listElemType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
-    go: symtab.typing.childOf parentTypeId: monoId name: "get"
+    go: symtab.typing.childOfId parentTypeId: monoId nameId: wkGet
     match (
         go
     ) case some then {
@@ -14296,7 +14307,7 @@ emitArrayMono: function {
     lenStr: monoElemName full: mn prefixLen: lenPfx
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
-    eqo: symtab.typing.childOf parentTypeId: monoId name: "=="
+    eqo: symtab.typing.childOfId parentTypeId: monoId nameId: wkOpEq
     match (
         eqo
     ) case some then {
@@ -14352,7 +14363,7 @@ emitStrMono: function {
     capStr: monoElemName full: mn prefixLen: 4
     lenT: capLenT cap: capStr.stringview
     eqBody: String
-    eqo: symtab.typing.childOf parentTypeId: monoId name: "=="
+    eqo: symtab.typing.childOfId parentTypeId: monoId nameId: wkOpEq
     match (
         eqo
     ) case some then {
@@ -14439,7 +14450,7 @@ emitListMono: function {
         buf.append t4.stringview
         buf.append "\n"
     }
-    co: symtab.typing.childOf parentTypeId: monoId name: "contains"
+    co: symtab.typing.childOfId parentTypeId: monoId nameId: wkContains
     match (
         co
     ) case some then {
@@ -14457,7 +14468,7 @@ emitListMono: function {
         buf.append "    return false;\n"
         buf.append "}\n\n"
     } case none then null
-    so: symtab.typing.childOf parentTypeId: monoId name: "sort"
+    so: symtab.typing.childOfId parentTypeId: monoId nameId: wkSort
     match (
         so
     ) case some then {
@@ -14484,14 +14495,14 @@ emitListIter: function {
     elemName: StringView
     buf: String.borrow
 } is {
-    liId: monoMethodReturn :symtab :monoId mname: "iterate"
+    liId: monoMethodReturn :symtab :monoId nameId: wkIterate
     if liId == 0 then {
         liNameF: "ListIter_\{elemName}"
         liId = monoIdByName :symtab name: liNameF.stringview
     }
     if liId == 0 then return
     liName: typeNameOfReg9 :symtab tid: liId
-    ovId: monoMethodReturn :symtab monoId: liId mname: "call"
+    ovId: monoMethodReturn :symtab monoId: liId nameId: wkCall
     if ovId == 0 then {
         ovNameF: "OptionView_\{elemName}"
         ovId = monoIdByName :symtab name: ovNameF.stringview
@@ -14604,7 +14615,7 @@ listviewMethods: function {
     nm: StringView
     ect: StringView
 } out String is {
-    lo: symtab.typing.childOf parentTypeId: monoId name: "listview"
+    lo: symtab.typing.childOfId parentTypeId: monoId nameId: wkListview
     match (
         lo
     ) case some then {
@@ -14838,8 +14849,8 @@ monoIdByName: function {symtab: zenv.ZSymbolTable name: StringView} out u64 is {
 # monoMethodReturn -- a mono method child's registered return id (0 when the
 # method or its return is absent). The id-first way to reach a collection's
 # iterator/view/wrapper companions.
-monoMethodReturn: function {symtab: zenv.ZSymbolTable monoId: u64 mname: StringView} out u64 is {
-    co: symtab.typing.childOf parentTypeId: monoId name: mname
+monoMethodReturn: function {symtab: zenv.ZSymbolTable monoId: u64 nameId: u64} out u64 is {
+    co: symtab.typing.childOfId parentTypeId: monoId :nameId
     match (
         co
     ) case some then {
@@ -14965,14 +14976,14 @@ emitSetMono: function {
     itemT: cTypeForNameTid :symtab :ctx name: elemName.stringview tid: elemTid
     ekind: keyHashKind :symtab :ctx tid: elemTid
     isStr: ekind == 1
-    siId: monoMethodReturn :symtab :monoId mname: "iterate"
+    siId: monoMethodReturn :symtab :monoId nameId: wkIterate
     if siId == 0 then {
         siNameF: "SetIter_\{elemName}"
         siId = monoIdByName :symtab name: siNameF.stringview
     }
     if siId == 0 then return
     siName: typeNameOfReg9 :symtab tid: siId
-    ovId: monoMethodReturn :symtab monoId: siId mname: "call"
+    ovId: monoMethodReturn :symtab monoId: siId nameId: wkCall
     if ovId == 0 then {
         ovNameF: "OptionView_\{elemName}"
         ovId = monoIdByName :symtab name: ovNameF.stringview
@@ -15080,28 +15091,28 @@ emitMapIters: function {
     valT: StringView
     buf: String.borrow
 } is {
-    miiId: monoMethodReturn :symtab :monoId mname: "iterateItems"
+    miiId: monoMethodReturn :symtab :monoId nameId: wkIterateItems
     if miiId == 0 then {
         miiNameF: "MapItemIter_\{keyName}_\{valName}"
         miiId = monoIdByName :symtab name: miiNameF.stringview
     }
     if miiId == 0 then return
     miiName: typeNameOfReg9 :symtab tid: miiId
-    mkiId: monoMethodReturn :symtab :monoId mname: "iterate"
+    mkiId: monoMethodReturn :symtab :monoId nameId: wkIterate
     if mkiId == 0 then {
         mkiNameF: "MapKeyIter_\{keyName}_\{valName}"
         mkiId = monoIdByName :symtab name: mkiNameF.stringview
     }
     if mkiId == 0 then return
     mkiName: typeNameOfReg9 :symtab tid: mkiId
-    ovkId: monoMethodReturn :symtab monoId: mkiId mname: "call"
+    ovkId: monoMethodReturn :symtab monoId: mkiId nameId: wkCall
     if ovkId == 0 then {
         ovkNameF: "OptionView_\{keyName}"
         ovkId = monoIdByName :symtab name: ovkNameF.stringview
     }
     if ovkId == 0 then return
     ovkName: typeNameOfReg9 :symtab tid: ovkId
-    oveId: monoMethodReturn :symtab monoId: miiId mname: "call"
+    oveId: monoMethodReturn :symtab monoId: miiId nameId: wkCall
     if oveId == 0 then {
         oveNameF: "OptionView_MapEntry_\{keyName}_\{valName}"
         oveId = monoIdByName :symtab name: oveNameF.stringview
@@ -15109,7 +15120,7 @@ emitMapIters: function {
     if oveId == 0 then return
     oveName: typeNameOfReg9 :symtab tid: oveId
     meId: u64
-    meo: symtab.typing.childOf parentTypeId: oveId name: "some"
+    meo: symtab.typing.childOfId parentTypeId: oveId nameId: wkSome
     match (
         meo
     ) case some then {
@@ -15152,11 +15163,11 @@ emitMapIters: function {
 # mapValType -- the canonical Map value type id, off the "set" method's "value"
 # param (mirrors listElemType). 0 when absent.
 mapKeyType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
-    so: symtab.typing.childOf parentTypeId: monoId name: "set"
+    so: symtab.typing.childOfId parentTypeId: monoId nameId: wkSet
     match (
         so
     ) case some then {
-        ko: symtab.typing.childOf parentTypeId: so name: "key"
+        ko: symtab.typing.childOfId parentTypeId: so nameId: wkKey
         match (
             ko
         ) case some then {
@@ -15167,11 +15178,11 @@ mapKeyType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
 }
 
 setElemType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
-    ao: symtab.typing.childOf parentTypeId: monoId name: "add"
+    ao: symtab.typing.childOfId parentTypeId: monoId nameId: wkAdd
     match (
         ao
     ) case some then {
-        io: symtab.typing.childOf parentTypeId: ao name: "item"
+        io: symtab.typing.childOfId parentTypeId: ao nameId: wkItem
         match (
             io
         ) case some then {
@@ -15182,11 +15193,11 @@ setElemType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
 }
 
 mapValType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
-    so: symtab.typing.childOf parentTypeId: monoId name: "set"
+    so: symtab.typing.childOfId parentTypeId: monoId nameId: wkSet
     match (
         so
     ) case some then {
-        vo: symtab.typing.childOf parentTypeId: so name: "value"
+        vo: symtab.typing.childOfId parentTypeId: so nameId: wkValue
         match (
             vo
         ) case some then {
@@ -15207,7 +15218,7 @@ emitMapMono: function {
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
     mcr: cUpperOf text: nm.stringview
     ovId: u64
-    go: symtab.typing.childOf parentTypeId: monoId name: "get"
+    go: symtab.typing.childOfId parentTypeId: monoId nameId: wkGet
     match (
         go
     ) case some then {
@@ -15274,7 +15285,7 @@ emitMapMono: function {
         getBody = gbR
     }
     rmWrapId9: u64
-    roMm9: symtab.typing.childOf parentTypeId: monoId name: "remove"
+    roMm9: symtab.typing.childOfId parentTypeId: monoId nameId: wkRemove
     match (
         roMm9
     ) case some then {
@@ -16170,7 +16181,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
 # resolve the value via the get-return OptionView's element name and the key via
 # the mangled-name remainder, mirroring emitMapMono.
 monoMapKV: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
-    go: symtab.typing.childOf parentTypeId: monoId name: "get"
+    go: symtab.typing.childOfId parentTypeId: monoId nameId: wkGet
     match (
         go
     ) case some then {
@@ -18233,7 +18244,7 @@ emitIoWrapperCreate: function {
     wid: resolveTypeIdByName :symtab :ctx name: wn.stringview
     if wid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: wid) != ztypes.ztypetype.classType then return "".string
-    cco: symtab.typing.childOf parentTypeId: wid name: "create"
+    cco: symtab.typing.childOfId parentTypeId: wid nameId: wkCreate
     cid: u64
     match (
         cco
@@ -18574,7 +18585,7 @@ emitCliSpecCreate: function {
     if cn.length == 0 then return "".string
     cid: cliClassTypeId :symtab :ctx name: cn.stringview
     if cid == 0 then return "".string
-    cco: symtab.typing.childOf parentTypeId: cid name: "create"
+    cco: symtab.typing.childOfId parentTypeId: cid nameId: wkCreate
     crid: u64
     match (
         cco
@@ -18677,14 +18688,14 @@ emitUserIterCall: function {
     match (
         cano9
     ) case some then {
-        if (childExists :symtab tid: cano9 name: "call") then iterId = cano9
+        if (symtab.typing.hasChildId parentTypeId: cano9 nameId: wkCall) then iterId = cano9
     } case none then null
     if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.classType then return "".string
     itorig9: monoOriginName :symtab tid: iterId
     if itorig9.length != 0 then return "".string
     itn9: typeNameOfReg9 :symtab tid: iterId
     if (userFnId :symtab :ctx name: itn9.stringview) <= 0 then return "".string
-    cco9: symtab.typing.childOf parentTypeId: iterId name: "call"
+    cco9: symtab.typing.childOfId parentTypeId: iterId nameId: wkCall
     match (
         cco9
     ) case some then {
