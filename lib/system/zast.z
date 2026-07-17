@@ -418,6 +418,119 @@ NameEntryData: class {
     text: String
 }
 
+# StringPool -- deduplicating intern table for identifier text. ids are
+# 1-based (0 = absent); texts are never removed, so an id stays valid for
+# the pool's lifetime. The slot index is an open-addressed, linear-probed
+# power-of-two table keyed by the seeded StringView hash: ids follow
+# insertion order and are deterministic, but slot layout is process-local
+# -- dump text, never hashes.
+StringPool: class {
+    texts: (List String)
+    slots: (List u32)
+    used: u64
+} as {
+    create: function {} out this is {
+        return (meta.create
+            texts: (List String)
+            slots: (List u32)
+            used: 0
+        )
+    }
+
+    # reserve -- grow the slot table when empty or at 2/3 load.
+    reserve: function {:this} is {
+        if this.slots.length == 0 then {
+            this.rebuild ncap: 16
+            return
+        }
+        if (this.used + 1) * 3 >= (this.slots.length * 2) then {
+            this.rebuild ncap: this.slots.length * 2
+        }
+    }
+
+    # rebuild -- swap in a slot table of ncap (a power of two), re-probing
+    # every interned text.
+    rebuild: function {:this ncap: u64} is {
+        ns: (List u32 capacity: ncap)
+        i: u64
+        for i < ncap loop {
+            ns.append 0
+            i = i + 1
+        }
+        mask: ncap - 1
+        k: u64
+        for k < this.texts.length loop {
+            t9: this.texts.get i: k
+            hv: t9.stringview.hash
+            idx: hv & mask
+            for (ns.get i: idx) != 0 loop idx = (idx + 1) & mask
+            ns.set i: idx val: (k + 1).u32
+            k = k + 1
+        }
+        this.slots = ns
+    }
+
+    # probeSlot -- the slot index for s: either holds s's id or is the
+    # empty slot where s would insert. Requires a non-empty slot table.
+    probeSlot: function {:this s: StringView} out u64 is {
+        mask: this.slots.length - 1
+        idx: s.hash & mask
+        for true loop {
+            sid: this.slots.get i: idx
+            if sid == 0 then return idx
+            t9: this.texts.get i: (sid - 1).u64
+            if t9.stringview == s then return idx
+            idx = (idx + 1) & mask
+        }
+        return 0
+    }
+
+    # set -- intern s, copying the bytes only on first sight.
+    set: function {:this s: StringView} out u32 is {
+        this.reserve
+        si: this.probeSlot :s
+        sid: this.slots.get i: si
+        if sid > 0 then return sid
+        this.texts.append s.string
+        nid: this.texts.length.u32
+        this.slots.set i: si val: nid
+        this.used = this.used + 1
+        return nid
+    }
+
+    # setOwned -- intern a donated owned string: moved in on first sight,
+    # dropped when the text is already interned.
+    setOwned: function {:this s: String.take} out u32 is {
+        this.reserve
+        si: this.probeSlot s: s.stringview
+        sid: this.slots.get i: si
+        if sid > 0 then return sid
+        this.texts.append s
+        nid: this.texts.length.u32
+        this.slots.set i: si val: nid
+        this.used = this.used + 1
+        return nid
+    }
+
+    # get -- an owned copy of id's text; panics on an out-of-range id.
+    get: function {:this id: u32} out String is {
+        t9: this.texts.get i: (id - 1).u64
+        return t9.copy
+    }
+
+    # eq -- does id's text equal s? Zero-allocation compare; id 0 (absent)
+    # equals only the empty view.
+    eq: function {:this id: u32 s: StringView} out bool is {
+        if id == 0 then return s.length == 0
+        t9: this.texts.get i: (id - 1).u64
+        return t9.stringview == s
+    }
+
+    length: function {:this} out u64 is {
+        return this.texts.length
+    }
+}
+
 StringChunkData: class {
     nodeid: u32
     lineno: u32
@@ -2125,6 +2238,29 @@ main: function is {
         nodes: (List Node)
     )
     printNode :nodes n: n27
+
+    sp9: StringPool
+    spa9: sp9.set s: "alpha"
+    spb9: sp9.set s: "beta"
+    spa2: sp9.set s: "alpha"
+    print "pool alpha=\{spa9} beta=\{spb9} alphaAgain=\{spa2} len=\{sp9.length}"
+    spo9: "gamma".string
+    spg9: sp9.setOwned s: spo9
+    spg2: sp9.setOwned s: "alpha".string
+    spt9: sp9.get id: spg9
+    print "pool gamma=\{spg9} alphaOwned=\{spg2} text=\{spt9}"
+    if (sp9.eq id: spa9 s: "alpha") then print "pool eq alpha ok"
+    if (sp9.eq id: spa9 s: "beta") == false then print "pool neq beta ok"
+    if (sp9.eq id: 0 s: "") then print "pool eq absent ok"
+    spi9: u64
+    for spi9 < 20 loop {
+        spn9: "k\{spi9}"
+        sp9.setOwned s: spn9
+        spi9 = spi9 + 1
+    }
+    spk3: sp9.set s: "k3"
+    spk19: sp9.get id: (sp9.set s: "k19")
+    print "pool grown len=\{sp9.length} k3=\{spk3} k19=\{spk19}"
 }
 
 # printNodeCanonicalAt -- print the row an id names. The row view is this
