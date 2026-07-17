@@ -1209,16 +1209,6 @@ Spans: class {
     }
 }
 
-# optLabel -- a namedoperation's label text ("" when absent).
-optLabel: function {o: (Option String)} out String is {
-    match (
-        o
-    ) case some then {
-        return o.copy
-    } case none then {
-        return "".string
-    }
-}
 
 # docLine -- 1-based line `lineno` of `text` (without the newline).
 docLine: function {text: StringView lineno: u32} out String is {
@@ -1513,13 +1503,13 @@ memberIn: function {
         iit9: op.isItems.iterate
         for ii9Id9: iit9 loop {
             ii9: ast.nodes.get i: (ii9Id9 - 1).u64
-            m9: (memberLabelId m: ii9 :name)
+            m9: (memberLabelId :ast m: ii9 :name)
             if m9 > 0 then return m9
         }
         ait9: op.asItems.iterate
         for ai9Id9: ait9 loop {
             ai9: ast.nodes.get i: (ai9Id9 - 1).u64
-            m2: (memberLabelId m: ai9 :name)
+            m2: (memberLabelId :ast m: ai9 :name)
             if m2 > 0 then return m2
         }
         return wrapperId.u64
@@ -1528,12 +1518,11 @@ memberIn: function {
     }
 }
 
-memberLabelId: function {m: zast.Node name: StringView} out u64 is {
+memberLabelId: function {ast: Ast m: zast.Node name: StringView} out u64 is {
     match (
         m
     ) case namedoperation then {
-        lb9: optLabel o: m.name
-        if lb9.stringview == name then return m.nodeid.u64
+        if (zast.nameTextEq :ast ref: m.name s: name) then return m.nodeid.u64
         return 0
     } else {
         return 0
@@ -1849,7 +1838,7 @@ unitGenericParamsOf: function {ast: Ast udId: u32} out String is {
                     :ast
                     op: (ast.nodes.get i: (gm9.operation - 1).u64)
                 ) then {
-                    gpn9: optLabel o: gm9.name
+                    gpn9: zast.nameTextCopy :ast ref: gm9.name
                     if out9.length == 0 then out9.append " {"
                     if out9.length > 2 then out9.append " "
                     out9.append gpn9.stringview
@@ -1876,7 +1865,7 @@ unitGenericSuffix: function {prog: zast.Node name: StringView} out String is {
             {
                 u9: prog.ast.nodes.get i: (u9Id9 - 1).u64
                 if u9.namedoperation then {
-                    lb9: optLabel o: u9.name
+                    lb9: zast.poolTextCopy pool: prog.ast.names ref: u9.name
                     if lb9.stringview == name then opId9 = u9.operation
                 }
             }
@@ -2241,7 +2230,7 @@ collectUnitSymbolsIn: function {
     match (
         w
     ) case namedoperation then {
-        lb9: optLabel o: w.name
+        lb9: zast.nameTextCopy :ast ref: w.name
         if lb9.stringview == unitName then (collectBodySymbols
             :ast
             ud: (ast.nodes.get i: (w.operation - 1).u64)
@@ -2277,7 +2266,7 @@ symbolOf: function {
     match (
         m
     ) case namedoperation then {
-        lb9: optLabel o: m.name
+        lb9: zast.nameTextCopy :ast ref: m.name
         if lb9.length == 0 then return
         k9: symbolKindOf op: (ast.nodes.get i: (m.operation - 1).u64)
         lt9: docLine text: docText lineno: m.lineno
@@ -2549,7 +2538,7 @@ collectUnitDefs: function {ast: Ast wId: u32 sink: (Map String value: u8)} is {
     match (
         w
     ) case namedoperation then {
-        ul9: optLabel o: w.name
+        ul9: zast.nameTextCopy :ast ref: w.name
         addCand :sink name: ul9.stringview kind: 9
         collectUnitDefsIn :ast ud: (ast.nodes.get i: (w.operation - 1).u64) :sink
     } else null
@@ -2568,7 +2557,7 @@ collectMemberDef: function {ast: Ast m: zast.Node sink: (Map String value: u8)} 
     match (
         m
     ) case namedoperation then {
-        lb9: optLabel o: m.name
+        lb9: zast.nameTextCopy :ast ref: m.name
         if lb9.length > 0 then {
             k9: defKindOf op: (ast.nodes.get i: (m.operation - 1).u64)
             addCand :sink name: lb9.stringview kind: k9
@@ -2614,7 +2603,7 @@ enclosingInUnit: function {
     match (
         w
     ) case namedoperation then {
-        ul9: optLabel o: w.name
+        ul9: zast.nameTextCopy :ast ref: w.name
         if ul9.stringview == unitName then return (enclosingInBody
             :ast
             ud: (ast.nodes.get i: (w.operation - 1).u64)
@@ -2686,16 +2675,16 @@ addFnParams: function {ast: Ast op: zast.Node sink: (Map String value: u8)} is {
         pit9: op.parameters.iterate
         for pm9Id9: pit9 loop {
             pm9: ast.nodes.get i: (pm9Id9 - 1).u64
-            addParamLabel pm: pm9 :sink
+            addParamLabel :ast pm: pm9 :sink
         }
     } else null
 }
 
-addParamLabel: function {pm: zast.Node sink: (Map String value: u8)} is {
+addParamLabel: function {ast: Ast pm: zast.Node sink: (Map String value: u8)} is {
     match (
         pm
     ) case namedoperation then {
-        pl9: optLabel o: pm.name
+        pl9: zast.nameTextCopy :ast ref: pm.name
         addCand :sink name: pl9.stringview kind: 6
     } else null
 }
@@ -2810,7 +2799,7 @@ addUnitMembers: function {prog: zast.Node name: StringView sink: (Map String val
             match (
                 u9
             ) case namedoperation then {
-                lb9: optLabel o: u9.name
+                lb9: zast.poolTextCopy pool: prog.ast.names ref: u9.name
                 if lb9.stringview == name then (collectUnitDefsIn
                     ast: prog.ast
                     ud: (prog.ast.nodes.get i: (u9.operation - 1).u64)

@@ -35,30 +35,6 @@ wkSome: 21.u64
 wkTag: 22.u64
 wkOpEq: 29.u64
 
-
-# unitLabel -- a unit/definition namedoperation label as an owned String
-# ("" when the operation carries no label).
-unitLabel: function {o: Option String} out String is {
-    match (
-        o
-    ) case some then {
-        return o.copy
-    } case none then {
-        return "".string
-    }
-}
-
-# labelIs -- compare a namedoperation label without materializing it.
-labelIs: function {o: Option String name: StringView} out bool is {
-    match (
-        o
-    ) case some then {
-        return o.stringview == name
-    } case none then {
-        return name.length == 0
-    }
-}
-
 # unitdefNodeId -- the nodeid of the unit row an id names (0 when the id does
 # not name a unit). The row view is scoped to the fetch.
 unitdefNodeId: function {ast: Ast nId: u32} out u32 is {
@@ -779,7 +755,7 @@ populatePreludeBody: function {
     with bit: bodyIds9.iterate do for bmId9: bit loop {
         bm: ast.nodes.get i: (bmId9 - 1).u64
         if bm.namedoperation then {
-            dn: unitLabel o: bm.name
+            dn: zast.nameTextCopy :ast ref: bm.name
             atgt0: dottedDefTarget :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
             if atgt0.length > 0 then {
                 ps0: String
@@ -812,8 +788,12 @@ populatePrelude: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             {
                 ru: program.ast.nodes.get i: (ruId9 - 1).u64
                 if ru.namedoperation then {
-                    unm: unitLabel o: ru.name
-                    if unm.stringview == "core" then opId9 = ru.operation
+                    isCore9: (zast.poolTextEq
+                        pool: program.ast.names
+                        ref: ru.name
+                        s: "core"
+                    )
+                    if isCore9 then opId9 = ru.operation
                 }
             }
             if opId9 > 0 then {
@@ -848,7 +828,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping program: Node} is {
             {
                 ru: program.ast.nodes.get i: (ruId9 - 1).u64
                 if ru.namedoperation then {
-                    unm: unitLabel o: ru.name
+                    unm: zast.poolTextCopy pool: program.ast.names ref: ru.name
                     opId9 = ru.operation
                     unm9 = unm.copy
                 }
@@ -883,7 +863,7 @@ indexUnitBody: function {
         with bit: bodyIds9.iterate do for bmId9: bit loop {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             if bm.namedoperation then {
-                dn: unitLabel o: bm.name
+                dn: zast.nameTextCopy :ast ref: bm.name
                 tto: (defTypetypeOf
                     :ast
                     defn: (ast.nodes.get i: (bm.operation - 1).u64)
@@ -1379,7 +1359,7 @@ mainBodyMentions: function {ast: Ast unitBody: List u32 name: StringView} out bo
             match (
                 mm
             ) case namedoperation then {
-                if (labelIs o: mm.name name: "main") then return (fnBodyMentions
+                if (zast.nameTextEq :ast ref: mm.name s: "main") then return (fnBodyMentions
                     :ast
                     op: (ast.nodes.get i: (mm.operation - 1).u64)
                     :name
@@ -1487,7 +1467,7 @@ registerGenericParamOne: function {
         m
     ) case namedoperation then {
         if (isGenericParam :ast op: (ast.nodes.get i: (m.operation - 1).u64)) then {
-            pn: unitLabel o: m.name
+            pn: zast.nameTextCopy :ast ref: m.name
             cb: genericConstraintBase :ast n: (ast.nodes.get i: (m.operation - 1).u64)
             ckx9: genericConstraintKind :ast n: (ast.nodes.get i: (m.operation - 1).u64)
             cf9x: cb.copy
@@ -1838,7 +1818,7 @@ resolveMonoRefParts: function {
                     match (
                         pdv9
                     ) case some then {
-                        vpn9: unitLabel o: arg9.name
+                        vpn9: zast.nameTextCopy :ast ref: arg9.name
                         vsk9: vpn9.copy
                         vsv9: pdv9
                         valSubsR9.set key: vsk9 value: vsv9
@@ -1937,7 +1917,7 @@ resolveMonoRefParts: function {
                         vn9: monoValName :ast :ty :reg tid: aid9
                         sfx9.append s: vn9.stringview
                         if firstA9 == 0 then firstA9 = aid9
-                        pn9: unitLabel o: arg9.name
+                        pn9: zast.nameTextCopy :ast ref: arg9.name
                         sk9: pn9.copy
                         sv9: aid9
                         subs9.set key: sk9 value: sv9
@@ -2896,7 +2876,7 @@ resolveFunction: function {
                 am
             ) case namedoperation then {
                 if (isGenericParam :ast op: (ast.nodes.get i: (am.operation - 1).u64)) then {
-                    apn: unitLabel o: am.name
+                    apn: zast.nameTextCopy :ast ref: am.name
                     ty.setGenericArg parentTypeId: fid paramName: apn.stringview argTypeId: 0
                 }
             } else null
@@ -2946,7 +2926,7 @@ resolveFunction: function {
                     # No node stamp (fn monos re-walk the SHARED template
                     # AST) and no typeref/demand recording (a user type
                     # coincidentally named like the param must not bind).
-                    pnameF9: unitLabel o: pm.name
+                    pnameF9: zast.nameTextCopy :ast ref: pm.name
                     fpt9: u64
                     fpo9: reg.genericParamTidOf typeKey: fnKey9.stringview paramName: ptn.stringview
                     match (
@@ -3001,7 +2981,7 @@ resolveFunction: function {
                     ty.nodeType.set key: pnid2.u64 value: gpv2b
                 }
             } else {
-                pname: unitLabel o: pm.name
+                pname: zast.nameTextCopy :ast ref: pm.name
                 cid: (resolveTyperefShell
                     :ty
                     :reg
@@ -3369,7 +3349,7 @@ attachMethods: function {
         match (
             am
         ) case namedoperation then {
-            mname: unitLabel o: am.name
+            mname: zast.nameTextCopy :ast ref: am.name
             if mname.stringview == "create" then hasCreate = true
             qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
@@ -3494,7 +3474,7 @@ attachMarkers: function {
             match (
                 mtid
             ) case some then {
-                mlbl: unitLabel o: mm.name
+                mlbl: zast.nameTextCopy :ast ref: mm.name
                 (ty.setChild
                     pool: ast.names
                     parentTypeId: parentId
@@ -3511,7 +3491,7 @@ attachMarkers: function {
                 )
             } case none then {
                 if (isLabelValue op: (ast.nodes.get i: (mm.operation - 1).u64)) then {
-                    amlbl: unitLabel o: mm.name
+                    amlbl: zast.nameTextCopy :ast ref: mm.name
                     amlid: (resolveAtomType
                         :ty
                         :reg
@@ -3584,7 +3564,7 @@ resolveData: function {ast: Ast
         match (
             el
         ) case namedoperation then {
-            nm: unitLabel o: el.name
+            nm: zast.nameTextCopy :ast ref: el.name
             if nm.length == 0 then {
                 ord: "\{ordinal}"
                 (ty.setChild
@@ -3811,7 +3791,7 @@ resolveRecord: function {
             match (
                 fm
             ) case namedoperation then {
-                fname: unitLabel o: fm.name
+                fname: zast.nameTextCopy :ast ref: fm.name
                 qname: "\{defName}.\{fname}"
                 mido: (resolveMethodFn
                     :ty
@@ -3992,7 +3972,7 @@ detectTagAccessor: function {
     tc9: dottedChildName :ast n: (ast.nodes.get i: (am.operation - 1).u64)
     if tc9.stringview != "tag" then return
     if (isNumericTypeName name: tp9.stringview) == false then return
-    mname9: unitLabel o: am.name
+    mname9: zast.nameTextCopy :ast ref: am.name
     nid9: (resolveTyperefShellMarked
         :ty
         :reg
@@ -4052,7 +4032,7 @@ resolveVariant: function {
         match (
             fm
         ) case namedoperation then {
-            aname: unitLabel o: fm.name
+            aname: zast.nameTextCopy :ast ref: fm.name
             if aname.stringview == "tag" then {
                 mt9: "'tag' is a reserved member name".string
                 (addResolveErrorH
@@ -4110,7 +4090,7 @@ resolveVariant: function {
         match (
             am
         ) case namedoperation then {
-            mname: unitLabel o: am.name
+            mname: zast.nameTextCopy :ast ref: am.name
             qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
                 :ty
@@ -4237,7 +4217,7 @@ unionCustomTagId: function {
         match (
             am
         ) case namedoperation then {
-            nm: unitLabel o: am.name
+            nm: zast.nameTextCopy :ast ref: am.name
             if nm.stringview == "tag" then {
                 pn: dottedParentName :ast n: (ast.nodes.get i: (am.operation - 1).u64)
                 if pn.length != 0 then {
@@ -4331,7 +4311,7 @@ resolveUnion: function {
         match (
             fm
         ) case namedoperation then {
-            aname: unitLabel o: fm.name
+            aname: zast.nameTextCopy :ast ref: fm.name
             if aname.stringview == "tag" then {
                 mt9: "'tag' is a reserved member name".string
                 (addResolveErrorH
@@ -4391,7 +4371,7 @@ resolveUnion: function {
         match (
             am
         ) case namedoperation then {
-            mname: unitLabel o: am.name
+            mname: zast.nameTextCopy :ast ref: am.name
             qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
                 :ty
@@ -4571,7 +4551,7 @@ resolveClass: function {
             fm
         ) case namedoperation then {
             if (isFunctionDefOp op: (ast.nodes.get i: (fm.operation - 1).u64)) then {
-                fname: unitLabel o: fm.name
+                fname: zast.nameTextCopy :ast ref: fm.name
                 prodM4: false
                 if (isgen) == false then {
                     prodM4 = true
@@ -4628,7 +4608,7 @@ resolveClass: function {
                     } case none then null
                 }
             } else {
-                fname: unitLabel o: fm.name
+                fname: zast.nameTextCopy :ast ref: fm.name
                 ftn: fieldHeadName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                 lockField: false
                 flock0: pathOwnership :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
@@ -4772,7 +4752,7 @@ resolveClass: function {
             amP4
         ) case namedoperation then {
             if (isFunctionDefOp op: (ast.nodes.get i: (amP4.operation - 1).u64)) then {
-                afnP4: unitLabel o: amP4.name
+                afnP4: zast.nameTextCopy :ast ref: amP4.name
                 prodA4: false
                 if isgen when (functiondefIsNative op: (ast.nodes.get i: (amP4.operation - 1).u64)) then {
                     famA4: false
@@ -4908,7 +4888,7 @@ resolveFacet: function {
         match (
             sm
         ) case namedoperation then {
-            mname: unitLabel o: sm.name
+            mname: zast.nameTextCopy :ast ref: sm.name
             qname: "\{defName}.\{mname}"
             sido: (resolveSpecFn
                 :ty
@@ -4994,7 +4974,7 @@ resolveProtocol: function {
         match (
             sm
         ) case namedoperation then {
-            mname: unitLabel o: sm.name
+            mname: zast.nameTextCopy :ast ref: sm.name
             qname: "\{defName}.\{mname}"
             sido: (resolveSpecFn
                 :ty
@@ -5081,7 +5061,7 @@ descendIntoUnit: function {
     bm9Id9: bodyIds9.get i: bodyIdx
     bm9: ast.nodes.get i: (bm9Id9 - 1).u64
     if bm9.namedoperation then {
-        dn9: unitLabel o: bm9.name
+        dn9: zast.nameTextCopy :ast ref: bm9.name
         if dn9.stringview == defName then {
             (resolveDef
                 :ty
@@ -5487,7 +5467,7 @@ resolveUnitBody: function {
                         :ast
                         op: (ast.nodes.get i: (gm.operation - 1).u64)
                     ) then {
-                        gpn0: unitLabel o: gm.name
+                        gpn0: zast.nameTextCopy :ast ref: gm.name
                         gtid0: u64
                         gpo0: reg.genericParamTidOf typeKey: unitName paramName: gpn0.stringview
                         match (
@@ -5529,7 +5509,7 @@ resolveUnitBody: function {
                 match (
                     cmm
                 ) case namedoperation then {
-                    ccn1: unitLabel o: cmm.name
+                    ccn1: zast.nameTextCopy :ast ref: cmm.name
                     ccn0 = ccn1
                 } else null
                 ccNames.append ccn0
@@ -5541,7 +5521,11 @@ resolveUnitBody: function {
                     match (
                         cmn0
                     ) case namedoperation then {
-                        if (labelIs o: cmn0.name name: "main") then mainOp9 = cmn0.operation
+                        if (zast.nameTextEq
+                            :ast
+                            ref: cmn0.name
+                            s: "main"
+                        ) then mainOp9 = cmn0.operation
                     } else null
                 }
             }
@@ -5578,7 +5562,7 @@ resolveUnitBody: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                defName: unitLabel o: bmNode9.name
+                defName: zast.nameTextCopy :ast ref: bmNode9.name
                 eager: true
                 if full then {
                     if (isFunctionDefOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
@@ -5655,7 +5639,7 @@ registerUnitRoots: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry progr
             {
                 ru: program.ast.nodes.get i: (ruId9 - 1).u64
                 if ru.namedoperation then {
-                    nm: unitLabel o: ru.name
+                    nm: zast.poolTextCopy pool: program.ast.names ref: ru.name
                     opId9 = ru.operation
                     nm9 = nm.copy
                 }
@@ -5680,7 +5664,7 @@ demandAllUnitDefs: function {reg: ztypes.ZTypeRegistry ast: Ast unitdefId: u32} 
     with dit9: bodyIds9.iterate do for bm9Id9: dit9 loop {
         bm9: ast.nodes.get i: (bm9Id9 - 1).u64
         if bm9.namedoperation then {
-            dn9: unitLabel o: bm9.name
+            dn9: zast.nameTextCopy :ast ref: bm9.name
             if dn9.length > 0 then reg.recordDemand name: dn9.stringview
         }
     }
@@ -5737,7 +5721,7 @@ nativeOnlyCheckOp: function {
                 im9
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (im9.operation - 1).u64)) then {
-                    in9: unitLabel o: im9.name
+                    in9: zast.nameTextCopy :ast ref: im9.name
                     mn9: "\{defName}.\{in9}"
                     (nativeOnlyBodyError
                         :ty
@@ -5756,7 +5740,7 @@ nativeOnlyCheckOp: function {
                 am9
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (am9.operation - 1).u64)) then {
-                    an9: unitLabel o: am9.name
+                    an9: zast.nameTextCopy :ast ref: am9.name
                     amn9: "\{defName}.\{an9}"
                     (nativeOnlyBodyError
                         :ty
@@ -5787,7 +5771,7 @@ checkNativeOnlyUnitBodies: function {
     with dit9: bodyIds9.iterate do for dm9Id9: dit9 loop {
         dm9: ast.nodes.get i: (dm9Id9 - 1).u64
         if dm9.namedoperation then {
-            dn9: unitLabel o: dm9.name
+            dn9: zast.nameTextCopy :ast ref: dm9.name
             (nativeOnlyCheckOp
                 :ast
                 :ty
@@ -5815,7 +5799,7 @@ unitHasDemandedBodiedFn: function {
         bm9: ast.nodes.get i: (bm9Id9 - 1).u64
         if bm9.namedoperation then {
             if (isFunctionDefWithBody o: (ast.nodes.get i: (bm9.operation - 1).u64)) then {
-                bn9: unitLabel o: bm9.name
+                bn9: zast.nameTextCopy :ast ref: bm9.name
                 bk9: "\{unitName}.\{bn9}"
                 ro9: resolvedByKey :ast :ty :reg key: bk9
                 if ro9.some then return true
@@ -5849,7 +5833,7 @@ registerAndResolveMain: function {
             {
                 mu: program.ast.nodes.get i: (muId9 - 1).u64
                 if mu.namedoperation then {
-                    nm: unitLabel o: mu.name
+                    nm: zast.poolTextCopy pool: program.ast.names ref: mu.name
                     opId9 = mu.operation
                     nm9 = nm.copy
                 }
@@ -5924,7 +5908,7 @@ resolveDemandedUnitBody: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                dn: unitLabel o: bmNode9.name
+                dn: zast.nameTextCopy :ast ref: bmNode9.name
                 if (reg.isDemanded name: dn.stringview) then {
                     # A name the main unit defines shadows this unit's def --
                     # unless the unit's own internals demand it (seeded io
@@ -6020,7 +6004,7 @@ resolveConformanceDefs: function {
                 :ast
                 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
             ) then {
-                dn: unitLabel o: bmNode9.name
+                dn: zast.nameTextCopy :ast ref: bmNode9.name
                 rkey: "\{unitName}.\{dn}"
                 if (ty.definedKeys.has item: rkey) == false then {
                     (resolveDef
@@ -6501,7 +6485,7 @@ scanDemandedDepClassBodies: function {
     for bmId9: bodyIds9.iterate loop {
         bm: ast.nodes.get i: (bmId9 - 1).u64
         if bm.namedoperation then {
-            cn: unitLabel o: bm.name
+            cn: zast.nameTextCopy :ast ref: bm.name
             if (reg.isDemanded name: cn.stringview) then {
                 hasm: objectdefHasMethodBodies :ast op: (ast.nodes.get i: (bm.operation - 1).u64)
                 if hasm when (objectdefIsGeneric
@@ -6532,7 +6516,7 @@ scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
             {
                 u: program.ast.nodes.get i: (uId9 - 1).u64
                 if u.namedoperation then {
-                    nm: unitLabel o: u.name
+                    nm: zast.poolTextCopy pool: program.ast.names ref: u.name
                     eager9 = isFileUnit name: nm.stringview
                     if nm.stringview == mainName then eager9 = true
                     opId9 = u.operation
@@ -6572,7 +6556,7 @@ seedBodyWalkDemands: function {reg: ztypes.ZTypeRegistry program: Node} is {
             match (
                 u
             ) case namedoperation then {
-                nm: unitLabel o: u.name
+                nm: zast.poolTextCopy pool: program.ast.names ref: u.name
                 if nm.stringview == mainName then {
                     if (unitHasObjectMethodBody
                         ast: program.ast
@@ -6660,7 +6644,7 @@ resolveDemandsByDescent: function {
                 {
                     mu9: program.ast.nodes.get i: (mu9Id9 - 1).u64
                     if mu9.namedoperation then {
-                        mnm9: unitLabel o: mu9.name
+                        mnm9: zast.poolTextCopy pool: program.ast.names ref: mu9.name
                         if mnm9.stringview == mainName9 then mOpId9 = mu9.operation
                     }
                 }
@@ -6696,7 +6680,7 @@ resolveDemandsByDescent: function {
                 {
                     u9: program.ast.nodes.get i: (u9Id9 - 1).u64
                     if u9.namedoperation then {
-                        un0: unitLabel o: u9.name
+                        un0: zast.poolTextCopy pool: program.ast.names ref: u9.name
                         isDep0: true
                         if un0.stringview == mainName9 then isDep0 = false
                         if un0.stringview == "core" then isDep0 = false
@@ -6845,7 +6829,7 @@ collectMainInstantiations: function {ast: Ast o: Node reqs: List InstReq} is {
                 tn: callableUnitName :ast op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                 if tn.length != 0 then {
                     at: firstArgTypeName :ast op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                    bindn: unitLabel o: bmNode9.name
+                    bindn: zast.nameTextCopy :ast ref: bmNode9.name
                     mono: "\{tn}_\{at}"
                     r9: (InstReq
                         bind: bindn
@@ -6879,7 +6863,7 @@ scanMainForInstantiations: function {program: Node reqs: List InstReq} is {
             match (
                 u
             ) case namedoperation then {
-                un: unitLabel o: u.name
+                un: zast.poolTextCopy pool: program.ast.names ref: u.name
                 if un.stringview == mainName then (collectMainInstantiations
                     ast: program.ast
                     o: (program.ast.nodes.get i: (u.operation - 1).u64)
@@ -6910,7 +6894,7 @@ attachMonoUnitFuncs: function {
                 fmNode9
             ) case namedoperation then {
                 if (isFunctionDefOp op: (ast.nodes.get i: (fmNode9.operation - 1).u64)) then {
-                    fn: unitLabel o: fmNode9.name
+                    fn: zast.nameTextCopy :ast ref: fmNode9.name
                     shellName: "\{monoName}.\{fn}"
                     shellId: (reg.newType
                         name: shellName.stringview
@@ -7128,7 +7112,7 @@ addResumeInputExpr: function {
             match (
                 arg
             ) case namedoperation then {
-                an: unitLabel o: arg.name
+                an: zast.nameTextCopy :ast ref: arg.name
                 if an.stringview == "accepts" then {
                     tn: baseTypeName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                     rf: (resolveAtomType
@@ -7323,7 +7307,7 @@ synthGeneratorIterClass: function {
         match (
             pm
         ) case namedoperation then {
-            pn: unitLabel o: pm.name
+            pn: zast.nameTextCopy :ast ref: pm.name
             ptn: baseTypeName :ast n: (ast.nodes.get i: (pm.operation - 1).u64)
             f1: resolveAtomType :ty :reg :ast :unitName nm: ptn.stringview :thisName
             (ty.setChild
@@ -7421,7 +7405,7 @@ resolveInlineGenericUnit: function {
                             :ast
                             op: (ast.nodes.get i: (gm.operation - 1).u64)
                         ) then {
-                            gpn5: unitLabel o: gm.name
+                            gpn5: zast.nameTextCopy :ast ref: gm.name
                             ik5: "\{unitName}.\{defName}"
                             gtid5: u64
                             gpo5: (reg.genericParamTidOf
@@ -7469,7 +7453,7 @@ resolveInlineGenericUnit: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                fn: unitLabel o: bmNode9.name
+                fn: zast.nameTextCopy :ast ref: bmNode9.name
                 qn: "\{defName}_\{fn}"
                 mido: (resolveMethodFn
                     :ty
@@ -7581,7 +7565,7 @@ resolveInlineMono: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                bn: unitLabel o: bmNode9.name
+                bn: zast.nameTextCopy :ast ref: bmNode9.name
                 if bn.stringview == templateName then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
                         (createUnitMono
@@ -7620,7 +7604,7 @@ resolveUnitMono: function {
             match (
                 u
             ) case namedoperation then {
-                un: unitLabel o: u.name
+                un: zast.poolTextCopy pool: program.ast.names ref: u.name
                 if un.stringview == templateName then {
                     (createUnitMono
                         :ty
@@ -7751,7 +7735,7 @@ registerMonoFnParams: function {
                     ppgo
                 ) case some then {
                     if argId > 0 then {
-                        ppnm: unitLabel o: ppm.name
+                        ppnm: zast.nameTextCopy :ast ref: ppm.name
                         (ty.setChild
                             pool: ast.names
                             parentTypeId: fnId
@@ -7791,7 +7775,7 @@ buildUnitMonoFull: function {
                 gm
             ) case namedoperation then {
                 if (isGenericParam :ast op: (ast.nodes.get i: (gm.operation - 1).u64)) then {
-                    gn: unitLabel o: gm.name
+                    gn: zast.nameTextCopy :ast ref: gm.name
                     if gpFirst.length == 0 then {
                         gnv9: gn.stringview
                         gpc9: gnv9.string
@@ -7810,7 +7794,7 @@ buildUnitMonoFull: function {
                 fmNode9
             ) case namedoperation then {
                 if (isFunctionDefOp op: (ast.nodes.get i: (fmNode9.operation - 1).u64)) then {
-                    fn: unitLabel o: fmNode9.name
+                    fn: zast.nameTextCopy :ast ref: fmNode9.name
                     qn: "\{monoName}.\{fn}"
                     srcId: u64
                     tfo: ty.childOf pool: ast.names parentTypeId: tplId name: fn.stringview
@@ -8006,7 +7990,7 @@ completeInlineReq: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                bn: unitLabel o: bmNode9.name
+                bn: zast.nameTextCopy :ast ref: bmNode9.name
                 if bn.stringview == tmplName then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
                         (buildUnitMonoFull
@@ -8048,7 +8032,7 @@ inlineTemplateTid: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                bn: unitLabel o: bmNode9.name
+                bn: zast.nameTextCopy :ast ref: bmNode9.name
                 if bn.stringview == tmplName then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
                         tnid: unitdefNodeId :ast nId: bmNode9.operation
@@ -8156,7 +8140,7 @@ completeUnitInstantiations: function {
                         match (
                             tu
                         ) case namedoperation then {
-                            tun: unitLabel o: tu.name
+                            tun: zast.poolTextCopy pool: program.ast.names ref: tu.name
                             if tun.stringview == mainName.stringview then {
                                 tplId = (inlineTemplateTid
                                     :ty
@@ -8182,7 +8166,7 @@ completeUnitInstantiations: function {
                         match (
                             u9
                         ) case namedoperation then {
-                            un9: unitLabel o: u9.name
+                            un9: zast.poolTextCopy pool: program.ast.names ref: u9.name
                             if un9.stringview == rt.stringview then {
                                 (buildUnitMonoFull
                                     :ty
@@ -10160,7 +10144,7 @@ inferGenericConstruction: function {
         match (
             arg
         ) case namedoperation then {
-            pk: unitLabel o: arg.name
+            pk: zast.nameTextCopy :ast ref: arg.name
             # elided leading type arg: an unnamed first arg naming a type
             # binds the primary generic param (`(List String)`); a value
             # first arg (`(box 5)`) is left for value inference.
@@ -10366,7 +10350,7 @@ genericTypeConstruction: function {
         ) case namedoperation then {
             # only generic-param labels construct here; a value arg means
             # the field-bound inference leg owns the call.
-            pk0: unitLabel o: arg.name
+            pk0: zast.nameTextCopy :ast ref: arg.name
             # An elided leading type argument (`(List zvfs.ProviderBox)`) binds
             # the primary generic param: probe the unnamed first arg as a type
             # (atom via walkLookupTyperef, cross-unit dotted via dottedTyperefId).
@@ -10568,7 +10552,7 @@ validateGenericTypeArgs: function {
         match (
             arg
         ) case namedoperation then {
-            pk: unitLabel o: arg.name
+            pk: zast.nameTextCopy :ast ref: arg.name
             if pk.length == 0 when argIdx == 0 then {
                 if primaryName.length > 0 then {
                     anP: paramTypeBaseName :ast op: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -10985,7 +10969,7 @@ checkProjectionCreate: function {
             arg
         ) case namedoperation then {
             if (found) == false then {
-                an: unitLabel o: arg.name
+                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
                 if an.length == 0 then {
                     isFrom = true
@@ -11156,7 +11140,7 @@ checkTypedefCreate: function {
             arg
         ) case namedoperation then {
             if (found) == false then {
-                an: unitLabel o: arg.name
+                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
                 if an.length == 0 then {
                     isFrom = true
@@ -11227,7 +11211,7 @@ checkTypedefBorrow: function {
             arg
         ) case namedoperation then {
             if (found) == false then {
-                an: unitLabel o: arg.name
+                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
                 if an.length == 0 then {
                     isFrom = true
@@ -13564,7 +13548,7 @@ checkFor: function {
                 opf39: ast.nodes.get i: (cond.operation - 1).u64
                 vt = checkValue :st :unitName :ast :unitBody node: opf39
             }
-            nm: unitLabel o: cond.name
+            nm: zast.nameTextCopy :ast ref: cond.name
             if nm.length > 0 when vt > 0 then {
                 # A call-shaped iterator init probes its per-iteration call
                 # in an empty call scope (the reference's rewrite walks it
@@ -14763,7 +14747,7 @@ checkMissingCallArgs: function {ast: Ast
         match (
             arg
         ) case namedoperation then {
-            an: unitLabel o: arg.name
+            an: zast.nameTextCopy :ast ref: arg.name
             if an.length == 0 then posCount = posCount + 1
             if an.length > 0 then provided.append an
         } else null
@@ -14816,7 +14800,7 @@ walkCallArgsHoist: function {
             # argument walks without the value-position auto-call coercion.
             useNC: false
             if isCtor then {
-                pn0: unitLabel o: arg.name
+                pn0: zast.nameTextCopy :ast ref: arg.name
                 if pn0.length > 0 then {
                     fco: st.typing.childOf pool: ast.names parentTypeId: funcId name: pn0.stringview
                     fcid: optU64Or o: fco d: 0
@@ -14836,7 +14820,7 @@ walkCallArgsHoist: function {
                 vt = checkValue :st :unitName :ast :unitBody node: opf59
             }
             if vt > 0 then {
-                pn: unitLabel o: arg.name
+                pn: zast.nameTextCopy :ast ref: arg.name
                 if (isCtor) == false when pn.length > 0 when funcId > 0 then {
                     if (st.typing.childCount parentTypeId: funcId) > 0 then {
                         pco9: (st.typing.childOf
@@ -15242,7 +15226,7 @@ checkBoxConstruction: function {
             arg
         ) case namedoperation then {
             if (fnd) == false then {
-                an: unitLabel o: arg.name
+                an: zast.nameTextCopy :ast ref: arg.name
                 if an.stringview != "t" then {
                     if an.stringview != "from" then {
                         anc7: an.copy
@@ -16141,7 +16125,7 @@ checkCall: function {
                                 match (
                                     arg2
                                 ) case namedoperation then {
-                                    uan9: unitLabel o: arg2.name
+                                    uan9: zast.nameTextCopy :ast ref: arg2.name
                                     if uan9.length > 0 when uan9.stringview != "from" then {
                                         uanc9: uan9.copy
                                         uum9: "unknown argument '\{uanc9}'"
@@ -16685,7 +16669,7 @@ checkGenericCall: function {
         match (
             arg
         ) case namedoperation then {
-            an2: unitLabel o: arg.name
+            an2: zast.nameTextCopy :ast ref: arg.name
             isTypeArg: false
             tgi: gparams.iterate
             for gp2: tgi loop {
@@ -17706,7 +17690,7 @@ checkMethodBodies: function {
                 im
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (im.operation - 1).u64)) then {
-                    mname: unitLabel o: im.name
+                    mname: zast.nameTextCopy :ast ref: im.name
                     qn: "\{typeName}.\{mname}"
                     ed7: (List u32)
                     (checkFunctionBody
@@ -17728,7 +17712,7 @@ checkMethodBodies: function {
                 am
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (am.operation - 1).u64)) then {
-                    mname2: unitLabel o: am.name
+                    mname2: zast.nameTextCopy :ast ref: am.name
                     qn2: "\{typeName}.\{mname2}"
                     ed6: (List u32)
                     (checkFunctionBody
@@ -17818,7 +17802,7 @@ checkFunctionBody: function {
                 match (
                     pm
                 ) case namedoperation then {
-                    pname: unitLabel o: pm.name
+                    pname: zast.nameTextCopy :ast ref: pm.name
                     pnid: nodeId n: (ast.nodes.get i: (pm.operation - 1).u64)
                     ptid: (paramTypeId
                         :ast
@@ -17996,7 +17980,7 @@ resolveDemandedStdDeps: function {
         match (
             u9
         ) case namedoperation then {
-            un9: unitLabel o: u9.name
+            un9: zast.nameTextCopy :ast ref: u9.name
             if (isStdlibUnitName name: un9.stringview) then {
                 (resolveDemandedUnitBody
                     :ty
@@ -18023,7 +18007,7 @@ runDepUnitWalks: function {
         match (
             du
         ) case namedoperation then {
-            dn: unitLabel o: du.name
+            dn: zast.nameTextCopy :ast ref: du.name
             # the runtime-backed stdlib units are excluded here: their bodied
             # free fns walk in checkBodies' final pass, AFTER the main unit
             # settles (demand order must not disturb main's shadow/mono
@@ -18094,7 +18078,7 @@ depWalkUnit: function {
                 bm2
             ) case namedoperation then {
                 if (isFunctionDefWithBody o: (ast.nodes.get i: (bm2.operation - 1).u64)) then {
-                    fn: unitLabel o: bm2.name
+                    fn: zast.nameTextCopy :ast ref: bm2.name
                     rk: "\{depName}.\{fn}"
                     rgo: resolvedByKey :ast ty: st.typing reg: st.reg key: rk
                     match (
@@ -18119,7 +18103,7 @@ depWalkUnit: function {
                         }
                     } case none then null
                 } else {
-                    cls: unitLabel o: bm2.name
+                    cls: zast.nameTextCopy :ast ref: bm2.name
                     crk: "\{depName}.\{cls}"
                     crgo: resolvedByKey :ast ty: st.typing reg: st.reg key: crk
                     match (
@@ -18168,7 +18152,7 @@ checkUnitBodies: function {
             match (
                 nm
             ) case namedoperation then {
-                mnm: unitLabel o: nm.name
+                mnm: zast.nameTextCopy :ast ref: nm.name
                 miv: mi
                 st.typing.mainMemberIndex.set key: mnm value: miv
             } else null
@@ -18181,7 +18165,7 @@ checkUnitBodies: function {
             mi9 = mi9 + 1
             mm: ast.nodes.get i: (mmId9 - 1).u64
             if mm.namedoperation then {
-                mainName: unitLabel o: mm.name
+                mainName: zast.nameTextCopy :ast ref: mm.name
                 if mainName.stringview == "main" then {
                     (checkFunctionBody
                         :st
@@ -18203,7 +18187,7 @@ checkUnitBodies: function {
             bi9 = bi9 + 1
             bm: ast.nodes.get i: (bmId9 - 1).u64
             if bm.namedoperation then {
-                defName: unitLabel o: bm.name
+                defName: zast.nameTextCopy :ast ref: bm.name
                 if defName.stringview != "main" then {
                     (checkFunctionBody
                         :st
@@ -18242,7 +18226,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             match (
                 u
             ) case namedoperation then {
-                nm: unitLabel o: u.name
+                nm: zast.poolTextCopy pool: program.ast.names ref: u.name
                 if nm.stringview == mainName then {
                     if (found0) == false then {
                         mainIdx = i0
@@ -18290,7 +18274,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             {
                 du9: program.ast.nodes.get i: (du9Id9 - 1).u64
                 if du9.namedoperation then {
-                    dun0: unitLabel o: du9.name
+                    dun0: zast.poolTextCopy pool: program.ast.names ref: du9.name
                     if (isStdlibUnitName name: dun0.stringview) then {
                         dOpId9 = du9.operation
                         dun9 = dun0.copy
@@ -18333,7 +18317,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 {
                     wu9: program.ast.nodes.get i: (wu9Id9 - 1).u64
                     if wu9.namedoperation then {
-                        wun0: unitLabel o: wu9.name
+                        wun0: zast.poolTextCopy pool: program.ast.names ref: wu9.name
                         if (isStdlibUnitName name: wun0.stringview) then {
                             wOpId9 = wu9.operation
                             wun9 = wun0.copy
@@ -18871,7 +18855,7 @@ resolveConstantDefsInUnit: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                defName: unitLabel o: bmNode9.name
+                defName: zast.nameTextCopy :ast ref: bmNode9.name
                 if defName.length > 0 then {
                     (resolveConstantDef
                         :ast
@@ -18901,7 +18885,7 @@ resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
             match (
                 u
             ) case namedoperation then {
-                nm: unitLabel o: u.name
+                nm: zast.poolTextCopy pool: program.ast.names ref: u.name
                 if nm.stringview == mainName then {
                     (resolveConstantDefsInUnit
                         :ty
@@ -18992,7 +18976,7 @@ resolveNamedDefsIn: function {
             match (
                 bmNode9
             ) case namedoperation then {
-                dn: unitLabel o: bmNode9.name
+                dn: zast.nameTextCopy :ast ref: bmNode9.name
                 hit: false
                 if dn.stringview == wantA then hit = true
                 if dn.stringview == wantB then hit = true
@@ -19053,7 +19037,7 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             {
                 su: program.ast.nodes.get i: (suId9 - 1).u64
                 if su.namedoperation then {
-                    snm: unitLabel o: su.name
+                    snm: zast.poolTextCopy pool: program.ast.names ref: su.name
                     if snm.stringview == "system" then sOpId9 = su.operation
                 }
             }
@@ -19152,7 +19136,7 @@ lowerGeneratorsInUnit: function {
                 match (
                     uel2
                 ) case namedoperation then {
-                    dnm = unitLabel o: uel2.name
+                    dnm = zast.nameTextCopy :ast ref: uel2.name
                     opId9 = uel2.operation
                 } else null
             }
@@ -19225,7 +19209,7 @@ lowerGeneratorsInUnit: function {
             match (
                 oel
             ) case namedoperation then {
-                tnm: unitLabel o: oel.name
+                tnm: zast.nameTextCopy :ast ref: oel.name
                 if tnm.length > 0 then {
                     (lowerGeneratorMethods
                         :ast
@@ -19318,7 +19302,7 @@ lowerGeneratorItems: function {
             match (
                 bm2
             ) case namedoperation then {
-                mnm: unitLabel o: bm2.name
+                mnm: zast.nameTextCopy :ast ref: bm2.name
                 sname: "\{typeName}_\{mnm}_iter"
                 fnNode: zast.tableTake :ast id: bm2.operation
                 lowOpt: (zgenerator.lowerOne :ast

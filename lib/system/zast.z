@@ -716,13 +716,13 @@ TypeOfExprData: class {
 }
 
 # Named-operation payload: an optional argument label plus the
-# operation value. Appears as a Call/Data argument; `name` is
-# absent for positional arguments.
+# operation value. Appears as a Call/Data argument; `name` is the
+# label's Ast.names pool id (0 = absent / positional).
 NamedOperationData: class {
     nodeid: u32
     lineno: u32
     colno: u32
-    name: (Option String)
+    name: u32
     operation: u32
 }
 
@@ -1142,14 +1142,13 @@ printCallKind: function {ck: callkind} is {
 
 # Print a NamedOperation's optional label. The Option is passed by
 # borrow so it can be matched without moving it out of its carrier.
-printOptName: function {o: Option String} is {
-    match (
-        o
-    ) case some then {
-        print "  name=\{o}"
-    } case none then {
+printPoolName: function {ast: Ast ref: u32} is {
+    if ref == 0 then {
         print "  name=<none>"
+        return
     }
+    t9: nameTextCopy :ast :ref
+    print "  name=\{t9}"
 }
 
 # Print a Data block's optional `out` type annotation, descending
@@ -1233,16 +1232,29 @@ posOf: function {n: Node} out nodepos is {
     }
 }
 
+# poolTextEq -- compare an interned name's text without copying. Takes the
+# pool itself so a caller holding a view into a sibling Ast field (the node
+# table) does not lock the whole carrier.
+poolTextEq: function {pool: StringPool ref: u32 s: StringView} out bool is {
+    return (pool.eq id: ref :s)
+}
+
+# poolTextCopy -- an owned copy of an interned name's text ("" when the ref
+# is absent). Pool-taking counterpart of poolTextEq.
+poolTextCopy: function {pool: StringPool ref: u32} out String is {
+    if ref == 0 then return "".string
+    return (pool.get id: ref)
+}
+
 # nameTextEq -- compare an interned name's text without copying.
 nameTextEq: function {ast: Ast ref: u32 s: StringView} out bool is {
-    return (ast.names.eq id: ref :s)
+    return (poolTextEq pool: ast.names :ref :s)
 }
 
 # nameTextCopy -- an owned copy of an interned name's text ("" when the
 # ref is absent).
 nameTextCopy: function {ast: Ast ref: u32} out String is {
-    if ref == 0 then return "".string
-    return (ast.names.get id: ref)
+    return (poolTextCopy pool: ast.names :ref)
 }
 
 # Print one line per Node in the form
@@ -1286,7 +1298,7 @@ printNode: function {ast: Ast n: Node} is {
         printNode :ast n: (ast.nodes.get i: (n.source - 1).u64)
     } case namedoperation then {
         print "\{n.nodeid}: namedoperation @\{n.lineno}:\{n.colno}"
-        printOptName n.name
+        printPoolName :ast ref: n.name
         printNode :ast n: (ast.nodes.get i: (n.operation - 1).u64)
     } case datablock then {
         print "\{n.nodeid}: datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
@@ -1444,7 +1456,7 @@ printNodeCanonical: function {ast: Ast n: Node} is {
         printNodeCanonical :ast n: (ast.nodes.get i: (n.source - 1).u64)
     } case namedoperation then {
         print "namedoperation"
-        printOptName n.name
+        printPoolName :ast ref: n.name
         printNodeCanonical :ast n: (ast.nodes.get i: (n.operation - 1).u64)
     } case datablock then {
         print "datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
@@ -1811,7 +1823,7 @@ main: function is {
         colno: 8
         name: (smokeNameRef :ast text: "x")
     )
-    noname: (Option.some "label".string)
+    noname: smokeNameRef :ast text: "label"
     n10: Node.namedoperation (NamedOperationData
         nodeid: 21
         lineno: 19
@@ -1832,7 +1844,7 @@ main: function is {
         nodeid: 23
         lineno: 20
         colno: 1
-        name: (Option.none String)
+        name: 0
         operation: (tableAdd :ast n: noval2)
     )
     printNode :ast n: n11
@@ -2096,7 +2108,7 @@ main: function is {
         nodeid: 59
         lineno: 31
         colno: 4
-        name: (Option.none String)
+        name: 0
         operation: (tableAdd :ast n: ifCondOp)
     )
     ifConds: (List u32)
@@ -2134,7 +2146,7 @@ main: function is {
         nodeid: 65
         lineno: 33
         colno: 5
-        name: (Option.some "i".string)
+        name: (smokeNameRef :ast text: "i")
         operation: (tableAdd :ast n: forBindOp)
     )
     forWhileOp: Node.atomid (AtomIdData
@@ -2147,7 +2159,7 @@ main: function is {
         nodeid: 67
         lineno: 33
         colno: 16
-        name: (Option.none String)
+        name: 0
         operation: (tableAdd :ast n: forWhileOp)
     )
     forConds: (List u32)
@@ -2255,7 +2267,7 @@ main: function is {
         nodeid: 82
         lineno: 40
         colno: 5
-        name: (Option.some "x".string)
+        name: (smokeNameRef :ast text: "x")
         operation: (tableAdd :ast n: objFieldType)
     )
     objIsItems: (List u32)
@@ -2290,7 +2302,7 @@ main: function is {
         nodeid: 86
         lineno: 41
         colno: 18
-        name: (Option.some "x".string)
+        name: (smokeNameRef :ast text: "x")
         operation: (tableAdd :ast n: fnParamType)
     )
     fnParams: (List u32)
@@ -2313,7 +2325,7 @@ main: function is {
         nodeid: 89
         lineno: 41
         colno: 1
-        name: (Option.some "greet".string)
+        name: (smokeNameRef :ast text: "greet")
         operation: (tableAdd :ast n: fnDef)
     )
     unitBody: (List u32)
@@ -2324,7 +2336,7 @@ main: function is {
         nodeid: 91
         lineno: 39
         colno: 1
-        name: (Option.some "main".string)
+        name: (smokeNameRef :ast text: "main")
         operation: (tableAdd :ast n: unitDef)
     )
     progUnits: (List u32)

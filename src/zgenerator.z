@@ -296,7 +296,7 @@ clonePath: function {ast: Ast ids: GenIds n: Node} out Node is {
         ln5: n.lineno
         co5: n.colno
         nop: clonePath :ast :ids n: (ast.nodes.get i: (n.operation - 1).u64)
-        nnm: cloneOptString o: n.name
+        nnm: n.name
         return (Node.namedoperation (zast.NamedOperationData
             nodeid: ids.mint
             lineno: ln5
@@ -357,29 +357,6 @@ clonePath: function {ast: Ast ids: GenIds n: Node} out Node is {
     }
 }
 
-cloneOptString: function {o: Option String} out Option String is {
-    match (
-        o
-    ) case some then {
-        ov: o.stringview
-        oc: ov.string
-        return (Option.some oc)
-    } case none then {
-        return (Option.none String)
-    }
-}
-
-optStringOr: function {o: Option String d: StringView} out String is {
-    match (
-        o
-    ) case some then {
-        ov: o.stringview
-        oc: ov.string
-        return oc
-    } case none then {
-        return d.string
-    }
-}
 
 # givesParts -- split the iterator return into (gives base path CLONE,
 # ownership leaf, accepts path CLONE or none). The base clone feeds the
@@ -419,7 +396,7 @@ givesPartsOf: function {ast: Ast ids: GenIds n: Node dst: GivesParts} is {
             match (
                 a0
             ) case namedoperation then {
-                an: optStringOr o: a0.name d: ""
+                an: zast.nameTextCopy :ast ref: a0.name
                 if an.stringview == "gives" then {
                     givesFromOp :ast :ids n: (ast.nodes.get i: (a0.operation - 1).u64) :dst
                 }
@@ -536,12 +513,11 @@ mkNamedOp: function {
     name: StringView
     op: Node.take
 } out Node is {
-    nm: (Option.some name.string)
     return (Node.namedoperation (zast.NamedOperationData
         nodeid: ids.mint
         lineno: line
         colno: col
-        name: nm
+        name: (ast.names.set s: name)
         operation: (zast.tableAppendRebase :ast n: op))
     )
 }
@@ -557,7 +533,7 @@ mkBareOp: function {
         nodeid: ids.mint
         lineno: line
         colno: col
-        name: (Option.none String)
+        name: 0
         operation: (zast.tableAppendRebase :ast n: op))
     )
 }
@@ -1241,7 +1217,7 @@ promoteFor: function {
             match (
                 c0
             ) case namedoperation then {
-                cn0: optStringOr o: c0.name d: ""
+                cn0: zast.nameTextCopy :ast ref: c0.name
                 if cn0.length > 0 when suspends then {
                     if (condIsTrivial
                         :ast
@@ -1282,7 +1258,7 @@ promoteFor: function {
                         statementline: (zast.tableAppendRebase :ast n: sa0))
                     )
                     dst.append (zast.tableAppendRebase :ast n: sl0)
-                    cn1: optStringOr o: c0.name d: ""
+                    cn1: zast.nameTextCopy :ast ref: c0.name
                     na0: mkAtom :ast :ids line: hl0 col: hc0 name: sno1.stringview
                     nc0: mkNamedOp :ast :ids line: hl0 col: hc0 name: cn1.stringview op: na0
                     nconds.append (zast.tableAppendRebase :ast n: nc0)
@@ -1495,7 +1471,7 @@ rewriteToThis: function {
         ln5: n.lineno
         co5: n.colno
         nop: rewriteToThis :ast :ids n: (ast.nodes.get i: (n.operation - 1).u64) :promoted
-        nnm: cloneOptString o: n.name
+        nnm: n.name
         return (Node.namedoperation (zast.NamedOperationData
             nodeid: ids.mint
             lineno: ln5
@@ -1946,7 +1922,7 @@ cloneCreateParam: function {
     ) case namedoperation then {
         ln0: n.lineno
         co0: n.colno
-        nnm: cloneOptString o: n.name
+        nnm: n.name
         isTh0: false
         if receiverType.length > 0 then {
             opf209: ast.nodes.get i: (n.operation - 1).u64
@@ -1998,7 +1974,7 @@ cloneFactoryParam: function {
     ) case namedoperation then {
         ln0: n.lineno
         co0: n.colno
-        nnm: cloneOptString o: n.name
+        nnm: n.name
         if (isThisPrivateLock :ast n: (ast.nodes.get i: (n.operation - 1).u64)) then {
             # the public this.lock replacement carries the function's start
             # (the reference synthesizes it at loc = func.start)
@@ -2156,7 +2132,7 @@ lowerOne: function {
                 match (
                     p0
                 ) case namedoperation then {
-                    pn0: optStringOr o: p0.name d: ""
+                    pn0: zast.nameTextCopy :ast ref: p0.name
                     if pn0.length > 0 then {
                         if (isThisPrivateLock
                             :ast
