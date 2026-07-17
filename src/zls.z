@@ -1419,7 +1419,12 @@ typeKindTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is
 
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
-fnSigTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64 name: StringView} out String is {
+fnSigTextOpt: function {
+    prog: zast.Node
+    o: (Option zenv.ZSymbolTable)
+    tid: u64
+    name: StringView
+} out String is {
     match (
         o
     ) case some then {
@@ -1431,14 +1436,16 @@ fnSigTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64 name: StringView}
         # (typeNameOf takes an exclusive lock on `o`).
         pnames9: (List String)
         ptids9: (List u64)
-        {
+        match (
+            prog
+        ) case program then {
             bp9: o.typing.childIndex.get key: tid
             match (
                 bp9
             ) case some then {
                 with rpit9: bp9.rows.iterate do for rpi9: rpit9 loop {
                     tc9: o.typing.typeChild.get i: rpi9
-                    cnB9: o.typing.edgeText.get i: tc9.nameId
+                    cnB9: prog.ast.names.texts.get i: (tc9.nameId - 1).u64
                     cn9: cnB9.stringview
                     isRecv9: false
                     if tc9.nameId == wkThis then isRecv9 = true
@@ -1461,7 +1468,7 @@ fnSigTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64 name: StringView}
                     }
                 }
             } case none then null
-        }
+        } else null
         sig9: name.string
         sig9.append ": function"
         if pnames9.length > 0 then {
@@ -2058,7 +2065,7 @@ navAnswer: function {
         ud9: useUnitDef o: snap.st nid: tnid
         sigTid9: t9
         if ud9 > 0 then sigTid9 = ud9
-        body9: fnSigTextOpt o: snap.st tid: sigTid9 name: hname.stringview
+        body9: fnSigTextOpt prog: snap.prog o: snap.st tid: sigTid9 name: hname.stringview
         if body9.length == 0 then {
             tk9: typeKindTextOpt o: snap.st tid: refTid
             if tk9.length > 0 then {
@@ -2730,17 +2737,39 @@ addScopeCompletions: function {
 
 # addTypeMembers -- a type's fields (kind 5) and methods (kind 2), the
 # receiver excluded.
-addTypeMembers: function {o: (Option zenv.ZSymbolTable) tid: u64 sink: (Map String value: u8)} is {
+addTypeMembers: function {
+    prog: zast.Node
+    o: (Option zenv.ZSymbolTable)
+    tid: u64
+    sink: (Map String value: u8)
+} is {
     match (
         o
     ) case some then {
+        match (
+            prog
+        ) case program then {
+            addTypeMembersIn :prog :o :tid :sink
+        } else null
+    } case none then null
+}
+
+# addTypeMembersIn -- addTypeMembers with the program narrowed (prog is
+# the ProgramData payload).
+addTypeMembersIn: function {
+    prog: zast.ProgramData
+    o: zenv.ZSymbolTable
+    tid: u64
+    sink: (Map String value: u8)
+} is {
+    {
         bp9: o.typing.childIndex.get key: tid
         match (
             bp9
         ) case some then {
             with rit9: bp9.rows.iterate do for ri9: rit9 loop {
                 tc9: o.typing.typeChild.get i: ri9
-                cnB8: o.typing.edgeText.get i: tc9.nameId
+                cnB8: prog.ast.names.texts.get i: (tc9.nameId - 1).u64
                 cn9: cnB8.stringview
                 isRecv9: false
                 if tc9.nameId == wkThis then isRecv9 = true
@@ -2764,7 +2793,7 @@ addTypeMembers: function {o: (Option zenv.ZSymbolTable) tid: u64 sink: (Map Stri
                 }
             }
         } case none then null
-    } case none then null
+    }
 }
 
 # addUnitMembers -- the top-level symbols of the file-unit named `name`.
@@ -2921,7 +2950,7 @@ addMemberCompletions: function {
                 sink: throwaway9
             )
             bt9: baseTypeInScope :snap :docRel :srcDir defStart9: ds9 :l1u :base
-            if bt9 > 0 then addTypeMembers o: snap.st tid: bt9 :sink
+            if bt9 > 0 then addTypeMembers prog: snap.prog o: snap.st tid: bt9 :sink
         }
         return
     }
@@ -2955,7 +2984,7 @@ addMemberCompletions: function {
         }
         pos9 = de9 + 1
     }
-    addTypeMembers o: snap.st tid: cur9 :sink
+    addTypeMembers prog: snap.prog o: snap.st tid: cur9 :sink
 }
 
 # completionAnswer -- scope-based completion from the last-good

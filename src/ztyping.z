@@ -201,12 +201,10 @@ ZTyping: class {
     # generic arg-type id, keyed by "parentTypeId:paramName"
     genericArgTypeBy: (Map String value: u64)
 
-    # edge-name caches derived from the shared Ast.names pool, filled by
+    # edge-name cache derived from the shared Ast.names pool, filled by
     # setChild/registerEdgeName: edge text -> pool id backs the text-keyed
-    # queries; pool id -> text is a sparse list ("" fillers, index = pool
-    # id) so id -> text reads stay borrowed row views.
+    # queries. id -> text readers borrow rows from the pool itself.
     edgeNameId: (Map String value: u64)
-    edgeText: (List String)
     # per-node single-valued stamps, keyed by parsed-AST nodeid
     nodeType: (Map u64 value: u64)
     nodeLiteralBase: (Map u64 value: ztypes.numbase)
@@ -308,9 +306,8 @@ ZTyping: class {
         }
     }
 
-    # registerEdgeText -- record pool id nid's text in both edge-name
-    # caches (idempotent). edgeText grows with "" fillers so its index IS
-    # the pool id; slot 0 stays a filler (pool id 0 = absent).
+    # registerEdgeText -- record pool id nid's text in the edge-name
+    # cache (idempotent).
     registerEdgeText: function {:this nid: u64 text: StringView} is {
         {
             g9: this.edgeNameId.getv key: text
@@ -320,8 +317,6 @@ ZTyping: class {
                 return
             } case none then null
         }
-        for this.edgeText.length <= nid loop this.edgeText.append "".string
-        this.edgeText.set i: nid val: text.string
         k9: text.string
         this.edgeNameId.set key: k9 value: nid
     }
@@ -1019,7 +1014,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
         edgeNameId: (Map String value: u64)
-        edgeText: (List String)
         nodeType: (Map u64 value: u64 capacity: nodeEst)
         nodeLiteralBase: (Map u64 value: ztypes.numbase)
         callKind: (Map u64 value: zast.callkind)
@@ -1114,7 +1108,7 @@ main: function is {
     smokeChildOf :ty :pid name: "x"
     smokeChildOf :ty :pid name: "label"
     smokeChildOf :ty :pid name: "z"
-    dumpChildren :ty parentTypeId: pid
+    dumpChildren :ty pool: pool9 parentTypeId: pid
 
     print "=== sidecars ==="
     ty.setChildPrivate parentTypeId: pid name: "x"
@@ -1256,7 +1250,7 @@ smokeGenericArg: function {ty: ZTyping pid: u64 name: StringView} is {
     print "genericArg List.\{name} -> \{optU64Text r}"
 }
 
-dumpChildren: function {ty: ZTyping parentTypeId: u64} is {
+dumpChildren: function {ty: ZTyping pool: zast.StringPool parentTypeId: u64} is {
     iter: ty.typeChild.iterate
     for row: iter loop {
         if row.parentTypeId == parentTypeId then {
@@ -1264,10 +1258,10 @@ dumpChildren: function {ty: ZTyping parentTypeId: u64} is {
             match (
                 ctOpt
             ) case some then {
-                rnB9: ty.edgeText.get i: row.nameId
+                rnB9: pool.texts.get i: (row.nameId - 1).u64
                 print "  child \{row.position} \{rnB9} -> \{ctOpt}"
             } case none then {
-                rnB8: ty.edgeText.get i: row.nameId
+                rnB8: pool.texts.get i: (row.nameId - 1).u64
                 print "  child \{row.position} \{rnB8} -> none"
             }
         }

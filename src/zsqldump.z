@@ -581,11 +581,11 @@ ZDumper: class {
     # appendTypeChildren -- one row per parent->child edge (function params).
     # The private/lock/default columns are constant for SMOKE and
     # param_ownership is NULL until ownership-annotated params land.
-    appendTypeChildren: function {:this typing: ztyping.ZTyping} is {
+    appendTypeChildren: function {:this ast: Ast typing: ztyping.ZTyping} is {
         citer: typing.typeChild.iterate
         for crow: citer loop {
             cidSql: optIdStr o: (typing.childTypeById.get key: crow.childNameId)
-            cnB9: typing.edgeText.get i: crow.nameId
+            cnB9: ast.names.texts.get i: (crow.nameId - 1).u64
             cnSql: sqlStr s: cnB9.stringview
             poSql: paramOwnSql o: (typing.childOwnership.get key: crow.childNameId)
             line: "INSERT OR IGNORE INTO type_children VALUES (\{crow.parentTypeId}, \{cnSql}, \{cidSql}, \{crow.position}, \{crow.childNameId}, 0, 0, 0, NULL, \{poSql});\n"
@@ -1014,7 +1014,7 @@ ZDumper: class {
         this.emitSection title: "types" :rows
     }
 
-    appendTypeChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+    appendTypeChildrenCanon: function {:this ast: Ast unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
         citer: st.typing.typeChild.iterate
         for crow: citer loop {
@@ -1030,7 +1030,7 @@ ZDumper: class {
                 cTid: optU64Or0 o: (st.typing.childTypeById.get key: crow.childNameId)
                 cName: canonTypeName reg: st.reg tid: cTid
                 pSql: sqlStr s: pName.stringview
-                cnB8: st.typing.edgeText.get i: crow.nameId
+                cnB8: ast.names.texts.get i: (crow.nameId - 1).u64
                 cnSql: sqlStr s: cnB8.stringview
                 ctSql: sqlStr s: cName.stringview
                 poSql: paramOwnSql o: (st.typing.childOwnership.get key: crow.childNameId)
@@ -1399,7 +1399,11 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     d.appendSynthNodes typing: symtab.typing
     d.appendUnits :program typing: symtab.typing
     d.appendTypes st: symtab
-    d.appendTypeChildren typing: symtab.typing
+    match (
+        program
+    ) case program then {
+        d.appendTypeChildren ast: program.ast typing: symtab.typing
+    } else null
     d.appendGenericChildren st: symtab
     d.appendGenericArgs st: symtab
     overrideExpressionStamps typing: symtab.typing :program
@@ -1456,7 +1460,11 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     d: ZDumper acc: "".string
     d.appendUnitsCanon :program
     d.appendTypesCanon unm: mu.stringview st: symtab
-    d.appendTypeChildrenCanon unm: mu.stringview st: symtab
+    match (
+        program
+    ) case program then {
+        d.appendTypeChildrenCanon ast: program.ast unm: mu.stringview st: symtab
+    } else null
     d.appendGenericChildrenCanon unm: mu.stringview st: symtab
     d.appendGenericArgsCanon unm: mu.stringview st: symtab
     d.appendConformanceCanon unm: mu.stringview st: symtab

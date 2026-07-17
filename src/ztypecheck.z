@@ -380,6 +380,7 @@ checkBareTypeConstruction: function {
 } is {
     cbW9: ast.names.texts.get i: (node.name - 1).u64
     (checkBareTypeValueAt
+        :ast
         :st
         :unitName
         nodeid: node.nodeid
@@ -393,6 +394,7 @@ checkBareTypeConstruction: function {
 # checkBareTypeValueAt -- checkBareTypeConstruction's core against explicit
 # source coordinates, shared by the bare-atom and unit-qualified dotted legs.
 checkBareTypeValueAt: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     unitName: StringView
     nodeid: u32
@@ -503,6 +505,7 @@ checkBareTypeValueAt: function {
     misN9: (List String)
     misI9: (List u64)
     (missingCtorFields
+        :ast
         :st
         funcId: tid
         isCtor: true
@@ -718,13 +721,18 @@ levenshtein: function {a: StringView b: StringView} out u64 is {
 
 # suggestSimilar -- the closest child name of parentTypeId to `name` (edit
 # distance <= 2 and unique); "" if none. Powers the did-you-mean hint.
-suggestSimilar: function {st: zenv.ZSymbolTable parentTypeId: u64 name: StringView} out String is {
+suggestSimilar: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    parentTypeId: u64
+    name: StringView
+} out String is {
     best: String
     bestDist: 3.u64
     tied: false
     with citer: st.typing.typeChild.iterate do for tc: citer loop {
         if tc.parentTypeId == parentTypeId then {
-            cnB9: st.typing.edgeText.get i: tc.nameId
+            cnB9: ast.names.texts.get i: (tc.nameId - 1).u64
             cn: cnB9.stringview
             if (cn == name) == false then {
                 d: levenshtein a: name b: cn
@@ -7770,7 +7778,7 @@ buildUnitMonoFull: function {
                                     match (
                                         cto
                                     ) case some then {
-                                        cnB0: ty.edgeText.get i: tc.nameId
+                                        cnB0: ast.names.texts.get i: (tc.nameId - 1).u64
                                         cn0: cnB0.copy
                                         cNames.append cn0
                                         cid2: cto
@@ -8531,7 +8539,7 @@ cloneMethodInto: function {
                 match (
                     co5
                 ) case some then {
-                    nmB5: ty.edgeText.get i: tc5.nameId
+                    nmB5: ast.names.texts.get i: (tc5.nameId - 1).u64
                     nm5: nmB5.copy
                     cN5.append nm5
                     cv5: co5
@@ -8833,7 +8841,7 @@ mintMono: function {
                 match (
                     cto
                 ) case some then {
-                    cnB1: ty.edgeText.get i: tc.nameId
+                    cnB1: ast.names.texts.get i: (tc.nameId - 1).u64
                     cn: cnB1.copy
                     cNames.append cn
                     cid2: cto
@@ -9285,6 +9293,7 @@ checkConstraintSat: function {
 # members (a class/union box, a destructor-carrying mono, or another owning
 # valtype): its byte-range hash and equality cannot cover them.
 heapOwningValtypeTid: function {
+    ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     tid: u64
@@ -9318,16 +9327,16 @@ heapOwningValtypeTid: function {
                 hcto9
             ) case some then {
                 hctt9: reg.typetypeOf typeId: hcto9
-                hnB9: ty.edgeText.get i: htc9.nameId
+                hnB9: ast.names.texts.get i: (htc9.nameId - 1).u64
                 if hctt9 != ztypes.ztypetype.functionType when hnB9.stringview != "tag" then {
                     if hctt9 == ztypes.ztypetype.classType then return true
                     if hctt9 == ztypes.ztypetype.unionType then return true
                     if (reg.hasDestructorName typeId: hcto9) then return true
                     if hctt9 == ztypes.ztypetype.recordType then {
-                        if (heapOwningValtypeTid :ty :reg tid: hcto9) then return true
+                        if (heapOwningValtypeTid :ast :ty :reg tid: hcto9) then return true
                     }
                     if hctt9 == ztypes.ztypetype.variantType then {
-                        if (heapOwningValtypeTid :ty :reg tid: hcto9) then return true
+                        if (heapOwningValtypeTid :ast :ty :reg tid: hcto9) then return true
                     }
                 }
             } case none then null
@@ -9432,7 +9441,7 @@ getOrMintSpec: function {
         if hkMap9 > 0 when templateId == hkMap9 then hkKind9 = "Map key".string
         if hkKind9.length > 0 when (keyIsVal8.get i: 0) == false then {
             hkT9: keys8.get i: 0
-            if (heapOwningValtypeTid :ty :reg tid: hkT9) then {
+            if (heapOwningValtypeTid :ast :ty :reg tid: hkT9) then {
                 hkN9: regTypeNameOf :reg tid: hkT9
                 mHK9: "heap-owning value type '\{hkN9}' cannot be a \{hkKind9}"
                 addResolveError :ty e: zast.err.genericError msg: mHK9
@@ -9967,7 +9976,7 @@ inferGenericConstruction: function {
                 match (
                     cto
                 ) case some then {
-                    fnB9: st.typing.edgeText.get i: tc.nameId
+                    fnB9: ast.names.texts.get i: (tc.nameId - 1).u64
                     fn1: fnB9.copy
                     cNames3.append fn1
                     cid1: cto
@@ -10380,7 +10389,7 @@ validateGenericTypeArgs: function {
         ) case some then {
             with vgit9: vgb9.rows.iterate do for vgr9: vgit9 loop {
                 tc: st.typing.typeChild.get i: vgr9
-                cnB2: st.typing.edgeText.get i: tc.nameId
+                cnB2: ast.names.texts.get i: (tc.nameId - 1).u64
                 cn1: cnB2.copy
                 childNames.append cn1
             }
@@ -11100,7 +11109,7 @@ methodHasThisReceiver: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     }
 }
 
-methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
+methodHasNoUserArgs: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool is {
     cnt: st.typing.childCount parentTypeId: mid
     if cnt == 0 then return true
     if cnt != 1 then return false
@@ -11112,7 +11121,7 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
     ) case some then {
         with rmit9: bm9.rows.iterate do for rmi9: rmit9 loop {
             tc: st.typing.typeChild.get i: rmi9
-            snB9: st.typing.edgeText.get i: tc.nameId
+            snB9: ast.names.texts.get i: (tc.nameId - 1).u64
             soleName = snB9.copy
             soleId = tc.nameId
         }
@@ -11132,12 +11141,12 @@ methodHasNoUserArgs: function {st: zenv.ZSymbolTable mid: u64} out bool is {
 # auto-call: it has no user parameters, or every non-receiver parameter
 # carries a default the site can fill. The strict no-user-args predicate
 # stays separate for its other gates (fnptr-field reads, for-iterators).
-fnAutoCallable: function {st: zenv.ZSymbolTable mid: u64} out bool is {
-    if (methodHasNoUserArgs :st :mid) then return true
+fnAutoCallable: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool is {
+    if (methodHasNoUserArgs :ast :st :mid) then return true
     names: (List String)
     ids: (List u64)
     idsNm: (List u64)
-    dataFieldNames :st tid: mid :names :ids nameIds: idsNm
+    dataFieldNames :ast :st tid: mid :names :ids nameIds: idsNm
     thisPn9: String
     {
         zo9: st.reg.typeById.get key: mid
@@ -11169,6 +11178,7 @@ fnAutoCallable: function {st: zenv.ZSymbolTable mid: u64} out bool is {
 # bareFnRefError -- a bare reference to a function with required parameters
 # is a call missing its arguments (a reference needs the explicit '.take').
 bareFnRefError: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     nodeid: u32
     lineno: u32
@@ -11180,6 +11190,7 @@ bareFnRefError: function {
     misN9: (List String)
     misI9: (List u64)
     (missingCtorFields
+        :ast
         :st
         funcId: fid
         isCtor: false
@@ -11746,12 +11757,14 @@ checkDotted: function {
             if (st.reg.typetypeOf typeId: mo9) == ztypes.ztypetype.functionType then isFn9 = true
             if coerce when isFn9 then {
                 if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+                    :ast
                     :st
                     mid: mo9
                 ) == false then {
                     ufl9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
                     ufc9: nodeCol n: (ast.nodes.get i: (dp.child - 1).u64)
                     (bareFnRefError
+                        :ast
                         :st
                         nodeid: dp.nodeid
                         lineno: ufl9
@@ -11760,7 +11773,11 @@ checkDotted: function {
                         fid: mo9
                     )
                 }
-                if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable :st mid: mo9) then {
+                if (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+                    :ast
+                    :st
+                    mid: mo9
+                ) then {
                     ro9: methodReturnOf :st mid: mo9
                     match (
                         ro9
@@ -11786,6 +11803,7 @@ checkDotted: function {
                             st.typing.implicitCreate.set key: dp.nodeid.u64 value: icd9
                         } else {
                             (checkBareTypeValueAt
+                                :ast
                                 :st
                                 unitName: un9.stringview
                                 nodeid: dp.nodeid
@@ -11809,7 +11827,7 @@ checkDotted: function {
             unc9: un9.copy
             cnc9: cn.copy
             m3: "unit '\{unc9}' has no member '\{cnc9}'"
-            sug3: suggestSimilar :st parentTypeId: bt name: cn.stringview
+            sug3: suggestSimilar :ast :st parentTypeId: bt name: cn.stringview
             h3: String
             if sug3.length > 0 then {
                 sgc3: sug3.copy
@@ -12047,7 +12065,7 @@ checkDotted: function {
                     if nzo3.isNative then natE3 = true
                 } case none then null
             }
-            if natE3 == false when (methodHasNoUserArgs :st mid: mo) == false then {
+            if natE3 == false when (methodHasNoUserArgs :ast :st mid: mo) == false then {
                 cnE3: cn.copy
                 mE3: "function-pointer field '\{cnE3}' takes arguments; call it, or reference it with '.take'"
                 (addError
@@ -12061,6 +12079,7 @@ checkDotted: function {
             }
         }
         if coerce when (st.typing.suppressFnAutoCall) == false when (fnAutoCallable
+            :ast
             :st
             mid: mo
         ) then {
@@ -12186,7 +12205,7 @@ checkDotted: function {
                     btnMm9: typeNameOf :st tid: bt
                     cnMm9: cn.copy
                     mMm9: "type '\{btnMm9}' has no member '\{cnMm9}'"
-                    sugMm9: suggestSimilar :st parentTypeId: bt name: cn.stringview
+                    sugMm9: suggestSimilar :ast :st parentTypeId: bt name: cn.stringview
                     hMm9: String
                     if sugMm9.length > 0 then {
                         sgMm9: sugMm9.copy
@@ -12327,9 +12346,10 @@ checkAtomid: function {
                     } case none then null
                 }
                 if isAutoFn when (st.typing.suppressFnAutoCall) == false then {
-                    if (fnAutoCallable :st mid: fo) == false then {
+                    if (fnAutoCallable :ast :st mid: fo) == false then {
                         isAutoFn = false
                         (bareFnRefError
+                            :ast
                             :st
                             nodeid: node.nodeid
                             lineno: node.lineno
@@ -12580,7 +12600,7 @@ shadowCollapseIfSingle: function {st: zenv.ZSymbolTable name: StringView fullTid
 # (or failing negated) fact SHADOW-narrows to the arm (the bare name is
 # the payload); the opposite excludes it, and an exclusion that leaves a
 # single payload arm collapses to the same shadow form.
-applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
+applyPredFact: function {ast: Ast st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
     doNarrow9: false
     if holds when (f.negated) == false then doNarrow9 = true
     if (holds) == false when f.negated then doNarrow9 = true
@@ -12598,6 +12618,7 @@ applyPredFact: function {st: zenv.ZSymbolTable f: ArmPredFact holds: bool} is {
         } case none then null
     } else {
         (st.exclude
+            pool: ast.names
             name: f.subject.stringview
             subtypeName: f.armName.stringview
             fullTypeId: f.fullTid
@@ -12675,7 +12696,12 @@ checkClause: function {
                 } case none then null
             } else null
         }
-        with afit9: factsOut.iterate do for af9: afit9 loop applyPredFact :st f: af9 holds: true
+        with afit9: factsOut.iterate do for af9: afit9 loop (applyPredFact
+            :ast
+            :st
+            f: af9
+            holds: true
+        )
         cs9: ast.nodes.get i: (clause.statement - 1).u64
         checkStatement :st :unitName :ast :unitBody block: cs9
         return (lastStmtType :st :ast block: cs9)
@@ -13292,7 +13318,7 @@ checkFor: function {
                     ffo
                 ) case some then {
                     if (st.reg.typetypeOf typeId: ffo) == ztypes.ztypetype.functionType then {
-                        if (methodHasNoUserArgs :st mid: ffo) then {
+                        if (methodHasNoUserArgs :ast :st mid: ffo) then {
                             fro: methodReturnOf :st mid: ffo
                             match (
                                 fro
@@ -13542,7 +13568,12 @@ checkIf: function {
             if (isEmptyBody n: (ast.nodes.get i: (clause.statement - 1).u64)) then anyEmpty = true
         } else null
         bm: st.pushBlock name: "if_branch"
-        with pfit9: accFacts.iterate do for pf9: pfit9 loop applyPredFact :st f: pf9 holds: false
+        with pfit9: accFacts.iterate do for pf9: pfit9 loop (applyPredFact
+            :ast
+            :st
+            f: pf9
+            holds: false
+        )
         cfacts9: (List ArmPredFact)
         bt9: checkClause :st :unitName :ast :unitBody :clause factsOut: cfacts9 boolId: pBool9
         dvgC9: st.isUnreachable
@@ -13584,7 +13615,12 @@ checkIf: function {
         hasElse = true
         if (isEmptyBody n: (ast.nodes.get i: (ifnode.elseclause - 1).u64)) then anyEmpty = true
         ebm: st.pushBlock name: "if_else"
-        with efit9: accFacts.iterate do for ef9: efit9 loop applyPredFact :st f: ef9 holds: false
+        with efit9: accFacts.iterate do for ef9: efit9 loop (applyPredFact
+            :ast
+            :st
+            f: ef9
+            holds: false
+        )
         walkBodyAt :st :unitName :ast :unitBody bodyId: ifnode.elseclause
         et9: lastStmtType :st :ast block: (ast.nodes.get i: (ifnode.elseclause - 1).u64)
         if st.isUnreachable then elseDvg9 = true
@@ -13648,7 +13684,7 @@ checkIf: function {
     pgTid9: u64
     pgApplied9: u64
     with gfit9: guardFacts9.iterate do for gf2: gfit9 loop {
-        applyPredFact :st f: gf2 holds: false
+        applyPredFact :ast :st f: gf2 holds: false
         pgs9: gf2.subject.copy
         pgSubj9 = pgs9
         pgTid9 = gf2.fullTid
@@ -13656,7 +13692,7 @@ checkIf: function {
     }
     if elseDvg9 when ifnode.clauses.length == 1 when accFacts.length == 1 then {
         af0: accFacts.get i: 0
-        applyPredFact :st f: af0 holds: true
+        applyPredFact :ast :st f: af0 holds: true
         pga9: af0.subject.copy
         pgSubj9 = pga9
         pgTid9 = af0.fullTid
@@ -13680,6 +13716,7 @@ checkIf: function {
 # boxed value's == is the element's, so the literal wears the element type),
 # else the concrete side itself.
 comparisonCoerceTarget: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     unitName: StringView
     concrete: u64
@@ -13689,7 +13726,7 @@ comparisonCoerceTarget: function {
     match (
         opo9
     ) case some then {
-        p0n9: positionalParamName :st funcId: opo9 idx: 0 skipRecv: true
+        p0n9: positionalParamName :ast :st funcId: opo9 idx: 0 skipRecv: true
         if p0n9.length > 0 then {
             ppo9: st.typing.childOf parentTypeId: opo9 name: p0n9.stringview
             match (
@@ -13734,7 +13771,7 @@ checkBinop: function {
         if rt == literalFloatId then rLit9 = true
         if lLit9 when rLit9 then {} else {
             if lLit9 when rt > 0 then {
-                lct9: comparisonCoerceTarget :st :unitName concrete: rt op: opn.stringview
+                lct9: comparisonCoerceTarget :ast :st :unitName concrete: rt op: opn.stringview
                 lid9: innermostNodeId :ast n: (ast.nodes.get i: (binop.lhs - 1).u64)
                 if lid9 > 0 then {
                     setlc9: lct9
@@ -13742,7 +13779,7 @@ checkBinop: function {
                 }
             }
             if rLit9 when lt > 0 then {
-                rct9: comparisonCoerceTarget :st :unitName concrete: lt op: opn.stringview
+                rct9: comparisonCoerceTarget :ast :st :unitName concrete: lt op: opn.stringview
                 rid9: innermostNodeId :ast n: (ast.nodes.get i: (binop.rhs - 1).u64)
                 if rid9 > 0 then {
                     setrc9: rct9
@@ -13971,6 +14008,7 @@ dottedParentNodeId: function {ast: Ast n: Node} out u32 is {
 # from the count: a dotted method call supplies the receiver implicitly, so
 # its positional args map onto the remaining params.
 positionalParamName: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     funcId: u64
     idx: u64
@@ -13986,7 +14024,7 @@ positionalParamName: function {
         with rpit9: bp9.rows.iterate do for rpi9: rpit9 loop {
             tc: st.typing.typeChild.get i: rpi9
             if (found) == false then {
-                tnB9: st.typing.edgeText.get i: tc.nameId
+                tnB9: ast.names.texts.get i: (tc.nameId - 1).u64
                 isRecv9: false
                 if skipRecv then {
                     if tnB9.stringview == "this" then isRecv9 = true
@@ -14319,6 +14357,7 @@ isConfMarkerId: function {conf: List ztypes.ZConformance tid: u64 name: StringVi
 # params; for a record/class, fnptr fields plus non-FUNCTION fields, excluding
 # as-block constants (asConstClone) and conformance markers.
 dataFieldNames: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     tid: u64
     names: List String
@@ -14366,7 +14405,7 @@ dataFieldNames: function {
                         } case none then null
                         isMk8: false
                         mi8: u64
-                        cnBm8: st.typing.edgeText.get i: tc.nameId
+                        cnBm8: ast.names.texts.get i: (tc.nameId - 1).u64
                         mn8: mkNames8.length
                         for mi8 < mn8 loop {
                             mv8: mkNames8.get i: mi8
@@ -14378,7 +14417,7 @@ dataFieldNames: function {
                 }
             }
             if inc then {
-                cnBx9: st.typing.edgeText.get i: tc.nameId
+                cnBx9: ast.names.texts.get i: (tc.nameId - 1).u64
                 cnx: cnBx9.copy
                 names.append cnx
                 idx0: cto
@@ -14396,6 +14435,7 @@ dataFieldNames: function {
 # construction's body-carrying FUNCTION-typed (fnptr) fields are auto-bound;
 # native types have no required fields.
 missingCtorFields: function {
+    ast: Ast
     st: zenv.ZSymbolTable
     funcId: u64
     isCtor: bool
@@ -14431,7 +14471,7 @@ missingCtorFields: function {
     names: (List String)
     ids: (List u64)
     idsNm: (List u64)
-    dataFieldNames :st tid: effId :names :ids nameIds: idsNm
+    dataFieldNames :ast :st tid: effId :names :ids nameIds: idsNm
     pcnt: names.length
     if pcnt == 0 then return
     thisPn9: String
@@ -14514,7 +14554,7 @@ checkMissingCallArgs: function {ast: Ast
     }
     missingNames: (List String)
     missingIds: (List u64)
-    missingCtorFields :st :funcId :isCtor :provided :posCount :missingNames :missingIds
+    missingCtorFields :ast :st :funcId :isCtor :provided :posCount :missingNames :missingIds
     mi: u64
     mn: missingNames.length
     for mi < mn loop {
@@ -14591,7 +14631,7 @@ walkCallArgsHoist: function {
                             anid9: arg.nodeid
                             anln9: arg.lineno
                             ancl9: arg.colno
-                            sug2: suggestSimilar :st parentTypeId: funcId name: pn.stringview
+                            sug2: suggestSimilar :ast :st parentTypeId: funcId name: pn.stringview
                             h2: String
                             if sug2.length > 0 then {
                                 sgc2: sug2.copy
@@ -14673,7 +14713,7 @@ walkCallArgsHoist: function {
                 wasPos9: false
                 if pn.length == 0 then {
                     wasPos9 = true
-                    pp: positionalParamName :st :funcId idx: argIdx skipRecv: recvImplicit
+                    pp: positionalParamName :ast :st :funcId idx: argIdx skipRecv: recvImplicit
                     pn = pp
                 }
                 if funcId > 0 when pn.length > 0 then {
@@ -15068,7 +15108,7 @@ checkBoxConstruction: function {
                     match (
                         cto2
                     ) case some then {
-                        cnB4: st.typing.edgeText.get i: tc2.nameId
+                        cnB4: ast.names.texts.get i: (tc2.nameId - 1).u64
                         cn2: cnB4.copy
                         cNames2.append cn2
                         cid3: cto2
@@ -16355,7 +16395,7 @@ checkGenericCall: function {
                     # the receiver is implicit at method call sites: keep it
                     # out of the positional holder list so a label-free arg
                     # maps to the first USER param (T holders included)
-                    pnB9: st.typing.edgeText.get i: tc.nameId
+                    pnB9: ast.names.texts.get i: (tc.nameId - 1).u64
                     if pnB9.stringview != "this" then {
                         pn2: pnB9.copy
                         pNames.append pn2
@@ -16629,7 +16669,7 @@ subjectAtomName: function {ast: Ast n: Node} out String is {
 
 # sumSubtypeNames -- a union/variant's arm names: its children minus the
 # synthesized members (functions, the tag data record, enums).
-sumSubtypeNames: function {st: zenv.ZSymbolTable sid: u64} out List String is {
+sumSubtypeNames: function {ast: Ast st: zenv.ZSymbolTable sid: u64} out List String is {
     names: (List String)
     cids: (List u64)
     bs9: st.typing.childIndex.get key: sid
@@ -16642,7 +16682,7 @@ sumSubtypeNames: function {st: zenv.ZSymbolTable sid: u64} out List String is {
             match (
                 cto
             ) case some then {
-                nmB2: st.typing.edgeText.get i: tc.nameId
+                nmB2: ast.names.texts.get i: (tc.nameId - 1).u64
                 nm2: nmB2.copy
                 names.append nm2
                 cto2: cto
@@ -16792,7 +16832,12 @@ checkCase: function {
         elseMarker: st.pushBlock name: "arm:else"
         if targetName.length > 0 when subjT > 0 then {
             with eiter: covered.iterate do for en2: eiter loop {
-                st.exclude name: targetName.stringview subtypeName: en2.stringview fullTypeId: subjT
+                (st.exclude
+                    pool: ast.names
+                    name: targetName.stringview
+                    subtypeName: en2.stringview
+                    fullTypeId: subjT
+                )
             }
             shadowCollapseIfSingle :st name: targetName.stringview fullTid: subjT
         }
@@ -16807,7 +16852,7 @@ checkCase: function {
     exhaustive: hasElse
     if (exhaustive) == false then {
         if isSum then {
-            arms2: sumSubtypeNames :st sid: subjT
+            arms2: sumSubtypeNames :ast :st sid: subjT
             # ambient narrowing relaxes the requirement: a subject already
             # narrowed to a single arm needs only that arm's case; arms the
             # enclosing flow has excluded are impossible and need none.
@@ -16868,7 +16913,12 @@ checkCase: function {
     }
     if targetName.length > 0 when subjT > 0 then {
         with diter: diverging.iterate do for dn2: diter loop {
-            st.exclude name: targetName.stringview subtypeName: dn2.stringview fullTypeId: subjT
+            (st.exclude
+                pool: ast.names
+                name: targetName.stringview
+                subtypeName: dn2.stringview
+                fullTypeId: subjT
+            )
         }
         if diverging.length > 0 then {
             shadowCollapseIfSingle :st name: targetName.stringview fullTid: subjT
