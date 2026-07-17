@@ -64,6 +64,14 @@ Accessed via qualified names only -- #~"ast.parseSource ...",
   [#*: #> to=pos: #b:"nodepos" -- #~"record { line: u32  col: u32 }"]
   [#*: #> to=pos: #b:"posOf" -- #~"function {n: Node} out nodepos"]
 
+#p: #b:"Names"
+
+#ul:
+  [#*: #> to=names: #b:"Ast" -- #~"class { nodes: List Node  names: StringPool  ... }"]
+  [#*: #> to=names: #b:"StringPool" -- #~"class as { set  setOwned  get  eq  length }"]
+  [#*: #> to=names: #b:"nameTextEq" -- #~"function {ast: Ast ref: u32 s: StringView} out bool"]
+  [#*: #> to=names: #b:"nameTextCopy" -- #~"function {ast: Ast ref: u32} out String"]
+
 #p: #b:"Errors"
 
 #ul:
@@ -78,9 +86,10 @@ Accessed via qualified names only -- #~"ast.parseSource ...",
   parseSource: function {source: String.take} out Node
 """
 
-Parse a single source string into a unit #~"Node", in memory --
+Parse a single source string into a #~"Node" tree, in memory --
 no #~"ZVfs", no filesystem, no type checking. The result is a
-#~"Node.unitdef" wrapping the parsed top-level definitions.
+#~"Node.program" carrying the tree's #~"Ast" (the master node table
+plus the interned name pool) and wrapping one parsed unit.
 
 A #b:"syntax error does not fail" the call: the parser embeds a
 #~"Node.error" arm at the point of failure and keeps going, so a
@@ -89,7 +98,7 @@ the #~"error" arms to find them.
 
 #code language=zerolang: """
   root: ast.parseSource source: src.copy
-  match (root) case unitdef then { print "parsed" } else {}
+  match (root) case program then { print "parsed" } else {}
 """
 
 
@@ -117,8 +126,10 @@ definitions (#~"program", #~"unitdef", #~"functiondef",
 #~"dottedpath", #~"atomstring", ...), control flow (#~"ifexpr",
 #~"forexpr", #~"caseexpr", #~"withexpr", ...), statements
 (#~"statement", #~"assignment", #~"reassignment", ...), and
-#~"error". Every arm carries #~"lineno" / #~"colno". Match on it
-to dispatch:
+#~"error". Every arm carries #~"lineno" / #~"colno". Name-bearing
+operand arms (#~"atomid", #~"labelvalue") store their identifier as
+a #b:"name pool id" (#> to=names: see Names), not as text. Match on
+it to dispatch:
 
 #code language=zerolang: """
   match (n)
@@ -127,6 +138,53 @@ to dispatch:
   case error then { ... n.msg ... n.err ... }
   else {}
 """
+
+
+#--: names
+
+#code language=zerolang: """
+  Ast: class {
+      nodes: (List Node)     # the master node table; nodeid - 1 indexes it
+      names: StringPool      # interned identifier text
+      ...                    # unit roots, file segments
+  }
+
+  StringPool: class as {
+      set:      function {:this s: StringView} out u32   # intern; copies on first sight
+      setOwned: function {:this s: String.take} out u32  # intern a donated String
+      get:      function {:this id: u32} out String      # owned copy; panics out of range
+      eq:       function {:this id: u32 s: StringView} out bool
+      length:   function {:this} out u64
+  }
+
+  nameTextEq:   function {ast: Ast ref: u32 s: StringView} out bool
+  nameTextCopy: function {ast: Ast ref: u32} out String
+"""
+
+The #~"program" node carries the tree's #~"Ast". Identifier text is
+#b:"interned": #~"atomid" / #~"labelvalue" arms hold a #~"u32" pool
+id in #~"name" (1-based; #~"0" = absent), and equal ids always name
+the same identifier, so id compares replace text compares within one
+tree. #~"nameTextEq" answers "is this node named X" without
+allocating; #~"nameTextCopy" returns an owned copy of the text
+(#~'""' for ref 0; #~"StringPool.get" panics on 0 instead).
+
+#code language=zerolang: """
+  root: ast.parseSource source: src.copy
+  match (root) case program then {
+      n: root.ast.nodes.get i: (id - 1).u64
+      match (n) case atomid then {
+          if (ast.nameTextEq ast: root.ast ref: n.name s: "main") then {
+              nm: ast.nameTextCopy ast: root.ast ref: n.name
+              print "found \{nm}"
+          }
+      } else {}
+  } else {}
+"""
+
+Pool ids are #b:"per-parse": the pool hashes with a per-process
+seed, so ids must never be persisted or compared across two parses
+-- serialize the text instead.
 
 
 #--: pos

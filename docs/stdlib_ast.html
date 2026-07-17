@@ -91,6 +91,8 @@ Table of Contents</div>
 </li>
 <li><a href="#node">node</a>
 </li>
+<li><a href="#names">names</a>
+</li>
 <li><a href="#pos">pos</a>
 </li>
 <li><a href="#errors">errors</a>
@@ -126,6 +128,13 @@ syntactic and does not resolve names or types.</p>
 <li><a href="#pos"><strong>nodepos</strong> -- <code>record { line: u32  col: u32 }</code></a></li>
 <li><a href="#pos"><strong>posOf</strong> -- <code>function {n: Node} out nodepos</code></a></li>
 </ul>
+<p><strong>Names</strong></p>
+<ul>
+<li><a href="#names"><strong>Ast</strong> -- <code>class { nodes: List Node  names: StringPool  ... }</code></a></li>
+<li><a href="#names"><strong>StringPool</strong> -- <code>class as { set  setOwned  get  eq  length }</code></a></li>
+<li><a href="#names"><strong>nameTextEq</strong> -- <code>function {ast: Ast ref: u32 s: StringView} out bool</code></a></li>
+<li><a href="#names"><strong>nameTextCopy</strong> -- <code>function {ast: Ast ref: u32} out String</code></a></li>
+</ul>
 <p><strong>Errors</strong></p>
 <ul>
 <li><a href="#errors"><strong>ErrorData</strong> -- <code>class { nodeid: u32  lineno: u32  colno: u32  width: u32  err: err  msg: String  ... }</code></a></li>
@@ -134,15 +143,16 @@ syntactic and does not resolve names or types.</p>
 </ul>
 <h2 id="parsesource"><a href="#parsesource">3. parsesource</a></h2>
 <pre><code class="language-zerolang">  parseSource: function {source: String.take} out Node</code></pre>
-<p>Parse a single source string into a unit <code>Node</code>, in memory --
+<p>Parse a single source string into a <code>Node</code> tree, in memory --
 no <code>ZVfs</code>, no filesystem, no type checking. The result is a
-<code>Node.unitdef</code> wrapping the parsed top-level definitions.</p>
+<code>Node.program</code> carrying the tree's <code>Ast</code> (the master node table
+plus the interned name pool) and wrapping one parsed unit.</p>
 <p>A <strong>syntax error does not fail</strong> the call: the parser embeds a
 <code>Node.error</code> arm at the point of failure and keeps going, so a
 tool can report every error in one pass. Walk the tree and collect
 the <code>error</code> arms to find them.</p>
 <pre><code class="language-zerolang">  root: ast.parseSource source: src.copy
-  match (root) case unitdef then { print "parsed" } else {}</code></pre>
+  match (root) case program then { print "parsed" } else {}</code></pre>
 <h2 id="parser"><a href="#parser">4. parser</a></h2>
 <pre><code class="language-zerolang">  Parser: class as {
       create: function out this
@@ -160,14 +170,53 @@ definitions (<code>program</code>, <code>unitdef</code>, <code>functiondef</code
 <code>dottedpath</code>, <code>atomstring</code>, ...), control flow (<code>ifexpr</code>,
 <code>forexpr</code>, <code>caseexpr</code>, <code>withexpr</code>, ...), statements
 (<code>statement</code>, <code>assignment</code>, <code>reassignment</code>, ...), and
-<code>error</code>. Every arm carries <code>lineno</code> / <code>colno</code>. Match on it
-to dispatch:</p>
+<code>error</code>. Every arm carries <code>lineno</code> / <code>colno</code>. Name-bearing
+operand arms (<code>atomid</code>, <code>labelvalue</code>) store their identifier as
+a <strong>name pool id</strong> (<a href="#names">see Names), not as text. Match on</a>
+it to dispatch:</p>
 <pre><code class="language-zerolang">  match (n)
   case call then { ... n.callable ... n.arguments ... }
   case binop then { ... n.lhs ... n.operator ... n.rhs ... }
   case error then { ... n.msg ... n.err ... }
   else {}</code></pre>
-<h2 id="pos"><a href="#pos">6. pos</a></h2>
+<h2 id="names"><a href="#names">6. names</a></h2>
+<pre><code class="language-zerolang">  Ast: class {
+      nodes: (List Node)     # the master node table; nodeid - 1 indexes it
+      names: StringPool      # interned identifier text
+      ...                    # unit roots, file segments
+  }
+
+  StringPool: class as {
+      set:      function {:this s: StringView} out u32   # intern; copies on first sight
+      setOwned: function {:this s: String.take} out u32  # intern a donated String
+      get:      function {:this id: u32} out String      # owned copy; panics out of range
+      eq:       function {:this id: u32 s: StringView} out bool
+      length:   function {:this} out u64
+  }
+
+  nameTextEq:   function {ast: Ast ref: u32 s: StringView} out bool
+  nameTextCopy: function {ast: Ast ref: u32} out String</code></pre>
+<p>The <code>program</code> node carries the tree's <code>Ast</code>. Identifier text is
+<strong>interned</strong>: <code>atomid</code> / <code>labelvalue</code> arms hold a <code>u32</code> pool
+id in <code>name</code> (1-based; <code>0</code> = absent), and equal ids always name
+the same identifier, so id compares replace text compares within one
+tree. <code>nameTextEq</code> answers "is this node named X" without
+allocating; <code>nameTextCopy</code> returns an owned copy of the text
+(<code></code>'""' for ref 0; <code>StringPool.get</code> panics on 0 instead).</p>
+<pre><code class="language-zerolang">  root: ast.parseSource source: src.copy
+  match (root) case program then {
+      n: root.ast.nodes.get i: (id - 1).u64
+      match (n) case atomid then {
+          if (ast.nameTextEq ast: root.ast ref: n.name s: "main") then {
+              nm: ast.nameTextCopy ast: root.ast ref: n.name
+              print "found \{nm}"
+          }
+      } else {}
+  } else {}</code></pre>
+<p>Pool ids are <strong>per-parse</strong>: the pool hashes with a per-process
+seed, so ids must never be persisted or compared across two parses
+-- serialize the text instead.</p>
+<h2 id="pos"><a href="#pos">7. pos</a></h2>
 <pre><code class="language-zerolang">  nodepos: record { line: u32  col: u32 }
   posOf:   function {n: Node} out nodepos</code></pre>
 <p><code>posOf</code> returns the source position of an <strong>operand-position</strong>
@@ -175,7 +224,7 @@ node (the arms that appear inside expressions). Definition,
 statement, and clause arms are not operand-position and return
 <code>(0, 0)</code> -- read their <code>lineno</code> / <code>colno</code> fields directly
 instead.</p>
-<h2 id="errors"><a href="#errors">7. errors</a></h2>
+<h2 id="errors"><a href="#errors">8. errors</a></h2>
 <pre><code class="language-zerolang">  ErrorData: class {
       nodeid: u32  lineno: u32  colno: u32  width: u32
       err: err  msg: String  fsno: u32  note: String  hint: String
