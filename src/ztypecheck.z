@@ -129,13 +129,13 @@ nodeCol: function {n: Node} out u32 is {
 # "" for anything else. Matching the Node param narrows it cleanly (the proven
 # simple-param pattern), so callers pass a field/arg projection without worrying
 # about path-subject narrowing.
-atomName: function {n: Node} out String is {
+atomName: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case atomid then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } case labelvalue then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } else {
         return "".string
     }
@@ -339,18 +339,22 @@ bareCtorError: function {
 checkBareTypeConstruction: function {
     st: zenv.ZSymbolTable
     unitName: StringView
+    nodes: List Node
     node: zast.AtomIdData
     tid: u64
 } is {
-    (checkBareTypeValueAt
-        :st
-        :unitName
-        nodeid: node.nodeid
-        lineno: node.lineno
-        colno: node.colno
-        width: node.name.length.u32
-        :tid
-    )
+    cbW9: nodes.get i: (node.name - 1).u64
+    if cbW9.nameentry then {
+        (checkBareTypeValueAt
+            :st
+            :unitName
+            nodeid: node.nodeid
+            lineno: node.lineno
+            colno: node.colno
+            width: cbW9.text.length.u32
+            :tid
+        )
+    }
 }
 
 # checkBareTypeValueAt -- checkBareTypeConstruction's core against explicit
@@ -959,8 +963,8 @@ dottedDefTarget: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (dottedDefTarget :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        pn: atomName n: (nodes.get i: (n.parent - 1).u64)
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        pn: atomName :nodes n: (nodes.get i: (n.parent - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         return "\{pn}.\{cn}"
     } else {
         return "".string
@@ -1212,7 +1216,7 @@ nodeMentionsName: function {nodes: List Node n: Node name: StringView} out bool 
     match (
         n
     ) case atomid then {
-        return n.name.stringview == name
+        return (zast.nameTextEq :nodes ref: n.name s: name)
     } case expression then {
         return (nodeMentionsName :nodes n: (nodes.get i: (n.expression - 1).u64) :name)
     } case dottedpath then {
@@ -1338,7 +1342,7 @@ recordConformerContexts: function {
             match (
                 am
             ) case namedoperation then {
-                cn: atomName n: (nodes.get i: (am.operation - 1).u64)
+                cn: atomName :nodes n: (nodes.get i: (am.operation - 1).u64)
                 skipIt: false
                 if cn.length == 0 then skipIt = true
                 if (isNumericLiteralName name: cn.stringview) then skipIt = true
@@ -1365,7 +1369,7 @@ isBareGenericParam: function {nodes: List Node op: Node} out bool is {
     match (
         op
     ) case dottedpath then {
-        leaf: atomName n: (nodes.get i: (op.child - 1).u64)
+        leaf: atomName :nodes n: (nodes.get i: (op.child - 1).u64)
         if leaf.stringview == "generic" then return true
         if leaf.stringview == "valtype" then return true
         if leaf.stringview == "reftype" then return true
@@ -1386,7 +1390,7 @@ isGenericParam: function {nodes: List Node op: Node} out bool is {
     } case call then {
         return (isGenericParam :nodes op: (nodes.get i: (op.callable - 1).u64))
     } case dottedpath then {
-        leaf: atomName n: (nodes.get i: (op.child - 1).u64)
+        leaf: atomName :nodes n: (nodes.get i: (op.child - 1).u64)
         if leaf.stringview == "generic" then return true
         if leaf.stringview == "valtype" then return true
         if leaf.stringview == "reftype" then return true
@@ -1433,7 +1437,7 @@ genericConstraintKind: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (genericConstraintKind :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        cn9: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn9: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if cn9.stringview == "valtype" then return cn9
         if cn9.stringview == "reftype" then return cn9
         return "".string
@@ -1450,7 +1454,7 @@ genericConstraintBase: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (genericConstraintBase :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        return (atomName n: (nodes.get i: (n.parent - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (n.parent - 1).u64))
     } else {
         return "".string
     }
@@ -1508,7 +1512,7 @@ pathOwnership: function {nodes: List Node n: Node} out optionval ztypes.zparamow
     match (
         n
     ) case dottedpath then {
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if cn.stringview == "lock" then return (optionval.some ztypes.zparamownership.lockMode)
         if cn.stringview == "borrow" then return (optionval.some ztypes.zparamownership.borrowMode)
         if cn.stringview == "take" then return (optionval.some ztypes.zparamownership.takeMode)
@@ -1525,11 +1529,11 @@ baseTypeName: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case atomid then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } case labelvalue then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } case dottedpath then {
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if (isStripMarker name: cn.stringview) then {
             return (baseTypeName :nodes n: (nodes.get i: (n.parent - 1).u64))
         } else {
@@ -1548,7 +1552,7 @@ genericApplHead: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (genericApplHead :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
-        return (atomName n: (nodes.get i: (n.callable - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (n.callable - 1).u64))
     } else {
         return "".string
     }
@@ -1632,8 +1636,8 @@ resolveDottedArgTid: function {
     match (
         dp
     ) case dottedpath then {
-        pq9: atomName n: (nodes.get i: (dp.parent - 1).u64)
-        cq9: atomName n: (nodes.get i: (dp.child - 1).u64)
+        pq9: atomName :nodes n: (nodes.get i: (dp.parent - 1).u64)
+        cq9: atomName :nodes n: (nodes.get i: (dp.child - 1).u64)
         if pq9.length > 0 when cq9.length > 0 then {
             if (reg.isUnitName name: pq9.stringview) then {
                 return (descendNamed
@@ -1740,7 +1744,7 @@ resolveMonoRefParts: function {
     nid: u32
 } out u64 is {
     {
-        tname9: atomName n: callable
+        tname9: atomName :nodes n: callable
         if tname9.length == 0 then return 0
         sfx9: String
         subs9: (Map String value: u64)
@@ -1753,7 +1757,7 @@ resolveMonoRefParts: function {
             match (
                 arg9
             ) case namedoperation then {
-                an9: atomName n: (nodes.get i: (arg9.operation - 1).u64)
+                an9: atomName :nodes n: (nodes.get i: (arg9.operation - 1).u64)
                 if (isNumericLiteralName name: an9.stringview) then {
                     sfx9.append s: "_"
                     sfx9.append s: an9.stringview
@@ -2004,7 +2008,7 @@ recordTyperef: function {
             match (
                 arg
             ) case namedoperation then {
-                an: atomName n: (nodes.get i: (arg.operation - 1).u64)
+                an: atomName :nodes n: (nodes.get i: (arg.operation - 1).u64)
                 if (isNumericLiteralName name: an.stringview) == false then {
                     (recordTyperef
                         :ty
@@ -2024,8 +2028,8 @@ recordTyperef: function {
         # stripped inner atom is stamped too (the reference stamps both ppath + stripped).
         # A `.typedef` marker only recurses -- the dotted node itself resolves to a
         # NULL-defined typedef wrapper the dump filters out.
-        cn: atomName n: (nodes.get i: (node.child - 1).u64)
-        pn: atomName n: (nodes.get i: (node.parent - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (node.child - 1).u64)
+        pn: atomName :nodes n: (nodes.get i: (node.parent - 1).u64)
         if (reg.unitNameTid.has key: pn) then {
             # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
             # its DEFINING unit (the parent) so stampTyperefs bridges this node.
@@ -2070,9 +2074,27 @@ recordTyperef: function {
             }
         }
     } case atomid then {
-        recordResolvedName :ty :unitName :thisName name: node.name.stringview nid: node.nodeid.u64
+        rrA9: nodes.get i: (node.name - 1).u64
+        if rrA9.nameentry then {
+            (recordResolvedName
+                :ty
+                :unitName
+                :thisName
+                name: rrA9.text.stringview
+                nid: node.nodeid.u64
+            )
+        }
     } case labelvalue then {
-        recordResolvedName :ty :unitName :thisName name: node.name.stringview nid: node.nodeid.u64
+        rrA9: nodes.get i: (node.name - 1).u64
+        if rrA9.nameentry then {
+            (recordResolvedName
+                :ty
+                :unitName
+                :thisName
+                name: rrA9.text.stringview
+                nid: node.nodeid.u64
+            )
+        }
     } else null
 }
 
@@ -2086,7 +2108,7 @@ returnParamTid: function {
 } out u64 is {
     if oId == 0 then return 0
     o: nodes.get i: (oId - 1).u64
-    bn: atomName n: o
+    bn: atomName :nodes n: o
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent.
     if bn.length == 0 then bn = markerPeeledBase :nodes n: o
@@ -2124,7 +2146,7 @@ partialTyperefTid: function {
         iexM9: nodes.get i: (n.expression - 1).u64
         return (partialTyperefTid :ty :reg :nodes :units :unitName :enclKey n: iexM9)
     } case dottedpath then {
-        dcn6: atomName n: (nodes.get i: (n.child - 1).u64)
+        dcn6: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if (isStripMarker name: dcn6.stringview) then {
             dpq9: nodes.get i: (n.parent - 1).u64
             return (partialTyperefTid :ty :reg :nodes :units :unitName :enclKey n: dpq9)
@@ -2204,9 +2226,9 @@ markerPeeledBase: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case dottedpath then {
-        mcn3: atomName n: (nodes.get i: (n.child - 1).u64)
+        mcn3: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if (isStripMarker name: mcn3.stringview) then {
-            return (atomName n: (nodes.get i: (n.parent - 1).u64))
+            return (atomName :nodes n: (nodes.get i: (n.parent - 1).u64))
         }
         return "".string
     } else {
@@ -2225,7 +2247,7 @@ stampGenericParamRef: function {
 } is {
     if oId == 0 then return
     o: nodes.get i: (oId - 1).u64
-    bn: atomName n: o
+    bn: atomName :nodes n: o
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent; the marker dp wears the stamp,
     # matching recordTyperef's convention for concrete marked returns.
@@ -2310,9 +2332,12 @@ demandTyperefNames: function {
     match (
         typeExpr
     ) case atomid then {
-        if (isNumericLiteralName name: typeExpr.name.stringview) == false then {
-            reg.recordDemand name: typeExpr.name.stringview
-            reg.recordSeededDemand un: unitName name: typeExpr.name.stringview
+        teN9: nodes.get i: (typeExpr.name - 1).u64
+        if teN9.nameentry then {
+            if (isNumericLiteralName name: teN9.text.stringview) == false then {
+                reg.recordDemand name: teN9.text.stringview
+                reg.recordSeededDemand un: unitName name: teN9.text.stringview
+            }
         }
     } case expression then {
         (demandTyperefNames
@@ -2322,7 +2347,7 @@ demandTyperefNames: function {
             typeExpr: (nodes.get i: (typeExpr.expression - 1).u64)
         )
     } case call then {
-        hn: atomName n: (nodes.get i: (typeExpr.callable - 1).u64)
+        hn: atomName :nodes n: (nodes.get i: (typeExpr.callable - 1).u64)
         if hn.length > 0 then {
             reg.recordDemand name: hn.stringview
             reg.recordSeededDemand un: unitName name: hn.stringview
@@ -2359,14 +2384,14 @@ typeArgSuffixName: function {nodes: List Node reg: ztypes.ZTypeRegistry op: Node
     ) case expression then {
         return (typeArgSuffixName :nodes :reg op: (nodes.get i: (op.expression - 1).u64))
     } case dottedpath then {
-        pNm: atomName n: (nodes.get i: (op.parent - 1).u64)
+        pNm: atomName :nodes n: (nodes.get i: (op.parent - 1).u64)
         if (reg.isUnitName name: pNm.stringview) then {
-            return (atomName n: (nodes.get i: (op.child - 1).u64))
+            return (atomName :nodes n: (nodes.get i: (op.child - 1).u64))
         } else {
             return "".string
         }
     } else {
-        return (atomName n: op)
+        return (atomName :nodes n: op)
     }
 }
 
@@ -2381,25 +2406,29 @@ resolveTyperefShell: function {
     match (
         typeExpr
     ) case atomid then {
-        reg.recordDemand name: typeExpr.name.stringview
-        reg.recordSeededDemand un: unitName name: typeExpr.name.stringview
+        teR9: nodes.get i: (typeExpr.name - 1).u64
+        if teR9.nameentry == false then return 0
+        reg.recordDemand name: teR9.text.stringview
+        reg.recordSeededDemand un: unitName name: teR9.text.stringview
         return (resolveAtomType
             :ty
             :reg
             :nodes
             :units
             :unitName
-            nm: typeExpr.name.stringview
+            nm: teR9.text.stringview
             :thisName
         )
     } case labelvalue then {
+        teL9: nodes.get i: (typeExpr.name - 1).u64
+        if teL9.nameentry == false then return 0
         return (resolveAtomType
             :ty
             :reg
             :nodes
             :units
             :unitName
-            nm: typeExpr.name.stringview
+            nm: teL9.text.stringview
             :thisName
         )
     } case expression then {
@@ -2424,7 +2453,7 @@ resolveTyperefShell: function {
             nid: 0
         )
         if imid8 > 0 then return imid8
-        suffix: atomName n: (nodes.get i: (typeExpr.callable - 1).u64)
+        suffix: atomName :nodes n: (nodes.get i: (typeExpr.callable - 1).u64)
         reg.recordDemand name: suffix.stringview
         reg.recordSeededDemand un: unitName name: suffix.stringview
         aiter: typeExpr.arguments.iterate
@@ -2451,9 +2480,9 @@ resolveTyperefShell: function {
         # type-expr peels to its parent: an ownership/access strip marker
         # (Container.private.lock) or a variant/union subtype default where the arm
         # is the default value and the type is the parent (direction.north).
-        pNm: atomName n: (nodes.get i: (typeExpr.parent - 1).u64)
+        pNm: atomName :nodes n: (nodes.get i: (typeExpr.parent - 1).u64)
         if (reg.isUnitName name: pNm.stringview) then {
-            cNm: atomName n: (nodes.get i: (typeExpr.child - 1).u64)
+            cNm: atomName :nodes n: (nodes.get i: (typeExpr.child - 1).u64)
             reg.recordDemand name: cNm.stringview
             reg.recordSeededDemand un: unitName name: cNm.stringview
             did8: descendNamed :ty :reg :nodes :units defUnit: pNm.stringview name: cNm.stringview
@@ -2463,7 +2492,7 @@ resolveTyperefShell: function {
             # a dotted numeric literal (4.u64, 2.5.f32) declares the SUFFIX
             # type: peeling to the numeric parent would collapse it to the
             # literal default (i64/f64), silently mistyping the slot
-            nSfx9: atomName n: (nodes.get i: (typeExpr.child - 1).u64)
+            nSfx9: atomName :nodes n: (nodes.get i: (typeExpr.child - 1).u64)
             isSfx9: isNumericTypeName name: nSfx9.stringview
             if (isNumericLiteralName name: pNm.stringview) when isSfx9 then {
                 return (resolveAtomType
@@ -2528,7 +2557,9 @@ typeofSourceType: function {nodes: List Node
         )
     } case atomid then {
         if ownerId == 0 then return 0
-        co: ty.childOf parentTypeId: ownerId name: n.name.stringview
+        coN9: nodes.get i: (n.name - 1).u64
+        if coN9.nameentry == false then return 0
+        co: ty.childOf parentTypeId: ownerId name: coN9.text.stringview
         match (
             co
         ) case some then {
@@ -2549,7 +2580,7 @@ typeofSourceType: function {nodes: List Node
             return 0
         }
     } case call then {
-        fn9: atomName n: (nodes.get i: (n.callable - 1).u64)
+        fn9: atomName :nodes n: (nodes.get i: (n.callable - 1).u64)
         if fn9.length > 0 then {
             sk9: "\{unitName}.\{fn9}_iter"
             so9: resolvedByKey :ty :reg key: sk9
@@ -2659,7 +2690,7 @@ returnHasBorrowMarkerNode: function {nodes: List Node n: Node} out bool is {
     ) case expression then {
         return (returnHasBorrowMarkerNode :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         return cn.stringview == "borrow"
     } else {
         return false
@@ -2681,9 +2712,9 @@ paramIsThisReceiver: function {nodes: List Node op: Node} out bool is {
     ) case expression then {
         return (paramIsThisReceiver :nodes op: (nodes.get i: (op.expression - 1).u64))
     } case atomid then {
-        return op.name.stringview == "this"
+        return (zast.nameTextEq :nodes ref: op.name s: "this")
     } case dottedpath then {
-        pn: atomName n: (nodes.get i: (op.parent - 1).u64)
+        pn: atomName :nodes n: (nodes.get i: (op.parent - 1).u64)
         return pn.stringview == "this"
     } else {
         return false
@@ -2694,13 +2725,13 @@ paramTypeBaseName: function {nodes: List Node op: Node} out String is {
     match (
         op
     ) case atomid then {
-        return op.name.copy
+        return (zast.nameTextCopy :nodes ref: op.name)
     } case labelvalue then {
-        return op.name.copy
+        return (zast.nameTextCopy :nodes ref: op.name)
     } case expression then {
         return (paramTypeBaseName :nodes op: (nodes.get i: (op.expression - 1).u64))
     } case call then {
-        return (atomName n: (nodes.get i: (op.callable - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (op.callable - 1).u64))
     } else {
         return "".string
     }
@@ -2822,7 +2853,7 @@ resolveFunction: function {
             skipParam: false
             genParam: false
             fnParam9: false
-            ptn: atomName n: (nodes.get i: (pm.operation - 1).u64)
+            ptn: atomName :nodes n: (nodes.get i: (pm.operation - 1).u64)
             if skipThisType then {
                 if ptn.stringview == "this" then skipParam = true
             }
@@ -3066,7 +3097,7 @@ paramIsBorrowReftype: function {nodes: List Node
     thisName: StringView
     op: Node
 } out bool is {
-    tn: atomName n: op
+    tn: atomName :nodes n: op
     isref: false
     if tn.stringview == "this" then {
         isref = nameIsInUnitReftype :ty :reg :unitName name: thisName
@@ -3200,9 +3231,10 @@ markerTargetId: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
+    nodes: List Node
     op: Node
 } out optionval u64 is {
-    tn: atomName n: op
+    tn: atomName :nodes n: op
     if tn.length == 0 then return (optionval.none u64)
     rkey: "\{unitName}.\{tn}"
     rr: resolvedByKey :ty :reg key: rkey
@@ -3263,7 +3295,7 @@ attachMethods: function {
             ) case some then {
                 ty.setChild parentTypeId: parentId childName: mname.stringview childTypeId: mido
             } case none then {
-                cn: atomName n: (nodes.get i: (am.operation - 1).u64)
+                cn: atomName :nodes n: (nodes.get i: (am.operation - 1).u64)
                 if (isNumericLiteralName name: cn.stringview) then {
                     # A static constant's child is a per-constant NULL-unit
                     # clone of the literal's default type: named through the
@@ -3340,7 +3372,7 @@ attachMarkers: function {
         match (
             mm
         ) case namedoperation then {
-            cnm: atomName n: (nodes.get i: (mm.operation - 1).u64)
+            cnm: atomName :nodes n: (nodes.get i: (mm.operation - 1).u64)
             if (isNumericLiteralName name: cnm.stringview) == false then {
                 (recordTyperef
                     :ty
@@ -3352,7 +3384,7 @@ attachMarkers: function {
                     node: (nodes.get i: (mm.operation - 1).u64)
                 )
             }
-            mtid: markerTargetId :ty :reg :unitName op: (nodes.get i: (mm.operation - 1).u64)
+            mtid: markerTargetId :ty :reg :unitName :nodes op: (nodes.get i: (mm.operation - 1).u64)
             match (
                 mtid
             ) case some then {
@@ -3402,7 +3434,7 @@ attachMarkers: function {
 # and free its payload, corrupting the later dump walk.
 dataOutTypeName: function {nodes: List Node oId: u32} out String is {
     if oId == 0 then return "".string
-    return (atomName n: (nodes.get i: (oId - 1).u64))
+    return (atomName :nodes n: (nodes.get i: (oId - 1).u64))
 }
 
 # resolveData -- resolve a data-block definition into a DATA type: one `literal_int`
@@ -3470,7 +3502,7 @@ isTypedefField: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case dottedpath then {
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         return (cn.stringview == "typedef")
     } else {
         return false
@@ -3514,20 +3546,20 @@ mangledTypeName: function {nodes: List Node op: Node} out String is {
     match (
         op
     ) case atomid then {
-        return op.name.copy
+        return (zast.nameTextCopy :nodes ref: op.name)
     } case labelvalue then {
-        return op.name.copy
+        return (zast.nameTextCopy :nodes ref: op.name)
     } case expression then {
         return (mangledTypeName :nodes op: (nodes.get i: (op.expression - 1).u64))
     } case call then {
-        base: atomName n: (nodes.get i: (op.callable - 1).u64)
+        base: atomName :nodes n: (nodes.get i: (op.callable - 1).u64)
         aiter: op.arguments.iterate
         for argId9: aiter loop {
             arg: nodes.get i: (argId9 - 1).u64
             match (
                 arg
             ) case namedoperation then {
-                an: atomName n: (nodes.get i: (arg.operation - 1).u64)
+                an: atomName :nodes n: (nodes.get i: (arg.operation - 1).u64)
                 if an.length > 0 then {
                     base.append s: "_"
                     base.append s: an.stringview
@@ -3536,7 +3568,7 @@ mangledTypeName: function {nodes: List Node op: Node} out String is {
         }
         return base
     } case dottedpath then {
-        return (atomName n: (nodes.get i: (op.child - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (op.child - 1).u64))
     } else {
         return "".string
     }
@@ -3998,7 +4030,7 @@ dottedParentName: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (dottedParentName :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        return (atomName n: (nodes.get i: (n.parent - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (n.parent - 1).u64))
     } else {
         return "".string
     }
@@ -4015,8 +4047,8 @@ dottedTyperefId: function {nodes: List Node st: zenv.ZSymbolTable op: Node} out 
     ) case expression then {
         return (dottedTyperefId :nodes :st op: (nodes.get i: (op.expression - 1).u64))
     } case dottedpath then {
-        pn: atomName n: (nodes.get i: (op.parent - 1).u64)
-        cn: atomName n: (nodes.get i: (op.child - 1).u64)
+        pn: atomName :nodes n: (nodes.get i: (op.parent - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (op.child - 1).u64)
         if (st.reg.unitNameTid.has key: pn) then {
             k: "\{pn}.\{cn}"
             ro: resolvedByKey ty: st.typing reg: st.reg key: k
@@ -4153,7 +4185,7 @@ resolveUnion: function {
                 )
             }
             armNames9.add item: aname.copy
-            an: atomName n: (nodes.get i: (fm.operation - 1).u64)
+            an: atomName :nodes n: (nodes.get i: (fm.operation - 1).u64)
             if an.stringview != "null" then allNull = false
             cid: (resolveTyperefShellMarked
                 :ty
@@ -5039,9 +5071,9 @@ resolveDef: function {
         # return types and value uses resolve. Replicates resolveTyperefShell's
         # cross-unit leg; mirrors the reference's _type_of_definition dotted-path
         # fallback (ztypecheck.py:1184).
-        apNm9: atomName n: (nodes.get i: (defn.parent - 1).u64)
+        apNm9: atomName :nodes n: (nodes.get i: (defn.parent - 1).u64)
         if (reg.isUnitName name: apNm9.stringview) then {
-            acNm9: atomName n: (nodes.get i: (defn.child - 1).u64)
+            acNm9: atomName :nodes n: (nodes.get i: (defn.child - 1).u64)
             reg.recordDemand name: acNm9.stringview
             reg.recordSeededDemand un: unitName name: acNm9.stringview
             tgtKey9: "\{apNm9}.\{acNm9}"
@@ -5976,7 +6008,7 @@ exprCallIsReturn: function {nodes: List Node op: Node} out bool is {
     match (
         op
     ) case call then {
-        cn: atomName n: (nodes.get i: (op.callable - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (op.callable - 1).u64)
         return cn.stringview == "return"
     } else {
         return false
@@ -6062,7 +6094,7 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
     } case expression then {
         scanCallsInNode :nodes :reg node: (nodes.get i: (node.expression - 1).u64)
     } case call then {
-        cn: atomName n: (nodes.get i: (node.callable - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (node.callable - 1).u64)
         if cn.stringview == "return" then {
             reg.recordDemand name: "return"
             reg.recordDemand name: "never"
@@ -6089,8 +6121,11 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
-        if (isNumericLiteralName name: node.name.stringview) == false then {
-            reg.recordDemand name: node.name.stringview
+        scN9: nodes.get i: (node.name - 1).u64
+        if scN9.nameentry then {
+            if (isNumericLiteralName name: scN9.text.stringview) == false then {
+                reg.recordDemand name: scN9.text.stringview
+            }
         }
     } case binop then {
         scanCallsInNode :nodes :reg node: (nodes.get i: (node.lhs - 1).u64)
@@ -6134,7 +6169,7 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
         scanCallsInNode :nodes :reg node: (nodes.get i: (node.value - 1).u64)
         scanCallsInNode :nodes :reg node: (nodes.get i: (node.body - 1).u64)
     } case dottedpath then {
-        bn: atomName n: (nodes.get i: (node.parent - 1).u64)
+        bn: atomName :nodes n: (nodes.get i: (node.parent - 1).u64)
         if bn.length > 0 then {
             reg.recordDemand name: bn.stringview
             # a unit-qualified member (io.stdout) demands the member name
@@ -6145,7 +6180,7 @@ scanCallsInNode: function {nodes: List Node reg: ztypes.ZTypeRegistry node: Node
             if bn.stringview == "cli" then isUnitQ = true
             if (reg.isUnitName name: bn.stringview) then isUnitQ = true
             if isUnitQ then {
-                mn0: atomName n: (nodes.get i: (node.child - 1).u64)
+                mn0: atomName :nodes n: (nodes.get i: (node.child - 1).u64)
                 if mn0.length > 0 then reg.recordDemand name: mn0.stringview
             }
         }
@@ -6472,7 +6507,7 @@ callableUnitName: function {nodes: List Node op: Node} out String is {
     ) case expression then {
         return (callableUnitName :nodes op: (nodes.get i: (op.expression - 1).u64))
     } case call then {
-        return (atomName n: (nodes.get i: (op.callable - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (op.callable - 1).u64))
     } else {
         return "".string
     }
@@ -6492,7 +6527,7 @@ firstArgTypeName: function {nodes: List Node op: Node} out String is {
             match (
                 arg
             ) case namedoperation then {
-                return (atomName n: (nodes.get i: (arg.operation - 1).u64))
+                return (atomName :nodes n: (nodes.get i: (arg.operation - 1).u64))
             } else null
         }
         return "".string
@@ -6664,7 +6699,7 @@ isIteratorCall: function {nodes: List Node op: Node} out bool is {
     ) case expression then {
         return (isIteratorCall :nodes op: (nodes.get i: (op.expression - 1).u64))
     } case call then {
-        cn: atomName n: (nodes.get i: (op.callable - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (op.callable - 1).u64)
         return (cn.stringview == "Iterator")
     } else {
         return false
@@ -7432,7 +7467,7 @@ registerMonoFnParams: function {
             match (
                 ppm
             ) case namedoperation then {
-                pptn: atomName n: (nodes.get i: (ppm.operation - 1).u64)
+                pptn: atomName :nodes n: (nodes.get i: (ppm.operation - 1).u64)
                 ppgo: gpNames.get key: pptn
                 match (
                     ppgo
@@ -8113,7 +8148,7 @@ paramTypeId: function {nodes: List Node
     match (
         op
     ) case dottedpath then {
-        ocn: atomName n: (nodes.get i: (op.child - 1).u64)
+        ocn: atomName :nodes n: (nodes.get i: (op.child - 1).u64)
         if (isStripMarker name: ocn.stringview) then {
             dpr9: nodes.get i: (op.parent - 1).u64
             return (paramTypeId :nodes :typing :reg :unitName op: dpr9)
@@ -8126,7 +8161,7 @@ paramTypeId: function {nodes: List Node
     ) case some then {
         return r
     } case none then {
-        an: atomName n: op
+        an: atomName :nodes n: op
         ano: walkLookupTyperef ty: typing :reg currentUnit: unitName base: an.stringview
         anid: optU64Or o: ano d: 0
         if anid > 0 then return anid
@@ -10409,7 +10444,7 @@ createDottedBaseId: function {nodes: List Node n: Node} out optionval u32 is {
     match (
         n
     ) case dottedpath then {
-        ccn: atomName n: (nodes.get i: (n.child - 1).u64)
+        ccn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if ccn.stringview == "create" then return (optionval.some n.parent)
     } else null
     return (optionval.none u32)
@@ -10421,7 +10456,7 @@ rootNameOf: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case atomid then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } case expression then {
         return (rootNameOf :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
@@ -10436,7 +10471,7 @@ dottedChildName: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case dottedpath then {
-        return (atomName n: (nodes.get i: (n.child - 1).u64))
+        return (atomName :nodes n: (nodes.get i: (n.child - 1).u64))
     } else {
         return "".string
     }
@@ -10454,7 +10489,7 @@ unionCreateArmName: function {nodes: List Node st: zenv.ZSymbolTable n: Node} ou
         match (
             dgot
         ) case some then {
-            return (atomName n: (nodes.get i: (n.child - 1).u64))
+            return (atomName :nodes n: (nodes.get i: (n.child - 1).u64))
         } case none then {
             return "".string
         }
@@ -10479,7 +10514,7 @@ borrowDottedBaseId: function {nodes: List Node n: Node} out optionval u32 is {
     match (
         n
     ) case dottedpath then {
-        bcn: atomName n: (nodes.get i: (n.child - 1).u64)
+        bcn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if bcn.stringview == "borrow" then return (optionval.some n.parent)
     } else null
     return (optionval.none u32)
@@ -10619,8 +10654,8 @@ metaCreateBaseId: function {nodes: List Node n: Node} out optionval u32 is {
     match (
         n
     ) case dottedpath then {
-        pn: atomName n: (nodes.get i: (n.parent - 1).u64)
-        cn2: atomName n: (nodes.get i: (n.child - 1).u64)
+        pn: atomName :nodes n: (nodes.get i: (n.parent - 1).u64)
+        cn2: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if pn.stringview == "meta" when cn2.stringview == "create" then {
             return (optionval.some (nodeId n: (nodes.get i: (n.parent - 1).u64)))
         }
@@ -11009,9 +11044,9 @@ checkDotted: function {
     # Numeric dotted suffix (`1.u8`): when the child names a non-function
     # type, the path is a typed-literal cast -- the parent atom coerces to
     # the suffix type and the path carries it.
-    castBase: atomName n: (nodes.get i: (dp.parent - 1).u64)
+    castBase: atomName :nodes n: (nodes.get i: (dp.parent - 1).u64)
     if (isNumericLiteralName name: castBase.stringview) then {
-        castChild: atomName n: (nodes.get i: (dp.child - 1).u64)
+        castChild: atomName :nodes n: (nodes.get i: (dp.child - 1).u64)
         castOpt: (walkLookupTyperef
             ty: st.typing
             reg: st.reg
@@ -11042,7 +11077,7 @@ checkDotted: function {
     # a `.take` child makes the base a function REFERENCE: the base walk
     # must not auto-call it
     supFnPrev9: st.typing.suppressFnAutoCall
-    tknm9: atomName n: (nodes.get i: (dp.child - 1).u64)
+    tknm9: atomName :nodes n: (nodes.get i: (dp.child - 1).u64)
     if tknm9.stringview == "take" then st.typing.suppressFnAutoCall = true
     bt: checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (dp.parent - 1).u64)
     st.typing.suppressFnAutoCall = supFnPrev9
@@ -11050,7 +11085,7 @@ checkDotted: function {
     if bt == 0 then {
         # an unresolved bare-name base may be a unit-qualified member
         # path (io.stdout): the side map types the base as the UNIT type.
-        ubn: atomName n: (nodes.get i: (dp.parent - 1).u64)
+        ubn: atomName :nodes n: (nodes.get i: (dp.parent - 1).u64)
         if ubn.length > 0 then {
             ubo: st.reg.unitNameTid.get key: ubn
             match (
@@ -11079,7 +11114,7 @@ checkDotted: function {
             }
         }
     }
-    cn: atomName n: (nodes.get i: (dp.child - 1).u64)
+    cn: atomName :nodes n: (nodes.get i: (dp.child - 1).u64)
     if cn.length == 0 then return 0
     # `.private` / `.public` access markers: the path carries the base's
     # type (the access view is a dump-filtered shell, not a member).
@@ -11937,8 +11972,10 @@ checkAtomid: function {
     nodes: List Node unitBody: List u32
     node: zast.AtomIdData
 } out u64 is {
+    ndNm9: nodes.get i: (node.name - 1).u64
+    if ndNm9.nameentry == false then return 0
     result: u64
-    vtOpt: st.lookup name: node.name.stringview
+    vtOpt: st.lookup name: ndNm9.text.stringview
     match (
         vtOpt
     ) case some then {
@@ -11946,8 +11983,8 @@ checkAtomid: function {
         # break/continue diverge: the atom's value is never (the scope
         # entry stays the unregistered placeholder).
         isBrk9: false
-        if node.name.stringview == "break" then isBrk9 = true
-        if node.name.stringview == "continue" then isBrk9 = true
+        if ndNm9.text.stringview == "break" then isBrk9 = true
+        if ndNm9.text.stringview == "continue" then isBrk9 = true
         if isBrk9 then {
             result = (optU64Or
                 o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never")
@@ -11957,7 +11994,7 @@ checkAtomid: function {
         stampGate :st nid: node.nodeid tid: result
         # atom-use variable id: stamped even during template walks (variable
         # ids are valid there; stampGate only gates GENERIC_PARAM types)
-        avo9: st.lookupVarId name: node.name.stringview
+        avo9: st.lookupVarId name: ndNm9.text.stringview
         match (
             avo9
         ) case some then {
@@ -11965,7 +12002,7 @@ checkAtomid: function {
             st.typing.atomVariableId.set key: node.nodeid.u64 value: setav9
         } case none then null
     } case none then {
-        if node.name.stringview == "return" then {
+        if ndNm9.text.stringview == "return" then {
             mrt9: st.typing.currentReturnTypeId
             if mrt9 > 0 then {
                 mtt9: st.reg.typetypeOf typeId: mrt9
@@ -11992,8 +12029,8 @@ checkAtomid: function {
                 }
             }
         }
-        if (st.isTakenName name: node.name.stringview) then {
-            nmc9: node.name.copy
+        if (st.isTakenName name: ndNm9.text.stringview) then {
+            nmc9: ndNm9.text.copy
             eh5: String
             m5: "cannot use '\{nmc9}' after ownership transfer"
             nt5: "this name no longer owns a value; it was moved earlier".string
@@ -12006,12 +12043,12 @@ checkAtomid: function {
                 msg: m5
                 note: nt5
                 hint: eh5
-                width: node.name.length.u32
+                width: ndNm9.text.length.u32
             )
             return 0
         }
-        if (isNumericLiteralName name: node.name.stringview) then {
-            if (isFloatLiteralName name: node.name.stringview) then {
+        if (isNumericLiteralName name: ndNm9.text.stringview) then {
+            if (isFloatLiteralName name: ndNm9.text.stringview) then {
                 result = literalFloatId
             } else {
                 result = literalIntId
@@ -12023,7 +12060,7 @@ checkAtomid: function {
                 ty: st.typing
                 reg: st.reg
                 currentUnit: unitName
-                base: node.name.stringview
+                base: ndNm9.text.stringview
             )
             match (
                 fo
@@ -12050,7 +12087,7 @@ checkAtomid: function {
                             nodeid: node.nodeid
                             lineno: node.lineno
                             colno: node.colno
-                            width: node.name.length.u32
+                            width: ndNm9.text.length.u32
                             fid: fo
                         )
                     }
@@ -12071,12 +12108,12 @@ checkAtomid: function {
                     # only an atom NAMING the type is a bare construction; a
                     # value alias typed as it (true: bool.true) is a value use
                     tnq9: typeNameOf :st tid: fo
-                    if tnq9.stringview == node.name.stringview then {
+                    if tnq9.stringview == ndNm9.text.stringview then {
                         if (isImplicitZeroCreateTid :st tid: fo) then {
                             icv9: fo
                             st.typing.implicitCreate.set key: node.nodeid.u64 value: icv9
                         } else {
-                            checkBareTypeConstruction :st :unitName :node tid: fo
+                            checkBareTypeConstruction :st :unitName :nodes :node tid: fo
                         }
                     }
                 }
@@ -12086,7 +12123,7 @@ checkAtomid: function {
                 # auto-call RETURN type above, which is not the referent)
                 setud9: fo
                 st.typing.atomUnitDefId.set key: node.nodeid.u64 value: setud9
-                maybeWalkMethods :st :unitName :nodes :unitBody name: node.name.stringview
+                maybeWalkMethods :st :unitName :nodes :unitBody name: ndNm9.text.stringview
             } case none then null
         }
     }
@@ -12169,7 +12206,7 @@ predDottedFact: function {nodes: List Node
     ) case expression then {
         return (predDottedFact :nodes :st n: (nodes.get i: (n.expression - 1).u64) :boolId :negated)
     } case dottedpath then {
-        cnc9: atomName n: (nodes.get i: (n.child - 1).u64)
+        cnc9: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         return (predDottedCore
             :nodes
             :st
@@ -12198,7 +12235,7 @@ predFactOf: function {
     ) case expression then {
         return (predFactOf :nodes :st n: (nodes.get i: (n.expression - 1).u64) :boolId)
     } case dottedpath then {
-        cn9: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn9: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if cn9.stringview == "true" then return (predDottedFact
             :nodes
             :st
@@ -12637,7 +12674,7 @@ checkReassignment: function {
             }
         }
     }
-    nm: atomName n: tpn9
+    nm: atomName :nodes n: tpn9
     if nm.length > 0 then {
         st.resetNarrowing name: nm.stringview
         nvo9: st.lookupVarId name: nm.stringview
@@ -12737,7 +12774,9 @@ withValueOwnership: function {
     ) case expression then {
         return (withValueOwnership :nodes :st v: (nodes.get i: (v.expression - 1).u64))
     } case atomid then {
-        vo: st.lookupVarId name: v.name.stringview
+        vNm9: nodes.get i: (v.name - 1).u64
+        if vNm9.nameentry == false then return ztypes.zownership.owned
+        vo: st.lookupVarId name: vNm9.text.stringview
         match (
             vo
         ) case some then {
@@ -12746,7 +12785,7 @@ withValueOwnership: function {
             return ztypes.zownership.owned
         }
     } case dottedpath then {
-        cn: atomName n: (nodes.get i: (v.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (v.child - 1).u64)
         if cn.stringview == "take" then {
             return ztypes.zownership.owned
         } else {
@@ -12829,7 +12868,7 @@ blockHasBreak: function {nodes: List Node n: Node} out bool is {
     } case expression then {
         return (blockHasBreak :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
-        return (n.name.stringview == "break")
+        return (zast.nameTextEq :nodes ref: n.name s: "break")
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0Id9: cliter loop {
@@ -13100,7 +13139,7 @@ checkFor: function {
                 }
                 if elem > 0 then {
                     if isView then {
-                        srcName: atomName n: (nodes.get i: (cond.operation - 1).u64)
+                        srcName: atomName :nodes n: (nodes.get i: (cond.operation - 1).u64)
                         bo: "<iterator>".string
                         if srcName.length > 0 then bo = srcName.copy
                         v: st.reg.newVariable ztypeId: elem ownership: ztypes.zownership.borrowed
@@ -13414,7 +13453,7 @@ checkBinop: function {
     result: u64
     lt: checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (binop.lhs - 1).u64)
     rt: checkValue :st :unitName :nodes :unitBody node: (nodes.get i: (binop.rhs - 1).u64)
-    opn: atomName n: (nodes.get i: (binop.operator - 1).u64)
+    opn: atomName :nodes n: (nodes.get i: (binop.operator - 1).u64)
     if (isComparisonOp name: opn.stringview) then {
         boOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "bool"
         match (
@@ -13584,7 +13623,7 @@ pathRootName: function {nodes: List Node n: Node} out String is {
     } case dottedpath then {
         return (pathRootName :nodes n: (nodes.get i: (n.parent - 1).u64))
     } case atomid then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } else {
         return "".string
     }
@@ -13621,7 +13660,7 @@ bareAtomName: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (bareAtomName :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } else {
         return "".string
     }
@@ -13794,7 +13833,7 @@ lockSuffixBase: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (lockSuffixBase :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        ln: atomName n: (nodes.get i: (n.child - 1).u64)
+        ln: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if ln.stringview == "lock" then {
             return (bareAtomName :nodes n: (nodes.get i: (n.parent - 1).u64))
         } else {
@@ -13819,11 +13858,11 @@ appendValueTuple: function {nodes: List Node n: Node dst: List String} is {
     ) case expression then {
         appendValueTuple :nodes n: (nodes.get i: (n.expression - 1).u64) :dst
     } case atomid then {
-        nm: n.name.copy
+        nm: zast.nameTextCopy :nodes ref: n.name
         dst.append nm
     } case dottedpath then {
         appendValueTuple :nodes n: (nodes.get i: (n.parent - 1).u64) :dst
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if cn.length > 0 then dst.append cn
     } else null
 }
@@ -14823,7 +14862,7 @@ returnedBareFieldName: function {nodes: List Node st: zenv.ZSymbolTable n: Node}
     ) case expression then {
         return (returnedBareFieldName :nodes :st n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        bfc9: atomName n: (nodes.get i: (n.child - 1).u64)
+        bfc9: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if bfc9.length == 0 then return "".string
         if (isStripMarker name: bfc9.stringview) then return "".string
         bfp9: nodeId n: (nodes.get i: (n.parent - 1).u64)
@@ -14864,7 +14903,7 @@ unresolvedBareCallable: function {nodes: List Node
             n: (nodes.get i: (n.expression - 1).u64)
         )
     } case call then {
-        ubc9: atomName n: (nodes.get i: (n.callable - 1).u64)
+        ubc9: atomName :nodes n: (nodes.get i: (n.callable - 1).u64)
         if ubc9.length == 0 then return "".string
         ubv9: st.lookupVarId name: ubc9.stringview
         match (
@@ -14912,7 +14951,7 @@ checkCall: function {
     call: zast.CallData
 } out u64 is {
     result: u64
-    cn: atomName n: (nodes.get i: (call.callable - 1).u64)
+    cn: atomName :nodes n: (nodes.get i: (call.callable - 1).u64)
     if cn.stringview == "return" then {
         rtOpt: walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "return"
         match (
@@ -16063,7 +16102,7 @@ checkGenericCall: function {
                 if an2.stringview == gp2.stringview then isTypeArg = true
             }
             if isTypeArg then {
-                tn3: atomName n: (nodes.get i: (arg.operation - 1).u64)
+                tn3: atomName :nodes n: (nodes.get i: (arg.operation - 1).u64)
                 to3: (walkLookupTyperef
                     ty: st.typing
                     reg: st.reg
@@ -16287,10 +16326,12 @@ subjectAtomName: function {nodes: List Node n: Node} out String is {
     ) case expression then {
         return (subjectAtomName :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case atomid then {
-        if (isNumericLiteralName name: n.name.stringview) then {
+        saB9: nodes.get i: (n.name - 1).u64
+        if saB9.nameentry == false then return "".string
+        if (isNumericLiteralName name: saB9.text.stringview) then {
             return "".string
         } else {
-            return n.name.copy
+            return saB9.text.copy
         }
     } else {
         return "".string
@@ -16403,7 +16444,7 @@ checkCase: function {
         match (
             clause
         ) case caseclause then {
-            armName: atomName n: (nodes.get i: (clause.matcharm - 1).u64)
+            armName: atomName :nodes n: (nodes.get i: (clause.matcharm - 1).u64)
             if (isEmptyBody n: (nodes.get i: (clause.statement - 1).u64)) then anyEmpty = true
             # A value-match literal arm wears the subject's concrete type.
             if (isSum) == false then {
@@ -16614,13 +16655,15 @@ checkValue: function {
         return (checkFor :st :unitName :nodes :unitBody fornode: node)
     } case labelvalue then {
         # the `:x` shorthand in value position reads the local x
-        lvo9: st.lookup name: node.name.stringview
+        lvNm9: nodes.get i: (node.name - 1).u64
+        if lvNm9.nameentry == false then return 0
+        lvo9: st.lookup name: lvNm9.text.stringview
         match (
             lvo9
         ) case some then {
             setlv9: lvo9
             st.typing.nodeType.set key: node.nodeid.u64 value: setlv9
-            lvv9: st.lookupVarId name: node.name.stringview
+            lvv9: st.lookupVarId name: lvNm9.text.stringview
             match (
                 lvv9
             ) case some then {
@@ -16703,6 +16746,7 @@ checkStmtInner: function {
         bn0: bareAtomName :nodes n: (nodes.get i: (inner.expression - 1).u64)
         if bn0.stringview == "break" then isR0 = true
         if bn0.stringview == "continue" then isR0 = true
+        if bn0.stringview == "return" then isR0 = true
         return isR0
     } case assignment then {
         checkAssignment :st :unitName :nodes :unitBody asgn: inner
@@ -17783,14 +17827,16 @@ constantOperandType: function {nodes: List Node
         )
     } case atomid then {
         result: u64
-        if (isNumericLiteralName name: n.name.stringview) then {
-            if (isFloatLiteralName name: n.name.stringview) then {
+        trN9: nodes.get i: (n.name - 1).u64
+        if trN9.nameentry == false then return 0
+        if (isNumericLiteralName name: trN9.text.stringview) then {
+            if (isFloatLiteralName name: trN9.text.stringview) then {
                 result = literalFloatId
             } else {
                 result = literalIntId
             }
         } else {
-            ro: walkLookupTyperef :ty :reg currentUnit: mainName base: n.name.stringview
+            ro: walkLookupTyperef :ty :reg currentUnit: mainName base: trN9.text.stringview
             match (
                 ro
             ) case some then {
@@ -17805,7 +17851,7 @@ constantOperandType: function {nodes: List Node
     } case binop then {
         lt: constantOperandType :nodes :ty :reg :mainName n: (nodes.get i: (n.lhs - 1).u64)
         rt: constantOperandType :nodes :ty :reg :mainName n: (nodes.get i: (n.rhs - 1).u64)
-        opn9: atomName n: (nodes.get i: (n.operator - 1).u64)
+        opn9: atomName :nodes n: (nodes.get i: (n.operator - 1).u64)
         if (isComparisonOp name: opn9.stringview) then {
             # A comparison condition: the result is bool and a literal
             # operand coerces (restamps) at the concrete side's type.
@@ -18051,58 +18097,62 @@ resolveConstantDef: function {
         iexL9: nodes.get i: (defn.expression - 1).u64
         resolveConstantDef :nodes :ty :reg :mainName :defName defn: iexL9
     } case atomid then {
-        if (isNumericLiteralName name: defn.name.stringview) then {
-            base: "i64"
-            if (isFloatLiteralName name: defn.name.stringview) then base = "f64"
-            tOpt: walkLookupTyperef :ty :reg currentUnit: mainName :base
-            match (
-                tOpt
-            ) case some then {
-                cu: reg.unitNameTid.get key: mainName.string
+        dfN9: nodes.get i: (defn.name - 1).u64
+        if dfN9.nameentry then {
+            if (isNumericLiteralName name: dfN9.text.stringview) then {
+                base: "i64"
+                if (isFloatLiteralName name: dfN9.text.stringview) then base = "f64"
+                tOpt: walkLookupTyperef :ty :reg currentUnit: mainName :base
                 match (
-                    cu
+                    tOpt
                 ) case some then {
-                    ty.setChild parentTypeId: cu childName: defName childTypeId: tOpt
+                    cu: reg.unitNameTid.get key: mainName.string
+                    match (
+                        cu
+                    ) case some then {
+                        ty.setChild parentTypeId: cu childName: defName childTypeId: tOpt
+                    } case none then null
                 } case none then null
-            } case none then null
-        } else {
-            # a bare TYPE name is not a constant value: unit constants take
-            # literal values (a zero value is a function-body binding)
-            bOpt9: walkLookupTyperef :ty :reg currentUnit: mainName base: defn.name.stringview
-            match (
-                bOpt9
-            ) case some then {
-                btt9: reg.typetypeOf typeId: bOpt9
-                isFam9: false
-                if btt9 == ztypes.ztypetype.recordType then isFam9 = true
-                if btt9 == ztypes.ztypetype.classType then isFam9 = true
-                if btt9 == ztypes.ztypetype.unionType then isFam9 = true
-                if btt9 == ztypes.ztypetype.variantType then isFam9 = true
-                if btt9 == ztypes.ztypetype.protocolType then isFam9 = true
-                if btt9 == ztypes.ztypetype.facetType then isFam9 = true
-                if isFam9 then {
-                    btn9: typeNameOfReg :reg tid: bOpt9
-                    if btn9.stringview == defn.name.stringview then {
-                        dnc9: defn.name.copy
-                        um9: "a unit-level constant takes a literal value, not the type '\{dnc9}'"
-                        un9: "unit constants inline literal numeric values".string
-                        dnh9: defn.name.copy
-                        uh9: "a zero value is a function-body binding ('\{defName}: \{dnh9}' inside a function)"
-                        ty.errors.append (zast.ErrorData
-                            nodeid: defn.nodeid
-                            lineno: defn.lineno
-                            colno: defn.colno
-                            width: defn.name.length.u32
-                            err: zast.err.typeError
-                            msg: um9
-                            fsno: 0
-                            note: un9
-                            hint: uh9
-                        )
-                        ty.isError = true
+            } else {
+                # a bare TYPE name is not a constant value: unit constants take
+                # literal values (a zero value is a function-body binding)
+                bOpt9: walkLookupTyperef :ty :reg currentUnit: mainName base: dfN9.text.stringview
+                match (
+                    bOpt9
+                ) case some then {
+                    btt9: reg.typetypeOf typeId: bOpt9
+                    isFam9: false
+                    if btt9 == ztypes.ztypetype.recordType then isFam9 = true
+                    if btt9 == ztypes.ztypetype.classType then isFam9 = true
+                    if btt9 == ztypes.ztypetype.unionType then isFam9 = true
+                    if btt9 == ztypes.ztypetype.variantType then isFam9 = true
+                    if btt9 == ztypes.ztypetype.protocolType then isFam9 = true
+                    if btt9 == ztypes.ztypetype.facetType then isFam9 = true
+                    if isFam9 then {
+                        btn9: typeNameOfReg :reg tid: bOpt9
+                        dnv9: dfN9.text.copy
+                        if btn9.stringview == dnv9.stringview then {
+                            dnc9: dnv9.copy
+                            um9: "a unit-level constant takes a literal value, not the type '\{dnc9}'"
+                            un9: "unit constants inline literal numeric values".string
+                            dnh9: dnv9.copy
+                            uh9: "a zero value is a function-body binding ('\{defName}: \{dnh9}' inside a function)"
+                            ty.errors.append (zast.ErrorData
+                                nodeid: defn.nodeid
+                                lineno: defn.lineno
+                                colno: defn.colno
+                                width: dfN9.text.length.u32
+                                err: zast.err.typeError
+                                msg: um9
+                                fsno: 0
+                                note: un9
+                                hint: uh9
+                            )
+                            ty.isError = true
+                        }
                     }
-                }
-            } case none then null
+                } case none then null
+            }
         }
     } else {
         if (isBinopNode n: defn) then {

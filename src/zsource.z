@@ -10,11 +10,11 @@ Node: zast.Node
 # the original zc lint helpers) ----
 
 # atomName -- the identifier name of an atomid node, else "".
-atomName: function {n: Node} out String is {
+atomName: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case atomid then {
-        return n.name.copy
+        return (zast.nameTextCopy :nodes ref: n.name)
     } else {
         return "".string
     }
@@ -552,7 +552,7 @@ Analysis: class {
     # checkElide -- L003 a built-in template call whose first argument carries its
     # primary parameter name. Receives the narrowed callable + argument list.
     checkElide: function {:this nodes: List Node callable: Node arguments: List u32} is {
-        cn: atomName n: callable
+        cn: atomName :nodes n: callable
         if cn.length == 0 then return
         primary: primaryGenericParam name: cn.stringview
         if primary.length == 0 then return
@@ -599,7 +599,7 @@ Analysis: class {
                 a
             ) case namedoperation then {
                 label: optName o: a.name
-                val: atomName n: (nodes.get i: (a.operation - 1).u64)
+                val: atomName :nodes n: (nodes.get i: (a.operation - 1).u64)
                 lsv: label.stringview
                 vsv: val.stringview
                 if lsv.length > 0 when vsv.length > 0 when lsv == vsv then {
@@ -1044,7 +1044,7 @@ Analysis: class {
                 hint: n.hint.copy
             )
             this.diags.append d
-        } case placeholder then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
+        } case placeholder then null case nameentry then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
             this.walk :nodes n: (nodes.get i: (n.lhs - 1).u64)
             this.walk :nodes n: (nodes.get i: (n.operator - 1).u64)
             this.walk :nodes n: (nodes.get i: (n.rhs - 1).u64)
@@ -1274,9 +1274,9 @@ Analysis: class {
                 this.tryBareZeroInit :nodes value: (nodes.get i: (s0Id9 - 1).u64)
             }
         } case dottedpath then {
-            repl: bareZeroTypeName n: (nodes.get i: (value.child - 1).u64)
+            repl: bareZeroTypeName :nodes n: (nodes.get i: (value.child - 1).u64)
             if repl.length == 0 then return
-            ptext: bareZeroParentText n: (nodes.get i: (value.parent - 1).u64)
+            ptext: bareZeroParentText :nodes n: (nodes.get i: (value.parent - 1).u64)
             if ptext.length == 0 then return
             isStr9: ptext.stringview == "\"\""
             isStrRepl9: repl.stringview == "String"
@@ -1997,7 +1997,7 @@ Analysis: class {
     walkSuf: function {:this nodes: List Node n: Node uname: StringView st: zenv.ZSymbolTable funcretId: u32} is {
         match (
             n
-        ) case error then null case placeholder then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
+        ) case error then null case placeholder then null case nameentry then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
             bl9: nodes.get i: (n.lhs - 1).u64
             br9: nodes.get i: (n.rhs - 1).u64
             this.sufBinop :nodes lhs: bl9 rhs: br9 :uname :st
@@ -2259,6 +2259,8 @@ nodeInfoOf: function {n: Node} out nodeinfo is {
         return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
     } case placeholder then {
         return (nodeinfo id: 0 line: 0 col: 0)
+    } case nameentry then {
+        return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
     } case atomid then {
         return (nodeinfo id: n.nodeid line: n.lineno col: n.colno)
     } case labelvalue then {
@@ -2322,14 +2324,15 @@ nodeInfoOf: function {n: Node} out nodeinfo is {
 # zero-init suffix candidate: `string` maps to String, a concrete numeric
 # type name maps to itself, anything else to "" (c8/c32/f128 are not
 # constructible stdlib types).
-bareZeroTypeName: function {n: Node} out String is {
+bareZeroTypeName: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case atomid then {
-        if n.name.stringview == "string" then return "String".string
-        isNum9: isNumericTypeName name: n.name.stringview
-        if isNum9 when n.name.stringview != "c8" then {
-            if n.name.stringview != "c32" when n.name.stringview != "f128" then return n.name.copy
+        znB9: zast.nameTextCopy :nodes ref: n.name
+        if znB9.stringview == "string" then return "String".string
+        isNum9: isNumericTypeName name: znB9.stringview
+        if isNum9 when znB9.stringview != "c8" then {
+            if znB9.stringview != "c32" when znB9.stringview != "f128" then return znB9.copy
         }
     } else null
     return "".string
@@ -2338,14 +2341,14 @@ bareZeroTypeName: function {n: Node} out String is {
 # bareZeroParentText -- the source spelling of a zero-literal dotted parent:
 # `""` for the empty string literal, `0` / `0.0` for the numeric zeros; ""
 # when the parent is not a zero literal.
-bareZeroParentText: function {n: Node} out String is {
+bareZeroParentText: function {nodes: List Node n: Node} out String is {
     match (
         n
     ) case atomstring then {
         if n.stringparts.length == 0 then return "\"\"".string
     } case atomid then {
-        if n.name.stringview == "0" then return "0".string
-        if n.name.stringview == "0.0" then return "0.0".string
+        if (zast.nameTextEq :nodes ref: n.name s: "0") then return "0".string
+        if (zast.nameTextEq :nodes ref: n.name s: "0.0") then return "0.0".string
     } else null
     return "".string
 }
@@ -2408,11 +2411,11 @@ operandSuffix: function {nodes: List Node n: Node} out sufrec is {
     ) case expression then {
         return (operandSuffix :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case dottedpath then {
-        cn: atomName n: (nodes.get i: (n.child - 1).u64)
+        cn: atomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if (isNumericTypeName name: cn.stringview) == false then {
             return (sufrec tname: "".string line: 0 col: 0)
         }
-        pn: atomName n: (nodes.get i: (n.parent - 1).u64)
+        pn: atomName :nodes n: (nodes.get i: (n.parent - 1).u64)
         if pn.length == 0 then return (sufrec tname: "".string line: 0 col: 0)
         if (literalFitsBase numstr: pn.stringview) == false then {
             return (sufrec tname: "".string line: 0 col: 0)

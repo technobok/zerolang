@@ -165,13 +165,11 @@ fnBodyHasYield: function {nodes: List zast.Node n: Node} out bool is {
 }
 
 # leafAtomName -- an atom's name (owned copy); "" for other shapes.
-leafAtomName: function {n: Node} out String is {
+leafAtomName: function {nodes: List zast.Node n: Node} out String is {
     match (
         n
     ) case atomid then {
-        nv: n.name.stringview
-        nc: nv.string
-        return nc
+        return (zast.nameTextCopy :nodes ref: n.name)
     } else {
         return "".string
     }
@@ -202,7 +200,7 @@ returnHeadOf: function {nodes: List zast.Node n: Node} out String is {
     ) case expression then {
         return (returnHeadOf :nodes n: (nodes.get i: (n.expression - 1).u64))
     } case call then {
-        return (leafAtomName n: (nodes.get i: (n.callable - 1).u64))
+        return (leafAtomName :nodes n: (nodes.get i: (n.callable - 1).u64))
     } else {
         return "".string
     }
@@ -214,7 +212,7 @@ pathLeafName: function {nodes: List zast.Node n: Node} out String is {
     match (
         n
     ) case dottedpath then {
-        ln: leafAtomName n: (nodes.get i: (n.child - 1).u64)
+        ln: leafAtomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if ln.stringview == "take" then return ln
         if ln.stringview == "lock" then return ln
         if ln.stringview == "borrow" then return ln
@@ -232,21 +230,19 @@ clonePath: function {nodes: List zast.Node ids: GenIds n: Node} out Node is {
     match (
         n
     ) case atomid then {
-        ln0: n.lineno
-        co0: n.colno
-        nmv: n.name.stringview
-        nm0: nmv.string
-        return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: ln0 colno: co0 name: nm0))
+        # interned name: the clone shares the nameentry row
+        return (Node.atomid (zast.AtomIdData
+            nodeid: ids.mint
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name)
+        )
     } case labelvalue then {
-        ln1: n.lineno
-        co1: n.colno
-        lmv: n.name.stringview
-        lm0: lmv.string
         return (Node.labelvalue (zast.LabelValueData
             nodeid: ids.mint
-            lineno: ln1
-            colno: co1
-            name: lm0)
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name)
         )
     } case dottedpath then {
         ln2: n.lineno
@@ -343,7 +339,12 @@ clonePath: function {nodes: List zast.Node ids: GenIds n: Node} out Node is {
         )
     } else {
         # unsupported path shape -- an error atom keeps the tree total
-        return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: 0 colno: 0 name: "?".string))
+        return (Node.atomid (zast.AtomIdData
+            nodeid: ids.mint
+            lineno: 0
+            colno: 0
+            name: (internSynthName :nodes text: "?"))
+        )
     }
 }
 
@@ -446,7 +447,7 @@ givesFromOp: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesParts
 }
 
 acceptsFromOp: function {nodes: List zast.Node ids: GenIds n: Node dst: GivesParts} is {
-    nm0: leafAtomName :n
+    nm0: leafAtomName :nodes :n
     if nm0.stringview != "null" then {
         ac: clonePath :nodes :ids :n
         dst.acceptsTy = (Option.some ac)
@@ -497,12 +498,32 @@ cloneDottedParent: function {nodes: List zast.Node ids: GenIds n: Node} out Opti
 
 # mkAtom / mkNamedOp / mkBareOp -- small node factories at a source
 # position (the synthesized members all carry the function's start).
-mkAtom: function {ids: GenIds line: u32 col: u32 name: StringView} out Node is {
+# internSynthName -- append a nameentry row for synthesized-name text and
+# return its table id (undeduplicated; synthesis volume is small).
+internSynthName: function {nodes: List zast.Node text: StringView} out u32 is {
+    return (zast.tableAppendRebase
+        :nodes
+        n: (Node.nameentry (zast.NameEntryData
+            nodeid: 0
+            lineno: 0
+            colno: 0
+            text: text.string
+        ))
+    )
+}
+
+mkAtom: function {
+    nodes: List zast.Node
+    ids: GenIds
+    line: u32
+    col: u32
+    name: StringView
+} out Node is {
     return (Node.atomid (zast.AtomIdData
         nodeid: ids.mint
         lineno: line
         colno: col
-        name: name.string)
+        name: (internSynthName :nodes text: name))
     )
 }
 
@@ -549,7 +570,7 @@ mkReturnBody: function {
     col: u32
     inner: Node.take
 } out Node is {
-    retCal: mkAtom :ids :line :col name: "return"
+    retCal: mkAtom :nodes :ids :line :col name: "return"
     retArg: mkBareOp :nodes :ids :line :col op: inner
     retArgs: (List u32)
     retArgs.append (zast.tableAppendRebase :nodes n: retArg)
@@ -594,8 +615,8 @@ buildCreateMethod: function {
     params: (List u32).take
     fwdNames: List String
 } out Node is {
-    metaAtom: mkAtom :ids :line :col name: "meta"
-    createAtom: mkAtom :ids :line :col name: "create"
+    metaAtom: mkAtom :nodes :ids :line :col name: "meta"
+    createAtom: mkAtom :nodes :ids :line :col name: "create"
     metaCreate: (Node.dottedpath (zast.DottedPathData
         nodeid: ids.mint
         lineno: line
@@ -603,7 +624,7 @@ buildCreateMethod: function {
         parent: (zast.tableAppendRebase :nodes n: metaAtom)
         child: (zast.tableAppendRebase :nodes n: createAtom))
     )
-    zeroAtom: mkAtom :ids :line :col name: "0"
+    zeroAtom: mkAtom :nodes :ids :line :col name: "0"
     stArg: mkNamedOp :nodes :ids :line :col name: "state" op: zeroAtom
     cargs: (List u32)
     cargs.append (zast.tableAppendRebase :nodes n: stArg)
@@ -612,12 +633,11 @@ buildCreateMethod: function {
     for fi < fn loop {
         f0: fwdNames.get i: fi
         f0v: f0.stringview
-        f0s: f0v.string
         lv0: (Node.labelvalue (zast.LabelValueData
             nodeid: ids.mint
             lineno: line
             colno: col
-            name: f0s)
+            name: (internSynthName :nodes text: f0v))
         )
         fa0: mkNamedOp :nodes :ids :line :col name: f0v op: lv0
         cargs.append (zast.tableAppendRebase :nodes n: fa0)
@@ -631,7 +651,7 @@ buildCreateMethod: function {
         arguments: cargs)
     )
     body: mkReturnBody :nodes :ids :line :col inner: icall
-    thisRet: mkAtom :ids :line :col name: "this"
+    thisRet: mkAtom :nodes :ids :line :col name: "this"
     thisRetId: zast.tableAppendRebase :nodes n: thisRet
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
@@ -657,7 +677,7 @@ buildCallMethod: function {
     wrapExprId: u32
     valueParam: (Option Node).take
 } out Node is {
-    thisP: mkAtom :ids :line :col name: "this"
+    thisP: mkAtom :nodes :ids :line :col name: "this"
     thisParam: mkNamedOp :nodes :ids :line :col name: "this" op: thisP
     params: (List u32)
     params.append (zast.tableAppendRebase :nodes n: thisParam)
@@ -692,7 +712,7 @@ buildWrapper: function {
 } out Node is {
     wn: "OptionView"
     if leaf == "take" then wn = "Option"
-    wAtom: mkAtom :ids :line :col name: wn
+    wAtom: mkAtom :nodes :ids :line :col name: wn
     tArg: mkNamedOp :nodes :ids :line :col name: "t" op: base
     wargs: (List u32)
     wargs.append (zast.tableAppendRebase :nodes n: tArg)
@@ -718,21 +738,21 @@ buildFactory: function {
     fwdNames: List String
     privNames: (Map String value: bool)
 } out Node is {
-    synthAtom: mkAtom :ids :line :col name: synthName
+    synthAtom: mkAtom :nodes :ids :line :col name: synthName
     fargs: (List u32)
     fi: u64
     fn: fwdNames.length
     for fi < fn loop {
         f0: fwdNames.get i: fi
         f0v: f0.stringview
-        va0: mkAtom :ids :line :col name: f0v
+        va0: mkAtom :nodes :ids :line :col name: f0v
         # a private-lock receiver forwards through `.private`: the synth
         # class's field needs friend access, while the factory's own
         # public `this.lock` parameter stays callable from outside.
         f0o: f0v.string
         isPriv: optBoolOr2 o: (privNames.get key: f0o) d: false
         if isPriv then {
-            pa0: mkAtom :ids :line :col name: "private"
+            pa0: mkAtom :nodes :ids :line :col name: "private"
             vp0: (Node.dottedpath (zast.DottedPathData
                 nodeid: ids.mint
                 lineno: line
@@ -756,7 +776,7 @@ buildFactory: function {
         arguments: fargs)
     )
     body: mkReturnBody :nodes :ids :line :col inner: icall
-    retAtom: mkAtom :ids :line :col name: synthName
+    retAtom: mkAtom :nodes :ids :line :col name: synthName
     retAtomId: zast.tableAppendRebase :nodes n: retAtom
     return (Node.functiondef (zast.FunctionData
         nodeid: ids.mint
@@ -830,7 +850,8 @@ crossWalk: function {nodes: List zast.Node gc: GenCross n: Node inYieldLoop: boo
             }
         }
     } case atomid then {
-        unv: n.name.stringview
+        unvC9: zast.nameTextCopy :nodes ref: n.name
+        unv: unvC9.stringview
         seen2: optU64Or2 o: (gc.firstDef.get key: unv.string) d: 18446744073709551615.u64
         if seen2 != 18446744073709551615.u64 then {
             uk: unv.string
@@ -1261,7 +1282,7 @@ promoteFor: function {
                     )
                     dst.append (zast.tableAppendRebase :nodes n: sl0)
                     cn1: optStringOr o: c0.name d: ""
-                    na0: mkAtom :ids line: hl0 col: hc0 name: sno1.stringview
+                    na0: mkAtom :nodes :ids line: hl0 col: hc0 name: sno1.stringview
                     nc0: mkNamedOp :nodes :ids line: hl0 col: hc0 name: cn1.stringview op: na0
                     nconds.append (zast.tableAppendRebase :nodes n: nc0)
                 } else null
@@ -1401,28 +1422,33 @@ rewriteToThis: function {
     ) case atomid then {
         ln0: n.lineno
         co0: n.colno
-        anv: n.name.stringview
+        anvC9: zast.nameTextCopy :nodes ref: n.name
+        anv: anvC9.stringview
         isP: optBoolOr2 o: (promoted.get key: anv.string) d: false
         if isP then {
             return (mkThisDotted :nodes :ids line: ln0 col: co0 name: anv)
         } else {
-            an0: anv.string
-            return (Node.atomid (zast.AtomIdData nodeid: ids.mint lineno: ln0 colno: co0 name: an0))
+            return (Node.atomid (zast.AtomIdData
+                nodeid: ids.mint
+                lineno: ln0
+                colno: co0
+                name: n.name)
+            )
         }
     } case labelvalue then {
         ln1: n.lineno
         co1: n.colno
-        lnv: n.name.stringview
+        lnvC9: zast.nameTextCopy :nodes ref: n.name
+        lnv: lnvC9.stringview
         isP1: optBoolOr2 o: (promoted.get key: lnv.string) d: false
         if isP1 then {
             return (mkThisDotted :nodes :ids line: ln1 col: co1 name: lnv)
         } else {
-            ln9: lnv.string
             return (Node.labelvalue (zast.LabelValueData
                 nodeid: ids.mint
                 lineno: ln1
                 colno: co1
-                name: ln9)
+                name: n.name)
             )
         }
     } case dottedpath then {
@@ -1763,8 +1789,8 @@ mkThisDotted: function {
     col: u32
     name: StringView
 } out Node is {
-    thisAtom: mkAtom :ids :line :col name: "this"
-    childAtom: mkAtom :ids :line :col :name
+    thisAtom: mkAtom :nodes :ids :line :col name: "this"
+    childAtom: mkAtom :nodes :ids :line :col :name
     return (Node.dottedpath (zast.DottedPathData
         nodeid: ids.mint
         lineno: line
@@ -1789,29 +1815,25 @@ cloneWithThisHead: function {
     match (
         n
     ) case atomid then {
-        if n.name.stringview == "this" then {
-            return (mkAtom :ids :line :col name: receiverType)
+        if (zast.nameTextEq :nodes ref: n.name s: "this") then {
+            return (mkAtom :nodes :ids :line :col name: receiverType)
         } else {
-            nmv: n.name.stringview
-            nm0: nmv.string
             return (Node.atomid (zast.AtomIdData
                 nodeid: ids.mint
                 lineno: line
                 colno: col
-                name: nm0)
+                name: n.name)
             )
         }
     } case labelvalue then {
-        if n.name.stringview == "this" then {
-            return (mkAtom :ids :line :col name: receiverType)
+        if (zast.nameTextEq :nodes ref: n.name s: "this") then {
+            return (mkAtom :nodes :ids :line :col name: receiverType)
         } else {
-            lmv: n.name.stringview
-            lm0: lmv.string
             return (Node.labelvalue (zast.LabelValueData
                 nodeid: ids.mint
                 lineno: line
                 colno: col
-                name: lm0)
+                name: n.name)
             )
         }
     } case dottedpath then {
@@ -1850,7 +1872,7 @@ isThisPrivateLock: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case dottedpath then {
-        ln: leafAtomName n: (nodes.get i: (n.child - 1).u64)
+        ln: leafAtomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if ln.stringview == "lock" then {
             return (isThisPrivate :nodes n: (nodes.get i: (n.parent - 1).u64))
         } else {
@@ -1865,7 +1887,7 @@ isThisPrivate: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case dottedpath then {
-        pn: leafAtomName n: (nodes.get i: (n.child - 1).u64)
+        pn: leafAtomName :nodes n: (nodes.get i: (n.child - 1).u64)
         if pn.stringview == "private" then {
             return (pathHeadIsThis :nodes n: (nodes.get i: (n.parent - 1).u64))
         } else {
@@ -1979,8 +2001,8 @@ cloneFactoryParam: function {
         if (isThisPrivateLock :nodes n: (nodes.get i: (n.operation - 1).u64)) then {
             # the public this.lock replacement carries the function's start
             # (the reference synthesizes it at loc = func.start)
-            ta0: mkAtom :ids line: fnLine col: fnCol name: "this"
-            la0: mkAtom :ids line: fnLine col: fnCol name: "lock"
+            ta0: mkAtom :nodes :ids line: fnLine col: fnCol name: "this"
+            la0: mkAtom :nodes :ids line: fnLine col: fnCol name: "lock"
             nop2: (Node.dottedpath (zast.DottedPathData
                 nodeid: ids.mint
                 lineno: fnLine
@@ -2068,9 +2090,9 @@ pathHeadIsThis: function {nodes: List zast.Node n: Node} out bool is {
     match (
         n
     ) case atomid then {
-        return (n.name.stringview == "this")
+        return (zast.nameTextEq :nodes ref: n.name s: "this")
     } case labelvalue then {
-        return (n.name.stringview == "this")
+        return (zast.nameTextEq :nodes ref: n.name s: "this")
     } case dottedpath then {
         return (pathHeadIsThis :nodes n: (nodes.get i: (n.parent - 1).u64))
     } case expression then {
@@ -2256,7 +2278,7 @@ lowerOne: function {
                             match (
                                 bg9
                             ) case some then {
-                                la9: mkAtom :ids line: al9 col: ac9 name: "lock"
+                                la9: mkAtom :nodes :ids line: al9 col: ac9 name: "lock"
                                 rf2: (Node.dottedpath (zast.DottedPathData
                                     nodeid: ids.mint
                                     lineno: al9
@@ -2288,8 +2310,8 @@ lowerOne: function {
                 )
                 # class fields: the state cursor, captured params, then
                 # typeof-typed yield-crossing locals (first-assignment order)
-                sysAtom: mkAtom :ids :line :col name: "system"
-                i64Leaf: mkAtom :ids :line :col name: "i64"
+                sysAtom: mkAtom :nodes :ids :line :col name: "system"
+                i64Leaf: mkAtom :nodes :ids :line :col name: "i64"
                 i64Atom: (Node.dottedpath (zast.DottedPathData
                     nodeid: ids.mint
                     lineno: line

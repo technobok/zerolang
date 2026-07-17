@@ -131,7 +131,7 @@ nodeIsBareNull: function {nodes: List Node n: Node} out bool is {
     match (
         n
     ) case atomid then {
-        return n.name.stringview == "null"
+        return (zast.nameTextEq :nodes ref: n.name s: "null")
     } case expression then {
         return (nodeIsBareNull :nodes n: (nodes.get i: (n.expression - 1).u64))
     } else {
@@ -258,6 +258,8 @@ Parser: class {
     # the payload-less placeholder arm until a converted parent moves
     # the real child in).
     nodes: (List Node)
+    # interned name text -> nameentry nodeid (see zast.NameEntryData)
+    nameIds: (Map String value: u32)
 } as {
     create: function {} out this is {
         return (meta.create
@@ -265,6 +267,7 @@ Parser: class {
             functionBodyDepth: 0
             fileSegs: (List FileSeg)
             nodes: (List Node)
+            nameIds: (Map String value: u32)
         )
     }
 
@@ -279,6 +282,30 @@ Parser: class {
     # intern -- move a finished node into its reserved master-table slot.
     intern: function {:this n: Node.take} out u32 is {
         return (zast.tableAdd nodes: this.nodes :n)
+    }
+
+    # internName -- the nameentry nodeid for an identifier's text (one
+    # shared row per distinct name; minted on first sight).
+    internName: function {:this name: StringView} out u32 is {
+        {
+            g9: this.nameIds.getv key: name
+            match (
+                g9
+            ) case some then {
+                return g9
+            } case none then null
+        }
+        id9: this.nextId
+        nr9: Node.nameentry (zast.NameEntryData
+            nodeid: id9
+            lineno: 0
+            colno: 0
+            text: name.string
+        )
+        rid9: zast.tableAdd nodes: this.nodes n: nr9
+        k9: name.string
+        this.nameIds.set key: k9 value: rid9
+        return rid9
     }
 
     # fsnoForNode -- the fsno of the file whose parse allocated `nodeid`:
@@ -429,13 +456,11 @@ Parser: class {
     parseAtomId: function {:this lex: zlexer.Lexer} out Node is {
         r: lex.accept tt: zlexer.TT.refIdTok
         match r case some then {
-            nm0: String
-            nm0 swap r.tokstr
             return (Node.atomid (zast.AtomIdData
                 nodeid: this.nextId
                 lineno: r.lineno
                 colno: r.colno
-                name: nm0)
+                name: (this.internName name: r.tokstr.stringview))
             )
         } case none then {
             t: lex.peek
@@ -489,13 +514,11 @@ Parser: class {
         } case some then {
             idOpt: lex.accept tt: zlexer.TT.refIdTok
             match idOpt case some then {
-                nm1: String
-                nm1 swap idOpt.tokstr
                 child: Node.atomid (zast.AtomIdData
                     nodeid: this.nextId
                     lineno: idOpt.lineno
                     colno: idOpt.colno
-                    name: nm1
+                    name: (this.internName name: idOpt.tokstr.stringview)
                 )
                 np: Node.dottedpath (zast.DottedPathData
                     nodeid: this.nextId
@@ -878,7 +901,7 @@ Parser: class {
             nodeid: this.nextId
             lineno: line
             colno: col
-            :name)
+            name: (this.internName name: name.stringview))
         )
     }
 
@@ -1573,7 +1596,7 @@ Parser: class {
                     nodeid: this.nextId
                     lineno: idOpt.lineno
                     colno: idOpt.colno
-                    name: idOpt.tokstr.copy
+                    name: (this.internName name: idOpt.tokstr.stringview)
                 )
                 tk: lex.peek
                 isThen: tk.toktype == zlexer.TT.thenTok
@@ -3303,7 +3326,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: 0
                 colno: 0
-                name: "ok".string)
+                name: (this.internName name: "ok"))
             )
         }
     }
@@ -3565,8 +3588,8 @@ ewWalkForCond: function {nodes: List Node externs: List String scope: List Strin
 ewWalk: function {nodes: List Node externs: List String scope: List String node: Node} is {
     match (
         node
-    ) case error then null case placeholder then null case atomid then {
-        ewEmit :externs :scope name: node.name.copy
+    ) case error then null case placeholder then null case nameentry then null case atomid then {
+        ewEmit :externs :scope name: (zast.nameTextCopy :nodes ref: node.name)
     } case labelvalue then null case stringchunk then null case binop then {
         ewWalk :nodes :externs :scope node: (nodes.get i: (node.lhs - 1).u64)
         ewWalk :nodes :externs :scope node: (nodes.get i: (node.operator - 1).u64)
