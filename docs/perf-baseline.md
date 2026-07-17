@@ -56,6 +56,19 @@ survive; see the W0 census discussion), Node payload inlining (<1% of blocks).
 Checker gap noted: `capacity:` + a dotted cross-unit value type trips Map
 generic inference (callKind stays unsized).
 
+## Cache census (perf, 2026-07-17 @ 476ce11) — union→variant flip NO-GO
+
+Self-compile, 5-run perf stat: IPC 2.42 (8.18G instr / 3.38G cycles), L1-dcache
+miss rate 1.5% (61.5M / 4.07G loads), cache-misses 10.0M, dTLB misses 0.8M,
+frontend stalls 19% of cycles. Cache-miss attribution (perf record):
+Map_u64_u64_find 10.6%, memcmp 6.5%, allocator ~7.6%, fasthash 4.2%,
+List_Node_get 3.9%, other Map finds ~5%. Buckets: Map/Set probes ~17%,
+node fetch + child lists ~4-6% — far under the >=15% flip gate, and the
+pipeline is not memory-bound. VERDICT: the inline-payload variant flip (and the
+B3 carrier as its enabler) is SHELVED on evidence; name interning proceeds on
+its own merits (allocs + the visible memcmp/String traffic); future cache work
+should target Map probing, not node layout.
+
 ## Ground allocation census (DHAT, 2026-07-17 @ 4f10844)
 
 | bucket | blocks | bytes | note |
