@@ -158,6 +158,7 @@ ZTyping: class {
     childTypeById: (Map u64 value: u64)
     childPrivate: (Map u64 value: bool)
     childLockField: (Map u64 value: bool)
+    childGrantsPrivate: (Map u64 value: bool)
     childIsFnptrField: (Map u64 value: bool)
     asConstClone: (Map u64 value: bool)
     generatorWrapper: (Map u64 value: bool)
@@ -489,6 +490,48 @@ ZTyping: class {
         ) case some then {
             this.childPrivate.set key: idopt value: true
         } case none then null
+    }
+
+    # setChildPrivateId -- mark a child edge private by its Ast.names pool id
+    # (id-keyed twin of setChildPrivate; the visibility pass has the id in hand).
+    setChildPrivateId: function {:this parentTypeId: u64 nameId: u64} is {
+        idopt: this.childNameIdOfId :parentTypeId :nameId
+        match (
+            idopt
+        ) case some then {
+            this.childPrivate.set key: idopt value: true
+        } case none then null
+    }
+
+    # setChildGrantsPrivateId -- mark a field edge as one whose declared type
+    # was a `.private` handle, so reads through it are private-capable.
+    setChildGrantsPrivateId: function {:this parentTypeId: u64 nameId: u64} is {
+        idopt: this.childNameIdOfId :parentTypeId :nameId
+        match (
+            idopt
+        ) case some then {
+            this.childGrantsPrivate.set key: idopt value: true
+        } case none then null
+    }
+
+    # isChildGrantsPrivate -- does reading child `name` of parentTypeId yield a
+    # private-capable handle (its declared type was `X.private...`)?
+    isChildGrantsPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
+        match (
+            idopt
+        ) case some then {
+            r: this.childGrantsPrivate.get key: idopt
+            match (
+                r
+            ) case some then {
+                return r
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
     }
 
     isChildPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -929,6 +972,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         childTypeById: (Map u64 value: u64)
         childPrivate: (Map u64 value: bool)
         childLockField: (Map u64 value: bool)
+    childGrantsPrivate: (Map u64 value: bool)
         childIsFnptrField: (Map u64 value: bool)
         asConstClone: (Map u64 value: bool)
         generatorWrapper: (Map u64 value: bool)

@@ -3744,6 +3744,122 @@ fnFieldFlaggableName: function {name: StringView} out bool is {
     return true
 }
 
+# typeExprHasPrivate -- does a field's type expression carry a `.private` marker
+# (`Container.private.lock`), i.e. is it a friend handle? Walks the dotted path
+# (markers nest outermost-last: `((Container.private).lock)`).
+typeExprHasPrivate: function {ast: Ast n: Node} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        cn9: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        if cn9.stringview == "private" then return true
+        return (typeExprHasPrivate :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+    } else {
+        return false
+    }
+}
+
+# scanVisibility -- one AST-only pass filling two out-lists (with-scoped
+# iterators, no lock outlives the scan): `excl` = pool ids of USER-declared
+# members NOT in the `public:` block (empty when there is no block -- the
+# all-public default; synthesized edges are never listed); `grants` = pool ids
+# of fields whose declared type is a `.private` handle (independent of any
+# `public:` block). The resolver applies both once child edges are registered.
+scanVisibility: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    onode: zast.ObjectDefData
+    excl: (List u64)
+    grants: (List u64)
+} is {
+    pubIds: (Set u64)
+    pubFound: false
+    with aiter: onode.asItems.iterate do for aId9: aiter loop {
+        an9: ast.nodes.get i: (aId9 - 1).u64
+        match (
+            an9
+        ) case namedoperation then {
+            if (zast.nameTextEq :ast ref: an9.name s: "private") then {
+                (addResolveErrorH
+                    :ty
+                    nodeid: an9.nodeid
+                    lineno: an9.lineno
+                    colno: an9.colno
+                    e: zast.err.typeError
+                    msg: "`private:` cannot be redefined -- `private` always includes every field and method of the type".string
+                    width: 7
+                )
+            }
+            if (zast.nameTextEq :ast ref: an9.name s: "public") then {
+                pubFound = true
+                op9: ast.nodes.get i: (an9.operation - 1).u64
+                match (
+                    op9
+                ) case unitdef then {
+                    with biter: op9.body.iterate do for bId9: biter loop {
+                        bn9: ast.nodes.get i: (bId9 - 1).u64
+                        match (
+                            bn9
+                        ) case namedoperation then {
+                            pubIds.add item: bn9.name.u64
+                        } else null
+                    }
+                } else null
+            }
+        } else null
+    }
+    with fiter: onode.isItems.iterate do for fId9: fiter loop {
+        fm9: ast.nodes.get i: (fId9 - 1).u64
+        match (
+            fm9
+        ) case namedoperation then {
+            if (typeExprHasPrivate
+                :ast
+                n: (ast.nodes.get i: (fm9.operation - 1).u64)
+            ) then grants.append from: fm9.name.u64
+            if pubFound then {
+                hasF9: pubIds.has item: fm9.name.u64
+                if (hasF9) == false then excl.append from: fm9.name.u64
+            }
+        } else null
+    }
+    if (pubFound) == false then return
+    with a2iter: onode.asItems.iterate do for a2Id9: a2iter loop {
+        am9: ast.nodes.get i: (a2Id9 - 1).u64
+        match (
+            am9
+        ) case namedoperation then {
+            skip9: false
+            if (zast.nameTextEq :ast ref: am9.name s: "public") then skip9 = true
+            if (zast.nameTextEq :ast ref: am9.name s: "private") then skip9 = true
+            if (skip9) == false then {
+                hasM9: pubIds.has item: am9.name.u64
+                if (hasM9) == false then excl.append from: am9.name.u64
+            }
+        } else null
+    }
+}
+
+# applyPrivateExclusions -- mark each excluded member private, by pool id.
+applyPrivateExclusions: function {ty: ztyping.ZTyping parentId: u64 excl: (List u64)} is {
+    ei9: u64
+    en9: excl.length
+    for ei9 < en9 loop {
+        ty.setChildPrivateId parentTypeId: parentId nameId: (excl.get i: ei9)
+        ei9 = ei9 + 1
+    }
+}
+
+# applyGrantsPrivate -- mark each `.private`-typed field as a friend handle.
+applyGrantsPrivate: function {ty: ztyping.ZTyping parentId: u64 grants: (List u64)} is {
+    gi9: u64
+    gn9: grants.length
+    for gi9 < gn9 loop {
+        ty.setChildGrantsPrivateId parentTypeId: parentId nameId: (grants.get i: gi9)
+        gi9 = gi9 + 1
+    }
+}
+
 resolveRecord: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -3761,6 +3877,9 @@ resolveRecord: function {
         typetype: ztypes.ztypetype.recordType
     )
     rrid: rid
+    pvExcl_rrid: (List u64)
+    pvGrants_rrid: (List u64)
+    scanVisibility :ty :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
     reg.setValtype typeId: rid value: true
     isgen: hasGenericParam :ast items: rnode.asItems
     if isgen then {
@@ -3943,6 +4062,8 @@ resolveRecord: function {
             }
         }
     }
+    applyPrivateExclusions :ty parentId: rrid excl: pvExcl_rrid
+    applyGrantsPrivate :ty parentId: rrid grants: pvGrants_rrid
     ty.definedInUnit.set key: rrid value: unitName.string
 }
 
@@ -4014,6 +4135,9 @@ resolveVariant: function {
         typetype: ztypes.ztypetype.variantType
     )
     vvid: vid
+    pvExcl_vvid: (List u64)
+    pvGrants_vvid: (List u64)
+    scanVisibility :ty :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     reg.setValtype typeId: vid value: true
     isgen: hasGenericParam :ast items: vnode.asItems
     if isgen then {
@@ -4152,6 +4276,8 @@ resolveVariant: function {
         neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: vid nameId: wkOpNe childTypeId: neqId
     }
+    applyPrivateExclusions :ty parentId: vvid excl: pvExcl_vvid
+    applyGrantsPrivate :ty parentId: vvid grants: pvGrants_vvid
     ty.definedInUnit.set key: vvid value: unitName.string
 }
 
@@ -4290,6 +4416,9 @@ resolveUnion: function {
         typetype: ztypes.ztypetype.unionType
     )
     uuid: uid
+    pvExcl_uuid: (List u64)
+    pvGrants_uuid: (List u64)
+    scanVisibility :ty :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
     reg.setValtype typeId: uid value: false
     isgen: hasGenericParam :ast items: vnode.asItems
     if isgen then {
@@ -4427,6 +4556,8 @@ resolveUnion: function {
         dn: "\{defName}_destroy"
         reg.setDestructorName typeId: uid name: dn.stringview
     }
+    applyPrivateExclusions :ty parentId: uuid excl: pvExcl_uuid
+    applyGrantsPrivate :ty parentId: uuid grants: pvGrants_uuid
     ty.definedInUnit.set key: uuid value: unitName.string
 }
 
@@ -4507,6 +4638,9 @@ resolveClass: function {
         typetype: ztypes.ztypetype.classType
     )
     ccid: cid
+    pvExcl_ccid: (List u64)
+    pvGrants_ccid: (List u64)
+    scanVisibility :ty :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
     reg.setValtype typeId: cid value: false
     needsDtor: false
     isgen: hasGenericParam :ast items: cnode.asItems
@@ -4831,6 +4965,8 @@ resolveClass: function {
         dn: "\{defName}_destroy"
         reg.setDestructorName typeId: cid name: dn.stringview
     }
+    applyPrivateExclusions :ty parentId: ccid excl: pvExcl_ccid
+    applyGrantsPrivate :ty parentId: ccid grants: pvGrants_ccid
     ty.definedInUnit.set key: ccid value: unitName.string
 }
 
@@ -4855,6 +4991,9 @@ resolveFacet: function {
         typetype: ztypes.ztypetype.facetType
     )
     ffid: fid
+    pvExcl_ffid: (List u64)
+    pvGrants_ffid: (List u64)
+    scanVisibility :ty :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     reg.setValtype typeId: fid value: true
     isgen: hasGenericParam :ast items: fnode.isItems
     if isgen then reg.setGeneric typeId: fid value: true
@@ -4907,6 +5046,8 @@ resolveFacet: function {
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: fid nameId: wkBorrow childTypeId: borrowId
     }
+    applyPrivateExclusions :ty parentId: ffid excl: pvExcl_ffid
+    applyGrantsPrivate :ty parentId: ffid grants: pvGrants_ffid
     ty.definedInUnit.set key: ffid value: unitName.string
 }
 
@@ -4931,6 +5072,9 @@ resolveProtocol: function {
         typetype: ztypes.ztypetype.protocolType
     )
     ppid: pid
+    pvExcl_ppid: (List u64)
+    pvGrants_ppid: (List u64)
+    scanVisibility :ty :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     reg.setValtype typeId: pid value: false
     isgen: hasGenericParam :ast items: fnode.isItems
     if isgen then reg.setGeneric typeId: pid value: true
@@ -4994,6 +5138,8 @@ resolveProtocol: function {
     }
     dn: "\{defName}_destroy"
     reg.setDestructorName typeId: pid name: dn.stringview
+    applyPrivateExclusions :ty parentId: ppid excl: pvExcl_ppid
+    applyGrantsPrivate :ty parentId: ppid grants: pvGrants_ppid
     ty.definedInUnit.set key: ppid value: unitName.string
 }
 
@@ -11441,6 +11587,37 @@ markDataRuntimeIndexed: function {st: zenv.ZSymbolTable tid: u64} is {
 # member up on the base's type, and stamp the dotted node -- with the method's
 # return when the method takes no user parameters beyond the receiver (the
 # auto-call coercion), else with the method FUNCTION type itself.
+# baseIsPrivateCapable -- may a private member be read through this base? True
+# when the base is the type's own `this`/same-type receiver (self, inside its
+# methods), a `.private` projection, or a read of a `.private`-typed friend
+# field. Everything else is external and gated.
+baseIsPrivateCapable: function {st: zenv.ZSymbolTable ast: Ast bt: u64 baseNode: Node} out bool is {
+    btNm9: typeNameOf :st tid: bt
+    if btNm9.length > 0 when st.typing.currentThisName.length > 0 then {
+        if st.typing.currentThisName.stringview == btNm9.stringview then return true
+    }
+    match (
+        baseNode
+    ) case atomid then {
+        anm9: zast.nameTextCopy :ast ref: baseNode.name
+        return anm9.stringview == "this"
+    } case dottedpath then {
+        cnm9: atomName :ast n: (ast.nodes.get i: (baseNode.child - 1).u64)
+        if cnm9.stringview == "private" then return true
+        pbNode9: ast.nodes.get i: (baseNode.parent - 1).u64
+        pbNid9: nodeId n: pbNode9
+        pbType9: optU64Or o: (st.typing.nodeType.get key: pbNid9.u64) d: 0
+        if pbType9 > 0 when (st.typing.isChildGrantsPrivate
+            pool: ast.names
+            parentTypeId: pbType9
+            name: cnm9.stringview
+        ) then return true
+        return false
+    } else {
+        return false
+    }
+}
+
 checkDotted: function {
     st: zenv.ZSymbolTable
     unitName: StringView
@@ -11528,6 +11705,35 @@ checkDotted: function {
     # `.private` / `.public` access markers: the path carries the base's
     # type (the access view is a dump-filtered shell, not a member).
     if cn.stringview == "private" then {
+        # Gate B: a `.private` view may only be PRODUCED inside the value's own
+        # type. currentThisName is the enclosing method's receiver type; when it
+        # does not name bt's type, this is external code taking a private handle
+        # it was never given -- E0102. (Reads THROUGH an already-`.private`-typed
+        # handle are member accesses, gated separately by Gate A, not here.)
+        btNm9: typeNameOf :st tid: bt
+        if btNm9.length > 0 then {
+            okPriv9: false
+            if st.typing.currentThisName.length > 0 when st.typing.currentThisName.stringview == btNm9.stringview then okPriv9 = true
+            if (okPriv9) == false then {
+                pcNode9: ast.nodes.get i: (dp.child - 1).u64
+                pcnid9: nodeId n: pcNode9
+                pcln9: nodeLine n: pcNode9
+                pccl9: nodeCol n: pcNode9
+                btNc9: btNm9.copy
+                pmsg9: "'.private' of '\{btNc9}' may only be taken inside '\{btNm9}'"
+                (addErrorH
+                    :st
+                    nodeid: pcnid9
+                    lineno: pcln9
+                    colno: pccl9
+                    e: zast.err.privateEscape
+                    msg: pmsg9
+                    note: "".string
+                    hint: "".string
+                    width: cn.length.u32
+                )
+            }
+        }
         setpv: bt
         st.typing.nodeType.set key: dp.nodeid.u64 value: setpv
         return bt
@@ -12290,6 +12496,28 @@ checkDotted: function {
                     # dump (the reference's t_null carries no unit either)
                     result = st.reg.allocType
                 }
+            }
+        }
+        if (st.typing.isChildPrivate pool: ast.names parentTypeId: bt name: cn.stringview) then {
+            baseN9: ast.nodes.get i: (dp.parent - 1).u64
+            if (baseIsPrivateCapable :st :ast :bt baseNode: baseN9) == false then {
+                cnidP9: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
+                cnlnP9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
+                cnclP9: nodeCol n: (ast.nodes.get i: (dp.child - 1).u64)
+                btNmP9: typeNameOf :st tid: bt
+                cnCp9: cn.copy
+                pmsgP9: "'\{cnCp9}' is not public on type '\{btNmP9}'"
+                (addErrorH
+                    :st
+                    nodeid: cnidP9
+                    lineno: cnlnP9
+                    colno: cnclP9
+                    e: zast.err.notPublic
+                    msg: pmsgP9
+                    note: "".string
+                    hint: "".string
+                    width: cn.length.u32
+                )
             }
         }
         stampGate :st nid: dp.nodeid tid: result
