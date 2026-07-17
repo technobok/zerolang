@@ -201,10 +201,6 @@ ZTyping: class {
     # generic arg-type id, keyed by "parentTypeId:paramName"
     genericArgTypeBy: (Map String value: u64)
 
-    # edge-name cache derived from the shared Ast.names pool, filled by
-    # setChild/registerEdgeName: edge text -> pool id backs the text-keyed
-    # queries. id -> text readers borrow rows from the pool itself.
-    edgeNameId: (Map String value: u64)
     # per-node single-valued stamps, keyed by parsed-AST nodeid
     nodeType: (Map u64 value: u64)
     nodeLiteralBase: (Map u64 value: ztypes.numbase)
@@ -279,8 +275,8 @@ ZTyping: class {
     # local counter and memoized so repeat calls return the same id.
     # The existing edge's id when the bucket has one, else a fresh mint (the
     # caller appends the row right after, so repeats resolve via the bucket).
-    childIdFor: function {:this parentTypeId: u64 name: StringView} out u64 is {
-        existing: this.childNameIdOf :parentTypeId :name
+    childIdFor: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out u64 is {
+        existing: this.childNameIdOf :pool :parentTypeId :name
         match (
             existing
         ) case some then {
@@ -306,42 +302,11 @@ ZTyping: class {
         }
     }
 
-    # registerEdgeText -- record pool id nid's text in the edge-name
-    # cache (idempotent).
-    registerEdgeText: function {:this nid: u64 text: StringView} is {
-        {
-            g9: this.edgeNameId.getv key: text
-            match (
-                g9
-            ) case some then {
-                return
-            } case none then null
-        }
-        k9: text.string
-        this.edgeNameId.set key: k9 value: nid
-    }
-
-    # registerEdgeName -- intern a name into the shared pool and the edge
-    # caches without laying an edge (alias names stay queryable by text).
-    registerEdgeName: function {:this pool: zast.StringPool name: StringView} is {
-        nid9: (pool.set s: name).u64
-        this.registerEdgeText nid: nid9 text: name
-    }
-
     # Resolve the childNameId of an existing (parent, name) edge by text.
-    # A name labelling no edge anywhere cannot label this one.
-    childNameIdOf: function {:this parentTypeId: u64 name: StringView} out optionval u64 is {
-        nid9: u64
-        {
-            ng9: this.edgeNameId.getv key: name
-            match (
-                ng9
-            ) case some then {
-                nid9 = ng9
-            } case none then {
-                return (optionval.none u64)
-            }
-        }
+    # A name interned nowhere cannot label any edge.
+    childNameIdOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
+        nid9: (pool.find s: name).u64
+        if nid9 == 0 then return (optionval.none u64)
         return (this.childNameIdOfId :parentTypeId nameId: nid9)
     }
 
@@ -376,14 +341,11 @@ ZTyping: class {
     # into the shared pool; the row's nameId is the pool id.
     setChild: function {:this pool: zast.StringPool parentTypeId: u64 childName: StringView childTypeId: u64} is {
         nid9: (pool.set s: childName).u64
-        this.registerEdgeText nid: nid9 text: childName
         this.setChildId :parentTypeId nameId: nid9 :childTypeId
     }
 
     # Record a (parent, nameId) -> child-type edge by pool id. Idempotent
-    # on the key: a repeat call updates the child-type id in place. The
-    # caches must already know the id (a prior setChild/registerEdgeName
-    # registered it).
+    # on the key: a repeat call updates the child-type id in place.
     setChildId: function {:this parentTypeId: u64 nameId: u64 childTypeId: u64} is {
         existing: this.childNameIdOfId :parentTypeId :nameId
         match (
@@ -442,8 +404,8 @@ ZTyping: class {
         }
     }
 
-    childOf: function {:this parentTypeId: u64 name: StringView} out optionval u64 is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -490,8 +452,8 @@ ZTyping: class {
         }
     }
 
-    hasChild: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    hasChild: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -525,8 +487,8 @@ ZTyping: class {
 
     # --- bool sidecars (private / lock-field / lock-arm) ---
 
-    setChildPrivate: function {:this parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setChildPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -534,8 +496,8 @@ ZTyping: class {
         } case none then null
     }
 
-    isChildPrivate: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    isChildPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -570,8 +532,8 @@ ZTyping: class {
         }
     }
 
-    setChildLockField: function {:this parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setChildLockField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -579,8 +541,8 @@ ZTyping: class {
         } case none then null
     }
 
-    isChildLockField: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    isChildLockField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -616,8 +578,8 @@ ZTyping: class {
         }
     }
 
-    setChildFnptrField: function {:this parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setChildFnptrField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -625,8 +587,8 @@ ZTyping: class {
         } case none then null
     }
 
-    isChildFnptrField: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    isChildFnptrField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -674,8 +636,8 @@ ZTyping: class {
         }
     }
 
-    setChildLockArm: function {:this parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setChildLockArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -683,8 +645,8 @@ ZTyping: class {
         } case none then null
     }
 
-    isChildLockArm: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    isChildLockArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -703,8 +665,8 @@ ZTyping: class {
 
     # --- default sidecar ---
 
-    setChildDefault: function {:this parentTypeId: u64 name: StringView default: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setChildDefault: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView default: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -713,8 +675,8 @@ ZTyping: class {
         } case none then null
     }
 
-    setDefaultNumeric: function {:this parentTypeId: u64 name: StringView value: i64} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setDefaultNumeric: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView value: i64} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -723,8 +685,8 @@ ZTyping: class {
         } case none then null
     }
 
-    setDefaultFunction: function {:this parentTypeId: u64 name: StringView funcname: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setDefaultFunction: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView funcname: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -733,8 +695,8 @@ ZTyping: class {
         } case none then null
     }
 
-    setDefaultVariantArm: function {:this parentTypeId: u64 name: StringView armName: StringView} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setDefaultVariantArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView armName: StringView} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -747,8 +709,8 @@ ZTyping: class {
     # owned deep copy of the map's String (the map keeps its own); `.string`
     # on an already-owned String is an identity that would alias the Option
     # payload destroyed at return.
-    childDefaultText: function {:this parentTypeId: u64 name: StringView} out String is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    childDefaultText: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out String is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -784,8 +746,8 @@ ZTyping: class {
         }
     }
 
-    hasChildDefault: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    hasChildDefault: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -823,8 +785,8 @@ ZTyping: class {
 
     # --- ownership sidecar ---
 
-    setChildOwnership: function {:this parentTypeId: u64 name: StringView ownership: ztypes.zparamownership} is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    setChildOwnership: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView ownership: ztypes.zparamownership} is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -847,8 +809,8 @@ ZTyping: class {
     # Ownership name for (parent, name), or "none" when unset.
     # childOwnershipIs -- the recorded param ownership for (parent, name)
     # equals `own`; false when the edge or the sidecar entry is absent.
-    childOwnershipIs: function {:this parentTypeId: u64 name: StringView own: ztypes.zparamownership} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    childOwnershipIs: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView own: ztypes.zparamownership} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -865,8 +827,8 @@ ZTyping: class {
         }
     }
 
-    childOwnershipText: function {:this parentTypeId: u64 name: StringView} out String is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    childOwnershipText: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out String is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -883,8 +845,8 @@ ZTyping: class {
         }
     }
 
-    hasChildOwnership: function {:this parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :parentTypeId :name
+    hasChildOwnership: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
@@ -1013,7 +975,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         genericArgTypeBy: (Map String value: u64)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
-        edgeNameId: (Map String value: u64)
         nodeType: (Map u64 value: u64 capacity: nodeEst)
         nodeLiteralBase: (Map u64 value: ztypes.numbase)
         callKind: (Map u64 value: zast.callkind)
@@ -1103,33 +1064,43 @@ main: function is {
     ty.setChild pool: pool9 parentTypeId: pid childName: "x" childTypeId: tInt
 
     print "childCount point -> \{ty.childCount parentTypeId: pid}"
-    smokeHasChild :ty :pid name: "x"
-    smokeHasChild :ty :pid name: "z"
-    smokeChildOf :ty :pid name: "x"
-    smokeChildOf :ty :pid name: "label"
-    smokeChildOf :ty :pid name: "z"
+    smokeHasChild pool: pool9 :ty :pid name: "x"
+    smokeHasChild pool: pool9 :ty :pid name: "z"
+    smokeChildOf pool: pool9 :ty :pid name: "x"
+    smokeChildOf pool: pool9 :ty :pid name: "label"
+    smokeChildOf pool: pool9 :ty :pid name: "z"
     dumpChildren :ty pool: pool9 parentTypeId: pid
 
     print "=== sidecars ==="
-    ty.setChildPrivate parentTypeId: pid name: "x"
-    ty.setChildLockField parentTypeId: pid name: "y"
-    ty.setChildLockArm parentTypeId: pid name: "label"
-    ty.setDefaultNumeric parentTypeId: pid name: "x" value: 7
-    ty.setDefaultFunction parentTypeId: pid name: "y" funcname: "makeY"
-    ty.setDefaultVariantArm parentTypeId: pid name: "label" armName: "none"
-    ty.setChildOwnership parentTypeId: pid name: "x" ownership: ztypes.zparamownership.takeMode
-    ty.setChildOwnership parentTypeId: pid name: "y" ownership: ztypes.zparamownership.borrowMode
+    ty.setChildPrivate pool: pool9 parentTypeId: pid name: "x"
+    ty.setChildLockField pool: pool9 parentTypeId: pid name: "y"
+    ty.setChildLockArm pool: pool9 parentTypeId: pid name: "label"
+    ty.setDefaultNumeric pool: pool9 parentTypeId: pid name: "x" value: 7
+    ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" funcname: "makeY"
+    ty.setDefaultVariantArm pool: pool9 parentTypeId: pid name: "label" armName: "none"
+    (ty.setChildOwnership
+        pool: pool9
+        parentTypeId: pid
+        name: "x"
+        ownership: ztypes.zparamownership.takeMode
+    )
+    (ty.setChildOwnership
+        pool: pool9
+        parentTypeId: pid
+        name: "y"
+        ownership: ztypes.zparamownership.borrowMode
+    )
 
-    smokeIsPrivate :ty :pid name: "x"
-    smokeIsPrivate :ty :pid name: "y"
-    smokeIsLockField :ty :pid name: "y"
-    smokeIsLockArm :ty :pid name: "label"
-    smokeDefault :ty :pid name: "x"
-    smokeDefault :ty :pid name: "y"
-    smokeDefault :ty :pid name: "label"
-    smokeOwn :ty :pid name: "x"
-    smokeOwn :ty :pid name: "y"
-    smokeOwn :ty :pid name: "label"
+    smokeIsPrivate pool: pool9 :ty :pid name: "x"
+    smokeIsPrivate pool: pool9 :ty :pid name: "y"
+    smokeIsLockField pool: pool9 :ty :pid name: "y"
+    smokeIsLockArm pool: pool9 :ty :pid name: "label"
+    smokeDefault pool: pool9 :ty :pid name: "x"
+    smokeDefault pool: pool9 :ty :pid name: "y"
+    smokeDefault pool: pool9 :ty :pid name: "label"
+    smokeOwn pool: pool9 :ty :pid name: "x"
+    smokeOwn pool: pool9 :ty :pid name: "y"
+    smokeOwn pool: pool9 :ty :pid name: "label"
 
     print "=== generic args ==="
     ty.setGenericArg parentTypeId: lid paramName: "of" argTypeId: tInt
@@ -1210,38 +1181,38 @@ main: function is {
     print "isError -> \{boolText ty.isError}"
 }
 
-smokeHasChild: function {ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.hasChild parentTypeId: pid :name
+smokeHasChild: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.hasChild :pool parentTypeId: pid :name
     print "hasChild point.\{name} -> \{boolText b}"
 }
 
-smokeChildOf: function {ty: ZTyping pid: u64 name: StringView} is {
-    r: ty.childOf parentTypeId: pid :name
+smokeChildOf: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    r: ty.childOf :pool parentTypeId: pid :name
     print "childOf point.\{name} -> \{optU64Text r}"
 }
 
-smokeIsPrivate: function {ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.isChildPrivate parentTypeId: pid :name
+smokeIsPrivate: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.isChildPrivate :pool parentTypeId: pid :name
     print "isPrivate point.\{name} -> \{boolText b}"
 }
 
-smokeIsLockField: function {ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.isChildLockField parentTypeId: pid :name
+smokeIsLockField: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.isChildLockField :pool parentTypeId: pid :name
     print "isLockField point.\{name} -> \{boolText b}"
 }
 
-smokeIsLockArm: function {ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.isChildLockArm parentTypeId: pid :name
+smokeIsLockArm: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    b: ty.isChildLockArm :pool parentTypeId: pid :name
     print "isLockArm point.\{name} -> \{boolText b}"
 }
 
-smokeDefault: function {ty: ZTyping pid: u64 name: StringView} is {
-    d: ty.childDefaultText parentTypeId: pid :name
+smokeDefault: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    d: ty.childDefaultText :pool parentTypeId: pid :name
     print "default point.\{name} -> \{d}"
 }
 
-smokeOwn: function {ty: ZTyping pid: u64 name: StringView} is {
-    o: ty.childOwnershipText parentTypeId: pid :name
+smokeOwn: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    o: ty.childOwnershipText :pool parentTypeId: pid :name
     print "ownership point.\{name} -> \{o}"
 }
 
