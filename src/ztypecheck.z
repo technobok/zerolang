@@ -16,6 +16,14 @@
 Node: zast.Node
 Ast: zast.Ast
 
+# Well-known Ast.names pool ids (fixed by Ast.create's intern order in
+# zast.z -- the authority).
+wkThis: 1.u32
+wkReturn: 2.u32
+wkBreak: 3.u32
+wkContinue: 4.u32
+
+
 # unitLabel -- a unit/definition namedoperation label as an owned String
 # ("" when the operation carries no label).
 unitLabel: function {o: Option String} out String is {
@@ -2707,7 +2715,7 @@ paramIsThisReceiver: function {ast: Ast op: Node} out bool is {
     ) case expression then {
         return (paramIsThisReceiver :ast op: (ast.nodes.get i: (op.expression - 1).u64))
     } case atomid then {
-        return (zast.nameTextEq :ast ref: op.name s: "this")
+        return op.name == wkThis
     } case dottedpath then {
         pn: atomName :ast n: (ast.nodes.get i: (op.parent - 1).u64)
         return pn.stringview == "this"
@@ -11969,8 +11977,8 @@ checkAtomid: function {
         # break/continue diverge: the atom's value is never (the scope
         # entry stays the unregistered placeholder).
         isBrk9: false
-        if ndNm9.stringview == "break" then isBrk9 = true
-        if ndNm9.stringview == "continue" then isBrk9 = true
+        if node.name == wkBreak then isBrk9 = true
+        if node.name == wkContinue then isBrk9 = true
         if isBrk9 then {
             result = (optU64Or
                 o: (walkLookupTyperef ty: st.typing reg: st.reg currentUnit: unitName base: "never")
@@ -11988,7 +11996,7 @@ checkAtomid: function {
             st.typing.atomVariableId.set key: node.nodeid.u64 value: setav9
         } case none then null
     } case none then {
-        if ndNm9.stringview == "return" then {
+        if node.name == wkReturn then {
             mrt9: st.typing.currentReturnTypeId
             if mrt9 > 0 then {
                 mtt9: st.reg.typetypeOf typeId: mrt9
@@ -12859,7 +12867,7 @@ blockHasBreak: function {ast: Ast n: Node} out bool is {
     } case expression then {
         return (blockHasBreak :ast n: (ast.nodes.get i: (n.expression - 1).u64))
     } case atomid then {
-        return (zast.nameTextEq :ast ref: n.name s: "break")
+        return n.name == wkBreak
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl0Id9: cliter loop {
