@@ -38,6 +38,14 @@ Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
 | 2026-07-17 | 81b9297 | A: tokenizer source-span token text (goldens byte-identical) | 0.67s | — | 118MB / — | — | 11,010,123 | 492MB | — |
 | 2026-07-17 | ab2d177 | B: move-on-advance + parser payload moves (+ D: ctor-arg move gap proved stale, pinned in corpus) | 0.65s | — | 119MB / — | — | 10,597,979 | 489MB | — |
 | 2026-07-17 | 7f8524f | C: child-edge name interning (pool + id-keyed buckets) | 0.65s | — | 117MB / — | — | 10,093,238 | 482MB | — |
+| 2026-07-17 | 297f741 | A1: names-as-nodes interning (AtomId/LabelValue name -> u32 nameentry ref; hot readers on scoped row views; constVals probes on getv) | 0.66s | — | 117MB / — | — | 10,161,794 | 485MB | — |
+
+A1 notes: 121,797 per-node name Strings collapse to ~one interned nameentry
+row per distinct identifier; name equality on refs becomes available (A2).
+Alloc cost +0.7% (the intern pool rows + map keys + residual cold-path
+copies) inside the arc's <=2% wall budget; leak-free (allocs == frees).
+Landmine: post-guard narrowing ignored bare `return` (atomid, not a return
+call-kind) -- fixed in checkStmtInner, usable after the seed bump.
 
 Token/name arc total: 11.22M -> 10.09M allocs (-10%), wall 0.68 -> ~0.65s.
 Notes: the tokenizer's 570k "reserve" census line was mostly first-allocs that
