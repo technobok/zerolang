@@ -11,8 +11,9 @@
 # the per-(parent,child) edges live in append-only row tables, and the
 # mutable per-edge sidecars live in id-keyed Maps. Every mutator runs on
 # :this -- a container that owns all of its state -- so mutations persist.
-# child-name ids are minted by ZTyping itself (the registry's id space is
-# for ZType ids); the memo keeps the mint idempotent per (parent, name).
+# edge names live in the shared Ast.names pool (ZTypeChild.nameId IS the
+# pool id); childNameIds are minted by ZTyping itself (the registry's id
+# space is for ZType ids), idempotent per (parent, name).
 
 ZType: ztypes.ZType
 Node: zast.Node
@@ -21,8 +22,8 @@ Node: zast.Node
 
 # One edge of the children table: a (parent, child-name) -> child-type
 # link. Append-only; the mutable child-type id and the sidecars live in
-# id-keyed Maps on ZTyping, keyed by childNameId. nameId indexes the
-# shared ZTyping.nameTexts intern pool (one String per DISTINCT name);
+# id-keyed Maps on ZTyping, keyed by childNameId. nameId is the shared
+# Ast.names pool id of the edge name (1-based; 0 = absent);
 # childNameId stays a per-(parent, name) edge id -- two id spaces.
 ZTypeChild: class {
     parentTypeId: u64
@@ -200,10 +201,12 @@ ZTyping: class {
     # generic arg-type id, keyed by "parentTypeId:paramName"
     genericArgTypeBy: (Map String value: u64)
 
-    # child-name intern pool: one String per distinct edge name;
-    # ZTypeChild.nameId indexes nameTexts
-    nameTexts: (List String)
-    nameIdByText: (Map String value: u64)
+    # edge-name caches derived from the shared Ast.names pool, filled by
+    # setChild/registerEdgeName: edge text -> pool id backs the text-keyed
+    # queries; pool id -> text is a sparse list ("" fillers, index = pool
+    # id) so id -> text reads stay borrowed row views.
+    edgeNameId: (Map String value: u64)
+    edgeText: (List String)
     # per-node single-valued stamps, keyed by parsed-AST nodeid
     nodeType: (Map u64 value: u64)
     nodeLiteralBase: (Map u64 value: ztypes.numbase)
@@ -291,40 +294,66 @@ ZTyping: class {
         }
     }
 
-    # internName -- the pool id for an edge name (minted on first sight).
-    internName: function {:this name: StringView} out u64 is {
+    # childIdForId -- the id-keyed form of childIdFor.
+    childIdForId: function {:this parentTypeId: u64 nameId: u64} out u64 is {
+        existing: this.childNameIdOfId :parentTypeId :nameId
+        match (
+            existing
+        ) case some then {
+            return existing
+        } case none then {
+            newId: this.nextChildId
+            this.nextChildId = this.nextChildId + 1
+            return newId
+        }
+    }
+
+    # registerEdgeText -- record pool id nid's text in both edge-name
+    # caches (idempotent). edgeText grows with "" fillers so its index IS
+    # the pool id; slot 0 stays a filler (pool id 0 = absent).
+    registerEdgeText: function {:this nid: u64 text: StringView} is {
         {
-            g9: this.nameIdByText.getv key: name
+            g9: this.edgeNameId.getv key: text
             match (
                 g9
             ) case some then {
-                return g9
+                return
             } case none then null
         }
-        nid9: this.nameTexts.length
-        this.nameTexts.append name.string
-        k9: name.string
-        this.nameIdByText.set key: k9 value: nid9
-        return nid9
+        for this.edgeText.length <= nid loop this.edgeText.append "".string
+        this.edgeText.set i: nid val: text.string
+        k9: text.string
+        this.edgeNameId.set key: k9 value: nid
     }
 
-    # Resolve the childNameId of an existing (parent, name) edge.
-    # Small buckets scan their rows (StringView compares, no allocation);
-    # large buckets probe the byName index.
+    # registerEdgeName -- intern a name into the shared pool and the edge
+    # caches without laying an edge (alias names stay queryable by text).
+    registerEdgeName: function {:this pool: zast.StringPool name: StringView} is {
+        nid9: (pool.set s: name).u64
+        this.registerEdgeText nid: nid9 text: name
+    }
+
+    # Resolve the childNameId of an existing (parent, name) edge by text.
+    # A name labelling no edge anywhere cannot label this one.
     childNameIdOf: function {:this parentTypeId: u64 name: StringView} out optionval u64 is {
         nid9: u64
         {
-            ng9: this.nameIdByText.getv key: name
+            ng9: this.edgeNameId.getv key: name
             match (
                 ng9
             ) case some then {
-                nid9 = ng9 + 1
+                nid9 = ng9
             } case none then {
-                # a name interned nowhere cannot label any edge
                 return (optionval.none u64)
             }
         }
-        nid9 = nid9 - 1
+        return (this.childNameIdOfId :parentTypeId nameId: nid9)
+    }
+
+    # Resolve the childNameId of an existing (parent, nameId) edge by pool
+    # id. Small buckets scan their rows (int compares, no allocation);
+    # large buckets probe the byName index.
+    childNameIdOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
         b: this.childIndex.get key: parentTypeId
         match (
             b
@@ -333,10 +362,10 @@ ZTyping: class {
                 ridx: b.rows.iterate
                 for ri: ridx loop {
                     row: this.typeChild.get i: ri
-                    if row.nameId == nid9 then return (optionval.some row.childNameId)
+                    if row.nameId == nameId then return (optionval.some row.childNameId)
                 }
             } else {
-                got: b.byName.get key: nid9
+                got: b.byName.get key: nameId
                 match (
                     got
                 ) case some then {
@@ -348,20 +377,31 @@ ZTyping: class {
     }
 
     # Record a (parent, name) -> child-type edge. Idempotent on the key:
-    # a repeat call updates the child-type id in place.
-    setChild: function {:this parentTypeId: u64 childName: StringView childTypeId: u64} is {
-        existing: this.childNameIdOf :parentTypeId name: childName
+    # a repeat call updates the child-type id in place. The name interns
+    # into the shared pool; the row's nameId is the pool id.
+    setChild: function {:this pool: zast.StringPool parentTypeId: u64 childName: StringView childTypeId: u64} is {
+        nid9: (pool.set s: childName).u64
+        this.registerEdgeText nid: nid9 text: childName
+        this.setChildId :parentTypeId nameId: nid9 :childTypeId
+    }
+
+    # Record a (parent, nameId) -> child-type edge by pool id. Idempotent
+    # on the key: a repeat call updates the child-type id in place. The
+    # caches must already know the id (a prior setChild/registerEdgeName
+    # registered it).
+    setChildId: function {:this parentTypeId: u64 nameId: u64 childTypeId: u64} is {
+        existing: this.childNameIdOfId :parentTypeId :nameId
         match (
             existing
         ) case some then {
             sv: childTypeId
             this.childTypeById.set key: existing value: sv
         } case none then {
-            cid: this.childIdFor :parentTypeId name: childName
+            cid: this.childIdForId :parentTypeId :nameId
             pos: this.childCount :parentTypeId
             this.typeChild.append (ZTypeChild
                 :parentTypeId
-                nameId: (this.internName name: childName)
+                :nameId
                 childNameId: cid
                 position: pos
             )
@@ -425,6 +465,25 @@ ZTyping: class {
         }
     }
 
+    # childOfId -- the id-keyed form of childOf.
+    childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
+        idopt: this.childNameIdOfId :parentTypeId :nameId
+        match (
+            idopt
+        ) case some then {
+            r: this.childTypeById.get key: idopt
+            match (
+                r
+            ) case some then {
+                return (optionval.some r)
+            } case none then {
+                return (optionval.none u64)
+            }
+        } case none then {
+            return (optionval.none u64)
+        }
+    }
+
     childByIdValue: function {:this childNameId: u64} out optionval u64 is {
         r: this.childTypeById.get key: childNameId
         match (
@@ -438,6 +497,18 @@ ZTyping: class {
 
     hasChild: function {:this parentTypeId: u64 name: StringView} out bool is {
         idopt: this.childNameIdOf :parentTypeId :name
+        match (
+            idopt
+        ) case some then {
+            return true
+        } case none then {
+            return false
+        }
+    }
+
+    # hasChildId -- the id-keyed form of hasChild.
+    hasChildId: function {:this parentTypeId: u64 nameId: u64} out bool is {
+        idopt: this.childNameIdOfId :parentTypeId :nameId
         match (
             idopt
         ) case some then {
@@ -859,8 +930,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         genericArgTypeBy: (Map String value: u64)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
-        nameTexts: (List String)
-        nameIdByText: (Map String value: u64)
+        edgeNameId: (Map String value: u64)
+        edgeText: (List String)
         nodeType: (Map u64 value: u64 capacity: nodeEst)
         nodeLiteralBase: (Map u64 value: ztypes.numbase)
         callKind: (Map u64 value: zast.callkind)
@@ -941,12 +1012,13 @@ main: function is {
     lid: tList
 
     ty: newTyping
+    pool9: zast.StringPool.create
 
     print "=== children ==="
-    ty.setChild parentTypeId: pid childName: "x" childTypeId: tInt
-    ty.setChild parentTypeId: pid childName: "y" childTypeId: tInt
-    ty.setChild parentTypeId: pid childName: "label" childTypeId: tStr
-    ty.setChild parentTypeId: pid childName: "x" childTypeId: tInt
+    ty.setChild pool: pool9 parentTypeId: pid childName: "x" childTypeId: tInt
+    ty.setChild pool: pool9 parentTypeId: pid childName: "y" childTypeId: tInt
+    ty.setChild pool: pool9 parentTypeId: pid childName: "label" childTypeId: tStr
+    ty.setChild pool: pool9 parentTypeId: pid childName: "x" childTypeId: tInt
 
     print "childCount point -> \{ty.childCount parentTypeId: pid}"
     smokeHasChild :ty :pid name: "x"
@@ -1104,10 +1176,10 @@ dumpChildren: function {ty: ZTyping parentTypeId: u64} is {
             match (
                 ctOpt
             ) case some then {
-                rnB9: ty.nameTexts.get i: row.nameId
+                rnB9: ty.edgeText.get i: row.nameId
                 print "  child \{row.position} \{rnB9} -> \{ctOpt}"
             } case none then {
-                rnB8: ty.nameTexts.get i: row.nameId
+                rnB8: ty.edgeText.get i: row.nameId
                 print "  child \{row.position} \{rnB8} -> none"
             }
         }
