@@ -10,6 +10,7 @@
 Value: json.Value
 Obj: json.Obj
 Arr: json.Arr
+Ast: zast.Ast
 
 # Transport -- the byte source/sink the server is framed over. stdio reads
 # fd 0 and writes fd 1; replay reads a file and writes fd 1 (the harness
@@ -1023,20 +1024,20 @@ Spans: class {
         this.names.append name.string
     }
 
-    memberRow: function {:this nodes: List zast.Node dpid: u32 c: zast.Node} is {
+    memberRow: function {:this ast: Ast dpid: u32 c: zast.Node} is {
         match (
             c
         ) case atomid then {
-            cAr9: zast.nameTextCopy :nodes ref: c.name
+            cAr9: zast.nameTextCopy :ast ref: c.name
             this.addRow id: dpid line: c.lineno col: c.colno name: cAr9.stringview kind: 2
         } else null
     }
 
     # walkOptAt -- the id-taking entry (0 = absent).
-    walkOptAt: function {:this nodes: List zast.Node oId: u32} is {
+    walkOptAt: function {:this ast: Ast oId: u32} is {
         if oId == 0 then return
-        o9: nodes.get i: (oId - 1).u64
-        this.walk :nodes n: o9
+        o9: ast.nodes.get i: (oId - 1).u64
+        this.walk :ast n: o9
     }
 
     # walkProgram -- root entry: notes the program node, then walks each
@@ -1050,7 +1051,7 @@ Spans: class {
             wpn9: prog.units.length
             for wpi9 < wpn9 loop {
                 wpid9: prog.units.get i: wpi9
-                this.walkAt nodes: prog.nodes nId: wpid9
+                this.walkAt ast: prog.ast nId: wpid9
                 wpi9 = wpi9 + 1
             }
         } else null
@@ -1058,19 +1059,19 @@ Spans: class {
 
     # walkAt -- the id-taking entry: the row view is this frame's, so a
     # caller can lend the table in the same call.
-    walkAt: function {:this nodes: List zast.Node nId: u32} is {
-        n9: nodes.get i: (nId - 1).u64
-        this.walk :nodes n: n9
+    walkAt: function {:this ast: Ast nId: u32} is {
+        n9: ast.nodes.get i: (nId - 1).u64
+        this.walk :ast n: n9
     }
 
-    walk: function {:this nodes: List zast.Node n: zast.Node} is {
+    walk: function {:this ast: Ast n: zast.Node} is {
         match (
             n
         ) case error then {
             this.note id: n.nodeid line: n.lineno col: n.colno
         } case placeholder then null case nameentry then null case atomid then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            nAr9: zast.nameTextCopy :nodes ref: n.name
+            nAr9: zast.nameTextCopy :ast ref: n.name
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: nAr9.stringview kind: 1
         } case labelvalue then {
             this.note id: n.nodeid line: n.lineno col: n.colno
@@ -1078,128 +1079,128 @@ Spans: class {
             this.note id: n.nodeid line: n.lineno col: n.colno
         } case binop then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.lhs - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.operator - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.rhs - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.operator - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
         } case atomstring then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             spit9: n.stringparts.iterate
-            for sp9: spit9 loop this.walk :nodes n: (nodes.get i: (sp9 - 1).u64)
+            for sp9: spit9 loop this.walk :ast n: (ast.nodes.get i: (sp9 - 1).u64)
         } case dottedpath then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.parent - 1).u64)
-            this.memberRow :nodes dpid: n.nodeid c: (nodes.get i: (n.child - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+            this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: (n.child - 1).u64)
         } case call then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.callable - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.callable - 1).u64)
             ait9: n.arguments.iterate
             for a9: ait9 loop {
-                this.walk :nodes n: (nodes.get i: (a9 - 1).u64)
+                this.walk :ast n: (ast.nodes.get i: (a9 - 1).u64)
             }
         } case typeofexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.source - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.source - 1).u64)
         } case namedoperation then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.operation - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.operation - 1).u64)
         } case datablock then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             eit9: n.elements.iterate
-            for e9: eit9 loop this.walk :nodes n: (nodes.get i: (e9 - 1).u64)
-            this.walkOptAt :nodes oId: n.outType
+            for e9: eit9 loop this.walk :ast n: (ast.nodes.get i: (e9 - 1).u64)
+            this.walkOptAt :ast oId: n.outType
         } case yieldexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.expr - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.expr - 1).u64)
         } case statement then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             sit9: n.statements.iterate
-            for s9Id9: sit9 loop this.walk :nodes n: (nodes.get i: (s9Id9 - 1).u64)
+            for s9Id9: sit9 loop this.walk :ast n: (ast.nodes.get i: (s9Id9 - 1).u64)
         } case statementline then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.statementline - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.statementline - 1).u64)
         } case assignment then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: n.name.stringview kind: 3
-            this.walk :nodes n: (nodes.get i: (n.value - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.value - 1).u64)
         } case reassignment then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.topath - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.value - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.topath - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.value - 1).u64)
         } case swapstmt then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.lhs - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.rhs - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.lhs - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.rhs - 1).u64)
         } case expression then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.expression - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.expression - 1).u64)
         } case ifexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             cit9: n.clauses.iterate
-            for c9Id9: cit9 loop this.walk :nodes n: (nodes.get i: (c9Id9 - 1).u64)
-            this.walkOptAt :nodes oId: n.elseclause
+            for c9Id9: cit9 loop this.walk :ast n: (ast.nodes.get i: (c9Id9 - 1).u64)
+            this.walkOptAt :ast oId: n.elseclause
         } case ifclause then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             coit9: n.conditions.iterate
-            for co9Id9: coit9 loop this.walk :nodes n: (nodes.get i: (co9Id9 - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.statement - 1).u64)
+            for co9Id9: coit9 loop this.walk :ast n: (ast.nodes.get i: (co9Id9 - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.statement - 1).u64)
         } case forexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             fct9: n.conditions.iterate
-            for fc9Id9: fct9 loop this.walk :nodes n: (nodes.get i: (fc9Id9 - 1).u64)
-            this.walkOptAt :nodes oId: n.body
+            for fc9Id9: fct9 loop this.walk :ast n: (ast.nodes.get i: (fc9Id9 - 1).u64)
+            this.walkOptAt :ast oId: n.body
             fpt9: n.postconditions.iterate
-            for fp9Id9: fpt9 loop this.walk :nodes n: (nodes.get i: (fp9Id9 - 1).u64)
+            for fp9Id9: fpt9 loop this.walk :ast n: (ast.nodes.get i: (fp9Id9 - 1).u64)
         } case doexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.statement - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.statement - 1).u64)
         } case withexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.value - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.body - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.value - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.body - 1).u64)
         } case caseexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.subject - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.subject - 1).u64)
             cct9: n.clauses.iterate
-            for cc9Id9: cct9 loop this.walk :nodes n: (nodes.get i: (cc9Id9 - 1).u64)
-            this.walkOptAt :nodes oId: n.elseclause
+            for cc9Id9: cct9 loop this.walk :ast n: (ast.nodes.get i: (cc9Id9 - 1).u64)
+            this.walkOptAt :ast oId: n.elseclause
         } case caseclause then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walk :nodes n: (nodes.get i: (n.matcharm - 1).u64)
-            this.walk :nodes n: (nodes.get i: (n.statement - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.matcharm - 1).u64)
+            this.walk :ast n: (ast.nodes.get i: (n.statement - 1).u64)
         } case functiondef then {
             this.note id: n.nodeid line: n.lineno col: n.colno
-            this.walkOptAt :nodes oId: n.returntype
+            this.walkOptAt :ast oId: n.returntype
             pit9: n.parameters.iterate
             for pm9Id9: pit9 loop {
-                pm9: nodes.get i: (pm9Id9 - 1).u64
-                this.walk :nodes n: pm9
+                pm9: ast.nodes.get i: (pm9Id9 - 1).u64
+                this.walk :ast n: pm9
             }
-            this.walkOptAt :nodes oId: n.body
+            this.walkOptAt :ast oId: n.body
             fat9: n.asItems.iterate
             for fa9Id9: fat9 loop {
-                fa9: nodes.get i: (fa9Id9 - 1).u64
-                this.walk :nodes n: fa9
+                fa9: ast.nodes.get i: (fa9Id9 - 1).u64
+                this.walk :ast n: fa9
             }
         } case objectdef then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             oit9: n.isItems.iterate
             for oi9Id9: oit9 loop {
-                oi9: nodes.get i: (oi9Id9 - 1).u64
-                this.walk :nodes n: oi9
+                oi9: ast.nodes.get i: (oi9Id9 - 1).u64
+                this.walk :ast n: oi9
             }
             oat9: n.asItems.iterate
             for oa9Id9: oat9 loop {
-                oa9: nodes.get i: (oa9Id9 - 1).u64
-                this.walk :nodes n: oa9
+                oa9: ast.nodes.get i: (oa9Id9 - 1).u64
+                this.walk :ast n: oa9
             }
         } case unitdef then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             ubt9: n.body.iterate
-            for ub9Id9: ubt9 loop this.walk :nodes n: (nodes.get i: (ub9Id9 - 1).u64)
+            for ub9Id9: ubt9 loop this.walk :ast n: (ast.nodes.get i: (ub9Id9 - 1).u64)
         } case program then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             uit9: n.units.iterate
-            for u9Id9x: uit9 loop this.walk :nodes n: (nodes.get i: (u9Id9x - 1).u64)
+            for u9Id9x: uit9 loop this.walk :ast n: (ast.nodes.get i: (u9Id9x - 1).u64)
         }
     }
 }
@@ -1490,7 +1491,7 @@ fnSigTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64 name: StringView}
 # ---- def-node navigation (unit/body indexes into the program AST) ----
 
 memberIn: function {
-    nodes: List zast.Node
+    ast: Ast
     op: zast.Node
     name: StringView
     wrapperId: u32
@@ -1500,13 +1501,13 @@ memberIn: function {
     ) case objectdef then {
         iit9: op.isItems.iterate
         for ii9Id9: iit9 loop {
-            ii9: nodes.get i: (ii9Id9 - 1).u64
+            ii9: ast.nodes.get i: (ii9Id9 - 1).u64
             m9: (memberLabelId m: ii9 :name)
             if m9 > 0 then return m9
         }
         ait9: op.asItems.iterate
         for ai9Id9: ait9 loop {
-            ai9: nodes.get i: (ai9Id9 - 1).u64
+            ai9: ast.nodes.get i: (ai9Id9 - 1).u64
             m2: (memberLabelId m: ai9 :name)
             if m2 > 0 then return m2
         }
@@ -1528,14 +1529,14 @@ memberLabelId: function {m: zast.Node name: StringView} out u64 is {
     }
 }
 
-defOrMember: function {nodes: List zast.Node d: zast.Node member: StringView} out u64 is {
+defOrMember: function {ast: Ast d: zast.Node member: StringView} out u64 is {
     match (
         d
     ) case namedoperation then {
         if member.length == 0 then return d.nodeid.u64
         return (memberIn
-            :nodes
-            op: (nodes.get i: (d.operation - 1).u64)
+            :ast
+            op: (ast.nodes.get i: (d.operation - 1).u64)
             name: member
             wrapperId: d.nodeid
         )
@@ -1544,24 +1545,24 @@ defOrMember: function {nodes: List zast.Node d: zast.Node member: StringView} ou
     }
 }
 
-navUnitDef: function {nodes: List zast.Node ud: zast.Node bidx: u64 member: StringView} out u64 is {
+navUnitDef: function {ast: Ast ud: zast.Node bidx: u64 member: StringView} out u64 is {
     match (
         ud
     ) case unitdef then {
         if bidx >= ud.body.length then return 0
         m9Id: ud.body.get i: bidx
-        return (defOrMember :nodes d: (nodes.get i: (m9Id - 1).u64) :member)
+        return (defOrMember :ast d: (ast.nodes.get i: (m9Id - 1).u64) :member)
     } else {
         return 0
     }
 }
 
-navWrapper: function {nodes: List zast.Node wId: u32 bidx: u64 member: StringView} out u64 is {
-    w: nodes.get i: (wId - 1).u64
+navWrapper: function {ast: Ast wId: u32 bidx: u64 member: StringView} out u64 is {
+    w: ast.nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
-        return (navUnitDef :nodes ud: (nodes.get i: (w.operation - 1).u64) :bidx :member)
+        return (navUnitDef :ast ud: (ast.nodes.get i: (w.operation - 1).u64) :bidx :member)
     } else {
         return 0
     }
@@ -1573,7 +1574,7 @@ navBody: function {prog: zast.Node uidx: u64 bidx: u64 member: StringView} out u
     ) case program then {
         if uidx >= prog.units.length then return 0
         u9Id9: prog.units.get i: uidx
-        return (navWrapper nodes: prog.nodes wId: u9Id9 :bidx :member)
+        return (navWrapper ast: prog.ast wId: u9Id9 :bidx :member)
     } else {
         return 0
     }
@@ -1821,21 +1822,21 @@ unitFsnoByName: function {snap: zcheck.CheckResult name: StringView} out u32 is 
 
 # unitGenericParamsOf -- a unitdef's generic parameters rendered " {T U}"
 # (its `T: base.generic` body declarations); "" when it has none.
-unitGenericParamsOf: function {nodes: List zast.Node udId: u32} out String is {
-    ud: nodes.get i: (udId - 1).u64
+unitGenericParamsOf: function {ast: Ast udId: u32} out String is {
+    ud: ast.nodes.get i: (udId - 1).u64
     out9: String
     match (
         ud
     ) case unitdef then {
         bit9: ud.body.iterate
         for gm9Id: bit9 loop {
-            gm9: nodes.get i: (gm9Id - 1).u64
+            gm9: ast.nodes.get i: (gm9Id - 1).u64
             match (
                 gm9
             ) case namedoperation then {
                 if (ztypecheck.isBareGenericParam
-                    :nodes
-                    op: (nodes.get i: (gm9.operation - 1).u64)
+                    :ast
+                    op: (ast.nodes.get i: (gm9.operation - 1).u64)
                 ) then {
                     gpn9: optLabel o: gm9.name
                     if out9.length == 0 then out9.append " {"
@@ -1859,7 +1860,7 @@ unitGenericSuffix: function {prog: zast.Node name: StringView} out String is {
         for u9Id9: uit9 loop {
             opId9: u32
             {
-                u9: prog.nodes.get i: (u9Id9 - 1).u64
+                u9: prog.ast.nodes.get i: (u9Id9 - 1).u64
                 if u9.namedoperation then {
                     lb9: optLabel o: u9.name
                     if lb9.stringview == name then opId9 = u9.operation
@@ -1867,7 +1868,7 @@ unitGenericSuffix: function {prog: zast.Node name: StringView} out String is {
             }
             if opId9 > 0 then {
                 gs9: (unitGenericParamsOf
-                    nodes: prog.nodes
+                    ast: prog.ast
                     udId: opId9
                 )
                 if gs9.length > 0 then out9 = gs9
@@ -2200,7 +2201,7 @@ collectUnitSymbols: function {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop {
             (collectUnitSymbolsIn
-                nodes: prog.nodes
+                ast: prog.ast
                 wId: u9Id9
                 :unitName
                 :docText
@@ -2212,21 +2213,21 @@ collectUnitSymbols: function {
 }
 
 collectUnitSymbolsIn: function {
-    nodes: List zast.Node
+    ast: Ast
     wId: u32
     unitName: StringView
     docText: StringView
     utf32: bool
     arr: Arr
 } is {
-    w: nodes.get i: (wId - 1).u64
+    w: ast.nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
         lb9: optLabel o: w.name
         if lb9.stringview == unitName then (collectBodySymbols
-            :nodes
-            ud: (nodes.get i: (w.operation - 1).u64)
+            :ast
+            ud: (ast.nodes.get i: (w.operation - 1).u64)
             :docText
             :utf32
             :arr
@@ -2235,7 +2236,7 @@ collectUnitSymbolsIn: function {
 }
 
 collectBodySymbols: function {
-    nodes: List zast.Node
+    ast: Ast
     ud: zast.Node
     docText: StringView
     utf32: bool
@@ -2245,12 +2246,12 @@ collectBodySymbols: function {
         ud
     ) case unitdef then {
         bit9: ud.body.iterate
-        for b9Id: bit9 loop symbolOf :nodes m: (nodes.get i: (b9Id - 1).u64) :docText :utf32 :arr
+        for b9Id: bit9 loop symbolOf :ast m: (ast.nodes.get i: (b9Id - 1).u64) :docText :utf32 :arr
     } else null
 }
 
 symbolOf: function {
-    nodes: List zast.Node
+    ast: Ast
     m: zast.Node
     docText: StringView
     utf32: bool
@@ -2261,7 +2262,7 @@ symbolOf: function {
     ) case namedoperation then {
         lb9: optLabel o: m.name
         if lb9.length == 0 then return
-        k9: symbolKindOf op: (nodes.get i: (m.operation - 1).u64)
+        k9: symbolKindOf op: (ast.nodes.get i: (m.operation - 1).u64)
         lt9: docLine text: docText lineno: m.lineno
         c0: encodedCol lineText: lt9.stringview cpCol1: m.colno :utf32
         wname9: lb9.stringview.count
@@ -2514,40 +2515,40 @@ collectTopDefs: function {prog: zast.Node sink: (Map String value: u8)} is {
     ) case program then {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop (collectUnitDefs
-            nodes: prog.nodes
+            ast: prog.ast
             wId: u9Id9
             :sink
         )
     } else null
 }
 
-collectUnitDefs: function {nodes: List zast.Node wId: u32 sink: (Map String value: u8)} is {
-    w: nodes.get i: (wId - 1).u64
+collectUnitDefs: function {ast: Ast wId: u32 sink: (Map String value: u8)} is {
+    w: ast.nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
         ul9: optLabel o: w.name
         addCand :sink name: ul9.stringview kind: 9
-        collectUnitDefsIn :nodes ud: (nodes.get i: (w.operation - 1).u64) :sink
+        collectUnitDefsIn :ast ud: (ast.nodes.get i: (w.operation - 1).u64) :sink
     } else null
 }
 
-collectUnitDefsIn: function {nodes: List zast.Node ud: zast.Node sink: (Map String value: u8)} is {
+collectUnitDefsIn: function {ast: Ast ud: zast.Node sink: (Map String value: u8)} is {
     match (
         ud
     ) case unitdef then {
         bit9: ud.body.iterate
-        for b9Id: bit9 loop collectMemberDef :nodes m: (nodes.get i: (b9Id - 1).u64) :sink
+        for b9Id: bit9 loop collectMemberDef :ast m: (ast.nodes.get i: (b9Id - 1).u64) :sink
     } else null
 }
 
-collectMemberDef: function {nodes: List zast.Node m: zast.Node sink: (Map String value: u8)} is {
+collectMemberDef: function {ast: Ast m: zast.Node sink: (Map String value: u8)} is {
     match (
         m
     ) case namedoperation then {
         lb9: optLabel o: m.name
         if lb9.length > 0 then {
-            k9: defKindOf op: (nodes.get i: (m.operation - 1).u64)
+            k9: defKindOf op: (ast.nodes.get i: (m.operation - 1).u64)
             addCand :sink name: lb9.stringview kind: k9
         }
     } else null
@@ -2568,7 +2569,7 @@ enclosingDefStart: function {
     ) case program then {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop {
-            r9: enclosingInUnit nodes: prog.nodes wId: u9Id9 :unitName :l1u :sink
+            r9: enclosingInUnit ast: prog.ast wId: u9Id9 :unitName :l1u :sink
             if r9 > 0 then return r9
         }
         return 0
@@ -2578,20 +2579,20 @@ enclosingDefStart: function {
 }
 
 enclosingInUnit: function {
-    nodes: List zast.Node
+    ast: Ast
     wId: u32
     unitName: StringView
     l1u: u32
     sink: (Map String value: u8)
 } out u32 is {
-    w: nodes.get i: (wId - 1).u64
+    w: ast.nodes.get i: (wId - 1).u64
     match (
         w
     ) case namedoperation then {
         ul9: optLabel o: w.name
         if ul9.stringview == unitName then return (enclosingInBody
-            :nodes
-            ud: (nodes.get i: (w.operation - 1).u64)
+            :ast
+            ud: (ast.nodes.get i: (w.operation - 1).u64)
             :l1u
             :sink
         )
@@ -2602,7 +2603,7 @@ enclosingInUnit: function {
 }
 
 enclosingInBody: function {
-    nodes: List zast.Node
+    ast: Ast
     ud: zast.Node
     l1u: u32
     sink: (Map String value: u8)
@@ -2614,7 +2615,7 @@ enclosingInBody: function {
         {
             bit9: ud.body.iterate
             for b9Id: bit9 loop {
-                b9IdNode9: nodes.get i: (b9Id - 1).u64
+                b9IdNode9: ast.nodes.get i: (b9Id - 1).u64
                 ln9: memberStartLine m: b9IdNode9
                 if ln9 > 0 when ln9 <= l1u then {
                     if ln9 > best9 then best9 = ln9
@@ -2624,9 +2625,9 @@ enclosingInBody: function {
         if best9 > 0 then {
             bit2: ud.body.iterate
             for b2Id: bit2 loop {
-                b2: nodes.get i: (b2Id - 1).u64
+                b2: ast.nodes.get i: (b2Id - 1).u64
                 ln2: memberStartLine m: b2
-                if ln2 == best9 then addMemberParams :nodes m: b2 :sink
+                if ln2 == best9 then addMemberParams :ast m: b2 :sink
             }
         }
         return best9
@@ -2645,21 +2646,21 @@ memberStartLine: function {m: zast.Node} out u32 is {
     }
 }
 
-addMemberParams: function {nodes: List zast.Node m: zast.Node sink: (Map String value: u8)} is {
+addMemberParams: function {ast: Ast m: zast.Node sink: (Map String value: u8)} is {
     match (
         m
     ) case namedoperation then {
-        addFnParams :nodes op: (nodes.get i: (m.operation - 1).u64) :sink
+        addFnParams :ast op: (ast.nodes.get i: (m.operation - 1).u64) :sink
     } else null
 }
 
-addFnParams: function {nodes: List zast.Node op: zast.Node sink: (Map String value: u8)} is {
+addFnParams: function {ast: Ast op: zast.Node sink: (Map String value: u8)} is {
     match (
         op
     ) case functiondef then {
         pit9: op.parameters.iterate
         for pm9Id9: pit9 loop {
-            pm9: nodes.get i: (pm9Id9 - 1).u64
+            pm9: ast.nodes.get i: (pm9Id9 - 1).u64
             addParamLabel pm: pm9 :sink
         }
     } else null
@@ -2755,14 +2756,14 @@ addUnitMembers: function {prog: zast.Node name: StringView sink: (Map String val
     ) case program then {
         uit9: prog.units.iterate
         for u9Id9: uit9 loop {
-            u9: prog.nodes.get i: (u9Id9 - 1).u64
+            u9: prog.ast.nodes.get i: (u9Id9 - 1).u64
             match (
                 u9
             ) case namedoperation then {
                 lb9: optLabel o: u9.name
                 if lb9.stringview == name then (collectUnitDefsIn
-                    nodes: prog.nodes
-                    ud: (prog.nodes.get i: (u9.operation - 1).u64)
+                    ast: prog.ast
+                    ud: (prog.ast.nodes.get i: (u9.operation - 1).u64)
                     :sink
                 )
             } else null
@@ -2845,7 +2846,7 @@ descendUnitType: function {
             result9 = (ztypecheck.descendNamed
                 ty: o.typing
                 reg: o.reg
-                nodes: prog.nodes
+                ast: prog.ast
                 units: prog.units
                 defUnit: unitName
                 :name

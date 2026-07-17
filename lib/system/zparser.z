@@ -16,6 +16,7 @@
 # Local alias for the cross-unit AST node union, for brevity at the many
 # `Node.<arm>` / `(Option t: Node)` sites below.
 Node: zast.Node
+Ast: zast.Ast
 
 # StringChunk.chunkKind codes. Values match the Python TT enum
 # (EOL=5, STRMID=21, STRCHR=22) so the eventual ast_nodes differential
@@ -127,24 +128,24 @@ isReservedMemberName: function {name: StringView} out bool is {
 
 # True when the node is the bare identifier `null` (through an
 # `expression` wrapper).
-nodeIsBareNull: function {nodes: List Node n: Node} out bool is {
+nodeIsBareNull: function {ast: Ast n: Node} out bool is {
     match (
         n
     ) case atomid then {
-        return (zast.nameTextEq :nodes ref: n.name s: "null")
+        return (zast.nameTextEq :ast ref: n.name s: "null")
     } case expression then {
-        return (nodeIsBareNull :nodes n: (nodes.get i: (n.expression - 1).u64))
+        return (nodeIsBareNull :ast n: (ast.nodes.get i: (n.expression - 1).u64))
     } else {
         return false
     }
 }
 
 # True when a statement line wraps the bare identifier `null`.
-slIsBareNull: function {nodes: List Node sl: Node} out bool is {
+slIsBareNull: function {ast: Ast sl: Node} out bool is {
     match (
         sl
     ) case statementline then {
-        return (nodeIsBareNull :nodes n: (nodes.get i: (sl.statementline - 1).u64))
+        return (nodeIsBareNull :ast n: (ast.nodes.get i: (sl.statementline - 1).u64))
     } else {
         return false
     }
@@ -152,13 +153,13 @@ slIsBareNull: function {nodes: List Node sl: Node} out bool is {
 
 # True when a clause body is exactly the bare atom `null` (one wrapped
 # expression statement): the empty-body spelling.
-isBareNullBody: function {nodes: List Node body: Node} out bool is {
+isBareNullBody: function {ast: Ast body: Node} out bool is {
     match (
         body
     ) case statement then {
         if body.statements.length != 1 then return false
         slId9: body.statements.get i: 0
-        return (slIsBareNull :nodes sl: (nodes.get i: (slId9 - 1).u64))
+        return (slIsBareNull :ast sl: (ast.nodes.get i: (slId9 - 1).u64))
     } else {
         return false
     }
@@ -257,7 +258,7 @@ Parser: class {
     # Master node table: one slot per minted id (a reserved slot holds
     # the payload-less placeholder arm until a converted parent moves
     # the real child in).
-    nodes: (List Node)
+    ast: Ast
     # interned name text -> nameentry nodeid (see zast.NameEntryData)
     nameIds: (Map String value: u32)
 } as {
@@ -266,7 +267,7 @@ Parser: class {
             nextNodeId: 1
             functionBodyDepth: 0
             fileSegs: (List FileSeg)
-            nodes: (List Node)
+            ast: Ast.create
             nameIds: (Map String value: u32)
         )
     }
@@ -275,13 +276,13 @@ Parser: class {
     nextId: function {:this} out u32 is {
         id: this.nextNodeId
         this.nextNodeId = this.nextNodeId + 1
-        this.nodes.append from: zast.Node.placeholder
+        this.ast.nodes.append from: zast.Node.placeholder
         return id
     }
 
     # intern -- move a finished node into its reserved master-table slot.
     intern: function {:this n: Node.take} out u32 is {
-        return (zast.tableAdd nodes: this.nodes :n)
+        return (zast.tableAdd ast: this.ast :n)
     }
 
     # internName -- the nameentry nodeid for an identifier's text (one
@@ -297,7 +298,7 @@ Parser: class {
         }
         id9: this.nextId
         nr9: Node.nameentry (zast.NameEntryData nodeid: id9 text: name.string)
-        rid9: zast.tableAdd nodes: this.nodes n: nr9
+        rid9: zast.tableAdd ast: this.ast n: nr9
         k9: name.string
         this.nameIds.set key: k9 value: rid9
         return rid9
@@ -481,8 +482,8 @@ Parser: class {
     # path -> atom | ( path "." atomid )
     #
     # Bare-Node producer: an atom followed by zero or more `. id`
-    # selectors, folded left into nested DottedPath nodes. Used by the
-    # greedy operation-path collector, which appends owned nodes.
+    # selectors, folded left into nested DottedPath ast.nodes. Used by the
+    # greedy operation-path collector, which appends owned ast.nodes.
     parsePath: function {:this lex: zlexer.Lexer} out Node is {
         startTok: lex.peek
         sLine: startTok.lineno
@@ -690,7 +691,7 @@ Parser: class {
         for i < origLen loop {
             if (stop1) == false then {
                 elId9: parts.get :i
-                c: partClass n: (this.nodes.get i: (elId9 - 1).u64)
+                c: partClass n: (this.ast.nodes.get i: (elId9 - 1).u64)
                 if c == 1 then {
                     startIdx = i + 1
                     stop1 = true
@@ -709,7 +710,7 @@ Parser: class {
             if (stop2) == false then {
                 j2: j - 1
                 elId9: parts.get i: j2
-                c: partClass n: (this.nodes.get i: (elId9 - 1).u64)
+                c: partClass n: (this.ast.nodes.get i: (elId9 - 1).u64)
                 if c == 1 then {
                     lastEol = true
                     lastEolIdx = j2
@@ -723,7 +724,7 @@ Parser: class {
         if lastEol then {
             m: lastEolIdx + 1
             for m < origLen loop {
-                el: this.nodes.get i: ((parts.get i: m) - 1).u64
+                el: this.ast.nodes.get i: ((parts.get i: m) - 1).u64
                 match (
                     el
                 ) case stringchunk then {
@@ -751,7 +752,7 @@ Parser: class {
             p: startIdx
             for p < endIdx loop {
                 elId9: parts.get i: p
-                el: this.nodes.get i: (elId9 - 1).u64
+                el: this.ast.nodes.get i: (elId9 - 1).u64
                 c: partClass n: el
                 if c == 1 then {
                     atLineStart = true
@@ -798,7 +799,7 @@ Parser: class {
                 ncCol: u32
                 ncText: String
                 {
-                    el: this.nodes.get i: (elId9 - 1).u64
+                    el: this.ast.nodes.get i: (elId9 - 1).u64
                     match (
                         el
                     ) case stringchunk then {
@@ -1384,7 +1385,7 @@ Parser: class {
         body: this.acceptPrimaryExpression :lex
         bErr: this.isError node: body
         if bErr then return body
-        if (isBareNullBody nodes: this.nodes :body) then {
+        if (isBareNullBody ast: this.ast :body) then {
             stmts0: (List u32)
             return (Node.statement (zast.StatementData
                 nodeid: this.nextId
@@ -2436,8 +2437,8 @@ Parser: class {
             an: ab.length
             if an > 0 then {
                 lastId9: ab.pop
-                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake ast: this.ast id: lastId9)
                 }
                 ab.append lastId9
             }
@@ -2465,8 +2466,8 @@ Parser: class {
             pn: pb.length
             if pn > 0 then {
                 lastId9: pb.pop
-                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake ast: this.ast id: lastId9)
                 }
                 pb.append lastId9
             }
@@ -2510,8 +2511,8 @@ Parser: class {
             pn: pb.length
             if pn > 0 then {
                 lastId9: pb.pop
-                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake ast: this.ast id: lastId9)
                 }
                 pb.append lastId9
             }
@@ -2871,8 +2872,8 @@ Parser: class {
             bn: body.length
             if bn > 0 then {
                 lastId9: body.pop
-                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake ast: this.ast id: lastId9)
                 }
                 body.append lastId9
             }
@@ -2963,8 +2964,8 @@ Parser: class {
                 ibn: ib.length
                 if ibn > 0 then {
                     lastId9: ib.pop
-                    if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                        return (zast.tableTake nodes: this.nodes id: lastId9)
+                    if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                        return (zast.tableTake ast: this.ast id: lastId9)
                     }
                     ib.append lastId9
                 }
@@ -3013,8 +3014,8 @@ Parser: class {
             abn: ab.length
             if abn > 0 then {
                 lastId9: ab.pop
-                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake ast: this.ast id: lastId9)
                 }
                 ab.append lastId9
             }
@@ -3039,8 +3040,8 @@ Parser: class {
                 ibn: ib.length
                 if ibn > 0 then {
                     lastId9: ib.pop
-                    if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                        return (zast.tableTake nodes: this.nodes id: lastId9)
+                    if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                        return (zast.tableTake ast: this.ast id: lastId9)
                     }
                     ib.append lastId9
                 }
@@ -3246,8 +3247,8 @@ Parser: class {
             bn: body.length
             if bn > 0 then {
                 lastId9: body.pop
-                if (zast.kindOf nodes: this.nodes id: lastId9) == zast.astkind.error then {
-                    return (zast.tableTake nodes: this.nodes id: lastId9)
+                if (zast.kindOf ast: this.ast id: lastId9) == zast.astkind.error then {
+                    return (zast.tableTake ast: this.ast id: lastId9)
                 }
                 body.append lastId9
             }
@@ -3268,8 +3269,8 @@ Parser: class {
                 )
             } case some then null
             this.fileSegs.append (FileSeg startId: segStart9 endId: this.nextNodeId fsno: fsid)
-            ewBindNameIds nodes: this.nodes scope: outNames items: body
-            raw: collectExterns nodes: this.nodes :body
+            ewBindNameIds ast: this.ast scope: outNames items: body
+            raw: collectExterns ast: this.ast :body
             dirid: vfs.walk parent: parentid name: unitname.stringview
             dkind: vfs.arm dentryid: dirid
             hasSubdir: false
@@ -3405,15 +3406,15 @@ Parser: class {
             }
         }
         pid9: this.nextId
-        tbl9: (List Node)
-        tbl9 swap this.nodes
+        tbl9: Ast.create
+        tbl9 swap this.ast
         return (Node.program (zast.ProgramData
             nodeid: pid9
             lineno: 1
             colno: 1
             :units
             mainUnitName: mainUnitName.copy
-            nodes: tbl9)
+            ast: tbl9)
         )
     }
 }
@@ -3479,12 +3480,12 @@ ewBindNames: function {scope: List String items: List Node} is {
 }
 
 # Bind the top-level names of a converted id-list (unit bodies).
-ewBindNameIds: function {nodes: List Node scope: List String items: List u32} is {
+ewBindNameIds: function {ast: Ast scope: List String items: List u32} is {
     ei9: u64
     en9: items.length
     for ei9 < en9 loop {
         eid9: items.get i: ei9
-        ewBindOneName :scope item: (nodes.get i: (eid9 - 1).u64)
+        ewBindOneName :scope item: (ast.nodes.get i: (eid9 - 1).u64)
         ei9 = ei9 + 1
     }
 }
@@ -3499,19 +3500,19 @@ ewTruncate: function {scope: List String n: u64} is {
 # Walk an optional child node if present.
 # ewWalkOptAt -- the id-taking entry (0 = absent).
 ewWalkOptAt: function {
-    nodes: List Node
+    ast: Ast
     externs: List String
     scope: List String
     oId: u32
 } is {
     if oId == 0 then return
-    o9: nodes.get i: (oId - 1).u64
-    ewWalk :nodes :externs :scope node: o9
+    o9: ast.nodes.get i: (oId - 1).u64
+    ewWalk :ast :externs :scope node: o9
 }
 
 # Walk a converted id-list (unit bodies).
 ewWalkBodyIds: function {
-    nodes: List Node
+    ast: Ast
     externs: List String
     scope: List String
     items: List u32
@@ -3520,7 +3521,7 @@ ewWalkBodyIds: function {
     wn9: items.length
     for wi9 < wn9 loop {
         wid9: items.get i: wi9
-        ewWalk :nodes :externs :scope node: (nodes.get i: (wid9 - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (wid9 - 1).u64)
         wi9 = wi9 + 1
     }
 }
@@ -3529,20 +3530,20 @@ ewWalkBodyIds: function {
 # the real form (assignment / reassignment / swap / bare expression);
 # unwrap one level, then dispatch. An assignment binds its name for the
 # lines that follow (but not for its own value).
-ewWalkLine: function {nodes: List Node externs: List String scope: List String line: Node} is {
+ewWalkLine: function {ast: Ast externs: List String scope: List String line: Node} is {
     match (
         line
     ) case statementline then {
-        ewWalkStmtInner :nodes :externs :scope inner: (nodes.get i: (line.statementline - 1).u64)
+        ewWalkStmtInner :ast :externs :scope inner: (ast.nodes.get i: (line.statementline - 1).u64)
     } else {
-        ewWalkStmtInner :nodes :externs :scope inner: line
+        ewWalkStmtInner :ast :externs :scope inner: line
     }
 }
 
 # The unwrapped statement form. `inner` is taken by value so reading its
 # fields does not free anything still owned by the enclosing statement.
 ewWalkStmtInner: function {
-    nodes: List Node
+    ast: Ast
     externs: List String
     scope: List String
     inner: Node
@@ -3550,131 +3551,131 @@ ewWalkStmtInner: function {
     match (
         inner
     ) case assignment then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (inner.value - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.value - 1).u64)
         scope.append inner.name.copy
     } case reassignment then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (inner.topath - 1).u64)
-        ewWalk :nodes :externs :scope node: (nodes.get i: (inner.value - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.topath - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.value - 1).u64)
     } case swapstmt then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (inner.lhs - 1).u64)
-        ewWalk :nodes :externs :scope node: (nodes.get i: (inner.rhs - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.lhs - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.rhs - 1).u64)
     } else {
-        ewWalk :nodes :externs :scope node: inner
+        ewWalk :ast :externs :scope node: inner
     }
 }
 
 # A for-loop condition arm: a named arm (`label op`) binds the loop
 # variable for the body after its iterable is walked; an unnamed arm
 # (a `while` / leading condition) is just walked.
-ewWalkForCond: function {nodes: List Node externs: List String scope: List String cond: Node} is {
+ewWalkForCond: function {ast: Ast externs: List String scope: List String cond: Node} is {
     match (
         cond
     ) case namedoperation then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (cond.operation - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (cond.operation - 1).u64)
         ewBindOptName :scope o: cond.name
     } else {
-        ewWalk :nodes :externs :scope node: cond
+        ewWalk :ast :externs :scope node: cond
     }
 }
 
 # The core recursive walk: same arms and child order as zast.printNode.
 # Emits atomid references; threads the bound scope through nested
 # definitions and blocks.
-ewWalk: function {nodes: List Node externs: List String scope: List String node: Node} is {
+ewWalk: function {ast: Ast externs: List String scope: List String node: Node} is {
     match (
         node
     ) case error then null case placeholder then null case nameentry then null case atomid then {
-        ewEmit :externs :scope name: (zast.nameTextCopy :nodes ref: node.name)
+        ewEmit :externs :scope name: (zast.nameTextCopy :ast ref: node.name)
     } case labelvalue then null case stringchunk then null case binop then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.lhs - 1).u64)
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.operator - 1).u64)
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.rhs - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.lhs - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.operator - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.rhs - 1).u64)
     } case atomstring then {
-        ewWalkBodyIds :nodes :externs :scope items: node.stringparts
+        ewWalkBodyIds :ast :externs :scope items: node.stringparts
     } case dottedpath then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.parent - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.parent - 1).u64)
     } case call then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.callable - 1).u64)
-        ewWalkBodyIds :nodes :externs :scope items: node.arguments
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.callable - 1).u64)
+        ewWalkBodyIds :ast :externs :scope items: node.arguments
     } case typeofexpr then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.source - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.source - 1).u64)
     } case namedoperation then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.operation - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.operation - 1).u64)
     } case datablock then {
-        ewWalkBodyIds :nodes :externs :scope items: node.elements
-        ewWalkOptAt :nodes :externs :scope oId: node.outType
+        ewWalkBodyIds :ast :externs :scope items: node.elements
+        ewWalkOptAt :ast :externs :scope oId: node.outType
     } case yieldexpr then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.expr - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.expr - 1).u64)
     } case statement then {
         base: scope.length
         sit: node.statements.iterate
-        for lnId9: sit loop ewWalkLine :nodes :externs :scope line: (nodes.get i: (lnId9 - 1).u64)
+        for lnId9: sit loop ewWalkLine :ast :externs :scope line: (ast.nodes.get i: (lnId9 - 1).u64)
         ewTruncate :scope n: base
     } case statementline then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statementline - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.statementline - 1).u64)
     } case assignment then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.value - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.value - 1).u64)
     } case reassignment then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.topath - 1).u64)
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.value - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.topath - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.value - 1).u64)
     } case swapstmt then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.lhs - 1).u64)
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.rhs - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.lhs - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.rhs - 1).u64)
     } case expression then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.expression - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.expression - 1).u64)
     } case ifexpr then {
-        ewWalkBodyIds :nodes :externs :scope items: node.clauses
-        ewWalkOptAt :nodes :externs :scope oId: node.elseclause
+        ewWalkBodyIds :ast :externs :scope items: node.clauses
+        ewWalkOptAt :ast :externs :scope oId: node.elseclause
     } case ifclause then {
-        ewWalkBodyIds :nodes :externs :scope items: node.conditions
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statement - 1).u64)
+        ewWalkBodyIds :ast :externs :scope items: node.conditions
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.statement - 1).u64)
     } case forexpr then {
         base: scope.length
         fit: node.conditions.iterate
-        for fc: fit loop ewWalkForCond :nodes :externs :scope cond: (nodes.get i: (fc - 1).u64)
-        ewWalkOptAt :nodes :externs :scope oId: node.body
-        ewWalkBodyIds :nodes :externs :scope items: node.postconditions
+        for fc: fit loop ewWalkForCond :ast :externs :scope cond: (ast.nodes.get i: (fc - 1).u64)
+        ewWalkOptAt :ast :externs :scope oId: node.body
+        ewWalkBodyIds :ast :externs :scope items: node.postconditions
         ewTruncate :scope n: base
     } case doexpr then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statement - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.statement - 1).u64)
     } case withexpr then {
         base: scope.length
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.value - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.value - 1).u64)
         scope.append node.name.copy
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.body - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.body - 1).u64)
         ewTruncate :scope n: base
     } case caseexpr then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.subject - 1).u64)
-        ewWalkBodyIds :nodes :externs :scope items: node.clauses
-        ewWalkOptAt :nodes :externs :scope oId: node.elseclause
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.subject - 1).u64)
+        ewWalkBodyIds :ast :externs :scope items: node.clauses
+        ewWalkOptAt :ast :externs :scope oId: node.elseclause
     } case caseclause then {
-        ewWalk :nodes :externs :scope node: (nodes.get i: (node.statement - 1).u64)
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.statement - 1).u64)
     } case functiondef then {
         base: scope.length
-        ewBindNameIds :nodes :scope items: node.parameters
-        ewBindNameIds :nodes :scope items: node.asItems
-        ewWalkOptAt :nodes :externs :scope oId: node.returntype
-        ewWalkBodyIds :nodes :externs :scope items: node.parameters
-        ewWalkOptAt :nodes :externs :scope oId: node.body
-        ewWalkBodyIds :nodes :externs :scope items: node.asItems
+        ewBindNameIds :ast :scope items: node.parameters
+        ewBindNameIds :ast :scope items: node.asItems
+        ewWalkOptAt :ast :externs :scope oId: node.returntype
+        ewWalkBodyIds :ast :externs :scope items: node.parameters
+        ewWalkOptAt :ast :externs :scope oId: node.body
+        ewWalkBodyIds :ast :externs :scope items: node.asItems
         ewTruncate :scope n: base
     } case objectdef then {
         base: scope.length
         scope.append "this".string
         scope.append "type".string
         scope.append "meta".string
-        ewBindNameIds :nodes :scope items: node.isItems
-        ewBindNameIds :nodes :scope items: node.asItems
-        ewWalkBodyIds :nodes :externs :scope items: node.isItems
-        ewWalkBodyIds :nodes :externs :scope items: node.asItems
+        ewBindNameIds :ast :scope items: node.isItems
+        ewBindNameIds :ast :scope items: node.asItems
+        ewWalkBodyIds :ast :externs :scope items: node.isItems
+        ewWalkBodyIds :ast :externs :scope items: node.asItems
         ewTruncate :scope n: base
     } case unitdef then {
         base: scope.length
         scope.append "this".string
         scope.append "type".string
         scope.append "meta".string
-        ewBindNameIds :nodes :scope items: node.body
-        ewWalkBodyIds :nodes :externs :scope items: node.body
+        ewBindNameIds :ast :scope items: node.body
+        ewWalkBodyIds :ast :externs :scope items: node.body
         ewTruncate :scope n: base
     } case program then null
 }
@@ -3683,14 +3684,14 @@ ewWalk: function {nodes: List Node externs: List String scope: List String node:
 # scope with {this,type,meta} and every top-level definition name (so
 # forward references resolve), then walks the body. Returns the deduped
 # extern names in source-reference order; parse() loads them as units.
-collectExterns: function {nodes: List Node body: List u32} out List String is {
+collectExterns: function {ast: Ast body: List u32} out List String is {
     externs: (List String)
     scope: (List String)
     scope.append "this".string
     scope.append "type".string
     scope.append "meta".string
-    ewBindNameIds :nodes :scope items: body
-    ewWalkBodyIds :nodes :externs :scope items: body
+    ewBindNameIds :ast :scope items: body
+    ewWalkBodyIds :ast :externs :scope items: body
     return externs
 }
 
@@ -3715,7 +3716,7 @@ runPath: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptPath lex: lx
     match r case some then {
-        zast.printNode nodes: p.nodes n: r
+        zast.printNode ast: p.ast n: r
     } case none then {
         print "<no atom>"
     }
@@ -3729,7 +3730,7 @@ runOp: function {label: StringView src: String.take} is {
     paths: p.operationPaths lex: lx
     r: p.acceptOperationOrCall :paths lex: lx
     match r case some then {
-        zast.printNode nodes: p.nodes n: r
+        zast.printNode ast: p.ast n: r
     } case none then {
         print "<none>"
     }
@@ -3742,7 +3743,7 @@ runExpr: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptExpression lex: lx
     match r case some then {
-        zast.printNode nodes: p.nodes n: r
+        zast.printNode ast: p.ast n: r
     } case none then {
         print "<none>"
     }
@@ -3758,7 +3759,7 @@ runYieldBody: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptExpression lex: lx
     match r case some then {
-        zast.printNode nodes: p.nodes n: r
+        zast.printNode ast: p.ast n: r
     } case none then {
         print "<none>"
     }
@@ -3773,7 +3774,7 @@ runFunc: function {label: StringView src: String.take} is {
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptFunctionDefinition lex: lx
     match r case some then {
-        zast.printNode nodes: p.nodes n: r
+        zast.printNode ast: p.ast n: r
     } case none then {
         print "<none>"
     }
@@ -3787,7 +3788,7 @@ runDef: function {label: StringView src: String.take} is {
     tk: zlexer.Tokenizer.create source: src fsno: 0
     lx: zlexer.Lexer.create lexer: tk
     r: p.acceptTypeDefinition lex: lx
-    zast.printNode nodes: p.nodes n: r
+    zast.printNode ast: p.ast n: r
 }
 
 # Inline smoke harness: parse each snippet and dump its node tree.
@@ -3916,7 +3917,7 @@ main: function is {
                     colno: firstTok.colno
                     :body
                 )
-                zast.printNodeCanonical nodes: p.nodes n: root
+                zast.printNodeCanonical ast: p.ast n: root
             } case err then {
                 io.eprintln "zparser: could not read source file"
                 os.exit code: 1

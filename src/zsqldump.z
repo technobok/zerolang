@@ -21,6 +21,7 @@
 # return value runs into self-reassignment ownership errors).
 
 Node: zast.Node
+Ast: zast.Ast
 
 # --- SQL value formatting (stateless) ---
 
@@ -68,10 +69,10 @@ optIdStr: function {o: optionval u64} out String is {
 
 # unitdefNodeId -- the nodeid of the unit row an id names (0 when the id does
 # not name a unit). The row view is scoped to the fetch.
-unitdefNodeId: function {nodes: List Node nId: u32} out u32 is {
+unitdefNodeId: function {ast: Ast nId: u32} out u32 is {
     out9: u32
     {
-        n9: nodes.get i: (nId - 1).u64
+        n9: ast.nodes.get i: (nId - 1).u64
         if n9.unitdef then out9 = n9.nodeid
     }
     return out9
@@ -245,10 +246,10 @@ ZDumper: class {
 
     # walkOpt -- walk an optional child when present.
     # walkOptAt -- the id-taking entry (0 = absent).
-    walkOptAt: function {:this nodes: List Node oId: u32 nameSql: StringView} is {
+    walkOptAt: function {:this ast: Ast oId: u32 nameSql: StringView} is {
         if oId == 0 then return
-        o9: nodes.get i: (oId - 1).u64
-        this.walkNode :nodes node: o9 :nameSql
+        o9: ast.nodes.get i: (oId - 1).u64
+        this.walkNode :ast node: o9 :nameSql
     }
 
     # walkUnwrapped -- walk a namedoperation child's wrapped operation, not
@@ -256,21 +257,21 @@ ZDumper: class {
     # maps (unit body, function parameters / as-items, object members, if /
     # for conditions): node_children yields the values, so the wrapper
     # produces no ast_nodes row.
-    walkUnwrapped: function {:this nodes: List Node wrapper: Node nameSql: StringView} is {
+    walkUnwrapped: function {:this ast: Ast wrapper: Node nameSql: StringView} is {
         match (
             wrapper
         ) case namedoperation then {
-            this.walkNode :nodes node: (nodes.get i: (wrapper.operation - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (wrapper.operation - 1).u64) :nameSql
         } else {
-            this.walkNode :nodes node: wrapper :nameSql
+            this.walkNode :ast node: wrapper :nameSql
         }
     }
 
     # walkNode -- emit `node`'s row (labelled nameSql) and recurse. Mirrors
     # the reference node_children: wrapper positions unwrap (walkUnwrapped),
     # list positions (call arguments, data elements, for postconditions, if
-    # / case clauses, statements, string parts) keep their child nodes.
-    walkNode: function {:this nodes: List Node node: Node nameSql: StringView} is {
+    # / case clauses, statements, string parts) keep their child ast.nodes.
+    walkNode: function {:this ast: Ast node: Node nameSql: StringView} is {
         match (
             node
         ) case error then {
@@ -283,29 +284,29 @@ ZDumper: class {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "StringChunk" :nameSql
         } case binop then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "BinOp" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.lhs - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.operator - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.rhs - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.lhs - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.operator - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.rhs - 1).u64) :nameSql
         } case atomstring then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "AtomString" :nameSql
             spiter: node.stringparts.iterate
             for sp: spiter loop {
-                this.walkNode :nodes node: (nodes.get i: (sp - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (sp - 1).u64) :nameSql
             }
         } case dottedpath then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "DottedPath" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.parent - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.child - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.parent - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.child - 1).u64) :nameSql
         } case call then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Call" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.callable - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.callable - 1).u64) :nameSql
             aiter: node.arguments.iterate
             for arg: aiter loop {
-                this.walkNode :nodes node: (nodes.get i: (arg - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (arg - 1).u64) :nameSql
             }
         } case typeofexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "TypeOfExpr" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.source - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.source - 1).u64) :nameSql
         } case namedoperation then {
             (this.emit
                 id: node.nodeid
@@ -314,22 +315,22 @@ ZDumper: class {
                 kind: "NamedOperation"
                 :nameSql
             )
-            this.walkNode :nodes node: (nodes.get i: (node.operation - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.operation - 1).u64) :nameSql
         } case datablock then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Data" :nameSql
             eiter: node.elements.iterate
             for el: eiter loop {
-                this.walkNode :nodes node: (nodes.get i: (el - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (el - 1).u64) :nameSql
             }
-            this.walkOptAt :nodes oId: node.outType :nameSql
+            this.walkOptAt :ast oId: node.outType :nameSql
         } case yieldexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Yield" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.expr - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.expr - 1).u64) :nameSql
         } case statement then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Statement" :nameSql
             sliter: node.statements.iterate
             for lnId9: sliter loop {
-                this.walkNode :nodes node: (nodes.get i: (lnId9 - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (lnId9 - 1).u64) :nameSql
             }
         } case statementline then {
             (this.emit
@@ -339,10 +340,10 @@ ZDumper: class {
                 kind: "StatementLine"
                 :nameSql
             )
-            this.walkNode :nodes node: (nodes.get i: (node.statementline - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.statementline - 1).u64) :nameSql
         } case assignment then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Assignment" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.value - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.value - 1).u64) :nameSql
         } case reassignment then {
             (this.emit
                 id: node.nodeid
@@ -351,91 +352,91 @@ ZDumper: class {
                 kind: "Reassignment"
                 :nameSql
             )
-            this.walkNode :nodes node: (nodes.get i: (node.topath - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.value - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.topath - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.value - 1).u64) :nameSql
         } case swapstmt then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Swap" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.lhs - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.rhs - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.lhs - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.rhs - 1).u64) :nameSql
         } case expression then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Expression" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.expression - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.expression - 1).u64) :nameSql
         } case ifexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "If" :nameSql
             cliter: node.clauses.iterate
             for cl: cliter loop {
-                this.walkNode :nodes node: (nodes.get i: (cl - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (cl - 1).u64) :nameSql
             }
-            this.walkOptAt :nodes oId: node.elseclause :nameSql
+            this.walkOptAt :ast oId: node.elseclause :nameSql
         } case ifclause then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "IfClause" :nameSql
             coiter: node.conditions.iterate
             for coId9: coiter loop {
-                this.walkUnwrapped :nodes wrapper: (nodes.get i: (coId9 - 1).u64) :nameSql
+                this.walkUnwrapped :ast wrapper: (ast.nodes.get i: (coId9 - 1).u64) :nameSql
             }
-            this.walkNode :nodes node: (nodes.get i: (node.statement - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.statement - 1).u64) :nameSql
         } case forexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "For" :nameSql
             fciter: node.conditions.iterate
             for fc: fciter loop {
-                this.walkUnwrapped :nodes wrapper: (nodes.get i: (fc - 1).u64) :nameSql
+                this.walkUnwrapped :ast wrapper: (ast.nodes.get i: (fc - 1).u64) :nameSql
             }
-            this.walkOptAt :nodes oId: node.body :nameSql
+            this.walkOptAt :ast oId: node.body :nameSql
             fpiter: node.postconditions.iterate
             for fp: fpiter loop {
-                this.walkNode :nodes node: (nodes.get i: (fp - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (fp - 1).u64) :nameSql
             }
         } case doexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Do" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.statement - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.statement - 1).u64) :nameSql
         } case withexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "With" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.value - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.body - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.value - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.body - 1).u64) :nameSql
         } case caseexpr then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Case" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.subject - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.subject - 1).u64) :nameSql
             cciter: node.clauses.iterate
             for cc: cciter loop {
-                this.walkNode :nodes node: (nodes.get i: (cc - 1).u64) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (cc - 1).u64) :nameSql
             }
-            this.walkOptAt :nodes oId: node.elseclause :nameSql
+            this.walkOptAt :ast oId: node.elseclause :nameSql
         } case caseclause then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "CaseClause" :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.matcharm - 1).u64) :nameSql
-            this.walkNode :nodes node: (nodes.get i: (node.statement - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.matcharm - 1).u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: (node.statement - 1).u64) :nameSql
         } case functiondef then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Function" :nameSql
-            this.walkOptAt :nodes oId: node.returntype :nameSql
+            this.walkOptAt :ast oId: node.returntype :nameSql
             piter: node.parameters.iterate
             for pmId9: piter loop {
-                pm: nodes.get i: (pmId9 - 1).u64
-                this.walkUnwrapped :nodes wrapper: pm :nameSql
+                pm: ast.nodes.get i: (pmId9 - 1).u64
+                this.walkUnwrapped :ast wrapper: pm :nameSql
             }
-            this.walkOptAt :nodes oId: node.body :nameSql
+            this.walkOptAt :ast oId: node.body :nameSql
             faiter: node.asItems.iterate
             for amId9: faiter loop {
-                am: nodes.get i: (amId9 - 1).u64
-                this.walkUnwrapped :nodes wrapper: am :nameSql
+                am: ast.nodes.get i: (amId9 - 1).u64
+                this.walkUnwrapped :ast wrapper: am :nameSql
             }
         } case objectdef then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "ObjectDef" :nameSql
             oiiter: node.isItems.iterate
             for oiId9: oiiter loop {
-                oi: nodes.get i: (oiId9 - 1).u64
-                this.walkUnwrapped :nodes wrapper: oi :nameSql
+                oi: ast.nodes.get i: (oiId9 - 1).u64
+                this.walkUnwrapped :ast wrapper: oi :nameSql
             }
             oaiter: node.asItems.iterate
             for oaId9: oaiter loop {
-                oa: nodes.get i: (oaId9 - 1).u64
-                this.walkUnwrapped :nodes wrapper: oa :nameSql
+                oa: ast.nodes.get i: (oaId9 - 1).u64
+                this.walkUnwrapped :ast wrapper: oa :nameSql
             }
         } case unitdef then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Unit" :nameSql
             ubiter: node.body.iterate
             for ub: ubiter loop {
-                ubNode9: nodes.get i: (ub - 1).u64
-                this.walkUnwrapped :nodes wrapper: ubNode9 :nameSql
+                ubNode9: ast.nodes.get i: (ub - 1).u64
+                this.walkUnwrapped :ast wrapper: ubNode9 :nameSql
             }
         } case program then {
             this.emit id: node.nodeid line: node.lineno col: node.colno kind: "Program" :nameSql
@@ -447,7 +448,7 @@ ZDumper: class {
     # "<unit>.<def>". Mirrors the reference _collect_ast_nodes: the unit
     # node is emitted directly and each definition subtree is walked under
     # its own label.
-    appendUnitDefAndBody: function {:this nodes: List Node unitdef: Node uname: StringView} is {
+    appendUnitDefAndBody: function {:this ast: Ast unitdef: Node uname: StringView} is {
         match (
             unitdef
         ) case unitdef then {
@@ -461,13 +462,13 @@ ZDumper: class {
             )
             biter: unitdef.body.iterate
             for bm: biter loop {
-                bmNode9: nodes.get i: (bm - 1).u64
-                this.appendBodyMember :nodes member: bmNode9 :uname
+                bmNode9: ast.nodes.get i: (bm - 1).u64
+                this.appendBodyMember :ast member: bmNode9 :uname
             }
         } else null
     }
 
-    appendBodyMember: function {:this nodes: List Node member: Node uname: StringView} is {
+    appendBodyMember: function {:this ast: Ast member: Node uname: StringView} is {
         match (
             member
         ) case namedoperation then {
@@ -475,8 +476,8 @@ ZDumper: class {
             label: "\{uname}.\{dname}"
             labelSql: sqlStr s: label.stringview
             (this.walkNode
-                :nodes
-                node: (nodes.get i: (member.operation - 1).u64)
+                :ast
+                node: (ast.nodes.get i: (member.operation - 1).u64)
                 nameSql: labelSql.stringview
             )
         } else null
@@ -488,18 +489,18 @@ ZDumper: class {
         ) case program then {
             uiter: program.units.iterate
             for uId9: uiter loop {
-                this.appendUnitFromNamedOp nodes: program.nodes unitNamedOpId: uId9
+                this.appendUnitFromNamedOp ast: program.ast unitNamedOpId: uId9
             }
         } else null
     }
 
-    appendUnitFromNamedOp: function {:this nodes: List Node unitNamedOpId: u32} is {
-        unitNamedOp: nodes.get i: (unitNamedOpId - 1).u64
+    appendUnitFromNamedOp: function {:this ast: Ast unitNamedOpId: u32} is {
+        unitNamedOp: ast.nodes.get i: (unitNamedOpId - 1).u64
         if unitNamedOp.namedoperation then {
             uname: optLabel o: unitNamedOp.name
             (this.appendUnitDefAndBody
-                :nodes
-                unitdef: (nodes.get i: (unitNamedOp.operation - 1).u64)
+                :ast
+                unitdef: (ast.nodes.get i: (unitNamedOp.operation - 1).u64)
                 uname: uname.stringview
             )
         }
@@ -512,7 +513,7 @@ ZDumper: class {
         ) case program then {
             uiter: program.units.iterate
             for uId9: uiter loop {
-                (this.appendUnitRow nodes: program.nodes
+                (this.appendUnitRow ast: program.ast
                     unitNamedOpId: uId9
                     mainName: program.mainUnitName.stringview
                     :typing
@@ -523,15 +524,15 @@ ZDumper: class {
 
     appendUnitRow: function {
         :this
-        nodes: List Node
+        ast: Ast
         unitNamedOpId: u32
         mainName: StringView
         typing: ztyping.ZTyping
     } is {
-        unitNamedOp: nodes.get i: (unitNamedOpId - 1).u64
+        unitNamedOp: ast.nodes.get i: (unitNamedOpId - 1).u64
         if unitNamedOp.namedoperation then {
             uname: optLabel o: unitNamedOp.name
-            uid: unitdefNodeId :nodes nId: unitNamedOp.operation
+            uid: unitdefNodeId :ast nId: unitNamedOp.operation
             isMain: uname.stringview == mainName
             unameSql: sqlStr s: uname.stringview
             isMainStr: boolNum b: isMain
@@ -775,7 +776,7 @@ ZDumper: class {
             mn: program.mainUnitName.stringview
             uiter: program.units.iterate
             for uId9: uiter loop {
-                u: program.nodes.get i: (uId9 - 1).u64
+                u: program.ast.nodes.get i: (uId9 - 1).u64
                 match (
                     u
                 ) case namedoperation then {
@@ -1160,18 +1161,18 @@ ZDumper: class {
 # caller can lend the table exclusively.
 walkExprStampsAt: function {
     typing: ztyping.ZTyping
-    nodes: List Node
+    ast: Ast
     nId: u32
     ids: List u64
     vals: List u64
 } out optionval u64 is {
-    n9: nodes.get i: (nId - 1).u64
-    return (walkExprStamps :typing :nodes n: n9 :ids :vals)
+    n9: ast.nodes.get i: (nId - 1).u64
+    return (walkExprStamps :typing :ast n: n9 :ids :vals)
 }
 
 walkExprStamps: function {
     typing: ztyping.ZTyping
-    nodes: List Node
+    ast: Ast
     n: Node
     ids: List u64
     vals: List u64
@@ -1179,7 +1180,7 @@ walkExprStamps: function {
     match (
         n
     ) case expression then {
-        eff: walkExprStamps :typing :nodes n: (nodes.get i: (n.expression - 1).u64) :ids :vals
+        eff: walkExprStamps :typing :ast n: (ast.nodes.get i: (n.expression - 1).u64) :ids :vals
         match (
             eff
         ) case some then {
@@ -1193,138 +1194,138 @@ walkExprStamps: function {
             return (typing.nodeType.get key: n.nodeid.u64)
         }
     } case binop then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.lhs - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.operator - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.rhs - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.lhs - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.operator - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.rhs - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case atomstring then {
         spiter: n.stringparts.iterate
         for sp: spiter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (sp - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (sp - 1).u64) :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case dottedpath then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.parent - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.child - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.parent - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.child - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case call then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.callable - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.callable - 1).u64) :ids :vals
         aiter: n.arguments.iterate
         for arg: aiter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (arg - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (arg - 1).u64) :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case typeofexpr then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.source - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.source - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case namedoperation then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.operation - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.operation - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case datablock then {
         eiter: n.elements.iterate
         for el: eiter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (el - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (el - 1).u64) :ids :vals
         }
-        walkExprStampsOptAt :typing :nodes oId: n.outType :ids :vals
+        walkExprStampsOptAt :typing :ast oId: n.outType :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case yieldexpr then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.expr - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.expr - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case statement then {
         sliter: n.statements.iterate
         for lnId9: sliter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (lnId9 - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (lnId9 - 1).u64) :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case statementline then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.statementline - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.statementline - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case assignment then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.value - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.value - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case reassignment then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.topath - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.value - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.topath - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.value - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case swapstmt then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.lhs - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.rhs - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.lhs - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.rhs - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case ifexpr then {
         cliter: n.clauses.iterate
         for cl: cliter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (cl - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (cl - 1).u64) :ids :vals
         }
-        walkExprStampsOptAt :typing :nodes oId: n.elseclause :ids :vals
+        walkExprStampsOptAt :typing :ast oId: n.elseclause :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case ifclause then {
         coiter: n.conditions.iterate
         for coId9: coiter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (coId9 - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (coId9 - 1).u64) :ids :vals
         }
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.statement - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case forexpr then {
         fciter: n.conditions.iterate
         for fc: fciter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (fc - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (fc - 1).u64) :ids :vals
         }
-        walkExprStampsOptAt :typing :nodes oId: n.body :ids :vals
+        walkExprStampsOptAt :typing :ast oId: n.body :ids :vals
         fpiter: n.postconditions.iterate
         for fp: fpiter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (fp - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (fp - 1).u64) :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case doexpr then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.statement - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case withexpr then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.value - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.body - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.value - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.body - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case caseexpr then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.subject - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.subject - 1).u64) :ids :vals
         cciter: n.clauses.iterate
         for cc: cciter loop {
-            walkExprStamps :typing :nodes n: (nodes.get i: (cc - 1).u64) :ids :vals
+            walkExprStamps :typing :ast n: (ast.nodes.get i: (cc - 1).u64) :ids :vals
         }
-        walkExprStampsOptAt :typing :nodes oId: n.elseclause :ids :vals
+        walkExprStampsOptAt :typing :ast oId: n.elseclause :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case caseclause then {
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.matcharm - 1).u64) :ids :vals
-        walkExprStamps :typing :nodes n: (nodes.get i: (n.statement - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.matcharm - 1).u64) :ids :vals
+        walkExprStamps :typing :ast n: (ast.nodes.get i: (n.statement - 1).u64) :ids :vals
         return (typing.nodeType.get key: n.nodeid.u64)
     } case functiondef then {
-        walkExprStampsOptAt :typing :nodes oId: n.returntype :ids :vals
+        walkExprStampsOptAt :typing :ast oId: n.returntype :ids :vals
         piter: n.parameters.iterate
         for pmId9: piter loop {
-            pm: nodes.get i: (pmId9 - 1).u64
-            walkExprStamps :typing :nodes n: pm :ids :vals
+            pm: ast.nodes.get i: (pmId9 - 1).u64
+            walkExprStamps :typing :ast n: pm :ids :vals
         }
-        walkExprStampsOptAt :typing :nodes oId: n.body :ids :vals
+        walkExprStampsOptAt :typing :ast oId: n.body :ids :vals
         faiter: n.asItems.iterate
         for amId9: faiter loop {
-            am: nodes.get i: (amId9 - 1).u64
-            walkExprStamps :typing :nodes n: am :ids :vals
+            am: ast.nodes.get i: (amId9 - 1).u64
+            walkExprStamps :typing :ast n: am :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case objectdef then {
         oiiter: n.isItems.iterate
         for oiId9: oiiter loop {
-            oi: nodes.get i: (oiId9 - 1).u64
-            walkExprStamps :typing :nodes n: oi :ids :vals
+            oi: ast.nodes.get i: (oiId9 - 1).u64
+            walkExprStamps :typing :ast n: oi :ids :vals
         }
         oaiter: n.asItems.iterate
         for oaId9: oaiter loop {
-            oa: nodes.get i: (oaId9 - 1).u64
-            walkExprStamps :typing :nodes n: oa :ids :vals
+            oa: ast.nodes.get i: (oaId9 - 1).u64
+            walkExprStamps :typing :ast n: oa :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case unitdef then {
         ubiter: n.body.iterate
         for ub: ubiter loop {
-            ubNode9: nodes.get i: (ub - 1).u64
-            walkExprStamps :typing :nodes n: ubNode9 :ids :vals
+            ubNode9: ast.nodes.get i: (ub - 1).u64
+            walkExprStamps :typing :ast n: ubNode9 :ids :vals
         }
         return (typing.nodeType.get key: n.nodeid.u64)
     } case atomid then {
@@ -1341,14 +1342,14 @@ walkExprStamps: function {
 # walkExprStampsOptAt -- the id-taking entry (0 = absent).
 walkExprStampsOptAt: function {
     typing: ztyping.ZTyping
-    nodes: List Node
+    ast: Ast
     oId: u32
     ids: List u64
     vals: List u64
 } is {
     if oId == 0 then return
-    o9: nodes.get i: (oId - 1).u64
-    walkExprStamps :typing :nodes n: o9 :ids :vals
+    o9: ast.nodes.get i: (oId - 1).u64
+    walkExprStamps :typing :ast n: o9 :ids :vals
 }
 
 # overrideExpressionStamps -- collect the wrapper overrides across every unit,
@@ -1361,7 +1362,7 @@ overrideExpressionStamps: function {typing: ztyping.ZTyping program: Node} is {
     ) case program then {
         uiter: program.units.iterate
         for uId9: uiter loop {
-            walkExprStampsAt :typing nodes: program.nodes nId: uId9 :ids :vals
+            walkExprStampsAt :typing ast: program.ast nId: uId9 :ids :vals
         }
     } else null
     i: u64
