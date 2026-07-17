@@ -41,6 +41,7 @@ Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
 | 2026-07-17 | 297f741 | A1: names-as-nodes interning (AtomId/LabelValue name -> u32 nameentry ref; hot readers on scoped row views; constVals probes on getv) | 0.66s | — | 117MB / — | 87 / 226 / 340 (total 653) | 10,161,794 | 485MB | — |
 | 2026-07-17 | 8727875 | C1: Ast carrier threaded (~570 sigs; ast.nodes indirection; ARCHITECTURE landing — B3-as-perf stays shelved) + StringView.hash native + unconditional z_hash.inc | 0.67s | — | 118MB / — | — | 10,280,730 | 487MB | — |
 | 2026-07-17 | dbd0899 | C2: names -> Ast.names StringPool; nameentry arm deleted; synth dedup (ref==ref sound); hot readers borrow pooled text | 0.66s | — | 116MB / — | — | 10,235,386 | 484MB | — |
+| 2026-07-17 | 17d8ba4 | C3 (a units, b fileSegs, c edge names, d well-known ids): tree-scoped state consolidated on the carrier; ZTyping's private edge-name pool deleted -- ZTypeChild.nameId IS the Ast.names id, member resolution int-keyed where provenance is certain (ARCHITECTURE landing; +0.5% allocs = edgeText "" fillers + edgeNameId cache) | 0.66s | — | 117MB / — | — | 10,292,415 | 486MB | — |
 
 A1 notes: 121,797 per-node name Strings collapse to ~one interned nameentry
 row per distinct identifier; name equality on refs becomes available (A2).
