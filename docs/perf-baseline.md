@@ -77,6 +77,43 @@ B3 carrier as its enabler) is SHELVED on evidence; name interning proceeds on
 its own merits (allocs + the visible memcmp/String traffic); future cache work
 should target Map probing, not node layout.
 
+## Wrapper-elision audit (2026-07-17, post-A1) — NO-GO
+
+Question: elide the 76,090 parsed expression/statementline wrapper rows (22%
+of the node table; each also boxes an ExpressionData/StatementLineData
+payload). Audit of all 224 expression/statementline match arms, every
+ZTyping per-node map's key domain, statement-list consumers, and the
+parser/formatter: 180 arms are pure descent, but elision is NOT
+parser+re-key+regen only. Blockers, with the payoff they'd buy weighed in:
+
+- **Deliberate wrapper-keyed semantics in monomorphization**: for
+  `(T args)`-shaped typerefs the wrapper carries the reference's instance
+  stamp while the inner call resolves to a filtered NULL-defined mono
+  (ztypecheck.z ~1985-2004, instFillIds -> completeUnitInstantiations
+  ~6560/7911, funcReturnNode values). Re-keying makes one node carry both
+  roles; every reader of those stamps needs its own audit.
+- **~10 statementline-shape helpers** else-null past non-statementline kinds
+  and would silently skip work: checkStatementLine/checkStmtInner,
+  lastStmtType, lastStmtLineId, blockEndsInReturn, assignmentLocalName,
+  constantBranchWalk, tryDebrace/forceBodyBreak (zl L008 anchors),
+  slIsBareNull/isBareNullBody, firstRhsOf.
+- **Position identity fails for `(`-led statement lines**: the statementline
+  sits on the `(` column, the inner call one column right — diagnostics and
+  the zsource byte anchors shift, violating the "only parser goldens regen"
+  gate.
+- checkValue leaves yieldexpr unstamped on purpose ("the expression wrapper
+  takes the type", ~16680); implicit-return restamp (17143/17338) uses the
+  wrapper to shadow the inner literal stamp.
+
+Payoff at current evidence: ~76k allocs (0.75%), ~3-4MB table+box RSS, and a
+dispatch hop inside the node-fetch bucket Stage 0 measured at only 4-6% of
+cache misses (pipeline not memory-bound, IPC 2.42). Sub-1% wall for surgery
+on the two most subtle subsystems (mono stamps, implicit-return coercion).
+VERDICT: NO-GO — do not relitigate without new evidence that node-table
+locality or parse-phase allocs became a measured bottleneck. Synth wrappers
+(zgenerator wrapExpr/hoistArg) are load-bearing regardless; no wrapper match
+arm may be deleted.
+
 ## Ground allocation census (DHAT, 2026-07-17 @ 4f10844)
 
 | bucket | blocks | bytes | note |
