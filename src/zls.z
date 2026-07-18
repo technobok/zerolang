@@ -1442,6 +1442,72 @@ typeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
     }
 }
 
+# displayTypeNameSt -- typeNameOf, but a source type in a real (non-prelude)
+# unit renders "<unit>.<name>"; prelude/stdlib and no-source types stay bare. A
+# generic mono keys the prelude/unit test on its ORIGIN's base name while
+# displaying the full instance name (e.g. "List u64" stays bare -- List is
+# prelude). "Referenced from core" == present in preludeUnit or a stdlib unit.
+displayTypeNameSt: function {st: zenv.ZSymbolTable tid: u64} out String is {
+    disp9: ztypecheck.typeNameOf :st :tid
+    if disp9.length == 0 then return disp9
+    base9: tid
+    {
+        rt9: st.reg.typeById.get key: tid
+        match (
+            rt9
+        ) case some then {
+            go9: rt9.genericOriginId
+            match (
+                go9
+            ) case some then {
+                base9 = go9
+            } case none then null
+        } case none then null
+    }
+    bname9: String
+    {
+        rt2: st.reg.typeById.get key: base9
+        match (
+            rt2
+        ) case some then {
+            bname9 = rt2.name.copy
+        } case none then null
+    }
+    if bname9.length == 0 then return disp9
+    unit9: String
+    {
+        du9: st.typing.definedInUnit.get key: base9
+        match (
+            du9
+        ) case some then {
+            unit9 = du9.copy
+        } case none then null
+    }
+    if unit9.length == 0 then return disp9
+    isPrel9: false
+    {
+        pu9: st.typing.preludeUnit.get key: bname9
+        match (
+            pu9
+        ) case some then {
+            isPrel9 = true
+        } case none then null
+    }
+    if (ztypecheck.isStdlibUnitName name: unit9.stringview) then isPrel9 = true
+    if isPrel9 then return disp9
+    return "\{unit9.stringview}.\{disp9.stringview}"
+}
+
+displayTypeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
+    match (
+        o
+    ) case some then {
+        return (displayTypeNameSt st: o :tid)
+    } case none then {
+        return "".string
+    }
+}
+
 # typeKindTextOpt -- a type definition's kind word ("class", "variant", ...)
 # for hover, or "" when tid is 0 or names something other than a type def.
 typeKindTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
@@ -1602,7 +1668,7 @@ fnSigTextOpt: function {
                     hasDef9 = true
                 } case none then null
             }
-            ptn9: ztypecheck.typeNameOf st: o tid: pt9
+            ptn9: displayTypeNameSt st: o tid: pt9
             ps9: (pnames9.get i: pi9).copy
             ps9.append ": "
             if hasDef9 then {
@@ -1629,7 +1695,7 @@ fnSigTextOpt: function {
         rr9: ztypecheck.methodReturnOf st: o mid: tid
         rtid9: ztypecheck.optU64Or o: rr9 d: 0
         if rtid9 > 0 then {
-            rtn9: ztypecheck.typeNameOf st: o tid: rtid9
+            rtn9: displayTypeNameSt st: o tid: rtid9
             rets9.append " out "
             rets9.append rtn9.stringview
             rb9: o.typing.funcReturnsBorrow.get key: tid
@@ -2216,7 +2282,7 @@ inferredGenericLines: function {o: (Option zenv.ZSymbolTable) callId: u64} out S
         r9: String
         hi9: u64
         for hi9 < holders9.length loop {
-            tn9: ztypecheck.typeNameOf st: o tid: (tids9.get i: hi9)
+            tn9: displayTypeNameSt st: o tid: (tids9.get i: hi9)
             if r9.length > 0 then r9.appendByte b: 10
             r9.append "# "
             r9.append (holders9.get i: hi9).stringview
@@ -2382,7 +2448,7 @@ navAnswer: function {
                 body9.append tk9.stringview
             } else {
                 if t9 == 0 then return Value.nul
-                tn: typeNameOfOpt o: snap.st tid: t9
+                tn: displayTypeNameOfOpt o: snap.st tid: t9
                 if tn.length == 0 then return Value.nul
                 body9 = hname.copy
                 body9.append ": "
@@ -3517,107 +3583,88 @@ caseArmComplete: function {
     return true
 }
 
-# argLabelComplete -- when the cursor sits at a fresh argument position inside a
-# call (not after `:` or `.`), append the callee's remaining parameter labels
-# (minus the receiver and the labels already supplied) to `arr`, with a
-# type[+ownership] detail. Returns true when it handled a call-arg-label context.
-argLabelComplete: function {
+# bareCalleeFuncId9 -- a lone function/method name with no label yet parses as
+# an atom/dotted-path, not a call node, so the arg-label path has nothing to sit
+# inside. Resolve the identifier just before the trailing whitespace via the
+# same leaf-span + def recipe navAnswer uses; a function/method type yields its
+# function id, anything else (a value arg, a keyword, an unresolved leaf) 0.
+bareCalleeFuncId9: function {
+    o: (Option zenv.ZSymbolTable)
+    ltv: StringView
+    ws9: u64
+    cursorPos: u64
+    sp: Spans
+} out u64 is {
+    is9: ws9
+    for is9 > 0 loop {
+        ib9: ltv.byteAt i: is9 - 1
+        stopid9: false
+        match (
+            ib9
+        ) case some then {
+            if (isIdentByte b: ib9) == false then stopid9 = true
+        } case none then {
+            stopid9 = true
+        }
+        if stopid9 then break
+        is9 = is9 - 1
+    }
+    if is9 == ws9 then return 0
+    sub9: ltv.substring from: 0 to: is9
+    cc9: sub9.count
+    idCol9: cc9.u32 + 1
+    l1u9: (cursorPos / 1048576).u32
+    leafNid9: u32
+    bk9: u8
+    found9: false
+    rix9: u64
+    for rix9 < sp.rows.length loop {
+        row9: sp.rows.get i: rix9
+        if row9.line == l1u9 when row9.colLo <= idCol9 then {
+            if idCol9 < row9.colHi then {
+                take9: false
+                if (found9) == false then take9 = true
+                if row9.kind == 2 when bk9 != 2 then take9 = true
+                if take9 then {
+                    leafNid9 = row9.nodeid
+                    bk9 = row9.kind
+                    found9 = true
+                }
+            }
+        }
+        rix9 = rix9 + 1
+    }
+    if (found9) == false then return 0
+    ftid9: nodeTypeAt :o nid: leafNid9.u64
+    udx9: useUnitDef :o nid: leafNid9.u64
+    if udx9 > 0 then ftid9 = udx9
+    if ftid9 == 0 then return 0
+    result9: u64
+    match (
+        o
+    ) case some then {
+        tt9: o.reg.typetypeOf typeId: ftid9
+        match (
+            tt9
+        ) case functionType then {
+            result9 = ftid9
+        } else null
+    } case none then null
+    return result9
+}
+
+# emitLabels -- append `funcId9`'s parameter labels (minus the receiver and any
+# already-supplied labels) to `arr` as kind-5 items with a type[+ownership]
+# detail. Shared by the bare-name and call-node arg-label paths. Returns true
+# when it emitted a label context (the callee has non-receiver params).
+emitLabels: function {
     arr: Arr
     o: (Option zenv.ZSymbolTable)
     prog: zast.Node
-    ltv: StringView
-    ps9: u64
-    prefix: StringView
-    cursorPos: u64
-} out bool is {
-    ws9: ps9
-    for ws9 > 0 loop {
-        wb9: ltv.byteAt i: ws9 - 1
-        stopw9: false
-        match (
-            wb9
-        ) case some then {
-            if wb9 != 32 when wb9 != 9 then stopw9 = true
-        } case none then {
-            stopw9 = true
-        }
-        if stopw9 then break
-        ws9 = ws9 - 1
-    }
-    if ws9 == 0 then return false
-    pvb9: ltv.byteAt i: ws9 - 1
-    badPos9: false
-    match (
-        pvb9
-    ) case some then {
-        if pvb9 == 58 then badPos9 = true
-        if pvb9 == 46 then badPos9 = true
-    } case none then null
-    if badPos9 then return false
-    sp9: (Spans
-        rows: (List spanrow)
-        names: (List String)
-        pos: (Map u64 value: u64)
-        ranges: (List rangerow)
-        lastPos: 0
-    )
-    sp9.walkProgram :prog
-    callId9: sp9.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
-    if callId9 == 0 then return false
-    # callable index + supplied argument node ids (scoped: one node view)
-    callableIdx9: u32
-    argIds9: (List u64)
-    okCall9: false
-    match (
-        prog
-    ) case program then {
-        cnode9: prog.ast.nodes.get i: (callId9 - 1).u64
-        match (
-            cnode9
-        ) case call then {
-            callableIdx9 = cnode9.callable
-            with aiter9: cnode9.arguments.iterate do for aid9: aiter9 loop argIds9.append aid9.u64
-            okCall9 = true
-        } else null
-    } else null
-    if (okCall9) == false then return false
-    if callableIdx9 == 0 then return false
-    # callee function id (callable node -> nodeId -> useUnitDef)
-    calNid9: u32
-    match (
-        prog
-    ) case program then {
-        caln9: prog.ast.nodes.get i: (callableIdx9 - 1).u64
-        calNid9 = ztypecheck.nodeId n: caln9
-    } else null
-    funcId9: useUnitDef :o nid: calNid9.u64
-    if funcId9 == 0 then return false
-    # supplied labels (each arg -> namedoperation.name ref -> text)
+    funcId9: u64
     supplied9: (List String)
-    si9: u64
-    for si9 < argIds9.length loop {
-        aid9: argIds9.get i: si9
-        nameRef9: u32
-        match (
-            prog
-        ) case program then {
-            anode9: prog.ast.nodes.get i: (aid9 - 1).u64
-            match (
-                anode9
-            ) case namedoperation then {
-                nameRef9 = anode9.name
-            } else null
-        } else null
-        if nameRef9 > 0 then {
-            match (
-                prog
-            ) case program then {
-                lbl9: zast.nameTextCopy ast: prog.ast ref: nameRef9
-                if lbl9.length > 0 then supplied9.append lbl9
-            } else null
-        }
-        si9 = si9 + 1
-    }
+    prefix: StringView
+} out bool is {
     # callee params (skip receiver) collected while the childIndex view is held
     pnames9: (List String)
     pcnids9: (List u64)
@@ -3677,7 +3724,7 @@ argLabelComplete: function {
             match (
                 o
             ) case some then {
-                tn9: ztypecheck.typeNameOf st: o tid: (pptids9.get i: ri9)
+                tn9: displayTypeNameSt st: o tid: (pptids9.get i: ri9)
                 det9.append tn9.stringview
                 oo9: o.typing.childOwnership.get key: (pcnids9.get i: ri9)
                 match (
@@ -3692,6 +3739,122 @@ argLabelComplete: function {
         ri9 = ri9 + 1
     }
     return true
+}
+
+# argLabelComplete -- when the cursor sits at a fresh argument position inside a
+# call (not after `:` or `.`), append the callee's remaining parameter labels
+# (minus the receiver and the labels already supplied) to `arr`, with a
+# type[+ownership] detail. Returns true when it handled a call-arg-label context.
+argLabelComplete: function {
+    arr: Arr
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    ltv: StringView
+    ps9: u64
+    prefix: StringView
+    cursorPos: u64
+} out bool is {
+    ws9: ps9
+    for ws9 > 0 loop {
+        wb9: ltv.byteAt i: ws9 - 1
+        stopw9: false
+        match (
+            wb9
+        ) case some then {
+            if wb9 != 32 when wb9 != 9 then stopw9 = true
+        } case none then {
+            stopw9 = true
+        }
+        if stopw9 then break
+        ws9 = ws9 - 1
+    }
+    if ws9 == 0 then return false
+    pvb9: ltv.byteAt i: ws9 - 1
+    badPos9: false
+    match (
+        pvb9
+    ) case some then {
+        if pvb9 == 58 then badPos9 = true
+        if pvb9 == 46 then badPos9 = true
+    } case none then null
+    if badPos9 then return false
+    sp9: (Spans
+        rows: (List spanrow)
+        names: (List String)
+        pos: (Map u64 value: u64)
+        ranges: (List rangerow)
+        lastPos: 0
+    )
+    sp9.walkProgram :prog
+    callId9: sp9.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
+    supplied9: (List String)
+    # a bare function/method name (no label yet) has no call node; on a fresh
+    # arg position (empty prefix) resolve the identifier just before the cursor
+    # and, when it names a function/method, offer its labels. Gated to the
+    # empty-prefix case so typing a value still falls through to scope
+    # completion; given priority since a slack-matched call node may be nearby.
+    if prefix.length == 0 then {
+        bfid9: bareCalleeFuncId9 :o :ltv :ws9 :cursorPos sp: sp9
+        if bfid9 > 0 then {
+            empty9: (List String)
+            return (emitLabels :arr :o :prog funcId9: bfid9 supplied9: empty9 :prefix)
+        }
+    }
+    if callId9 == 0 then return false
+    # callable index + supplied argument node ids (scoped: one node view)
+    callableIdx9: u32
+    argIds9: (List u64)
+    okCall9: false
+    match (
+        prog
+    ) case program then {
+        cnode9: prog.ast.nodes.get i: (callId9 - 1).u64
+        match (
+            cnode9
+        ) case call then {
+            callableIdx9 = cnode9.callable
+            with aiter9: cnode9.arguments.iterate do for aid9: aiter9 loop argIds9.append aid9.u64
+            okCall9 = true
+        } else null
+    } else null
+    if (okCall9) == false then return false
+    if callableIdx9 == 0 then return false
+    # callee function id (callable node -> nodeId -> useUnitDef)
+    calNid9: u32
+    match (
+        prog
+    ) case program then {
+        caln9: prog.ast.nodes.get i: (callableIdx9 - 1).u64
+        calNid9 = ztypecheck.nodeId n: caln9
+    } else null
+    funcId9: useUnitDef :o nid: calNid9.u64
+    if funcId9 == 0 then return false
+    # supplied labels (each arg -> namedoperation.name ref -> text)
+    si9: u64
+    for si9 < argIds9.length loop {
+        aid9: argIds9.get i: si9
+        nameRef9: u32
+        match (
+            prog
+        ) case program then {
+            anode9: prog.ast.nodes.get i: (aid9 - 1).u64
+            match (
+                anode9
+            ) case namedoperation then {
+                nameRef9 = anode9.name
+            } else null
+        } else null
+        if nameRef9 > 0 then {
+            match (
+                prog
+            ) case program then {
+                lbl9: zast.nameTextCopy ast: prog.ast ref: nameRef9
+                if lbl9.length > 0 then supplied9.append lbl9
+            } else null
+        }
+        si9 = si9 + 1
+    }
+    return (emitLabels :arr :o :prog :funcId9 :supplied9 :prefix)
 }
 
 # completionAnswer -- scope-based completion from the last-good
