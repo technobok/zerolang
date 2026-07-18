@@ -1010,15 +1010,28 @@ spanrow: record {
     kind: u8
 }
 
+# rangerow -- an enclosing-node span, start..end as line*1048576+col; kind
+# 4 = call, 5 = caseexpr. endPos is the last descendant's start (a subtree
+# extent good enough to find the node enclosing a cursor).
+rangerow: record {
+    nodeid: u32
+    startPos: u64
+    endPos: u64
+    kind: u8
+}
+
 Spans: class {
     rows: (List spanrow)
     names: (List String)
     pos: (Map u64 value: u64)
+    ranges: (List rangerow)
+    lastPos: u64
 } as {
     note: function {:this id: u32 line: u32 col: u32} is {
         if id > 0 then {
             v9: (line.u64 * 1048576) + col.u64
             this.pos.set key: id.u64 value: v9
+            if v9 > this.lastPos then this.lastPos = v9
         }
     }
 
@@ -1035,6 +1048,31 @@ Spans: class {
             cAr9: zast.nameTextCopy :ast ref: c.name
             this.addRow id: dpid line: c.lineno col: c.colno name: cAr9.stringview kind: 2
         } else null
+    }
+
+    # innerRangeOfKind -- the innermost recorded range of `kind` whose
+    # [startPos, endPos + slack] contains `curPos` (line*1048576+col), or 0.
+    innerRangeOfKind: function {:this curPos: u64 kind: u8 slack: u64} out u32 is {
+        best9: u32
+        bestStart9: u64
+        ri9: u64
+        for ri9 < this.ranges.length loop {
+            rr9: this.ranges.get i: ri9
+            hit9: rr9.kind == kind
+            if rr9.startPos > curPos then hit9 = false
+            if curPos > rr9.endPos + slack then hit9 = false
+            if hit9 then {
+                take9: false
+                if best9 == 0 then take9 = true
+                if rr9.startPos > bestStart9 then take9 = true
+                if take9 then {
+                    best9 = rr9.nodeid
+                    bestStart9 = rr9.startPos
+                }
+            }
+            ri9 = ri9 + 1
+        }
+        return best9
     }
 
     # walkOptAt -- the id-taking entry (0 = absent).
@@ -1096,11 +1134,18 @@ Spans: class {
             this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: (n.child - 1).u64)
         } case call then {
             this.note id: n.nodeid line: n.lineno col: n.colno
+            csp9: (n.lineno.u64 * 1048576) + n.colno.u64
             this.walk :ast n: (ast.nodes.get i: (n.callable - 1).u64)
             ait9: n.arguments.iterate
             for a9: ait9 loop {
                 this.walk :ast n: (ast.nodes.get i: (a9 - 1).u64)
             }
+            this.ranges.append (rangerow
+                nodeid: n.nodeid
+                startPos: csp9
+                endPos: this.lastPos
+                kind: 4
+            )
         } case typeofexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walk :ast n: (ast.nodes.get i: (n.source - 1).u64)
@@ -1163,10 +1208,17 @@ Spans: class {
             this.walk :ast n: (ast.nodes.get i: (n.body - 1).u64)
         } case caseexpr then {
             this.note id: n.nodeid line: n.lineno col: n.colno
+            xsp9: (n.lineno.u64 * 1048576) + n.colno.u64
             this.walk :ast n: (ast.nodes.get i: (n.subject - 1).u64)
             cct9: n.clauses.iterate
             for cc9Id9: cct9 loop this.walk :ast n: (ast.nodes.get i: (cc9Id9 - 1).u64)
             this.walkOptAt :ast oId: n.elseclause
+            this.ranges.append (rangerow
+                nodeid: n.nodeid
+                startPos: xsp9
+                endPos: this.lastPos
+                kind: 5
+            )
         } case caseclause then {
             this.note id: n.nodeid line: n.lineno col: n.colno
             this.walk :ast n: (ast.nodes.get i: (n.matcharm - 1).u64)
@@ -2108,6 +2160,65 @@ locationAtFileTop: function {
     return (Value.object lo9)
 }
 
+# dispositionNote -- a call argument's disposition (from the argDisposition
+# stamp) as a one-line prose note, or "".
+dispositionNote: function {o: (Option zenv.ZSymbolTable) nid: u64} out String is {
+    match (
+        o
+    ) case some then {
+        d9: o.typing.argDisposition.get key: nid
+        match (
+            d9
+        ) case some then {
+            if d9 == ztypes.zparamownership.takeMode then {
+                return "Moved into the call (a taking parameter).".string
+            }
+            if d9 == ztypes.zparamownership.lockMode then {
+                return "Locked for the duration of the call (a lock parameter).".string
+            }
+            if d9 == ztypes.zparamownership.borrowMode then {
+                return "Borrowed for the duration of the call.".string
+            }
+        } case none then null
+    } case none then null
+    return "".string
+}
+
+# inferredGenericLines -- concrete generic bindings inferred for the call
+# `callId` whose callee is `calleeNid`, one "# T = Type" comment per bound
+# generic param (from the callGenericBinding stamp), or "".
+inferredGenericLines: function {o: (Option zenv.ZSymbolTable) callId: u64} out String is {
+    match (
+        o
+    ) case some then {
+        prefix9: "\{callId}:"
+        holders9: (List String)
+        tids9: (List u64)
+        with git9: o.typing.callGenericBinding.iterateItems do for e9: git9 loop {
+            k9: e9.key.copy
+            if k9.startsWith prefix9.stringview then {
+                hv9: k9.substring from: prefix9.length to: k9.length
+                holders9.append hv9.string
+                tids9.append e9.value
+            }
+        }
+        r9: String
+        hi9: u64
+        for hi9 < holders9.length loop {
+            tn9: ztypecheck.typeNameOf st: o tid: (tids9.get i: hi9)
+            if r9.length > 0 then r9.appendByte b: 10
+            r9.append "# "
+            r9.append (holders9.get i: hi9).stringview
+            r9.append " = "
+            r9.append tn9.stringview
+            hi9 = hi9 + 1
+        }
+        return r9
+    } case none then {
+        return "".string
+    }
+}
+
 # refAnnotation -- a value reference's ownership + scope origin (+ borrow
 # source) as an in-fence `#` comment body: "owned local" / "borrowed
 # parameter" / "borrowed local, from s" / "static unit-level"; "" when the
@@ -2178,7 +2289,13 @@ navAnswer: function {
     l1u: l1.u32
     lt: docLine text: docText lineno: l1u
     cp1: cpColOf lineText: lt.stringview :ch :utf32
-    sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+    sp: (Spans
+        rows: (List spanrow)
+        names: (List String)
+        pos: (Map u64 value: u64)
+        ranges: (List rangerow)
+        lastPos: 0
+    )
     sp.walkProgram prog: snap.prog
     bestIdx: -1
     bestKind: u8
@@ -2206,7 +2323,7 @@ navAnswer: function {
     if bestIdx < 0 then return Value.nul
     bi: bestIdx.u64
     hit: sp.rows.get i: bi
-    hname: sp.names.get i: bi
+    hname: (sp.names.get i: bi).copy
     w9: hit.colHi - hit.colLo
     hnid: hit.nodeid.u64
 
@@ -2288,6 +2405,45 @@ navAnswer: function {
                     if doc9.length > 0 then docBody9 = doc9
                 }
             } case none then null
+        }
+        # call-site enrichment: hovering a callee appends inferred generic
+        # bindings (in-fence); hovering an argument appends its disposition.
+        hpos9: u64
+        {
+            hp9: sp.pos.get key: hnid
+            match (
+                hp9
+            ) case some then {
+                hpos9 = hp9
+            } case none then null
+        }
+        callId9: sp.innerRangeOfKind curPos: hpos9 kind: 4 slack: 0
+        if callId9 > 0 then {
+            callPos9: u64
+            {
+                cp9x: sp.pos.get key: callId9.u64
+                match (
+                    cp9x
+                ) case some then {
+                    callPos9 = cp9x
+                } case none then null
+            }
+            if callPos9 == hpos9 then {
+                gl9: inferredGenericLines o: snap.st callId: callId9.u64
+                if gl9.length > 0 then {
+                    body9.appendByte b: 10
+                    body9.append gl9.stringview
+                }
+            } else {
+                dn9x: dispositionNote o: snap.st nid: hnid
+                if dn9x.length > 0 then {
+                    if docBody9.length > 0 then {
+                        docBody9.appendByte b: 10
+                        docBody9.appendByte b: 10
+                    }
+                    docBody9.append dn9x.stringview
+                }
+            }
         }
         return (hoverMarkdown code: body9.stringview doc: docBody9.stringview)
     }
@@ -2889,7 +3045,13 @@ addScopeCompletions: function {
     docUnit9: zsource.unitNameOf path: docRel
     defStart9: enclosingDefStart prog: snap.prog unitName: docUnit9.stringview :l1u :sink
     if defStart9 > 0 then {
-        sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+        sp: (Spans
+            rows: (List spanrow)
+            names: (List String)
+            pos: (Map u64 value: u64)
+            ranges: (List rangerow)
+            lastPos: 0
+        )
         sp.walkProgram prog: snap.prog
         nr9: sp.rows.length
         ri9: u64
@@ -3010,7 +3172,13 @@ baseTypeInScope: function {
     base: StringView
 } out u64 is {
     result9: u64
-    sp: (Spans rows: (List spanrow) names: (List String) pos: (Map u64 value: u64))
+    sp: (Spans
+        rows: (List spanrow)
+        names: (List String)
+        pos: (Map u64 value: u64)
+        ranges: (List rangerow)
+        lastPos: 0
+    )
     sp.walkProgram prog: snap.prog
     nr9: sp.rows.length
     ri9: u64
