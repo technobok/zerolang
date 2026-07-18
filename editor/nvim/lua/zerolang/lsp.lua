@@ -83,9 +83,11 @@ function M.setup(opts)
         root_dir = find_root(fname),
         init_options = init_options,
         on_attach = function(client, bufnr)
-          -- Built-in completion with autotrigger on the server's `.` trigger,
-          -- so a member popup opens the moment you type the dot. Opt out with
-          -- `completion = false` if you drive completion from your own engine.
+          -- Built-in completion with autotrigger on the server's trigger
+          -- characters (`.` for members; a space for `case` arms and argument
+          -- labels), so the popup opens as you type. The server advertises the
+          -- triggers, so no client change is needed to pick up the space fire.
+          -- Opt out with `completion = false` if you drive completion yourself.
           if opts.completion ~= false and client:supports_method("textDocument/completion") then
             vim.lsp.completion.enable(true, client.id, bufnr, { autotrigger = true })
             -- `noselect` so autotrigger opens the menu without inserting the
