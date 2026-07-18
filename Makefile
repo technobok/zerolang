@@ -47,7 +47,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard fallback-guard
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard fallback-guard member-guard
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -101,7 +101,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint shadow-guard emitter-guard native-guard fallback-guard ci-corpus
+ci: style-lint shadow-guard emitter-guard native-guard fallback-guard member-guard ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -310,6 +310,29 @@ emitter-guard:
 	  exit 1; \
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9"
+
+# member-guard -- ratchet against declaration-bypassing member special-cases in
+# the type checker. The single-source-of-truth arc removed the hardcoded member
+# shortcuts (the .string-on-String reject guard and the moMiss9 String->
+# StringView retry that let a String silently inherit StringView's read surface).
+# What remains are the sanctioned string-keyed markers: ownership (lock / borrow /
+# take / release), definition keywords (typedef / private / public / return /
+# error / panic / create / copy / tag / array / index), and the .stringview / .str
+# conversions. A rising count means a new hardcoded string-keyed member/marker
+# special-case -- resolve members through their declared childOf edges instead
+# (the system units are the source of truth). Bump the baseline here only for a
+# genuinely-sanctioned marker.
+member-guard:
+	@m1=$$(grep -c 'cn.stringview ==' src/ztypecheck.z); \
+	if [ "$$m1" -gt 37 ]; then \
+	  echo "member-guard FAIL: 'cn.stringview ==' = $$m1 (baseline 37)"; \
+	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
+	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
+	  echo "  system units are the source of truth); bump the baseline only for a"; \
+	  echo "  genuinely-sanctioned marker."; \
+	  exit 1; \
+	fi; \
+	echo "member-guard OK: cn.stringview == = $$m1 (<=37)"
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
 # cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C. Leg 1:
