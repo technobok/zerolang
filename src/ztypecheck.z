@@ -11689,6 +11689,45 @@ baseIsPrivateCapable: function {st: zenv.ZSymbolTable ast: Ast bt: u64 baseNode:
     }
 }
 
+# memberStrictType -- whether `bt` should get the strict unknown-member check:
+# a concrete record/class/union/variant that is either a user type or a
+# non-generic stdlib type (numeric scalars, bool, String, StringView -- their
+# method sets are fully declared). Generic instances (List/Map/Set monos) and
+# bare shells stay lenient because their members are minted per-instantiation.
+memberStrictType: function {st: zenv.ZSymbolTable bt: u64} out bool is {
+    tt9: st.reg.typetypeOf typeId: bt
+    isConc9: false
+    if tt9 == ztypes.ztypetype.recordType then isConc9 = true
+    if tt9 == ztypes.ztypetype.classType then isConc9 = true
+    if tt9 == ztypes.ztypetype.unionType then isConc9 = true
+    if tt9 == ztypes.ztypetype.variantType then isConc9 = true
+    if (isConc9) == false then return false
+    if (isUserShadowElem ty: st.typing reg: st.reg elemTid: bt) then return true
+    duo9: st.typing.definedInUnit.get key: bt
+    hasUnit9: false
+    match (
+        duo9
+    ) case some then {
+        hasUnit9 = true
+    } case none then null
+    if (hasUnit9) == false then return false
+    zo9: st.reg.typeById.get key: bt
+    match (
+        zo9
+    ) case some then {
+        if zo9.isgeneric then return false
+        goo9: zo9.genericOriginId
+        match (
+            goo9
+        ) case some then {
+            return false
+        } case none then null
+    } case none then {
+        return false
+    }
+    return true
+}
+
 checkDotted: function {
     st: zenv.ZSymbolTable
     unitName: StringView
@@ -12645,7 +12684,7 @@ checkDotted: function {
         if bttMm9 == ztypes.ztypetype.classType then isConcMm9 = true
         if bttMm9 == ztypes.ztypetype.unionType then isConcMm9 = true
         if bttMm9 == ztypes.ztypetype.variantType then isConcMm9 = true
-        if isConcMm9 when (isUserShadowElem ty: st.typing reg: st.reg elemTid: bt) then {
+        if isConcMm9 when (memberStrictType :st :bt) then {
             if st.typing.suppressParamStamps == false then {
                 # demand-order safety: walk the type's methods once and
                 # re-probe before declaring the member unknown
@@ -12658,6 +12697,16 @@ checkDotted: function {
                 ) case some then {
                     stillMiss9 = false
                 } case none then null
+                # a numeric-type-named member on a numeric base is a width
+                # conversion; the identity form (x.T where x is already T) is
+                # not a declared child but is a valid (redundant) cast.
+                if stillMiss9 then {
+                    baseNum9: false
+                    if (isNumericTypeName name: btnMm0.stringview) then baseNum9 = true
+                    if btnMm0.stringview == "literal_int" then baseNum9 = true
+                    if btnMm0.stringview == "literal_float" then baseNum9 = true
+                    if (isNumericTypeName name: cn.stringview) when baseNum9 then stillMiss9 = false
+                }
                 if stillMiss9 then {
                     btnMm9: typeNameOf :st tid: bt
                     cnMm9: cn.copy
