@@ -3517,6 +3517,183 @@ caseArmComplete: function {
     return true
 }
 
+# argLabelComplete -- when the cursor sits at a fresh argument position inside a
+# call (not after `:` or `.`), append the callee's remaining parameter labels
+# (minus the receiver and the labels already supplied) to `arr`, with a
+# type[+ownership] detail. Returns true when it handled a call-arg-label context.
+argLabelComplete: function {
+    arr: Arr
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    ltv: StringView
+    ps9: u64
+    prefix: StringView
+    cursorPos: u64
+} out bool is {
+    ws9: ps9
+    for ws9 > 0 loop {
+        wb9: ltv.byteAt i: ws9 - 1
+        stopw9: false
+        match (
+            wb9
+        ) case some then {
+            if wb9 != 32 when wb9 != 9 then stopw9 = true
+        } case none then {
+            stopw9 = true
+        }
+        if stopw9 then break
+        ws9 = ws9 - 1
+    }
+    if ws9 == 0 then return false
+    pvb9: ltv.byteAt i: ws9 - 1
+    badPos9: false
+    match (
+        pvb9
+    ) case some then {
+        if pvb9 == 58 then badPos9 = true
+        if pvb9 == 46 then badPos9 = true
+    } case none then null
+    if badPos9 then return false
+    sp9: (Spans
+        rows: (List spanrow)
+        names: (List String)
+        pos: (Map u64 value: u64)
+        ranges: (List rangerow)
+        lastPos: 0
+    )
+    sp9.walkProgram :prog
+    callId9: sp9.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
+    if callId9 == 0 then return false
+    # callable index + supplied argument node ids (scoped: one node view)
+    callableIdx9: u32
+    argIds9: (List u64)
+    okCall9: false
+    match (
+        prog
+    ) case program then {
+        cnode9: prog.ast.nodes.get i: (callId9 - 1).u64
+        match (
+            cnode9
+        ) case call then {
+            callableIdx9 = cnode9.callable
+            with aiter9: cnode9.arguments.iterate do for aid9: aiter9 loop argIds9.append aid9.u64
+            okCall9 = true
+        } else null
+    } else null
+    if (okCall9) == false then return false
+    if callableIdx9 == 0 then return false
+    # callee function id (callable node -> nodeId -> useUnitDef)
+    calNid9: u32
+    match (
+        prog
+    ) case program then {
+        caln9: prog.ast.nodes.get i: (callableIdx9 - 1).u64
+        calNid9 = ztypecheck.nodeId n: caln9
+    } else null
+    funcId9: useUnitDef :o nid: calNid9.u64
+    if funcId9 == 0 then return false
+    # supplied labels (each arg -> namedoperation.name ref -> text)
+    supplied9: (List String)
+    si9: u64
+    for si9 < argIds9.length loop {
+        aid9: argIds9.get i: si9
+        nameRef9: u32
+        match (
+            prog
+        ) case program then {
+            anode9: prog.ast.nodes.get i: (aid9 - 1).u64
+            match (
+                anode9
+            ) case namedoperation then {
+                nameRef9 = anode9.name
+            } else null
+        } else null
+        if nameRef9 > 0 then {
+            match (
+                prog
+            ) case program then {
+                lbl9: zast.nameTextCopy ast: prog.ast ref: nameRef9
+                if lbl9.length > 0 then supplied9.append lbl9
+            } else null
+        }
+        si9 = si9 + 1
+    }
+    # callee params (skip receiver) collected while the childIndex view is held
+    pnames9: (List String)
+    pcnids9: (List u64)
+    pptids9: (List u64)
+    match (
+        prog
+    ) case program then {
+        match (
+            o
+        ) case some then {
+            bp9: o.typing.childIndex.get key: funcId9
+            match (
+                bp9
+            ) case some then {
+                with rpit9: bp9.rows.iterate do for rpi9: rpit9 loop {
+                    tc9: o.typing.typeChild.get i: rpi9
+                    cnB9: prog.ast.names.texts.get i: (tc9.nameId - 1).u64
+                    cn9: cnB9.stringview
+                    isRecv9: false
+                    if tc9.nameId == wkThis then isRecv9 = true
+                    zt9: o.reg.typeById.get key: funcId9
+                    match (
+                        zt9
+                    ) case some then {
+                        if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
+                    } case none then null
+                    if (isRecv9) == false then {
+                        ctid9: u64
+                        cg9: o.typing.childTypeById.get key: tc9.childNameId
+                        match (
+                            cg9
+                        ) case some then {
+                            ctid9 = cg9
+                        } case none then null
+                        pnames9.append cn9.string
+                        pcnids9.append tc9.childNameId
+                        pptids9.append ctid9
+                    }
+                }
+            } case none then null
+        } case none then null
+    } else null
+    if pnames9.length == 0 then return false
+    ri9: u64
+    for ri9 < pnames9.length loop {
+        pn9: pnames9.get i: ri9
+        isSupp9: false
+        with sit9: supplied9.iterate do for su9: sit9 loop {
+            if su9.stringview == pn9.stringview then isSupp9 = true
+        }
+        matchp9: true
+        if prefix.length > 0 then {
+            if (pn9.startsWith prefix) == false then matchp9 = false
+        }
+        if isSupp9 == false when matchp9 then {
+            det9: String
+            match (
+                o
+            ) case some then {
+                tn9: ztypecheck.typeNameOf st: o tid: (pptids9.get i: ri9)
+                det9.append tn9.stringview
+                oo9: o.typing.childOwnership.get key: (pcnids9.get i: ri9)
+                match (
+                    oo9
+                ) case some then {
+                    if oo9 == ztypes.zparamownership.takeMode then det9.append ".take"
+                    if oo9 == ztypes.zparamownership.lockMode then det9.append ".lock"
+                } case none then null
+            } case none then null
+            arr.items.append (completionItem label: pn9.stringview kind: 5 detail: det9.stringview)
+        }
+        ri9 = ri9 + 1
+    }
+    return true
+}
+
 # completionAnswer -- scope-based completion from the last-good
 # snapshot: the enclosing definition's params and preceding bindings,
 # every loaded unit's top-level defs and unit names, and keywords --
@@ -3601,6 +3778,16 @@ completionAnswer: function {
             cursorPos: curPos9
         )
         if handledCA9 then return (Value.array arr)
+        handledAL9: (argLabelComplete
+            :arr
+            o: snap.st
+            prog: snap.prog
+            :ltv
+            :ps9
+            prefix: prefix9.stringview
+            cursorPos: curPos9
+        )
+        if handledAL9 then return (Value.array arr)
         if trig == " " then return (Value.array arr)
         addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
     }
