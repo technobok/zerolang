@@ -11855,31 +11855,8 @@ checkDotted: function {
         st.typing.nodeType.set key: dp.nodeid.u64 value: setlk
         return bt
     }
-    # A `.string`/`.stringview` conversion is legal only when it changes the
-    # type: String.stringview projects a view, StringView.string owns a copy.
-    # The same-type forms are rejected -- `.string` on a String hides a fresh
-    # copy (spell it `.copy`), `.stringview` on a StringView is an identity
-    # no-op. A StringView base keeps the member path below for `.string`
-    # (a real native converting view -> owned String).
-    if cn.stringview == "string" then {
-        if bt == (builtinTidTc :ast :st base: "String") then {
-            mss9: "redundant conversion: '.string' on a String".string
-            nss9: "the value is already an owned String; '.string' would hide a fresh copy".string
-            hss9: "use '.copy' for an owned duplicate, or drop '.string'".string
-            (addErrorH
-                :st
-                nodeid: dp.nodeid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.typeError
-                msg: mss9
-                note: nss9
-                hint: hss9
-                width: cn.length.u32
-            )
-            return 0
-        }
-    }
+    # `.stringview` on a StringView is an identity no-op and is rejected --
+    # the value is already a StringView.
     if cn.stringview == "stringview" then {
         if bt == (builtinTidTc :ast :st base: "StringView") then {
             msv9: "redundant conversion: '.stringview' on a StringView".string
@@ -12411,13 +12388,15 @@ checkDotted: function {
     }
     mo: st.typing.childOfId parentTypeId: bt nameId: cnId9
     # String's readonly surface: a member missing on String retries on
-    # StringView (the emitter's native legs make the same projection)
+    # StringView (the emitter's native legs make the same projection).
+    # `.string` is excluded -- it is an owned-String member, not a view op.
     moMiss9: true
     match (
         mo
     ) case some then {
         moMiss9 = false
     } case none then null
+    if cn.stringview == "string" then moMiss9 = false
     if moMiss9 then {
         if bt == (builtinTidT :ast ty: st.typing reg: st.reg base: "String") then {
             svT9: builtinTidT :ast ty: st.typing reg: st.reg base: "StringView"
