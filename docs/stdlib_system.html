@@ -229,11 +229,20 @@ on assignment, no heap allocation, no destructor.</p>
 default to <code>f64</code>. Use the dotted suffix form to choose a different
 type: <code>65.u8</code>, <code>1.5.f32</code>, <code>0xff.u32</code>. Do <strong>not</strong> write
 <code>65u8</code> (non-dotted form is reserved syntax).</p>
-<p><strong>Arithmetic.</strong> Every type supports <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>
-with a same-type rhs. No implicit promotion: <code>i32 + i64</code> is a
-type error; cast first.</p>
-<p><strong>Comparison.</strong> Every type supports <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>,
-<code>==</code>, <code>!=</code> with a same-type rhs; all return <code>bool</code>.</p>
+<p><strong>Arithmetic.</strong> Every type declares <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>
+as native methods taking a same-type rhs; the integer types also
+declare <code>%</code> (modulo) and <code>&amp;</code> (bitwise AND). Operators resolve
+as ordinary declared methods -- the system units are the single
+source of truth -- so an operator on a type that declares none
+(e.g. <code>bool + 1</code>) is a plain "type has no method" error, and a
+mismatched rhs (<code>1 + true</code>) is an argument-type mismatch against
+the method. No implicit promotion: <code>i32 + i64</code> is a type error;
+cast first.</p>
+<p><strong>Comparison.</strong> Every type declares <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>,
+<code>==</code>, <code>!=</code> as native methods taking a same-type rhs; all return
+<code>bool</code>. Comparisons are method-driven like arithmetic; a user
+record or variant that declares none still compares with <code>==</code> /
+<code>!=</code> through generated structural equality.</p>
 <p><strong>Conversion.</strong> Every type has a method named after every other
 numeric type that yields a converted value. Truncation / widening
 follows C semantics:</p>
@@ -264,11 +273,17 @@ modulo 2^N. No trapping or saturating variants yet.</p>
 support for <code>__int128</code> (gcc / clang). Width on platforms without
 native 128-bit support is determined at C compile time.</p>
 <h2 id="bool"><a href="#bool">4. bool</a></h2>
-<pre><code class="language-zerolang">  bool: variant { false: null  true: null } as { tag: u8.tag }
+<pre><code class="language-zerolang">  bool: variant { false: null  true: null } as {
+      tag: u8.tag
+      ==  / != / &lt; / &lt;= / &gt; / &gt;=   # native, same-type rhs, out bool
+  }
   false: bool.false
   true:  bool.true</code></pre>
 <p>Two-state valtype declared as a variant with null-payload arms
-and a u8 tag. <code>false</code> and <code>true</code> are unit-level names
+and a u8 tag. It declares the six comparison operators
+(<code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>) as native methods
+returning <code>bool</code>, so bool values compare through the declared
+methods like any other type. <code>false</code> and <code>true</code> are unit-level names
 (re-exported by <code>core</code>) resolving to <code>bool.false</code> /
 <code>bool.true</code> respectively -- the same pattern numeric
 "literals" follow.</p>
@@ -388,6 +403,13 @@ changes across runs (DoS resistance, matching Python / Rust /
 Swift). Not suitable for content-addressed storage; pair it
 with a deterministic hash for that use case</li>
 </ul>
+<p><strong>Non-allocating queries.</strong> <code>String</code> declares <code>count</code>,
+<code>startsWith</code>, <code>endsWith</code>, and <code>contains</code> directly, with the
+same semantics as the <code>StringView</code> methods of the same name. The
+rest of StringView's read surface (<code>byteAt</code>, <code>indexOf</code>, <code>trim</code>,
+<code>split</code>, the parse methods, ...) is reached through an explicit
+<code>.stringview</code> view -- <code>String</code> declares its own read surface and
+does not silently inherit StringView's.</p>
 <p><strong>Ordering.</strong> <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> are byte-wise
 lexicographic on the UTF-8 bytes. A shorter string is less than a
 longer string that shares its prefix. Not locale-aware.</p>

@@ -143,12 +143,21 @@ default to #~"f64". Use the dotted suffix form to choose a different
 type: #~"65.u8", #~"1.5.f32", #~"0xff.u32". Do #b:"not" write
 #~"65u8" (non-dotted form is reserved syntax).
 
-#b:"Arithmetic." Every type supports #~"+", #~"-", #~"*", #~"/"
-with a same-type rhs. No implicit promotion: #~"i32 + i64" is a
-type error; cast first.
+#b:"Arithmetic." Every type declares #~"+", #~"-", #~"*", #~"/"
+as native methods taking a same-type rhs; the integer types also
+declare #~"%" (modulo) and #~"&" (bitwise AND). Operators resolve
+as ordinary declared methods -- the system units are the single
+source of truth -- so an operator on a type that declares none
+(e.g. #~"bool + 1") is a plain "type has no method" error, and a
+mismatched rhs (#~"1 + true") is an argument-type mismatch against
+the method. No implicit promotion: #~"i32 + i64" is a type error;
+cast first.
 
-#b:"Comparison." Every type supports #~"<", #~"<=", #~">", #~">=",
-#~"==", #~"!=" with a same-type rhs; all return #~"bool".
+#b:"Comparison." Every type declares #~"<", #~"<=", #~">", #~">=",
+#~"==", #~"!=" as native methods taking a same-type rhs; all return
+#~"bool". Comparisons are method-driven like arithmetic; a user
+record or variant that declares none still compares with #~"==" /
+#~"!=" through generated structural equality.
 
 #b:"Conversion." Every type has a method named after every other
 numeric type that yields a converted value. Truncation / widening
@@ -190,13 +199,19 @@ native 128-bit support is determined at C compile time.
 #--: bool
 
 #code language=zerolang: """
-  bool: variant { false: null  true: null } as { tag: u8.tag }
+  bool: variant { false: null  true: null } as {
+      tag: u8.tag
+      ==  / != / < / <= / > / >=   # native, same-type rhs, out bool
+  }
   false: bool.false
   true:  bool.true
 """
 
 Two-state valtype declared as a variant with null-payload arms
-and a u8 tag. #~"false" and #~"true" are unit-level names
+and a u8 tag. It declares the six comparison operators
+(#~"==", #~"!=", #~"<", #~"<=", #~">", #~">=") as native methods
+returning #~"bool", so bool values compare through the declared
+methods like any other type. #~"false" and #~"true" are unit-level names
 (re-exported by #~"core") resolving to #~"bool.false" /
 #~"bool.true" respectively -- the same pattern numeric
 "literals" follow.
@@ -360,6 +375,14 @@ accumulate programmatically, start empty and #~".append":
     changes across runs (DoS resistance, matching Python / Rust /
     Swift). Not suitable for content-addressed storage; pair it
     with a deterministic hash for that use case]
+
+#b:"Non-allocating queries." #~"String" declares #~"count",
+#~"startsWith", #~"endsWith", and #~"contains" directly, with the
+same semantics as the #~"StringView" methods of the same name. The
+rest of StringView's read surface (#~"byteAt", #~"indexOf", #~"trim",
+#~"split", the parse methods, ...) is reached through an explicit
+#~".stringview" view -- #~"String" declares its own read surface and
+does not silently inherit StringView's.
 
 #b:"Ordering." #~"<", #~"<=", #~">", #~">=" are byte-wise
 lexicographic on the UTF-8 bytes. A shorter string is less than a
