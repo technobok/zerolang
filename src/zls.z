@@ -2108,6 +2108,58 @@ locationAtFileTop: function {
     return (Value.object lo9)
 }
 
+# refAnnotation -- a value reference's ownership + scope origin (+ borrow
+# source) as an in-fence `#` comment body: "owned local" / "borrowed
+# parameter" / "borrowed local, from s" / "static unit-level"; "" when the
+# reference carries no stamped ownership/origin.
+refAnnotation: function {o: (Option zenv.ZSymbolTable) vid: u64 nid: u64} out String is {
+    if vid == 0 then {
+        udo9: useUnitDef :o :nid
+        if udo9 > 0 then return "static unit-level".string
+        return "".string
+    }
+    match (
+        o
+    ) case some then {
+        own9: String
+        vo9: o.typing.variableOwnership.get key: vid
+        match (
+            vo9
+        ) case some then {
+            if vo9 == ztypes.zownership.owned then own9 = "owned".string
+            if vo9 == ztypes.zownership.borrowed then own9 = "borrowed".string
+        } case none then null
+        orig9: String
+        ro9: o.typing.variableOrigin.get key: vid
+        match (
+            ro9
+        ) case some then {
+            if ro9 then orig9 = "parameter".string
+            if (ro9) == false then orig9 = "local".string
+        } case none then null
+        if own9.length == 0 when orig9.length == 0 then return "".string
+        r9: String
+        if own9.length > 0 then r9.append own9.stringview
+        if orig9.length > 0 then {
+            if r9.length > 0 then r9.append " "
+            r9.append orig9.stringview
+        }
+        bo9: o.typing.variableBorrowOrigin.get key: vid
+        match (
+            bo9
+        ) case some then {
+            bsrc9: bo9.copy
+            if bsrc9.length > 0 then {
+                r9.append ", from "
+                r9.append bsrc9.stringview
+            }
+        } case none then null
+        return r9
+    } case none then {
+        return "".string
+    }
+}
+
 # navAnswer -- definition (1), hover (2), references (3) from the
 # last-good snapshot.
 navAnswer: function {
@@ -2207,6 +2259,11 @@ navAnswer: function {
                 body9 = hname.copy
                 body9.append ": "
                 body9.append tn.stringview
+                annot9: refAnnotation o: snap.st vid: refVid nid: tnid
+                if annot9.length > 0 then {
+                    body9.append "  # "
+                    body9.append annot9.stringview
+                }
             }
         }
         docBody9: String
