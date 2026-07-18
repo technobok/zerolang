@@ -2843,6 +2843,53 @@ demandReturnType: function {
 # entry in the resolved name-view. Returns the FUNCTION type id (a record method
 # binds it as a child; a free function discards it). The map `set`s TAKE the u64,
 # so copies are threaded for `definedInUnit.set` and the returned id.
+# fnHasLockParam -- does any parameter (including a `this.lock` receiver) carry
+# a `.lock` marker? A `.borrow` return must borrow from a locked parameter so
+# the returned view has a locked parent to live in (docs/ownership.pdoc).
+fnHasLockParam: function {ast: Ast fnode: zast.FunctionData} out bool is {
+    found9: false
+    with pit9: fnode.parameters.iterate do for pmId9: pit9 loop {
+        if (found9) == false then {
+            pm9: ast.nodes.get i: (pmId9 - 1).u64
+            match (
+                pm9
+            ) case namedoperation then {
+                po9: pathOwnership :ast n: (ast.nodes.get i: (pm9.operation - 1).u64)
+                match (
+                    po9
+                ) case some then {
+                    if po9 == ztypes.zparamownership.lockMode then found9 = true
+                } case none then null
+            } else null
+        }
+    }
+    return found9
+}
+
+# checkBorrowReturnLock -- a `.borrow`-returning function must borrow from a
+# `.lock` parameter (a `this.lock` receiver counts), so the returned view has a
+# locked parent (docs/ownership.pdoc). Runs at every function/method decl.
+checkBorrowReturnLock: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    fnode: zast.FunctionData
+    defName: StringView
+} is {
+    if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
+        if (fnHasLockParam :ast :fnode) == false then {
+            (addResolveErrorH
+                :ty
+                nodeid: fnode.nodeid
+                lineno: fnode.lineno
+                colno: fnode.colno
+                e: zast.err.ownerError
+                msg: "a `.borrow` return must borrow from a `.lock` parameter -- mark the source parameter (e.g. `t: this.lock`) so the returned view has a locked parent".string
+                width: defName.length.u32
+            )
+        }
+    }
+}
+
 resolveFunction: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -3159,6 +3206,7 @@ resolveFunction: function {
         fbv: true
         ty.funcReturnsBorrow.set key: fbk value: fbv
     }
+    checkBorrowReturnLock :ast :ty :fnode :defName
     ty.definedInUnit.set key: dfid value: unitName.string
     return rfid
 }
@@ -3356,6 +3404,14 @@ attachMethods: function {
         ) case namedoperation then {
             mname: zast.nameTextCopy :ast ref: am.name
             if mname.stringview == "create" then hasCreate = true
+            {
+                mop9: ast.nodes.get i: (am.operation - 1).u64
+                match (
+                    mop9
+                ) case functiondef then {
+                    checkBorrowReturnLock :ast :ty fnode: mop9 defName: mname.stringview
+                } else null
+            }
             qname: "\{defName}.\{mname}"
             mido: (resolveMethodFn
                 :ty
