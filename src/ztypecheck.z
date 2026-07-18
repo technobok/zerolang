@@ -3382,6 +3382,30 @@ markerTargetId: function {
     }
 }
 
+# eqNullOptOut -- true when a type's `as {}` block opts out of equality by
+# declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
+# record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
+# the type resolves no method and is a hard error.
+eqNullOptOut: function {ast: Ast asItems: List u32} out bool is {
+    result: false
+    with aiter: asItems.iterate do for amId9: aiter loop {
+        am: ast.nodes.get i: (amId9 - 1).u64
+        match (
+            am
+        ) case namedoperation then {
+            mn9: zast.nameTextCopy :ast ref: am.name
+            isEqNe9: false
+            if mn9.stringview == "==" then isEqNe9 = true
+            if mn9.stringview == "!=" then isEqNe9 = true
+            if isEqNe9 then {
+                vn9: atomName :ast n: (ast.nodes.get i: (am.operation - 1).u64)
+                if vn9.stringview == "null" then result = true
+            }
+        } else null
+    }
+    return result
+}
+
 # attachMethods -- resolve an as-block's method items (namedoperation -> functiondef)
 # as children of `parentId`, returning whether one is named `create` (so the caller
 # skips the synth create). Takes the item list by value so its iterator's lock is
@@ -3938,6 +3962,7 @@ resolveRecord: function {
     scanVisibility :ty :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
     reg.setValtype typeId: rid value: true
     isgen: hasGenericParam :ast items: rnode.asItems
+    eqOptR9: eqNullOptOut :ast asItems: rnode.asItems
     if isgen then {
         reg.setGeneric typeId: rid value: true
         rtk: "\{unitName}.\{defName}"
@@ -4108,7 +4133,7 @@ resolveRecord: function {
         ty.setChildId parentTypeId: rid nameId: wkBorrow childTypeId: borrowId
     } else {
         if (isgen) == false then {
-            if (hasEqIs) == false then {
+            if (hasEqIs) == false when (eqOptR9) == false then {
                 eqName: "\{defName}.=="
                 eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.functionType
                 ty.setChildId parentTypeId: rid nameId: wkOpEq childTypeId: eqId
@@ -4196,6 +4221,7 @@ resolveVariant: function {
     scanVisibility :ty :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     reg.setValtype typeId: vid value: true
     isgen: hasGenericParam :ast items: vnode.asItems
+    eqOptV9: eqNullOptOut :ast asItems: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: vid value: true
         gtk9: "\{unitName}.\{defName}"
@@ -4324,7 +4350,7 @@ resolveVariant: function {
             }
         } else null
     }
-    if (isgen) == false then {
+    if (isgen) == false when (eqOptV9) == false then {
         eqName: "\{defName}.=="
         eqId: reg.newType name: eqName.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: vid nameId: wkOpEq childTypeId: eqId
@@ -14332,6 +14358,31 @@ checkBinopMethodDispatch: function {
         return lt
     } case none then {
         if isCmp9 then {
+            # `!=` derives from `==`: only error when `==` is also unavailable.
+            if opn == "!=" then {
+                eqEdge9: st.typing.childOfId parentTypeId: dt9 nameId: wkOpEq
+                if eqEdge9.some then {
+                    boD9: builtinTidTc :ast :st base: "bool"
+                    if boD9 > 0 then return boD9
+                    return lt
+                }
+            }
+            # A concrete type that declares no comparison method -- a class or
+            # union without `==`, or a record/variant that opted out with
+            # `==: null` -- is a hard error rather than invalid C.
+            if (memberStrictType :st bt: dt9) then {
+                lnc9: typeNameOf :st tid: dt9
+                mgc9: "type '\{lnc9}' has no '\{opn}' method"
+                (addError
+                    :st
+                    nodeid: binop.nodeid
+                    lineno: binop.lineno
+                    colno: binop.colno
+                    e: zast.err.typeError
+                    msg: mgc9
+                )
+                return 0
+            }
             bo9: builtinTidTc :ast :st base: "bool"
             if bo9 > 0 then return bo9
             return lt
