@@ -14253,9 +14253,132 @@ comparisonCoerceTarget: function {
     return concrete
 }
 
-# checkBinop -- type an arithmetic binop. Both operands are walked (so their
-# nodes are stamped); the result is the lhs operand type (correct for same-type
-# arithmetic -- full operator-method dispatch lands with a comparison example).
+# checkBinopMethodDispatch -- resolve a binary operator as a declared method on
+# the lhs type: materialise a bare-literal lhs for dispatch, chase typedef bases
+# to the type that declares the operator, arg-check the rhs against the method's
+# first parameter, and return the result type. For a comparison (isCmp9) an
+# undeclared operator falls back to bool -- structural `==`/`!=` on records and
+# variants; for arithmetic an undeclared operator on a concrete type is an error
+# and a bare-literal lhs keeps its coercible literal result. Returns 0 on an
+# emitted arg-mismatch.
+checkBinopMethodDispatch: function {
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    ast: Ast
+    binop: zast.BinOpData
+    opn: StringView
+    opnId9: u64
+    lt: u64
+    rt: u64
+    isCmp9: bool
+} out u64 is {
+    ltLit9: isLiteralTypeId :st tid: lt
+    dt9: lt
+    if ltLit9 then dt9 = materialiseLiteral :ast :st :unitName t: lt
+    opo: st.typing.childOfId parentTypeId: dt9 nameId: opnId9
+    for opo.none while (typedefBaseOf :ast :st :unitName tid: dt9) > 0 loop {
+        dt9 = typedefBaseOf :ast :st :unitName tid: dt9
+        opo = st.typing.childOfId parentTypeId: dt9 nameId: opnId9
+    }
+    match (
+        opo
+    ) case some then {
+        oParamT9: u64
+        p0n9: positionalParamName :ast :st funcId: opo idx: 0 skipRecv: true
+        if p0n9.length > 0 then {
+            ppo9: st.typing.childOf pool: ast.names parentTypeId: opo name: p0n9.stringview
+            match (
+                ppo9
+            ) case some then {
+                oParamT9 = ppo9
+            } case none then null
+        }
+        if oParamT9 > 0 when rt > 0 then {
+            if (typesCompatible :ast :st :unitName a: rt b: oParamT9) == false then {
+                skipA9: false
+                if (isNumericTid
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    tid: rt
+                ) when (isNumericTid
+                    :ast
+                    ty: st.typing
+                    reg: st.reg
+                    tid: oParamT9
+                ) then skipA9 = true
+                strT9x: builtinTidTc :ast :st base: "String"
+                svT9x: builtinTidTc :ast :st base: "StringView"
+                rSty9: false
+                if rt == strT9x then rSty9 = true
+                if rt == svT9x then rSty9 = true
+                pSty9: false
+                if oParamT9 == strT9x then pSty9 = true
+                if oParamT9 == svT9x then pSty9 = true
+                if rSty9 when pSty9 then skipA9 = true
+                ptt9: st.reg.typetypeOf typeId: oParamT9
+                if ptt9 == ztypes.ztypetype.protocolType then skipA9 = true
+                if ptt9 == ztypes.ztypetype.facetType then skipA9 = true
+                if ptt9 == ztypes.ztypetype.genericParam then skipA9 = true
+                if ptt9 == ztypes.ztypetype.functionType then skipA9 = true
+                if (skipA9) == false then {
+                    ea9: typeNameOf :st tid: oParamT9
+                    aa9: typeNameOf :st tid: rt
+                    eac9: ea9.copy
+                    aac9: aa9.copy
+                    mma9: "argument type mismatch: expected \{eac9}, got \{aac9}"
+                    (addError
+                        :st
+                        nodeid: binop.nodeid
+                        lineno: binop.lineno
+                        colno: binop.colno
+                        e: zast.err.callError
+                        msg: mma9
+                    )
+                    return 0
+                }
+            }
+        }
+        if isCmp9 then {
+            cb9: builtinTidTc :ast :st base: "bool"
+            if cb9 > 0 then return cb9
+            return lt
+        }
+        if ltLit9 then return lt
+        oro: methodReturnOf :st mid: opo
+        match (
+            oro
+        ) case some then {
+            return oro
+        } case none then null
+        return lt
+    } case none then {
+        if isCmp9 then {
+            bo9: builtinTidTc :ast :st base: "bool"
+            if bo9 > 0 then return bo9
+            return lt
+        }
+        if (memberStrictType :st bt: dt9) then {
+            ln9: typeNameOf :st tid: dt9
+            msg9: "type '\{ln9}' has no '\{opn}' method"
+            (addError
+                :st
+                nodeid: binop.nodeid
+                lineno: binop.lineno
+                colno: binop.colno
+                e: zast.err.typeError
+                msg: msg9
+            )
+            return 0
+        }
+        return lt
+    }
+}
+
+# checkBinop -- type a binary operator expression. Both operands are walked (so
+# their nodes are stamped), then the operator resolves as a declared method on
+# the operand type via checkBinopMethodDispatch (comparisons yield bool; an
+# undeclared comparison falls back to structural equality).
 checkBinop: function {
     st: zenv.ZSymbolTable
     unitName: StringView
@@ -14268,14 +14391,6 @@ checkBinop: function {
     opn: atomName :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
     opnId9: atomNameId :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
     if (isComparisonOp name: opn.stringview) then {
-        boOpt: walkLookupTyperef :ast ty: st.typing reg: st.reg currentUnit: unitName base: "bool"
-        match (
-            boOpt
-        ) case some then {
-            result = boOpt
-        } case none then {
-            result = lt
-        }
         # A literal operand coerces (restamps) at the concrete side's type.
         lLit9: false
         if lt == literalIntId then lLit9 = true
@@ -14301,93 +14416,29 @@ checkBinop: function {
                 }
             }
         }
+        result = (checkBinopMethodDispatch
+            :st
+            :unitName
+            :ast
+            :binop
+            opn: opn.stringview
+            :opnId9
+            :lt
+            :rt
+            isCmp9: true
+        )
     } else {
-        result = lt
-        # Arithmetic operators resolve as declared methods on the lhs type
-        # (a boxed value's `+` is the element's). A bare-literal lhs
-        # materialises for dispatch but keeps its coercible literal result;
-        # a typedef delegates to the base type that declares the operator.
-        ltLit9: isLiteralTypeId :st tid: lt
-        dt9: lt
-        if ltLit9 then dt9 = materialiseLiteral :ast :st :unitName t: lt
-        opo: st.typing.childOfId parentTypeId: dt9 nameId: opnId9
-        for opo.none while (typedefBaseOf :ast :st :unitName tid: dt9) > 0 loop {
-            dt9 = typedefBaseOf :ast :st :unitName tid: dt9
-            opo = st.typing.childOfId parentTypeId: dt9 nameId: opnId9
-        }
-        match (
-            opo
-        ) case some then {
-            oParamT9: u64
-            p0n9: positionalParamName :ast :st funcId: opo idx: 0 skipRecv: true
-            if p0n9.length > 0 then {
-                ppo9: st.typing.childOf pool: ast.names parentTypeId: opo name: p0n9.stringview
-                match (
-                    ppo9
-                ) case some then {
-                    oParamT9 = ppo9
-                } case none then null
-            }
-            if oParamT9 > 0 when rt > 0 then {
-                if (typesCompatible :ast :st :unitName a: rt b: oParamT9) == false then {
-                    skipA9: false
-                    if (isNumericTid
-                        :ast
-                        ty: st.typing
-                        reg: st.reg
-                        tid: rt
-                    ) when (isNumericTid
-                        :ast
-                        ty: st.typing
-                        reg: st.reg
-                        tid: oParamT9
-                    ) then skipA9 = true
-                    ptt9: st.reg.typetypeOf typeId: oParamT9
-                    if ptt9 == ztypes.ztypetype.protocolType then skipA9 = true
-                    if ptt9 == ztypes.ztypetype.facetType then skipA9 = true
-                    if ptt9 == ztypes.ztypetype.genericParam then skipA9 = true
-                    if ptt9 == ztypes.ztypetype.functionType then skipA9 = true
-                    if (skipA9) == false then {
-                        ea9: typeNameOf :st tid: oParamT9
-                        aa9: typeNameOf :st tid: rt
-                        eac9: ea9.copy
-                        aac9: aa9.copy
-                        mma9: "argument type mismatch: expected \{eac9}, got \{aac9}"
-                        (addError
-                            :st
-                            nodeid: binop.nodeid
-                            lineno: binop.lineno
-                            colno: binop.colno
-                            e: zast.err.callError
-                            msg: mma9
-                        )
-                        result = 0
-                    }
-                }
-            }
-            if result > 0 when (ltLit9) == false then {
-                oro: methodReturnOf :st mid: opo
-                match (
-                    oro
-                ) case some then {
-                    result = oro
-                } case none then null
-            }
-        } case none then {
-            if (memberStrictType :st bt: dt9) then {
-                ln9: typeNameOf :st tid: dt9
-                msg9: "type '\{ln9}' has no '\{opn}' method"
-                (addError
-                    :st
-                    nodeid: binop.nodeid
-                    lineno: binop.lineno
-                    colno: binop.colno
-                    e: zast.err.typeError
-                    msg: msg9
-                )
-                result = 0
-            }
-        }
+        result = (checkBinopMethodDispatch
+            :st
+            :unitName
+            :ast
+            :binop
+            opn: opn.stringview
+            :opnId9
+            :lt
+            :rt
+            isCmp9: false
+        )
     }
     tdb2: typedefBaseOf :ast :st :unitName tid: result
     if tdb2 > 0 then result = tdb2
