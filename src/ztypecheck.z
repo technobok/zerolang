@@ -14225,6 +14225,30 @@ comparisonCoerceTarget: function {
     return concrete
 }
 
+# arithOperandOk -- true when `tid` may be an operand of a builtin arithmetic
+# operator: a numeric-literal pseudo-type, a builtin numeric scalar (possibly
+# behind a typedef), a generic parameter (structural pass-through), or an
+# unresolved (0) type. A non-numeric concrete type (e.g. bool) is not.
+arithOperandOk: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitName: StringView
+    tid: u64
+} out bool is {
+    if tid == 0 then return true
+    if tid == literalIntId then return true
+    if tid == literalFloatId then return true
+    et9: tid
+    b9: typedefBaseOf :ast :st :unitName :tid
+    if b9 > 0 then et9 = b9
+    if (st.reg.typetypeOf typeId: et9) == ztypes.ztypetype.genericParam then return true
+    nm9: typeNameOf :st tid: et9
+    if (isNumericTypeName name: nm9.stringview) then return true
+    if nm9 == "literal_int" then return true
+    if nm9 == "literal_float" then return true
+    return false
+}
+
 # checkBinop -- type an arithmetic binop. Both operands are walked (so their
 # nodes are stamped); the result is the lhs operand type (correct for same-type
 # arithmetic -- full operator-method dispatch lands with a comparison example).
@@ -14287,7 +14311,26 @@ checkBinop: function {
             ) case some then {
                 result = oro
             } case none then null
-        } case none then null
+        } case none then {
+            badTid9: u64
+            if (arithOperandOk :st :ast :unitName tid: lt) == false then badTid9 = lt
+            if badTid9 == 0 when (arithOperandOk :st :ast :unitName tid: rt) == false then {
+                badTid9 = rt
+            }
+            if badTid9 > 0 then {
+                bn9: typeNameOf :st tid: badTid9
+                msg9: "operator '\{opn}' requires numeric operands, but an operand has type '\{bn9}'"
+                (addError
+                    :st
+                    nodeid: binop.nodeid
+                    lineno: binop.lineno
+                    colno: binop.colno
+                    e: zast.err.typeError
+                    msg: msg9
+                )
+                result = 0
+            }
+        }
     }
     tdb2: typedefBaseOf :ast :st :unitName tid: result
     if tdb2 > 0 then result = tdb2
