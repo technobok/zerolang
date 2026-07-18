@@ -95,6 +95,9 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS tag_read (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS tag_accessor (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, tag_type_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS post_guard (node_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type_id INTEGER NOT NULL, arm TEXT NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS variable_origin (variable_id INTEGER PRIMARY KEY, is_param INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (key TEXT PRIMARY KEY, type_id INTEGER NOT NULL);\n"
     return acc
 }
 
@@ -202,6 +205,50 @@ originSql: function {o: Option String} out String is {
     } case none then {
         return "NULL".string
     }
+}
+
+# originKindSql -- a variable's origin kind as canon text (param/local), or
+# "NULL" when unstamped (unit-level variables carry no origin stamp).
+originKindSql: function {o: optionval bool} out String is {
+    match (
+        o
+    ) case some then {
+        if o then return "param".string
+        return "local".string
+    } case none then {
+        return "NULL".string
+    }
+}
+
+# argAtomName -- the identifier name of the atom node at `id` (1-based), else
+# "" (non-atom arguments carry no stable canon name).
+argAtomName: function {ast: Ast id: u64} out String is {
+    if id == 0 then return "".string
+    n: ast.nodes.get i: (id - 1).u64
+    match (
+        n
+    ) case atomid then {
+        return (zast.nameTextCopy :ast ref: n.name)
+    } else {
+        return "".string
+    }
+}
+
+# holderAfterColon -- the generic-param holder in a "callNodeid:holder" key
+# (the substring after the first ':', byte 58), or "" when there is no colon.
+holderAfterColon: function {k: StringView} out String is {
+    kn: k.length
+    ki: u64
+    for ki < kn loop {
+        bo: k.byteAt ki
+        match (
+            bo
+        ) case some then {
+            if bo == 58 then return (k.substring from: ki + 1 to: kn).string
+        } case none then null
+        ki = ki + 1
+    }
+    return "".string
 }
 
 # --- the dumper ---
@@ -667,6 +714,20 @@ ZDumper: class {
             } case none then null
             row6: "INSERT OR IGNORE INTO tag_accessor VALUES (\{ta.key}, '\{ta.value}', \{tat9});\n"
             this.acc.append s: row6.stringview
+        }
+        with adit: typing.argDisposition.iterateItems do for ad: adit loop {
+            adInt9: ztypes.zparamownershipInt ad.value
+            rowAd9: "INSERT OR IGNORE INTO arg_disposition VALUES (\{ad.key}, \{adInt9});\n"
+            this.acc.append s: rowAd9.stringview
+        }
+        with voit: typing.variableOrigin.iterateItems do for vo: voit loop {
+            voNum9: boolNum b: vo.value
+            rowVo9: "INSERT OR IGNORE INTO variable_origin VALUES (\{vo.key}, \{voNum9});\n"
+            this.acc.append s: rowVo9.stringview
+        }
+        with cgit: typing.callGenericBinding.iterateItems do for cg: cgit loop {
+            rowCg9: "INSERT OR IGNORE INTO call_generic_binding VALUES ('\{cg.key}', \{cg.value});\n"
+            this.acc.append s: rowCg9.stringview
         }
     }
 
@@ -1140,12 +1201,39 @@ ZDumper: class {
             privNum: optBoolNumOr0 o: (st.typing.variableIsPrivate.get key: vid)
             boSql: originSql o: (ownOptStr o: (st.typing.variableBorrowOrigin.get key: vid))
             soSql: originSql o: (ownOptStr o: (st.typing.variableSynthOrigin.get key: vid))
-            vline: "\{ztSql} | \{ownSql} | \{privNum} | \{boSql} | \{soSql}"
+            orSql9: originKindSql o: (st.typing.variableOrigin.get key: vid)
+            vline: "\{ztSql} | \{ownSql} | \{privNum} | \{boSql} | \{soSql} | \{orSql9}"
             varRows.append vline
         }
         this.emitSection title: "variable" rows: varRows
 
         this.emitSection title: "narrowed_subtype" rows: narrowedRows
+    }
+
+    appendArgDispositionCanon: function {:this ast: Ast st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        with adit: st.typing.argDisposition.iterateItems do for ad: adit loop {
+            an9: argAtomName :ast id: ad.key
+            if an9.length > 0 then {
+                anSql9: sqlStr s: an9.stringview
+                dnm9: ztypes.zparamownershipName ad.value
+                rows.append "\{anSql9} | \{dnm9}"
+            }
+        }
+        this.emitSection title: "arg_disposition" :rows
+    }
+
+    appendCallGenericBindingCanon: function {:this st: zenv.ZSymbolTable} is {
+        rows: (List String)
+        with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
+            kc9: cg.key.copy
+            hld9: holderAfterColon k: kc9.stringview
+            tn9: canonTypeName reg: st.reg tid: cg.value
+            hSql9: sqlStr s: hld9.stringview
+            tSql9: sqlStr s: tn9.stringview
+            rows.append "\{hSql9} | \{tSql9}"
+        }
+        this.emitSection title: "call_generic_binding" :rows
     }
 
 }
@@ -1454,10 +1542,12 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
         program
     ) case program then {
         d.appendTypeChildrenCanon ast: program.ast unm: mu.stringview st: symtab
+        d.appendArgDispositionCanon ast: program.ast st: symtab
     } else null
     d.appendGenericChildrenCanon unm: mu.stringview st: symtab
     d.appendGenericArgsCanon unm: mu.stringview st: symtab
     d.appendConformanceCanon unm: mu.stringview st: symtab
     d.appendSymbolTableCanon st: symtab
+    d.appendCallGenericBindingCanon st: symtab
     return d.acc.copy
 }
