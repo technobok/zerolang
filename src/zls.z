@@ -535,6 +535,7 @@ Server: class {
         comp9: newObj
         ctc9: newArr
         ctc9.items.append (Value.text ".".string)
+        ctc9.items.append (Value.text " ".string)
         comp9.set key: "triggerCharacters".string value: (Value.array ctc9)
         caps.set key: "completionProvider".string value: (Value.object comp9)
         caps.set key: "documentFormattingProvider".string value: (Value.boolean true)
@@ -875,6 +876,15 @@ Server: class {
                         sno
                     ) case some then {
                         res: Value.nul
+                        trigCh9: String
+                        {
+                            tco9: json.textAt v: msg path: "params/context/triggerCharacter"
+                            match (
+                                tco9
+                            ) case some then {
+                                trigCh9 = tco9.copy
+                            } case none then null
+                        }
                         if mode == 4 then {
                             res = (completionAnswer
                                 snap: sno
@@ -884,6 +894,7 @@ Server: class {
                                 :line0
                                 ch: ch0
                                 utf32: this.encUtf32
+                                trig: trigCh9.stringview
                             )
                         } else {
                             res = (navAnswer
@@ -1060,7 +1071,7 @@ Spans: class {
             rr9: this.ranges.get i: ri9
             hit9: rr9.kind == kind
             if rr9.startPos > curPos then hit9 = false
-            if curPos > rr9.endPos + slack then hit9 = false
+            if curPos > (rr9.endPos + slack) then hit9 = false
             if hit9 then {
                 take9: false
                 if best9 == 0 then take9 = true
@@ -3341,6 +3352,171 @@ addMemberCompletions: function {
     addTypeMembers prog: snap.prog o: snap.st tid: cur9 :sink
 }
 
+# completionItem -- a completion item object (label + kind, optional detail).
+completionItem: function {label: StringView kind: u8 detail: StringView} out Value is {
+    it9: newObj
+    it9.set key: "label".string value: (Value.text label.string)
+    it9.set key: "kind".string value: (Value.intval kind.i64)
+    if detail.length > 0 then {
+        it9.set key: "detail".string value: (Value.text detail.string)
+    }
+    return (Value.object it9)
+}
+
+# caseArmComplete -- when the cursor sits after `case ` inside a match, append
+# the subject variant's remaining arms (sumSubtypeNames minus arms already
+# covered by other clauses) to `arr` as EnumMember items. Returns true when it
+# handled the completion (a case-arm context), false otherwise.
+caseArmComplete: function {
+    arr: Arr
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    ltv: StringView
+    ps9: u64
+    prefix: StringView
+    cursorPos: u64
+} out bool is {
+    ws9: ps9
+    for ws9 > 0 loop {
+        wb9: ltv.byteAt i: ws9 - 1
+        stopw9: false
+        match (
+            wb9
+        ) case some then {
+            if wb9 != 32 when wb9 != 9 then stopw9 = true
+        } case none then {
+            stopw9 = true
+        }
+        if stopw9 then break
+        ws9 = ws9 - 1
+    }
+    if ws9 == ps9 then return false
+    wb2: ws9
+    for wb2 > 0 loop {
+        cb9: ltv.byteAt i: wb2 - 1
+        stopc9: false
+        match (
+            cb9
+        ) case some then {
+            if (isIdentByte b: cb9) == false then stopc9 = true
+        } case none then {
+            stopc9 = true
+        }
+        if stopc9 then break
+        wb2 = wb2 - 1
+    }
+    isCaseKw9: false
+    {
+        word9: ltv.substring from: wb2 to: ws9
+        if word9 == "case" then isCaseKw9 = true
+    }
+    if (isCaseKw9) == false then return false
+    sp9: (Spans
+        rows: (List spanrow)
+        names: (List String)
+        pos: (Map u64 value: u64)
+        ranges: (List rangerow)
+        lastPos: 0
+    )
+    sp9.walkProgram :prog
+    caseId9: sp9.innerRangeOfKind curPos: cursorPos kind: 5 slack: 1048576
+    if caseId9 == 0 then return false
+    # caseexpr subject index + clause ids (scoped: one node view at a time)
+    subjIdx9: u32
+    clauseIds9: (List u64)
+    okCase9: false
+    match (
+        prog
+    ) case program then {
+        cnode9: prog.ast.nodes.get i: (caseId9 - 1).u64
+        match (
+            cnode9
+        ) case caseexpr then {
+            subjIdx9 = cnode9.subject
+            with clit9: cnode9.clauses.iterate do for cl9: clit9 loop clauseIds9.append cl9.u64
+            okCase9 = true
+        } else null
+    } else null
+    if (okCase9) == false then return false
+    if subjIdx9 == 0 then return false
+    subjNid9: u32
+    match (
+        prog
+    ) case program then {
+        subjNode9: prog.ast.nodes.get i: (subjIdx9 - 1).u64
+        subjNid9 = ztypecheck.nodeId n: subjNode9
+    } else null
+    subjTid9: nodeTypeAt :o nid: subjNid9.u64
+    if subjTid9 == 0 then return false
+    arms9: (List String)
+    gotArms9: false
+    match (
+        o
+    ) case some then {
+        match (
+            prog
+        ) case program then {
+            arms9 = ztypecheck.sumSubtypeNames ast: prog.ast st: o sid: subjTid9
+            gotArms9 = true
+        } else null
+    } case none then null
+    if (gotArms9) == false then return false
+    used9: (List String)
+    ui9: u64
+    for ui9 < clauseIds9.length loop {
+        clId9: clauseIds9.get i: ui9
+        maIdx9: u32
+        match (
+            prog
+        ) case program then {
+            clNode9: prog.ast.nodes.get i: (clId9 - 1).u64
+            match (
+                clNode9
+            ) case caseclause then {
+                maIdx9 = clNode9.matcharm
+            } else null
+        } else null
+        if maIdx9 > 0 then {
+            maRef9: u32
+            match (
+                prog
+            ) case program then {
+                maNode9: prog.ast.nodes.get i: (maIdx9 - 1).u64
+                match (
+                    maNode9
+                ) case atomid then {
+                    maRef9 = maNode9.name
+                } case labelvalue then {
+                    maRef9 = maNode9.name
+                } else null
+            } else null
+            if maRef9 > 0 then {
+                match (
+                    prog
+                ) case program then {
+                    an9: zast.nameTextCopy ast: prog.ast ref: maRef9
+                    if an9.length > 0 then used9.append an9
+                } else null
+            }
+        }
+        ui9 = ui9 + 1
+    }
+    with ait9: arms9.iterate do for arm9: ait9 loop {
+        skip9: false
+        with uit9: used9.iterate do for u9: uit9 loop {
+            if u9.stringview == arm9.stringview then skip9 = true
+        }
+        matchp9: true
+        if prefix.length > 0 then {
+            if (arm9.startsWith prefix) == false then matchp9 = false
+        }
+        if skip9 == false when matchp9 then {
+            arr.items.append (completionItem label: arm9.stringview kind: 20 detail: "")
+        }
+    }
+    return true
+}
+
 # completionAnswer -- scope-based completion from the last-good
 # snapshot: the enclosing definition's params and preceding bindings,
 # every loaded unit's top-level defs and unit names, and keywords --
@@ -3354,6 +3530,7 @@ completionAnswer: function {
     line0: i64
     ch: i64
     utf32: bool
+    trig: StringView
 } out Value is {
     arr: newArr
     l1: line0 + 1
@@ -3412,7 +3589,21 @@ completionAnswer: function {
     }
     prefix9: (ltv.substring from: ps9 to: cur9).string
 
-    if (memberMode9) == false then addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
+    if (memberMode9) == false then {
+        curPos9: (l1u.u64 * 1048576) + cp1.u64
+        handledCA9: (caseArmComplete
+            :arr
+            o: snap.st
+            prog: snap.prog
+            :ltv
+            :ps9
+            prefix: prefix9.stringview
+            cursorPos: curPos9
+        )
+        if handledCA9 then return (Value.array arr)
+        if trig == " " then return (Value.array arr)
+        addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
+    }
 
     labels9: (List String)
     with cit9: cands.iterateItems do for ce9: cit9 loop {
