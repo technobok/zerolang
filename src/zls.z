@@ -1407,6 +1407,65 @@ typeKindTextOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is
     return result9
 }
 
+# defaultDisplay -- a defaulted param's value rendered with its resolved type:
+# a numeric default as `v.<type>` (int) or `(v).<type>` (float); a function
+# default (`#function:name`) as the bare name; a variant-arm default
+# (`#variant:arm`) as `<type>.<arm>`. "" when `dtext` is empty.
+defaultDisplay: function {dtext: StringView typeName: StringView} out String is {
+    if dtext.length == 0 then return "".string
+    b0: dtext.byteAt 0
+    isHash9: false
+    match (
+        b0
+    ) case some then {
+        if b0 == 35 then isHash9 = true
+    } case none then null
+    if isHash9 then {
+        ci9: u64
+        n9: dtext.length
+        found9: false
+        for ci9 < n9 loop {
+            cb9: dtext.byteAt ci9
+            match (
+                cb9
+            ) case some then {
+                if cb9 == 58 then found9 = true
+            } case none then null
+            if found9 then break
+            ci9 = ci9 + 1
+        }
+        isVariant9: false
+        {
+            kindPart9: dtext.substring from: 1 to: ci9
+            if kindPart9 == "variant" then isVariant9 = true
+        }
+        payload9: dtext.substring from: ci9 + 1 to: n9
+        if isVariant9 then {
+            r9: typeName.string
+            r9.appendByte b: 46
+            r9.append payload9
+            return r9
+        }
+        return payload9.string
+    }
+    isFloat9: false
+    if typeName == "f64" then isFloat9 = true
+    if typeName == "f32" then isFloat9 = true
+    rr9: String
+    if isFloat9 then {
+        rr9.appendByte b: 40
+        rr9.append dtext
+        rr9.appendByte b: 41
+        rr9.appendByte b: 46
+        rr9.append typeName
+    } else {
+        rr9.append dtext
+        rr9.appendByte b: 46
+        rr9.append typeName
+    }
+    return rr9
+}
+
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
 fnSigTextOpt: function {
@@ -1426,6 +1485,7 @@ fnSigTextOpt: function {
         # (typeNameOf takes an exclusive lock on `o`).
         pnames9: (List String)
         ptids9: (List u64)
+        pcnids9: (List u64)
         match (
             prog
         ) case program then {
@@ -1455,38 +1515,127 @@ fnSigTextOpt: function {
                         } case none then null
                         pnames9.append cn9.string
                         ptids9.append ctid9
+                        pcnids9.append tc9.childNameId
                     }
                 }
             } case none then null
         } else null
-        sig9: name.string
-        sig9.append ": function"
-        if pnames9.length > 0 then {
-            sig9.append " {"
-            pi9: u64
-            for pi9 < pnames9.length loop {
-                if pi9 > 0 then sig9.append " "
-                pn9: pnames9.get i: pi9
-                sig9.append pn9.stringview
-                sig9.append ": "
-                pt9: ptids9.get i: pi9
-                ptn9: ztypecheck.typeNameOf st: o tid: pt9
-                sig9.append ptn9.stringview
-                pi9 = pi9 + 1
+        # render each param display string (the childIndex view has released;
+        # typeNameOf locks `o` exclusively, so a childDefault view is copied
+        # out first). A defaulted param shows its value; else type + ownership.
+        pdisp9: (List String)
+        pi9: u64
+        for pi9 < pnames9.length loop {
+            pt9: ptids9.get i: pi9
+            pcn9: pcnids9.get i: pi9
+            dtc9: String
+            hasDef9: false
+            {
+                dt9: o.typing.childDefault.get key: pcn9
+                match (
+                    dt9
+                ) case some then {
+                    dtc9 = dt9.copy
+                    hasDef9 = true
+                } case none then null
             }
-            sig9.append "}"
+            ptn9: ztypecheck.typeNameOf st: o tid: pt9
+            ps9: (pnames9.get i: pi9).copy
+            ps9.append ": "
+            if hasDef9 then {
+                dd9: defaultDisplay dtext: dtc9.stringview typeName: ptn9.stringview
+                if dd9.length > 0 then {
+                    ps9.append dd9.stringview
+                } else {
+                    ps9.append ptn9.stringview
+                }
+            } else {
+                ps9.append ptn9.stringview
+                oo9: o.typing.childOwnership.get key: pcn9
+                match (
+                    oo9
+                ) case some then {
+                    if oo9 == ztypes.zparamownership.takeMode then ps9.append ".take"
+                    if oo9 == ztypes.zparamownership.lockMode then ps9.append ".lock"
+                } case none then null
+            }
+            pdisp9.append ps9
+            pi9 = pi9 + 1
         }
+        rets9: String
         rr9: ztypecheck.methodReturnOf st: o mid: tid
         rtid9: ztypecheck.optU64Or o: rr9 d: 0
         if rtid9 > 0 then {
             rtn9: ztypecheck.typeNameOf st: o tid: rtid9
-            sig9.append " out "
-            sig9.append rtn9.stringview
+            rets9.append " out "
+            rets9.append rtn9.stringview
+            rb9: o.typing.funcReturnsBorrow.get key: tid
+            match (
+                rb9
+            ) case some then {
+                if rb9 then rets9.append ".borrow"
+            } case none then null
         }
-        return sig9
+        # one line, or param-per-line (zl fmt >100-col style) when too long.
+        one9: name.string
+        one9.append ": function"
+        if pdisp9.length > 0 then {
+            one9.append " {"
+            oi9: u64
+            for oi9 < pdisp9.length loop {
+                if oi9 > 0 then one9.append " "
+                one9.append (pdisp9.get i: oi9).stringview
+                oi9 = oi9 + 1
+            }
+            one9.append "}"
+        }
+        one9.append rets9.stringview
+        if one9.length <= 100 then return one9
+        if pdisp9.length == 0 then return one9
+        wrap9: name.string
+        wrap9.append ": function {"
+        wi9: u64
+        for wi9 < pdisp9.length loop {
+            wrap9.appendByte b: 10
+            wrap9.append "    "
+            wrap9.append (pdisp9.get i: wi9).stringview
+            wi9 = wi9 + 1
+        }
+        wrap9.appendByte b: 10
+        wrap9.append "}"
+        wrap9.append rets9.stringview
+        return wrap9
     } case none then {
         return "".string
     }
+}
+
+# hoverMarkdown -- a hover result: `code` rendered as a fenced ```zerolang
+# block (highlighted like source), then an optional doc block as markdown
+# prose. `code` may be multi-line (a hand-wrapped signature).
+hoverMarkdown: function {code: StringView doc: StringView} out Value is {
+    v9: String
+    v9.appendByte b: 96
+    v9.appendByte b: 96
+    v9.appendByte b: 96
+    v9.append "zerolang"
+    v9.appendByte b: 10
+    v9.append code
+    v9.appendByte b: 10
+    v9.appendByte b: 96
+    v9.appendByte b: 96
+    v9.appendByte b: 96
+    if doc.length > 0 then {
+        v9.appendByte b: 10
+        v9.appendByte b: 10
+        v9.append doc
+    }
+    mk9: newObj
+    mk9.set key: "kind".string value: (Value.text "markdown".string)
+    mk9.set key: "value".string value: (Value.text v9)
+    ho9: newObj
+    ho9.set key: "contents".string value: (Value.object mk9)
+    return (Value.object ho9)
 }
 
 # ---- def-node navigation (unit/body indexes into the program AST) ----
@@ -2034,17 +2183,7 @@ navAnswer: function {
             ugs9: unitGenericSuffix prog: snap.prog name: hname.stringview
             ub9.append ugs9.stringview
             udoc9: unitDocComment :snap fsno: unitFsno9
-            if udoc9.length > 0 then {
-                ub9.appendByte b: 10
-                ub9.appendByte b: 10
-                ub9.append udoc9.stringview
-            }
-            umk9: newObj
-            umk9.set key: "kind".string value: (Value.text "plaintext".string)
-            umk9.set key: "value".string value: (Value.text ub9)
-            uho9: newObj
-            uho9.set key: "contents".string value: (Value.object umk9)
-            return (Value.object uho9)
+            return (hoverMarkdown code: ub9.stringview doc: udoc9.stringview)
         }
         tnid: hnid
         t9: nodeTypeAt o: snap.st nid: tnid
@@ -2070,6 +2209,7 @@ navAnswer: function {
                 body9.append tn.stringview
             }
         }
+        docBody9: String
         # append the `#` doc block above the definition, if any (cross-file ok)
         dnd9: (defNodeOf
             o: snap.st
@@ -2088,20 +2228,11 @@ navAnswer: function {
                 dln9: (dpg9 / 1048576).u32
                 if dfs9 > 0 when dln9 > 1 then {
                     doc9: docCommentForNode :snap fsno: dfs9 defLine: dln9
-                    if doc9.length > 0 then {
-                        body9.appendByte b: 10
-                        body9.appendByte b: 10
-                        body9.append doc9.stringview
-                    }
+                    if doc9.length > 0 then docBody9 = doc9
                 }
             } case none then null
         }
-        mk9: newObj
-        mk9.set key: "kind".string value: (Value.text "plaintext".string)
-        mk9.set key: "value".string value: (Value.text body9)
-        ho9: newObj
-        ho9.set key: "contents".string value: (Value.object mk9)
-        return (Value.object ho9)
+        return (hoverMarkdown code: body9.stringview doc: docBody9.stringview)
     }
 
     if mode == 1 then {
