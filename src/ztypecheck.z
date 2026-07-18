@@ -11600,7 +11600,22 @@ baseIsPrivateCapable: function {st: zenv.ZSymbolTable ast: Ast bt: u64 baseNode:
         baseNode
     ) case atomid then {
         anm9: zast.nameTextCopy :ast ref: baseNode.name
-        return anm9.stringview == "this"
+        if anm9.stringview == "this" then return true
+        vo9: st.lookupVarId name: anm9.stringview
+        match (
+            vo9
+        ) case some then {
+            po9: st.typing.variableIsPrivate.get key: vo9
+            match (
+                po9
+            ) case some then {
+                return po9
+            } case none then {
+                return false
+            }
+        } case none then {
+            return false
+        }
     } case dottedpath then {
         cnm9: atomName :ast n: (ast.nodes.get i: (baseNode.child - 1).u64)
         if cnm9.stringview == "private" then return true
@@ -11705,34 +11720,31 @@ checkDotted: function {
     # `.private` / `.public` access markers: the path carries the base's
     # type (the access view is a dump-filtered shell, not a member).
     if cn.stringview == "private" then {
-        # Gate B: a `.private` view may only be PRODUCED inside the value's own
-        # type. currentThisName is the enclosing method's receiver type; when it
-        # does not name bt's type, this is external code taking a private handle
-        # it was never given -- E0102. (Reads THROUGH an already-`.private`-typed
-        # handle are member accesses, gated separately by Gate A, not here.)
-        btNm9: typeNameOf :st tid: bt
-        if btNm9.length > 0 then {
-            okPriv9: false
-            if st.typing.currentThisName.length > 0 when st.typing.currentThisName.stringview == btNm9.stringview then okPriv9 = true
-            if (okPriv9) == false then {
-                pcNode9: ast.nodes.get i: (dp.child - 1).u64
-                pcnid9: nodeId n: pcNode9
-                pcln9: nodeLine n: pcNode9
-                pccl9: nodeCol n: pcNode9
-                btNc9: btNm9.copy
-                pmsg9: "'.private' of '\{btNc9}' may only be taken inside '\{btNm9}'"
-                (addErrorH
-                    :st
-                    nodeid: pcnid9
-                    lineno: pcln9
-                    colno: pccl9
-                    e: zast.err.privateEscape
-                    msg: pmsg9
-                    note: "".string
-                    hint: "".string
-                    width: cn.length.u32
-                )
-            }
+        # Gate B: a `.private` view may only be produced from a base that
+        # already holds private access -- the type's own `this`/same-type
+        # receiver (the class minting it), or an existing `.private` handle (a
+        # friend forwarding what it was given, per spec). External code holding
+        # only a public value cannot mint one -- E0102.
+        baseGN9: ast.nodes.get i: (dp.parent - 1).u64
+        if (baseIsPrivateCapable :st :ast :bt baseNode: baseGN9) == false then {
+            pcNode9: ast.nodes.get i: (dp.child - 1).u64
+            pcnid9: nodeId n: pcNode9
+            pcln9: nodeLine n: pcNode9
+            pccl9: nodeCol n: pcNode9
+            btNm9: typeNameOf :st tid: bt
+            btNc9: btNm9.copy
+            pmsg9: "'.private' of '\{btNc9}' may only be taken by '\{btNm9}' or a holder of its '.private' handle"
+            (addErrorH
+                :st
+                nodeid: pcnid9
+                lineno: pcln9
+                colno: pccl9
+                e: zast.err.privateEscape
+                msg: pmsg9
+                note: "".string
+                hint: "".string
+                width: cn.length.u32
+            )
         }
         setpv: bt
         st.typing.nodeType.set key: dp.nodeid.u64 value: setpv
@@ -18115,6 +18127,10 @@ checkFunctionBody: function {
                         n: (ast.nodes.get i: (pm.operation - 1).u64)
                     )
                     v: st.reg.newVariable ztypeId: ptid ownership: own
+                    if (typeExprHasPrivate
+                        :ast
+                        n: (ast.nodes.get i: (pm.operation - 1).u64)
+                    ) then v.isPrivateAccess = true
                     vid2: v.variableId
                     st.defineVar name: pname.stringview var: v
                     st.typing.defVariableId.set key: pnid.u64 value: vid2
