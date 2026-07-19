@@ -1301,6 +1301,63 @@ Only the matching arm is emitted in the generated C code; dead arms are
 eliminated. See [#> to=compile-time-error: Compile-Time Error] for how this
 interacts with the #~"error" builtin.
 
+#_*"Generic dissection." A #~"match" whose subject is a #_*"generic parameter"
+is resolved at monomorphisation rather than at runtime: for each instantiation
+the compiler selects the single arm matching the parameter's concrete binding
+and emits #_*"only" that arm. Dead arms are eliminated from the generated C —
+this is the zerolang analogue of #~"#ifdef", with no runtime discriminator. Two
+forms are supported:
+
+#ul:
+  [#*: #_*"Type dissection" — the parameter ranges over types
+      (#~"t: Any.generic"). Each #~"case" names a type, matched against the
+      concrete instantiation type.]
+  [#*: #_*"Numeric-value dissection" — the parameter ranges over a numeric type
+      (#~"cap: u32.generic"). Each #~"case" names a value, matched against the
+      concrete binding. The subject may be the bare parameter (#~"match cap"), a
+      receiver access (#~"match this.cap"), or another instance's access
+      (#~"match (b.cap)").]
+
+Generic dissection is available anywhere a generic parameter is in scope: class
+methods (main-body and #~"as"-block) and free functions. If no #~"case" matches
+the concrete binding and there is no #~"else", compilation fails at the
+offending instantiation — there is no arm to run.
+
+#code language=zerolang: """
+  Holder: class {
+      val: t
+      describe: function {:this} out StringView is {
+          match t case i32 then {
+              return "i32"
+          } case i64 then {
+              return "i64"
+          } else {
+              return "other"
+          }
+      }
+  } as { t: Any.generic }
+
+  Buffer: class {
+      used: u32
+      describe: function {:this} out StringView is {
+          match cap case 0 then {
+              return "empty"
+          } case 8 then {
+              return "small"
+          } else {
+              return "big"
+          }
+      }
+  } as { cap: u32.generic }
+
+  main: function is {
+      h: Holder val: 42.i32
+      print h.describe            # "i32" — only this arm is compiled
+      b: (Buffer cap: 8) used: 0
+      print b.describe            # "small" — only this arm is compiled
+  }
+  """
+
 
 #code language=zerolang: """
   match optionalthing1 case some then {
