@@ -7631,6 +7631,7 @@ resolveInlineGenericUnit: function {
         rid: uid
         if (hasGenericParam :ast items: bodyIds9) then {
             reg.setGeneric typeId: uid value: true
+            registerGenericParams :reg :ast typeKey: defName items: bodyIds9
             if ty.fullMainUnit.length > 0 then {
                 # full mode mirrors the reference's inline-template touch:
                 # the unit node and each bare generic-param def stamp, and
@@ -8014,6 +8015,7 @@ buildUnitMonoFull: function {
     if (optBoolOr o: bgot9 d: false) then return
     bk0: monoId
     ty.collectionChildrenBuilt.set key: bk0 value: true
+    if argId > 0 then reg.appendGenericArg specId: monoId arg: argId
     gpNames: (Map String value: bool)
     gpFirst: String
     {
@@ -18937,6 +18939,107 @@ depWalkUnit: function {
 }
 
 # checkUnitBodies -- walk every function definition with a body in one unit.
+# walkUnitTemplateBodies9 -- body-walk a generic unit template's functions with
+# the generic param UNBOUND (no st.define of the arg), so a `match t` subject
+# resolves to 0 and checkCase stamps it as a genericParam (against the bare unit
+# name) for the emitter to dissect. Mirrors checkUnitBodies' fn loop (index-based
+# so it never holds the iterator lock while passing unitBody), no mainMemberIndex.
+walkUnitTemplateBodies9: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitName: StringView
+    unitdefId: u32
+} is {
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    ed9: (List u32)
+    bn9: bodyIds9.length
+    bi9: u64
+    for bi9 < bn9 loop {
+        bmId9: bodyIds9.get i: bi9
+        bi9 = bi9 + 1
+        bm9: ast.nodes.get i: (bmId9 - 1).u64
+        if bm9.namedoperation then {
+            if (isFunctionDefOp op: (ast.nodes.get i: (bm9.operation - 1).u64)) then {
+                dn9: zast.nameTextCopy :ast ref: bm9.name
+                (checkFunctionBody
+                    :st
+                    :unitName
+                    defName: dn9.stringview
+                    defn: (ast.nodes.get i: (bm9.operation - 1).u64)
+                    thisName: ""
+                    :ast
+                    unitBody: bodyIds9
+                    depUnits: ed9
+                )
+            }
+        }
+    }
+}
+
+# walkGenericUnitTemplates -- stamp `match t`/`match cap` in every generic unit
+# template (file-level units and inline `unit as {}` bindings) via an unbound
+# body walk. Runs in full mode after the main-unit body check. Unit op ids and
+# names are lifted out of node views before program.ast is passed on (lock-safe).
+walkGenericUnitTemplates: function {st: zenv.ZSymbolTable program: Node} is {
+    match (
+        program
+    ) case program then {
+        n9: program.ast.units.length
+        ui9: u64
+        for ui9 < n9 loop {
+            uId9: program.ast.units.get i: ui9
+            ui9 = ui9 + 1
+            uop9: u32
+            un9: String
+            {
+                u9: program.ast.nodes.get i: (uId9 - 1).u64
+                if u9.namedoperation then {
+                    uop9 = u9.operation
+                    un9 = zast.poolTextCopy pool: program.ast.names ref: u9.name
+                }
+            }
+            if uop9 > 0 then {
+                if (unitDefIsGeneric ast: program.ast oId: uop9) then {
+                    (walkUnitTemplateBodies9
+                        :st
+                        ast: program.ast
+                        unitName: un9.stringview
+                        unitdefId: uop9
+                    )
+                }
+                ibody9: zast.unitBodyIdsAt ast: program.ast unitId: uop9
+                ibn9: ibody9.length
+                ibi9: u64
+                for ibi9 < ibn9 loop {
+                    ibmId9: ibody9.get i: ibi9
+                    ibi9 = ibi9 + 1
+                    bop9: u32
+                    bnm9: String
+                    isU9: false
+                    {
+                        bm9: program.ast.nodes.get i: (ibmId9 - 1).u64
+                        if bm9.namedoperation then {
+                            if (isUnitOp op: (program.ast.nodes.get i: (bm9.operation - 1).u64)) then {
+                                isU9 = true
+                                bop9 = bm9.operation
+                                bnm9 = zast.poolTextCopy pool: program.ast.names ref: bm9.name
+                            }
+                        }
+                    }
+                    if isU9 when (unitDefIsGeneric ast: program.ast oId: bop9) then {
+                        (walkUnitTemplateBodies9
+                            :st
+                            ast: program.ast
+                            unitName: bnm9.stringview
+                            unitdefId: bop9
+                        )
+                    }
+                }
+            }
+        }
+    } else null
+}
+
 checkUnitBodies: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -20946,6 +21049,7 @@ typecheck: function {
     stampTyperefs ty: st.typing reg: st.reg :program
     if full then {
         checkBodies :st :program
+        walkGenericUnitTemplates :st :program
         match (
             program
         ) case program then {
