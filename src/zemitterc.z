@@ -5334,6 +5334,8 @@ emitCallValue: function {
     if fmc.length > 0 then return fmc
     clisc: emitCliSpecCreate :ast :symtab :ctx :call
     if clisc.length > 0 then return clisc
+    rcc9: emitResultCombinator :ast :symtab :ctx :call
+    if rcc9.length > 0 then return rcc9
     pmc: emitParsedMethodCall :ast :symtab :ctx :call
     if pmc.length > 0 then return pmc
     uic: emitUserIterCall :ast :symtab :ctx :call
@@ -6435,6 +6437,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
                 e5: "\{bn2}.\{mn2}"
                 return e5
+            }
+            rcOrig9: monoOriginName :symtab tid: bstamp
+            isRC9: false
+            if rcOrig9.stringview == "resultval" then isRC9 = true
+            if rcOrig9.stringview == "Result" then isRC9 = true
+            if mn2.stringview == "orPanic" when isRC9 then {
+                okTagR9: variantTag :symtab tid: bstamp arm: "ok"
+                return "({ __auto_type _rc = (\{bn2}); if (_rc.tag != \{okTagR9.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
             }
             if rtt == ztypes.ztypetype.variantType then {
                 e9: "\{bn2}.data.\{mn2}"
@@ -19185,6 +19195,59 @@ emitCliSpecCreate: function {
 # emitParsedMethodCall -- a Parsed accessor (hasFlag/option/positional), native,
 # receiver by pointer (incl. the narrowed Result ok-arm projection) and the
 # StringView name by pointer. "" for any non-Parsed receiver.
+# emitResultCombinator -- inline lowering of the built-in result combinators
+# `.orPanic` (unwrap the ok payload or abort) and `.or d:` (unwrap or default)
+# on a `resultval`/`Result` receiver. Branchless statement-expression, no
+# result struct call. "" when the call is not one of these.
+emitResultCombinator: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    call: zast.CallData
+} out String is {
+    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    isP9: false
+    if mn.stringview == "orPanic" then isP9 = true
+    isO9: false
+    if mn.stringview == "or" then isO9 = true
+    bothMiss9: (isP9) == false
+    if bothMiss9 when (isO9) == false then return "".string
+    rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
+    rtid: chaseColMono :ast :symtab tid: rtid0
+    if rtid == 0 then return "".string
+    orig: monoOriginName :symtab tid: rtid
+    okR9: false
+    if orig.stringview == "resultval" then okR9 = true
+    if orig.stringview == "Result" then okR9 = true
+    if (okR9) == false then return "".string
+    bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    if bnid == 0 then return "".string
+    recvExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bnid - 1).u64)
+    if recvExpr.length == 0 then return "".string
+    okTag: variantTag :symtab tid: rtid arm: "ok"
+    if isP9 then {
+        rp9: "({ __auto_type _rc = (\{recvExpr.stringview}); if (_rc.tag != \{okTag.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
+        return rp9
+    }
+    argN9: call.arguments.length
+    if argN9 == 0 then return "".string
+    argId0: call.arguments.get i: 0
+    opId9: u32
+    {
+        a9: ast.nodes.get i: (argId0 - 1).u64
+        match (
+            a9
+        ) case namedoperation then {
+            opId9 = a9.operation
+        } else null
+    }
+    if opId9 == 0 then return "".string
+    dExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (opId9 - 1).u64)
+    if dExpr.length == 0 then return "".string
+    ro9: "({ __auto_type _rc = (\{recvExpr.stringview}); (_rc.tag == \{okTag.stringview}) ? _rc.data.ok : (\{dExpr.stringview}); })"
+    return ro9
+}
+
 emitParsedMethodCall: function {
     ast: Ast
     symtab: zenv.ZSymbolTable

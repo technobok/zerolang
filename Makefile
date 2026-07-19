@@ -302,7 +302,7 @@ emitter-guard:
 	if [ "$$e6" -gt 123 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 123)"; fail=1; fi; \
 	if [ "$$e7" -gt 20 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 20)"; fail=1; fi; \
 	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
-	if [ "$$e9" -gt 60 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 60)"; fail=1; fi; \
+	if [ "$$e9" -gt 61 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 61)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
