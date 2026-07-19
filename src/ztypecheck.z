@@ -14022,6 +14022,44 @@ checkFor: function {
                 vt = checkValue :st :unitName :ast :unitBody node: opf39
             }
             nm: zast.nameTextCopy :ast ref: cond.name
+            # A bare `for while <cond> loop` (no binding, no iterator factory)
+            # must be boolean; a non-bool, non-iterable value is a type error
+            # rather than invalid C. Iterator bindings (`for e: it`) carry a
+            # name; iterable inits expose an element wrapper or a `call` child.
+            if nm.length == 0 when vt > 0 when facId == 0 then {
+                fbId9: builtinTidTc :ast :st base: "bool"
+                fIter9: false
+                {
+                    fpw9: iterWrapperElem :ast :st :unitName wid: vt
+                    match (
+                        fpw9
+                    ) case some then {
+                        fIter9 = true
+                    } case none then null
+                }
+                {
+                    fico9: st.typing.childOfId parentTypeId: vt nameId: wkCall
+                    match (
+                        fico9
+                    ) case some then {
+                        fIter9 = true
+                    } case none then null
+                }
+                fTt9: st.reg.typetypeOf typeId: vt
+                if fbId9 > 0 when vt != fbId9 when (fIter9) == false when fTt9 != ztypes.ztypetype.neverType then {
+                    fcn9: ast.nodes.get i: (cond.operation - 1).u64
+                    fctn9: typeNameOf :st tid: vt
+                    fcmsg9: "loop condition must be bool, got '\{fctn9}'"
+                    (addError
+                        :st
+                        nodeid: (nodeId n: fcn9)
+                        lineno: (nodeLine n: fcn9)
+                        colno: (nodeCol n: fcn9)
+                        e: zast.err.typeError
+                        msg: fcmsg9
+                    )
+                }
+            }
             if nm.length > 0 when vt > 0 then {
                 # A call-shaped iterator init probes its per-iteration call
                 # in an empty call scope (the reference's rewrite walks it
@@ -14565,7 +14603,17 @@ checkBinopMethodDispatch: function {
             if bo9 > 0 then return bo9
             return lt
         }
-        if (memberStrictType :st bt: dt9) then {
+        # A concrete aggregate (record / class / union / variant, including a
+        # generic mono like resultval) that declares no arithmetic operator is a
+        # type error rather than invalid C. Type params, protocols, facets and
+        # non-aggregates resolve elsewhere and keep the coercible lhs result.
+        aTt9: st.reg.typetypeOf typeId: dt9
+        aAgg9: false
+        if aTt9 == ztypes.ztypetype.recordType then aAgg9 = true
+        if aTt9 == ztypes.ztypetype.classType then aAgg9 = true
+        if aTt9 == ztypes.ztypetype.unionType then aAgg9 = true
+        if aTt9 == ztypes.ztypetype.variantType then aAgg9 = true
+        if aAgg9 then {
             ln9: typeNameOf :st tid: dt9
             msg9: "type '\{ln9}' has no '\{opn}' method"
             (addError
