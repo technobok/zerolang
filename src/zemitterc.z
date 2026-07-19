@@ -9274,6 +9274,81 @@ emitReassignLvalue: function {
 
 # emitMatchStmt -- a variant-subject match as a tag switch over a temp;
 # payload arms shadow the subject name with the payload value.
+# emitGenericDissect -- compile-time `match` on a generic parameter. The concrete
+# type bound to the parameter for the current mono instance (ctx.curThisTid) is
+# resolved via genericArgOf; the arm whose label names that type is emitted
+# inline and every other arm is dropped (no runtime switch). No matching arm and
+# no `else` emits nothing (the caller-level no-match check is a compile error).
+emitGenericDissect: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    m: zast.CaseData
+    paramName: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    concrete9: u64
+    if ctx.curThisTid > 0 then {
+        orig9: genericOriginOf9 :symtab tid: ctx.curThisTid
+        if orig9 > 0 then {
+            onm9: typeNameOfReg9 :symtab tid: orig9
+            ounit9: String
+            {
+                duo9: symtab.typing.definedInUnit.get key: orig9
+                match (
+                    duo9
+                ) case some then {
+                    ounit9 = duo9.copy
+                } case none then null
+            }
+            tk9: "\{ounit9}.\{onm9}"
+            pnames9: symtab.reg.genericParamNamesOf typeKey: tk9.stringview
+            found9: false
+            ord9: u64
+            k9: u64
+            with pnit9: pnames9.iterate do for pn9: pnit9 loop {
+                if (found9) == false then {
+                    if pn9.stringview == paramName then {
+                        found9 = true
+                        ord9 = k9
+                    } else {
+                        k9 = k9 + 1
+                    }
+                }
+            }
+            concrete9 = symtab.reg.genericArgAt specId: ctx.curThisTid ordinal: ord9
+        }
+    }
+    cn0: String
+    if concrete9 > 0 then cn0 = typeNameOfReg9 :symtab tid: concrete9
+    win9: u32
+    with cit9: m.clauses.iterate do for cId9: cit9 loop {
+        cnode9: ast.nodes.get i: (cId9 - 1).u64
+        match (
+            cnode9
+        ) case caseclause then {
+            if win9 == 0 then {
+                if cn0.length > 0 when cnode9.name.stringview == cn0.stringview then win9 = cnode9.statement
+            }
+        } else null
+    }
+    if win9 == 0 then win9 = m.elseclause
+    if win9 > 0 then {
+        buf.append ind
+        buf.append "{\n"
+        emitBodyNode :ast :symtab :ctx n: (ast.nodes.get i: (win9 - 1).u64) :ind :tmp :buf
+        buf.append ind
+        buf.append "}\n"
+    } else {
+        cnm9: "generic match on '\{paramName}' has no case for '\{cn0}' and no else"
+        ctx.emitErrors.append from: cnm9.copy
+        ef9: "\{ind}z_panic(\"(compile-time error)\");\n"
+        buf.append ef9.stringview
+    }
+}
+
 emitMatchStmt: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
@@ -9291,6 +9366,13 @@ emitMatchStmt: function {
         return
     }
     vtid: resolveTypeIdByName :ast :symtab :ctx name: stn.stringview
+    subjSid9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (m.subject - 1).u64))
+    if subjSid9 > 0 then {
+        if (symtab.reg.typetypeOf typeId: subjSid9) == ztypes.ztypetype.genericParam then {
+            emitGenericDissect :ast :symtab :ctx :m paramName: stn.stringview :ind :tmp :buf
+            return
+        }
+    }
     isVar: false
     isUni: false
     if vtid > 0 then {
@@ -14194,6 +14276,14 @@ collectFnLiterals: function {ast: Ast n: Node ids: List u64 texts: List String} 
     ) case functiondef then {
         if n.body > 0 then collectLiterals :ast n: (ast.nodes.get i: (n.body - 1).u64) :ids :texts
     } case objectdef then {
+        with iiter9: n.isItems.iterate do for imId9: iiter9 loop {
+            im9: ast.nodes.get i: (imId9 - 1).u64
+            match (
+                im9
+            ) case namedoperation then {
+                collectFnLiterals :ast n: (ast.nodes.get i: (im9.operation - 1).u64) :ids :texts
+            } else null
+        }
         with aiter: n.asItems.iterate do for amId9: aiter loop {
             am: ast.nodes.get i: (amId9 - 1).u64
             match (
