@@ -17706,6 +17706,27 @@ checkCase: function {
         if stt == ztypes.ztypetype.unionType then isSum = true
         if stt == ztypes.ztypetype.variantType then isSum = true
     }
+    isGenericSubj9: false
+    if subjT > 0 then {
+        if (st.reg.typetypeOf typeId: subjT) == ztypes.ztypetype.genericParam then isGenericSubj9 = true
+    }
+    # A match dissects a union/variant into its arms (a runtime discriminator
+    # test) or a generic parameter into its resolutions (at monomorphisation).
+    # Any other subject -- a numeric, string, class, record, or a constant --
+    # has no child arms to dissect into.
+    if subjT > 0 when (isSum) == false when (isGenericSubj9) == false then {
+        subjNode9: ast.nodes.get i: (casenode.subject - 1).u64
+        subjTn0: typeNameOf :st tid: subjT
+        smsg9: "match subject must be a union, variant, or generic parameter, got '\{subjTn0}'"
+        (addError
+            :st
+            nodeid: (nodeId n: subjNode9)
+            lineno: (nodeLine n: subjNode9)
+            colno: (nodeCol n: subjNode9)
+            e: zast.err.typeError
+            msg: smsg9
+        )
+    }
     targetName: String
     if isSum then {
         tn: subjectAtomName :ast n: (ast.nodes.get i: (casenode.subject - 1).u64)
@@ -17752,6 +17773,25 @@ checkCase: function {
             }
             asname: "arm:\{armName}"
             armMarker: st.pushBlock name: asname.stringview
+            # Every arm of a sum subject must name one of its declared arms.
+            if isSum when subjT > 0 then {
+                armo9: st.typing.childOfId parentTypeId: subjT nameId: armId9
+                match (
+                    armo9
+                ) case some then null case none then {
+                    subjTn9: typeNameOf :st tid: subjT
+                    amsg9: "type '\{subjTn9}' has no arm '\{armName}'"
+                    marm9: ast.nodes.get i: (clause.matcharm - 1).u64
+                    (addError
+                        :st
+                        nodeid: (nodeId n: marm9)
+                        lineno: (nodeLine n: marm9)
+                        colno: (nodeCol n: marm9)
+                        e: zast.err.typeError
+                        msg: amsg9
+                    )
+                }
+            }
             if targetName.length > 0 when subjT > 0 then {
                 po: st.typing.childOfId parentTypeId: subjT nameId: armId9
                 match (
