@@ -9290,6 +9290,7 @@ emitGenericDissect: function {
     buf: String.borrow
 } is {
     concrete9: u64
+    isVal9: false
     if ctx.curThisTid > 0 then {
         orig9: genericOriginOf9 :symtab tid: ctx.curThisTid
         if orig9 > 0 then {
@@ -9319,20 +9320,44 @@ emitGenericDissect: function {
                 }
             }
             concrete9 = symtab.reg.genericArgAt specId: ctx.curThisTid ordinal: ord9
+            isVal9 = symtab.reg.genericArgIsValueAt specId: ctx.curThisTid ordinal: ord9
         }
     }
-    cn0: String
-    if concrete9 > 0 then cn0 = typeNameOfReg9 :symtab tid: concrete9
     win9: u32
-    with cit9: m.clauses.iterate do for cId9: cit9 loop {
-        cnode9: ast.nodes.get i: (cId9 - 1).u64
-        match (
-            cnode9
-        ) case caseclause then {
-            if win9 == 0 then {
-                if cn0.length > 0 when cnode9.name.stringview == cn0.stringview then win9 = cnode9.statement
-            }
-        } else null
+    subjDesc9: String
+    if isVal9 then {
+        subjDesc9 = "\{concrete9}"
+        with cit9: m.clauses.iterate do for cId9: cit9 loop {
+            cnode9: ast.nodes.get i: (cId9 - 1).u64
+            match (
+                cnode9
+            ) case caseclause then {
+                if win9 == 0 then {
+                    if cnode9.name.length > 0 then {
+                        pu9: cnode9.name.stringview.parseU64
+                        match (
+                            pu9
+                        ) case ok then {
+                            if pu9 == concrete9 then win9 = cnode9.statement
+                        } case err then null
+                    }
+                }
+            } else null
+        }
+    } else {
+        cn0: String
+        if concrete9 > 0 then cn0 = typeNameOfReg9 :symtab tid: concrete9
+        with cit9: m.clauses.iterate do for cId9: cit9 loop {
+            cnode9: ast.nodes.get i: (cId9 - 1).u64
+            match (
+                cnode9
+            ) case caseclause then {
+                if win9 == 0 then {
+                    if cn0.length > 0 when cnode9.name.stringview == cn0.stringview then win9 = cnode9.statement
+                }
+            } else null
+        }
+        subjDesc9 = cn0
     }
     if win9 == 0 then win9 = m.elseclause
     if win9 > 0 then {
@@ -9342,7 +9367,7 @@ emitGenericDissect: function {
         buf.append ind
         buf.append "}\n"
     } else {
-        cnm9: "generic match on '\{paramName}' has no case for '\{cn0}' and no else"
+        cnm9: "generic match on '\{paramName}' has no case for '\{subjDesc9}' and no else"
         ctx.emitErrors.append from: cnm9.copy
         ef9: "\{ind}z_panic(\"(compile-time error)\");\n"
         buf.append ef9.stringview
