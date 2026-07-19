@@ -664,9 +664,24 @@ typesCompatible: function {
     cur9: a
     for cur9 > 0 loop {
         nb9: typedefBaseOf :ast :st :unitName tid: cur9
-        if nb9 == 0 then return false
-        if nb9 == b then return true
-        cur9 = nb9
+        if nb9 == 0 then {
+            cur9 = 0
+        } else {
+            if nb9 == b then return true
+            cur9 = nb9
+        }
+    }
+    # Last resort (only when the id-based checks all fail): cross-unit instances
+    # of one type get distinct tids -- a generic template is monomorphized per
+    # unit, and a unit-qualified alias (`tokenize.Token`) resolves apart from
+    # its target (`zlexer.Token`), so `List tokenize.Token` and `List Token`
+    # diverge by tid yet denote the same type and emitted struct. The structural
+    # name is the canonical signature (it encodes the full instantiation and
+    # collapses aliases), so equal non-empty names are the same type.
+    anA9: typeNameOf :st tid: a
+    if anA9.length > 0 then {
+        anB9: typeNameOf :st tid: b
+        if anA9.stringview == anB9.stringview then return true
     }
     return false
 }
@@ -13523,6 +13538,59 @@ checkReassignment: function {
             if iid > 0 then {
                 setc: lvt
                 st.typing.nodeType.set key: iid.u64 value: setc
+            }
+        }
+    }
+    # The RHS value must be assignable to the target's declared type. Numeric
+    # coercion (a literal, or a concrete-to-concrete numeric) is permitted here
+    # exactly as at a call argument; a non-numeric type mismatch -- a resultval
+    # where a scalar is expected, a String into a numeric field -- is an error
+    # rather than invalid C downstream.
+    if lvt > 0 when rvt > 0 then {
+        # Validate against the target's declared type: a narrowed bare-name
+        # target accepts a fresh value of its whole type (reassignment resets
+        # narrowing). A field target has no bare name and keeps lvt.
+        chkT9: lvt
+        {
+            nmC9: atomName :ast n: tpn9
+            if nmC9.length > 0 then {
+                dtoC9: st.declaredTypeOf name: nmC9.stringview
+                match (
+                    dtoC9
+                ) case some then {
+                    chkT9 = dtoC9
+                } case none then null
+            }
+        }
+        if (typesCompatible :ast :st :unitName a: rvt b: chkT9) == false then {
+            skipR9: false
+            if (isNumericTid
+                :ast
+                ty: st.typing
+                reg: st.reg
+                tid: rvt
+            ) when (isNumericTid :ast ty: st.typing reg: st.reg tid: chkT9) then skipR9 = true
+            lttR9: st.reg.typetypeOf typeId: chkT9
+            if lttR9 == ztypes.ztypetype.protocolType then skipR9 = true
+            if lttR9 == ztypes.ztypetype.facetType then skipR9 = true
+            if lttR9 == ztypes.ztypetype.genericParam then skipR9 = true
+            if lttR9 == ztypes.ztypetype.functionType then skipR9 = true
+            tsoR9: st.typing.typeofShell.get key: chkT9
+            if tsoR9.some then skipR9 = true
+            if (skipR9) == false then {
+                enR9: typeNameOf :st tid: chkT9
+                anR9: typeNameOf :st tid: rvt
+                encR9: enR9.copy
+                ancR9: anR9.copy
+                mmR9: "cannot assign value of type '\{ancR9}' to '\{encR9}' target"
+                (addError
+                    :st
+                    nodeid: rasgn.nodeid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                    e: zast.err.callError
+                    msg: mmR9
+                )
             }
         }
     }
