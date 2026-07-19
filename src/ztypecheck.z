@@ -11791,6 +11791,49 @@ checkDotted: function {
             castOpt
         ) case some then {
             if (st.reg.typetypeOf typeId: castOpt) != ztypes.ztypetype.functionType then {
+                # a compile-time-constant conversion is checked statically: a
+                # lossy literal cast is an error (300.u8, 3.5.u8, an int beyond
+                # a float's mantissa). Reuse the numeric parser's range +
+                # float-suffix checks; add the int->float exact-mantissa check.
+                if (isNumericTypeName name: castChild.stringview) then {
+                    isChar9c: castBase.stringview.startsWith "0c"
+                    if (isChar9c) == false then {
+                        chk9c: "\{castBase.stringview}\{castChild.stringview}"
+                        pn9c: ztypes.parseNumber numstr: chk9c.stringview
+                        if pn9c.err.length > 0 then {
+                            (addError
+                                :st
+                                nodeid: dp.nodeid
+                                lineno: dp.lineno
+                                colno: dp.colno
+                                e: zast.err.typeError
+                                msg: pn9c.err
+                            )
+                        } else {
+                            if (ztypes.isFloatKind k: pn9c.kind) then {
+                                baseDot9c: castBase.contains "."
+                                exact9c: true
+                                if baseDot9c then {
+                                    exact9c = ztypes.floatFitsFloat value: pn9c.fval k: pn9c.kind
+                                } else {
+                                    ivp9c: ztypes.parseNumber numstr: castBase.stringview
+                                    exact9c = ztypes.intFitsFloat value: ivp9c.ival.i64 k: pn9c.kind
+                                }
+                                if (exact9c) == false then {
+                                    em9c: "Value \{castBase.stringview} not exactly representable as \{castChild.stringview}"
+                                    (addError
+                                        :st
+                                        nodeid: dp.nodeid
+                                        lineno: dp.lineno
+                                        colno: dp.colno
+                                        e: zast.err.typeError
+                                        msg: em9c
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 castPid: nodeId n: (ast.nodes.get i: (dp.parent - 1).u64)
                 setcp: castOpt
                 st.typing.nodeType.set key: castPid.u64 value: setcp
