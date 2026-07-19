@@ -6982,29 +6982,6 @@ callableUnitName: function {ast: Ast op: Node} out String is {
     }
 }
 
-# firstArgTypeName -- the type-name of a call's first argument (the instantiation type
-# argument, e.g. i64 in (genmath t: i64)), else "".
-firstArgTypeName: function {ast: Ast op: Node} out String is {
-    match (
-        op
-    ) case expression then {
-        return (firstArgTypeName :ast op: (ast.nodes.get i: (op.expression - 1).u64))
-    } case call then {
-        aiter: op.arguments.iterate
-        for argId9: aiter loop {
-            arg: ast.nodes.get i: (argId9 - 1).u64
-            match (
-                arg
-            ) case namedoperation then {
-                return (atomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64))
-            } else null
-        }
-        return "".string
-    } else {
-        return "".string
-    }
-}
-
 # collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
 # and append the mono name ({template}_{arg}) + template name to the parallel lists.
 # InstReq -- one generic-unit instantiation binding (intmath: (mathops t: i64)):
@@ -7013,11 +6990,12 @@ InstReq: class {
     bind: String
     mono: String
     tmpl: String
-    argn: String
+    argLabels: (List String)
+    argNames: (List String)
+    argAtomIds: (List u64)
     exprId: u64
     callId: u64
     calId: u64
-    argAtomId: u64
 }
 
 # instFillIds -- record the instantiation's expression/call/callable/arg node
@@ -7031,19 +7009,6 @@ instFillIds: function {ast: Ast r: InstReq op: Node} is {
     } case call then {
         r.callId = op.nodeid.u64
         instFillCallable :r op: (ast.nodes.get i: (op.callable - 1).u64)
-        aiter: op.arguments.iterate
-        for a9Id9: aiter loop {
-            a9: ast.nodes.get i: (a9Id9 - 1).u64
-            match (
-                a9
-            ) case namedoperation then {
-                if r.argAtomId == 0 then (instFillArg
-                    :ast
-                    :r
-                    op: (ast.nodes.get i: (a9.operation - 1).u64)
-                )
-            } else null
-        }
     } else null
 }
 
@@ -7055,13 +7020,41 @@ instFillCallable: function {r: InstReq op: Node} is {
     } else null
 }
 
-instFillArg: function {ast: Ast r: InstReq op: Node} is {
+instArgAtomId9: function {ast: Ast op: Node} out u64 is {
     match (
         op
     ) case expression then {
-        instFillArg :ast :r op: (ast.nodes.get i: (op.expression - 1).u64)
+        return (instArgAtomId9 :ast op: (ast.nodes.get i: (op.expression - 1).u64))
     } case atomid then {
-        r.argAtomId = op.nodeid.u64
+        return op.nodeid.u64
+    } else {
+        return 0
+    }
+}
+
+# fillUnitArgs -- capture every instantiation argument (param label + type/value
+# name + atom id) in declaration order, so a unit monomorphises over ALL its
+# generic parameters, not just the first.
+fillUnitArgs: function {ast: Ast r: InstReq op: Node} is {
+    match (
+        op
+    ) case expression then {
+        fillUnitArgs :ast :r op: (ast.nodes.get i: (op.expression - 1).u64)
+    } case call then {
+        aiter: op.arguments.iterate
+        for a9Id9: aiter loop {
+            a9: ast.nodes.get i: (a9Id9 - 1).u64
+            match (
+                a9
+            ) case namedoperation then {
+                lbl9: zast.nameTextCopy :ast ref: a9.name
+                anm9: atomName :ast n: (ast.nodes.get i: (a9.operation - 1).u64)
+                aid9: instArgAtomId9 :ast op: (ast.nodes.get i: (a9.operation - 1).u64)
+                r.argLabels.append lbl9
+                r.argNames.append anm9
+                r.argAtomIds.append aid9
+            } else null
+        }
     } else null
 }
 
@@ -7077,19 +7070,28 @@ collectMainInstantiations: function {ast: Ast o: Node reqs: List InstReq} is {
             ) case namedoperation then {
                 tn: callableUnitName :ast op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                 if tn.length != 0 then {
-                    at: firstArgTypeName :ast op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                     bindn: zast.nameTextCopy :ast ref: bmNode9.name
-                    mono: "\{tn}_\{at}"
                     r9: (InstReq
                         bind: bindn
-                        :mono
-                        tmpl: tn
-                        argn: at
+                        mono: "".string
+                        tmpl: tn.copy
+                        argLabels: (List String)
+                        argNames: (List String)
+                        argAtomIds: (List u64)
                         exprId: 0
                         callId: 0
                         calId: 0
-                        argAtomId: 0
                     )
+                    fillUnitArgs :ast r: r9 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
+                    mn9: tn.copy
+                    naC9: r9.argNames.length
+                    nai9: u64
+                    for nai9 < naC9 loop {
+                        mn9.append "_"
+                        mn9.append (r9.argNames.get i: nai9).stringview
+                        nai9 = nai9 + 1
+                    }
+                    r9.mono = mn9
                     instFillIds :ast r: r9 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                     reqs.append r9
                 }
@@ -7967,8 +7969,7 @@ registerMonoFnParams: function {
     ty: ztyping.ZTyping
     op: Node
     fnId: u64
-    gpNames: (Map String value: bool)
-    argId: u64
+    subs: (Map String value: u64)
 } is {
     match (
         op
@@ -7980,18 +7981,15 @@ registerMonoFnParams: function {
                 ppm
             ) case namedoperation then {
                 pptn: atomName :ast n: (ast.nodes.get i: (ppm.operation - 1).u64)
-                ppgo: gpNames.get key: pptn
+                ppgo: subs.get key: pptn
                 match (
                     ppgo
                 ) case some then {
-                    if argId > 0 then {
-                        ppnm: zast.nameTextCopy :ast ref: ppm.name
-                        (ty.setChildId
-                            parentTypeId: fnId
-                            nameId: ppm.name.u64
-                            childTypeId: argId
-                        )
-                    }
+                    (ty.setChildId
+                        parentTypeId: fnId
+                        nameId: ppm.name.u64
+                        childTypeId: ppgo
+                    )
                 } case none then null
             } else null
         }
@@ -8007,7 +8005,7 @@ buildUnitMonoFull: function {
     monoId: u64
     monoName: StringView
     tplId: u64
-    argId: u64
+    subs: (Map String value: u64)
     templateOpId: u32
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: templateOpId
@@ -8015,7 +8013,6 @@ buildUnitMonoFull: function {
     if (optBoolOr o: bgot9 d: false) then return
     bk0: monoId
     ty.collectionChildrenBuilt.set key: bk0 value: true
-    if argId > 0 then reg.appendGenericArg specId: monoId arg: argId
     gpNames: (Map String value: bool)
     gpFirst: String
     {
@@ -8109,7 +8106,12 @@ buildUnitMonoFull: function {
                             match (
                                 cgo
                             ) case some then {
-                                if argId > 0 then target = argId
+                                cg9: subs.get key: ctn
+                                match (
+                                    cg9
+                                ) case some then {
+                                    target = cg9
+                                } case none then null
                             } case none then null
                             (ty.setChildId
                                 parentTypeId: newFnId
@@ -8136,7 +8138,12 @@ buildUnitMonoFull: function {
                             match (
                                 rgo
                             ) case some then {
-                                if argId > 0 then rtv = argId
+                                rg9: subs.get key: rtn
+                                match (
+                                    rg9
+                                ) case some then {
+                                    rtv = rg9
+                                } case none then null
                             } case none then null
                             reg.setReturnType typeId: newFnId value: rtv
                         } case none then {
@@ -8152,7 +8159,12 @@ buildUnitMonoFull: function {
                                 match (
                                     rgo2
                                 ) case some then {
-                                    rid2 = argId
+                                    sg2: subs.get key: rnm
+                                    match (
+                                        sg2
+                                    ) case some then {
+                                        rid2 = sg2
+                                    } case none then null
                                 } case none then {
                                     rlo2: (walkLookupTyperef
                                         :ast
@@ -8176,8 +8188,7 @@ buildUnitMonoFull: function {
                         :ty
                         op: (ast.nodes.get i: (fmNode9.operation - 1).u64)
                         fnId: newFnId
-                        :gpNames
-                        :argId
+                        :subs
                     )
                     (ty.setChildId
                         parentTypeId: monoId
@@ -8200,7 +8211,7 @@ buildUnitMonoFull: function {
                             monoName: mn9
                             qualified: qn
                             gpName: gpn9
-                            :argId
+                            argId: 0
                             fn: co9.take
                         )
                         ty.pendingUnitWalk.append rec9
@@ -8226,7 +8237,7 @@ completeInlineReq: function {
     monoName: StringView
     tmplName: StringView
     tplId: u64
-    argId: u64
+    subs: (Map String value: u64)
     mainOpId: u32
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: mainOpId
@@ -8249,7 +8260,7 @@ completeInlineReq: function {
                             :monoId
                             :monoName
                             :tplId
-                            :argId
+                            :subs
                             templateOpId: bmNode9.operation
                         )
                     }
@@ -8318,12 +8329,49 @@ completeUnitInstantiations: function {
         rm: rmv1.string
         rtv1: r.tmpl.stringview
         rt: rtv1.string
-        rav1: r.argn.stringview
-        ra: rav1.string
         re: r.exprId
         rc: r.callId
         rl: r.calId
-        rg: r.argAtomId
+        subs: (Map String value: u64)
+        valSubs: (Map String value: u64)
+        naR9: r.argLabels.length
+        aiR9: u64
+        for aiR9 < naR9 loop {
+            lblR9: (r.argLabels.get i: aiR9).copy
+            anmR9: (r.argNames.get i: aiR9).copy
+            aidR9: r.argAtomIds.get i: aiR9
+            if (isNumericLiteralName name: anmR9.stringview) then {
+                pvR9: parseDecimalU64 text: anmR9.stringview
+                match (
+                    pvR9
+                ) case some then {
+                    valSubs.set key: lblR9.copy value: pvR9
+                } case none then null
+            } else {
+                aoR9: (optionval.none u64)
+                match (
+                    program
+                ) case program then {
+                    aoR9 = (walkLookupTyperef
+                        ast: program.ast
+                        :ty
+                        :reg
+                        currentUnit: mainName.stringview
+                        base: anmR9.stringview
+                    )
+                } else null
+                match (
+                    aoR9
+                ) case some then {
+                    subs.set key: lblR9.copy value: aoR9
+                    if aidR9 > 0 then {
+                        stR9: aoR9
+                        ty.nodeType.set key: aidR9 value: stR9
+                    }
+                } case none then null
+            }
+            aiR9 = aiR9 + 1
+        }
         mk: "\{mainName}.\{rm}"
         mgo: (optionval.none u64)
         match (
@@ -8359,32 +8407,28 @@ completeUnitInstantiations: function {
                     tplId = ugo
                 } case none then null
             }
-            argId: u64
-            ago: (optionval.none u64)
-            match (
-                program
-            ) case program then {
-                ago = (walkLookupTyperef
-                    ast: program.ast
-                    :ty
-                    :reg
-                    currentUnit: mainName.stringview
-                    base: ra.stringview
-                )
-            } else null
-            match (
-                ago
-            ) case some then {
-                argId = ago
-            } case none then null
-            if argId == 0 when (isNumericLiteralName name: ra.stringview) then {
-                if (reg.genericArgCount specId: mid9) == 0 then {
-                    pv9: parseDecimalU64 text: ra.stringview
+            if (reg.genericArgCount specId: mid9) == 0 then {
+                pnR9: reg.genericParamNamesOf typeKey: rt.stringview
+                pnN9: pnR9.length
+                pnI9: u64
+                for pnI9 < pnN9 loop {
+                    pnmR9: (pnR9.get i: pnI9).copy
+                    tgoR9: subs.get key: pnmR9.copy
                     match (
-                        pv9
+                        tgoR9
                     ) case some then {
-                        reg.appendGenericArgValue specId: mid9 value: pv9
-                    } case none then null
+                        reg.appendGenericArg specId: mid9 arg: tgoR9
+                    } case none then {
+                        vgoR9: valSubs.get key: pnmR9.copy
+                        match (
+                            vgoR9
+                        ) case some then {
+                            reg.appendGenericArgValue specId: mid9 value: vgoR9
+                        } case none then {
+                            reg.appendGenericArg specId: mid9 arg: 0
+                        }
+                    }
+                    pnI9 = pnI9 + 1
                 }
             }
             if tplId == 0 then {
@@ -8434,7 +8478,7 @@ completeUnitInstantiations: function {
                                     monoId: mid9
                                     monoName: rm.stringview
                                     :tplId
-                                    :argId
+                                    :subs
                                     templateOpId: u9.operation
                                 )
                             }
@@ -8448,7 +8492,7 @@ completeUnitInstantiations: function {
                                     monoName: rm.stringview
                                     tmplName: rt.stringview
                                     :tplId
-                                    :argId
+                                    :subs
                                     mainOpId: u9.operation
                                 )
                             }
@@ -8467,10 +8511,6 @@ completeUnitInstantiations: function {
             if rl > 0 when tplId > 0 then {
                 lv: tplId
                 ty.nodeType.set key: rl value: lv
-            }
-            if rg > 0 when argId > 0 then {
-                av: argId
-                ty.nodeType.set key: rg value: av
             }
         } case none then null
         i = i + 1
@@ -8502,19 +8542,46 @@ runUnitMonoWalks: function {
         rmid: (st.typing.pendingUnitWalk.get i: i9).monoId
         if rmid == monoId then {
             rqual: String
-            rgp: String
             rmn: String
-            raid: u64
             {
                 rec: st.typing.pendingUnitWalk.get i: i9
                 rqual = rec.qualified.copy
-                rgp = rec.gpName.copy
                 rmn = rec.monoName.copy
-                raid = rec.argId
             }
             sn: "unitgeneric:\{rmn}"
             st.push name: sn.stringview
-            st.define name: rgp.stringview ztypeId: raid
+            {
+                orgU9: u64
+                {
+                    moU9: st.reg.typeById.get key: monoId
+                    match (
+                        moU9
+                    ) case some then {
+                        goU9: moU9.genericOriginId
+                        match (
+                            goU9
+                        ) case some then {
+                            orgU9 = goU9
+                        } case none then null
+                    } case none then null
+                }
+                if orgU9 > 0 then {
+                    ukU9: typeNameOfReg reg: st.reg tid: orgU9
+                    pnU9: st.reg.genericParamNamesOf typeKey: ukU9.stringview
+                    pcU9: pnU9.length
+                    pjU9: u64
+                    for pjU9 < pcU9 loop {
+                        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pjU9) == false then {
+                            avU9: st.reg.genericArgAt specId: monoId ordinal: pjU9
+                            if avU9 > 0 then {
+                                pnmU9: (pnU9.get i: pjU9).copy
+                                st.define name: pnmU9.stringview ztypeId: avU9
+                            }
+                        }
+                        pjU9 = pjU9 + 1
+                    }
+                }
+            }
             prevL: st.typing.synthLabel.copy
             prevT: st.typing.currentThisName.copy
             ed8: (List u32)
