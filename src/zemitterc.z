@@ -5829,6 +5829,23 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         lvC9: ast.names.texts.get i: (n.name - 1).u64
         return (emitLocalAtomName :ctx name: lvC9.stringview)
     } case dottedpath then {
+        # built-in `.orPanic` on a resultval/Result receiver -- any base
+        # (a bound var, or a chained call/conversion), emitted via emitExpr so
+        # the receiver value is materialized once. `.or d:` is a call node and
+        # is handled by emitResultCombinator in the call dispatch instead.
+        dcMn9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        if dcMn9.stringview == "orPanic" then {
+            pStamp9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
+            pMono9: chaseColMono :ast :symtab tid: pStamp9
+            pOrig9: monoOriginName :symtab tid: pMono9
+            isRcc9: false
+            if pOrig9.stringview == "resultval" then isRcc9 = true
+            if isRcc9 then {
+                rcRecv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+                okTagX9: variantTag :symtab tid: pMono9 arm: "ok"
+                return "({ __auto_type _rc = (\{rcRecv9.stringview}); if (_rc.tag != \{okTagX9.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
+            }
+        }
         # a stamped implicit zero-create on a unit-qualified type path
         # (`unit.Conf`) constructs like the bare-atom legs
         izd9: symtab.typing.implicitCreate.get key: n.nodeid.u64
@@ -6441,14 +6458,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
                 e5: "\{bn2}.\{mn2}"
                 return e5
-            }
-            rcOrig9: monoOriginName :symtab tid: bstamp
-            isRC9: false
-            if rcOrig9.stringview == "resultval" then isRC9 = true
-            if rcOrig9.stringview == "Result" then isRC9 = true
-            if mn2.stringview == "orPanic" when isRC9 then {
-                okTagR9: variantTag :symtab tid: bstamp arm: "ok"
-                return "({ __auto_type _rc = (\{bn2}); if (_rc.tag != \{okTagR9.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
             }
             if rtt == ztypes.ztypetype.variantType then {
                 e9: "\{bn2}.data.\{mn2}"
@@ -19216,7 +19225,17 @@ emitResultCombinator: function {
     if mn.stringview == "or" then isO9 = true
     bothMiss9: (isP9) == false
     if bothMiss9 when (isO9) == false then return "".string
-    rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
+    bnid: u32
+    {
+        cnDp9: ast.nodes.get i: (call.callable - 1).u64
+        match (
+            cnDp9
+        ) case dottedpath then {
+            bnid = cnDp9.parent
+        } else null
+    }
+    if bnid == 0 then return "".string
+    rtid0: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (bnid - 1).u64))
     rtid: chaseColMono :ast :symtab tid: rtid0
     if rtid == 0 then return "".string
     orig: monoOriginName :symtab tid: rtid
@@ -19224,8 +19243,6 @@ emitResultCombinator: function {
     if orig.stringview == "resultval" then okR9 = true
     if orig.stringview == "Result" then okR9 = true
     if (okR9) == false then return "".string
-    bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    if bnid == 0 then return "".string
     recvExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bnid - 1).u64)
     if recvExpr.length == 0 then return "".string
     okTag: variantTag :symtab tid: rtid arm: "ok"
