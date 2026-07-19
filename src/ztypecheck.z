@@ -13255,13 +13255,33 @@ checkClause: function {
             match (
                 cond
             ) case namedoperation then {
-                (checkValue
+                ctv9: (checkValue
                     :st
                     :unitName
                     :ast
                     :unitBody
                     node: (ast.nodes.get i: (cond.operation - 1).u64)
                 )
+                # An if-condition must be a boolean. A non-bool value (a
+                # resultval, an aggregate, a raw numeric) is a type error rather
+                # than invalid C. Bare arm predicates (`o.none`, `b.false`) type
+                # as bool already; a diverging never-typed condition is allowed.
+                if ctv9 > 0 when boolId > 0 when ctv9 != boolId then {
+                    ctt9: st.reg.typetypeOf typeId: ctv9
+                    if ctt9 != ztypes.ztypetype.neverType then {
+                        conode9: ast.nodes.get i: (cond.operation - 1).u64
+                        ctnm9: typeNameOf :st tid: ctv9
+                        cmsg9: "condition must be bool, got '\{ctnm9}'"
+                        (addError
+                            :st
+                            nodeid: (nodeId n: conode9)
+                            lineno: (nodeLine n: conode9)
+                            colno: (nodeCol n: conode9)
+                            e: zast.err.typeError
+                            msg: cmsg9
+                        )
+                    }
+                }
             } else null
         }
         with cfit9: clause.conditions.iterate do for cnd9Id9: cfit9 loop {
@@ -14501,6 +14521,29 @@ checkBinopMethodDispatch: function {
                     if boD9 > 0 then return boD9
                     return lt
                 }
+            }
+            # Ordering comparisons have no structural fallback: unlike `==` /
+            # `!=` there is no structural ordering, so the operand type must
+            # declare the operator (numerics declare all six). An undeclared
+            # `<` / `>` / `<=` / `>=` -- on a resultval or any other aggregate --
+            # is a hard error, not invalid C.
+            isOrd9: false
+            if opn == "<" then isOrd9 = true
+            if opn == ">" then isOrd9 = true
+            if opn == "<=" then isOrd9 = true
+            if opn == ">=" then isOrd9 = true
+            if isOrd9 then {
+                lnOr9: typeNameOf :st tid: dt9
+                mgOr9: "type '\{lnOr9}' has no '\{opn}' method"
+                (addError
+                    :st
+                    nodeid: binop.nodeid
+                    lineno: binop.lineno
+                    colno: binop.colno
+                    e: zast.err.typeError
+                    msg: mgOr9
+                )
+                return 0
             }
             # A concrete type that declares no comparison method -- a class or
             # union without `==`, or a record/variant that opted out with
