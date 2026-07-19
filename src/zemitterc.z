@@ -9279,11 +9279,29 @@ emitReassignLvalue: function {
 # resolved via genericArgOf; the arm whose label names that type is emitted
 # inline and every other arm is dropped (no runtime switch). No matching arm and
 # no `else` emits nothing (the caller-level no-match check is a compile error).
+genericOwnerKey9: function {symtab: zenv.ZSymbolTable ownerTid: u64} out String is {
+    orig9: genericOriginOf9 :symtab tid: ownerTid
+    if orig9 == 0 then return "".string
+    onm9: typeNameOfReg9 :symtab tid: orig9
+    ounit9: String
+    {
+        duo9: symtab.typing.definedInUnit.get key: orig9
+        match (
+            duo9
+        ) case some then {
+            ounit9 = duo9.copy
+        } case none then null
+    }
+    tk9: "\{ounit9}.\{onm9}"
+    return tk9
+}
+
 emitGenericDissect: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     m: zast.CaseData
+    ownerTid: u64
     paramName: StringView
     ind: StringView
     tmp: TmpCtr
@@ -9291,20 +9309,9 @@ emitGenericDissect: function {
 } is {
     concrete9: u64
     isVal9: false
-    if ctx.curThisTid > 0 then {
-        orig9: genericOriginOf9 :symtab tid: ctx.curThisTid
-        if orig9 > 0 then {
-            onm9: typeNameOfReg9 :symtab tid: orig9
-            ounit9: String
-            {
-                duo9: symtab.typing.definedInUnit.get key: orig9
-                match (
-                    duo9
-                ) case some then {
-                    ounit9 = duo9.copy
-                } case none then null
-            }
-            tk9: "\{ounit9}.\{onm9}"
+    if ownerTid > 0 then {
+        tk9: genericOwnerKey9 :symtab :ownerTid
+        if tk9.length > 0 then {
             pnames9: symtab.reg.genericParamNamesOf typeKey: tk9.stringview
             found9: false
             ord9: u64
@@ -9319,8 +9326,10 @@ emitGenericDissect: function {
                     }
                 }
             }
-            concrete9 = symtab.reg.genericArgAt specId: ctx.curThisTid ordinal: ord9
-            isVal9 = symtab.reg.genericArgIsValueAt specId: ctx.curThisTid ordinal: ord9
+            if found9 then {
+                concrete9 = symtab.reg.genericArgAt specId: ownerTid ordinal: ord9
+                isVal9 = symtab.reg.genericArgIsValueAt specId: ownerTid ordinal: ord9
+            }
         }
     }
     win9: u32
@@ -9374,6 +9383,17 @@ emitGenericDissect: function {
     }
 }
 
+matchSubjectCore9: function {ast: Ast nid: u64} out u64 is {
+    n9: ast.nodes.get i: (nid - 1).u64
+    match (
+        n9
+    ) case expression then {
+        return (matchSubjectCore9 :ast nid: n9.expression)
+    } else {
+        return nid
+    }
+}
+
 emitMatchStmt: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
@@ -9394,10 +9414,53 @@ emitMatchStmt: function {
     subjSid9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (m.subject - 1).u64))
     if subjSid9 > 0 then {
         if (symtab.reg.typetypeOf typeId: subjSid9) == ztypes.ztypetype.genericParam then {
-            emitGenericDissect :ast :symtab :ctx :m paramName: stn.stringview :ind :tmp :buf
+            (emitGenericDissect
+                :ast
+                :symtab
+                :ctx
+                :m
+                ownerTid: ctx.curThisTid
+                paramName: stn.stringview
+                :ind
+                :tmp
+                :buf
+            )
             return
         }
     }
+    dcore9: matchSubjectCore9 :ast nid: m.subject
+    dcn9: ast.nodes.get i: (dcore9 - 1).u64
+    match (
+        dcn9
+    ) case dottedpath then {
+        dleaf9: dottedChildText :ast n: (ast.nodes.get i: (dcore9 - 1).u64)
+        dbnid9: dottedBaseNodeId :ast n: (ast.nodes.get i: (dcore9 - 1).u64)
+        dbst9: stampIdOf :symtab nid: dbnid9
+        downer9: ctx.curThisTid
+        if (symtab.reg.genericArgCount specId: dbst9) > 0 then downer9 = dbst9
+        if downer9 > 0 when dleaf9.length > 0 then {
+            dkey9: genericOwnerKey9 :symtab ownerTid: downer9
+            if dkey9.length > 0 then {
+                if (symtab.reg.isGenericParamOf
+                    typeKey: dkey9.stringview
+                    name: dleaf9.stringview
+                ) then {
+                    (emitGenericDissect
+                        :ast
+                        :symtab
+                        :ctx
+                        :m
+                        ownerTid: downer9
+                        paramName: dleaf9.stringview
+                        :ind
+                        :tmp
+                        :buf
+                    )
+                    return
+                }
+            }
+        }
+    } else null
     isVar: false
     isUni: false
     if vtid > 0 then {
