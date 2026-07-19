@@ -231,12 +231,130 @@ castLitVal: function {val: StringView dstName: StringView} out String is {
     return r
 }
 
+# emitNumericCastResult -- build a `resultval t: <dstName> e: convError` value for
+# a lossy numeric conversion `<val>.<dstName>` from `srcName`. Branchless: an
+# int-narrowing range test, an int->float mantissa-span test, a float->int
+# power-of-2 bounds + round-trip test, or an f64->f32 exact-representation test.
+# retTid is the stamped resultval mono; okTag/errTag/RT are named from it.
+emitNumericCastResult: function {
+    srcName: StringView
+    dstName: StringView
+    val: StringView
+    symtab: zenv.ZSymbolTable
+    retTid: u64
+} out String is {
+    scT: cTypeOf name: srcName
+    tcT: cTypeOf name: dstName
+    rtBase: symtab.reg.cnameOf tid: retTid
+    okTag: variantTag :symtab tid: retTid arm: "ok"
+    errTag: variantTag :symtab tid: retTid arm: "err"
+    sFloat: isFloatName name: srcName
+    dFloat: isFloatName name: dstName
+    okSet: "_r.tag = \{okTag}; _r.data.ok = (\{tcT})_v;"
+    body: String
+    if sFloat then {
+        if dFloat then {
+            errInf: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errPrecF: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
+            okF: "_r.tag = \{okTag}; _r.data.ok = _f;"
+            body = "float _f = (float)_v; if (__builtin_isinf(_f) && !__builtin_isinf(_v)) { \{errInf} } else if ((double)_f != (double)_v) { \{errPrecF} } else { \{okF} }"
+        } else {
+            b: numBits name: dstName
+            dsig: numSigned name: dstName
+            inRange: String
+            if dsig then {
+                bm1: b - 1
+                inRange = "(_v >= -0x1p\{bm1} && _v < 0x1p\{bm1})"
+            } else {
+                inRange = "(_v >= 0.0 && _v < 0x1p\{b})"
+            }
+            errOor: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
+            errPrecI: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
+            body = "if (!\{inRange}) { \{errOor} } else if ((double)(\{tcT})_v != (double)_v) { \{errPrecI} } else { \{okSet} }"
+        }
+    } else {
+        if dFloat then {
+            p9: 53
+            if dstName == "f32" then p9 = 24
+            ssig: numSigned name: srcName
+            magExpr: String
+            if ssig then {
+                magExpr = "(_v < 0 ? (uint64_t)(0 - (uint64_t)_v) : (uint64_t)_v)".string
+            } else {
+                magExpr = "(uint64_t)_v".string
+            }
+            errPrecX: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
+            body = "uint64_t _mag = \{magExpr}; if (_v == 0 || (64 - __builtin_clzll(_mag) - __builtin_ctzll(_mag)) <= \{p9}) { \{okSet} } else { \{errPrecX} }"
+        } else {
+            needsLo: true
+            needsHi: true
+            sbits: numBits name: srcName
+            dbits: numBits name: dstName
+            ssig: numSigned name: srcName
+            dsig: numSigned name: dstName
+            if ssig then {
+                if dsig then {
+                    if sbits <= dbits then needsLo = false
+                }
+            } else {
+                needsLo = false
+            }
+            if ssig == dsig then {
+                if sbits <= dbits then needsHi = false
+            } else {
+                if ssig then {
+                    if sbits <= dbits then needsHi = false
+                } else {
+                    if sbits < dbits then needsHi = false
+                }
+            }
+            cond: String
+            if needsLo then {
+                if needsHi then {
+                    lo: numLoStr name: dstName
+                    hi: numHiStr name: dstName
+                    cond = "_v < \{lo} || _v > \{hi}"
+                } else {
+                    lo2: numLoStr name: dstName
+                    cond = "_v < \{lo2}"
+                }
+            } else {
+                if needsHi then {
+                    hi2: numHiStr name: dstName
+                    cond = "_v > \{hi2}"
+                } else {
+                    cond = "0".string
+                }
+            }
+            errOor2: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
+            body = "if (\{cond}) { \{errOor2} } else { \{okSet} }"
+        }
+    }
+    r: "({ \{scT} _v = \{val}; \{rtBase}_t _r = {0}; \{body} _r; })"
+    return r
+}
+
 # emitNumericCast -- a runtime numeric conversion `<val>.<dstName>` from source
-# type `srcName`. Widening (source range fully inside dest) is a plain cast;
-# narrowing emits an overflow-checked statement-expression (z_panic when out of
-# range), mirroring the reference. Unknown / non-integer source falls back to a
-# plain cast -- the typechecker has already validated the conversion is legal.
-emitNumericCast: function {srcName: StringView dstName: StringView val: StringView} out String is {
+# type `srcName`. When the stamped return type is a resultval mono the conversion
+# is lossy and builds a `resultval t: <dst> e: convError` via emitNumericCastResult.
+# Otherwise widening is a plain cast and narrowing emits an overflow-checked
+# statement-expression (z_panic when out of range); unknown / non-integer source
+# falls back to a plain cast.
+emitNumericCast: function {
+    srcName: StringView
+    dstName: StringView
+    val: StringView
+    symtab: zenv.ZSymbolTable
+    retTid: u64
+} out String is {
+    resOrig9: monoOriginName :symtab tid: retTid
+    if resOrig9.stringview == "resultval" then return (emitNumericCastResult
+        :srcName
+        :dstName
+        :val
+        :symtab
+        :retTid
+    )
     dct: cTypeOf name: dstName
     if dct.length == 0 then return val.string
     sval: castLitVal :val :dstName
@@ -6129,10 +6247,14 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             # conversions return earlier via nodeConstText.
             ncSrc9: stampNameOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
             ncVal9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
+            ncRet9: stampIdOf :symtab nid: n.nodeid.u64
+            ncRetM9: chaseColMono :ast :symtab tid: ncRet9
             return (emitNumericCast
                 srcName: ncSrc9.stringview
                 dstName: mn2.stringview
                 val: ncVal9.stringview
+                :symtab
+                retTid: ncRetM9
             )
         }
         if bn2.length > 0 then {
