@@ -546,6 +546,44 @@ main: function is {
     a: 10.u8                       # a is u8
     a = 100                        # bare 100 coerces to a's u8
 }</code></pre>
+<h4 id="numeric-conversions-at-runtime"><a href="#numeric-conversions-at-runtime">2.7.6. Numeric conversions at runtime</a></h4>
+<p>The dotted conversion methods above (<code>x.u8</code>, <code>x.f32</code>, ...) also apply to a
+runtime value -- a variable or expression, not just a literal. Because a runtime
+value cannot be range-checked at compile time, the result type depends on
+whether the conversion can lose information. No conversion discards information
+silently.</p>
+<ul>
+<li><em><strong>Provably-safe conversions</strong></em> return the target type <code>T</code> directly.
+These are widenings (<code>u8</code> -&gt; <code>u32</code>), identity, an integer to a float
+whose mantissa covers the source range (any integer <code>&lt;= 2^24</code> to <code>f32</code>,
+<code>&lt;= 2^53</code> to <code>f64</code>), and <code>f32</code> -&gt; <code>f64</code>.</li>
+<li><em><strong>Possibly-lossy conversions</strong></em> return <code>resultval t: T e: convError</code>
+that the caller must handle. These are narrowings (<code>u64</code> -&gt; <code>u32</code>), sign
+crossings (<code>i32</code> -&gt; <code>u32</code>, <code>i64</code> -&gt; <code>u64</code>), any float to an integer,
+<code>f64</code> -&gt; <code>f32</code>, and an integer to a float beyond its mantissa (<code>u64</code>
+-&gt; <code>f64</code>).</li>
+</ul>
+<p><code>convError</code> reports <code>outOfRange</code> (the value -- or <code>NaN</code> / an infinity --
+does not fit the target) or <code>precisionLoss</code> (the value is in range but not
+exactly representable). Unwrap the result with the <code>resultval</code> combinators
+(<code>.orPanic</code>, <code>.or d:</code>) or with <code>match</code>:</p>
+<pre><code class="language-zerolang">count: xs.length          # length is u64
+n: count.u32.orPanic      # abort if it does not fit u32
+m: count.u32.or d: 0      # or fall back to a default
+
+r: value.f32              # f64 -&gt; f32 may lose precision
+match (
+    r
+) case ok then {
+    # exactly representable
+} case err then {
+    # precisionLoss or outOfRange
+}</code></pre>
+<p>A compile-time-constant conversion (a literal or constant expression, see
+<a href="#numeric-literal-coercion-at-typed-locations">literal coercion</a>) is
+checked statically and yields the bare type <code>T</code>, never a <code>resultval</code>: so
+<code>100.u8</code> is a <code>u8</code> and <code>300.u8</code> is a compile error, while <code>x.u8</code> on a
+runtime <code>x</code> is a <code>resultval</code>.</p>
 <h3 id="labels"><a href="#labels">2.8. Labels</a></h3>
 <p>Labels are used when assigning names to definitions. They are
 <a href="#identifiers">identifiers</a> followed by a colon (<code>:</code>). The name assigned is

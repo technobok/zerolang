@@ -410,6 +410,53 @@ Examples:
   }
   """
 
+
+#----: Numeric conversions at runtime
+
+The dotted conversion methods above (#~"x.u8", #~"x.f32", ...) also apply to a
+runtime value -- a variable or expression, not just a literal. Because a runtime
+value cannot be range-checked at compile time, the result type depends on
+whether the conversion can lose information. No conversion discards information
+silently.
+
+#ul:
+  [#*: #_*"Provably-safe conversions" return the target type #~"T" directly.
+    These are widenings (#~"u8" -> #~"u32"), identity, an integer to a float
+    whose mantissa covers the source range (any integer #~"<= 2^24" to #~"f32",
+    #~"<= 2^53" to #~"f64"), and #~"f32" -> #~"f64".]
+  [#*: #_*"Possibly-lossy conversions" return #~"resultval t: T e: convError"
+    that the caller must handle. These are narrowings (#~"u64" -> #~"u32"), sign
+    crossings (#~"i32" -> #~"u32", #~"i64" -> #~"u64"), any float to an integer,
+    #~"f64" -> #~"f32", and an integer to a float beyond its mantissa (#~"u64"
+    -> #~"f64").]
+
+#~"convError" reports #~"outOfRange" (the value -- or #~"NaN" / an infinity --
+does not fit the target) or #~"precisionLoss" (the value is in range but not
+exactly representable). Unwrap the result with the #~"resultval" combinators
+(#~".orPanic", #~".or d:") or with #~"match":
+
+#code language=zerolang: """
+  count: xs.length          # length is u64
+  n: count.u32.orPanic      # abort if it does not fit u32
+  m: count.u32.or d: 0      # or fall back to a default
+
+  r: value.f32              # f64 -> f32 may lose precision
+  match (
+      r
+  ) case ok then {
+      # exactly representable
+  } case err then {
+      # precisionLoss or outOfRange
+  }
+  """
+
+A compile-time-constant conversion (a literal or constant expression, see
+[#> to=numeric-literal-coercion-at-typed-locations: literal coercion]) is
+checked statically and yields the bare type #~"T", never a #~"resultval": so
+#~"100.u8" is a #~"u8" and #~"300.u8" is a compile error, while #~"x.u8" on a
+runtime #~"x" is a #~"resultval".
+
+
 #---: Labels
 
 Labels are used when assigning names to definitions. They are
