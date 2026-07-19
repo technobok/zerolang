@@ -17701,22 +17701,41 @@ checkCase: function {
         node: (ast.nodes.get i: (casenode.subject - 1).u64)
     )
     # A bare generic-parameter subject (`match t`) is not a value -- resolve it
-    # against the enclosing type's generic context so it stamps as a genericParam
-    # and the emitter can dissect it per monomorphised instance.
+    # against the enclosing generic context (synthLabel is `{unit}.{type}` for a
+    # method, `{unit}.{fn}` for a generic free function or unit) so it stamps as a
+    # genericParam and the emitter can dissect it per monomorphised instance.
     if subjT == 0 then {
         gsn9: subjectAtomName :ast n: (ast.nodes.get i: (casenode.subject - 1).u64)
-        tn9: st.typing.currentThisName
-        if gsn9.length > 0 when tn9.length > 0 then {
-            etk9: "\{unitName}.\{tn9.stringview}"
-            if (st.reg.isGenericParamOf typeKey: etk9.stringview name: gsn9.stringview) then {
-                subjT = (resolveNamedType
-                    ty: st.typing
-                    reg: st.reg
-                    :ast
-                    :unitName
-                    name: gsn9.stringview
-                    thisName: tn9.stringview
-                )
+        if gsn9.length > 0 then {
+            gkey9: String
+            if (st.reg.isGenericParamOf
+                typeKey: st.typing.synthLabel.stringview
+                name: gsn9.stringview
+            ) then {
+                gkey9 = st.typing.synthLabel.copy
+            } else {
+                if (st.reg.isGenericParamOf typeKey: unitName name: gsn9.stringview) then {
+                    gkey9 = unitName.string
+                }
+            }
+            if gkey9.length > 0 then {
+                pgo9: st.reg.genericParamTidOf typeKey: gkey9.stringview paramName: gsn9.stringview
+                match (
+                    pgo9
+                ) case some then {
+                    subjT = pgo9
+                } case none then {
+                    ptid9: (st.reg.newType
+                        name: gsn9.stringview
+                        typetype: ztypes.ztypetype.genericParam
+                    )
+                    (st.reg.setGenericParamTid
+                        typeKey: gkey9.stringview
+                        paramName: gsn9.stringview
+                        tid: ptid9
+                    )
+                    subjT = ptid9
+                }
                 gsnid9: nodeId n: (ast.nodes.get i: (casenode.subject - 1).u64)
                 if gsnid9 > 0 when subjT > 0 then {
                     setgs9: subjT
