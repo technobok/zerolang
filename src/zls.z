@@ -1611,14 +1611,120 @@ defaultDisplay: function {dtext: StringView typeName: StringView} out String is 
     return rr9
 }
 
+# paramDocs -- map of parameter name -> its trailing `#` doc comment, read from
+# the function's declaration source. Resolves the function tid to its
+# functiondef node (via the namedoperation wrapper), then reads each parameter
+# node's line; only a parameter that is the last on its source line takes that
+# line's trailing comment. Empty when the function has no documented parameters.
+paramDocs: function {
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    vfs: zvfs.ZVfs
+    tid: u64
+} out (Map String value: String) is {
+    result9: (Map String value: String)
+    defNid9: defNodeInfo :o :prog :tid member: ""
+    if defNid9 == 0 then return result9
+    fnNid9: u32
+    {
+        match (
+            prog
+        ) case program then {
+            wn9: prog.ast.nodes.get i: (defNid9 - 1).u64
+            match (
+                wn9
+            ) case namedoperation then {
+                fnNid9 = wn9.operation
+            } else null
+        } else null
+    }
+    if fnNid9 == 0 then return result9
+    fsno9: u32
+    {
+        match (
+            prog
+        ) case program then {
+            fsno9 = prog.ast.fsnoForNode nodeid: fnNid9
+        } else null
+    }
+    if fsno9 == 0 then return result9
+    paramIds9: (List u32)
+    {
+        match (
+            prog
+        ) case program then {
+            fd9: prog.ast.nodes.get i: (fnNid9 - 1).u64
+            match (
+                fd9
+            ) case functiondef then {
+                with pit9: fd9.parameters.iterate do for pid9: pit9 loop paramIds9.append pid9
+            } else null
+        } else null
+    }
+    pnms9: (List String)
+    plns9: (List u32)
+    pk9: u64
+    for pk9 < paramIds9.length loop {
+        pid9: paramIds9.get i: pk9
+        nameRef9: u32
+        ln9: u32
+        {
+            match (
+                prog
+            ) case program then {
+                pnode9: prog.ast.nodes.get i: (pid9 - 1).u64
+                match (
+                    pnode9
+                ) case namedoperation then {
+                    nameRef9 = pnode9.name
+                    ln9 = pnode9.lineno
+                } else null
+            } else null
+        }
+        if nameRef9 > 0 then {
+            match (
+                prog
+            ) case program then {
+                nm9: zast.nameTextCopy ast: prog.ast ref: nameRef9
+                pnms9.append nm9
+                plns9.append ln9
+            } else null
+        }
+        pk9 = pk9 + 1
+    }
+    ci9: u64
+    cn9: pnms9.length
+    for ci9 < cn9 loop {
+        lastOnLine9: true
+        nxt9: ci9 + 1
+        if nxt9 < cn9 then {
+            thisLn9: plns9.get i: ci9
+            nextLn9: plns9.get i: nxt9
+            if nextLn9 == thisLn9 then lastOnLine9 = false
+        }
+        if lastOnLine9 then {
+            curLn9: plns9.get i: ci9
+            tcm9: trailingDocOf :vfs fsno: fsno9 line1: curLn9
+            if tcm9.length > 0 then {
+                kk9: (pnms9.get i: ci9).copy
+                result9.set key: kk9 value: tcm9
+            }
+        }
+        ci9 = ci9 + 1
+    }
+    return result9
+}
+
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
 fnSigTextOpt: function {
+    vfs: zvfs.ZVfs
     prog: zast.Node
     o: (Option zenv.ZSymbolTable)
     tid: u64
     name: StringView
 } out String is {
+    docs9: paramDocs :o :prog :vfs :tid
     match (
         o
     ) case some then {
@@ -1722,6 +1828,24 @@ fnSigTextOpt: function {
             } case none then null
         }
         # one line, or param-per-line (zl fmt >100-col style) when too long.
+        pdocs9: (List String)
+        hasDocs9: false
+        pdi9: u64
+        for pdi9 < pnames9.length loop {
+            pdc9: String
+            {
+                pn0: pnames9.get i: pdi9
+                dgot9: docs9.get key: pn0
+                match (
+                    dgot9
+                ) case some then {
+                    pdc9 = dgot9.copy
+                } case none then null
+            }
+            if pdc9.length > 0 then hasDocs9 = true
+            pdocs9.append pdc9
+            pdi9 = pdi9 + 1
+        }
         one9: name.string
         one9.append ": function"
         if pdisp9.length > 0 then {
@@ -1735,7 +1859,7 @@ fnSigTextOpt: function {
             one9.append "}"
         }
         one9.append rets9.stringview
-        if one9.length <= 100 then return one9
+        if one9.length <= 100 when hasDocs9 == false then return one9
         if pdisp9.length == 0 then return one9
         wrap9: name.string
         wrap9.append ": function {"
@@ -1744,6 +1868,11 @@ fnSigTextOpt: function {
             wrap9.appendByte b: 10
             wrap9.append "    "
             wrap9.append (pdisp9.get i: wi9).stringview
+            wpdc9: pdocs9.get i: wi9
+            if wpdc9.length > 0 then {
+                wrap9.append "  # "
+                wrap9.append wpdc9.stringview
+            }
             wi9 = wi9 + 1
         }
         wrap9.appendByte b: 10
@@ -2145,10 +2274,10 @@ defNodeOf: function {
 # trailingDocOf -- the text of a trailing `#` comment on `line1` (1-based) of
 # file `fsno`, the `#` and surrounding space stripped; "" when there is none.
 # Surfaces a field's or parameter's inline doc in hover.
-trailingDocOf: function {snap: zcheck.CheckResult fsno: u32 line1: u32} out String is {
+trailingDocOf: function {vfs: zvfs.ZVfs fsno: u32 line1: u32} out String is {
     result9: String
     if line1 == 0 then return result9
-    lg9: snap.vfs.getline dentryid: fsno lineno: (line1 - 1).u64
+    lg9: vfs.getline dentryid: fsno lineno: (line1 - 1).u64
     match (
         lg9
     ) case some then {
@@ -2586,7 +2715,13 @@ navAnswer: function {
         ud9: useUnitDef o: snap.st nid: tnid
         sigTid9: t9
         if ud9 > 0 then sigTid9 = ud9
-        body9: fnSigTextOpt prog: snap.prog o: snap.st tid: sigTid9 name: hname.stringview
+        body9: (fnSigTextOpt
+            vfs: snap.vfs
+            prog: snap.prog
+            o: snap.st
+            tid: sigTid9
+            name: hname.stringview
+        )
         if body9.length == 0 then {
             tk9: typeKindTextOpt o: snap.st tid: refTid
             if tk9.length > 0 then {
@@ -2635,7 +2770,7 @@ navAnswer: function {
                     doc9: docCommentForNode :snap fsno: dfs9 defLine: dln9
                     if doc9.length > 0 then docBody9 = doc9
                     if refOwner > 0 then {
-                        tc9: trailingDocOf :snap fsno: dfs9 line1: dln9
+                        tc9: trailingDocOf vfs: snap.vfs fsno: dfs9 line1: dln9
                         if tc9.length > 0 then {
                             body9.append "  # "
                             body9.append tc9.stringview
@@ -4323,7 +4458,7 @@ signatureHelpAnswer: function {
     sp9.walkProgram prog: snap.prog
     funcId9: leafFuncIdAt :snap o: snap.st sp: sp9 :docRel :srcDir line1u: headLine9 idCol: idCol9
     if funcId9 == 0 then return Value.nul
-    label9: fnSigTextOpt prog: snap.prog o: snap.st tid: funcId9 name: nmS9.stringview
+    label9: fnSigTextOpt vfs: snap.vfs prog: snap.prog o: snap.st tid: funcId9 name: nmS9.stringview
     if label9.length == 0 then return Value.nul
     pdisps9: fnParamDisplays prog: snap.prog o: snap.st tid: funcId9
     params9: newArr
