@@ -1204,7 +1204,6 @@ takeStringSource: function {
         if cn9.stringview != "take" then return "".string
         bnid9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
         bid9: stampIdOf :symtab nid: bnid9
-        btn9: stampNameOf :symtab nid: bnid9
         isMv9: false
         if (stampIdOf :symtab nid: bnid9) == ctx.strTid then isMv9 = true
         if (symtab.reg.typetypeOf typeId: bid9) == ztypes.ztypetype.unionType then isMv9 = true
@@ -1448,7 +1447,6 @@ isCtorOwnerCall: function {
     call: zast.CallData
 } out bool is {
     smidO: stampIdOf :symtab nid: call.nodeid.u64
-    soO: monoOriginName :symtab tid: smidO
     bnO: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     mcO9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bnO.stringview == "meta" when mcO9.stringview == "create" then return true
@@ -2000,7 +1998,6 @@ emitDottedCall: function {
         return epn9
     }
     if (isStringyTid :ctx tid: btid) when (isSvArgNative name: mn.stringview) then {
-        bf: svValueForm :ctx expr: bn.stringview isStr: btIsStr9
         needsAdd :ctx name: mn.stringview
         argx: String
         with aiter9: call.arguments.iterate do for a9Id9: aiter9 loop {
@@ -2127,8 +2124,6 @@ emitDataIndexCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    bt: stampNameOf :symtab nid: bnid
     isData: ctx.dataElems.has key: bn.copy
     if (isData) == false then return "".string
     if mn.stringview == "index" then {
@@ -2410,8 +2405,8 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
         ctx.breakListMarks.pop
     }
     if ctx.breakLabelCleanup.length > 0 then {
-        dcl9: ctx.breakLabelCleanup.pop
-        dcv9: ctx.breakLabelCleanupVar.pop
+        ctx.breakLabelCleanup.pop
+        ctx.breakLabelCleanupVar.pop
     }
     uo: ctx.breakLabelUsed.get key: id
     match (
@@ -2437,6 +2432,7 @@ methodOwnerId: function {
     rtid: u64
     mn: StringView
 } out u64 is {
+    ctx
     direct: symtab.typing.childOf pool: ast.names parentTypeId: rtid name: mn
     match (
         direct
@@ -2924,13 +2920,11 @@ emitStrConvCall: function {
     if mn.stringview != "str" then return "".string
     rid0: stampIdOf :symtab nid: call.nodeid.u64
     rid: chaseColMono :ast :symtab tid: rid0
-    rori: monoOriginName :symtab tid: rid
     if (originIsTid :symtab tid: rid originTid: ctx.strOriginTid) == false then return "".string
     rmn: typeNameOfReg9 :symtab tid: rid
     rnm: cbaseNoPrefix tid: rid name: rmn.stringview
     pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: (call.callable - 1).u64)
     ptid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
-    ptn: typeNameOfReg9 :symtab tid: ptid
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size".string
     if ptid == ctx.svTid then lenAcc = "length".string
@@ -3001,7 +2995,6 @@ emitEmptyColCreate: function {ast: Ast
     if cn0 == "array" then {
         amid0: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (call.callable - 1).u64))
         amid9: chaseColMono :ast :symtab tid: amid0
-        amo9: monoOriginName :symtab tid: amid9
         if (originIsTid :symtab tid: amid9 originTid: ctx.arrayOriginTid) then {
             acb9: symtab.reg.cnameOf tid: amid9
             return "\{acb9}_create()"
@@ -3010,7 +3003,6 @@ emitEmptyColCreate: function {ast: Ast
     if cn0 == "str" then {
         smid0: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (call.callable - 1).u64))
         smid9: chaseColMono :ast :symtab tid: smid0
-        smo9: monoOriginName :symtab tid: smid9
         if (originIsTid :symtab tid: smid9 originTid: ctx.strOriginTid) then {
             scb9: symtab.reg.cnameOf tid: smid9
             return "\{scb9}_create()"
@@ -3501,6 +3493,8 @@ listTakeArgBase: function {
     call: zast.CallData
     label: StringView
 } out String is {
+    symtab
+    ctx
     aiter: call.arguments.iterate
     for aId9: aiter loop {
         a: ast.nodes.get i: (aId9 - 1).u64
@@ -3692,7 +3686,6 @@ emitVariantCtorCall: function {
     # stamped with the concrete mono id (userFnId fails for these). Option.some
     # is a heap box handled by emitOptionBoxHoist at the statement site.
     smid: stampIdOf :symtab nid: call.nodeid.u64
-    sorig: monoOriginName :symtab tid: smid
     sInline: false
     if (originIsTid
         :symtab
@@ -5148,6 +5141,7 @@ emitCrossUnitBareCreate: function {ast: Ast
     parent: Node
     child: StringView
 } out String is {
+    ctx
     if child != "create" then return "".string
     pbase9: dottedBaseAtom :ast n: parent
     ptype9: dottedChildText :ast n: parent
@@ -6270,7 +6264,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             tknid9: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
             if tknid9 == 0 then tknid9 = n.parent.u64
             tkt9: stampIdOf :symtab nid: tknid9
-            tktn9: stampNameOf :symtab nid: tknid9
             isMove9: false
             if (stampIdOf :symtab nid: tknid9) == ctx.strTid then isMove9 = true
             if (symtab.reg.typetypeOf typeId: tkt9) == ztypes.ztypetype.unionType then isMove9 = true
@@ -6339,7 +6332,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
             } case none then null
             bnid2: nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)
-            bt2: stampNameOf :symtab nid: bnid2
             btC12: userFnId :ast :symtab :ctx name: bn2.stringview
             if btC12 > 0 then {
                 ccoC12: (symtab.typing.childOf
@@ -6470,7 +6462,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if rtt == ztypes.ztypetype.recordType then {
                 # array/str monos are RECORD typetype but keep their own legs
                 # below (a.0 -> a.data[0]; str .length -> .len etc.).
-                bsoNmR9: monoOriginName :symtab tid: bstamp
                 if (originIsTid
                     :symtab
                     tid: bstamp
@@ -6645,7 +6636,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             accB2: ".".string
             if (isPtrVar :ctx name: bn2.stringview) then accB2 = "->".string
             recvB2: colRecvRef :ctx bn: bn2.stringview
-            bsmn: monoOriginName :symtab tid: bstamp
             if (originIsTid :symtab tid: bstamp originTid: ctx.arrayOriginTid) then {
                 acba9: symtab.reg.cnameOf tid: bstamp
                 if mn2.stringview == "length" then {
@@ -6802,7 +6792,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # field access (matches the simple-base svValueForm path).
         if mn2.stringview == "stringview" then {
             ppid9: nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)
-            ptn9: stampNameOf :symtab nid: ppid9
             if (stampIdOf :symtab nid: ppid9) == ctx.strTid then {
                 pbv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
                 sv9: svValueForm :ctx expr: pbv9.stringview isStr: true
@@ -6836,7 +6825,6 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # path). Resolve the List mono from the base node and emit the call.
         nlid9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64))
         nlid9 = chaseColMono :ast :symtab tid: nlid9
-        nlomn9: monoOriginName :symtab tid: nlid9
         if (originIsTid :symtab tid: nlid9 originTid: ctx.strOriginTid) then {
             nstrcb9: symtab.reg.cnameOf tid: nlid9
             if mn2.stringview == "length" then return "\{base9}.len"
@@ -7153,7 +7141,6 @@ interpBaseIsMapEntry: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out 
     } case dottedpath then {
         bnid: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
         bt: stampIdOf :symtab nid: bnid
-        bo: monoOriginName :symtab tid: bt
         meT9: builtinTid :ast :symtab base: "MapEntry"
         if (originIsTid :symtab tid: bt originTid: meT9) then return true
         return false
@@ -7289,7 +7276,6 @@ emitInterpPart: function {
             }
         } else {
             pStrId9: stampIdOf :symtab nid: (nodeIdOf9 :n)
-            pStrOr9: monoOriginName :symtab tid: pStrId9
             if (originIsTid :symtab tid: pStrId9 originTid: ctx.strOriginTid) then {
                 lstri9: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
                 buf.append lstri9.stringview
@@ -7707,7 +7693,6 @@ emitPrintArg: function {
             buf.append lpv.stringview
         } else {
             argTid: stampIdOf :symtab nid: n.nodeid.u64
-            pOrig9: monoOriginName :symtab tid: argTid
             if (originIsTid :symtab tid: argTid originTid: ctx.strOriginTid) then {
                 lpstr9: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){\{anm}.data, \{anm}.len});\n"
                 buf.append lpstr9.stringview
@@ -7738,7 +7723,6 @@ emitPrintArg: function {
     } case call then {
         ce9: emitCallValue :ast :symtab :ctx call: n
         flushArgHoists :ctx :ind :tmp :buf
-        rtn9: stampNameOf :symtab nid: n.nodeid.u64
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.svTid then {
             lpcv9: "\{ind}\{ctx.svC}_print(\{ce9});\n"
             buf.append lpcv9.stringview
@@ -7753,7 +7737,6 @@ emitPrintArg: function {
         }
     } else {
         eid9: nodeIdOf9 :n
-        etn9: stampNameOf :symtab nid: eid9
         if (stampIdOf :symtab nid: eid9) == ctx.svTid then {
             ev9: emitExpr :ast :symtab :ctx :n
             flushArgHoists :ctx :ind :tmp :buf
@@ -7808,7 +7791,6 @@ stringviewOfBase: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out Stri
         mn: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if mn.stringview == "stringview" then {
             bnid: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
-            bt: stampNameOf :symtab nid: bnid
             if (stampIdOf :symtab nid: bnid) == (builtinTid :ast :symtab base: "String") then {
                 return (atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
             }
@@ -7963,7 +7945,6 @@ emitOptionBoxHoist: function {
         cn: dottedChildText :ast n: (ast.nodes.get i: (n.callable - 1).u64)
         if cn.stringview != "some" then return "".string
         mid: stampIdOf :symtab nid: n.nodeid.u64
-        mo9: monoOriginName :symtab tid: mid
         if (originIsTid :symtab tid: mid originTid: ctx.optionOriginTid) == false then {
             return "".string
         }
@@ -8320,7 +8301,6 @@ emitStmt: function {
         ltid: stampIdOf :symtab nid: n.nodeid.u64
         if ltid == 0 then ltid = stampIdOf :symtab nid: (nodeIdOf9 n: avn9)
         ltid = chaseColMono :ast :symtab tid: ltid
-        ltmn: monoOriginName :symtab tid: ltid
         if (originIsTid :symtab tid: ltid originTid: ctx.listOriginTid) then {
             lcb: symtab.reg.cnameOf tid: ltid
             if (osNoArgCallRhs :ast n: avn9) then {
@@ -8663,7 +8643,6 @@ emitStmt: function {
         if zsrc9.length > 0 then {
             znid9: nodeIdOf9 n: rvn29
             zid9: stampIdOf :symtab nid: znid9
-            znm9: stampNameOf :symtab nid: znid9
             if (isHeapPtrCollection :ast :symtab :ctx tid: zid9) then {
                 zinvh9: "\{ind}\{zsrc9} = NULL;\n"
                 buf.append zinvh9.stringview
@@ -9821,7 +9800,7 @@ scalarArmLabel: function {ctx: Ctx arm: StringView} out String is {
 flushBlockFrees: function {ctx: Ctx tmp: TmpCtr fL: u64 lL: u64 buf: String.borrow} is {
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
-        lvfo: tmp.listFreeVars.pop
+        tmp.listFreeVars.pop
         buf.append lvo.stringview
     }
     for tmp.frees.length > fL loop {
@@ -10570,10 +10549,10 @@ emitObjIterFor: function {
                 if pfree9.length > 0 then payCleanup9 = "\{pfree9}(&\{lbl});\n"
             }
             if payCleanup9.length > 0 then {
-                ecl9: ctx.breakLabelCleanup.pop
+                ctx.breakLabelCleanup.pop
                 pcl9: payCleanup9.copy
                 ctx.breakLabelCleanup.append pcl9
-                ecv9: ctx.breakLabelCleanupVar.pop
+                ctx.breakLabelCleanupVar.pop
                 pcv9: lbl.copy
                 ctx.breakLabelCleanupVar.append pcv9
             }
@@ -10791,6 +10770,7 @@ emitForCond: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    tmp
     match (
         n
     ) case namedoperation then {
@@ -12462,7 +12442,6 @@ isSetMapPtrParam: function {
         } case none then null
     }
     bt: chaseColMono :ast :symtab tid: cid
-    omn: monoOriginName :symtab tid: bt
     setT9: builtinTid :ast :symtab base: "Set"
     if (originIsTid :symtab tid: bt originTid: setT9) then return true
     mapT9: builtinTid :ast :symtab base: "Map"
@@ -12487,7 +12466,6 @@ isListPtrParam: function {
         own: ztypes.zparamownership.takeMode
     ) then return false
     cid: tid
-    omn0: monoOriginName :symtab :tid
     listT9: builtinTid :ast :symtab base: "List"
     if (originIsTid :symtab :tid originTid: listT9) == false then {
         # a param type is a List SHELL (no genericOriginId, definedInUnit none);
@@ -12501,7 +12479,6 @@ isListPtrParam: function {
         } case none then null
     }
     bt: chaseColMono :ast :symtab tid: cid
-    omn: monoOriginName :symtab tid: bt
     listT8: builtinTid :ast :symtab base: "List"
     if (originIsTid :symtab tid: bt originTid: listT8) then return true
     return false
@@ -13567,6 +13544,7 @@ fillTypeMethodReturns: function {
     typeName: StringView
     op: Node
 } is {
+    symtab
     match (
         op
     ) case objectdef then {
@@ -15284,6 +15262,7 @@ emitListIter: function {
     elemName: StringView
     buf: String.borrow
 } is {
+    ctx
     liId: monoMethodReturn :symtab :monoId nameId: wkIterate
     if liId == 0 then {
         liNameF: "ListIter_\{elemName}"
@@ -15405,6 +15384,7 @@ listviewMethods: function {
     nm: StringView
     ect: StringView
 } out String is {
+    ctx
     lo: symtab.typing.childOfId parentTypeId: monoId nameId: wkListview
     match (
         lo
@@ -15505,6 +15485,7 @@ ctxBindMain: function {ctx: Ctx name: StringView} is {
 # definedInNonMain -- the type is defined in a non-main (system/io/...)
 # unit (a reachable library type to emit alongside the main closure).
 definedInNonMain: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+    symtab
     dgo: ctx.defUnitId.get key: tid
     match (
         dgo
@@ -15731,6 +15712,7 @@ emitOptionViewMono: function {
     monoId: u64
     buf: String.borrow
 } is {
+    ctx
     mn: typeNameOfReg9 :symtab tid: monoId
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
     ovu: cUpperOf text: mn.stringview
@@ -15855,6 +15837,7 @@ mapValFreeStmt: function {
     valTid: u64
     slot: StringView
 } out String is {
+    valName
     if valTid == ctx.strTid then return "\{ctx.strC}_free(&\{slot});"
     if valTid > 0 then {
         vmid: chaseColMono :ast :symtab tid: valTid
@@ -16038,7 +16021,6 @@ emitMapMono: function {
     } case none then null
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: ovId
-    ovOrigin: monoOriginName :symtab tid: ovId
     valTid: mapValType :symtab :monoId
     valName: typeNameOfReg9 :symtab tid: valTid
     valT: cTypeForNameTid :ast :symtab :ctx name: valName.stringview tid: valTid
@@ -16108,7 +16090,6 @@ emitMapMono: function {
     rmWrapName9: typeNameOfReg9 :symtab tid: rmWrapId9
     rmWrap9: cbaseNoPrefix tid: rmWrapId9 name: rmWrapName9.stringview
     rmWrapU9: cUpperOf text: rmWrapName9.stringview
-    rmWrapOrigin9: monoOriginName :symtab tid: rmWrapId9
     keyOnlyFree9: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringview valFree: ""
     delTail9: "\{keyOnlyFree9}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
     removeBody9: String
@@ -16386,7 +16367,6 @@ cliClassIsComposite: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: 
     for fi < fn0 loop {
         fid: fids.get i: fi
         cm: chaseColMono :ast :symtab tid: fid
-        onm: monoOriginName :symtab tid: cm
         if (originIsTid :symtab tid: cm originTid: ctx.listOriginTid) then return true
         if (originIsTid :symtab tid: cm originTid: ctx.mapOriginTid) then return true
         if (originIsTid :symtab tid: cm originTid: ctx.setOriginTid) then return true
@@ -17032,6 +17012,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
 # resolve the value via the get-return OptionView's element name and the key via
 # the mangled-name remainder, mirroring emitMapMono.
 monoMapKV: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
+    ctx
     go: symtab.typing.childOfId parentTypeId: monoId nameId: wkGet
     match (
         go
@@ -17048,7 +17029,6 @@ monoMapKV: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u6
 # Option/Result/OptionView), or its fields for a user-generic record/class mono.
 # Used by the early/late split to find which monos embed a user type.
 monoElemIdsOf: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
-    origin: monoOriginName :symtab tid: monoId
     isLV: false
     if (originIsTid :symtab tid: monoId originTid: ctx.listOriginTid) then isLV = true
     if (originIsTid :symtab tid: monoId originTid: ctx.listViewOriginTid) then isLV = true
@@ -17105,6 +17085,7 @@ monoElemIdsOf: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64
 # UNION / VARIANT that are not monos and not generic templates. A mono embedding
 # one of these by value must be emitted after it.
 buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx acc: List u64} is {
+    ctx
     last: symtab.reg.nextTypeId
     t: u64
     for t < last loop {
@@ -17408,6 +17389,7 @@ collectLateMonosKind: function {
 # BODIED (non-native), DEMANDED free fn (natives keep routing through the
 # declaration-driven call emitter and have no id-cname definition).
 stdFnRefEmittable: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
+    ctx
     duo9: definedInUnitOf :symtab tid: fid
     match (
         duo9
@@ -17541,7 +17523,6 @@ ensureFwdStruct: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Stri
         match (
             o
         ) case some then null case none then {
-            nm: typeNameOfReg9 :symtab :tid
             cn: symtab.reg.cnameOf :tid
             ctx.fwdDeclaredTypes.set key: tid.u64 value: true
             l0: "typedef struct \{cn}_t \{cn}_t;\n"
@@ -18465,7 +18446,6 @@ protoParamCtype: function {
     if pct.length == 0 then pct = "int64_t".string
     isCol: false
     if (chaseColMono :ast :symtab tid: cpid) != cpid then isCol = true
-    pco9: monoOriginName :symtab tid: cpid
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: cpid)) then isCol = true
     if isCol then return "\{pct}*"
     return pct
@@ -18783,6 +18763,7 @@ emitFacetImpl: function {
     label: StringView
     buf: String.borrow
 } is {
+    facetName
     if (isGenericType :symtab tid: implTid) then return
     implBase: cnameOf tid: implTid name: implName
     implCtype: "\{implBase}_t"
@@ -18983,6 +18964,7 @@ conformanceLabelFor: function {symtab: zenv.ZSymbolTable implTid: u64 protoTid: 
 # through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
 # fileTypeIdOf -- the io File class type id if `nid` stamps as File, else 0.
 fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is {
+    ctx
     tid: stampIdOf :symtab :nid
     if tid == 0 then return 0
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return 0
@@ -19836,7 +19818,6 @@ emitProtocolDispatch: function {
                     )
                     apfx9: String
                     if (chaseColMono :ast :symtab tid: atid9) != atid9 then apfx9 = "&".string
-                    aco9: monoOriginName :symtab tid: atid9
                     if (isCollectionOriginTid
                         :ctx
                         originTid: (originTidOf :symtab tid: atid9)
@@ -19878,7 +19859,6 @@ emitProtocolDispatch: function {
                 )
                 apfx9: String
                 if (chaseColMono :ast :symtab tid: atid9) != atid9 then apfx9 = "&".string
-                aco9: monoOriginName :symtab tid: atid9
                 if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: atid9)) then {
                     apfx9 = "&".string
                 }
@@ -21248,6 +21228,7 @@ emitYieldStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    tmp
     k: ctx.genYieldNext
     ctx.genYieldNext = k + 1
     # an interpolated yield value builds via a self-contained statement

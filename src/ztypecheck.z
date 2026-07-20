@@ -148,6 +148,7 @@ atomName: function {ast: Ast n: Node} out String is {
 # atomNameId -- the Ast.names pool id of an atomid/labelvalue node's name
 # (0 when the node is neither; no pool id is 0, so lookups by it miss).
 atomNameId: function {ast: Ast n: Node} out u64 is {
+    ast
     match (
         n
     ) case atomid then {
@@ -2794,6 +2795,12 @@ paramIsThisReceiver: function {ast: Ast op: Node} out bool is {
     }
 }
 
+# paramIsThisReceiverId -- paramIsThisReceiver over a node id, for callers
+# that hold no outstanding view into ast.nodes.
+paramIsThisReceiverId: function {ast: Ast opId: u32} out bool is {
+    return (paramIsThisReceiver :ast op: (ast.nodes.get i: (opId - 1).u64))
+}
+
 paramTypeBaseName: function {ast: Ast op: Node} out String is {
     match (
         op
@@ -2999,7 +3006,6 @@ resolveFunction: function {
                     # No node stamp (fn monos re-walk the SHARED template
                     # AST) and no typeref/demand recording (a user type
                     # coincidentally named like the param must not bind).
-                    pnameF9: zast.nameTextCopy :ast ref: pm.name
                     fpt9: u64
                     fpo9: reg.genericParamTidOf typeKey: fnKey9.stringview paramName: ptn.stringview
                     match (
@@ -4136,6 +4142,7 @@ scanUnitVisibility: function {
     unitTid: u64
     unitdefId: u32
 } is {
+    unitName
     pubIds: (Set u64)
     memberIds: (Set u64)
     memberNameList: (List u64)
@@ -4267,6 +4274,7 @@ scanUnitVisibility: function {
 # so the target's signature resolves and its unit childOf edge is created;
 # otherwise a cross-unit reference to the renamed def resolves to nothing.
 demandUnitRenameTargets: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    ty
     match (
         program
     ) case program then {
@@ -4368,6 +4376,49 @@ applyUnitVisibility: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
                         unitTid: utidV9
                         unitdefId: opIdV9
                     )
+                    # the entry `main` of the primary unit must stay public:
+                    # a `public:` block that omits it hides the entry point
+                    if nmV9.stringview == program.mainUnitName.stringview then {
+                        if (ty.isChildPrivate
+                            pool: program.ast.names
+                            parentTypeId: utidV9
+                            name: "main"
+                        ) then {
+                            mnid9: u32
+                            mnln9: u32
+                            mncl9: u32
+                            {
+                                mIds9: zast.unitBodyIdsAt ast: program.ast unitId: opIdV9
+                                mref9: program.ast.names.find s: "main"
+                                with mit9: mIds9.iterate do for mid9: mit9 loop {
+                                    mn9: program.ast.nodes.get i: (mid9 - 1).u64
+                                    match (
+                                        mn9
+                                    ) case namedoperation then {
+                                        if mn9.name == mref9 when mref9 > 0 then {
+                                            mnid9 = mn9.nodeid
+                                            mnln9 = mn9.lineno
+                                            mncl9 = mn9.colno
+                                        }
+                                    } else null
+                                }
+                            }
+                            mmsg9: "the entry 'main' must be public".string
+                            if mnid9 > 0 then {
+                                (addResolveErrorH
+                                    :ty
+                                    nodeid: mnid9
+                                    lineno: mnln9
+                                    colno: mncl9
+                                    e: zast.err.notPublic
+                                    msg: mmsg9
+                                    width: 4
+                                )
+                            } else {
+                                addResolveError :ty e: zast.err.notPublic msg: mmsg9
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -9596,7 +9647,6 @@ mintMono: function {
     idSubs: (Map u64 value: u64)
     fallbackArg: u64
 } out u64 is {
-    kn: name.string
     got: resolveSystemChild :ast :ty :reg :name
     match (
         got
@@ -9647,7 +9697,6 @@ mintMono: function {
     # Option/Result own a heap box. A user generic whose template already has a
     # destructor inherits one. Map/Set own native heap too (freed via a `&`-less
     # heap-pointer destroy). Views (ListView/OptionView) own no heap -- excluded.
-    tplNmD: regTypeNameOf :reg tid: templateId
     needsDtorM: false
     if templateId == (builtinTidT :ast :ty :reg base: "List") then needsDtorM = true
     if templateId == (builtinTidT :ast :ty :reg base: "Option") then needsDtorM = true
@@ -9822,7 +9871,6 @@ mintMono: function {
     # synthesize -- except str/array, whose branches own those members
     # (their u64 `to` child comes from THIS synth; the branches add none).
     if tt == ztypes.ztypetype.recordType then {
-        tplNm9: regTypeNameOf :reg tid: templateId
         isSized9: false
         if templateId == (builtinTidT :ast :ty :reg base: "str") then isSized9 = true
         if templateId == (builtinTidT :ast :ty :reg base: "array") then isSized9 = true
@@ -9944,6 +9992,7 @@ isUserShadowElem: function {
     reg: ztypes.ZTypeRegistry
     elemTid: u64
 } out bool is {
+    reg
     duo: ty.definedInUnit.get key: elemTid
     match (
         duo
@@ -9983,6 +10032,7 @@ mapGetWrapperName: function {
     reg: ztypes.ZTypeRegistry
     valArg: u64
 } out String is {
+    ty
     isVal: false
     {
         vt: reg.typeById.get key: valArg
@@ -10559,6 +10609,7 @@ mintCollectionChildren: function {
     elemArg: u64
     valArg: u64
 } is {
+    suffix
     listTid: builtinTidT :ast :ty :reg base: "List"
     listViewTid: builtinTidT :ast :ty :reg base: "ListView"
     setTid: builtinTidT :ast :ty :reg base: "Set"
@@ -11065,6 +11116,7 @@ genericTypeConstruction: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitName: StringView
+    unitBody: List u32
     call: zast.CallData
     tplId: u64
 } out u64 is {
@@ -11142,6 +11194,17 @@ genericTypeConstruction: function {
                     reg: st.reg
                     base: "Set"
                 ) then skipCr9 = true
+            }
+            # a skipped capacity: arg is still a value: check it so its
+            # atoms stamp (atomVariableId / atomUnitDefId) like any arg
+            if skipCr9 then {
+                (checkValue
+                    :st
+                    :unitName
+                    :ast
+                    :unitBody
+                    node: (ast.nodes.get i: (arg.operation - 1).u64)
+                )
             }
             if (isP0) == false when skipCr9 == false then anyMiss = true
             an: paramTypeBaseName :ast op: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -11759,7 +11822,7 @@ checkProjectionCreate: function {
                                     } case none then null
                                 }
                             } else {
-                                tnm3: (hoistArg
+                                (hoistArg
                                     :ast
                                     :st
                                     argNode: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -11909,7 +11972,7 @@ checkTypedefCreate: function {
                                 } case none then null
                             }
                         } else {
-                            tnm: (hoistArg
+                            (hoistArg
                                 :ast
                                 :st
                                 argNode: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -12917,6 +12980,14 @@ checkDotted: function {
                 hh3: "did you mean '\{sgc3}'?"
                 h3 = hh3
             }
+            if (st.typing.isChildPrivate
+                pool: ast.names
+                parentTypeId: bt
+                name: cn.stringview
+            ) then {
+                hp3: "'\{cnc9}' is private (not in the public interface)"
+                h3 = hp3
+            }
             en3: String
             cnid3: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
             cnln3: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
@@ -13393,6 +13464,14 @@ checkDotted: function {
                         sgMm9: sugMm9.copy
                         hhMm9: "did you mean '\{sgMm9}'?"
                         hMm9 = hhMm9
+                    }
+                    if (st.typing.isChildPrivate
+                        pool: ast.names
+                        parentTypeId: bt
+                        name: cn.stringview
+                    ) then {
+                        hpMm9: "'\{cnMm9}' is private (not in the public interface)"
+                        hMm9 = hpMm9
                     }
                     cnidMm9: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
                     cnlnMm9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
@@ -15044,6 +15123,7 @@ comparisonCoerceTarget: function {
     concrete: u64
     op: StringView
 } out u64 is {
+    unitName
     opo9: st.typing.childOf pool: ast.names parentTypeId: concrete name: op
     match (
         opo9
@@ -15386,6 +15466,7 @@ typeIsReftype: function {st: zenv.ZSymbolTable tid: u64} out bool is {
 # (records, variants, facets, primitives). Unset or unregistered ids are not
 # valtypes.
 typeIsValtype: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out bool is {
+    ty
     zo: reg.typeById.get key: tid
     match (
         zo
@@ -15673,9 +15754,7 @@ appendValueTuple: function {ast: Ast n: Node dst: List String} is {
 # drainPendingBorrow / takePendingBorrow -- clear the borrow side-channel /
 # move it into a local list (root-first order preserved).
 drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
-    for st.typing.pendingBorrowPath.length > 0 loop {
-        pd: st.typing.pendingBorrowPath.pop
-    }
+    for st.typing.pendingBorrowPath.length > 0 loop st.typing.pendingBorrowPath.pop
     st.typing.pendingBorrowShared = false
 }
 
@@ -16957,7 +17036,7 @@ checkCall: function {
                 }
                 if isWType when call.arguments.length > 0 then {
                     wcm: st.pushCall
-                    _wlr09: (walkCallArgsHoist
+                    (walkCallArgsHoist
                         :st
                         :unitName
                         :ast :unitBody
@@ -17018,7 +17097,7 @@ checkCall: function {
                 setmb: mtid
                 st.typing.nodeType.set key: mcid.u64 value: setmb
                 mcm: st.pushCall
-                mclr: (walkCallArgsHoist
+                (walkCallArgsHoist
                     :st
                     :unitName
                     :ast :unitBody
@@ -17041,6 +17120,24 @@ checkCall: function {
             dro
         ) case some then {
             if dro == 0 then {
+                # unresolved dotted callable (a data block's `.index`): the
+                # call stays untyped, but its args are still values -- check
+                # them so their atoms stamp (atomVariableId / atomUnitDefId)
+                uwiter9: call.arguments.iterate
+                for uwArg9: uwiter9 loop {
+                    uwa9: ast.nodes.get i: (uwArg9 - 1).u64
+                    match (
+                        uwa9
+                    ) case namedoperation then {
+                        (checkValue
+                            :st
+                            :unitName
+                            :ast
+                            :unitBody
+                            node: (ast.nodes.get i: (uwa9.operation - 1).u64)
+                        )
+                    } else null
+                }
                 return 0
             } else {
                 # A non-generic FUNCTION member dispatches as a user method
@@ -17620,7 +17717,14 @@ checkCall: function {
                                 tplId: dro
                                 allowFrom: false
                             )
-                            gres2: genericTypeConstruction :ast :st :unitName :call tplId: dro
+                            gres2: (genericTypeConstruction
+                                :ast
+                                :st
+                                :unitName
+                                :unitBody
+                                :call
+                                tplId: dro
+                            )
                             if gres2 > 0 then return gres2
                         }
                         # A plain cross-unit class/record dotted construction
@@ -17635,7 +17739,7 @@ checkCall: function {
                         if isCtorT9 then {
                             if call.arguments.length > 0 then {
                                 dcm9: st.pushCall
-                                _wlr19: (walkCallArgsHoist
+                                (walkCallArgsHoist
                                     :st
                                     :unitName
                                     :ast :unitBody
@@ -17674,6 +17778,15 @@ checkCall: function {
                 if (st.reg.typetypeOf typeId: lvo) == ztypes.ztypetype.functionType then {
                     funcId = lvo
                     st.typing.callKind.set key: call.nodeid.u64 value: zast.callkind.callable
+                    # callee-use variable id: calling through a fn-typed
+                    # variable reads it, so it stamps like a value atom
+                    cvo9: st.lookupVarId name: cn.stringview
+                    match (
+                        cvo9
+                    ) case some then {
+                        setcv9: cvo9
+                        st.typing.atomVariableId.set key: call.callable.u64 value: setcv9
+                    } case none then null
                 }
             } case none then null
             if funcId <= 0 then {
@@ -17843,7 +17956,7 @@ checkCall: function {
                         tplId: funcId
                         allowFrom: false
                     )
-                    gres: genericTypeConstruction :ast :st :unitName :call tplId: funcId
+                    gres: genericTypeConstruction :ast :st :unitName :unitBody :call tplId: funcId
                     if gres > 0 then return gres
                     # field-bound value args: infer the instance and construct
                     # through the standard ctor flow (mirrors the reference's
@@ -17869,7 +17982,7 @@ checkCall: function {
                             st.typing.nodeType.set key: calid9.u64 value: setc9
                         }
                         cm9: st.pushCall
-                        _wlr29: (walkCallArgsHoist
+                        (walkCallArgsHoist
                             :st
                             :unitName
                             :ast :unitBody
@@ -18122,7 +18235,6 @@ checkGenericCall: function {
     if allOk == false then return 0
     if gparams.length == 0 then return 0
     wasNew: false
-    nk: mname.copy
     ngot: resolveSystemChild :ast ty: st.typing reg: st.reg name: mname.stringview
     match (
         ngot
@@ -21038,6 +21150,7 @@ walkUnitProbe9ById: function {
     uname: StringView
     baseId: u32
 } out optionval u64 is {
+    ast
     uido: reg.unitNameTid.getv key: uname
     match (
         uido

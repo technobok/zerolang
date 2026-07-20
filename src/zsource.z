@@ -7,6 +7,9 @@
 Node: zast.Node
 Ast: zast.Ast
 
+# well-known name-pool id: "this" is interned first (zast.wkThis).
+wkThis: 1.u32
+
 # ---- AST query helpers for the parse-tier rules (behaviour-preserving port of
 # the original zc lint helpers) ----
 
@@ -1841,6 +1844,7 @@ Analysis: class {
     # emitSuf -- L005: a redundant numeric suffix. The safe fix removes the `.` and the type
     # name (e.g. `5.i32` -> `5`); the context already pins the type.
     emitSuf: function {:this uname: StringView ln: u32 col: u32 tname: StringView} is {
+        uname
         srcOwned: this.source.copy
         sv: srcOwned.stringview
         lineStart: lineStartIndex src: sv
@@ -2240,7 +2244,179 @@ Analysis: class {
             st: ztypecheck.typecheck :ast program: prog :reg full: true
             this.lintSuffixUnit :prog :uname :st
             this.reportUnusedDefs :prog :uname :st
+            this.reportUnusedVars :prog :uname :st
         }
+    }
+
+    # reportUnusedVars -- L014 (unused parameter) + L013 (unused local). A binding whose
+    # variableId never appears as a use (atomVariableId) is dead. Params are walked from the
+    # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
+    # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
+    # its own line (it lowers to `(void)(x);`), which stamps a use.
+    reportUnusedVars: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable} is {
+        match (
+            prog
+        ) case program then {
+            used9: (Set u64)
+            with uit9: st.typing.atomVariableId.iterateItems do for av9: uit9 loop used9.add item: av9.value
+            mainOp9: u32
+            uN9: prog.ast.units.length
+            uI9: u64
+            for uI9 < uN9 loop {
+                uid9: prog.ast.units.get i: uI9
+                uI9 = uI9 + 1
+                unm9: String
+                uop9: u32
+                {
+                    un9: prog.ast.nodes.get i: (uid9 - 1).u64
+                    if un9.namedoperation then {
+                        unm9 = (zast.poolTextCopy pool: prog.ast.names ref: un9.name)
+                        uop9 = un9.operation
+                    }
+                }
+                if unm9.stringview == uname when uop9 > 0 then mainOp9 = uop9
+            }
+            if mainOp9 > 0 then {
+                fnOps9: (List u32)
+                memIds9: (List u32)
+                {
+                    bodyIds9: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp9
+                    with bit9: bodyIds9.iterate do for mid9: bit9 loop memIds9.append from: mid9
+                }
+                mN9: memIds9.length
+                mI9: u64
+                for mI9 < mN9 loop {
+                    mid9: memIds9.get i: mI9
+                    mI9 = mI9 + 1
+                    mop9: u32
+                    { m9: prog.ast.nodes.get i: (mid9 - 1).u64
+                      if m9.namedoperation then mop9 = m9.operation }
+                    if mop9 > 0 then {
+                        isFn9: false
+                        isObj9: false
+                        { op9: prog.ast.nodes.get i: (mop9 - 1).u64
+                          if op9.functiondef then isFn9 = true
+                          if op9.objectdef then isObj9 = true }
+                        # synth-lowered defs sit outside every file segment
+                        # (fsno 0): they are not user source, so their params
+                        # are exempt
+                        if isFn9 when (prog.ast.fsnoForNode nodeid: mop9) > 0 then fnOps9.append from: mop9
+                        if isObj9 then {
+                            asIds9: (List u32)
+                            { op9b: prog.ast.nodes.get i: (mop9 - 1).u64
+                              match (op9b) case objectdef then {
+                                  with ait9: op9b.asItems.iterate do for aid9: ait9 loop asIds9.append from: aid9
+                              } else null }
+                            aN9: asIds9.length
+                            aI9: u64
+                            for aI9 < aN9 loop {
+                                amid9: asIds9.get i: aI9
+                                aI9 = aI9 + 1
+                                amop9: u32
+                                { am9: prog.ast.nodes.get i: (amid9 - 1).u64
+                                  if am9.namedoperation then amop9 = am9.operation }
+                                if amop9 > 0 then {
+                                    isFnA9: false
+                                    { aop9: prog.ast.nodes.get i: (amop9 - 1).u64
+                                      if aop9.functiondef then isFnA9 = true }
+                                    if isFnA9 when (prog.ast.fsnoForNode nodeid: amop9) > 0 then fnOps9.append from: amop9
+                                }
+                            }
+                        }
+                    }
+                }
+                fN9: fnOps9.length
+                fI9: u64
+                for fI9 < fN9 loop {
+                    fop9: fnOps9.get i: fI9
+                    fI9 = fI9 + 1
+                    paramIds9: (List u32)
+                    { fd9: prog.ast.nodes.get i: (fop9 - 1).u64
+                      match (fd9) case functiondef then {
+                          with pit9: fd9.parameters.iterate do for pid9: pit9 loop paramIds9.append from: pid9
+                      } else null }
+                    pN9: paramIds9.length
+                    pI9: u64
+                    for pI9 < pN9 loop {
+                        pid9: paramIds9.get i: pI9
+                        pI9 = pI9 + 1
+                        pOpId9: u32
+                        pNameRef9: u32
+                        pLn9: u32
+                        pCl9: u32
+                        { pm9: prog.ast.nodes.get i: (pid9 - 1).u64
+                          match (pm9) case namedoperation then {
+                              pOpId9 = pm9.operation
+                              pNameRef9 = pm9.name
+                              pLn9 = pm9.lineno
+                              pCl9 = pm9.colno
+                          } else null }
+                        if pOpId9 > 0 then {
+                            # the receiver is exempt: `:this` names it directly
+                            # (wkThis); a spelled `b: this.lock` is receiver-shaped
+                            isRecv9: false
+                            if pNameRef9 == wkThis then isRecv9 = true
+                            if (isRecv9) == false then {
+                                isRecv9 = (ztypecheck.paramIsThisReceiverId
+                                    ast: prog.ast
+                                    opId: pOpId9
+                                )
+                            }
+                            if (isRecv9) == false then {
+                                vo9: st.typing.defVariableId.get key: pOpId9.u64
+                                match (vo9) case some then {
+                                    if (used9.has item: vo9) == false then {
+                                        pnm9: zast.poolTextCopy pool: prog.ast.names ref: pNameRef9
+                                        (this.warn
+                                            code: "L014"
+                                            msg: "parameter '\{pnm9}' is never used (touch it with a bare `\{pnm9}` statement if intentional)"
+                                            line: pLn9
+                                            col: pCl9
+                                            width: pnm9.length.u32.orPanic
+                                        )
+                                    }
+                                } case none then null
+                            }
+                        }
+                    }
+                }
+                if fnOps9.length > 0 then {
+                    mainFsno9: prog.ast.fsnoForNode nodeid: (fnOps9.get i: 0)
+                    with dit9: st.typing.defVariableId.iterateItems do for dv9: dit9 loop {
+                        nid9: dv9.key
+                        vid9: dv9.value
+                        skip9: false
+                        if nid9 >= 0x40000000 then skip9 = true
+                        if (skip9) == false when (used9.has item: vid9) then skip9 = true
+                        if (skip9) == false then {
+                            fs9: prog.ast.fsnoForNode nodeid: nid9.u32.orPanic
+                            if fs9 == mainFsno9 then {
+                                nm9: String
+                                ln9: u32
+                                cl9: u32
+                                okL9: false
+                                { nodeL9: prog.ast.nodes.get i: (nid9 - 1).u64
+                                  match (nodeL9) case assignment then {
+                                      nm9 = nodeL9.name.copy
+                                      ln9 = nodeL9.lineno
+                                      cl9 = nodeL9.colno
+                                      okL9 = true
+                                  } else null }
+                                if okL9 then {
+                                    (this.warn
+                                        code: "L013"
+                                        msg: "local '\{nm9}' is never used (touch it with a bare `\{nm9}` statement if intentional)"
+                                        line: ln9
+                                        col: cl9
+                                        width: nm9.length.u32.orPanic
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else null
     }
 
     # reportUnusedDefs -- L012 (unused private definition). A private unit-level definition
@@ -2317,6 +2493,44 @@ Analysis: class {
                         } case none then null
                     }
                 }
+                # member-access uses: a dotted path stamped with its owner
+                # type marks that type's member edge as referenced
+                moTids9: (List u64)
+                moNames9: (List u32)
+                astN9: prog.ast.nodes.length
+                with mo9: st.typing.memberOwnerTid.iterateItems do for me9: mo9 loop {
+                    mnid9: me9.key
+                    mnm9: u32
+                    if mnid9 <= astN9 then {
+                        mnd9: prog.ast.nodes.get i: (mnid9 - 1).u64
+                        match (
+                            mnd9
+                        ) case dottedpath then {
+                            mch9: prog.ast.nodes.get i: (mnd9.child - 1).u64
+                            match (
+                                mch9
+                            ) case atomid then {
+                                mnm9 = mch9.name
+                            } else null
+                        } else null
+                    }
+                    if mnm9 > 0 then {
+                        moTids9.append from: me9.value
+                        moNames9.append from: mnm9
+                    }
+                }
+                moI9: u64
+                for moI9 < moTids9.length loop {
+                    moTid9: moTids9.get i: moI9
+                    moNm9: moNames9.get i: moI9
+                    moI9 = moI9 + 1
+                    meo9: st.typing.childNameIdOfId parentTypeId: moTid9 nameId: moNm9.u64
+                    match (
+                        meo9
+                    ) case some then {
+                        usedE9.add item: meo9
+                    } case none then null
+                }
                 mainOp9: u32
                 uN9: prog.ast.units.length
                 uI9: u64
@@ -2375,17 +2589,117 @@ Analysis: class {
                                 }
                                 if priv9 when (usedE9.has item: ceoD9) == false then {
                                     dnm9: zast.poolTextCopy pool: prog.ast.names ref: mNameRef9
-                                    if dnm9.stringview != "main" then {
-                                        (this.warn
-                                            code: "L012"
-                                            msg: "private definition '\{dnm9}' is never used"
-                                            line: mLn9
-                                            col: mCl9
-                                            width: dnm9.length.u32.orPanic
-                                        )
-                                    }
+                                    (this.warn
+                                        code: "L012"
+                                        msg: "private definition '\{dnm9}' is never used"
+                                        line: mLn9
+                                        col: mCl9
+                                        width: dnm9.length.u32.orPanic
+                                    )
                                 }
                             } case none then null
+                        }
+                    }
+                    # private type members: walk each type definition's is/as
+                    # members and flag private edges with no recorded use
+                    tmI9: u64
+                    for tmI9 < mN9 loop {
+                        tmid9: memIds9.get i: tmI9
+                        tmI9 = tmI9 + 1
+                        tNameRef9: u32
+                        tOp9: u32
+                        {
+                            tm9: prog.ast.nodes.get i: (tmid9 - 1).u64
+                            if tm9.namedoperation then {
+                                tNameRef9 = tm9.name
+                                tOp9 = tm9.operation
+                            }
+                        }
+                        isObjT9: false
+                        if tOp9 > 0 then {
+                            to9: prog.ast.nodes.get i: (tOp9 - 1).u64
+                            if to9.objectdef then isObjT9 = true
+                        }
+                        if isObjT9 when tNameRef9 > 0 then {
+                            typeTid9: u64
+                            {
+                                teoT9: (st.typing.childNameIdOfId
+                                    parentTypeId: mainTid9
+                                    nameId: tNameRef9.u64
+                                )
+                                match (
+                                    teoT9
+                                ) case some then {
+                                    cto9: st.typing.childTypeById.get key: teoT9
+                                    match (
+                                        cto9
+                                    ) case some then {
+                                        typeTid9 = cto9
+                                    } case none then null
+                                } case none then null
+                            }
+                            if typeTid9 > 0 then {
+                                tmemIds9: (List u32)
+                                {
+                                    tod9: prog.ast.nodes.get i: (tOp9 - 1).u64
+                                    match (
+                                        tod9
+                                    ) case objectdef then {
+                                        with iit9: tod9.isItems.iterate do for iid9: iit9 loop tmemIds9.append from: iid9
+                                        with ait9: tod9.asItems.iterate do for aid9: ait9 loop tmemIds9.append from: aid9
+                                    } else null
+                                }
+                                tnm9: zast.poolTextCopy pool: prog.ast.names ref: tNameRef9
+                                tmN9: tmemIds9.length
+                                tmJ9: u64
+                                for tmJ9 < tmN9 loop {
+                                    tmmid9: tmemIds9.get i: tmJ9
+                                    tmJ9 = tmJ9 + 1
+                                    tmName9: u32
+                                    tmLn9: u32
+                                    tmCl9: u32
+                                    {
+                                        tmm9: prog.ast.nodes.get i: (tmmid9 - 1).u64
+                                        if tmm9.namedoperation then {
+                                            tmName9 = tmm9.name
+                                            tmLn9 = tmm9.lineno
+                                            tmCl9 = tmm9.colno
+                                        }
+                                    }
+                                    if tmName9 > 0 then {
+                                        tmeo9: (st.typing.childNameIdOfId
+                                            parentTypeId: typeTid9
+                                            nameId: tmName9.u64
+                                        )
+                                        match (
+                                            tmeo9
+                                        ) case some then {
+                                            tpriv9: false
+                                            {
+                                                tpr9: st.typing.childPrivate.get key: tmeo9
+                                                match (
+                                                    tpr9
+                                                ) case some then {
+                                                    tpriv9 = tpr9
+                                                } case none then null
+                                            }
+                                            if tpriv9 when (usedE9.has item: tmeo9) == false then {
+                                                tmnm9: (zast.poolTextCopy
+                                                    pool: prog.ast.names
+                                                    ref: tmName9
+                                                )
+                                                (this.warn
+                                                    code: "L012"
+                                                    msg: "private member '\{tnm9}.\{tmnm9}' is never used"
+                                                    line: tmLn9
+                                                    col: tmCl9
+                                                    width: tmnm9.length.u32.orPanic
+                                                )
+                                            }
+                                        } case none then null
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3454,7 +3768,7 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
                 if bad9 then {
                     j: u64
                     for j < added loop {
-                        pd9: good.pop
+                        good.pop
                         j = j + 1
                     }
                 }
