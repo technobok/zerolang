@@ -2142,6 +2142,45 @@ defNodeOf: function {
     return 0
 }
 
+# trailingDocOf -- the text of a trailing `#` comment on `line1` (1-based) of
+# file `fsno`, the `#` and surrounding space stripped; "" when there is none.
+# Surfaces a field's or parameter's inline doc in hover.
+trailingDocOf: function {snap: zcheck.CheckResult fsno: u32 line1: u32} out String is {
+    result9: String
+    if line1 == 0 then return result9
+    lg9: snap.vfs.getline dentryid: fsno lineno: (line1 - 1).u64
+    match (
+        lg9
+    ) case some then {
+        lv9: lg9.stringview
+        n9: lv9.length
+        inStr9: false
+        hashAt9: u64
+        found9: false
+        i9: u64
+        for i9 < n9 loop {
+            b9: lv9.byteAt i: i9
+            match (
+                b9
+            ) case some then {
+                if b9 == 34 then inStr9 = (inStr9 == false)
+                if b9 == 35 when inStr9 == false when found9 == false then {
+                    hashAt9 = i9
+                    found9 = true
+                }
+            } case none then null
+            if found9 then break
+            i9 = i9 + 1
+        }
+        if found9 then {
+            after9: lv9.substring from: (hashAt9 + 1) to: n9
+            trimmed9: after9.trim
+            result9 = trimmed9.string
+        }
+    } case none then null
+    return result9
+}
+
 # docCommentForNode -- the contiguous `#` comment block immediately above the
 # definition at `defLine` (1-based) in file `fsno`, each line stripped of its
 # leading "# " and joined top-to-bottom by newlines; "" when there is none.
@@ -2551,14 +2590,21 @@ navAnswer: function {
         if body9.length == 0 then {
             tk9: typeKindTextOpt o: snap.st tid: refTid
             if tk9.length > 0 then {
-                body9 = hname.copy
+                body9 = displayTypeNameOfOpt o: snap.st tid: refTid
                 body9.append ": "
                 body9.append tk9.stringview
             } else {
                 if t9 == 0 then return Value.nul
                 tn: displayTypeNameOfOpt o: snap.st tid: t9
                 if tn.length == 0 then return Value.nul
-                body9 = hname.copy
+                if refOwner > 0 then {
+                    own9: displayTypeNameOfOpt o: snap.st tid: refOwner
+                    if own9.length > 0 then {
+                        body9.append own9.stringview
+                        body9.appendByte b: 46
+                    }
+                }
+                body9.append hname.stringview
                 body9.append ": "
                 body9.append tn.stringview
                 annot9: refAnnotation o: snap.st vid: refVid nid: tnid
@@ -2588,6 +2634,13 @@ navAnswer: function {
                 if dfs9 > 0 when dln9 > 1 then {
                     doc9: docCommentForNode :snap fsno: dfs9 defLine: dln9
                     if doc9.length > 0 then docBody9 = doc9
+                    if refOwner > 0 then {
+                        tc9: trailingDocOf :snap fsno: dfs9 line1: dln9
+                        if tc9.length > 0 then {
+                            body9.append "  # "
+                            body9.append tc9.stringview
+                        }
+                    }
                 }
             } case none then null
         }
