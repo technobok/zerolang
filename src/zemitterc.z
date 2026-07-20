@@ -1392,7 +1392,7 @@ implicitTakeFnId: function {
         # not a bare-name lookup: a free function sharing the method's name
         # (zast.mkNamedOp vs the Parser.mkNamedOp method) otherwise wins below,
         # and its mismatched param names leave a moved-in owned arg un-zeroed.
-        mdch0: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+        mdch0: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
         if mdch0.length > 0 then {
             xq229: ast.nodes.get i: (call.callable - 1).u64
             mrcv0: dottedReceiverStampId :ast :symtab callable: xq229
@@ -1418,7 +1418,7 @@ implicitTakeFnId: function {
         # child name to reach its consuming `create` below (the same-unit path
         # resolves via the bare-atom userFnId above). Without this the moved-in
         # owned arg is never zeroed -> double free at the owner's destructor.
-        dn0: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+        dn0: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
         if dn0.length > 0 then {
             rt0: resolveTypeIdByName :ast :symtab :ctx name: dn0.stringview
             if rt0 > 0 then ct = rt0
@@ -1450,7 +1450,7 @@ isCtorOwnerCall: function {
     smidO: stampIdOf :symtab nid: call.nodeid.u64
     soO: monoOriginName :symtab tid: smidO
     bnO: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    mcO9: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mcO9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bnO.stringview == "meta" when mcO9.stringview == "create" then return true
     if (originIsTid
         :symtab
@@ -1472,7 +1472,7 @@ isCtorOwnerCall: function {
             if (symtab.reg.typetypeOf typeId: uctO) == ztypes.ztypetype.unionType then {
                 monoLk1: monoOriginName :symtab tid: uctO
                 if monoLk1.length == 0 then {
-                    uarmO: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+                    uarmO: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
                     if (symtab.typing.isChildLockArm
                         pool: ast.names
                         parentTypeId: uctO
@@ -1488,7 +1488,7 @@ isCtorOwnerCall: function {
         # cross-unit construction (dotted callable, e.g. `zast.UnitData`):
         # resolve the constructed type by its child name so an owned arg moved
         # into a record/variant/class/union field is zeroed (else double free).
-        dn0: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+        dn0: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
         if dn0.length > 0 then {
             rt0: resolveTypeIdByName :ast :symtab :ctx name: dn0.stringview
             if rt0 > 0 then ct = rt0
@@ -1512,7 +1512,7 @@ emitCallTakeInvalidations: function {
 } is {
     ftid9: implicitTakeFnId :ast :symtab :ctx :call
     ctorOwner9: isCtorOwnerCall :ast :symtab :ctx :call
-    mmn9: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mmn9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     collMove9: false
     if mmn9.stringview == "append" then collMove9 = true
     if mmn9.stringview == "insert" then collMove9 = true
@@ -1721,6 +1721,33 @@ dottedChildText: function {ast: Ast n: Node} out String is {
     }
 }
 
+# aliasOrChild / aliasChildName -- the internal member name a dotted-path node
+# resolved to through a public-interface alias (typecheck stamp keyed on the
+# dotted-path nodeid), else the plain AST child text. Centralizes rename-aware
+# member-name emission so a renamed member emits its internal (declared) C name.
+aliasOrChild: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    aliasId: u64
+    childId: u32
+} out String is {
+    if symtab.typing.renameSeen then {
+        ai9: symtab.typing.aliasInternalNameOf nodeid: aliasId
+        if ai9.length > 0 then return ai9
+    }
+    return (atomTextOf :ast n: (ast.nodes.get i: (childId - 1).u64))
+}
+
+aliasChildName: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child)
+    } else {
+        return "".string
+    }
+}
+
 dottedBaseNodeId: function {ast: Ast n: Node} out u64 is {
     match (
         n
@@ -1846,7 +1873,7 @@ emitDottedCall: function {
     call: zast.CallData
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     btid: u64
     if bn.length == 0 then {
         # nested/projected base (el.text.stringview.stripPrefix): no base atom, but
@@ -2098,7 +2125,7 @@ emitDataIndexCall: function {
     call: zast.CallData
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     bt: stampNameOf :symtab nid: bnid
@@ -2217,7 +2244,7 @@ emitStringArgMethod: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     nativeM: String
     if mn.stringview == "appendByte" then nativeM = "append_byte".string
     if mn.stringview == "reserve" then nativeM = "reserve".string
@@ -2488,7 +2515,7 @@ emitInstanceMethodCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
     xq179: ast.nodes.get i: (call.callable - 1).u64
     recvExpr: emitDottedReceiver :ast :symtab :ctx callable: xq179
@@ -2819,7 +2846,7 @@ callRhsIsBorrow: function {
         ufid9: userFnId :ast :symtab :ctx name: cnm9.stringview
         if (funcBorrowFlag :symtab tid: ufid9) then return true
     }
-    ch: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    ch: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if ch.length == 0 then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
     rid = chaseColMono :ast :symtab tid: rid
@@ -2893,7 +2920,7 @@ emitStrConvCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if mn.stringview != "str" then return "".string
     rid0: stampIdOf :symtab nid: call.nodeid.u64
     rid: chaseColMono :ast :symtab tid: rid0
@@ -3023,7 +3050,7 @@ emitCollectionMethodCall: function {
 } out String is {
     bn: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     brid9: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
     bt: chaseColMono :ast :symtab tid: brid9
     # classify by the mono's ORIGIN NAME (the graph-independent identity):
@@ -3597,7 +3624,7 @@ emitUnionCtor: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
     smid0: stampIdOf :symtab nid: call.nodeid.u64
     smOrig9: monoOriginName :symtab tid: smid0
@@ -3659,7 +3686,7 @@ emitVariantCtorCall: function {
     call: zast.CallData
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
     # system monos (optionval/resultval inline, Option none) -- the call node is
     # stamped with the concrete mono id (userFnId fails for these). Option.some
@@ -3740,7 +3767,7 @@ emitColTypedefCall: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     isBC: false
     if mn.stringview == "borrow" then isBC = true
     if mn.stringview == "create" then isBC = true
@@ -3762,7 +3789,7 @@ emitTypeQualCall: function {
     call: zast.CallData
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
     btid: userFnId :ast :symtab :ctx name: bn.stringview
     if btid == 0 then return "".string
@@ -4674,7 +4701,7 @@ emitGenericFnCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    gdc9: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    gdc9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if gdc9.length > 0 then return "".string
     gmf9: stampIdOf :symtab nid: (nodeIdOf9 n: (ast.nodes.get i: (call.callable - 1).u64))
     if gmf9 == 0 then return "".string
@@ -4818,7 +4845,7 @@ emitUnitMethodCall: function {
     if (symtab.reg.typetypeOf typeId: rsid9) != ztypes.ztypetype.unitType then return "".string
     rmo9: monoOriginName :symtab tid: rsid9
     if rmo9.length == 0 then return "".string
-    child9: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    child9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if child9.length == 0 then return "".string
     co9: symtab.typing.childOf pool: ast.names parentTypeId: rsid9 name: child9.stringview
     fid9: u64
@@ -4958,7 +4985,7 @@ emitCrossUnitFnCall: function {
     call: zast.CallData
 } out String is {
     base: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    child: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    child: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if base.length == 0 then return "".string
     if child.length == 0 then return "".string
     if (symtab.reg.isUnitName name: base.stringview) == false then return "".string
@@ -5238,7 +5265,7 @@ emitCrossUnitUnionCtor: function {
     ptype: dottedParentChild :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if pbase.length == 0 then return "".string
     if ptype.length == 0 then return "".string
-    arm9: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    arm9: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if arm9.length == 0 then return "".string
     if arm9.stringview == "create" then return "".string
     if arm9.stringview == "borrow" then return "".string
@@ -5291,7 +5318,7 @@ emitCrossUnitCtor: function {
     call: zast.CallData
 } out String is {
     base: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    child: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    child: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if base.length == 0 then return "".string
     if child.length == 0 then return "".string
     if child.stringview == "create" then {
@@ -5369,7 +5396,7 @@ emitFnptrFieldCall: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
     rtid: chaseColMono :ast :symtab tid: rtid0
@@ -5415,7 +5442,7 @@ emitFnptrLocalCall: function {
     cn0: StringView
 } out String is {
     if fid > 0 then return "".string
-    dct: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    dct: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if dct.length > 0 then return "".string
     cnid: nodeIdOf9 n: (ast.nodes.get i: (call.callable - 1).u64)
     cTid: stampIdOf :symtab nid: cnid
@@ -6063,7 +6090,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 }
             } case none then null
         }
-        mnc0: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
         dps9: ast.nodes.get i: (n.parent - 1).u64
         ccbc9: emitCrossUnitBareCreate :ast :symtab :ctx parent: dps9 child: mnc0.stringview
         if ccbc9.length > 0 then return ccbc9
@@ -6205,7 +6232,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         bn2r: atomTextOf :ast n: (ast.nodes.get i: (n.parent - 1).u64)
         bn2a9: aliasResolve :ctx name: bn2r.stringview
         bn2: ztypes.mangleVarName name: bn2a9.stringview
-        mn2: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
+        mn2: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
         if bn2r.stringview == "io" then {
             isStdS9: false
             if mn2.stringview == "stdout" then isStdS9 = true
@@ -8081,7 +8108,7 @@ emitCallStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    relmn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    relmn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if relmn.stringview == "release" then {
         relbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
         reltid: stampIdOf :symtab nid: relbnid
@@ -19028,7 +19055,7 @@ emitFileMethodCall: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     isFM: false
     if mn.stringview == "close" then isFM = true
     if mn.stringview == "read" then isFM = true
@@ -19562,7 +19589,7 @@ emitResultCombinator: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     isP9: false
     if mn.stringview == "orPanic" then isP9 = true
     isO9: false
@@ -19621,7 +19648,7 @@ emitParsedMethodCall: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     isPM: false
     if mn.stringview == "hasFlag" then isPM = true
     if mn.stringview == "option" then isPM = true
@@ -19670,7 +19697,7 @@ emitUserIterCall: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if mn.stringview != "call" then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     rid0: stampIdOf :symtab nid: bnid
@@ -19746,7 +19773,7 @@ emitProtocolDispatch: function {
     ctx: Ctx
     call: zast.CallData
 } out String is {
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     if mn.length == 0 then return "".string
     if mn.stringview == "create" then return "".string
     if mn.stringview == "borrow" then return "".string
@@ -19882,7 +19909,7 @@ emitProtocolCreateCall: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: (call.callable - 1).u64)
     if bn.length == 0 then return "".string
-    mn: dottedChildText :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: (call.callable - 1).u64)
     isCreate: false
     if mn.stringview == "create" then isCreate = true
     if mn.stringview == "borrow" then isCreate = true

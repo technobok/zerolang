@@ -157,6 +157,12 @@ ZTyping: class {
     # per-edge mutable state, keyed by childNameId
     childTypeById: (Map u64 value: u64)
     childPrivate: (Map u64 value: bool)
+    # public-interface rename: "{parentTypeId}:{publicName}" -> internalName
+    childPublicAlias: (Map String value: String)
+    # true once any public-interface rename exists (skips alias lookups otherwise)
+    renameSeen: bool
+    # true once any member has been marked private (gates cross-unit checks)
+    privacySeen: bool
     childLockField: (Map u64 value: bool)
     childGrantsPrivate: (Map u64 value: bool)
     childIsFnptrField: (Map u64 value: bool)
@@ -213,6 +219,8 @@ ZTyping: class {
     callKind: (Map u64 value: zast.callkind)
     atomVariableId: (Map u64 value: u64)
     atomUnitDefId: (Map u64 value: u64)
+    # dotted-path nodeid -> the internal member name a public alias resolved to
+    aliasInternalName: (Map u64 value: String)
     implicitCreate: (Map u64 value: u64)
     variableCname: (Map u64 value: String)
     variableZtype: (Map u64 value: u64)
@@ -502,12 +510,56 @@ ZTyping: class {
     # setChildPrivateId -- mark a child edge private by its Ast.names pool id
     # (id-keyed twin of setChildPrivate; the visibility pass has the id in hand).
     setChildPrivateId: function {:this parentTypeId: u64 nameId: u64} is {
+        this.privacySeen = true
         idopt: this.childNameIdOfId :parentTypeId :nameId
         match (
             idopt
         ) case some then {
             this.childPrivate.set key: idopt value: true
         } case none then null
+    }
+
+    # --- public-interface rename map (publicName -> internalName) ---
+    # setChildPublicAlias -- record that `publicName` in parentTypeId's public
+    # interface exposes the internal member `internalName`.
+    setChildPublicAlias: function {:this parentTypeId: u64 publicName: StringView internalName: StringView} is {
+        k9: "\{parentTypeId}:\{publicName}"
+        v9: internalName.string
+        this.childPublicAlias.set key: k9.take value: v9
+        this.renameSeen = true
+    }
+
+    # childPublicAliasOf -- the internal member a public alias exposes, "" when
+    # `name` is not a renamed public entry of parentTypeId.
+    childPublicAliasOf: function {:this parentTypeId: u64 name: StringView} out String is {
+        k9: "\{parentTypeId}:\{name}"
+        r9: this.childPublicAlias.get key: k9
+        match (
+            r9
+        ) case some then {
+            return r9.copy
+        } case none then {
+            return "".string
+        }
+    }
+
+    # setAliasInternalName / aliasInternalNameOf -- per dotted-path-node record
+    # of the internal member an external access resolved to through a public
+    # alias; the emitter reads it to emit the internal C name.
+    setAliasInternalName: function {:this nodeid: u64 internalName: StringView} is {
+        v9: internalName.string
+        this.aliasInternalName.set key: nodeid value: v9
+    }
+
+    aliasInternalNameOf: function {:this nodeid: u64} out String is {
+        r9: this.aliasInternalName.get key: nodeid
+        match (
+            r9
+        ) case some then {
+            return r9.copy
+        } case none then {
+            return "".string
+        }
     }
 
     # setChildGrantsPrivateId -- mark a field edge as one whose declared type
@@ -978,6 +1030,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         typeGenericArg: (List ZTypeGenericArg)
         childTypeById: (Map u64 value: u64)
         childPrivate: (Map u64 value: bool)
+        childPublicAlias: (Map String value: String)
+        renameSeen: false
+        privacySeen: false
         childLockField: (Map u64 value: bool)
     childGrantsPrivate: (Map u64 value: bool)
         childIsFnptrField: (Map u64 value: bool)
@@ -1028,6 +1083,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         callKind: (Map u64 value: zast.callkind)
         atomVariableId: (Map u64 value: u64 capacity: nodeEst / 4)
         atomUnitDefId: (Map u64 value: u64 capacity: nodeEst / 8)
+        aliasInternalName: (Map u64 value: String)
         implicitCreate: (Map u64 value: u64)
         variableCname: (Map u64 value: String)
         variableZtype: (Map u64 value: u64)

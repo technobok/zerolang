@@ -3956,11 +3956,18 @@ materializeCreateParams: function {
 scanVisibility: function {
     ty: ztyping.ZTyping
     ast: Ast
+    parentId: u64
     onode: zast.ObjectDefData
     excl: (List u64)
     grants: (List u64)
 } is {
     pubIds: (Set u64)
+    memberIds: (Set u64)
+    aliasPubRef: (List u32)
+    aliasIntRef: (List u32)
+    aliasLine: (List u32)
+    aliasCol: (List u32)
+    aliasNode: (List u32)
     pubFound: false
     with aiter: onode.asItems.iterate do for aId9: aiter loop {
         an9: ast.nodes.get i: (aId9 - 1).u64
@@ -3990,6 +3997,30 @@ scanVisibility: function {
                             bn9
                         ) case namedoperation then {
                             pubIds.add item: bn9.name.u64
+                            bop9: ast.nodes.get i: (bn9.operation - 1).u64
+                            match (
+                                bop9
+                            ) case labelvalue then null case atomid then {
+                                # `alias: internal` renames when the exposed
+                                # name differs from the member being exposed
+                                if bn9.name != bop9.name then {
+                                    aliasPubRef.append from: bn9.name
+                                    aliasIntRef.append from: bop9.name
+                                    aliasLine.append from: bn9.lineno
+                                    aliasCol.append from: bn9.colno
+                                    aliasNode.append from: bn9.nodeid
+                                }
+                            } else {
+                                (addResolveErrorH
+                                    :ty
+                                    nodeid: bn9.nodeid
+                                    lineno: bn9.lineno
+                                    colno: bn9.colno
+                                    e: zast.err.typeError
+                                    msg: "a public interface entry must be ':member' or 'alias: member'".string
+                                    width: 1
+                                )
+                            }
                         } else null
                     }
                 } else null
@@ -4001,6 +4032,7 @@ scanVisibility: function {
         match (
             fm9
         ) case namedoperation then {
+            memberIds.add item: fm9.name.u64
             if (typeExprHasPrivate
                 :ast
                 n: (ast.nodes.get i: (fm9.operation - 1).u64)
@@ -4021,10 +4053,54 @@ scanVisibility: function {
             if (zast.nameTextEq :ast ref: am9.name s: "public") then skip9 = true
             if (zast.nameTextEq :ast ref: am9.name s: "private") then skip9 = true
             if (skip9) == false then {
+                memberIds.add item: am9.name.u64
                 hasM9: pubIds.has item: am9.name.u64
                 if (hasM9) == false then excl.append from: am9.name.u64
             }
         } else null
+    }
+    # validate the rename aliases against the now-known member set, then install
+    ax9: u64
+    for ax9 < aliasPubRef.length loop {
+        pRef9: aliasPubRef.get i: ax9
+        iRef9: aliasIntRef.get i: ax9
+        okAlias9: true
+        if (memberIds.has item: iRef9.u64) == false then {
+            iTxt9: zast.nameTextCopy :ast ref: iRef9
+            (addResolveErrorH
+                :ty
+                nodeid: (aliasNode.get i: ax9)
+                lineno: (aliasLine.get i: ax9)
+                colno: (aliasCol.get i: ax9)
+                e: zast.err.typeError
+                msg: "public interface exposes '\{iTxt9}', which is not a member of this type"
+                width: 1
+            )
+            okAlias9 = false
+        }
+        if okAlias9 when (memberIds.has item: pRef9.u64) then {
+            pTxt9: zast.nameTextCopy :ast ref: pRef9
+            (addResolveErrorH
+                :ty
+                nodeid: (aliasNode.get i: ax9)
+                lineno: (aliasLine.get i: ax9)
+                colno: (aliasCol.get i: ax9)
+                e: zast.err.typeError
+                msg: "public alias '\{pTxt9}' collides with a member of the same name"
+                width: 1
+            )
+            okAlias9 = false
+        }
+        if okAlias9 then {
+            pTxt2: zast.nameTextCopy :ast ref: pRef9
+            iTxt2: zast.nameTextCopy :ast ref: iRef9
+            (ty.setChildPublicAlias
+                parentTypeId: parentId
+                publicName: pTxt2.stringview
+                internalName: iTxt2.stringview
+            )
+        }
+        ax9 = ax9 + 1
     }
 }
 
@@ -4048,6 +4124,256 @@ applyGrantsPrivate: function {ty: ztyping.ZTyping parentId: u64 grants: (List u6
     }
 }
 
+# scanUnitVisibility -- restrict a file unit's public interface. A `public:`
+# block lists the exposed top-level definitions; unlisted defs become private
+# (E0101 when referenced from another unit) and `alias: internal` entries
+# expose a def under a different public name. The unit's members are childOf
+# edges of unitTid, so the same childPrivate / childPublicAlias tables apply.
+scanUnitVisibility: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    unitName: StringView
+    unitTid: u64
+    unitdefId: u32
+} is {
+    pubIds: (Set u64)
+    memberIds: (Set u64)
+    memberNameList: (List u64)
+    aliasPubRef: (List u32)
+    aliasIntRef: (List u32)
+    aliasLine: (List u32)
+    aliasCol: (List u32)
+    aliasNode: (List u32)
+    pubFound: false
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
+    with uit9: bodyIds9.iterate do for umId9: uit9 loop {
+        um9: ast.nodes.get i: (umId9 - 1).u64
+        match (
+            um9
+        ) case namedoperation then {
+            isPubU9: zast.nameTextEq :ast ref: um9.name s: "public"
+            isPrivU9: zast.nameTextEq :ast ref: um9.name s: "private"
+            if isPrivU9 then {
+                (addResolveErrorH
+                    :ty
+                    nodeid: um9.nodeid
+                    lineno: um9.lineno
+                    colno: um9.colno
+                    e: zast.err.typeError
+                    msg: "`private:` cannot be redefined -- `private` always includes every definition of the unit".string
+                    width: 7
+                )
+            }
+            if isPubU9 then {
+                uop9: ast.nodes.get i: (um9.operation - 1).u64
+                match (
+                    uop9
+                ) case unitdef then {
+                    pubFound = true
+                    with ubit9: uop9.body.iterate do for ubId9: ubit9 loop {
+                        ubn9: ast.nodes.get i: (ubId9 - 1).u64
+                        match (
+                            ubn9
+                        ) case namedoperation then {
+                            pubIds.add item: ubn9.name.u64
+                            ubop9: ast.nodes.get i: (ubn9.operation - 1).u64
+                            match (
+                                ubop9
+                            ) case labelvalue then null case atomid then {
+                                if ubn9.name != ubop9.name then {
+                                    aliasPubRef.append from: ubn9.name
+                                    aliasIntRef.append from: ubop9.name
+                                    aliasLine.append from: ubn9.lineno
+                                    aliasCol.append from: ubn9.colno
+                                    aliasNode.append from: ubn9.nodeid
+                                }
+                            } else {
+                                (addResolveErrorH
+                                    :ty
+                                    nodeid: ubn9.nodeid
+                                    lineno: ubn9.lineno
+                                    colno: ubn9.colno
+                                    e: zast.err.typeError
+                                    msg: "a public interface entry must be ':member' or 'alias: member'".string
+                                    width: 1
+                                )
+                            }
+                        } else null
+                    }
+                } else null
+            }
+            if (isPubU9) == false when (isPrivU9) == false then {
+                memberIds.add item: um9.name.u64
+                memberNameList.append from: um9.name.u64
+            }
+        } else null
+    }
+    if (pubFound) == false then return
+    emiU9: u64
+    for emiU9 < memberNameList.length loop {
+        mnidU9: memberNameList.get i: emiU9
+        if (pubIds.has item: mnidU9) == false then {
+            ty.setChildPrivateId parentTypeId: unitTid nameId: mnidU9
+        }
+        emiU9 = emiU9 + 1
+    }
+    axU9: u64
+    for axU9 < aliasPubRef.length loop {
+        pRefU9: aliasPubRef.get i: axU9
+        iRefU9: aliasIntRef.get i: axU9
+        okU9: true
+        if (memberIds.has item: iRefU9.u64) == false then {
+            iTxtU9: zast.nameTextCopy :ast ref: iRefU9
+            (addResolveErrorH
+                :ty
+                nodeid: (aliasNode.get i: axU9)
+                lineno: (aliasLine.get i: axU9)
+                colno: (aliasCol.get i: axU9)
+                e: zast.err.typeError
+                msg: "public interface exposes '\{iTxtU9}', which is not a definition of this unit"
+                width: 1
+            )
+            okU9 = false
+        }
+        if okU9 when (memberIds.has item: pRefU9.u64) then {
+            pTxtU9: zast.nameTextCopy :ast ref: pRefU9
+            (addResolveErrorH
+                :ty
+                nodeid: (aliasNode.get i: axU9)
+                lineno: (aliasLine.get i: axU9)
+                colno: (aliasCol.get i: axU9)
+                e: zast.err.typeError
+                msg: "public alias '\{pTxtU9}' collides with a definition of the same name"
+                width: 1
+            )
+            okU9 = false
+        }
+        if okU9 then {
+            pTxU9: zast.nameTextCopy :ast ref: pRefU9
+            iTxU9: zast.nameTextCopy :ast ref: iRefU9
+            (ty.setChildPublicAlias
+                parentTypeId: unitTid
+                publicName: pTxU9.stringview
+                internalName: iTxU9.stringview
+            )
+        }
+        axU9 = axU9 + 1
+    }
+}
+
+# demandUnitRenameTargets -- a `public: unit { alias: internal }` rename
+# references its target only through the alias, so the ordinary demand scan
+# never demands `internal`. Seed those demands up front (before the descent)
+# so the target's signature resolves and its unit childOf edge is created;
+# otherwise a cross-unit reference to the renamed def resolves to nothing.
+demandUnitRenameTargets: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        uCntD9: program.ast.units.length
+        uIdxD9: u64
+        for uIdxD9 < uCntD9 loop {
+            uIdD9: program.ast.units.get i: uIdxD9
+            uIdxD9 = uIdxD9 + 1
+            opIdD9: u32
+            nmD9: String
+            {
+                ruD9: program.ast.nodes.get i: (uIdD9 - 1).u64
+                if ruD9.namedoperation then {
+                    nmtD9: zast.poolTextCopy pool: program.ast.names ref: ruD9.name
+                    opIdD9 = ruD9.operation
+                    nmD9 = nmtD9.copy
+                }
+            }
+            if opIdD9 > 0 then {
+                bodyIdsD9: zast.unitBodyIdsAt ast: program.ast unitId: opIdD9
+                with dit9: bodyIdsD9.iterate do for dmId9: dit9 loop {
+                    dm9: program.ast.nodes.get i: (dmId9 - 1).u64
+                    if dm9.namedoperation then {
+                        if (zast.poolTextEq
+                            pool: program.ast.names
+                            ref: dm9.name
+                            s: "public"
+                        ) then {
+                            duop9: program.ast.nodes.get i: (dm9.operation - 1).u64
+                            match (
+                                duop9
+                            ) case unitdef then {
+                                with dubit9: duop9.body.iterate do for dubId9: dubit9 loop {
+                                    dubn9: program.ast.nodes.get i: (dubId9 - 1).u64
+                                    if dubn9.namedoperation then {
+                                        dubop9: program.ast.nodes.get i: (dubn9.operation - 1).u64
+                                        match (
+                                            dubop9
+                                        ) case atomid then {
+                                            tgtNm9: (zast.poolTextCopy
+                                                pool: program.ast.names
+                                                ref: dubop9.name
+                                            )
+                                            if tgtNm9.length > 0 then {
+                                                reg.recordDemand name: tgtNm9.stringview
+                                                (reg.recordSeededDemand
+                                                    un: nmD9.stringview
+                                                    name: tgtNm9.stringview
+                                                )
+                                            }
+                                        } else null
+                                    }
+                                }
+                            } else null
+                        }
+                    }
+                }
+            }
+        }
+    } else null
+}
+
+# applyUnitVisibility -- run scanUnitVisibility for every file unit that
+# declares a `public:` block, after all unit child edges are registered.
+applyUnitVisibility: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
+    match (
+        program
+    ) case program then {
+        uCntV9: program.ast.units.length
+        uIdxV9: u64
+        for uIdxV9 < uCntV9 loop {
+            uIdV9: program.ast.units.get i: uIdxV9
+            uIdxV9 = uIdxV9 + 1
+            opIdV9: u32
+            nmV9: String
+            {
+                ruV9: program.ast.nodes.get i: (uIdV9 - 1).u64
+                if ruV9.namedoperation then {
+                    nmt9: zast.poolTextCopy pool: program.ast.names ref: ruV9.name
+                    opIdV9 = ruV9.operation
+                    nmV9 = nmt9.copy
+                }
+            }
+            if opIdV9 > 0 then {
+                utidV9: u64
+                {
+                    uidoV9: reg.unitNameTid.getv key: nmV9.stringview
+                    match (
+                        uidoV9
+                    ) case some then {
+                        utidV9 = uidoV9
+                    } case none then null
+                }
+                if utidV9 > 0 then {
+                    (scanUnitVisibility
+                        :ty
+                        ast: program.ast
+                        unitName: nmV9.stringview
+                        unitTid: utidV9
+                        unitdefId: opIdV9
+                    )
+                }
+            }
+        }
+    } else null
+}
+
 resolveRecord: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -4067,7 +4393,7 @@ resolveRecord: function {
     rrid: rid
     pvExcl_rrid: (List u64)
     pvGrants_rrid: (List u64)
-    scanVisibility :ty :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
+    scanVisibility :ty :ast parentId: rrid onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
     reg.setValtype typeId: rid value: true
     isgen: hasGenericParam :ast items: rnode.asItems
     eqOptR9: eqNullOptOut :ast asItems: rnode.asItems
@@ -4327,7 +4653,7 @@ resolveVariant: function {
     vvid: vid
     pvExcl_vvid: (List u64)
     pvGrants_vvid: (List u64)
-    scanVisibility :ty :ast onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
+    scanVisibility :ty :ast parentId: vvid onode: vnode excl: pvExcl_vvid grants: pvGrants_vvid
     reg.setValtype typeId: vid value: true
     isgen: hasGenericParam :ast items: vnode.asItems
     eqOptV9: eqNullOptOut :ast asItems: vnode.asItems
@@ -4609,7 +4935,7 @@ resolveUnion: function {
     uuid: uid
     pvExcl_uuid: (List u64)
     pvGrants_uuid: (List u64)
-    scanVisibility :ty :ast onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
+    scanVisibility :ty :ast parentId: uuid onode: vnode excl: pvExcl_uuid grants: pvGrants_uuid
     reg.setValtype typeId: uid value: false
     isgen: hasGenericParam :ast items: vnode.asItems
     if isgen then {
@@ -4831,7 +5157,7 @@ resolveClass: function {
     ccid: cid
     pvExcl_ccid: (List u64)
     pvGrants_ccid: (List u64)
-    scanVisibility :ty :ast onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
+    scanVisibility :ty :ast parentId: ccid onode: cnode excl: pvExcl_ccid grants: pvGrants_ccid
     reg.setValtype typeId: cid value: false
     needsDtor: false
     isgen: hasGenericParam :ast items: cnode.asItems
@@ -5190,7 +5516,7 @@ resolveFacet: function {
     ffid: fid
     pvExcl_ffid: (List u64)
     pvGrants_ffid: (List u64)
-    scanVisibility :ty :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
+    scanVisibility :ty :ast parentId: ffid onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     reg.setValtype typeId: fid value: true
     isgen: hasGenericParam :ast items: fnode.isItems
     if isgen then reg.setGeneric typeId: fid value: true
@@ -5271,7 +5597,7 @@ resolveProtocol: function {
     ppid: pid
     pvExcl_ppid: (List u64)
     pvGrants_ppid: (List u64)
-    scanVisibility :ty :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
+    scanVisibility :ty :ast parentId: ppid onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     reg.setValtype typeId: pid value: false
     isgen: hasGenericParam :ast items: fnode.isItems
     if isgen then reg.setGeneric typeId: pid value: true
@@ -12458,12 +12784,53 @@ checkDotted: function {
     # position (its return is the path's value).
     if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then {
         un9: typeNameOf :st tid: bt
+        # public-interface visibility: from ANOTHER unit, translate a public
+        # alias to the internal def it exposes, and reject a reference to a
+        # private (unlisted) definition (E0101). Same-unit refs use declared
+        # names and are never restricted.
+        effUcn9: cn.copy
+        if (st.typing.privacySeen) when un9.stringview != unitName then {
+            aliasHitU9: false
+            if st.typing.renameSeen then {
+                intU9: st.typing.childPublicAliasOf parentTypeId: bt name: cn.stringview
+                if intU9.length > 0 then {
+                    (st.typing.setAliasInternalName
+                        nodeid: dp.nodeid.u64
+                        internalName: intU9.stringview
+                    )
+                    effUcn9 = intU9.copy
+                    aliasHitU9 = true
+                }
+            }
+            if (aliasHitU9) == false when (st.typing.isChildPrivate
+                pool: ast.names
+                parentTypeId: bt
+                name: cn.stringview
+            ) then {
+                ucnid9: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
+                ucln9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
+                uccl9: nodeCol n: (ast.nodes.get i: (dp.child - 1).u64)
+                ucnc9: cn.copy
+                (addErrorH
+                    :st
+                    nodeid: ucnid9
+                    lineno: ucln9
+                    colno: uccl9
+                    e: zast.err.notPublic
+                    msg: "'\{ucnc9}' is not public on unit '\{un9}'"
+                    note: "".string
+                    hint: "".string
+                    width: cn.length.u32.orPanic
+                )
+                return 0
+            }
+        }
         mo9: (walkLookupTyperef
             :ast
             ty: st.typing
             reg: st.reg
             currentUnit: un9.stringview
-            base: cn.stringview
+            base: effUcn9.stringview
         )
         match (
             mo9
@@ -12567,6 +12934,29 @@ checkDotted: function {
             )
             return 0
         }
+    }
+    # public-interface rename: from OUTSIDE the type, a public alias resolves
+    # to the internal member it exposes (the internal name stays private,
+    # enforced below). Same-object access (this / a .private handle) uses
+    # declared names, so translate only when the base is not private-capable.
+    aliasViaX9: false
+    intNmX9: String
+    {
+        baseNodeX9: ast.nodes.get i: (dp.parent - 1).u64
+        if (st.typing.renameSeen) when (baseIsPrivateCapable
+            :st
+            :ast
+            :bt
+            baseNode: baseNodeX9
+        ) == false then {
+            intNmX9 = st.typing.childPublicAliasOf parentTypeId: bt name: cn.stringview
+        }
+    }
+    if intNmX9.length > 0 then {
+        st.typing.setAliasInternalName nodeid: dp.nodeid.u64 internalName: intNmX9.stringview
+        cnId9 = (ast.names.find s: intNmX9.stringview).u64
+        cn = intNmX9.copy
+        aliasViaX9 = true
     }
     # a typedef member that isn't on the wrapper delegates to the base
     # (Bytes.append is List_u8.append).
@@ -12687,6 +13077,38 @@ checkDotted: function {
             if isMember0 then {
                 isVal9: taggedRecvIsValue :ast :st n: (ast.nodes.get i: (dp.parent - 1).u64)
                 if (isVal9) == false then {
+                    # arm constructors are members: from OUTSIDE the type an
+                    # unlisted arm is private (a public alias translated above).
+                    armHidden9: false
+                    if aliasViaX9 == false then {
+                        baseNodeC9: ast.nodes.get i: (dp.parent - 1).u64
+                        if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC9) == false then {
+                            if (st.typing.isChildPrivate
+                                pool: ast.names
+                                parentTypeId: bt
+                                name: cn.stringview
+                            ) then armHidden9 = true
+                        }
+                    }
+                    if armHidden9 then {
+                        ccnid9: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
+                        ccln9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
+                        cccl9: nodeCol n: (ast.nodes.get i: (dp.child - 1).u64)
+                        ccbn9: typeNameOf :st tid: bt
+                        cccp9: cn.copy
+                        (addErrorH
+                            :st
+                            nodeid: ccnid9
+                            lineno: ccln9
+                            colno: cccl9
+                            e: zast.err.notPublic
+                            msg: "'\{cccp9}' is not public on type '\{ccbn9}'"
+                            note: "".string
+                            hint: "".string
+                            width: cn.length.u32.orPanic
+                        )
+                        return 0
+                    }
                     dpk0: dp.nodeid.u64
                     dpv0: bt
                     st.typing.dpTaggedParent.set key: dpk0 value: dpv0
@@ -12855,7 +13277,11 @@ checkDotted: function {
                 }
             }
         }
-        if (st.typing.isChildPrivate pool: ast.names parentTypeId: bt name: cn.stringview) then {
+        if aliasViaX9 == false when (st.typing.isChildPrivate
+            pool: ast.names
+            parentTypeId: bt
+            name: cn.stringview
+        ) then {
             baseN9: ast.nodes.get i: (dp.parent - 1).u64
             if (baseIsPrivateCapable :st :ast :bt baseNode: baseN9) == false then {
                 cnidP9: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
@@ -21253,6 +21679,7 @@ typecheck: function {
     registerAndResolveMain ty: st.typing reg: st.reg :program :full
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
     if full then scanMainBodyCalls reg: st.reg :program
+    demandUnitRenameTargets ty: st.typing reg: st.reg :program
     resolveDemandsByDescent ty: st.typing reg: st.reg :program :full
     match (
         program
@@ -21269,6 +21696,7 @@ typecheck: function {
         resolveConstantDefs ty: st.typing reg: st.reg :program
         completeUnitInstantiations ty: st.typing reg: st.reg :program
     }
+    applyUnitVisibility ty: st.typing reg: st.reg :program
     stampTyperefs ty: st.typing reg: st.reg :program
     if full then {
         checkBodies :st :program
