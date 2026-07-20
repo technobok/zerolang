@@ -20,6 +20,10 @@
 -- so typing `.` opens a member-completion popup. Pass `completion = false` to
 -- leave completion to your own engine (nvim-cmp, blink.cmp, ...).
 --
+-- setup() also shows a signature-help popup (the current call's parameters, with
+-- the active one highlighted) automatically when a `:` or a space is typed, and
+-- on demand via <C-k> in insert mode. Pass `signature = false` to disable it.
+--
 -- `systemDir` must point at the zerolang standard library (a real directory); it
 -- also falls back to $ZEROLANG_SYSTEM. `srcDir` is optional -- when omitted, zls
 -- derives it from the workspace root (the directory holding the .z files, or its
@@ -96,6 +100,40 @@ function M.setup(opts)
             vim.api.nvim_set_option_value(
               "completeopt", "menuone,noselect,popup", { buf = bufnr }
             )
+          end
+
+          -- Signature help: a floating popup with the enclosing call's
+          -- parameters, the active one highlighted. Unlike completion this is a
+          -- separate popup (not the pum), so it works even mid-call when the
+          -- line does not yet parse. Auto-shown when a signatureHelp trigger
+          -- character (the server advertises `:` and a space) is typed -- and
+          -- silent then, so a `:`/space outside a call shows nothing -- plus
+          -- <C-k> in insert mode for an on-demand (non-silent) request. Opt out
+          -- with `signature = false`.
+          if opts.signature ~= false and client:supports_method("textDocument/signatureHelp") then
+            vim.keymap.set(
+              "i", "<C-k>", vim.lsp.buf.signature_help,
+              { buffer = bufnr, desc = "Signature help" }
+            )
+            local trig = {}
+            local sp = client.server_capabilities.signatureHelpProvider or {}
+            for _, ch in ipairs(sp.triggerCharacters or {}) do
+              trig[ch] = true
+            end
+            vim.api.nvim_create_autocmd("InsertCharPre", {
+              buffer = bufnr,
+              callback = function()
+                if trig[vim.v.char] then
+                  -- fire after the character lands so the request reflects it;
+                  -- silent so a `:`/space outside a call opens nothing
+                  vim.schedule(function()
+                    if vim.api.nvim_buf_is_valid(bufnr) then
+                      vim.lsp.buf.signature_help({ silent = true })
+                    end
+                  end)
+                end
+              end,
+            })
           end
         end,
       }, { bufnr = args.buf })
