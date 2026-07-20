@@ -2239,7 +2239,158 @@ Analysis: class {
             reg: ztypes.newRegistry
             st: ztypecheck.typecheck :ast program: prog :reg full: true
             this.lintSuffixUnit :prog :uname :st
+            this.reportUnusedDefs :prog :uname :st
         }
+    }
+
+    # reportUnusedDefs -- L012 (unused private definition). A private unit-level definition
+    # (function, type, or alias excluded from a `public:` block) whose child edge is never
+    # referenced is dead. Usage is edge-based (childNameId): a reference name resolved against
+    # the unit maps to the same edge id that carries the private flag, so an unused alias is
+    # flagged even when its target is used directly elsewhere.
+    reportUnusedDefs: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable} is {
+        match (
+            prog
+        ) case program then {
+            mainTid9: u64
+            {
+                uo9: st.reg.unitNameTid.getv key: uname
+                match (
+                    uo9
+                ) case some then {
+                    mainTid9 = uo9
+                } case none then null
+            }
+            if mainTid9 > 0 then {
+                usedE9: (Set u64)
+                refNames9: (List u32)
+                with a9: st.typing.atomUnitDefId.iterateItems do for e9: a9 loop {
+                    nid9: e9.key
+                    rn9: u32
+                    {
+                        nd9: prog.ast.nodes.get i: (nid9 - 1).u64
+                        match (
+                            nd9
+                        ) case atomid then {
+                            rn9 = nd9.name
+                        } case dottedpath then {
+                            chId9: nd9.child
+                            {
+                                ch9: prog.ast.nodes.get i: (chId9 - 1).u64
+                                match (
+                                    ch9
+                                ) case atomid then {
+                                    rn9 = ch9.name
+                                } else null
+                            }
+                        } else null
+                    }
+                    if rn9 > 0 then refNames9.append from: rn9
+                }
+                rnI9: u64
+                for rnI9 < refNames9.length loop {
+                    rn9b: refNames9.get i: rnI9
+                    rnI9 = rnI9 + 1
+                    ceo9: st.typing.childNameIdOfId parentTypeId: mainTid9 nameId: rn9b.u64
+                    match (
+                        ceo9
+                    ) case some then {
+                        usedE9.add item: ceo9
+                    } case none then null
+                }
+                atPrefix9: "\{mainTid9}:"
+                tgtNames9: (List String)
+                with pa9: st.typing.childPublicAlias.iterateItems do for pe9: pa9 loop {
+                    if (pe9.key.stringview.startsWith prefix: atPrefix9.stringview) then tgtNames9.append from: pe9.value.copy
+                }
+                tI9: u64
+                for tI9 < tgtNames9.length loop {
+                    tnm9: tgtNames9.get i: tI9
+                    tI9 = tI9 + 1
+                    tpid9: (prog.ast.names.find s: tnm9.stringview).u64
+                    if tpid9 > 0 then {
+                        teo9: st.typing.childNameIdOfId parentTypeId: mainTid9 nameId: tpid9
+                        match (
+                            teo9
+                        ) case some then {
+                            usedE9.add item: teo9
+                        } case none then null
+                    }
+                }
+                mainOp9: u32
+                uN9: prog.ast.units.length
+                uI9: u64
+                for uI9 < uN9 loop {
+                    uid9: prog.ast.units.get i: uI9
+                    uI9 = uI9 + 1
+                    unm9: String
+                    uop9: u32
+                    {
+                        un9: prog.ast.nodes.get i: (uid9 - 1).u64
+                        if un9.namedoperation then {
+                            unm9 = (zast.poolTextCopy pool: prog.ast.names ref: un9.name)
+                            uop9 = un9.operation
+                        }
+                    }
+                    if unm9.stringview == uname when uop9 > 0 then mainOp9 = uop9
+                }
+                if mainOp9 > 0 then {
+                    memIds9: (List u32)
+                    {
+                        bodyIds9: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp9
+                        with bit9: bodyIds9.iterate do for mid9: bit9 loop memIds9.append from: mid9
+                    }
+                    mN9: memIds9.length
+                    mI9: u64
+                    for mI9 < mN9 loop {
+                        mid9: memIds9.get i: mI9
+                        mI9 = mI9 + 1
+                        mNameRef9: u32
+                        mLn9: u32
+                        mCl9: u32
+                        {
+                            m9: prog.ast.nodes.get i: (mid9 - 1).u64
+                            if m9.namedoperation then {
+                                mNameRef9 = m9.name
+                                mLn9 = m9.lineno
+                                mCl9 = m9.colno
+                            }
+                        }
+                        if mNameRef9 > 0 then {
+                            ceoD9: (st.typing.childNameIdOfId
+                                parentTypeId: mainTid9
+                                nameId: mNameRef9.u64
+                            )
+                            match (
+                                ceoD9
+                            ) case some then {
+                                priv9: false
+                                {
+                                    pr9: st.typing.childPrivate.get key: ceoD9
+                                    match (
+                                        pr9
+                                    ) case some then {
+                                        priv9 = pr9
+                                    } case none then null
+                                }
+                                if priv9 when (usedE9.has item: ceoD9) == false then {
+                                    dnm9: zast.poolTextCopy pool: prog.ast.names ref: mNameRef9
+                                    if dnm9.stringview != "main" then {
+                                        (this.warn
+                                            code: "L012"
+                                            msg: "private definition '\{dnm9}' is never used"
+                                            line: mLn9
+                                            col: mCl9
+                                            width: dnm9.length.u32.orPanic
+                                        )
+                                    }
+                                }
+                            } case none then null
+                        }
+                    }
+                }
+            }
+        } else null
     }
 }
 
