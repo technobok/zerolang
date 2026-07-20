@@ -450,6 +450,8 @@ Server: class {
                 this.handleNav :msg mode: 3
             } else if mv == "textDocument/completion" then {
                 this.handleNav :msg mode: 4
+            } else if mv == "textDocument/signatureHelp" then {
+                this.handleNav :msg mode: 5
             } else if mv == "textDocument/formatting" then {
                 this.handleFormatting :msg
             } else if mv == "textDocument/documentSymbol" then {
@@ -538,6 +540,16 @@ Server: class {
         ctc9.items.append (Value.text " ".string)
         comp9.set key: "triggerCharacters".string value: (Value.array ctc9)
         caps.set key: "completionProvider".string value: (Value.object comp9)
+        sig9: newObj
+        stc9: newArr
+        stc9.items.append (Value.text ":".string)
+        stc9.items.append (Value.text " ".string)
+        sig9.set key: "triggerCharacters".string value: (Value.array stc9)
+        rtc9: newArr
+        rtc9.items.append (Value.text ":".string)
+        rtc9.items.append (Value.text " ".string)
+        sig9.set key: "retriggerCharacters".string value: (Value.array rtc9)
+        caps.set key: "signatureHelpProvider".string value: (Value.object sig9)
         caps.set key: "documentFormattingProvider".string value: (Value.boolean true)
         caps.set key: "referencesProvider".string value: (Value.boolean true)
         caps.set key: "documentSymbolProvider".string value: (Value.boolean true)
@@ -895,6 +907,16 @@ Server: class {
                                 ch: ch0
                                 utf32: this.encUtf32
                                 trig: trigCh9.stringview
+                            )
+                        } else if mode == 5 then {
+                            res = (signatureHelpAnswer
+                                snap: sno
+                                docRel: drel.stringview
+                                srcDir: this.srcDir.stringview
+                                docText: dtext.stringview
+                                :line0
+                                ch: ch0
+                                utf32: this.encUtf32
                             )
                         } else {
                             res = (navAnswer
@@ -1731,6 +1753,98 @@ fnSigTextOpt: function {
     } case none then {
         return "".string
     }
+}
+
+# fnParamDisplays -- the per-parameter display strings for a function tid
+# (receiver skipped): each "name: <type>[.take/.lock]" or "name: <default>",
+# mirroring fnSigTextOpt's param rendering. Raw material for signatureHelp
+# parameters.
+fnParamDisplays: function {
+    prog: zast.Node
+    o: (Option zenv.ZSymbolTable)
+    tid: u64
+} out (List String) is {
+    out9: (List String)
+    match (
+        o
+    ) case some then {
+        pnames9: (List String)
+        ptids9: (List u64)
+        pcnids9: (List u64)
+        match (
+            prog
+        ) case program then {
+            bp9: o.typing.childIndex.get key: tid
+            match (
+                bp9
+            ) case some then {
+                with rpit9: bp9.rows.iterate do for rpi9: rpit9 loop {
+                    tc9: o.typing.typeChild.get i: rpi9
+                    cnB9: prog.ast.names.texts.get i: (tc9.nameId - 1).u64
+                    cn9: cnB9.stringview
+                    isRecv9: false
+                    if tc9.nameId == wkThis then isRecv9 = true
+                    zt9: o.reg.typeById.get key: tid
+                    match (
+                        zt9
+                    ) case some then {
+                        if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
+                    } case none then null
+                    if (isRecv9) == false then {
+                        ctid9: u64
+                        cg9: o.typing.childTypeById.get key: tc9.childNameId
+                        match (
+                            cg9
+                        ) case some then {
+                            ctid9 = cg9
+                        } case none then null
+                        pnames9.append cn9.string
+                        ptids9.append ctid9
+                        pcnids9.append tc9.childNameId
+                    }
+                }
+            } case none then null
+        } else null
+        pi9: u64
+        for pi9 < pnames9.length loop {
+            pt9: ptids9.get i: pi9
+            pcn9: pcnids9.get i: pi9
+            dtc9: String
+            hasDef9: false
+            {
+                dt9: o.typing.childDefault.get key: pcn9
+                match (
+                    dt9
+                ) case some then {
+                    dtc9 = dt9.copy
+                    hasDef9 = true
+                } case none then null
+            }
+            ptn9: displayTypeNameSt st: o tid: pt9
+            ps9: (pnames9.get i: pi9).copy
+            ps9.append ": "
+            if hasDef9 then {
+                dd9: defaultDisplay dtext: dtc9.stringview typeName: ptn9.stringview
+                if dd9.length > 0 then {
+                    ps9.append dd9.stringview
+                } else {
+                    ps9.append ptn9.stringview
+                }
+            } else {
+                ps9.append ptn9.stringview
+                oo9: o.typing.childOwnership.get key: pcn9
+                match (
+                    oo9
+                ) case some then {
+                    if oo9 == ztypes.zparamownership.takeMode then ps9.append ".take"
+                    if oo9 == ztypes.zparamownership.lockMode then ps9.append ".lock"
+                } case none then null
+            }
+            out9.append ps9
+            pi9 = pi9 + 1
+        }
+    } case none then null
+    return out9
 }
 
 # hoverMarkdown -- a hover result: `code` rendered as a fenced ```zerolang
@@ -3577,6 +3691,69 @@ caseArmComplete: function {
     return true
 }
 
+# resolveCalleeFuncId -- a callable/leaf node id -> its function tid: nodeType
+# carries a method callable's fn tid, useUnitDef a free function's; anything that
+# does not name a function type yields 0.
+resolveCalleeFuncId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    ftid9: nodeTypeAt :o :nid
+    udx9: useUnitDef :o :nid
+    if udx9 > 0 then ftid9 = udx9
+    if ftid9 == 0 then return 0
+    result9: u64
+    match (
+        o
+    ) case some then {
+        tt9: o.reg.typetypeOf typeId: ftid9
+        match (
+            tt9
+        ) case functionType then {
+            result9 = ftid9
+        } else null
+    } case none then null
+    return result9
+}
+
+# leafFuncIdAt -- the innermost leaf span at (line1u, idCol) resolved to a
+# function tid, preferring a kind-2 member row so a dotted method's callable
+# resolves; 0 when nothing there names a function. Shared by the bare-name
+# arg-label lookup and signature help.
+leafFuncIdAt: function {
+    snap: zcheck.CheckResult
+    o: (Option zenv.ZSymbolTable)
+    sp: Spans
+    docRel: StringView
+    srcDir: StringView
+    line1u: u32
+    idCol: u32
+} out u64 is {
+    leafNid9: u32
+    bk9: u8
+    found9: false
+    rix9: u64
+    for rix9 < sp.rows.length loop {
+        row9: sp.rows.get i: rix9
+        if row9.line == line1u when row9.colLo <= idCol then {
+            if idCol < row9.colHi then {
+                fs9: zcheck.fsnoFor r: snap nodeid: row9.nodeid
+                pp9: snap.vfs.pathfromprovider dentryid: fs9
+                if (pathMatches pv: pp9.stringview rel: docRel :srcDir) then {
+                    take9: false
+                    if (found9) == false then take9 = true
+                    if row9.kind == 2 when bk9 != 2 then take9 = true
+                    if take9 then {
+                        leafNid9 = row9.nodeid
+                        bk9 = row9.kind
+                        found9 = true
+                    }
+                }
+            }
+        }
+        rix9 = rix9 + 1
+    }
+    if (found9) == false then return 0
+    return (resolveCalleeFuncId :o nid: leafNid9.u64)
+}
+
 # bareCalleeFuncId9 -- a lone function/method name with no label yet parses as
 # an atom/dotted-path, not a call node, so the arg-label path has nothing to sit
 # inside. Resolve the identifier just before the trailing whitespace via the
@@ -3629,22 +3806,7 @@ bareCalleeFuncId9: function {
         rix9 = rix9 + 1
     }
     if (found9) == false then return 0
-    ftid9: nodeTypeAt :o nid: leafNid9.u64
-    udx9: useUnitDef :o nid: leafNid9.u64
-    if udx9 > 0 then ftid9 = udx9
-    if ftid9 == 0 then return 0
-    result9: u64
-    match (
-        o
-    ) case some then {
-        tt9: o.reg.typetypeOf typeId: ftid9
-        match (
-            tt9
-        ) case functionType then {
-            result9 = ftid9
-        } else null
-    } case none then null
-    return result9
+    return (resolveCalleeFuncId :o nid: leafNid9.u64)
 }
 
 # emitLabels -- append `funcId9`'s parameter labels (minus the receiver and any
@@ -3821,7 +3983,7 @@ argLabelComplete: function {
         caln9: prog.ast.nodes.get i: (callableIdx9 - 1).u64
         calNid9 = ztypecheck.nodeId n: caln9
     } else null
-    funcId9: useUnitDef :o nid: calNid9.u64
+    funcId9: resolveCalleeFuncId :o nid: calNid9.u64
     if funcId9 == 0 then return false
     # supplied labels (each arg -> namedoperation.name ref -> text)
     si9: u64
@@ -3849,6 +4011,314 @@ argLabelComplete: function {
         si9 = si9 + 1
     }
     return (emitLabels :arr :o :prog :funcId9 :supplied9 :prefix)
+}
+
+# signatureHelpAnswer -- a mid-typing signature popup. A call being typed often
+# fails to parse (a trailing label -> "Expected an Operation after label") and is
+# absent from the last-good snapshot tree, so locate the enclosing call by a
+# paren-depth-aware backward scan of the live buffer (a call spans lines only
+# inside parens; a nested call argument is always parenthesised, so the innermost
+# unmatched "(" bounds it), resolve the callee against the snapshot, and render
+# its signature with the active parameter (the label nearest the cursor). Returns
+# a SignatureHelp object, or null when the cursor is not inside a resolvable call.
+signatureHelpAnswer: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    srcDir: StringView
+    docText: StringView
+    line0: i64
+    ch: i64
+    utf32: bool
+} out Value is {
+    l1: line0 + 1
+    l1u: l1.u32.orPanic
+    curLt: docLine text: docText lineno: l1u
+    cp1: cpColOf lineText: curLt.stringview :ch :utf32
+    curByte9: byteIdxOfCp s: curLt.stringview :cp1
+    # scan backward for the operation head: the innermost unmatched "(" (an
+    # enclosing, possibly multi-line, call) wins; otherwise the nearest statement
+    # start (a line begun outside parens) once a block boundary or the buffer top
+    # is reached. Newlines are NOT hard stops -- a call spans lines inside parens.
+    pd9: i64
+    headLine9: l1u
+    headByte9: u64
+    stmtLine9: l1u
+    stmtByte9: u64
+    haveStmt9: false
+    stop9: false
+    scanLine9: l1u
+    scanText9: curLt.copy
+    scanEnd9: curByte9
+    for stop9 == false loop {
+        {
+            stv9: scanText9.stringview
+            i9: scanEnd9
+            for i9 > 0 loop {
+                bb9: stv9.byteAt i: i9 - 1
+                match (
+                    bb9
+                ) case some then {
+                    if bb9 == 41 then pd9 = pd9 + 1
+                    if bb9 == 40 then {
+                        if pd9 > 0 then {
+                            pd9 = pd9 - 1
+                        } else {
+                            headLine9 = scanLine9
+                            headByte9 = i9
+                            stop9 = true
+                        }
+                    }
+                    if bb9 == 123 when pd9 == 0 then {
+                        if haveStmt9 then {
+                            headLine9 = stmtLine9
+                            headByte9 = stmtByte9
+                        } else {
+                            headLine9 = scanLine9
+                            headByte9 = i9
+                        }
+                        stop9 = true
+                    }
+                    if bb9 == 125 when pd9 == 0 then {
+                        if haveStmt9 then {
+                            headLine9 = stmtLine9
+                            headByte9 = stmtByte9
+                        } else {
+                            headLine9 = scanLine9
+                            headByte9 = i9
+                        }
+                        stop9 = true
+                    }
+                } case none then null
+                if stop9 then break
+                i9 = i9 - 1
+            }
+        }
+        if stop9 then break
+        if pd9 == 0 when haveStmt9 == false then {
+            stmtLine9 = scanLine9
+            stmtByte9 = 0
+            haveStmt9 = true
+        }
+        if scanLine9 <= 1 then {
+            if haveStmt9 then {
+                headLine9 = stmtLine9
+                headByte9 = stmtByte9
+            } else {
+                headLine9 = 1
+                headByte9 = 0
+            }
+            stop9 = true
+        } else {
+            scanLine9 = scanLine9 - 1
+            scanText9 = docLine text: docText lineno: scanLine9
+            scanEnd9 = scanText9.length
+        }
+    }
+    headLt9: docLine text: docText lineno: headLine9
+    hstv9: headLt9.stringview
+    hlen9: hstv9.length
+    j9: headByte9
+    for j9 < hlen9 loop {
+        wb9: hstv9.byteAt i: j9
+        stopw9: false
+        match (
+            wb9
+        ) case some then {
+            if wb9 != 32 when wb9 != 9 then stopw9 = true
+        } case none then {
+            stopw9 = true
+        }
+        if stopw9 then break
+        j9 = j9 + 1
+    }
+    ids9: j9
+    for j9 < hlen9 loop {
+        ib9: hstv9.byteAt i: j9
+        stopi9: false
+        match (
+            ib9
+        ) case some then {
+            if (isIdentByte b: ib9) == false then stopi9 = true
+        } case none then {
+            stopi9 = true
+        }
+        if stopi9 then break
+        j9 = j9 + 1
+    }
+    isBind9: false
+    {
+        cb9: hstv9.byteAt i: j9
+        match (
+            cb9
+        ) case some then {
+            if cb9 == 58 then isBind9 = true
+        } case none then null
+    }
+    if isBind9 then {
+        j9 = j9 + 1
+        for j9 < hlen9 loop {
+            wb2: hstv9.byteAt i: j9
+            stopw2: false
+            match (
+                wb2
+            ) case some then {
+                if wb2 != 32 when wb2 != 9 then stopw2 = true
+            } case none then {
+                stopw2 = true
+            }
+            if stopw2 then break
+            j9 = j9 + 1
+        }
+        ids9 = j9
+        for j9 < hlen9 loop {
+            ib2: hstv9.byteAt i: j9
+            stopi2: false
+            match (
+                ib2
+            ) case some then {
+                if (isIdentByte b: ib2) == false then stopi2 = true
+            } case none then {
+                stopi2 = true
+            }
+            if stopi2 then break
+            j9 = j9 + 1
+        }
+    }
+    if j9 == ids9 then return Value.nul
+    segStart9: ids9
+    for true loop {
+        db9: hstv9.byteAt i: j9
+        isDot9: false
+        match (
+            db9
+        ) case some then {
+            if db9 == 46 then isDot9 = true
+        } case none then null
+        if (isDot9) == false then break
+        j9 = j9 + 1
+        segStart9 = j9
+        for j9 < hlen9 loop {
+            ib3: hstv9.byteAt i: j9
+            stopi3: false
+            match (
+                ib3
+            ) case some then {
+                if (isIdentByte b: ib3) == false then stopi3 = true
+            } case none then {
+                stopi3 = true
+            }
+            if stopi3 then break
+            j9 = j9 + 1
+        }
+    }
+    calleeEnd9: j9
+    activeLabel9: String
+    {
+        lowb9: u64
+        if headLine9 == l1u then lowb9 = calleeEnd9
+        alstv9: curLt.stringview
+        k9: curByte9
+        apd9: i64
+        albreak9: false
+        for k9 > lowb9 loop {
+            ab9: alstv9.byteAt i: k9 - 1
+            match (
+                ab9
+            ) case some then {
+                if ab9 == 41 then apd9 = apd9 + 1
+                if ab9 == 40 when apd9 > 0 then apd9 = apd9 - 1
+                if ab9 == 58 when apd9 == 0 then {
+                    le9: k9 - 1
+                    ls9: le9
+                    for ls9 > lowb9 loop {
+                        lb9: alstv9.byteAt i: ls9 - 1
+                        stopl9: false
+                        match (
+                            lb9
+                        ) case some then {
+                            if (isIdentByte b: lb9) == false then stopl9 = true
+                        } case none then {
+                            stopl9 = true
+                        }
+                        if stopl9 then break
+                        ls9 = ls9 - 1
+                    }
+                    if ls9 < le9 then {
+                        activeLabel9 = (alstv9.substring from: ls9 to: le9).string
+                        albreak9 = true
+                    }
+                }
+            } case none then null
+            if albreak9 then break
+            k9 = k9 - 1
+        }
+    }
+    nmS9: (hstv9.substring from: segStart9 to: calleeEnd9).string
+    segCp9: u64
+    {
+        hsub9: hstv9.substring from: 0 to: segStart9
+        segCp9 = hsub9.count
+    }
+    idCol9: segCp9.u32.orPanic + 1
+    sp9: (Spans
+        rows: (List spanrow)
+        names: (List String)
+        pos: (Map u64 value: u64)
+        ranges: (List rangerow)
+        lastPos: 0
+    )
+    sp9.walkProgram prog: snap.prog
+    funcId9: leafFuncIdAt :snap o: snap.st sp: sp9 :docRel :srcDir line1u: headLine9 idCol: idCol9
+    if funcId9 == 0 then return Value.nul
+    label9: fnSigTextOpt prog: snap.prog o: snap.st tid: funcId9 name: nmS9.stringview
+    if label9.length == 0 then return Value.nul
+    pdisps9: fnParamDisplays prog: snap.prog o: snap.st tid: funcId9
+    params9: newArr
+    activeIdx9: i64
+    foundActive9: false
+    pi9: u64
+    for pi9 < pdisps9.length loop {
+        pds9: pdisps9.get i: pi9
+        pdv9: pds9.stringview
+        colon9: u64
+        hasColon9: false
+        ci9: u64
+        for ci9 < pdv9.length loop {
+            cbb9: pdv9.byteAt i: ci9
+            match (
+                cbb9
+            ) case some then {
+                if cbb9 == 58 when hasColon9 == false then {
+                    colon9 = ci9
+                    hasColon9 = true
+                }
+            } case none then null
+            ci9 = ci9 + 1
+        }
+        pnm9: pdv9
+        if hasColon9 then pnm9 = pdv9.substring from: 0 to: colon9
+        if foundActive9 == false when activeLabel9.length > 0 then {
+            if pnm9 == activeLabel9.stringview then {
+                activeIdx9 = pi9.i64.orPanic
+                foundActive9 = true
+            }
+        }
+        pobj9: newObj
+        pobj9.set key: "label".string value: (Value.text pdv9.string)
+        params9.items.append (Value.object pobj9)
+        pi9 = pi9 + 1
+    }
+    siginfo9: newObj
+    siginfo9.set key: "label".string value: (Value.text label9)
+    siginfo9.set key: "parameters".string value: (Value.array params9)
+    siginfo9.set key: "activeParameter".string value: (Value.intval activeIdx9)
+    sigs9: newArr
+    sigs9.items.append (Value.object siginfo9)
+    root9: newObj
+    root9.set key: "signatures".string value: (Value.array sigs9)
+    root9.set key: "activeSignature".string value: (Value.intval 0)
+    root9.set key: "activeParameter".string value: (Value.intval activeIdx9)
+    return (Value.object root9)
 }
 
 # completionAnswer -- scope-based completion from the last-good
