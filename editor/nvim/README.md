@@ -84,6 +84,12 @@ auto-selecting the first item and further typing filters it. Pass
 `completion = false` to `setup()` to leave completion — and `completeopt` — to
 your own engine (nvim-cmp, blink.cmp, …).
 
+Signature help pops up automatically as you type a call — a floating window with
+the callee's parameters and the active one highlighted — when you type a `:` or a
+space, and on demand via `<C-k>` in insert mode. Because it is a separate popup
+from the completion menu it also shows mid-call while the line does not yet
+parse. Pass `signature = false` to `setup()` to turn it off.
+
 One `zls` process serves a whole workspace: Neovim dedups clients by `root_dir`,
 so every `.z` buffer under the same root shares a single server, which checks
 the open buffers layered over the on-disk sources. Files in unrelated
