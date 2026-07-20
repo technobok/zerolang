@@ -3780,9 +3780,19 @@ emitTypeQualCall: function {
             pids: (List u64)
             pidsNm: (List u64)
             recFieldLists :ast :symtab tid: mco names: pnames ids: pids nameIds: pidsNm
-            # the default (synth) `create` carries no params -- route it to the
-            # type's ctor (field-label args), the same path bare-name uses.
-            if mn.stringview == "create" when pnames.length == 0 then {
+            # a synthesized `create` (no body) has field-shaped params but no
+            # emitted create fn -- route it to the type's field-wise ctor, the
+            # path bare-name construction uses; a user create (a body) is called.
+            mcBody9: false
+            {
+                mcrn9: symtab.typing.funcReturnNode.get key: mco
+                match (
+                    mcrn9
+                ) case some then {
+                    mcBody9 = true
+                } case none then null
+            }
+            if mn.stringview == "create" when mcBody9 == false then {
                 return (emitRecordCtor :ast :symtab :ctx :call tid: btid name: bn.stringview)
             }
             pn: pnames.length
@@ -4118,11 +4128,18 @@ emitRecordCtor: function {
         cco
     ) case some then {
         if (symtab.reg.typetypeOf typeId: cco) == ztypes.ztypetype.functionType then {
+            crB9: false
+            crn9: symtab.typing.funcReturnNode.get key: cco
+            match (
+                crn9
+            ) case some then {
+                crB9 = true
+            } case none then null
             cpn: (List String)
             cpi: (List u64)
             cpiNm: (List u64)
             recFieldLists :ast :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
-            if cpn.length > 0 then {
+            if crB9 then {
                 cargs: String
                 ci: u64
                 ccn: cpn.length
@@ -5173,8 +5190,21 @@ emitCrossUnitExplicitCreate: function {
                 cargs.append cav.stringview
                 ci = ci + 1
             }
-            ccb: symtab.reg.cnameOf tid: cco
-            return "\{ccb}(\{cargs})"
+            ccBody9: false
+            {
+                ccrn9: symtab.typing.funcReturnNode.get key: cco
+                match (
+                    ccrn9
+                ) case some then {
+                    ccBody9 = true
+                } case none then null
+            }
+            if ccBody9 then {
+                ccb: symtab.reg.cnameOf tid: cco
+                return "\{ccb}(\{cargs})"
+            }
+            fwcb9: symtab.reg.cnameOf :tid
+            return "\{fwcb9}_create(\{cargs})"
         }
     } case none then null
     return "".string

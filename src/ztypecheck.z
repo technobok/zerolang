@@ -3877,6 +3877,82 @@ typeExprHasPrivate: function {ast: Ast n: Node} out bool is {
 # all-public default; synthesized edges are never listed); `grants` = pool ids
 # of fields whose declared type is a `.private` handle (independent of any
 # `public:` block). The resolver applies both once child edges are registered.
+# materializeCreateParams -- give a synthesized `.create` one parameter edge per
+# the type's data field, in declaration order, so the create method carries the
+# signature the construction sugar validates and dispatches against. Mirrors
+# dataFieldNames' field filter (fnptr fields + non-FUNCTION fields, excluding
+# as-block const clones and conformance markers). The synth create keeps no
+# funcReturnNode, so emission still routes it field-wise.
+materializeCreateParams: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    typeTid: u64
+    createId: u64
+} is {
+    mkNames8: (List String)
+    with cfit8: ty.conformance.iterate do for crow8: cfit8 loop {
+        if crow8.implTypeId == typeTid then mkNames8.append crow8.label.copy
+    }
+    fnameIds: (List u64)
+    ftypeIds: (List u64)
+    {
+        bd9: ty.childIndex.get key: typeTid
+        match (
+            bd9
+        ) case some then {
+            with rdit9: bd9.rows.iterate do for rdi9: rdit9 loop {
+                tc: ty.typeChild.get i: rdi9
+                cto: optU64Or o: (ty.childTypeById.get key: tc.childNameId) d: 0
+                inc: false
+                fptr: false
+                fpo: ty.childIsFnptrField.get key: tc.childNameId
+                match (
+                    fpo
+                ) case some then {
+                    fptr = fpo
+                } case none then null
+                if fptr then {
+                    inc = true
+                } else {
+                    if cto > 0 when (reg.typetypeOf typeId: cto) != ztypes.ztypetype.functionType then {
+                        isC: false
+                        aco: ty.asConstClone.get key: cto
+                        match (
+                            aco
+                        ) case some then {
+                            isC = aco
+                        } case none then null
+                        isMk8: false
+                        cnBm8: ast.names.texts.get i: (tc.nameId - 1).u64
+                        mi8: u64
+                        mn8: mkNames8.length
+                        for mi8 < mn8 loop {
+                            mv8: mkNames8.get i: mi8
+                            if mv8.stringview == cnBm8.stringview then isMk8 = true
+                            mi8 = mi8 + 1
+                        }
+                        if isC == false when isMk8 == false then inc = true
+                    }
+                }
+                if inc then {
+                    fnameIds.append tc.nameId.u64
+                    ftypeIds.append cto
+                }
+            }
+        } case none then null
+    }
+    i9: u64
+    for i9 < fnameIds.length loop {
+        (ty.setChildId
+            parentTypeId: createId
+            nameId: (fnameIds.get i: i9)
+            childTypeId: (ftypeIds.get i: i9)
+        )
+        i9 = i9 + 1
+    }
+}
+
 scanVisibility: function {
     ty: ztyping.ZTyping
     ast: Ast
@@ -4158,6 +4234,7 @@ resolveRecord: function {
         createName: "\{defName}.create"
         createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: rid nameId: wkCreate childTypeId: createId
+        materializeCreateParams :ty :reg :ast typeTid: rid :createId
     }
     if istd then {
         borrowName: "\{defName}.borrow"
@@ -5072,6 +5149,7 @@ resolveClass: function {
                 typetype: ztypes.ztypetype.functionType
             )
             ty.setChildId parentTypeId: cid nameId: wkCreate childTypeId: createId
+            materializeCreateParams :ty :reg :ast typeTid: cid :createId
         }
     }
     if istd then {
@@ -12654,6 +12732,29 @@ checkDotted: function {
         rm: mo
         result: u64
         result = rm
+        # `X.create` in value position is zero-argument construction (the same
+        # as the bare type name); route it through the shared construction check
+        # so a synthesized create's required fields are enforced and the
+        # implicitCreate stamp drives field-wise emission.
+        if coerce when cnId9 == wkCreate when (st.reg.typetypeOf typeId: mo) == ztypes.ztypetype.functionType when (isImplicitZeroCreateTid
+            :ast
+            :st
+            tid: bt
+        ) == false then {
+            (checkBareTypeValueAt
+                :ast
+                :st
+                :unitName
+                nodeid: dp.nodeid
+                lineno: dp.lineno
+                colno: dp.colno
+                width: cn.length.u32.orPanic
+                tid: bt
+            )
+            setcr9: bt
+            st.typing.nodeType.set key: dp.nodeid.u64 value: setcr9
+            return bt
+        }
         # Reading a protocol-typed conformance member projects a borrow of
         # the receiver: the consuming binding becomes BORROWED with the base
         # as its origin (and installs the borrow locks).
@@ -15566,6 +15667,22 @@ walkCallArgsHoist: function {
     st.typing.lastLockParamRoot = "".string
     argIdx: u64
     boundArgIds: (List u64)
+    effId9: funcId
+    if isCtor then {
+        isMetaC9: false
+        {
+            mcbC9: metaCreateBaseId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
+            match (
+                mcbC9
+            ) case some then {
+                isMetaC9 = true
+            } case none then null
+        }
+        if (isMetaC9) == false then {
+            crEff9: optU64Or o: (st.typing.childOfId parentTypeId: funcId nameId: wkCreate) d: 0
+            if crEff9 > 0 when (st.reg.typetypeOf typeId: crEff9) == ztypes.ztypetype.functionType then effId9 = crEff9
+        }
+    }
     aiter: call.arguments.iterate
     for argId9: aiter loop {
         arg: ast.nodes.get i: (argId9 - 1).u64
@@ -15578,7 +15695,7 @@ walkCallArgsHoist: function {
             if isCtor then {
                 pn0: zast.nameTextCopy :ast ref: arg.name
                 if pn0.length > 0 then {
-                    fco: st.typing.childOf pool: ast.names parentTypeId: funcId name: pn0.stringview
+                    fco: st.typing.childOf pool: ast.names parentTypeId: effId9 name: pn0.stringview
                     fcid: optU64Or o: fco d: 0
                     if fcid > 0 then {
                         if (st.reg.typetypeOf typeId: fcid) == ztypes.ztypetype.functionType then {
@@ -15597,11 +15714,11 @@ walkCallArgsHoist: function {
             }
             if vt > 0 then {
                 pn: zast.nameTextCopy :ast ref: arg.name
-                if (isCtor) == false when pn.length > 0 when funcId > 0 then {
-                    if (st.typing.childCount parentTypeId: funcId) > 0 then {
+                if pn.length > 0 when effId9 > 0 then {
+                    if (st.typing.childCount parentTypeId: effId9) > 0 then {
                         pco9: (st.typing.childOf
                             pool: ast.names
-                            parentTypeId: funcId
+                            parentTypeId: effId9
                             name: pn.stringview
                         )
                         pcidX9: optU64Or o: pco9 d: 0
@@ -15611,7 +15728,7 @@ walkCallArgsHoist: function {
                             anid9: arg.nodeid
                             anln9: arg.lineno
                             ancl9: arg.colno
-                            sug2: suggestSimilar :ast :st parentTypeId: funcId name: pn.stringview
+                            sug2: suggestSimilar :ast :st parentTypeId: effId9 name: pn.stringview
                             h2: String
                             if sug2.length > 0 then {
                                 sgc2: sug2.copy
@@ -15701,13 +15818,19 @@ walkCallArgsHoist: function {
                 wasPos9: false
                 if pn.length == 0 then {
                     wasPos9 = true
-                    pp: positionalParamName :ast :st :funcId idx: argIdx skipRecv: recvImplicit
+                    pp: (positionalParamName
+                        :ast
+                        :st
+                        funcId: effId9
+                        idx: argIdx
+                        skipRecv: recvImplicit
+                    )
                     pn = pp
                 }
-                if funcId > 0 when pn.length > 0 then {
+                if effId9 > 0 when pn.length > 0 then {
                     dcnid9: (st.typing.childIdFor
                         pool: ast.names
-                        parentTypeId: funcId
+                        parentTypeId: effId9
                         name: pn.stringview
                     )
                     dupSeen9: false
@@ -15728,11 +15851,11 @@ walkCallArgsHoist: function {
                     } else {
                         boundArgIds.append dcnid9
                     }
-                    if wasPos9 when (isCtor) == false then {
+                    if wasPos9 then {
                         cpidP9: (optU64Or
                             o: (st.typing.childOf
                                 pool: ast.names
-                                parentTypeId: funcId
+                                parentTypeId: effId9
                                 name: pn.stringview
                             )
                             d: 0
