@@ -1664,11 +1664,6 @@ recordNodeName: function {ty: ztyping.ZTyping unitName: StringView name: StringV
         ty.pendingTyperef.set key: kc value: name.string
         kc2: nid
         ty.pendingTyperefUnit.set key: kc2 value: unitName.string
-        if ty.suppressSigStamp then {
-            kc3: nid
-            sv0: true
-            ty.noStampNode.set key: kc3 value: sv0
-        }
     }
 }
 
@@ -5904,8 +5899,6 @@ descendNamed: function {
     } case none then {
         return tid9
     }
-    sup9: ty.suppressSigStamp
-    ty.suppressSigStamp = false
     ue9Id9: ast.units.get i: uidx9
     ue9: ast.nodes.get i: (ue9Id9 - 1).u64
     match (
@@ -5921,7 +5914,6 @@ descendNamed: function {
             unitdefId: ue9.operation
         )
     } else null
-    ty.suppressSigStamp = sup9
     if classified9 == false then {
         ro9: resolveUnitChild :ast :ty :reg unitName: defUnit :name
         return (optU64Or o: ro9 d: 0)
@@ -6212,7 +6204,6 @@ resolveUnitBody: function {
     ast: Ast
     unitName: StringView
     unitdefId: u32
-    full: bool
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
@@ -6258,7 +6249,7 @@ resolveUnitBody: function {
                 } else null
             }
         }
-        if full then {
+        {
             # The reference binds a spec receiver only when the conformer's
             # resolution triggers the protocol's; a main body that never
             # names the conformer resolves the protocol context-free (e.g.
@@ -6328,10 +6319,8 @@ resolveUnitBody: function {
             ) case namedoperation then {
                 defName: zast.nameTextCopy :ast ref: bmNode9.name
                 eager: true
-                if full then {
-                    if (isFunctionDefOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
-                        if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then eager = false
-                    }
+                if (isFunctionDefOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then {
+                    if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) == false then eager = false
                 }
                 if eager then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
@@ -6577,7 +6566,6 @@ registerAndResolveMain: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     program: Node
-    full: bool
 } is {
     match (
         program
@@ -6623,29 +6611,13 @@ registerAndResolveMain: function {
                     eager9 = true
                 }
                 if eager9 then {
-                    # Skeleton mode (full=false): the reference resolves dep
-                    # signatures lazily and never stamps their type-ref atoms, so
-                    # suppress the dep sig stamps to match. Full mode stamps them
-                    # (the reference does too), so leave it on there.
-                    supp: false
-                    if (full) == false then {
-                        if (nm9.stringview == mainName) == false then {
-                            if (unitDefIsGeneric
-                                ast: program.ast
-                                oId: opId9
-                            ) == false then supp = true
-                        }
-                    }
-                    ty.suppressSigStamp = supp
                     (resolveUnitBody
                         :ty
                         :reg
                         ast: program.ast
                         unitName: nm9.stringview
                         unitdefId: opId9
-                        :full
                     )
-                    ty.suppressSigStamp = false
                 }
             }
         }
@@ -7348,13 +7320,12 @@ onFirstEntry: function {
     unitName: StringView
     mainName: StringView
     unitdefId: u32
-    full: bool
     entered: Set String
 } is {
     if (entered.has item: unitName.string) then return
     entered.add item: unitName.string
     if unitName == "io" then {
-        if full then seedIoDemands :reg
+        seedIoDemands :reg
         resolveConformanceDefs :ty :reg :ast unitName: "io" :unitdefId
         return
     }
@@ -7384,7 +7355,6 @@ resolveDemandsByDescent: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     program: Node
-    full: bool
 } is {
     seedBodyWalkDemands :reg :program
     if (reg.isDemanded name: "print") then {
@@ -7398,7 +7368,7 @@ resolveDemandsByDescent: function {
     match (
         program
     ) case program then {
-        if full then {
+        {
             mdN9: program.ast.units.length
             mdI9: u64
             for mdI9 < mdN9 loop {
@@ -7471,7 +7441,6 @@ resolveDemandsByDescent: function {
                             unitName: un9.stringview
                             mainName: mainName9
                             unitdefId: uOpId9
-                            :full
                             entered: entered9
                         )
                     }
@@ -22082,7 +22051,6 @@ canonicalizeShellChildren: function {ast: Ast st: zenv.ZSymbolTable mainName: St
 typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take
-    full: bool
 } out zenv.ZSymbolTable is {
     nodeEstT9: u64
     match (
@@ -22136,11 +22104,11 @@ typecheck: function {
     populatePrelude ty: st.typing reg: st.reg :program
     lowerGenerators ty: st.typing reg: st.reg :program
     indexUnitDefs ty: st.typing :program
-    registerAndResolveMain ty: st.typing reg: st.reg :program :full
+    registerAndResolveMain ty: st.typing reg: st.reg :program
     resolveMainUnitInstantiations ty: st.typing reg: st.reg :program
-    if full then scanMainBodyCalls reg: st.reg :program
+    scanMainBodyCalls reg: st.reg :program
     demandUnitRenameTargets ty: st.typing reg: st.reg :program
-    resolveDemandsByDescent ty: st.typing reg: st.reg :program :full
+    resolveDemandsByDescent ty: st.typing reg: st.reg :program
     match (
         program
     ) case program then {
@@ -22152,31 +22120,27 @@ typecheck: function {
             mainName: program.mainUnitName.stringview
         )
     } else null
-    if full then {
-        resolveConstantDefs ty: st.typing reg: st.reg :program
-        completeUnitInstantiations ty: st.typing reg: st.reg :program
-    }
+    resolveConstantDefs ty: st.typing reg: st.reg :program
+    completeUnitInstantiations ty: st.typing reg: st.reg :program
     applyUnitVisibility ty: st.typing reg: st.reg :program
     stampTyperefs ty: st.typing reg: st.reg :program
-    if full then {
-        checkBodies :st :program
-        walkGenericUnitTemplates :st :program
-        match (
-            program
-        ) case program then {
-            stampCtorDefaults ast: program.ast :st unitName: program.mainUnitName.stringview
-        } else null
-        foldLiteralStamps :st :program
-        match (
-            program
-        ) case program then {
-            canonicalizeShellChildren ast: program.ast :st mainName: program.mainUnitName.stringview
-            (canonicalizeShellNodeStamps
-                ast: program.ast
-                :st
-                mainName: program.mainUnitName.stringview
-            )
-        } else null
-    }
+    checkBodies :st :program
+    walkGenericUnitTemplates :st :program
+    match (
+        program
+    ) case program then {
+        stampCtorDefaults ast: program.ast :st unitName: program.mainUnitName.stringview
+    } else null
+    foldLiteralStamps :st :program
+    match (
+        program
+    ) case program then {
+        canonicalizeShellChildren ast: program.ast :st mainName: program.mainUnitName.stringview
+        (canonicalizeShellNodeStamps
+            ast: program.ast
+            :st
+            mainName: program.mainUnitName.stringview
+        )
+    } else null
     return st
 }

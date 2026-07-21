@@ -164,7 +164,7 @@ printUsage: function is {
     io.eprintln ""
     io.eprintln "common flags:"
     io.eprintln "  -o OUT  --src DIR  --release  --cc CC  --target TRIPLE"
-    io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --full  --time  --fast-hash"
+    io.eprintln "  --cflags STR  --ldflags STR  --save-temps  --time  --fast-hash"
     io.eprintln "  --system DIR  --runtime DIR  -h/--help  -V/--version"
 }
 
@@ -175,7 +175,7 @@ printCommandHelp: function {cmd: StringView} is {
         io.eprintln "Compile <src> to a native executable."
         io.eprintln "Output goes to -o OUT, else ./<unit> (./<unit>.exe for windows targets)."
         io.eprintln "Flags: --release --cc CC --target TRIPLE --save-temps"
-        io.eprintln "       --cflags STR --ldflags STR --src DIR --full"
+        io.eprintln "       --cflags STR --ldflags STR --src DIR"
     } else if cmd == "run" then {
         io.eprintln "usage: zc run <src> [args] [flags]"
         io.eprintln "Build <src>, then run it. Flags before <src> configure the build;"
@@ -189,7 +189,6 @@ printCommandHelp: function {cmd: StringView} is {
         io.eprintln "usage: zc dump <src> [--canon] [flags]"
         io.eprintln "Dump the typecheck model as SQL to -o FILE (or stdout)."
         io.eprintln "--canon emits the id-normalized model instead."
-        io.eprintln "--full type-checks every definition, not just those reachable from main."
     } else if cmd == "explain" then {
         io.eprintln "usage: zc explain <code>"
         io.eprintln "Explain a diagnostic error code, e.g. zc explain E0200."
@@ -547,7 +546,6 @@ main: function is {
     emitTarget: String
     dumpSqlTarget: String
     outPath: String
-    full: false
     canon: false
     release: false
     saveTemps: false
@@ -611,8 +609,6 @@ main: function is {
         } else if a.stringview == "--ldflags" then {
             i = i + 1
             ldflags = (argv.get :i).copy
-        } else if a.stringview == "--full" then {
-            full = true
         } else if a.stringview == "--canon" then {
             canon = true
         } else if a.stringview == "--release" then {
@@ -685,11 +681,6 @@ main: function is {
     systemdir: zcheck.resolveSystemDir flagVal: systemFlag.stringview
     runtimeDir: zcheck.resolveRuntimeDir flagVal: runtimeFlag.stringview
 
-    isDump: isDumpSql
-    if isDumpCanon then isDump = true
-    effFull: full
-    if isEmit then effFull = true
-    if (isEmit == false) when (isDump == false) then effFull = true
 
     tParse0: os.monotonicMillis
     vfs: (zvfs.ZVfs
@@ -721,7 +712,7 @@ main: function is {
         os.exit code: 1
     } else {
         reg: ztypes.newRegistry
-        st: ztypecheck.typecheck program: prog :reg full: effFull
+        st: ztypecheck.typecheck program: prog :reg
         tCheck1: os.monotonicMillis
         nerr: st.typing.errors.length
         if nerr > 0 then {
