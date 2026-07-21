@@ -9330,6 +9330,89 @@ isReturnCallKind: function {o: optionval zast.callkind} out bool is {
     }
 }
 
+# printableNumericName -- the numeric/bool scalar names the emitter's
+# interp formatter accepts by name (shadow or spec-scoped instances carry
+# these names with non-builtin ids).
+printableNumericName: function {name: StringView} out bool is {
+    if name == "i8" then return true
+    if name == "i16" then return true
+    if name == "i32" then return true
+    if name == "i64" then return true
+    if name == "i128" then return true
+    if name == "u8" then return true
+    if name == "u16" then return true
+    if name == "u32" then return true
+    if name == "u64" then return true
+    if name == "u128" then return true
+    if name == "f16" then return true
+    if name == "f32" then return true
+    if name == "f64" then return true
+    if name == "f128" then return true
+    if name == "c8" then return true
+    if name == "c32" then return true
+    if name == "bool" then return true
+    return false
+}
+
+# printableInterpTid -- an interpolated part must be a value the string
+# machinery can splice: a numeric scalar, bool, a declared tag, String or
+# StringView (directly, via typedef, or a str-origin mono/port). Unstamped
+# values and generic params pass -- the emitter's loud unhandled-construct
+# backstop covers a bad instantiation.
+printableInterpTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    tid: u64
+} out bool is {
+    if tid == 0 then return true
+    if tid == literalIntId then return true
+    if tid == literalFloatId then return true
+    if tid == st.typing.literalIntShellId then return true
+    if tid == st.typing.literalFloatShellId then return true
+    t9: tid
+    tc9: u64
+    for tc9 < 8 loop {
+        b9: typedefBaseMangledOf :ast :st :unitName tid: t9
+        if b9 == 0 then break
+        t9 = b9
+        tc9 = tc9 + 1
+    }
+    if (isNumericTid :ast ty: st.typing reg: st.reg tid: t9) then return true
+    if t9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "bool") then return true
+    if t9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "String") then return true
+    if t9 == (builtinTidT :ast ty: st.typing reg: st.reg base: "StringView") then return true
+    tt9: st.reg.typetypeOf typeId: t9
+    if tt9 == ztypes.ztypetype.genericParam then return true
+    if tt9 == ztypes.ztypetype.tagType then return true
+    if tt9 == ztypes.ztypetype.functionType then {
+        ro9: methodReturnOf :st mid: t9
+        match (
+            ro9
+        ) case some then {
+            return (printableInterpTid :ast :st :unitName tid: ro9)
+        } case none then null
+        return true
+    }
+    tn9: typeNameOf :st tid: t9
+    if (printableNumericName name: tn9.stringview) then return true
+    if tn9.stringview == "String" then return true
+    if tn9.stringview == "StringView" then return true
+    strO9: builtinTidT :ast ty: st.typing reg: st.reg base: "str"
+    to9: st.reg.typeById.get key: t9
+    match (
+        to9
+    ) case some then {
+        go9: to9.genericOriginId
+        match (
+            go9
+        ) case some then {
+            if strO9 > 0 when go9 == strO9 then return true
+        } case none then null
+    } case none then null
+    return false
+}
+
 # checkString -- a non-interpolated string literal types as StringView; an
 # interpolated one (any non-chunk part) types as String, since it must allocate
 # to splice the values, and each interpolated sub-expression is walked + stamped.
@@ -9347,7 +9430,28 @@ checkString: function {
             part
         ) case stringchunk then null else {
             hasInterp = true
-            checkValue :st :unitName :ast :unitBody node: part
+            en0: st.typing.errors.length
+            ptid9: checkValue :st :unitName :ast :unitBody node: part
+            if st.typing.errors.length == en0 when (printableInterpTid
+                :ast
+                :st
+                :unitName
+                tid: ptid9
+            ) == false then {
+                ptn9: typeNameOf :st tid: ptid9
+                pm9: "type '\{ptn9}' is not printable in an interpolation"
+                (addErrorH
+                    :st
+                    nodeid: (nodeId n: part)
+                    lineno: (nodeLine n: part)
+                    colno: (nodeCol n: part)
+                    e: zast.err.typeError
+                    msg: pm9
+                    note: "an interpolated value must be numeric, bool, String or StringView".string
+                    hint: "unwrap or format the value first: match on it or use an accessor that yields a printable type".string
+                    width: 1
+                )
+            }
         }
     }
     # the runtime value is always the SYSTEM String/StringView (the interp
