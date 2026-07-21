@@ -12366,10 +12366,18 @@ checkDotted: function {
     dp: zast.DottedPathData
     coerce: bool
 } out u64 is {
-    # Numeric dotted suffix (`1.u8`): when the child names a non-function
-    # type, the path is a typed-literal cast -- the parent atom coerces to
-    # the suffix type and the path carries it.
-    castBase: atomName :ast n: (ast.nodes.get i: (dp.parent - 1).u64)
+    # Numeric dotted suffix (`1.u8`, `(2.5).f32`): when the child names a
+    # non-function type, the path is a typed-literal cast -- the parent atom
+    # coerces to the suffix type and the path carries it. Parens around the
+    # literal are the same conversion (peel expression wrappers).
+    castBaseId9: dp.parent
+    pw9c: u64
+    for pw9c < 2 loop {
+        cbn9: ast.nodes.get i: (castBaseId9 - 1).u64
+        if cbn9.expression then castBaseId9 = cbn9.expression
+        pw9c = pw9c + 1
+    }
+    castBase: atomName :ast n: (ast.nodes.get i: (castBaseId9 - 1).u64)
     if (isNumericLiteralName name: castBase.stringview) then {
         castChild: atomName :ast n: (ast.nodes.get i: (dp.child - 1).u64)
         castOpt: (walkLookupTyperef
@@ -13603,6 +13611,48 @@ checkAtomid: function {
             return 0
         }
         if (isNumericLiteralName name: ndNm9.stringview) then {
+            # an INLINE type suffix (`65u8`, `2.5f32`) is not zerolang syntax:
+            # a conversion applies to a complete literal (`(65).u8`). Exempt
+            # 0x lexemes whose tail is hex-digit text (0x1f32, 0xac8) and 0c
+            # char literals (0c8 ends in a c8-shaped tail).
+            sfR9: ztypes.suffixInfoOf numstr: ndNm9.stringview
+            rejS9: false
+            if sfR9.has then {
+                rejS9 = true
+                if (ndNm9.stringview.startsWith prefix: "0x") then {
+                    sb9: ndNm9.stringview.byteAt (ndNm9.length - sfR9.len)
+                    match (
+                        sb9
+                    ) case some then {
+                        if sb9 == 102 then rejS9 = false
+                        if sb9 == 99 then rejS9 = false
+                    } case none then null
+                }
+                if (ndNm9.stringview.startsWith prefix: "0c") then rejS9 = false
+            }
+            if rejS9 then {
+                nmc8: ndNm9.copy
+                core8: (ndNm9.stringview.substring from: 0 to: (ndNm9.length - sfR9.len)).string
+                sfx8: (ndNm9.stringview.substring
+                    from: (ndNm9.length - sfR9.len)
+                    to: ndNm9.length
+                ).string
+                m8: "Unknown reference '\{nmc8}'"
+                h8: "a numeric conversion applies to a complete literal: write (\{core8}).\{sfx8}"
+                en8: String
+                (addErrorH
+                    :st
+                    nodeid: node.nodeid
+                    lineno: node.lineno
+                    colno: node.colno
+                    e: zast.err.badReference
+                    msg: m8
+                    note: en8
+                    hint: h8
+                    width: ndNm9.length.u32.orPanic
+                )
+                return 0
+            }
             if (isFloatLiteralName name: ndNm9.stringview) then {
                 result = literalFloatId
             } else {
