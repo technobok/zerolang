@@ -191,6 +191,18 @@ addResolveError: function {ty: ztyping.ZTyping e: zast.err msg: String} is {
 # during a generic template walk: the emitter re-walks the shared template
 # AST per instance and must not see template-time param stamps.
 stampGate: function {st: zenv.ZSymbolTable nid: u64 tid: u64} is {
+    if st.typing.curMonoStamp > 0 then {
+        mtid9: tid
+        subo9: st.typing.monoParamSubst.get key: tid
+        match (
+            subo9
+        ) case some then {
+            mtid9 = subo9
+        } case none then null
+        mk9: (st.typing.curMonoStamp * 4294967296) + nid
+        st.typing.monoNodeType.set key: mk9 value: mtid9
+        return
+    }
     if st.typing.suppressParamStamps then {
         if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return
     }
@@ -18768,6 +18780,22 @@ checkCase: function {
             }
         }
     }
+    # per-mono instance walk: a subject that is a bare TYPE name (resolved
+    # by the instance's scope define, not a value) is a compile-time
+    # dissection -- template-time checking validated it and the emitter
+    # dispatches one arm per mono; there is nothing to stamp here
+    if st.typing.curMonoStamp > 0 when subjT > 0 then {
+        dsn9: subjectAtomName :ast n: (ast.nodes.get i: (casenode.subject - 1).u64)
+        if dsn9.length > 0 then {
+            dsv9: st.lookupVarId name: dsn9.stringview
+            match (
+                dsv9
+            ) case some then null case none then {
+                st.popTo marker: matchMarker
+                return 0
+            }
+        }
+    }
     isSum: false
     if subjT > 0 then {
         stt: st.reg.typetypeOf typeId: subjT
@@ -19480,7 +19508,10 @@ maybeWalkMethods: function {
     mv: true
     st.typing.walkedMethodOwners.set key: nk value: mv
     memId9: unitBody.get i: idx
+    prevMono9: st.typing.curMonoStamp
+    st.typing.curMonoStamp = 0
     walkOwnerMethods :st :unitName :ast :unitBody :memId9 :name
+    st.typing.curMonoStamp = prevMono9
 }
 
 # walkOwnerMethods -- check one type member's method bodies (the shared
@@ -19708,6 +19739,20 @@ checkFunctionBody: function {
                         :unitName
                         op: (ast.nodes.get i: (pm.operation - 1).u64)
                     )
+                    if st.typing.curMonoFnTid > 0 then {
+                        # per-mono instance walk: the mono FUNCTION child
+                        # carries the substituted param type
+                        mpo9: (st.typing.childOf
+                            pool: ast.names
+                            parentTypeId: st.typing.curMonoFnTid
+                            name: pname.stringview
+                        )
+                        match (
+                            mpo9
+                        ) case some then {
+                            ptid = mpo9
+                        } case none then null
+                    }
                     if ptid == 0 when isGenDef then {
                         # a template's own bare param carries no stamp; bind
                         # the canonical param tid from the FUNCTION child so
@@ -20310,6 +20355,7 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
             }
         }
         sweepUnwalkedMethods :st ast: program.ast
+        stampUnitMonoTemplates :st :program
     } else null
 }
 
@@ -20383,6 +20429,262 @@ sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast} is {
             }
         } else null
     }
+}
+
+# stampUnitMonoTemplates -- post-sweep: re-walk each generic-unit template's
+# method bodies once per monomorphised instance, instance type args bound in
+# scope, every stamp routed into the mono side table (stampGate's
+# curMonoStamp mode, flat param->arg substitution via monoParamSubst). The
+# emitter's per-instance template re-walk reads the table (monoStampIdOf)
+# where the global table is param-suppressed. Runs under suppressParamStamps
+# so its scopes/entries stay out of the dump log; skipped when diagnostics
+# exist (nothing will be emitted).
+stampUnitMonoTemplates: function {st: zenv.ZSymbolTable program: zast.ProgramData} is {
+    if st.typing.errors.length > 0 then return
+    {
+        uCnt9: program.ast.units.length
+        uIdx9: u64
+        for uIdx9 < uCnt9 loop {
+            uId9: program.ast.units.get i: uIdx9
+            uIdx9 = uIdx9 + 1
+            uOp9: u32
+            uNm9: String
+            {
+                u9: program.ast.nodes.get i: (uId9 - 1).u64
+                if u9.namedoperation then {
+                    uNm9 = zast.poolTextCopy pool: program.ast.names ref: u9.name
+                    uOp9 = u9.operation
+                }
+            }
+            if uOp9 > 0 then {
+                if (unitDefIsGeneric ast: program.ast oId: uOp9) then {
+                    (stampMonoTemplateUnit
+                        :st
+                        ast: program.ast
+                        unitName: uNm9.stringview
+                        templateName: uNm9.stringview
+                        unitOpId: uOp9
+                    )
+                } else {
+                    ibody9: zast.unitBodyIdsAt ast: program.ast unitId: uOp9
+                    ibn9: ibody9.length
+                    ibi9: u64
+                    for ibi9 < ibn9 loop {
+                        imId9: ibody9.get i: ibi9
+                        ibi9 = ibi9 + 1
+                        imOp9: u32
+                        imNm9: String
+                        {
+                            im9: program.ast.nodes.get i: (imId9 - 1).u64
+                            if im9.namedoperation then {
+                                if (isUnitOp op: (program.ast.nodes.get i: (im9.operation - 1).u64)) then {
+                                    imOp9 = im9.operation
+                                    imNm9 = (zast.poolTextCopy
+                                        pool: program.ast.names
+                                        ref: im9.name
+                                    )
+                                }
+                            }
+                        }
+                        if imOp9 > 0 when (unitDefIsGeneric ast: program.ast oId: imOp9) then {
+                            (stampMonoTemplateUnit
+                                :st
+                                ast: program.ast
+                                unitName: uNm9.stringview
+                                templateName: imNm9.stringview
+                                unitOpId: imOp9
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+# stampMonoTemplateUnit -- resolve one generic template unit (file-level by
+# unit name, inline by its def-node stamp), then stamp-walk every registry
+# mono minted from it.
+stampMonoTemplateUnit: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitName: StringView
+    templateName: StringView
+    unitOpId: u32
+} is {
+    tplId9: u64
+    {
+        tk9: templateName.string
+        tgo9: st.reg.unitNameTid.get key: tk9
+        match (
+            tgo9
+        ) case some then {
+            tplId9 = tgo9
+        } case none then null
+    }
+    if tplId9 == 0 then {
+        rid9: u32
+        {
+            tuo9: ast.nodes.get i: (unitOpId - 1).u64
+            if tuo9.unitdef then rid9 = tuo9.nodeid
+        }
+        if rid9 > 0 then {
+            sgo9: st.typing.nodeType.get key: rid9.u64
+            match (
+                sgo9
+            ) case some then {
+                tplId9 = sgo9
+            } case none then null
+        }
+    }
+    if tplId9 == 0 then return
+    tplKey9: typeNameOfReg reg: st.reg tid: tplId9
+    last9: st.reg.nextTypeId
+    t9: 1.u64
+    for t9 < last9 loop {
+        isMono9: false
+        if (st.reg.typetypeOf typeId: t9) == ztypes.ztypetype.unitType then {
+            {
+                to9: st.reg.typeById.get key: t9
+                match (
+                    to9
+                ) case some then {
+                    go9: to9.genericOriginId
+                    match (
+                        go9
+                    ) case some then {
+                        if go9 == tplId9 then isMono9 = true
+                    } case none then null
+                } case none then null
+            }
+        }
+        if isMono9 then {
+            (stampOneUnitMono
+                :st
+                :ast
+                :unitName
+                :templateName
+                :unitOpId
+                tplKey: tplKey9.stringview
+                monoId: t9
+            )
+        }
+        t9 = t9 + 1
+    }
+}
+
+# stampOneUnitMono -- the instance walk: bind the mono's type args (scope
+# defines + monoParamSubst), then re-check each template method body with
+# curMonoStamp routing stamps into the side table.
+stampOneUnitMono: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitName: StringView
+    templateName: StringView
+    unitOpId: u32
+    tplKey: StringView
+    monoId: u64
+} is {
+    bodyIds9: zast.unitBodyIdsAt :ast unitId: unitOpId
+    monoNm9: typeNameOfReg reg: st.reg tid: monoId
+    prevSup9: st.typing.suppressParamStamps
+    st.typing.suppressParamStamps = true
+    sn9: "unitgeneric:\{monoNm9}"
+    st.push name: sn9.stringview
+    st.typing.monoParamSubst = (Map u64 value: u64)
+    {
+        pn9: st.reg.genericParamNamesOf typeKey: tplKey
+        pc9: pn9.length
+        pj9: u64
+        for pj9 < pc9 loop {
+            if (st.reg.genericArgIsValueAt specId: monoId ordinal: pj9) == false then {
+                av9: st.reg.genericArgAt specId: monoId ordinal: pj9
+                if av9 > 0 then {
+                    pnm9: (pn9.get i: pj9).copy
+                    st.define name: pnm9.stringview ztypeId: av9
+                    ptk9: "\{unitName}.\{templateName}"
+                    pto9: st.reg.genericParamTidOf typeKey: tplKey paramName: pnm9.stringview
+                    match (
+                        pto9
+                    ) case some then null case none then {
+                        pto9 = (st.reg.genericParamTidOf
+                            typeKey: ptk9.stringview
+                            paramName: pnm9.stringview
+                        )
+                    }
+                    match (
+                        pto9
+                    ) case some then {
+                        sv9: av9
+                        st.typing.monoParamSubst.set key: pto9 value: sv9
+                    } case none then null
+                }
+            }
+            pj9 = pj9 + 1
+        }
+    }
+    idxs9: (List u64)
+    {
+        di9: u64
+        with biter9: bodyIds9.iterate do for bmId9: biter9 loop {
+            bm9: ast.nodes.get i: (bmId9 - 1).u64
+            match (
+                bm9
+            ) case namedoperation then {
+                if (isFunctionDefWithBody o: (ast.nodes.get i: (bm9.operation - 1).u64)) then {
+                    dv9: di9
+                    idxs9.append dv9
+                }
+            } else null
+            di9 = di9 + 1
+        }
+    }
+    st.typing.curMonoStamp = monoId
+    prevL9: st.typing.synthLabel.copy
+    prevT9: st.typing.currentThisName.copy
+    wi9: u64
+    for wi9 < idxs9.length loop {
+        bidx9: idxs9.get i: wi9
+        wi9 = wi9 + 1
+        bmId2: bodyIds9.get i: bidx9
+        bm2: ast.nodes.get i: (bmId2 - 1).u64
+        match (
+            bm2
+        ) case namedoperation then {
+            mnm9: zast.nameTextCopy :ast ref: bm2.name
+            q9: "\{monoNm9}.\{mnm9}"
+            mfo9: (st.typing.childOf
+                pool: ast.names
+                parentTypeId: monoId
+                name: mnm9.stringview
+            )
+            match (
+                mfo9
+            ) case some then {
+                st.typing.curMonoFnTid = mfo9
+            } case none then {
+                st.typing.curMonoFnTid = 0
+            }
+            ed9: (List u32)
+            (checkFunctionBody
+                :st
+                :unitName
+                defName: q9.stringview
+                defn: (ast.nodes.get i: (bm2.operation - 1).u64)
+                thisName: ""
+                :ast
+                unitBody: bodyIds9
+                depUnits: ed9
+            )
+        } else null
+    }
+    st.typing.synthLabel = prevL9
+    st.typing.currentThisName = prevT9
+    st.typing.curMonoFnTid = 0
+    st.typing.curMonoStamp = 0
+    st.typing.suppressParamStamps = prevSup9
+    st.typing.monoParamSubst = (Map u64 value: u64)
+    st.pop
 }
 
 # foldLiteralStamps -- replace literal-typed node stamps with their concrete

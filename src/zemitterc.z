@@ -854,6 +854,22 @@ stampIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     }
 }
 
+# monoStampIdOf -- the per-mono side stamp for a template node: the
+# checker's instance walk records (monoId << 32 | nodeid) -> tid; consulted
+# during mono re-walks (ctx.curThisTid) before any fallback resolution.
+monoStampIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is {
+    if ctx.curThisTid == 0 then return 0
+    mk9: (ctx.curThisTid * 4294967296) + nid
+    go9: symtab.typing.monoNodeType.get key: mk9
+    match (
+        go9
+    ) case some then {
+        return go9
+    } case none then {
+        return 0
+    }
+}
+
 # dpTaggedOf9 -- the tagged-construction stamp for a dotted node: the
 # variant/union type id when the path names a subtype member on the TYPE
 # (`Type.arm`); 0 otherwise.
@@ -7425,6 +7441,12 @@ emitInterpPart: function {
     } else {
         di0: dataIndexElemName :ast :symtab :ctx :n
         tn0: stampNameDeep :ast :symtab :n
+        # the checker's per-mono instance walk side-stamps template nodes
+        # the global table suppresses
+        if tn0.length == 0 when ctx.curThisTid > 0 then {
+            msid9: monoStampIdOf :symtab :ctx nid: (nodeIdOf9 :n)
+            if msid9 > 0 then tn0 = typeNameOfReg9 :symtab tid: msid9
+        }
         # a fn-mono re-walk leaves template value nodes unstamped: a bare
         # param part resolves through the mono's concrete param child
         if tn0.length == 0 when ctx.curThisTid > 0 then {
