@@ -1872,12 +1872,19 @@ Analysis: class {
         :this
         lhs: Node
         rhs: Node
+        isCmp: bool
         uname: StringView
         st: zenv.ZSymbolTable
     } is {
-        ls: operandSuffix :ast n: lhs
-        if ls.tname.length > 0 when (isAnchor :ast n: rhs tname: ls.tname.stringview :st) then {
-            this.emitSuf :uname ln: ls.line col: ls.col tname: ls.tname.stringview
+        # a LEADING literal's suffix is load-bearing at arithmetic ops (the
+        # bare form defaults i64 and mismatches); only comparisons coerce a
+        # literal from either side, so only there can the lhs suffix be
+        # redundant
+        if isCmp then {
+            ls: operandSuffix :ast n: lhs
+            if ls.tname.length > 0 when (isAnchor :ast n: rhs tname: ls.tname.stringview :st) then {
+                this.emitSuf :uname ln: ls.line col: ls.col tname: ls.tname.stringview
+            }
         }
         rs: operandSuffix :ast n: rhs
         if rs.tname.length > 0 when (isAnchor :ast n: lhs tname: rs.tname.stringview :st) then {
@@ -2266,7 +2273,15 @@ Analysis: class {
         ) case error then null case placeholder then null case atomid then null case labelvalue then null case stringchunk then null case binop then {
             bl9: ast.nodes.get i: (n.lhs - 1).u64
             br9: ast.nodes.get i: (n.rhs - 1).u64
-            this.sufBinop :ast lhs: bl9 rhs: br9 :uname :st
+            bop9: atomName :ast n: (ast.nodes.get i: (n.operator - 1).u64)
+            (this.sufBinop
+                :ast
+                lhs: bl9
+                rhs: br9
+                isCmp: (ztypecheck.isComparisonOp name: bop9.stringview)
+                :uname
+                :st
+            )
             this.walkSuf :ast n: (ast.nodes.get i: (n.lhs - 1).u64) :uname :st :funcretId
             this.walkSuf :ast n: (ast.nodes.get i: (n.operator - 1).u64) :uname :st :funcretId
             this.walkSuf :ast n: (ast.nodes.get i: (n.rhs - 1).u64) :uname :st :funcretId
