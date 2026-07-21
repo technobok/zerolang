@@ -4,7 +4,8 @@
 # user-function emission, and a statement/expression walk covering the
 # scalar core (locals, binops, if/for-while, return, recursion) plus
 # print of plain and interpolated literals. Unhandled shapes emit marker
-# comments so the C compiles and the gate reports honest RUN-DIFFs.
+# comments AND record an emitFail: zc reports every failure and exits
+# nonzero without writing output (no silent degradation).
 
 Node: zast.Node
 Ast: zast.Ast
@@ -593,10 +594,28 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
     return txt
 }
 
+# emitFail -- record an emission failure for an unhandled construct. The
+# marker comment still lands in the emitted C for context, but zc reports
+# every recorded failure and exits nonzero without writing any output.
+emitFail: function {ctx: Ctx what: String line: u32} is {
+    msg9: String
+    if line > 0 then {
+        msg9 = "zemitterc: \{what} [line \{line}]"
+    } else {
+        msg9 = "zemitterc: \{what}"
+    }
+    ctx.emitErrors.append from: msg9
+}
+
 # loadFragment -- read a runtime fragment and substitute the canonical
 # z_StringView / z_String names with the registry's id-based ones
 # (StringView first: z_String is its prefix).
-loadFragment: function {path: StringView svC: StringView strC: StringView} out String is {
+loadFragment: function {
+    path: StringView
+    svC: StringView
+    strC: StringView
+    fails: List String
+} out String is {
     rd: io.readText :path
     match (
         rd
@@ -605,6 +624,8 @@ loadFragment: function {path: StringView svC: StringView strC: StringView} out S
         s2: substituteAll text: s1 needle: "z_String" repl: strC
         return s2
     } case err then {
+        f9: "zemitterc: missing runtime fragment \{path}"
+        fails.append from: f9
         m9: "/* zemitterc: missing runtime fragment \{path} */\n"
         return m9
     }
@@ -5908,6 +5929,7 @@ emitCallValue: function {
         }
         fplc9: emitFnptrLocalCall :ast :symtab :ctx :call :fid cn0: cn0.stringview
         if fplc9.length > 0 then return fplc9
+        emitFail :ctx what: "unhandled callee \{cn0}" line: call.lineno
         m8: "/* zemitterc: unhandled callee \{cn0} */0"
         return m8
     }
@@ -5966,6 +5988,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             s0Id9: n.statements.get i: 0
             return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (s0Id9 - 1).u64))
         }
+        emitFail :ctx what: "unhandled expr (multi-statement)".string line: n.lineno
         return "/* zemitterc: unhandled expr */0".string
     } case atomid then {
         avC9: ast.names.texts.get i: (n.name - 1).u64
@@ -6921,6 +6944,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
         base9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
         if (base9.stringview.startsWith prefix: "/*") then {
+            emitFail :ctx what: "unhandled dotted".string line: n.lineno
             return "/* zemitterc: unhandled dotted */0".string
         }
         nptn9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.parent - 1).u64)
@@ -7032,6 +7056,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             se9: "_zs\{li9}"
             return se9
         }
+        emitFail :ctx what: "unhandled atomstring expr".string line: n.lineno
         return "/* zemitterc: unhandled atomstring expr */0".string
     } case ifexpr then {
         tx: String
@@ -7135,6 +7160,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
     } case call then {
         return (emitCallValue :ast :symtab :ctx call: n)
     } else {
+        emitFail :ctx what: "unhandled expr".string line: (ztypecheck.nodeLine :n)
         return "/* zemitterc: unhandled expr */0".string
     }
 }
@@ -7427,6 +7453,11 @@ emitInterpPart: function {
                 lstri9: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
                 buf.append lstri9
             } else {
+                (emitFail
+                    :ctx
+                    what: "unhandled interp part type \{tn}"
+                    line: (ztypecheck.nodeLine :n)
+                )
                 l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
                 buf.append l8
             }
@@ -7863,6 +7894,7 @@ emitPrintArg: function {
                     buf.append lpt2
                 }
             } case none then {
+                emitFail :ctx what: "unhandled print of \{anm} type \{tn9}" line: n.lineno
                 lpu: "\{ind}/* zemitterc: unhandled print of \{anm} type \{tn9} */\n"
                 buf.append lpu
             }
@@ -7905,6 +7937,7 @@ emitPrintArg: function {
                 buf.append lsl9
             }
         } else {
+            emitFail :ctx what: "unhandled print argument".string line: (ztypecheck.nodeLine :n)
             buf.append "    /* zemitterc: unhandled print argument */\n"
         }
     }
@@ -8549,6 +8582,7 @@ emitStmt: function {
             vx: emitExpr :ast :symtab :ctx n: avn9
             flushArgHoists :ctx :ind :tmp :buf
             if (vx.stringview.startsWith prefix: "/*") then {
+                emitFail :ctx what: "unhandled StringView binding \{nm}" line: n.lineno
                 lsv3: "\{ind}/* zemitterc: unhandled StringView binding \{nm} */\n"
                 buf.append lsv3
             } else {
@@ -8580,6 +8614,7 @@ emitStmt: function {
             sx: emitExpr :ast :symtab :ctx n: avn9
             flushArgHoists :ctx :ind :tmp :buf
             if (sx.stringview.startsWith prefix: "/*") then {
+                emitFail :ctx what: "unhandled String binding \{nm}" line: n.lineno
                 lst2: "\{ind}/* zemitterc: unhandled String binding \{nm} */\n"
                 buf.append lst2
             } else {
@@ -8680,6 +8715,7 @@ emitStmt: function {
                 }
             }
         } else {
+            emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
             lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
             buf.append lb
         }
@@ -9107,6 +9143,7 @@ emitStmt: function {
             }
             de9: emitExpr :ast :symtab :ctx :n
             if (de9.stringview.startsWith prefix: "/*") then {
+                emitFail :ctx what: "unhandled statement".string line: (ztypecheck.nodeLine :n)
                 lud9: "\{ind}/* zemitterc: unhandled statement */\n"
                 buf.append lud9
             } else {
@@ -9229,6 +9266,11 @@ emitStmt: function {
                 } else {
                     ue9: emitExpr :ast :symtab :ctx :n
                     if (ue9.stringview.startsWith prefix: "/*") then {
+                        (emitFail
+                            :ctx
+                            what: "unhandled statement".string
+                            line: (ztypecheck.nodeLine :n)
+                        )
                         lu: "\{ind}/* zemitterc: unhandled statement */\n"
                         buf.append lu
                     } else {
@@ -9663,6 +9705,7 @@ emitMatchStmt: function {
                 emitScalarMatch :ast :symtab :ctx :m subj: sx.stringview :assignTo :ind :tmp :buf
                 return
             }
+            emitFail :ctx what: "unhandled match subject type \{stn}" line: m.lineno
             lu0: "\{ind}/* zemitterc: unhandled match subject type \{stn} */\n"
             buf.append lu0
             return
@@ -14720,7 +14763,7 @@ emitC: function {
         resultvalOriginTid = builtinTid ast: program.ast :symtab base: "resultval"
     } else null
     p1: "\{runtimeDir}/z_String.inc"
-    f1: loadFragment path: p1.stringview svC: svC.stringview strC: strC.stringview
+    f1: loadFragment path: p1.stringview svC: svC.stringview strC: strC.stringview fails: errs
     buf.append f1
     buf.append "\n"
     # a String-typedef class (Path) shares the String struct: alias its
@@ -14736,11 +14779,11 @@ emitC: function {
         }
     }
     p2: "\{runtimeDir}/z_StringView.inc"
-    f2: loadFragment path: p2.stringview svC: svC.stringview strC: strC.stringview
+    f2: loadFragment path: p2.stringview svC: svC.stringview strC: strC.stringview fails: errs
     buf.append f2
     buf.append "\n"
     ph: "\{runtimeDir}/z_hash.inc"
-    fh: loadFragment path: ph.stringview svC: svC.stringview strC: strC.stringview
+    fh: loadFragment path: ph.stringview svC: svC.stringview strC: strC.stringview fails: errs
     buf.append fh
     buf.append "\n"
     mn: mainNameOf9 :program
@@ -14994,7 +15037,12 @@ emitNeededNatives: function {
         p0: nativePath :runtimeDir frag: "_Z_SV_IS_ASCII_WS"
         sc0: ctx.svC.copy
         tc0: ctx.strC.copy
-        f0: loadFragment path: p0.stringview svC: sc0.stringview strC: tc0.stringview
+        f0: (loadFragment
+            path: p0.stringview
+            svC: sc0.stringview
+            strC: tc0.stringview
+            fails: ctx.emitErrors
+        )
         buf.append f0
     }
     emitNativeIf :ctx need: "substring" frag: "_Z_SV_SUBSTRING" :runtimeDir :buf
@@ -15011,7 +15059,12 @@ emitNeededNatives: function {
         pR: nativePath :runtimeDir frag: "_Z_SV_REPLACE_IMPL"
         scR: ctx.svC.copy
         tcR: ctx.strC.copy
-        fR: loadFragment path: pR.stringview svC: scR.stringview strC: tcR.stringview
+        fR: (loadFragment
+            path: pR.stringview
+            svC: scR.stringview
+            strC: tcR.stringview
+            fails: ctx.emitErrors
+        )
         buf.append fR
     }
     emitNativeIf :ctx need: "replace" frag: "_Z_SV_REPLACE" :runtimeDir :buf
@@ -15027,7 +15080,12 @@ emitNeededNatives: function {
         pu: nativePath :runtimeDir frag: "_Z_SV_UTF8_DECODE"
         scu: ctx.svC.copy
         tcu: ctx.strC.copy
-        fu: loadFragment path: pu.stringview svC: scu.stringview strC: tcu.stringview
+        fu: (loadFragment
+            path: pu.stringview
+            svC: scu.stringview
+            strC: tcu.stringview
+            fails: ctx.emitErrors
+        )
         buf.append fu
     }
     emitNativeIf :ctx need: "count" frag: "_Z_SV_COUNT" :runtimeDir :buf
@@ -15163,7 +15221,12 @@ emitNativeIf: function {
         p9: nativePath :runtimeDir :frag
         sc9: ctx.svC.copy
         tc9: ctx.strC.copy
-        f9: loadFragment path: p9.stringview svC: sc9.stringview strC: tc9.stringview
+        f9: (loadFragment
+            path: p9.stringview
+            svC: sc9.stringview
+            strC: tc9.stringview
+            fails: ctx.emitErrors
+        )
         buf.append f9
     }
 }
@@ -15310,7 +15373,12 @@ emitStrMono: function {
     p: "\{runtimeDir}/z_str.c.tmpl"
     svL9: ctx.svC.copy
     strL9: ctx.strC.copy
-    raw: loadFragment path: p.stringview svC: svL9.stringview strC: strL9.stringview
+    raw: (loadFragment
+        path: p.stringview
+        svC: svL9.stringview
+        strC: strL9.stringview
+        fails: ctx.emitErrors
+    )
     t1: applyTmpl text: raw key: "NAME" val: nm.stringview
     t2: applyTmpl text: t1 key: "CAP" val: capStr.stringview
     t3: applyTmpl text: t2 key: "LEN_T" val: lenT.stringview
@@ -16434,6 +16502,7 @@ loadIoFragment: function {
         cur = substituteAll text: cur needle: "z_String" repl: ctx.strC.stringview
         return cur
     } case err then {
+        emitFail :ctx what: "missing io fragment \{path}" line: 0
         return "/* zemitterc: missing io fragment \{path} */\n"
     }
 }
@@ -16901,10 +16970,17 @@ emitRuntimeIo: function {
     ioSkip9.append "file_read".string
     ioSkip9.append "file_seek".string
     ioSkip9.append "file_flush".string
+    ioSkip9.append "file_readLine".string
+    ioSkip9.append "file_writeLine".string
+    ioSkip9.append "file_accept".string
     ioSkip9.append "uses_BufWriter".string
     ioSkip9.append "uses_BufReader".string
     ioSkip9.append "uses_TextWriter".string
     ioSkip9.append "uses_TextReader".string
+    ioSkip9.append "removeTree".string
+    ioSkip9.append "stdout".string
+    ioSkip9.append "stderr".string
+    ioSkip9.append "stdin".string
     loadConventionFrags :ast :symtab :ctx :runtimeDir uname: "io" skip: ioSkip9 :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_close" frag: "_Z_FILE_CLOSE" :buf
     ioFragIf :ast :symtab :ctx :runtimeDir need: "io_file_write" frag: "_Z_FILE_WRITE" :buf

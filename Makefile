@@ -335,13 +335,17 @@ member-guard:
 	echo "member-guard OK: cn.stringview == = $$m1 (<=37)"
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
-# cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C. Leg 1:
-# no example emit outside the known baseline may carry a marker (the baseline
-# holds the known gaps and shrinks to empty as they are fixed). Leg 2: the
-# emitted driver C (bin/zc.c, out/zl.c, out/zls.c) must carry ZERO live
-# markers -- lines holding the emitter's own message-string literals
-# (String_append / _zs constants) are excluded from the count.
+# cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C (and
+# records an emitFail, so zc exits nonzero). Leg 1: no example emit outside
+# the known baseline may carry a marker (the baseline holds the known gaps
+# and shrinks to empty as they are fixed). Leg 2: the emitted driver C
+# (bin/zc.c, out/zl.c, out/zls.c) must carry ZERO live markers -- lines
+# holding the emitter's own message-string literals (String_append / _zs
+# constants) are excluded from the count. Leg 3: a source ratchet on the
+# emitFail line count in src/zemitterc.z -- it may only DECREASE as fallback
+# legs are resolved; lower the baseline in the same commit that removes a leg.
 FALLBACK_BASELINE :=
+EMITFAIL_BASELINE := 18
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
@@ -360,12 +364,18 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	    echo "fallback-guard FAIL: $$d carries $$n live unhandled-construct marker(s)"; fail=1; \
 	  fi; \
 	done; \
+	n=$$(grep -c 'emitFail' src/zemitterc.z); \
+	if [ "$$n" -gt $(EMITFAIL_BASELINE) ]; then \
+	  echo "fallback-guard FAIL: src/zemitterc.z emitFail lines = $$n (baseline $(EMITFAIL_BASELINE)) -- new fallback leg?"; fail=1; \
+	elif [ "$$n" -lt $(EMITFAIL_BASELINE) ]; then \
+	  echo "fallback-guard: emitFail lines = $$n < baseline $(EMITFAIL_BASELINE) -- lower EMITFAIL_BASELINE"; \
+	fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap (or,"; \
 	  echo "  for a known example gap being tracked, add it to FALLBACK_BASELINE)."; \
 	  exit 1; \
 	fi; \
-	echo "fallback-guard OK: no unhandled-construct markers outside the baseline ($(words $(FALLBACK_BASELINE)) known)"
+	echo "fallback-guard OK: no unhandled-construct markers outside the baseline ($(words $(FALLBACK_BASELINE)) known; emitFail legs $$n)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
