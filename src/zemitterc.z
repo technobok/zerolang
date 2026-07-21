@@ -7120,6 +7120,18 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 return cm1
             }
         }
+        if op.stringview == "%" then {
+            # C has no float %: route through the fmod family (f16 computes
+            # in float and rounds back -- fmod results are exact in-format)
+            lmt9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64)
+            lmn9: numericFormatName :ast :symtab :ctx tn: lmt9.stringview
+            if (isFloatName name: lmn9.stringview) then {
+                if lmn9.stringview == "f32" then return "fmodf(\{l}, \{r})"
+                if lmn9.stringview == "f64" then return "fmod(\{l}, \{r})"
+                if lmn9.stringview == "f128" then return "fmodq(\{l}, \{r})"
+                return "((_Float16)fmodf((float)\{l}, (float)\{r}))"
+            }
+        }
         e9: "(\{l} \{op} \{r})"
         return e9
     } case call then {
@@ -14590,6 +14602,7 @@ emitC: function {
     buf.append "#include <stdlib.h>\n"
     buf.append "#include <stdbool.h>\n"
     buf.append "#include <string.h>\n"
+    buf.append "#include <math.h>\n"
     buf.append "#if defined(__SIZEOF_FLOAT128__)\n"
     buf.append "#include <quadmath.h>\n"
     buf.append "#endif\n"
