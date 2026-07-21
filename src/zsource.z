@@ -1876,11 +1876,11 @@ Analysis: class {
         st: zenv.ZSymbolTable
     } is {
         ls: operandSuffix :ast n: lhs
-        if ls.tname.length > 0 when (isAnchor n: rhs tname: ls.tname.stringview :st) then {
+        if ls.tname.length > 0 when (isAnchor :ast n: rhs tname: ls.tname.stringview :st) then {
             this.emitSuf :uname ln: ls.line col: ls.col tname: ls.tname.stringview
         }
         rs: operandSuffix :ast n: rhs
-        if rs.tname.length > 0 when (isAnchor n: lhs tname: rs.tname.stringview :st) then {
+        if rs.tname.length > 0 when (isAnchor :ast n: lhs tname: rs.tname.stringview :st) then {
             this.emitSuf :uname ln: rs.line col: rs.col tname: rs.tname.stringview
         }
     }
@@ -2148,6 +2148,35 @@ Analysis: class {
             if an.length > 0 then {
                 s9: operandSuffix :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
                 if s9.tname.length > 0 then {
+                    # a generic-origin param never anchors a defix: the
+                    # suffix is what SELECTS the instantiation (the mono's
+                    # concrete param type was inferred from this argument)
+                    gorig9: calleeType
+                    {
+                        zoS9: st.reg.typeById.get key: calleeType
+                        match (
+                            zoS9
+                        ) case some then {
+                            goS9: zoS9.genericOriginId
+                            match (
+                                goS9
+                            ) case some then {
+                                if goS9 > 0 then gorig9 = goS9
+                            } case none then null
+                        } case none then null
+                    }
+                    if gorig9 != calleeType then {
+                        opto9: (st.typing.childOf
+                            pool: ast.names
+                            parentTypeId: gorig9
+                            name: an.stringview
+                        )
+                        match (
+                            opto9
+                        ) case some then {
+                            if (st.reg.typetypeOf typeId: opto9) == ztypes.ztypetype.genericParam then return
+                        } case none then null
+                    }
                     pto: (st.typing.childOf
                         pool: ast.names
                         parentTypeId: calleeType
@@ -3179,7 +3208,34 @@ typeNameOfOptAt: function {ast: Ast oId: u32 st: zenv.ZSymbolTable} out String i
 
 # isAnchor -- the node is a concrete non-literal value of numeric type `tname`, a genuine
 # type anchor that makes a same-type literal suffix redundant.
-isAnchor: function {n: Node tname: StringView st: zenv.ZSymbolTable} out bool is {
+# litShapedSuf -- the node is a numeric literal, bare or wearing a width
+# conversion (`5`, `5.u32`, `(1.0e300).f128`): such an operand must never
+# anchor a suffix strip -- removing the other side's suffix would leave
+# default-typed literals and change the arithmetic width.
+litShapedSuf: function {ast: Ast n: Node} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (litShapedSuf :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case atomid then {
+        an9: zast.nameTextCopy :ast ref: n.name
+        d9: false
+        b9: an9.stringview.byteAt 0
+        match (
+            b9
+        ) case some then {
+            if b9 >= 48 when b9 <= 57 then d9 = true
+        } case none then null
+        return d9
+    } case dottedpath then {
+        return (litShapedSuf :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+    } else {
+        return false
+    }
+}
+
+isAnchor: function {ast: Ast n: Node tname: StringView st: zenv.ZSymbolTable} out bool is {
+    if (litShapedSuf :ast :n) then return false
     info: nodeInfoOf :n
     nid: info.id.u64
     to: st.typing.nodeType.get key: nid
