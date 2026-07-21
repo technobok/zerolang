@@ -155,18 +155,6 @@ zcontrolkindName: function {t: zcontrolkind} out String is {
     }
 }
 
-zbuiltinfuncName: function {t: zbuiltinfunc} out String is {
-    match (
-        t
-    ) case none then {
-        return "NONE".string
-    } case parseF64 then {
-        return "PARSE_F64".string
-    } case envNames then {
-        return "ENV_NAMES".string
-    }
-}
-
 zownershipName: function {t: zownership} out String is {
     match (
         t
@@ -324,12 +312,6 @@ zsrcpos: record {
 zlockholder: record {
     kind: zlockholderkind
     id: u64
-}
-
-# Classification of a numeric literal's lexical shape.
-numform: record {
-    hasSuffix: bool
-    base: numbase
 }
 
 # Suffix-detection result: the kind named by an inline suffix (if any)
@@ -1143,12 +1125,6 @@ mangleVarName: function {name: StringView} out String is {
     return name.string
 }
 
-mangleFuncName: function {name: StringView} out String is {
-    if name == "main" then return "z_main".string
-    flat: name.replace needle: "." replacement: "_"
-    return ("z_".concat flat)
-}
-
 # composeCname -- the id-based C name for a type: z_t{tid}_{name}, dots
 # flattened to underscores. Composed once at mint (newType); consumers read
 # the stored cname, never re-derive it.
@@ -1294,40 +1270,6 @@ floatFitsFloat: function {value: f64 k: numkind} out bool is {
     } else {
         return false
     }
-}
-
-# True iff the lexeme ends in a known numeric type suffix.
-hasNumericSuffix: function {numstr: StringView} out bool is {
-    if numstr.endsWith "i128" then return true
-    if numstr.endsWith "u128" then return true
-    if numstr.endsWith "f128" then return true
-    if numstr.endsWith "i16" then return true
-    if numstr.endsWith "i32" then return true
-    if numstr.endsWith "i64" then return true
-    if numstr.endsWith "u16" then return true
-    if numstr.endsWith "u32" then return true
-    if numstr.endsWith "u64" then return true
-    if numstr.endsWith "f16" then return true
-    if numstr.endsWith "f32" then return true
-    if numstr.endsWith "f64" then return true
-    if numstr.endsWith "c32" then return true
-    if numstr.endsWith "i8" then return true
-    if numstr.endsWith "u8" then return true
-    if numstr.endsWith "c8" then return true
-    return false
-}
-
-# Classify a numeric literal lexeme: does it carry an explicit type
-# suffix, and what is its lexical base shape (ignoring the suffix).
-numericLiteralForm: function {numstr: StringView} out numform is {
-    hasSuffix: hasNumericSuffix numstr
-    if numstr.contains "." then return (numform :hasSuffix base: numbase.float)
-    if numstr.startsWith "0b" then return (numform :hasSuffix base: numbase.nonDec)
-    if numstr.startsWith "0o" then return (numform :hasSuffix base: numbase.nonDec)
-    if numstr.startsWith "0x" then return (numform :hasSuffix base: numbase.nonDec)
-    if numstr.contains "e" then return (numform :hasSuffix base: numbase.float)
-    if numstr.contains "E" then return (numform :hasSuffix base: numbase.float)
-    return (numform :hasSuffix base: numbase.dec)
 }
 
 # --- numeric-literal value parsing ---
@@ -1606,11 +1548,6 @@ main: function is {
     print (zcontrolkindName zcontrolkind.errorKind)
     print (zcontrolkindName zcontrolkind.panicKind)
 
-    print "=== zbuiltinfunc ==="
-    print (zbuiltinfuncName zbuiltinfunc.none)
-    print (zbuiltinfuncName zbuiltinfunc.parseF64)
-    print (zbuiltinfuncName zbuiltinfunc.envNames)
-
     print "=== zownership ==="
     print (zownershipName zownership.owned)
     print (zownershipName zownership.borrowed)
@@ -1673,30 +1610,12 @@ main: function is {
     lh0: zlockholder kind: zlockholderkind.varKind id: 5
     print "lockholder kind=\{zlockholderkindName lh0.kind} id=\{lh0.id}"
 
-    print "=== numericLiteralForm ==="
-    smokeNumForm "0"
-    smokeNumForm "42"
-    smokeNumForm "0xff"
-    smokeNumForm "0b1010"
-    smokeNumForm "0o17"
-    smokeNumForm "100u8"
-    smokeNumForm "42i128"
-    smokeNumForm "3.14"
-    smokeNumForm "1e3"
-    smokeNumForm "1.5f32"
-
     print "=== mangleVar ==="
     smokeMangleVar "foo"
     smokeMangleVar "int"
     smokeMangleVar "for"
     smokeMangleVar "main"
     smokeMangleVar "exit"
-
-    print "=== mangleFunc ==="
-    smokeMangleFunc "foo"
-    smokeMangleFunc "main"
-    smokeMangleFunc "math.add"
-    smokeMangleFunc "a.b.c"
 
     print "=== intFitsFloat ==="
     smokeIntFits value: 0 k: numkind.f32Type
@@ -1742,19 +1661,9 @@ main: function is {
     smokeLitVal "0xZZ"
 }
 
-smokeNumForm: function {numstr: StringView} is {
-    f: numericLiteralForm numstr
-    print "numform \{numstr} -> suffix=\{boolText f.hasSuffix} base=\{numbaseName f.base}"
-}
-
 smokeMangleVar: function {name: StringView} is {
     mangled: mangleVarName name
     print "mangleVar \{name} -> \{mangled}"
-}
-
-smokeMangleFunc: function {name: StringView} is {
-    mangled: mangleFuncName name
-    print "mangleFunc \{name} -> \{mangled}"
 }
 
 smokeIntFits: function {value: i64 k: numkind} is {
