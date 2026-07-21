@@ -1291,23 +1291,43 @@ digitVal: function {b: u8} out optionval u64 is {
 # Detect an inline numeric type suffix shape (longest first) on a
 # lexeme. Diagnostic + exact-name mapping only -- parseNumber never
 # peels; inline suffixes are not part of the language.
+# numkindByName -- the numkind for an exact numeric-type-name spelling
+# ("u8", "f32", "c32"); has=false for any other text. The single source
+# of suffix spellings -- suffixInfoOf derives from this table.
+numkindByName: function {name: StringView} out suffixinfo is {
+    if name == "i8" then return (suffixinfo has: true kind: numkind.i8Type len: 2)
+    if name == "u8" then return (suffixinfo has: true kind: numkind.u8Type len: 2)
+    if name == "c8" then return (suffixinfo has: true kind: numkind.c8Type len: 2)
+    if name == "i16" then return (suffixinfo has: true kind: numkind.i16Type len: 3)
+    if name == "i32" then return (suffixinfo has: true kind: numkind.i32Type len: 3)
+    if name == "i64" then return (suffixinfo has: true kind: numkind.i64Type len: 3)
+    if name == "u16" then return (suffixinfo has: true kind: numkind.u16Type len: 3)
+    if name == "u32" then return (suffixinfo has: true kind: numkind.u32Type len: 3)
+    if name == "u64" then return (suffixinfo has: true kind: numkind.u64Type len: 3)
+    if name == "f16" then return (suffixinfo has: true kind: numkind.f16Type len: 3)
+    if name == "f32" then return (suffixinfo has: true kind: numkind.f32Type len: 3)
+    if name == "f64" then return (suffixinfo has: true kind: numkind.f64Type len: 3)
+    if name == "c32" then return (suffixinfo has: true kind: numkind.c32Type len: 3)
+    if name == "i128" then return (suffixinfo has: true kind: numkind.i128Type len: 4)
+    if name == "u128" then return (suffixinfo has: true kind: numkind.u128Type len: 4)
+    if name == "f128" then return (suffixinfo has: true kind: numkind.f128Type len: 4)
+    return (suffixinfo has: false kind: numkind.i64Type len: 0)
+}
+
+# suffixInfoOf -- inline-suffix detection over a numeric lexeme: probe the
+# lexeme's tail against the numkindByName table, longest spelling first.
+# Only the inline-suffix rejection diagnostic consumes this -- the language
+# itself has no inline suffixes.
 suffixInfoOf: function {numstr: StringView} out suffixinfo is {
-    if numstr.endsWith "i128" then return (suffixinfo has: true kind: numkind.i128Type len: 4)
-    if numstr.endsWith "u128" then return (suffixinfo has: true kind: numkind.u128Type len: 4)
-    if numstr.endsWith "f128" then return (suffixinfo has: true kind: numkind.f128Type len: 4)
-    if numstr.endsWith "i16" then return (suffixinfo has: true kind: numkind.i16Type len: 3)
-    if numstr.endsWith "i32" then return (suffixinfo has: true kind: numkind.i32Type len: 3)
-    if numstr.endsWith "i64" then return (suffixinfo has: true kind: numkind.i64Type len: 3)
-    if numstr.endsWith "u16" then return (suffixinfo has: true kind: numkind.u16Type len: 3)
-    if numstr.endsWith "u32" then return (suffixinfo has: true kind: numkind.u32Type len: 3)
-    if numstr.endsWith "u64" then return (suffixinfo has: true kind: numkind.u64Type len: 3)
-    if numstr.endsWith "f16" then return (suffixinfo has: true kind: numkind.f16Type len: 3)
-    if numstr.endsWith "f32" then return (suffixinfo has: true kind: numkind.f32Type len: 3)
-    if numstr.endsWith "f64" then return (suffixinfo has: true kind: numkind.f64Type len: 3)
-    if numstr.endsWith "c32" then return (suffixinfo has: true kind: numkind.c32Type len: 3)
-    if numstr.endsWith "i8" then return (suffixinfo has: true kind: numkind.i8Type len: 2)
-    if numstr.endsWith "u8" then return (suffixinfo has: true kind: numkind.u8Type len: 2)
-    if numstr.endsWith "c8" then return (suffixinfo has: true kind: numkind.c8Type len: 2)
+    n9: numstr.length
+    tl9: 4.u64
+    for tl9 >= 2 loop {
+        if n9 >= tl9 then {
+            si9: numkindByName name: (numstr.substring from: (n9 - tl9) to: n9)
+            if si9.has then return si9
+        }
+        tl9 = tl9 - 1
+    }
     return (suffixinfo has: false kind: numkind.i64Type len: 0)
 }
 
@@ -1496,14 +1516,6 @@ parseNumber: function {numstr: StringView} out ParsedNumber is {
 # a float kind for dotted literals.
 parseNumberAs: function {numstr: StringView k: numkind} out ParsedNumber is {
     return (parseNumberWith :numstr hasK: true :k)
-}
-
-# numkindByName -- the numkind for an exact numeric-type-name spelling
-# ("u8", "f32", "c32"); has=false for any other text.
-numkindByName: function {name: StringView} out suffixinfo is {
-    si: suffixInfoOf numstr: name
-    if si.has when si.len == name.length then return si
-    return (suffixinfo has: false kind: numkind.i64Type len: 0)
 }
 
 # Parse a literal to its unbounded value, ignoring range errors so a
