@@ -90,7 +90,6 @@ module Rouge
           i64 
           i128
 
-          f8 
           f16 
           f32 
           f64 

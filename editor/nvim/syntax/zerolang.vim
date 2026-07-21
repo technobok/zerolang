@@ -62,12 +62,10 @@ syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 " words in the last group. Keep in sync with the `builtins` list in
 " docs/style/prism-zerolang.js; a future zls semantic-token layer will
 " compute this set from core.z instead of a hand-maintained list.
-" Types (core.z type-valued definitions; f8/f16/f128 are spec-listed
-" numeric widths not yet defined in core.z -- spec.pdoc "Other
-" predefined identifiers" -- kept so spec code blocks render uniformly)
+" Types (core.z type-valued definitions)
 syn match zerolangBuiltinType /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
 syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
-syn match zerolangBuiltinType /\<\%(f8\|f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
+syn match zerolangBuiltinType /\<\%(f16\|f32\|f64\|f128\|c8\|c32\|bool\)\>/
 syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|Any\)\>/
 syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|convError\|Box\|Iterator\)\>/
 syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListView\|ListIter\|Map\|MapKeyIter\|MapItemIter\|MapEntry\|Set\|SetIter\|Bytes\|ByteView\)\>/

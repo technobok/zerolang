@@ -180,7 +180,7 @@ Other predefined identifiers:
 
   u8 u16 u32 u64 u128
   i8 i16 i32 i64 i128
-  f8 f16 f32 f64 f128
+  f16 f32 f64 f128
   c8     c32
   String
 
@@ -306,6 +306,7 @@ losslessly be stored in the resulting format:
 
 #table cols="1 2 >1":
   Method | Resulting Type               | Bit size
+  f16    | Floating Point               |       16
   f32    | Floating Point               |       32
   f64    | Floating Point               |       64
   f128   | Floating Point               |      128
@@ -318,6 +319,12 @@ Examples:
   (1.0e15).f128
   (1e15).f128
   """
+
+Float literals are emitted at the full precision of their target width (the
+compiler carries the literal text through to C, so an #~"f128" literal is
+parsed once at binary128 precision). #~"f16" is backed by the C #~"_Float16"
+type (GCC 12+ / Clang 15+); #~"f128" is backed by #~"__float128", and printing
+it exactly uses #~"libquadmath".
 
 
 #----: Numeric defaults
@@ -421,13 +428,16 @@ silently.
 #ul:
   [#*: #_*"Provably-safe conversions" return the target type #~"T" directly.
     These are widenings (#~"u8" -> #~"u32"), identity, an integer to a float
-    whose mantissa covers the source range (any integer #~"<= 2^24" to #~"f32",
-    #~"<= 2^53" to #~"f64"), and #~"f32" -> #~"f64".]
+    whose mantissa covers the source range (any integer #~"<= 2^11" to #~"f16",
+    #~"<= 2^24" to #~"f32", #~"<= 2^53" to #~"f64", #~"<= 2^113" to #~"f128"),
+    and a float to a wider float (#~"f16" -> #~"f32" / #~"f64" / #~"f128",
+    #~"f32" -> #~"f64" / #~"f128", #~"f64" -> #~"f128").]
   [#*: #_*"Possibly-lossy conversions" return #~"resultval t: T e: convError"
     that the caller must handle. These are narrowings (#~"u64" -> #~"u32"), sign
     crossings (#~"i32" -> #~"u32", #~"i64" -> #~"u64"), any float to an integer,
-    #~"f64" -> #~"f32", and an integer to a float beyond its mantissa (#~"u64"
-    -> #~"f64").]
+    a float to a narrower float (#~"f64" -> #~"f32", #~"f128" -> #~"f64",
+    #~"f32" -> #~"f16"), and an integer to a float beyond its mantissa
+    (#~"u64" -> #~"f64", #~"u128" -> #~"f128").]
 
 #~"convError" reports #~"outOfRange" (the value -- or #~"NaN" / an infinity --
 does not fit the target) or #~"precisionLoss" (the value is in range but not
@@ -3089,7 +3099,7 @@ Predefined numeric type identifiers:
 #code language=zerolang:
   u8 u16 u32 u64 u128
   i8 i16 i32 i64 i128
-  f8 f16 f32 f64 f128
+  f16 f32 f64 f128
   c8     c32
 
 Characters are also a numeric type and represent a single unicode code point
