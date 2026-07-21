@@ -1346,7 +1346,9 @@ digitVal: function {b: u8} out optionval u64 is {
     return (optionval.none u64)
 }
 
-# Peel an inline numeric type suffix (longest first) off a lexeme.
+# Detect an inline numeric type suffix shape (longest first) on a
+# lexeme. Diagnostic + exact-name mapping only -- parseNumber never
+# peels; inline suffixes are not part of the language.
 suffixInfoOf: function {numstr: StringView} out suffixinfo is {
     if numstr.endsWith "i128" then return (suffixinfo has: true kind: numkind.i128Type len: 4)
     if numstr.endsWith "u128" then return (suffixinfo has: true kind: numkind.u128Type len: 4)
@@ -1372,15 +1374,17 @@ rangeErr: function {value: u64 k: numkind r: NumRange} out String is {
     return msg
 }
 
-# Parse a numeric literal lexeme into (kind, value, error). 'e'-notation
-# is NOT recognised here -- only a decimal point selects the float path,
-# so a bare `1e3` is an invalid integer.
-parseNumber: function {numstr: StringView} out ParsedNumber is {
+# Parse a numeric literal lexeme into (kind, value, error) against an
+# optional required kind (the dot-form conversion target). The lexeme is
+# consumed in its ENTIRETY -- the language has no inline type suffixes,
+# so any non-literal tail is an invalid literal. 'e'-notation is NOT
+# recognised here -- only a decimal point selects the float path, so a
+# bare `1e3` is an invalid integer.
+parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedNumber is {
     n: numstr.length
-    si: suffixInfoOf numstr
-    coreLen: n - si.len
-    hasKind: si.has
-    kind: si.kind
+    coreLen: n
+    hasKind: hasK
+    kind: k
 
     hasDot: false
     di: u64
@@ -1537,6 +1541,27 @@ parseNumber: function {numstr: StringView} out ParsedNumber is {
         }
     }
     return (ParsedNumber :kind isFloat: false ival: acc fval: 0.0 err: "".string)
+}
+
+# Parse a numeric literal lexeme into (kind, value, error); the kind
+# comes from the literal's own shape (dot -> f64, 0c -> c32, else i64).
+parseNumber: function {numstr: StringView} out ParsedNumber is {
+    return (parseNumberWith :numstr hasK: false k: numkind.i64Type)
+}
+
+# parseNumberAs -- parse a complete literal against a required kind (the
+# dot-form conversion target): range-checks integers and chars, requires
+# a float kind for dotted literals.
+parseNumberAs: function {numstr: StringView k: numkind} out ParsedNumber is {
+    return (parseNumberWith :numstr hasK: true :k)
+}
+
+# numkindByName -- the numkind for an exact numeric-type-name spelling
+# ("u8", "f32", "c32"); has=false for any other text.
+numkindByName: function {name: StringView} out suffixinfo is {
+    si: suffixInfoOf numstr: name
+    if si.has when si.len == name.length then return si
+    return (suffixinfo has: false kind: numkind.i64Type len: 0)
 }
 
 # Parse a literal to its unbounded value, ignoring range errors so a
@@ -1702,6 +1727,9 @@ main: function is {
     smokeParse "42i128"
     smokeParse "0cA"
     smokeParse "0cAB"
+    smokeParse "0c8"
+    smokeParse "0c"
+    smokeParse "0x1f32"
     smokeParse "1.5"
     smokeParse "1e3"
     smokeParse "0xZZ"
