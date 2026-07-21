@@ -15170,35 +15170,6 @@ checkIf: function {
     return result
 }
 
-# comparisonCoerceTarget -- the type a literal comparison operand coerces at:
-# the concrete side's operator-child first-param type when resolvable (a
-# boxed value's == is the element's, so the literal wears the element type),
-# else the concrete side itself.
-comparisonCoerceTarget: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitName: StringView
-    concrete: u64
-    op: StringView
-} out u64 is {
-    unitName
-    opo9: st.typing.childOf pool: ast.names parentTypeId: concrete name: op
-    match (
-        opo9
-    ) case some then {
-        p0n9: positionalParamName :ast :st funcId: opo9 idx: 0 skipRecv: true
-        if p0n9.length > 0 then {
-            ppo9: st.typing.childOf pool: ast.names parentTypeId: opo9 name: p0n9.stringview
-            match (
-                ppo9
-            ) case some then {
-                return ppo9
-            } case none then null
-        }
-    } case none then null
-    return concrete
-}
-
 # checkBinopMethodDispatch -- resolve a binary operator as a declared method on
 # the lhs type: materialise a bare-literal lhs for dispatch, chase typedef bases
 # to the type that declares the operator, arg-check the rhs against the method's
@@ -15383,56 +15354,17 @@ checkBinop: function {
     rt: checkValue :st :unitName :ast :unitBody node: (ast.nodes.get i: (binop.rhs - 1).u64)
     opn: atomName :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
     opnId9: atomNameId :ast n: (ast.nodes.get i: (binop.operator - 1).u64)
-    if (isComparisonOp name: opn.stringview) then {
-        # A literal operand coerces (restamps) at the concrete side's type.
-        lLit9: false
-        if lt == literalIntId then lLit9 = true
-        if lt == literalFloatId then lLit9 = true
-        rLit9: false
-        if rt == literalIntId then rLit9 = true
-        if rt == literalFloatId then rLit9 = true
-        if lLit9 when rLit9 then {} else {
-            if lLit9 when rt > 0 then {
-                lct9: comparisonCoerceTarget :ast :st :unitName concrete: rt op: opn.stringview
-                lid9: innermostNodeId :ast n: (ast.nodes.get i: (binop.lhs - 1).u64)
-                if lid9 > 0 then {
-                    setlc9: lct9
-                    st.typing.nodeType.set key: lid9.u64 value: setlc9
-                }
-            }
-            if rLit9 when lt > 0 then {
-                rct9: comparisonCoerceTarget :ast :st :unitName concrete: lt op: opn.stringview
-                rid9: innermostNodeId :ast n: (ast.nodes.get i: (binop.rhs - 1).u64)
-                if rid9 > 0 then {
-                    setrc9: rct9
-                    st.typing.nodeType.set key: rid9.u64 value: setrc9
-                }
-            }
-        }
-        result = (checkBinopMethodDispatch
-            :st
-            :unitName
-            :ast
-            :binop
-            opn: opn.stringview
-            :opnId9
-            :lt
-            :rt
-            isCmp9: true
-        )
-    } else {
-        result = (checkBinopMethodDispatch
-            :st
-            :unitName
-            :ast
-            :binop
-            opn: opn.stringview
-            :opnId9
-            :lt
-            :rt
-            isCmp9: false
-        )
-    }
+    result = (checkBinopMethodDispatch
+        :st
+        :unitName
+        :ast
+        :binop
+        opn: opn.stringview
+        :opnId9
+        :lt
+        :rt
+        isCmp9: (isComparisonOp name: opn.stringview)
+    )
     tdb2: typedefBaseOf :ast :st :unitName tid: result
     if tdb2 > 0 then result = tdb2
     if result > 0 when (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.genericParam then {
