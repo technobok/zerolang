@@ -14236,9 +14236,29 @@ checkAssignment: function {
 } is {
     drainPendingBorrow :st
     av9: ast.nodes.get i: (asgn.value - 1).u64
+    errA0: st.typing.errors.length
     vt: checkValue :st :unitName :ast :unitBody node: av9
     mvt: materialiseLiteral :ast :st :unitName t: vt
     vt = mvt
+    if vt == 0 when st.typing.errors.length == errA0 then {
+        ubn0: unresolvedBareCallable :ast :st :unitName n: av9
+        if ubn0.length > 0 then {
+            um0: "Unknown reference '\{ubn0}'"
+            en0u: String
+            eh0u: String
+            (addErrorH
+                :st
+                nodeid: (nodeId n: av9)
+                lineno: (nodeLine n: av9)
+                colno: (nodeCol n: av9)
+                e: zast.err.badReference
+                msg: um0
+                note: en0u
+                hint: eh0u
+                width: ubn0.length.u32.orPanic
+            )
+        }
+    }
     if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.nullType then {
         m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
         vln1: nodeLine n: av9
@@ -16944,6 +16964,64 @@ returnedBareFieldName: function {ast: Ast st: zenv.ZSymbolTable n: Node} out Str
 # value that resolves to NOTHING (no local, no own-unit function, no system
 # name, no walkable type): the checker's silent args-walked fallthrough
 # otherwise leaves the binding untyped and the emitter prints a marker.
+# unresolvedBareName -- prove a bare name resolves NOWHERE in value
+# position: not a local, not a unit member, not a typeref, not a system
+# child. The name when unresolvable; "" when anything claims it.
+unresolvedBareName: function {ast: Ast
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    name: StringView
+} out String is {
+    if name.length == 0 then return "".string
+    ubv9: st.lookupVarId :name
+    match (
+        ubv9
+    ) case some then {
+        return "".string
+    } case none then null
+    if (st.reg.unitNameTid.has key: name.string) then return "".string
+    ubk9: "\{unitName}.\{name}"
+    ubr9: resolvedByKey :ast ty: st.typing reg: st.reg key: ubk9
+    match (
+        ubr9
+    ) case some then {
+        return "".string
+    } case none then null
+    ubw9: (walkLookupTyperef
+        :ast
+        ty: st.typing
+        reg: st.reg
+        currentUnit: unitName
+        base: name
+    )
+    match (
+        ubw9
+    ) case some then {
+        return "".string
+    } case none then null
+    ubs9: resolveSystemChild :ast ty: st.typing reg: st.reg :name
+    match (
+        ubs9
+    ) case some then {
+        return "".string
+    } case none then null
+    return name.string
+}
+
+# dottedRootName -- the root atom name of a dotted path ("" when the
+# root is not a bare atom).
+dottedRootName: function {ast: Ast n: Node} out String is {
+    match (
+        n
+    ) case dottedpath then {
+        return (dottedRootName :ast n: (ast.nodes.get i: (n.parent - 1).u64))
+    } case expression then {
+        return (dottedRootName :ast n: (ast.nodes.get i: (n.expression - 1).u64))
+    } else {
+        return (atomName :ast :n)
+    }
+}
+
 unresolvedBareCallable: function {ast: Ast
     st: zenv.ZSymbolTable
     unitName: StringView
@@ -16959,40 +17037,14 @@ unresolvedBareCallable: function {ast: Ast
             n: (ast.nodes.get i: (n.expression - 1).u64)
         )
     } case call then {
-        ubc9: atomName :ast n: (ast.nodes.get i: (n.callable - 1).u64)
-        if ubc9.length == 0 then return "".string
-        ubv9: st.lookupVarId name: ubc9.stringview
-        match (
-            ubv9
-        ) case some then {
-            return "".string
-        } case none then null
-        ubk9: "\{unitName}.\{ubc9}"
-        ubr9: resolvedByKey :ast ty: st.typing reg: st.reg key: ubk9
-        match (
-            ubr9
-        ) case some then {
-            return "".string
-        } case none then null
-        ubw9: (walkLookupTyperef
-            :ast
-            ty: st.typing
-            reg: st.reg
-            currentUnit: unitName
-            base: ubc9.stringview
-        )
-        match (
-            ubw9
-        ) case some then {
-            return "".string
-        } case none then null
-        ubs9: resolveSystemChild :ast ty: st.typing reg: st.reg name: ubc9.stringview
-        match (
-            ubs9
-        ) case some then {
-            return "".string
-        } case none then null
-        return (ubc9.copy)
+        cnode9: ast.nodes.get i: (n.callable - 1).u64
+        ubc9: atomName :ast n: cnode9
+        if ubc9.length > 0 then return (unresolvedBareName :ast :st :unitName name: ubc9.stringview)
+        ubr0: dottedRootName :ast n: cnode9
+        return (unresolvedBareName :ast :st :unitName name: ubr0.stringview)
+    } case atomid then {
+        uba9: zast.nameTextCopy :ast ref: n.name
+        return (unresolvedBareName :ast :st :unitName name: uba9.stringview)
     } else {
         return "".string
     }
@@ -19038,11 +19090,48 @@ checkStmtInner: function {
     match (
         inner
     ) case expression then {
+        errE0: st.typing.errors.length
         isR0: checkExpression :st :unitName :ast :unitBody expr: inner
         bn0: bareAtomName :ast n: (ast.nodes.get i: (inner.expression - 1).u64)
         if bn0.stringview == "break" then isR0 = true
         if bn0.stringview == "continue" then isR0 = true
         if bn0.stringview == "return" then isR0 = true
+        # a statement whose value resolved to nothing and raised nothing:
+        # an unresolvable root name is an unknown reference (the emitter
+        # would otherwise hit its unhandled-callee backstop)
+        ctl0: false
+        if bn0.stringview == "break" then ctl0 = true
+        if bn0.stringview == "continue" then ctl0 = true
+        if bn0.stringview == "return" then ctl0 = true
+        if st.typing.errors.length == errE0 when ctl0 == false then {
+            eto0: st.typing.nodeType.get key: inner.nodeid.u64
+            unkn0: true
+            match (
+                eto0
+            ) case some then {
+                if eto0 > 0 then unkn0 = false
+            } case none then null
+            if unkn0 then {
+                einv0: ast.nodes.get i: (inner.expression - 1).u64
+                ubn1: unresolvedBareCallable :ast :st :unitName n: einv0
+                if ubn1.length > 0 then {
+                    um1: "Unknown reference '\{ubn1}'"
+                    en1u: String
+                    eh1u: String
+                    (addErrorH
+                        :st
+                        nodeid: (nodeId n: einv0)
+                        lineno: (nodeLine n: einv0)
+                        colno: (nodeCol n: einv0)
+                        e: zast.err.badReference
+                        msg: um1
+                        note: en1u
+                        hint: eh1u
+                        width: ubn1.length.u32.orPanic
+                    )
+                }
+            }
+        }
         return isR0
     } case assignment then {
         checkAssignment :st :unitName :ast :unitBody asgn: inner
