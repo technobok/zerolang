@@ -47,7 +47,8 @@
         'null', 'never', 'true', 'false', '_',
         'u8', 'u16', 'u32', 'u64', 'u128',
         'i8', 'i16', 'i32', 'i64', 'i128',
-        'f32', 'f64', 'c8', 'c32', 'bool',
+        // f8/f16/f128: spec-listed numeric widths not yet in core.z
+        'f8', 'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
         'String', 'StringView', 'Text', 'StringLike', 'Any',
         'Option', 'optionval', 'OptionView', 'Result', 'resultval', 'convError', 'Box', 'Iterator',
         'array', 'str', 'List', 'ListView', 'ListIter', 'Map', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'Set', 'SetIter', 'Bytes', 'ByteView',
