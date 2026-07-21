@@ -54,9 +54,12 @@ Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
 2026-07-21 arc notes: `make test` wall is bimodal — ~13.3s typical with an
 occasional ~25s run at identical CPU time (~2m45 user, 24 jobs), so
 single-run corpus timings are not comparable; a prior 26s reading was this
-mode, not a regression. The differential kind runs strictly serial (direct
-os.spawn, no runJobs pool) and is the suspected tail; attribution pending
-(arc step A3).
+mode, not a regression. Per-kind split (A3, temporary section probes,
+typical 13.3s run): LEAK 5.5s, LSP 3.2s, RUN 2.4s, DIFFERENTIAL 1.0s,
+SMOKE 0.8s, VFS 0.3s, ERROR+DUMP 0.1s. The serial-differential-tail
+hypothesis is REFUTED at 24 jobs — the ASan leak pool dominates; any
+future runner scheduling work should target LEAK/LSP, and the ~25s
+outlier remains unattributed (it is not differential serialization).
 
 A1 notes: 121,797 per-node name Strings collapse to ~one interned nameentry
 row per distinct identifier; name equality on refs becomes available (A2).
