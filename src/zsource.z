@@ -1903,6 +1903,241 @@ Analysis: class {
         }
     }
 
+    # emitConv -- L015 caret + safe fix: delete the `.member` conversion span.
+    emitConv: function {:this ln: u32 col: u32 mname: StringView msg: String.take} is {
+        srcOwned: this.source.copy
+        sv: srcOwned.stringview
+        lineStart: lineStartIndex src: sv
+        srcLines: linesOf src: sv
+        byteStart: tokByteStart :lineStart :srcLines lineno: ln colno: col
+        lo: byteStart
+        if byteStart > 0 then lo = byteStart - 1
+        hi: byteStart + mname.length
+        (this.warnFix
+            code: "L015"
+            :msg
+            line: ln
+            :col
+            width: mname.length.u32.orPanic
+            :lo
+            :hi
+            repl: "".string
+        )
+    }
+
+    # slConvArg -- one call argument: flag a redundant StringLike conversion.
+    # Direction A: `x.stringview` on a String base (free but pointless).
+    # Direction B: `sv.copy` / `sv.string` on a StringView base -- allocates an
+    # owned String the callee only borrows. Both fire only when the parameter
+    # is a generic constrained StringLike (either string form is accepted
+    # directly); B is skipped for a `.take` parameter (it keeps the value).
+    slConvArg: function {
+        :this
+        ast: Ast
+        opId: u32
+        originTid: u64
+        pname: StringView
+        ptid: u64
+        strTid: u64
+        svTid: u64
+        st: zenv.ZSymbolTable
+    } is {
+        if (st.reg.typetypeOf typeId: ptid) != ztypes.ztypetype.genericParam then return
+        gpn9: ztypecheck.regTypeNameOf reg: st.reg tid: ptid
+        tk9: ztypecheck.genericTypeKey ty: st.typing reg: st.reg tid: originTid
+        cd9: st.reg.genericParamConstraintOf typeKey: tk9.stringview paramName: gpn9.stringview
+        if (cd9.kind == ztypes.constraintkind.stringLike) == false then return
+        dpId9: opId
+        {
+            opn9: ast.nodes.get i: (dpId9 - 1).u64
+            if opn9.expression then dpId9 = opn9.expression
+        }
+        cn9: String
+        cln9: u32
+        ccl9: u32
+        bnid9: u64
+        {
+            dpn9: ast.nodes.get i: (dpId9 - 1).u64
+            match (
+                dpn9
+            ) case dottedpath then {
+                chn9: ast.nodes.get i: (dpn9.child - 1).u64
+                cn9 = atomName :ast n: chn9
+                ci9: nodeInfoOf n: chn9
+                cln9 = ci9.line
+                ccl9 = ci9.col
+                pnn9: ast.nodes.get i: (dpn9.parent - 1).u64
+                bni9: nodeInfoOf n: pnn9
+                bnid9 = bni9.id.u64
+            } else null
+        }
+        if cn9.length == 0 then return
+        if bnid9 == 0 then return
+        bt9: u64
+        {
+            bto9: st.typing.nodeType.get key: bnid9
+            match (
+                bto9
+            ) case some then {
+                bt9 = bto9
+            } case none then null
+        }
+        if bt9 == 0 then return
+        if cn9.stringview == "stringview" when bt9 == strTid then {
+            (this.emitConv
+                ln: cln9
+                col: ccl9
+                mname: "stringview"
+                msg: "redundant conversion: `.stringview` on a String argument (the parameter accepts StringLike)".string
+            )
+            return
+        }
+        isOwned9: false
+        if cn9.stringview == "copy" then isOwned9 = true
+        if cn9.stringview == "string" then isOwned9 = true
+        if isOwned9 when bt9 == svTid then {
+            if (st.typing.childOwnershipIs
+                pool: ast.names
+                parentTypeId: originTid
+                name: pname
+                own: ztypes.zparamownership.takeMode
+            ) == false then {
+                cnc9: cn9.copy
+                (this.emitConv
+                    ln: cln9
+                    col: ccl9
+                    mname: cn9.stringview
+                    msg: "redundant conversion: `.\{cnc9}` allocates an owned String the call only borrows (the parameter accepts StringLike)"
+                )
+            }
+        }
+    }
+
+    # slConvCall -- L015 over one call: resolve the callee's template and
+    # check each argument's conversion shape against its parameter.
+    slConvCall: function {
+        :this
+        ast: Ast
+        callNid: u32
+        callable: Node
+        arguments: List u32
+        uname: StringView
+        st: zenv.ZSymbolTable
+    } is {
+        uname
+        isRet9: false
+        {
+            ck9: st.typing.callKind.get key: callNid.u64
+            match (
+                ck9
+            ) case some then {
+                match (
+                    ck9
+                ) case returnCall then {
+                    isRet9 = true
+                } else null
+            } case none then null
+        }
+        if isRet9 then return
+        callee9: u64
+        {
+            cInfo9: nodeInfoOf n: callable
+            co9: st.typing.nodeType.get key: cInfo9.id.u64
+            match (
+                co9
+            ) case some then {
+                callee9 = co9
+            } case none then null
+        }
+        if callee9 == 0 then return
+        if (st.reg.typetypeOf typeId: callee9) != ztypes.ztypetype.functionType then return
+        origin9: callee9
+        thisPn9: String
+        {
+            zo9: st.reg.typeById.get key: callee9
+            match (
+                zo9
+            ) case some then {
+                go9: zo9.genericOriginId
+                match (
+                    go9
+                ) case some then {
+                    if go9 > 0 then origin9 = go9
+                } case none then null
+            } case none then null
+        }
+        {
+            zoR9: st.reg.typeById.get key: origin9
+            match (
+                zoR9
+            ) case some then {
+                thisPn9 = ztypecheck.optStrOrEmpty o: zoR9.thisParamName
+            } case none then null
+        }
+        names9: (List String)
+        ids9: (List u64)
+        nameIds9: (List u64)
+        ztypecheck.dataFieldNames :ast :st tid: origin9 names: names9 ids: ids9 nameIds: nameIds9
+        if names9.length == 0 then return
+        strTid9: ztypecheck.builtinTidT :ast ty: st.typing reg: st.reg base: "String"
+        svTid9: ztypecheck.builtinTidT :ast ty: st.typing reg: st.reg base: "StringView"
+        firstArg9: true
+        aiter9: arguments.iterate
+        for aId9: aiter9 loop {
+            arg9: ast.nodes.get i: (aId9 - 1).u64
+            match (
+                arg9
+            ) case namedoperation then {
+                an9: zast.nameTextCopy :ast ref: arg9.name
+                pidx9: u64
+                pfound9: false
+                if an9.length > 0 then {
+                    pi9: u64
+                    for pi9 < names9.length loop {
+                        if pfound9 == false then {
+                            pnm9: names9.get i: pi9
+                            if pnm9.stringview == an9.stringview then {
+                                pidx9 = pi9
+                                pfound9 = true
+                            }
+                        }
+                        pi9 = pi9 + 1
+                    }
+                } else if firstArg9 then {
+                    # the elided first label binds the first non-receiver param
+                    pj9: u64
+                    for pj9 < names9.length loop {
+                        if pfound9 == false then {
+                            pnm9b: names9.get i: pj9
+                            isRecv9: false
+                            if (nameIds9.get i: pj9) == wkThis.u64 then isRecv9 = true
+                            if thisPn9.length > 0 when thisPn9.stringview == pnm9b.stringview then isRecv9 = true
+                            if isRecv9 == false then {
+                                pidx9 = pj9
+                                pfound9 = true
+                            }
+                        }
+                        pj9 = pj9 + 1
+                    }
+                }
+                if pfound9 then {
+                    pnmc9: (names9.get i: pidx9).copy
+                    (this.slConvArg
+                        :ast
+                        opId: arg9.operation
+                        originTid: origin9
+                        pname: pnmc9.stringview
+                        ptid: (ids9.get i: pidx9)
+                        strTid: strTid9
+                        svTid: svTid9
+                        :st
+                    )
+                }
+                firstArg9 = false
+            } else null
+        }
+    }
+
     # sufNamedArg -- a named call/constructor argument whose suffix the parameter / field type
     # fixes.
     sufNamedArg: function {:this ast: Ast arg: Node calleeType: u64 uname: StringView st: zenv.ZSymbolTable} is {
@@ -2022,6 +2257,13 @@ Analysis: class {
                 :uname
                 :st
                 :funcretId
+            )
+            (this.slConvCall :ast
+                callNid: n.nodeid
+                callable: (ast.nodes.get i: (n.callable - 1).u64)
+                arguments: n.arguments
+                :uname
+                :st
             )
             this.walkSuf :ast n: (ast.nodes.get i: (n.callable - 1).u64) :uname :st :funcretId
             argiter: n.arguments.iterate
@@ -2477,7 +2719,7 @@ Analysis: class {
                 atPrefix9: "\{mainTid9}:"
                 tgtNames9: (List String)
                 with pa9: st.typing.childPublicAlias.iterateItems do for pe9: pa9 loop {
-                    if (pe9.key.stringview.startsWith prefix: atPrefix9.stringview) then tgtNames9.append from: pe9.value.copy
+                    if (pe9.key.stringview.startsWith prefix: atPrefix9) then tgtNames9.append from: pe9.value.copy
                 }
                 tI9: u64
                 for tI9 < tgtNames9.length loop {
@@ -3174,7 +3416,7 @@ emitDiffHunk: function {
         e: edits.get i: j
         if e.byteLo >= prev when (e.byteLo <= e.byteHi) then {
             zfix.appendRange buf: newBlock src: source lo: prev hi: e.byteLo
-            newBlock.append e.replacement.stringview
+            newBlock.append e.replacement
             prev = e.byteHi
         }
         j = j + 1
@@ -3185,12 +3427,12 @@ emitDiffHunk: function {
     newCount: newLines.length
     newStart: (clLo.i64.orPanic + newDelta) + 1
     hh: "@@ -\{clLo + 1},\{oldCount} +\{newStart},\{newCount} @@\n"
-    buf.append hh.stringview
+    buf.append hh
     oi: clLo
     for oi <= clHi loop {
         ol: srcLines.get i: oi
         dm: "-\{ol}\n"
-        buf.append dm.stringview
+        buf.append dm
         oi = oi + 1
     }
     if (clHi + 1) == nLines when ((endsWithNewline src: source) == false) then {
@@ -3198,7 +3440,7 @@ emitDiffHunk: function {
     }
     with nit: newLines.iterate do for nl: nit loop {
         pm: "+\{nl}\n"
-        buf.append pm.stringview
+        buf.append pm
     }
     if newBlock.length > 0 when ((endsWithNewline src: newBlock.stringview) == false) then {
         buf.append "\\ No newline at end of file\n"
@@ -3305,7 +3547,7 @@ renderDiff: function {
     nLines: srcLines.length
 
     hdr: "--- \{path}\n+++ \{path}\n"
-    buf.append hdr.stringview
+    buf.append hdr
 
     newDelta: i64
     cActive: false
@@ -3397,7 +3639,7 @@ analyzeSource: function {
 }
 
 analyzeFile: function {path: String.take lineLength: u32 casing: bool} out Analysis is {
-    rd: io.readText path: path.stringview
+    rd: io.readText :path
     match (
         rd
     ) case ok then {
@@ -3443,7 +3685,7 @@ analyzeFileFull: function {
     systemdir: StringView
     lineLength: u32
 } out Analysis is {
-    rd: io.readText path: path.stringview
+    rd: io.readText :path
     match (
         rd
     ) case ok then {
