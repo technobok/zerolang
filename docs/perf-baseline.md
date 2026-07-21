@@ -46,6 +46,15 @@ Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
 | 2026-07-18 | 6eee916 | D5 (a: namedoperation label -> pool id, last owned Option String on the AST gone, 7 label helpers collapse to nameTextCopy/nameTextEq; b: text-taking setChild deleted -- analysis interns ONLY at 6 explicit ast.internString mint sites, else id-keyed setChildId via wk consts / in-hand ids / poolFind read-probe). Pure refactor: 129/129 examples behaviourally identical. -29k allocs (per-label Option removed) | 0.66s | — | 115MB / — | — | 10,444,134 | 493MB | — |
 | 2026-07-18 | (E1 seeded) | E1: id-key resolveTypeIdByName -- poolFind the name ONCE, then id-keyed stages (childOfId); the composed-key fallback materialises text lazily. The same name was find()-ed ~9+N times per resolve (once per stage + once per unit in the cross-unit loop); now once per resolve. Pure refactor (129/129 examples identical). -354k allocs (-3.4%) vs D5 | 0.64s | — | 113MB / — | — | 10,089,619 | 481MB | — |
 | 2026-07-18 | (E2a seeded) | E2a: cache the unit list. resolveTypeIdByNameId rebuilt utids9 (List u64) + the fallback uks9 (List String, every unit key copied) on EVERY cross-unit resolve, iterating unitNameTid each time. unitNameTid is typecheck-stable, so snapshot it once per Ctx (ensureUnitCache -> ctx.unitTidsC/unitKeysC). Pure refactor (129/129 identical). -533k allocs (-5.3%) vs E1; -8.5% cumulative from D5 | 0.64s | — | 111MB / — | — | 9,556,604 | 453MB | — |
+| 2026-07-21 | 1426aaa | HEAD re-measure (+72 feature commits since E2a, incl. the completion sweep): the accumulated regression the perf arc attributes | 0.71s | — | 125MB / — | 90 / 277 / 350 (total 715) | 10,520,665 | 510MB | 13.4s |
+| 2026-07-21 | (A1 seeded) | A1: walkedMethodOwners keys qualified "unit.name" everywhere. The sweep probed bare names while depWalkUnit marked qualified, so it re-walked every dep/stdlib type the dep walks had already checked, and same-named types across units masked each other's sweep entry; + mainMemberIndex gated to the unit it indexes (the qualified probe exposed a latent cross-unit index clash) | 0.69s | — | 122MB / — | 92 / 250 / 340 (total 690) | 10,203,138 | 491MB | 13.2s |
+
+2026-07-21 arc notes: `make test` wall is bimodal — ~13.3s typical with an
+occasional ~25s run at identical CPU time (~2m45 user, 24 jobs), so
+single-run corpus timings are not comparable; a prior 26s reading was this
+mode, not a regression. The differential kind runs strictly serial (direct
+os.spawn, no runJobs pool) and is the suspected tail; attribution pending
+(arc step A3).
 
 A1 notes: 121,797 per-node name Strings collapse to ~one interned nameentry
 row per distinct identifier; name equality on refs becomes available (A2).
