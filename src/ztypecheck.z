@@ -17063,6 +17063,9 @@ unresolvedBareName: function {ast: Ast
     name: StringView
 } out String is {
     if name.length == 0 then return "".string
+    # `meta` is the enclosing type's raw allocator base (meta.create):
+    # contextual, never a unit-resolvable name
+    if name == "meta" then return "".string
     ubv9: st.lookupVarId :name
     match (
         ubv9
@@ -19468,6 +19471,18 @@ maybeWalkMethods: function {
     mv: true
     st.typing.walkedMethodOwners.set key: nk value: mv
     memId9: unitBody.get i: idx
+    walkOwnerMethods :st :unitName :ast :unitBody :memId9 :name
+}
+
+# walkOwnerMethods -- check one type member's method bodies (the shared
+# core of the demand-time walk and the completion sweep).
+walkOwnerMethods: function {
+    st: zenv.ZSymbolTable
+    unitName: StringView
+    ast: Ast unitBody: List u32
+    memId9: u32
+    name: StringView
+} is {
     mem: ast.nodes.get i: (memId9 - 1).u64
     match (
         mem
@@ -20319,7 +20334,79 @@ checkBodies: function {st: zenv.ZSymbolTable program: Node} is {
                 }
             }
         }
+        sweepUnwalkedMethods :st ast: program.ast
     } else null
+}
+
+# sweepUnwalkedMethods -- after the demand-driven walks, check the method
+# bodies of every concrete type the walks never reached (a type whose
+# name is never used). Template owners are skipped: their bodies check
+# per instantiation. Deterministic: unit load order, declaration order.
+sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast} is {
+    swN9: ast.units.length
+    swI9: u64
+    for swI9 < swN9 loop {
+        swuId9: ast.units.get i: swI9
+        swI9 = swI9 + 1
+        swu9: ast.nodes.get i: (swuId9 - 1).u64
+        match (
+            swu9
+        ) case namedoperation then {
+            swun9: zast.nameTextCopy :ast ref: swu9.name
+            swBody9: zast.unitBodyIdsAt :ast unitId: swu9.operation
+            swbi9: u64
+            swbn9: swBody9.length
+            for swbi9 < swbn9 loop {
+                swmId9: swBody9.get i: swbi9
+                swbi9 = swbi9 + 1
+                swm9: ast.nodes.get i: (swmId9 - 1).u64
+                match (
+                    swm9
+                ) case namedoperation then {
+                    swmn9: zast.nameTextCopy :ast ref: swm9.name
+                    swWalked9: false
+                    {
+                        swg9: st.typing.walkedMethodOwners.get key: swmn9
+                        match (
+                            swg9
+                        ) case some then {
+                            swWalked9 = true
+                        } case none then null
+                    }
+                    if swWalked9 == false then {
+                        swop9: ast.nodes.get i: (swm9.operation - 1).u64
+                        swDo9: false
+                        match (
+                            swop9
+                        ) case objectdef then {
+                            if (hasGenericParam :ast items: swop9.asItems) == false then {
+                                swDo9 = true
+                            }
+                        } else null
+                        if swDo9 when (objectdefHasMethodBodies :ast op: swop9) then {
+                            mvS9: true
+                            st.typing.walkedMethodOwners.set key: swmn9.copy value: mvS9
+                            (resolveUnitChild
+                                :ast
+                                ty: st.typing
+                                reg: st.reg
+                                unitName: swun9.stringview
+                                name: swmn9.stringview
+                            )
+                            (walkOwnerMethods
+                                :st
+                                unitName: swun9.stringview
+                                :ast
+                                unitBody: swBody9
+                                memId9: swmId9
+                                name: swmn9.stringview
+                            )
+                        }
+                    }
+                } else null
+            }
+        } else null
+    }
 }
 
 # foldLiteralStamps -- replace literal-typed node stamps with their concrete
