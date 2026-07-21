@@ -9140,6 +9140,36 @@ builtinTidTc: function {ast: Ast st: zenv.ZSymbolTable base: StringView} out u64
 # resolved type. Runs after the demand descent, so system + forward refs are present
 # in childOf. pendingTyperef is a sibling field of nodeType (no lock
 # conflict). The widened typed_nodes differential reads the resulting nodeType rows.
+# nameClaimedByScope -- the probe core shared by the negative-proof chains
+# (unknown-reference at value/callable sites, unknown-type at stampTyperefs):
+# does a unit-level namespace claim the name -- the unit-name space, the
+# current unit's resolved children, or system's children? Callers add their
+# context legs (local variables, the typeref walk, the closure-wide unit
+# scan) and their own exemptions.
+nameClaimedByScope: function {
+    ast: Ast
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    currentUnit: StringView
+    name: StringView
+} out bool is {
+    if (reg.unitNameTid.has key: name.string) then return true
+    nck9: "\{currentUnit}.\{name}"
+    ncr9: resolvedByKey :ast :ty :reg key: nck9
+    match (
+        ncr9
+    ) case some then {
+        return true
+    } case none then null
+    ncs9: resolveSystemChild :ast :ty :reg :name
+    match (
+        ncs9
+    ) case some then {
+        return true
+    } case none then null
+    return false
+}
+
 stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
@@ -9219,33 +9249,13 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                     # that collides with some template's param name is the
                     # accepted blind spot).
                     if (gpNames9.has item: pval9.copy) then continue
-                    urk9: "\{origin}.\{pval9}"
-                    urko9: (resolvedByKey
+                    urHit9: (nameClaimedByScope
                         ast: program.ast
                         :ty
                         :reg
-                        key: urk9
+                        currentUnit: origin
+                        name: pval9.stringview
                     )
-                    urHit9: false
-                    match (
-                        urko9
-                    ) case some then {
-                        urHit9 = true
-                    } case none then null
-                    if urHit9 == false then {
-                        ursc9: (resolveSystemChild
-                            ast: program.ast
-                            :ty
-                            :reg
-                            name: pval9.stringview
-                        )
-                        match (
-                            ursc9
-                        ) case some then {
-                            urHit9 = true
-                        } case none then null
-                    }
-                    if urHit9 == false when (reg.unitNameTid.has key: pval9.copy) then urHit9 = true
                     if urHit9 == false then {
                         # closure-wide: a bare name may resolve to a member
                         # of ANY loaded unit (the demand resolvers search
@@ -17076,14 +17086,13 @@ unresolvedBareName: function {ast: Ast
     ) case some then {
         return "".string
     } case none then null
-    if (st.reg.unitNameTid.has key: name.string) then return "".string
-    ubk9: "\{unitName}.\{name}"
-    ubr9: resolvedByKey :ast ty: st.typing reg: st.reg key: ubk9
-    match (
-        ubr9
-    ) case some then {
-        return "".string
-    } case none then null
+    if (nameClaimedByScope
+        :ast
+        ty: st.typing
+        reg: st.reg
+        currentUnit: unitName
+        :name
+    ) then return "".string
     ubw9: (walkLookupTyperef
         :ast
         ty: st.typing
@@ -17093,12 +17102,6 @@ unresolvedBareName: function {ast: Ast
     )
     match (
         ubw9
-    ) case some then {
-        return "".string
-    } case none then null
-    ubs9: resolveSystemChild :ast ty: st.typing reg: st.reg :name
-    match (
-        ubs9
     ) case some then {
         return "".string
     } case none then null
