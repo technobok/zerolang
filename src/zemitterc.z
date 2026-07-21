@@ -6244,23 +6244,68 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                         cvres9 = true
                     }
                 }
+                # a bare param under a FUNCTION mono re-walk: the mono's
+                # concrete param child carries the substituted type
+                if cvres9 == false when ctx.curThisTid > 0 then {
+                    if (symtab.reg.typetypeOf typeId: ctx.curThisTid) == ztypes.ztypetype.functionType then {
+                        cvan9: atomTextDeep :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+                        if cvan9.length > 0 then {
+                            cvr2: (optU64Or9
+                                o: (symtab.typing.childOf
+                                    pool: ast.names
+                                    parentTypeId: ctx.curThisTid
+                                    name: cvan9.stringview
+                                )
+                            )
+                            if cvr2 > 0 then {
+                                cvp9 = cvr2
+                                cvres9 = true
+                            }
+                        }
+                    }
+                }
             }
             if cvres9 then {
+                if cvp9 == ctx.svTid then {
+                    return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64))
+                }
                 cvtt9: symtab.reg.typetypeOf typeId: cvp9
+                cvstr9: cvp9 == ctx.strTid
+                if (originIsTid :symtab tid: cvp9 originTid: ctx.strOriginTid) then cvstr9 = true
                 cvref9: false
                 if cvtt9 == ztypes.ztypetype.classType then cvref9 = true
                 if cvtt9 == ztypes.ztypetype.unionType then cvref9 = true
                 if cvtt9 == ztypes.ztypetype.protocolType then cvref9 = true
-                if cvp9 == ctx.strTid then cvref9 = true
+                if cvstr9 then cvref9 = true
                 if (cvref9) == false when (symtab.reg.hasDestructorName typeId: cvp9) == false then {
                     return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64))
                 }
-                if cvp9 == ctx.strTid then {
+                if cvstr9 then {
                     cvpv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
                     if (isNonLvalueArg s: cvpv9.stringview) == false then {
+                        cvan2: atomTextDeep :ast n: (ast.nodes.get i: (n.parent - 1).u64)
+                        if cvan2.length > 0 when (isPtrVar :ctx name: cvan2.stringview) then {
+                            return "\{ctx.strC}_copy(\{cvpv9})"
+                        }
                         return "\{ctx.strC}_copy(&\{cvpv9})"
                     }
                 }
+                if cvgen9 then {
+                    cvtn9: symtab.reg.cnameOf tid: cvp9
+                    (emitFail
+                        :ctx
+                        what: "unsupported .copy of type \{cvtn9} in a generic body"
+                        line: n.lineno
+                    )
+                    return "/* zemitterc: unhandled copy */0".string
+                }
+            } else if cvgen9 when ctx.curThisTid > 0 then {
+                (emitFail
+                    :ctx
+                    what: "unresolved .copy receiver in a generic body".string
+                    line: n.lineno
+                )
+                return "/* zemitterc: unhandled copy */0".string
             }
         }
         if mnc0.stringview == "string" then {
@@ -15456,6 +15501,8 @@ emitListMono: function {
     eln9: typeNameOfReg9 :symtab tid: eid
     isStrEl9: false
     if eid == ctx.strTid then isStrEl9 = true
+    isSvEl9: false
+    if eid == ctx.svTid then isSvEl9 = true
     ect0: typeRefC :ast :symtab :ctx tid: eid thisTid: 0
     ect: ctypeOrI64 s: ect0.stringview
     p: "\{runtimeDir}/z_List.c.tmpl"
@@ -15495,6 +15542,8 @@ emitListMono: function {
         buf.append "    for (uint64_t i = 0; i < _this->length; i++) {\n"
         if isStrEl9 then {
             buf.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
+        } else if isSvEl9 then {
+            buf.append "        if (_this->data[i].length == _needle.length && memcmp(_this->data[i].data, _needle.data, _needle.length) == 0) return true;\n"
         } else {
             buf.append "        if (_this->data[i] == _needle) return true;\n"
         }
@@ -15510,7 +15559,9 @@ emitListMono: function {
             nm: nm.stringview
             ect: ect.stringview
             isStr: isStrEl9
+            isSv: isSvEl9
             strC: ctx.strC.stringview
+            svC: ctx.svC.stringview
             :buf
         )
     } case none then null
@@ -15575,12 +15626,17 @@ emitListSort: function {
     nm: StringView
     ect: StringView
     isStr: bool
+    isSv: bool
     strC: StringView
+    svC: StringView
     buf: String.borrow
 } is {
     if isStr then {
         s0s: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return \{strC}_cmp(&_a, &_b) < 0; }\n"
         buf.append s0s
+    } else if isSv then {
+        s0v: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return \{svC}_cmp(_a, _b) < 0; }\n"
+        buf.append s0v
     } else {
         s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return _a < _b; }\n"
         buf.append s0
