@@ -12321,29 +12321,39 @@ methodHasNoUserArgs: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool
 # stays separate for its other gates (fnptr-field reads, for-iterators).
 fnAutoCallable: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool is {
     if (methodHasNoUserArgs :ast :st :mid) then return true
-    names: (List String)
-    ids: (List u64)
-    idsNm: (List u64)
-    dataFieldNames :ast :st tid: mid :names :ids nameIds: idsNm
-    thisPn9: String
+    thisPnId9: u64
     {
         zo9: st.reg.typeById.get key: mid
         match (
             zo9
         ) case some then {
-            thisPn9 = optStrOrEmpty o: zo9.thisParamName
+            tpn9: optStrOrEmpty o: zo9.thisParamName
+            if tpn9.length > 0 then {
+                thisPnId9 = (zast.poolFind pool: ast.names text: tpn9.stringview).u64
+            }
         } case none then null
     }
-    n9: names.length
-    i9: u64
+    pnIds9: (List u64)
+    {
+        bd9: st.typing.childIndex.get key: mid
+        match (
+            bd9
+        ) case some then {
+            with rdit9: bd9.rows.iterate do for rdi9: rdit9 loop {
+                tc: st.typing.typeChild.get i: rdi9
+                pnIds9.append tc.nameId
+            }
+        } case none then null
+    }
     userSeen9: false
+    n9: pnIds9.length
+    i9: u64
     for i9 < n9 loop {
-        pname: names.get i: i9
-        pnameId: idsNm.get i: i9
+        pnameId: pnIds9.get i: i9
         i9 = i9 + 1
         isRecv9: false
         if pnameId == wkThis.u64 then isRecv9 = true
-        if thisPn9.length > 0 when thisPn9.stringview == pname.stringview then isRecv9 = true
+        if thisPnId9 > 0 when pnameId == thisPnId9 then isRecv9 = true
         if (isRecv9) == false then {
             userSeen9 = true
             hd9: st.typing.hasChildDefaultId parentTypeId: mid nameId: pnameId
