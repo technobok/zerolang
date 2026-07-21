@@ -22,12 +22,15 @@
     var ID_CHAR = "[-!$%&'*+\\/<=>?@\\\\^_|~a-zA-Z0-9]";
     var WORD    = ID_CHAR + '+';
 
+    // Keywords: exactly the docs/spec.pdoc "Keywords" list (plus `=`,
+    // handled as its own token below). return/break/continue/yield are
+    // NOT keywords -- they are predeclared functions (see builtins).
     var keywords = [
         'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data',
         'function', 'in', 'out', 'is', 'as',
         'if', 'when', 'then', 'else',
         'for', 'while', 'loop', 'with', 'do', 'on',
-        'match', 'case', 'break', 'continue', 'yield', 'return', 'swap',
+        'match', 'case', 'swap',
         'native'
     ];
 
@@ -36,16 +39,22 @@
         'pragma', 'enum', 'view', 'unsafe', 'switch'
     ];
 
+    // Predeclared identifiers: everything defined in lib/system/core.z
+    // (grep '^name:' lib/system/core.z), plus the context words at the
+    // end. Keep in sync with editor/nvim/syntax/zerolang.vim; a future
+    // zls semantic-token layer will compute this set from core.z.
     var builtins = [
-        'null', 'never', 'Any', '_', 'typedef', 'tag',
+        'null', 'never', 'true', 'false', '_',
         'u8', 'u16', 'u32', 'u64', 'u128',
         'i8', 'i16', 'i32', 'i64', 'i128',
-        'f8', 'f16', 'f32', 'f64', 'f128',
-        'c8', 'c32', 'String',
-        'true', 'false',
-        'public', 'private',
-        'this', 'meta', 'error',
-        'iterator',
+        'f32', 'f64', 'c8', 'c32', 'bool',
+        'String', 'StringView', 'Text', 'StringLike', 'Any',
+        'Option', 'optionval', 'OptionView', 'Result', 'resultval', 'convError', 'Box', 'Iterator',
+        'array', 'str', 'List', 'ListView', 'ListIter', 'Map', 'MapKeyIter', 'MapItemIter', 'MapEntry', 'Set', 'SetIter', 'Bytes', 'ByteView',
+        'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
+        'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
+        'return', 'break', 'continue', 'yield',
+        'public', 'private', 'this', 'meta', 'typedef', 'tag', 'iterator',
         'take', 'borrow', 'lock', 'generic'
     ];
 

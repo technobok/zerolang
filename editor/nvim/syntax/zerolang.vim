@@ -57,18 +57,26 @@ syn match zerolangOperator /\<[-!$%&'*+\/<=>?@\\^|~]\+\>/
 syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
 syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 
-" Built-in / predeclared identifiers
-syn match zerolangBuiltin /\<\%(null\|never\|Any\|_\|typedef\|tag\)\>/
-syn match zerolangBuiltin /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
-syn match zerolangBuiltin /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
-syn match zerolangBuiltin /\<\%(f8\|f16\|f32\|f64\|f128\)\>/
-syn match zerolangBuiltin /\<\%(c8\|c32\|String\)\>/
-syn match zerolangBuiltin /\<\%(true\|false\)\>/
-syn match zerolangBuiltin /\<\%(public\|private\)\>/
-syn match zerolangBuiltin /\<\%(this\|meta\|error\)\>/
-syn match zerolangBuiltin /\<iterator\>/
-syn match zerolangBuiltin /\<\%(take\|borrow\|lock\|generic\)\>/
+" Predeclared identifiers: everything defined in lib/system/core.z
+" (grep '^name:' lib/system/core.z), split by role, plus the context
+" words in the last group. Keep in sync with the `builtins` list in
+" docs/style/prism-zerolang.js; a future zls semantic-token layer will
+" compute this set from core.z instead of a hand-maintained list.
+" Types (core.z type-valued definitions)
+syn match zerolangBuiltinType /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
+syn match zerolangBuiltinType /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
+syn match zerolangBuiltinType /\<\%(f32\|f64\|c8\|c32\|bool\)\>/
+syn match zerolangBuiltinType /\<\%(String\|StringView\|Text\|StringLike\|Any\)\>/
+syn match zerolangBuiltinType /\<\%(Option\|optionval\|OptionView\|Result\|resultval\|convError\|Box\|Iterator\)\>/
+syn match zerolangBuiltinType /\<\%(array\|str\|List\|ListView\|ListIter\|Map\|MapKeyIter\|MapItemIter\|MapEntry\|Set\|SetIter\|Bytes\|ByteView\)\>/
+syn match zerolangBuiltinType /\<\%(Path\|PathView\|IoError\|Reader\|Writer\|Closer\|Seeker\|seekorigin\|File\|openmode\)\>/
+" Constants / literal values
+syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
+" Predeclared functions, streams, and context words
+syn match zerolangBuiltin /\<\%(print\|stringJoin\|error\|panic\|stdin\|stdout\|stderr\)\>/
 syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
+syn match zerolangBuiltin /\<\%(public\|private\|this\|meta\|typedef\|tag\|iterator\)\>/
+syn match zerolangBuiltin /\<\%(take\|borrow\|lock\|generic\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'
@@ -92,7 +100,9 @@ hi def link zerolangInterpolationDelim Delimiter
 hi def link zerolangKeyword    Keyword
 hi def link zerolangOperator   Operator
 hi def link zerolangReserved   Error
-hi def link zerolangBuiltin    Type
+hi def link zerolangBuiltinType  Type
+hi def link zerolangBuiltinConst Constant
+hi def link zerolangBuiltin      Special
 hi def link zerolangLabel      Identifier
 hi def link zerolangError      Error
 hi def link zerolangPunctuation Delimiter
