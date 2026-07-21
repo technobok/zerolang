@@ -1385,8 +1385,7 @@ fnBodyMentions: function {ast: Ast op: Node name: StringView} out bool is {
 # recordConformerContexts -- pre-record each as-block marker target's first
 # conforming type (body order) so a demand-resolved protocol binds its spec
 # receiver to the conformer (the reference resolves the protocol inside the
-# conformer's resolution, inheriting its `this` context). Full mode only:
-# signature-only resolves protocols standalone, receiver dropped.
+# conformer's resolution, inheriting its `this` context).
 recordConformerContexts: function {
     ast: Ast
     ty: ztyping.ZTyping
@@ -6802,7 +6801,7 @@ seedIoDemands: function {reg: ztypes.ZTypeRegistry} is {
 
 # stampCtorDefaults -- a construction fills unprovided defaulted fields: the
 # default's node stamps its resolved member/parent type, once the owner has
-# actually been constructed (full-mode body walk).
+# actually been constructed (during the body walk).
 stampCtorDefaults: function {ast: Ast st: zenv.ZSymbolTable unitName: StringView} is {
     dnids9: (List u64)
     owners: (List u64)
@@ -7018,7 +7017,7 @@ unitHasObjectMethodBody: function {ast: Ast defId: u32} out bool is {
 # signatures only, so when the MAIN unit has any objectdef with a method-with-body,
 # demand `return` + `never` to match.
 # scanCallsInNode -- recursively record demands for the call targets in an
-# expression/statement subtree (full-mode body-walk pre-pass): `return` pulls
+# expression/statement subtree (the body-walk pre-pass): `return` pulls
 # return+never, any other bare-atom callable (e.g. `print`) is demanded by name
 # so the cross-unit pass resolves it before the walk runs.
 scanCallsInNode: function {ast: Ast reg: ztypes.ZTypeRegistry node: Node} is {
@@ -7217,7 +7216,7 @@ scanDemandedDepClassBodies: function {
 
 
 # scanMainBodyCalls -- record call-target demands for every function body in the
-# main unit (the full-mode body walk reaches them; demand must precede the pass).
+# main unit (the body walk reaches them; demand must precede the pass).
 scanMainBodyCalls: function {reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
@@ -7327,7 +7326,7 @@ onFirstEntry: function {
 }
 
 # resolveDemandsByDescent -- the descent-era demand worklist. Seeds the body-walk
-# demands, then body-drains the main unit (full mode) and every dependency unit
+# demands, then body-drains the main unit and every dependency unit
 # except core to a joint fixpoint; each resolved def's own references descend
 # inline (resolveAtomType -> descendNamed), so per-unit body order only decides
 # trigger order, not dependency order. The tail resolves core's bool
@@ -7450,7 +7449,7 @@ callableUnitName: function {ast: Ast op: Node} out String is {
 # collectMainInstantiations -- scan a unit body for generic-unit instantiation bindings
 # and append the mono name ({template}_{arg}) + template name to the parallel lists.
 # InstReq -- one generic-unit instantiation binding (intmath: (mathops t: i64)):
-# the names the mint needs plus the binding's node ids for full-mode stamps.
+# the names the mint needs plus the binding's node ids for the instantiation stamps.
 InstReq: class {
     bind: String
     mono: String
@@ -8100,7 +8099,7 @@ resolveInlineGenericUnit: function {
             reg.setGeneric typeId: uid value: true
             registerGenericParams :reg :ast typeKey: defName items: bodyIds9
             if ty.fullMainUnit.length > 0 then {
-                # full mode mirrors the reference's inline-template touch:
+                # mirror the reference's inline-template touch:
                 # the unit node and each bare generic-param def stamp, and
                 # the param name resolves so signature t-refs stamp.
                 udnid: unitdefNodeId :ast nId: unitOpId
@@ -8246,7 +8245,7 @@ createUnitMono: function {
                 reg.setGenericOrigin typeId: monoId value: utGot
             } case none then {
                 # inline generic template: no childOf edge and not a unit
-                # root -- its id lives only in the full-mode def-node stamp
+                # root -- its id lives only in the def-node stamp
                 # laid by resolveInlineGenericUnit.
                 itnid: unitdefNodeId :ast nId: templateOpId
                 itso: ty.nodeType.get key: itnid.u64
@@ -8421,7 +8420,7 @@ cloneUnitMethod: function {ast: Ast ids: zgenerator.GenIds op: Node} out Option 
     }
 }
 
-# buildUnitMonoFull -- full-mode unit-mono completion: substituted method
+# buildUnitMono -- unit-mono completion: substituted method
 # children ({mono}.{fn} FUNCTION types whose generic-param-named child types
 # and return are replaced by the instantiation arg) plus a cloned body per
 # method, stashed for the lazy first-use walk. One build per mono.
@@ -8461,7 +8460,7 @@ registerMonoFnParams: function {
     } else null
 }
 
-buildUnitMonoFull: function {
+buildUnitMono: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     ast: Ast
@@ -8692,7 +8691,7 @@ buildUnitMonoFull: function {
 }
 
 # completeInlineReq -- locate an inline template member by name in the main
-# unit body and build its mono's full-mode completion.
+# unit body and build its mono's completion.
 completeInlineReq: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -8716,7 +8715,7 @@ completeInlineReq: function {
                 bn: zast.nameTextCopy :ast ref: bmNode9.name
                 if bn.stringview == tmplName then {
                     if (isUnitOp op: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
-                        (buildUnitMonoFull
+                        (buildUnitMono
                             :ty
                             :reg
                             :ast
@@ -8738,7 +8737,7 @@ completeInlineReq: function {
 # inlineTemplateTid -- the canonical id of an inline generic-unit template
 # (mathops: unit as {...} in the main body). A generic inline template has no
 # unit->def childOf edge (it would shadow instance lookups) and is not a unit
-# root, so the only durable record of its id is the full-mode def-node stamp
+# root, so the only durable record of its id is the def-node stamp
 # laid by resolveInlineGenericUnit; 0 when no such binding is stamped.
 inlineTemplateTid: function {
     ty: ztyping.ZTyping
@@ -8773,7 +8772,7 @@ inlineTemplateTid: function {
     return found
 }
 
-# completeUnitInstantiations -- post-demand full-mode pass: with system types
+# completeUnitInstantiations -- post-demand pass: with system types
 # resolved, finish each generic-unit instantiation (substituted children +
 # clone stash), register the binding name, and stamp the instantiation's
 # expression/call/callable/arg nodes (the reference stamps all four).
@@ -8934,7 +8933,7 @@ completeUnitInstantiations: function {
                         ) case namedoperation then {
                             un9: zast.poolTextCopy pool: program.ast.names ref: u9.name
                             if un9.stringview == rt.stringview then {
-                                (buildUnitMonoFull
+                                (buildUnitMono
                                     :ty
                                     :reg
                                     ast: program.ast
@@ -19835,7 +19834,7 @@ checkFunctionBody: function {
     } else null
 }
 
-# runDepUnitWalks -- full-mode dependency-unit body walks: the reference
+# runDepUnitWalks -- dependency-unit body walks: the reference
 # checks a demanded user unit's function bodies on first touch, inside the
 # using function's scope. Walks every resolved function-with-body member of
 # each non-system dependency unit, scoped function:{unit}.{fn}.
@@ -20051,7 +20050,7 @@ walkUnitTemplateBodies9: function {
 
 # walkGenericUnitTemplates -- stamp `match t`/`match cap` in every generic unit
 # template (file-level units and inline `unit as {}` bindings) via an unbound
-# body walk. Runs in full mode after the main-unit body check. Unit op ids and
+# body walk. Runs after the main-unit body check. Unit op ids and
 # names are lifted out of node views before program.ast is passed on (lock-safe).
 walkGenericUnitTemplates: function {st: zenv.ZSymbolTable program: Node} is {
     match (
@@ -20183,7 +20182,7 @@ checkUnitBodies: function {
     }
 }
 
-# checkBodies -- the body-walk pass (full mode), mirroring check()'s top-level
+# checkBodies -- the body-walk pass, mirroring check()'s top-level
 # loop: walk the main unit's function bodies, main first, then the others in
 # body order. Runs after demand resolution so referenced types are already
 # resolved.
@@ -20906,7 +20905,7 @@ resolveConstantDefsInUnit: function {
     }
 }
 
-# resolveConstantDefs -- under the full driver, materialise the main unit's numeric
+# resolveConstantDefs -- materialise the main unit's numeric
 # constant definitions the way the oracle resolves them on first name lookup. Runs
 # post-demand so the numeric defaults are already in resolved.
 resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
