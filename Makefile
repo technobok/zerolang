@@ -87,7 +87,7 @@ style-lint: bin/zl
 $(BUILDDIR)/ztestrunner: bin/zc src/ztestrunner.z $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc ztestrunner --src src --system lib/system --emit-c $(BUILDDIR)/ztestrunner.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/ztestrunner $(BUILDDIR)/ztestrunner.c -lquadmath
 
 # test -- build the compiler + the corpus runner, then run the fast corpus gate
 # (run/leak/error/dump/smoke/differential kinds, all driven via os.spawn; no
@@ -118,7 +118,7 @@ $(EXDIR)/%.c: examples/%.z bin/zc
 	bin/zc $* --src examples --system lib/system --emit-c $@
 
 $(EXDIR)/%.bin: $(EXDIR)/%.c
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -o $@ $< -lquadmath
 
 build: $(EXBINS)
 	@echo "$(words $(EXBINS)) examples built ($(EXDIR)/)"
@@ -135,7 +135,7 @@ $(BUILDDIR)/mimalloc.o: vendor/mimalloc/src/static.c vendor/mimalloc/zc_tune.c $
 # seed (bootstrap/zc.c). See bootstrap/README.md and `make test-bootstrap`.
 $(BUILDDIR)/zc-seed: bootstrap/zc.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c
+	$(CC) $(CFLAGS) -o $@ bootstrap/zc.c -lquadmath
 
 # bin/zc -- the self-hosted compiler, bootstrapped by the seed. Persistent +
 # git-ignored; rebuilt when the compiler sources change. The dev bin/zc
@@ -143,7 +143,7 @@ $(BUILDDIR)/zc-seed: bootstrap/zc.c
 bin/zc: $(wildcard src/*.z) $(wildcard lib/system/*.z) $(ZC_DEP) $(MIMALLOC_OBJ)
 	@mkdir -p bin
 	$(ZC) zc --src src --system lib/system $(ZCHASH) --emit-c bin/zc.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc $(MIMALLOC_OBJ) bin/zc.c -lpthread
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zc $(MIMALLOC_OBJ) bin/zc.c -lpthread -lquadmath
 
 # zc -- convenience alias for bin/zc.
 zc: bin/zc
@@ -155,7 +155,7 @@ zc: bin/zc
 bin/zl: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl $(MIMALLOC_OBJ) out/zl.c -lpthread
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zl $(MIMALLOC_OBJ) out/zl.c -lpthread -lquadmath
 
 # bin/zls -- the zerolang language server (src/zls.z): JSON-RPC over
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
@@ -164,7 +164,7 @@ bin/zl: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zl.z) $(wildcard src/zsource.z) $(
 bin/zls: bin/zc $(MIMALLOC_OBJ) $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z)
 	@mkdir -p bin out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
-	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls $(MIMALLOC_OBJ) out/zls.c -lpthread
+	$(CC) $(CFLAGS) $(OPTFLAGS) -o bin/zls $(MIMALLOC_OBJ) out/zls.c -lpthread -lquadmath
 
 # zl -- convenience alias for bin/zl.
 zl: bin/zl
@@ -177,12 +177,12 @@ zls: bin/zls
 out/zlexer: bin/zc $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zlexer --src src --system lib/system --emit-c $(BUILDDIR)/zlexer.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zlexer $(BUILDDIR)/zlexer.c -lquadmath
 
 out/zparser: bin/zc $(wildcard lib/system/*.z)
 	@mkdir -p $(BUILDDIR)
 	bin/zc zparser --src src --system lib/system --emit-c $(BUILDDIR)/zparser.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zparser $(BUILDDIR)/zparser.c -lquadmath
 
 # Regenerate the lexer / parser / whole-program goldens from the .z dump
 # binaries (no Python). Always review the resulting diff before committing.
@@ -210,11 +210,11 @@ bump-seed: bin/zc
 # Slow (3 zc.c compiles).
 test-bootstrap:
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-seed bootstrap/zc.c -lquadmath
 	$(BUILDDIR)/zc-seed zc --src src --system lib/system --emit-c $(BUILDDIR)/b1.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b1 $(BUILDDIR)/b1.c -lquadmath
 	$(BUILDDIR)/zc-b1 zc --src src --system lib/system --emit-c $(BUILDDIR)/b2.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zc-b2 $(BUILDDIR)/b2.c -lquadmath
 	$(BUILDDIR)/zc-b2 zc --src src --system lib/system --emit-c $(BUILDDIR)/b3.c
 	@diff $(BUILDDIR)/b2.c $(BUILDDIR)/b3.c \
 		&& echo "fixpoint OK (b2 == b3)" \
@@ -223,7 +223,7 @@ test-bootstrap:
 		&& echo "seed is current (b1 == committed seed)" \
 		|| echo "note: seed has lagged (b1 != committed seed) -- run 'make bump-seed' when convenient"
 	$(BUILDDIR)/zc-b1 ztypes --src src --system lib/system --emit-c $(BUILDDIR)/zt.c
-	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zt $(BUILDDIR)/zt.c -lquadmath
 	$(BUILDDIR)/zt | diff - tests/fixtures/ztypes_z/smoke.expected \
 		&& echo "correctness OK (seed-built zc compiles ztypes to golden)"
 	@echo "bootstrap seed OK: 'cc bootstrap/zc.c' builds a correct self-hosting zc (no Python)"

@@ -99,13 +99,71 @@ cTypeOf: function {name: StringView} out String is {
     if name == "u64" then return "uint64_t".string
     if name == "i128" then return "__int128".string
     if name == "u128" then return "unsigned __int128".string
+    if name == "f16" then return "_Float16".string
     if name == "f32" then return "float".string
     if name == "f64" then return "double".string
+    if name == "f128" then return "__float128".string
     if name == "c8" then return "uint8_t".string
     if name == "c32" then return "uint32_t".string
     if name == "bool" then return "bool".string
     if name == "literal_int" then return "int64_t".string
     return "".string
+}
+
+# cFloatLitSuffix -- the C literal suffix that parses a float literal at
+# the named width (single rounding): f (float), f16 (_Float16), Q
+# (__float128); f64 literals stay bare (double).
+cFloatLitSuffix: function {name: StringView} out String is {
+    if name == "f32" then return "f".string
+    if name == "f16" then return "f16".string
+    if name == "f128" then return "Q".string
+    return "".string
+}
+
+# isFloatLitText -- the expression text is a bare digit-led float literal
+# (decimal point or exponent; no identifier characters).
+isFloatLitText: function {s: StringView} out bool is {
+    n: s.length
+    if n == 0 then return false
+    b0: s.byteAt 0
+    match (
+        b0
+    ) case some then {
+        if b0 < 48 then return false
+        if b0 > 57 then return false
+    } case none then {
+        return false
+    }
+    hasDotE: false
+    i: u64
+    for i < n loop {
+        bo: s.byteAt i
+        match (
+            bo
+        ) case some then {
+            ok: false
+            if bo >= 48 when bo <= 57 then ok = true
+            if bo == 46 then {
+                ok = true
+                hasDotE = true
+            }
+            if bo == 101 then {
+                ok = true
+                hasDotE = true
+            }
+            if bo == 69 then {
+                ok = true
+                hasDotE = true
+            }
+            if bo == 43 then ok = true
+            if bo == 45 then ok = true
+            if ok == false then return false
+        } case none then {
+            return false
+        }
+        i = i + 1
+    }
+    return hasDotE
 }
 
 # scalarCTypeFor -- the C scalar type for a builtin-named tid, BUT empty when the
@@ -140,8 +198,10 @@ isIntName: function {name: StringView} out bool is {
 }
 
 isFloatName: function {name: StringView} out bool is {
+    if name == "f16" then return true
     if name == "f32" then return true
     if name == "f64" then return true
+    if name == "f128" then return true
     return false
 }
 
@@ -179,7 +239,7 @@ numLoStr: function {name: StringView} out String is {
     if name == "i16" then return "-32768".string
     if name == "i32" then return "-2147483648".string
     if name == "i64" then return "(-9223372036854775807LL - 1)".string
-    if name == "i128" then return "-170141183460469231731687303715884105728".string
+    if name == "i128" then return "(-(__int128)((((unsigned __int128)0x7FFFFFFFFFFFFFFFULL) << 64) | 0xFFFFFFFFFFFFFFFFULL) - 1)".string
     return "0".string
 }
 numHiStr: function {name: StringView} out String is {
@@ -187,14 +247,14 @@ numHiStr: function {name: StringView} out String is {
     if name == "i16" then return "32767".string
     if name == "i32" then return "2147483647".string
     if name == "i64" then return "9223372036854775807".string
-    if name == "i128" then return "170141183460469231731687303715884105727".string
+    if name == "i128" then return "((__int128)((((unsigned __int128)0x7FFFFFFFFFFFFFFFULL) << 64) | 0xFFFFFFFFFFFFFFFFULL))".string
     if name == "u8" then return "255".string
     if name == "c8" then return "255".string
     if name == "u16" then return "65535".string
     if name == "u32" then return "4294967295U".string
     if name == "c32" then return "4294967295U".string
     if name == "u64" then return "18446744073709551615ULL".string
-    if name == "u128" then return "340282366920938463463374607431768211455".string
+    if name == "u128" then return "(~(unsigned __int128)0)".string
     return "0".string
 }
 
@@ -257,7 +317,7 @@ emitNumericCastResult: function {
             errInf: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE;"
             errPrecF: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
             okF: "_r.tag = \{okTag}; _r.data.ok = _f;"
-            body = "float _f = (float)_v; if (__builtin_isinf(_f) && !__builtin_isinf(_v)) { \{errInf} } else if ((double)_f != (double)_v) { \{errPrecF} } else { \{okF} }"
+            body = "\{tcT} _f = (\{tcT})_v; if (__builtin_isinf(_f) && !__builtin_isinf(_v)) { \{errInf} } else if ((\{scT})_f != _v) { \{errPrecF} } else { \{okF} }"
         } else {
             b: numBits name: dstName
             dsig: numSigned name: dstName
@@ -276,15 +336,34 @@ emitNumericCastResult: function {
         if dFloat then {
             p9: 53
             if dstName == "f32" then p9 = 24
+            if dstName == "f16" then p9 = 11
+            if dstName == "f128" then p9 = 113
+            # f16 also has a tiny finite range: the integer magnitude must
+            # stay within its max (65504), not just within the mantissa span
+            rangeAnd9: ""
+            if dstName == "f16" then rangeAnd9 = " && _mag <= 65504"
             ssig: numSigned name: srcName
-            magExpr: String
-            if ssig then {
-                magExpr = "(_v < 0 ? (uint64_t)(0 - (uint64_t)_v) : (uint64_t)_v)".string
-            } else {
-                magExpr = "(uint64_t)_v".string
-            }
             errPrecX: "_r.tag = \{errTag}; _r.data.err.tag = Z_CONVERROR_TAG_PRECISIONLOSS;"
-            body = "uint64_t _mag = \{magExpr}; if (_v == 0 || (64 - __builtin_clzll(_mag) - __builtin_ctzll(_mag)) <= \{p9}) { \{okSet} } else { \{errPrecX} }"
+            is128s9: false
+            if srcName == "i128" then is128s9 = true
+            if srcName == "u128" then is128s9 = true
+            if is128s9 then {
+                magExpr2: String
+                if ssig then {
+                    magExpr2 = "(_v < 0 ? (unsigned __int128)(0 - (unsigned __int128)_v) : (unsigned __int128)_v)".string
+                } else {
+                    magExpr2 = "(unsigned __int128)_v".string
+                }
+                body = "unsigned __int128 _mag = \{magExpr2}; uint64_t _mh = (uint64_t)(_mag >> 64); uint64_t _ml = (uint64_t)_mag; int _bl = _mh ? (128 - __builtin_clzll(_mh)) : (_ml ? 64 - __builtin_clzll(_ml) : 0); int _tz = _ml ? __builtin_ctzll(_ml) : (_mh ? 64 + __builtin_ctzll(_mh) : 0); if (_mag == 0 || ((_bl - _tz) <= \{p9}\{rangeAnd9})) { \{okSet} } else { \{errPrecX} }"
+            } else {
+                magExpr: String
+                if ssig then {
+                    magExpr = "(_v < 0 ? (uint64_t)(0 - (uint64_t)_v) : (uint64_t)_v)".string
+                } else {
+                    magExpr = "(uint64_t)_v".string
+                }
+                body = "uint64_t _mag = \{magExpr}; if (_v == 0 || ((64 - __builtin_clzll(_mag) - __builtin_ctzll(_mag)) <= \{p9}\{rangeAnd9})) { \{okSet} } else { \{errPrecX} }"
+            }
         } else {
             needsLo: true
             needsHi: true
@@ -358,6 +437,14 @@ emitNumericCast: function {
     dct: cTypeOf name: dstName
     if dct.length == 0 then return val.string
     sval: castLitVal :val :dstName
+    if (isFloatName name: dstName) then {
+        # a bare float-literal operand re-parses at the destination width
+        # via the C literal suffix (single rounding, full precision)
+        if (isFloatLitText s: val) then {
+            fl9: cFloatLitSuffix name: dstName
+            return "\{val}\{fl9}"
+        }
+    }
     dbits: numBits name: dstName
     if dbits == 0 then return "((\{dct})\{sval})"
     sbits: numBits name: srcName
@@ -1772,6 +1859,8 @@ isSvNoArgNative: function {name: StringView} out bool is {
 
 isSvParseNative: function {name: StringView} out bool is {
     if name == "parseF64" then return true
+    if name == "parseF16" then return true
+    if name == "parseF128" then return true
     if name == "parseI64" then return true
     if name == "parseU64" then return true
     return false
@@ -5874,6 +5963,25 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 return cl9
             }
         }
+        # a float literal lexeme with a zerolang width suffix re-suffixes
+        # for C (`2.5f128` -> `2.5Q`) so gcc parses it at the target width
+        fsl9: false
+        if av.contains "." then fsl9 = true
+        if fsl9 == false then {
+            if (av.startsWith "0x") == false when (av.startsWith "0b") == false then {
+                if (av.startsWith "0o") == false when (av.contains "e") then fsl9 = true
+            }
+        }
+        if fsl9 then {
+            siL9: ztypes.suffixInfoOf numstr: av
+            if siL9.has when (ztypes.isFloatKind k: siL9.kind) then {
+                coreL9: av.substring from: 0 to: (av.length - siL9.len)
+                knmL9: ztypes.numkindName k: siL9.kind
+                sfxL9: cFloatLitSuffix name: knmL9.stringview
+                rl9: "\{coreL9}\{sfxL9}"
+                return rl9
+            }
+        }
         # stamped variable use first: the local, alias-resolved and C-mangled
         # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
         # key alloc + hash) never runs for it
@@ -6388,6 +6496,16 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                     needsAdd :ctx name: "parseF64"
                     epf: "\{ctx.svC}_parseF64(&\{bn2})"
                     return epf
+                }
+                if mn2.stringview == "parseF16" then {
+                    needsAdd :ctx name: "parseF16"
+                    eph: "\{ctx.svC}_parseF16(&\{bn2})"
+                    return eph
+                }
+                if mn2.stringview == "parseF128" then {
+                    needsAdd :ctx name: "parseF128"
+                    epq: "\{ctx.svC}_parseF128(&\{bn2})"
+                    return epq
                 }
                 if (isSvSimpleNative name: mn2.stringview) then {
                     # a no-paren method reference auto-calls
@@ -7092,6 +7210,10 @@ numericFormatName: function {
             return "f64".string
         } else if bc.stringview == "float" then {
             return "f32".string
+        } else if bc.stringview == "_Float16" then {
+            return "f16".string
+        } else if bc.stringview == "__float128" then {
+            return "f128".string
         } else if bc.length > 0 then return "i64".string
     }
     rr: tn.string
@@ -7240,6 +7362,11 @@ emitInterpPart: function {
             buf.append l4
             l5: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
             buf.append l5
+        } else if tn.stringview == "f128" then {
+            l6q: "\{ind}char _b\{bN}[64]; int _b\{bN}_n = quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val});\n"
+            buf.append l6q
+            l7q: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
+            buf.append l7q
         } else if (isFloatName name: tn.stringview) then {
             l6: "\{ind}char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{val});\n"
             buf.append l6
@@ -13457,6 +13584,8 @@ scanNeeds: function {ast: Ast ctx: Ctx n: Node} is {
     } case dottedpath then {
         pdm9: atomTextOf :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if pdm9.stringview == "parseF64" then needsAdd :ctx name: "parseF64"
+        if pdm9.stringview == "parseF16" then needsAdd :ctx name: "parseF16"
+        if pdm9.stringview == "parseF128" then needsAdd :ctx name: "parseF128"
         if pdm9.stringview == "parseI64" then needsAdd :ctx name: "parseI64"
         if pdm9.stringview == "parseU64" then needsAdd :ctx name: "parseU64"
         if (isSvNoArgNative name: pdm9.stringview) then needsAdd :ctx name: pdm9.stringview
@@ -14461,6 +14590,9 @@ emitC: function {
     buf.append "#include <stdlib.h>\n"
     buf.append "#include <stdbool.h>\n"
     buf.append "#include <string.h>\n"
+    buf.append "#if defined(__SIZEOF_FLOAT128__)\n"
+    buf.append "#include <quadmath.h>\n"
+    buf.append "#endif\n"
     buf.append "#include <errno.h>\n"
     buf.append "#include <fcntl.h>\n"
     buf.append "#include <unistd.h>\n"
@@ -14973,6 +15105,28 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_PARSE_F64"
             mono: "resultval_f64_parseerror"
+            :buf
+        )
+    }
+    if (needsHas :ctx name: "parseF16") then {
+        (emitParseNative
+            :ast
+            :symtab
+            :ctx
+            :runtimeDir
+            frag: "_Z_SV_PARSE_F16"
+            mono: "resultval_f16_parseerror"
+            :buf
+        )
+    }
+    if (needsHas :ctx name: "parseF128") then {
+        (emitParseNative
+            :ast
+            :symtab
+            :ctx
+            :runtimeDir
+            frag: "_Z_SV_PARSE_F128"
+            mono: "resultval_f128_parseerror"
             :buf
         )
     }

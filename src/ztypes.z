@@ -97,6 +97,7 @@ numkind: variant {
     u128Type: null
     c8Type: null
     c32Type: null
+    f16Type: null
     f32Type: null
     f64Type: null
     f128Type: null
@@ -287,6 +288,8 @@ numkindName: function {k: numkind} out String is {
         return "c8".string
     } case c32Type then {
         return "c32".string
+    } case f16Type then {
+        return "f16".string
     } case f32Type then {
         return "f32".string
     } case f64Type then {
@@ -1159,7 +1162,9 @@ composeCname: function {tid: u64 name: StringView} out String is {
 isFloatKind: function {k: numkind} out bool is {
     match (
         k
-    ) case f32Type then {
+    ) case f16Type then {
+        return true
+    } case f32Type then {
         return true
     } case f64Type then {
         return true
@@ -1173,7 +1178,9 @@ isFloatKind: function {k: numkind} out bool is {
 mantissaOf: function {k: numkind} out u64 is {
     match (
         k
-    ) case f32Type then {
+    ) case f16Type then {
+        return 11
+    } case f32Type then {
         return 24
     } case f64Type then {
         return 53
@@ -1247,10 +1254,38 @@ floatFitsFloat: function {value: f64 k: numkind} out bool is {
         k
     ) case f64Type then {
         return true
+    } case f128Type then {
+        return true
     } case f32Type then {
         r: value.f32
         match (
             r
+        ) case ok then {
+            return true
+        } case err then {
+            return false
+        }
+    } case f16Type then {
+        # exact binary16 representability, in f64 arithmetic only (the
+        # bootstrap seed has no .f16 conversion): find the value's binade,
+        # derive the f16 ulp there (subnormal floor 2^-24), and require the
+        # value to be an exact multiple of that ulp within range.
+        av: value
+        if av < 0.0 then av = 0.0 - av
+        if av == 0.0 then return true
+        if av > 65504.0 then return false
+        p: 1.0
+        for p > av loop p = p / 2.0
+        for (p * 2.0) <= av loop p = p * 2.0
+        ulp: p / 1024.0
+        minUlp: 1.0 / 16777216.0
+        if ulp < minUlp then ulp = minUlp
+        q: av / ulp
+        # q < 2048 by construction; the checked u64 conversion errs on a
+        # fractional value, which is exactly the integerness test
+        qo: q.u64
+        match (
+            qo
         ) case ok then {
             return true
         } case err then {
@@ -1272,6 +1307,7 @@ hasNumericSuffix: function {numstr: StringView} out bool is {
     if numstr.endsWith "u16" then return true
     if numstr.endsWith "u32" then return true
     if numstr.endsWith "u64" then return true
+    if numstr.endsWith "f16" then return true
     if numstr.endsWith "f32" then return true
     if numstr.endsWith "f64" then return true
     if numstr.endsWith "c32" then return true
@@ -1321,6 +1357,7 @@ suffixInfoOf: function {numstr: StringView} out suffixinfo is {
     if numstr.endsWith "u16" then return (suffixinfo has: true kind: numkind.u16Type len: 3)
     if numstr.endsWith "u32" then return (suffixinfo has: true kind: numkind.u32Type len: 3)
     if numstr.endsWith "u64" then return (suffixinfo has: true kind: numkind.u64Type len: 3)
+    if numstr.endsWith "f16" then return (suffixinfo has: true kind: numkind.f16Type len: 3)
     if numstr.endsWith "f32" then return (suffixinfo has: true kind: numkind.f32Type len: 3)
     if numstr.endsWith "f64" then return (suffixinfo has: true kind: numkind.f64Type len: 3)
     if numstr.endsWith "c32" then return (suffixinfo has: true kind: numkind.c32Type len: 3)
