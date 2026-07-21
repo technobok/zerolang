@@ -1676,6 +1676,7 @@ recordNodeName: function {ty: ztyping.ZTyping unitName: StringView name: StringV
 # `type` self-keywords record as the enclosing type (thisName).
 recordResolvedName: function {
     ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
     unitName: StringView
     thisName: StringView
     name: StringView
@@ -1694,7 +1695,26 @@ recordResolvedName: function {
                     recordNodeName :ty :unitName name: "i64" :nid
                 }
             } else {
+                # a template's own param name still RECORDS (the pending
+                # map feeds mono substitution) but never name-resolves: mark
+                # it no-stamp so resolution doesn't chase or report it
+                gskip9: false
+                if thisName.length > 0 then {
+                    enclK9: "\{unitName}.\{thisName}"
+                    if (reg.isGenericParamOf typeKey: enclK9.stringview :name) then gskip9 = true
+                }
+                if gskip9 == false when ty.sigGenericKey.length > 0 then {
+                    if (reg.isGenericParamOf
+                        typeKey: ty.sigGenericKey.stringview
+                        :name
+                    ) then gskip9 = true
+                }
                 recordNodeName :ty :unitName :name :nid
+                if gskip9 then {
+                    nsg9: nid
+                    nsv9: true
+                    ty.noStampNode.set key: nsg9 value: nsv9
+                }
             }
         }
     }
@@ -2138,6 +2158,7 @@ recordTyperef: function {
             # its DEFINING unit (the parent) so stampTyperefs bridges this node.
             (recordResolvedName
                 :ty
+                :reg
                 unitName: pn.stringview
                 :thisName
                 name: cn.stringview
@@ -2146,7 +2167,14 @@ recordTyperef: function {
         } else {
             if (isStripMarker name: cn.stringview) then {
                 bn: baseTypeName :ast n: (ast.nodes.get i: (node.parent - 1).u64)
-                recordResolvedName :ty :unitName :thisName name: bn.stringview nid: node.nodeid.u64
+                (recordResolvedName
+                    :ty
+                    :reg
+                    :unitName
+                    :thisName
+                    name: bn.stringview
+                    nid: node.nodeid.u64
+                )
                 # a parameterized parent ((List of: String).take) has no base
                 # name; the marker dp wears the parent's mono stamp.
                 if bn.length == 0 then {
@@ -2180,6 +2208,7 @@ recordTyperef: function {
         rrA9: ast.names.texts.get i: (node.name - 1).u64
         (recordResolvedName
             :ty
+            :reg
             :unitName
             :thisName
             name: rrA9.stringview
@@ -2189,6 +2218,7 @@ recordTyperef: function {
         rrA9: ast.names.texts.get i: (node.name - 1).u64
         (recordResolvedName
             :ty
+            :reg
             :unitName
             :thisName
             name: rrA9.stringview
@@ -2387,6 +2417,11 @@ recordGenericMarkerReturn: function {
     if mpb3.length > 0 when (reg.isGenericParamOf typeKey: enclKey name: mpb3.stringview) then {
         mnid3: nodeId n: o
         recordNodeName :ty :unitName name: mpb3.stringview nid: mnid3.u64
+        # the entry feeds mono-return substitution (the pending MAP is the
+        # consumer); it names a template param, so it never name-resolves
+        nsk3: mnid3.u64
+        nsv3: true
+        ty.noStampNode.set key: nsk3 value: nsv3
     }
 
 }
@@ -2994,6 +3029,8 @@ resolveFunction: function {
     if thisName.length != 0 then enclKey = "\{unitName}.\{thisName}"
     fnKey9: String
     if isgen then fnKey9 = "\{unitName}.\{defName}"
+    sgkPrev9: ty.sigGenericKey.copy
+    if isgen then ty.sigGenericKey = fnKey9.copy
     piter: fnode.parameters.iterate
     for pmId9: piter loop {
         pm: ast.nodes.get i: (pmId9 - 1).u64
@@ -3268,6 +3305,7 @@ resolveFunction: function {
     }
     checkBorrowReturnLock :ast :ty :fnode :defName
     ty.definedInUnit.set key: dfid value: unitName.string
+    ty.sigGenericKey = sgkPrev9
     return rfid
 }
 
@@ -9166,6 +9204,20 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
             pv9: e.value.copy
             pvals9.append pv9
         }
+        gpNames9: (Set String)
+        gpiN9: 1.u64
+        gpLast9: reg.nextTypeId
+        for gpiN9 < gpLast9 loop {
+            if (reg.typetypeOf typeId: gpiN9) == ztypes.ztypetype.genericParam then {
+                gto9: reg.typeById.get key: gpiN9
+                match (
+                    gto9
+                ) case some then {
+                    if gto9.name.length > 0 then gpNames9.add item: gto9.name.copy
+                } case none then null
+            }
+            gpiN9 = gpiN9 + 1
+        }
         pi9: u64
         pcnt9: pkeys9.length
         for pi9 < pcnt9 loop {
@@ -9210,7 +9262,76 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                     # because a type-annotation atom is never emitted as an
                     # expression (the emitter's only atomUnitDefId reader).
                     ty.atomUnitDefId.set key: nid value: r
-                } case none then null
+                } case none then {
+                    # a signature typeref that resolves NOWHERE after every
+                    # demand pass names a nonexistent type. Template param
+                    # names are exempt: their pendings feed mono substitution
+                    # and resolve per instantiation (a dead-signature typo
+                    # that collides with some template's param name is the
+                    # accepted blind spot).
+                    if (gpNames9.has item: pval9.copy) then continue
+                    urk9: "\{origin}.\{pval9}"
+                    urko9: (resolvedByKey
+                        ast: program.ast
+                        :ty
+                        :reg
+                        key: urk9
+                    )
+                    urHit9: false
+                    match (
+                        urko9
+                    ) case some then {
+                        urHit9 = true
+                    } case none then null
+                    if urHit9 == false then {
+                        ursc9: (resolveSystemChild
+                            ast: program.ast
+                            :ty
+                            :reg
+                            name: pval9.stringview
+                        )
+                        match (
+                            ursc9
+                        ) case some then {
+                            urHit9 = true
+                        } case none then null
+                    }
+                    if urHit9 == false when (reg.unitNameTid.has key: pval9.copy) then urHit9 = true
+                    if urHit9 == false then {
+                        # closure-wide: a bare name may resolve to a member
+                        # of ANY loaded unit (the demand resolvers search
+                        # the closure; the typeref walk does not)
+                        with uit9: reg.unitNameTid.iterateItems do for ue9: uit9 loop {
+                            if urHit9 == false then {
+                                urk2: "\{ue9.key}.\{pval9}"
+                                uro2: (resolvedByKey
+                                    ast: program.ast
+                                    :ty
+                                    :reg
+                                    key: urk2
+                                )
+                                match (
+                                    uro2
+                                ) case some then {
+                                    urHit9 = true
+                                } case none then null
+                            }
+                        }
+                    }
+                    if urHit9 then continue
+                    un9: program.ast.nodes.get i: (uk - 1)
+                    upn9: pval9.copy
+                    um9: "Unknown type '\{upn9}'"
+                    (addResolveErrorH
+                        :ty
+                        nodeid: (nodeId n: un9)
+                        lineno: (nodeLine n: un9)
+                        colno: (nodeCol n: un9)
+                        e: zast.err.badReference
+                        msg: um9
+                        width: pval9.length.u32.orPanic
+                    )
+                }
             }
         }
     } else null
