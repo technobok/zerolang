@@ -715,6 +715,7 @@ Server: class {
             }
         }
         mu: String
+        mp: String
         found9: false
         {
             ku: uri.string
@@ -723,6 +724,7 @@ Server: class {
                 dgo
             ) case some then {
                 mu = zsource.unitNameOf path: dgo.path.stringview
+                mp = dgo.path.copy
                 found9 = true
             } case none then null
         }
@@ -736,7 +738,7 @@ Server: class {
         rows: (List zcheck.diagrow)
         msgs: (List String)
         zcheck.diagsOf :r :rows :msgs
-        this.publishAll :r :rows :msgs
+        this.publishAll :r :rows :msgs mainUnit: mu.stringview mainPath: mp.stringview
         if r.parseOk then {
             ku9: uri.string
             this.snapshots.set key: ku9 value: r
@@ -750,6 +752,8 @@ Server: class {
         r: zcheck.CheckResult
         rows: (List zcheck.diagrow)
         msgs: (List String)
+        mainUnit: StringView
+        mainPath: StringView
     } is {
         # resolve each row's provider path once (parallel to rows)
         paths: (List String)
@@ -795,7 +799,19 @@ Server: class {
                 }
                 ri = ri + 1
             }
-            lintInto :arr text: e.value.text.copy relpath: drel.stringview utf32: this.encUtf32
+            if e.value.path.stringview == mainPath then {
+                (tcLintInto
+                    :arr
+                    text: e.value.text.copy
+                    relpath: drel.stringview
+                    utf32: this.encUtf32
+                    prog: r.prog
+                    uname: mainUnit
+                    sto: r.st
+                )
+            } else {
+                lintInto :arr text: e.value.text.copy relpath: drel.stringview utf32: this.encUtf32
+            }
             p9: newObj
             p9.set key: "uri".string value: (Value.text durl)
             p9.set key: "diagnostics".string value: (Value.array arr)
@@ -3049,6 +3065,36 @@ symbolKindOf: function {op: zast.Node} out i64 is {
 # which owns them).
 lintInto: function {arr: Arr text: String.take relpath: StringView utf32: bool} is {
     la9: zsource.analyzeSource source: text path: relpath.string lineLength: 100 casing: false
+    appendLintDiags :arr :la9 :utf32
+}
+
+# tcLintInto -- lintInto plus the typecheck-tier rules (L005 suffix, L012
+# unused private def / member, L013 / L014 unused local / param) for the
+# document that owns the check's main unit. Reuses the compile pass's
+# program and symbol table -- no second typecheck.
+tcLintInto: function {
+    arr: Arr
+    text: String.take
+    relpath: StringView
+    utf32: bool
+    prog: Node
+    uname: StringView
+    sto: (Option zenv.ZSymbolTable)
+} is {
+    la9: zsource.analyzeSource source: text path: relpath.string lineLength: 100 casing: false
+    match (
+        sto
+    ) case some then {
+        la9.lintSuffixUnit :prog :uname st: sto
+        la9.reportUnusedDefs :prog :uname st: sto
+        la9.reportUnusedVars :prog :uname st: sto
+    } case none then null
+    appendLintDiags :arr :la9 :utf32
+}
+
+# appendLintDiags -- an Analysis's collected warnings / infos as LSP
+# diagnostic rows (hard errors stay with the compile pass, which owns them).
+appendLintDiags: function {arr: Arr la9: zsource.Analysis utf32: bool} is {
     with dit9: la9.diags.iterate do for d9: dit9 loop {
         sevN9: i64
         k9: d9.sev
