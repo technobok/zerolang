@@ -1009,6 +1009,9 @@ Ctx: class {
     unitTidsC: (List u64)
     unitKeysC: (List String)
     unitCacheBuilt: bool
+    # name-id -> resolved tid (misses cached as 0): the typed model is
+    # frozen during emission, so resolution per name id is emit-stable
+    resolveByNameC: (Map u64 value: u64)
     unitIdCtr: u64
     mainUnitId: u64
     condDepth: u64
@@ -9385,6 +9388,23 @@ resolveTypeIdByNameId: function {
     nameId: u32
 } out u64 is {
     if nameId == 0 then return 0
+    mc9: ctx.resolveByNameC.get key: nameId.u64
+    match (
+        mc9
+    ) case some then {
+        return mc9
+    } case none then null
+    r9: typeIdByNameStages9 :ast :symtab :ctx :nameId
+    ctx.resolveByNameC.set key: nameId.u64 value: r9
+    return r9
+}
+
+typeIdByNameStages9: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nameId: u32
+} out u64 is {
     f: userFnIdById :ast :symtab :ctx :nameId
     if f > 0 then return f
     mo: ztypecheck.resolveSystemChildById :ast ty: symtab.typing reg: symtab.reg :nameId
@@ -14872,6 +14892,7 @@ emitC: function {
         unitTidsC: (List u64)
         unitKeysC: (List String)
         unitCacheBuilt: false
+        resolveByNameC: (Map u64 value: u64)
         unitIdCtr: 0
         mainUnitId: 0
         condDepth: 0
