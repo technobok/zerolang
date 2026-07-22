@@ -29,16 +29,19 @@ Transport: union {
 
 # ---- small builders -------------------------------------------------
 
+# a fresh empty JSON object.
 newObj: function out Obj is {
     return (Obj entries: (Map String value: Value) keys: (List String))
 }
 
+# a fresh empty JSON array.
 newArr: function out Arr is {
     return (Arr items: (List Value))
 }
 
 # ---- uri <-> path ---------------------------------------------------
 
+# the value of hex-digit byte `b`, or -1 when not a hex digit.
 hexNibble: function {b: u8} out i64 is {
     if b >= 48 when b <= 57 then return (b - 48).i64
     if b >= 97 when b <= 102 then return (b - 87).i64
@@ -191,6 +194,7 @@ transportFd: function {tp: Transport} out i32 is {
 # `this.snapshots`, so sending stays legal while those fields are locked
 # (e.g. publishAll sends inside a docs iteration).
 
+# write all of `s` to transport `tp`.
 writeAll: function {s: StringView tp: Transport} is {
     b: Bytes
     i: u64
@@ -213,6 +217,7 @@ writeAll: function {s: StringView tp: Transport} is {
     }
 }
 
+# frame `body` with a Content-Length header and send it.
 frameAndSend: function {body: String tp: Transport} is {
     blen: body.length
     m: "Content-Length: \{blen}"
@@ -224,6 +229,7 @@ frameAndSend: function {body: String tp: Transport} is {
     writeAll s: m.stringview :tp
 }
 
+# send a JSON-RPC success response for request `id`.
 sendResult: function {id: Value.take result: Value.take tp: Transport} is {
     o: newObj
     o.set key: "jsonrpc".string value: (Value.text "2.0".string)
@@ -234,6 +240,7 @@ sendResult: function {id: Value.take result: Value.take tp: Transport} is {
     frameAndSend :body :tp
 }
 
+# send a JSON-RPC error response for request `id`.
 sendError: function {id: Value.take code: i64 message: StringView tp: Transport} is {
     e: newObj
     e.set key: "code".string value: (Value.intval code)
@@ -247,6 +254,7 @@ sendError: function {id: Value.take code: i64 message: StringView tp: Transport}
     frameAndSend :body :tp
 }
 
+# send a JSON-RPC notification.
 sendNotification: function {method: StringView params: Value.take tp: Transport} is {
     o: newObj
     o.set key: "jsonrpc".string value: (Value.text "2.0".string)
@@ -274,6 +282,7 @@ idValueOf: function {msg: Value} out Value is {
 
 # ---- header parsing -------------------------------------------------
 
+# the byte count parsed from a `Content-Length:` header line.
 parseContentLength: function {line: StringView} out u64 is {
     lower: line.toLowerAscii
     lv: lower.stringview
@@ -294,6 +303,7 @@ parseContentLength: function {line: StringView} out u64 is {
 
 # ---- document + server ----------------------------------------------
 
+# one open text document: its uri, version, and current text.
 Document: class {
     uri: String
     path: String
@@ -302,6 +312,7 @@ Document: class {
     version: i64
 }
 
+# the language-server state: open documents, the project dirs, and the check cache.
 Server: class {
     docs: (Map String value: Document)
     srcDir: String
@@ -1051,6 +1062,7 @@ codeOf: function {n: u32} out String is {
 # memberOwnerTid key; the name is the child atom's), 3 = binding name.
 # `pos` records every node's start for def-target positioning.
 
+# one hit-testable span: a source range mapped to a resolvable reference.
 spanrow: record {
     nodeid: u32
     line: u32
@@ -1069,6 +1081,7 @@ rangerow: record {
     kind: u8
 }
 
+# the per-file table of hit-testable spans built for goto-def / hover / references.
 Spans: class {
     rows: (List spanrow)
     names: (List String)
@@ -1371,6 +1384,7 @@ pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bo
 
 # ---- stamp lookups through the snapshot's Option symtab ----
 
+# the variable id referenced at use-site node `nid`, or 0.
 useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     match (
         o
@@ -1388,6 +1402,7 @@ useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     }
 }
 
+# the unit-definition id referenced at node `nid`, or 0.
 useUnitDef: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     match (
         o
@@ -1405,6 +1420,7 @@ useUnitDef: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     }
 }
 
+# the owner type id of the member referenced at node `nid`, or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     match (
         o
@@ -1422,6 +1438,7 @@ memberOwnerOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     }
 }
 
+# the variable id defined at node `nid`, or 0.
 defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     match (
         o
@@ -1439,6 +1456,7 @@ defVarIdOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     }
 }
 
+# the type id stamped on node `nid`, or 0.
 nodeTypeAt: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     match (
         o
@@ -1470,6 +1488,7 @@ varDefNode: function {o: (Option zenv.ZSymbolTable) vid: u64} out u64 is {
     }
 }
 
+# the display name of type `tid`, or "" when unavailable.
 typeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
     match (
         o
@@ -1530,6 +1549,7 @@ displayTypeNameSt: function {st: zenv.ZSymbolTable tid: u64} out String is {
     return "\{uv9}.\{disp9.stringview}"
 }
 
+# the hover display name of type `tid` (unit-qualified outside core/system).
 displayTypeNameOfOpt: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
     match (
         o
@@ -2184,6 +2204,7 @@ hoverMarkdown: function {code: StringView doc: StringView} out Value is {
 
 # ---- def-node navigation (unit/body indexes into the program AST) ----
 
+# the node id of member `name` within a definition, or 0.
 memberIn: function {
     ast: Ast
     op: zast.Node
@@ -2211,6 +2232,7 @@ memberIn: function {
     }
 }
 
+# the node id of the label for member `name` on `m`, or 0.
 memberLabelId: function {ast: Ast m: zast.Node name: StringView} out u64 is {
     match (
         m
@@ -2222,6 +2244,7 @@ memberLabelId: function {ast: Ast m: zast.Node name: StringView} out u64 is {
     }
 }
 
+# the node id of definition `d`, or of its member `member` when named.
 defOrMember: function {ast: Ast d: zast.Node member: StringView} out u64 is {
     match (
         d
@@ -2238,6 +2261,7 @@ defOrMember: function {ast: Ast d: zast.Node member: StringView} out u64 is {
     }
 }
 
+# resolve a member within a unit definition for goto-definition.
 navUnitDef: function {ast: Ast ud: zast.Node bidx: u64 member: StringView} out u64 is {
     match (
         ud
@@ -2250,6 +2274,7 @@ navUnitDef: function {ast: Ast ud: zast.Node bidx: u64 member: StringView} out u
     }
 }
 
+# resolve a member within a wrapped definition for goto-definition.
 navWrapper: function {ast: Ast wId: u32 bidx: u64 member: StringView} out u64 is {
     w: ast.nodes.get i: (wId - 1).u64
     match (
@@ -2261,6 +2286,7 @@ navWrapper: function {ast: Ast wId: u32 bidx: u64 member: StringView} out u64 is
     }
 }
 
+# resolve a member within a unit body for goto-definition.
 navBody: function {prog: zast.Node uidx: u64 bidx: u64 member: StringView} out u64 is {
     match (
         prog
@@ -3093,6 +3119,7 @@ symbolsAnswer: function {
     return (Value.array arr)
 }
 
+# collect document-symbol entries for a whole unit.
 collectUnitSymbols: function {
     prog: zast.Node
     unitName: StringView
@@ -3120,6 +3147,7 @@ collectUnitSymbols: function {
     } else null
 }
 
+# collect document-symbol entries within a unit node.
 collectUnitSymbolsIn: function {
     ast: Ast
     wId: u32
@@ -3143,6 +3171,7 @@ collectUnitSymbolsIn: function {
     } else null
 }
 
+# collect document-symbol entries from a unit body.
 collectBodySymbols: function {
     ast: Ast
     ud: zast.Node
@@ -3158,6 +3187,7 @@ collectBodySymbols: function {
     } else null
 }
 
+# the document-symbol entry for one definition.
 symbolOf: function {
     ast: Ast
     m: zast.Node
@@ -3215,6 +3245,7 @@ rangeCopy: function {docText: StringView utf32: bool line0: i64 c0: i64 c1: i64}
     return (Value.object rg9)
 }
 
+# the LSP SymbolKind code for definition `op`.
 symbolKindOf: function {op: zast.Node} out i64 is {
     match (
         op
@@ -3407,6 +3438,7 @@ byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
     return n
 }
 
+# true when byte `b` may appear in an identifier.
 isIdentByte: function {b: u8} out bool is {
     if b >= 97 when b <= 122 then return true
     if b >= 65 when b <= 90 then return true
@@ -3424,6 +3456,7 @@ addCand: function {sink: (Map String value: u8) name: StringView kind: u8} is {
     sink.set key: k2 value: kind
 }
 
+# add the language keywords to a completion sink.
 addKeywords: function {sink: (Map String value: u8)} is {
     addCand :sink name: "function" kind: 14
     addCand :sink name: "class" kind: 14
@@ -3490,6 +3523,7 @@ collectTopDefs: function {prog: zast.Node sink: (Map String value: u8)} is {
     } else null
 }
 
+# add a unit's top-level definition names to a completion sink.
 collectUnitDefs: function {ast: Ast wId: u32 sink: (Map String value: u8)} is {
     w: ast.nodes.get i: (wId - 1).u64
     match (
@@ -3501,6 +3535,7 @@ collectUnitDefs: function {ast: Ast wId: u32 sink: (Map String value: u8)} is {
     } else null
 }
 
+# add a unit node's definition names to a completion sink.
 collectUnitDefsIn: function {ast: Ast ud: zast.Node sink: (Map String value: u8)} is {
     match (
         ud
@@ -3510,6 +3545,7 @@ collectUnitDefsIn: function {ast: Ast ud: zast.Node sink: (Map String value: u8)
     } else null
 }
 
+# add member `m`'s name to a completion sink.
 collectMemberDef: function {ast: Ast m: zast.Node sink: (Map String value: u8)} is {
     match (
         m
@@ -3549,6 +3585,7 @@ enclosingDefStart: function {
     }
 }
 
+# the definition enclosing a position within a unit.
 enclosingInUnit: function {
     ast: Ast
     wId: u32
@@ -3573,6 +3610,7 @@ enclosingInUnit: function {
     }
 }
 
+# the definition enclosing a position within a body.
 enclosingInBody: function {
     ast: Ast
     ud: zast.Node
@@ -3607,6 +3645,7 @@ enclosingInBody: function {
     }
 }
 
+# the source line where member `m` begins.
 memberStartLine: function {m: zast.Node} out u32 is {
     match (
         m
@@ -3617,6 +3656,7 @@ memberStartLine: function {m: zast.Node} out u32 is {
     }
 }
 
+# add member `m`'s parameter names to a completion sink.
 addMemberParams: function {ast: Ast m: zast.Node sink: (Map String value: u8)} is {
     match (
         m
@@ -3625,6 +3665,7 @@ addMemberParams: function {ast: Ast m: zast.Node sink: (Map String value: u8)} i
     } else null
 }
 
+# add function `op`'s parameter names to a completion sink.
 addFnParams: function {ast: Ast op: zast.Node sink: (Map String value: u8)} is {
     match (
         op
@@ -3637,6 +3678,7 @@ addFnParams: function {ast: Ast op: zast.Node sink: (Map String value: u8)} is {
     } else null
 }
 
+# add parameter `pm`'s label to a completion sink.
 addParamLabel: function {ast: Ast pm: zast.Node sink: (Map String value: u8)} is {
     match (
         pm
@@ -4890,6 +4932,7 @@ completionAnswer: function {
 # inter-keystroke gaps while staying under the perception threshold.
 DEBOUNCE_MS: 100.i32
 
+# the server loop: read framed requests and dispatch each until shutdown.
 serve: function {srv: Server} is {
     for srv.running loop {
         mo: srv.readMessage
@@ -4914,6 +4957,7 @@ serve: function {srv: Server} is {
     }
 }
 
+# print the zls usage to stderr.
 printUsage: function is {
     io.eprintln "usage: zls [--stdio] [--replay <file>] [--listen <port>]"
     io.eprintln "           [--src <dir>] [--system <dir>]"
