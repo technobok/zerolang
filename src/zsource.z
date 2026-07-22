@@ -1231,6 +1231,170 @@ Analysis: class {
         }
     }
 
+    # hasDocAbove -- true when the source line directly above `line1` (1-based)
+    # is a `#` comment line -- the start of a leading doc block.
+    hasDocAbove: function {:this line1: u32} out bool is {
+        result9: false
+        if line1 < 2 then return result9
+        idx9: (line1 - 2).u64
+        if idx9 >= this.lines.length then return result9
+        ln9: this.lines.get i: idx9
+        lv9: ln9.stringview
+        lt9: lv9.trim
+        if lt9.startsWith "#" then result9 = true
+        return result9
+    }
+
+    # reportUndocDef -- warn L016 when a definition (type / function / method) has
+    # no leading `#` doc block. `nameRef` gives the underline width.
+    reportUndocDef: function {:this ast: Ast nameRef: u32 line: u32 col: u32} is {
+        if (this.hasDocAbove line1: line) then return
+        nm9: zast.nameTextCopy :ast ref: nameRef
+        (this.warn
+            code: "L016"
+            msg: "missing doc comment: add a `#` comment above this definition".string
+            :line
+            :col
+            width: nm9.length.u32.orPanic
+        )
+    }
+
+    # checkDocsMember -- a parameter or field counts as documented by a leading
+    # `#` block or a trailing `#` on its own line; warn `code`/`kind` otherwise.
+    checkDocsMember: function {:this ast: Ast member: Node code: StringView kind: StringView} is {
+        match (
+            member
+        ) case namedoperation then {
+            nm9: zast.nameTextCopy :ast ref: member.name
+            skip9: false
+            if nm9.stringview == "this" then skip9 = true
+            if skip9 == false then {
+                documented9: false
+                if (this.hasDocAbove line1: member.lineno) then documented9 = true
+                if documented9 == false then {
+                    li9: (member.lineno - 1).u64
+                    if li9 < this.lines.length then {
+                        mline9: this.lines.get i: li9
+                        if (hasHash line: mline9.stringview) then documented9 = true
+                    }
+                }
+                if documented9 == false then {
+                    msg9: "missing doc comment: add a `#` comment above this \{kind}"
+                    (this.warn
+                        :code
+                        msg: msg9
+                        line: member.lineno
+                        col: member.colno
+                        width: nm9.length.u32.orPanic
+                    )
+                }
+            }
+        } else null
+    }
+
+    # walkDocs -- opt-in doc-coverage pass. L016 flags a type/function/method with
+    # no leading `#` block; L017 an undocumented parameter; L018 an undocumented
+    # record/class field. Each tier is gated by its own flag.
+    walkDocs: function {:this ast: Ast n: Node docs: bool docParams: bool docFields: bool} is {
+        match (
+            n
+        ) case program then {
+            wit9: n.ast.units.iterate
+            for uId9: wit9 loop {
+                this.walkDocs :ast n: (ast.nodes.get i: (uId9 - 1).u64) :docs :docParams :docFields
+            }
+        } case unitdef then {
+            bit9: n.body.iterate
+            for bId9: bit9 loop {
+                this.walkDocs :ast n: (ast.nodes.get i: (bId9 - 1).u64) :docs :docParams :docFields
+            }
+        } case namedoperation then {
+            op9: ast.nodes.get i: (n.operation - 1).u64
+            match (
+                op9
+            ) case functiondef then {
+                if docs then this.reportUndocDef :ast nameRef: n.name line: n.lineno col: n.colno
+                if docParams then {
+                    pit9: op9.parameters.iterate
+                    for pmId9: pit9 loop {
+                        (this.checkDocsMember
+                            :ast
+                            member: (ast.nodes.get i: (pmId9 - 1).u64)
+                            code: "L017"
+                            kind: "parameter"
+                        )
+                    }
+                }
+                ait9: op9.asItems.iterate
+                for amId9: ait9 loop {
+                    (this.walkDocs
+                        :ast
+                        n: (ast.nodes.get i: (amId9 - 1).u64)
+                        :docs
+                        :docParams
+                        :docFields
+                    )
+                }
+            } case objectdef then {
+                if docs then this.reportUndocDef :ast nameRef: n.name line: n.lineno col: n.colno
+                isRC9: false
+                if op9.kind == zast.nodetype.recordDef then isRC9 = true
+                if op9.kind == zast.nodetype.classDef then isRC9 = true
+                if docFields when isRC9 then {
+                    fit9: op9.isItems.iterate
+                    for fId9: fit9 loop {
+                        (this.checkDocsMember
+                            :ast
+                            member: (ast.nodes.get i: (fId9 - 1).u64)
+                            code: "L018"
+                            kind: "field"
+                        )
+                    }
+                }
+                amit9: op9.asItems.iterate
+                for oamId9: amit9 loop {
+                    (this.walkDocs
+                        :ast
+                        n: (ast.nodes.get i: (oamId9 - 1).u64)
+                        :docs
+                        :docParams
+                        :docFields
+                    )
+                }
+            } case unitdef then {
+                (this.walkDocs
+                    :ast
+                    n: (ast.nodes.get i: (n.operation - 1).u64)
+                    :docs
+                    :docParams
+                    :docFields
+                )
+            } else null
+        } else null
+    }
+
+    # walkDocsAt -- the id-taking entry: the node view is this frame's, so the
+    # program loop can lend prog.ast without an outstanding view lock.
+    walkDocsAt: function {:this ast: Ast nId: u32 docs: bool docParams: bool docFields: bool} is {
+        n9: ast.nodes.get i: (nId - 1).u64
+        this.walkDocs :ast n: n9 :docs :docParams :docFields
+    }
+
+    # walkDocsProgram -- root entry for the doc-coverage pass.
+    walkDocsProgram: function {:this prog: Node docs: bool docParams: bool docFields: bool} is {
+        match (
+            prog
+        ) case program then {
+            wdi9: u64
+            wdn9: prog.ast.units.length
+            for wdi9 < wdn9 loop {
+                wdid9: prog.ast.units.get i: wdi9
+                this.walkDocsAt ast: prog.ast nId: wdid9 :docs :docParams :docFields
+                wdi9 = wdi9 + 1
+            }
+        } else null
+    }
+
     # checkRedundantParens -- L007: a paren wrapping an ENTIRE `if` condition, when the condition
     # does not require it. A named-argument-call condition needs the parens (its args are greedy and
     # would swallow `then`), detected as a top-level colon inside the paren; those and sub-expression
@@ -3683,6 +3847,9 @@ analyzeSource: function {
     path: String.take
     lineLength: u32
     casing: bool
+    docs: bool
+    docParams: bool
+    docFields: bool
 } out Analysis is {
     root: ast.parseSource source: source.copy
     lines: linesOf src: source.stringview
@@ -3704,17 +3871,36 @@ analyzeSource: function {
     )
     a.runFastChecks n: root
     if casing then a.walkCasingProgram prog: root
+    anyDocs9: docs
+    if docParams then anyDocs9 = true
+    if docFields then anyDocs9 = true
+    if anyDocs9 then a.walkDocsProgram prog: root :docs :docParams :docFields
     a.checkLineLength width: lineLength
     a.sortEditsInPlace
     return a
 }
 
-analyzeFile: function {path: String.take lineLength: u32 casing: bool} out Analysis is {
+analyzeFile: function {
+    path: String.take
+    lineLength: u32
+    casing: bool
+    docs: bool
+    docParams: bool
+    docFields: bool
+} out Analysis is {
     rd: io.readText :path
     match (
         rd
     ) case ok then {
-        return (analyzeSource source: rd.take path: path.copy :lineLength :casing)
+        return (analyzeSource
+            source: rd.take
+            path: path.copy
+            :lineLength
+            :casing
+            :docs
+            :docParams
+            :docFields
+        )
     } case err then {
         a: (Analysis
             path: path.copy
@@ -3755,6 +3941,9 @@ analyzeFileFull: function {
     srcdir: StringView
     systemdir: StringView
     lineLength: u32
+    docs: bool
+    docParams: bool
+    docFields: bool
 } out Analysis is {
     rd: io.readText :path
     match (
@@ -3779,6 +3968,10 @@ analyzeFileFull: function {
             wrapGroups: (List u64)
         )
         a.runFastChecks n: root
+        anyDocs9: docs
+        if docParams then anyDocs9 = true
+        if docFields then anyDocs9 = true
+        if anyDocs9 then a.walkDocsProgram prog: root :docs :docParams :docFields
         un: unitNameOf path: a.path.stringview
         a.checkSuffix :srcdir :systemdir uname: un.stringview
         a.checkLineLength width: lineLength
@@ -3825,9 +4018,20 @@ analyzeFileTiered: function {
     systemdir: StringView
     lineLength: u32
     casing: bool
+    docs: bool
+    docParams: bool
+    docFields: bool
 } out Analysis is {
-    if full then return (analyzeFileFull :path :srcdir :systemdir :lineLength)
-    return (analyzeFile :path :lineLength :casing)
+    if full then return (analyzeFileFull
+        :path
+        :srcdir
+        :systemdir
+        :lineLength
+        :docs
+        :docParams
+        :docFields
+    )
+    return (analyzeFile :path :lineLength :casing :docs :docParams :docFields)
 }
 
 # codepointLen -- number of Unicode codepoints in `s` (UTF-8 continuation bytes 0x80..0xBF are not

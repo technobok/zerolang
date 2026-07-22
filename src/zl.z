@@ -20,6 +20,9 @@ printUsage: function is {
     io.eprintln "lint flags:"
     io.eprintln "  --full    also run typecheck-tier rules (--src DIR --system DIR set the project)"
     io.eprintln "  --casing  report variant/union members that are not lowerCamelCase (advisory)"
+    io.eprintln "  --docs    report definitions/functions/methods lacking a leading `#` doc (advisory)"
+    io.eprintln "  --docs-params  report undocumented function parameters (advisory)"
+    io.eprintln "  --docs-fields  report undocumented record/class fields (advisory)"
     io.eprintln "  --line-length N  report lines over N columns (advisory; default off)"
 }
 
@@ -49,6 +52,9 @@ runLint: function {
     systemdir: StringView
     lineLength: u32
     casing: bool
+    docs: bool
+    docParams: bool
+    docFields: bool
 } out i32 is {
     if paths.length == 0 then {
         io.eprintln "zl lint: no input files"
@@ -56,7 +62,17 @@ runLint: function {
     }
     total: u64
     with pit: paths.iterate do for p: pit loop {
-        a: zsource.analyzeFileTiered path: p.copy :full :srcdir :systemdir :lineLength :casing
+        a: (zsource.analyzeFileTiered
+            path: p.copy
+            :full
+            :srcdir
+            :systemdir
+            :lineLength
+            :casing
+            :docs
+            :docParams
+            :docFields
+        )
         reportAnalysis :a
         total = total + a.failCount
     }
@@ -116,7 +132,17 @@ runFmt: function {
     }
     rc: i32
     with pit: paths.iterate do for p: pit loop {
-        a: zsource.analyzeFileTiered path: p.copy :full :srcdir :systemdir :lineLength casing: false
+        a: (zsource.analyzeFileTiered
+            path: p.copy
+            :full
+            :srcdir
+            :systemdir
+            :lineLength
+            casing: false
+            docs: false
+            docParams: false
+            docFields: false
+        )
         if a.parseErrorCount > 0 then {
             reportAnalysis :a
             msg: "zl fmt: \{p} has parse errors; not formatting"
@@ -215,6 +241,9 @@ main: function is {
     fDiff: false
     fFull: false
     fCasing: false
+    fDocs: false
+    fDocParams: false
+    fDocFields: false
     srcdir: ".".string
     systemdir: "lib/system".string
     lineLength: u32
@@ -233,6 +262,12 @@ main: function is {
             fFull = true
         } else if av == "--casing" then {
             fCasing = true
+        } else if av == "--docs" then {
+            fDocs = true
+        } else if av == "--docs-params" then {
+            fDocParams = true
+        } else if av == "--docs-fields" then {
+            fDocFields = true
         } else if av == "--src" then {
             if (i + 1) < n then {
                 i = i + 1
@@ -286,6 +321,9 @@ main: function is {
             systemdir: systemdir.stringview
             :lineLength
             casing: fCasing
+            docs: fDocs
+            docParams: fDocParams
+            docFields: fDocFields
         )
         os.exit code: rc
     }
