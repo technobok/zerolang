@@ -117,6 +117,7 @@ tokstatetype: variant {
     stringraw: u8
 } as { tag: u8.tag }
 
+# one lexer token: its kind, source text, and file/line/column position.
 Token: class {
     toktype: TT
     tokstr: String
@@ -137,12 +138,14 @@ isws: function {b: u8} out bool is {
     return false
 }
 
+# true when byte `b` ends a line (CR or LF).
 iseol: function {b: u8} out bool is {
     if b == ascii.lf then return true
     if b == ascii.cr then return true
     return false
 }
 
+# true when byte `b` may appear in a comment body (anything but CR/LF/NUL).
 iscommentbody: function {b: u8} out bool is {
     if b == ascii.nul then return false
     if b == ascii.lf then return false
@@ -180,24 +183,28 @@ charflags: data {
     0b1101 0b1101 0b1101 0b1100 0b1101 0b1100 0b1101 0b1100   # 120..127  x y z { | } ~ del
 } out u8
 
+# true when byte `b` is legal inside an identifier.
 isidchar: function {b: u8} out bool is {
     if b > 127 then return false
     idx: b.u64
     return (charflags.index idx) & charflag.identifier != 0
 }
 
+# true when byte `b` is an ASCII digit 0-9.
 isdigit: function {b: u8} out bool is {
     if b > 127 then return false
     idx: b.u64
     return (charflags.index idx) & charflag.digit != 0
 }
 
+# true when byte `b` is legal in an interpreted-string body.
 isstrc: function {b: u8} out bool is {
     if b > 127 then return true
     idx: b.u64
     return (charflags.index idx) & charflag.stringBody != 0
 }
 
+# true when byte `b` is legal in a raw-string body.
 israwc: function {b: u8} out bool is {
     if b > 127 then return true
     idx: b.u64
@@ -224,6 +231,7 @@ extendraw: function {stringparts: String delim_view: StringView} is {
     }
 }
 
+# true when byte `b` is a hex digit (0-9, a-f, A-F).
 ishexdigit: function {b: u8} out bool is {
     if b >= ascii.zero when b <= ascii.nine then return true
     if b >= ascii.upperA when b <= ascii.upperF then return true
@@ -281,6 +289,7 @@ utf8_encode_append: function {cp: u64 dst: String} is {
     dst.appendByte (lo + 128).u8.orPanic
 }
 
+# the raw scanner: walks a source buffer and emits Tokens, whitespace and comments retained.
 Tokenizer: class {
     source: String
     pos: u64
@@ -1389,6 +1398,7 @@ kwlookup: function {sv: StringView} out kwresult is {
     return (kwresult found: false tt: TT.eofTok)
 }
 
+# true when `sv` is a reserved word that may not be used as an identifier.
 islookupReserved: function {sv: StringView} out bool is {
     if sv == "enum" then return true
     if sv == "macro" then return true
@@ -1404,6 +1414,7 @@ islookupReserved: function {sv: StringView} out bool is {
     return false
 }
 
+# the printable name of a token type `t`.
 ttname: function {t: TT} out String is {
     match (
         t
@@ -1518,6 +1529,7 @@ hexdigit: function {b: u8} out u8 is {
     return b - 10 + 97
 }
 
+# append byte `b` to `dst`, rendering it as an escape when it is special.
 escapeAppend: function {b: u8 dst: String} is {
     if b == ascii.ht then {
         dst.appendByte ascii.backslash
@@ -1706,6 +1718,7 @@ escapeAppendCp: function {cp: u32 dst: String} is {
     dst.appendByte ascii.braceClose
 }
 
+# `sv` re-rendered with special characters shown as escapes (dump output).
 escapeStr: function {sv: StringView} out String is {
     buf: String
     n: sv.length
@@ -1742,6 +1755,7 @@ escapeStr: function {sv: StringView} out String is {
     return buf
 }
 
+# standalone entry point for the zlexer token-dump test.
 main: function is {
     argv: os.args
     if argv.length < 2 then {
@@ -1761,6 +1775,7 @@ main: function is {
     }
 }
 
+# print every token from `tok` (lexer golden-dump helper).
 dump: function {tok: Tokenizer} is {
     for true loop {
         t: tok.token
