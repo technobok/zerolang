@@ -902,25 +902,38 @@ indexUnitDefs: function {ty: ztyping.ZTyping program: Node} is {
             uIdx9b = uIdx9b + 1
             opId9: u32
             unm9: String
+            unmRef9: u32
             {
                 ru: program.ast.nodes.get i: (ruId9 - 1).u64
                 if ru.namedoperation then {
                     unm: zast.poolTextCopy pool: program.ast.names ref: ru.name
                     opId9 = ru.operation
                     unm9 = unm.copy
+                    unmRef9 = ru.name
                 }
             }
             if opId9 > 0 then {
+                udid9: (ty.declNew
+                    name: unmRef9
+                    parent: 0
+                    kind: ztyping.declkind.unitDecl
+                    node: ruId9
+                )
+                ty.unitRootDecl.set key: uidx0 value: udid9
+                udk9: unm9.copy
+                ty.declOfDefKey.set key: udk9 value: udid9
                 (indexUnitBody
                     :ty
                     ast: program.ast
                     unitName: unm9.stringview
                     unitIdx: uidx0
                     unitopId: opId9
+                    unitDeclId: udid9
                 )
             }
             uidx0 = uidx0 + 1
         }
+        assertDeclIndexAgrees :ty
         ty.defNodeIndexBuilt = true
     } else null
 }
@@ -933,10 +946,13 @@ indexUnitBody: function {
     unitName: StringView
     unitIdx: u64
     unitopId: u32
+    unitDeclId: u64
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitopId
     {
         bidx0: u64
+        pubDeclId0: u64
+        pubOpId0: u32
         with bit: bodyIds9.iterate do for bmId9: bit loop {
             bm: ast.nodes.get i: (bmId9 - 1).u64
             if bm.namedoperation then {
@@ -967,10 +983,369 @@ indexUnitBody: function {
                 sk1: "\{unitName}.\{dn}"
                 bv1: bidx0
                 ty.defNodeBodyIdx.set key: sk1 value: bv1
+                ddid0: (indexDeclDef
+                    :ty
+                    :ast
+                    parentDeclId: unitDeclId
+                    defKeyUnit: unitName
+                    nameRef: bm.name
+                    nopNodeId: bm.nodeid
+                    opNodeId: bm.operation
+                )
+                if (zast.nameTextEq :ast ref: bm.name s: "public") then {
+                    pubDeclId0 = ddid0
+                    pubOpId0 = bm.operation
+                }
             }
             bidx0 = bidx0 + 1
         }
+        if pubDeclId0 > 0 then {
+            (indexDeclPublicEntries
+                :ty
+                :ast
+                :unitDeclId
+                pubDeclId: pubDeclId0
+                pubOpId: pubOpId0
+            )
+        }
     }
+}
+
+# indexDeclDef -- create the Decl for one definition (a namedoperation's
+# name + operation) under parentDeclId, descending into the definition's
+# own namespace (function params, object members, nested unit bodies).
+# Registers "defKeyUnit.name" in declOfDefKey when defKeyUnit is non-empty
+# (top-level defs, mirroring defNodeUnitIdx keys). Returns the new DeclId.
+indexDeclDef: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    parentDeclId: u64
+    defKeyUnit: StringView
+    nameRef: u32
+    nopNodeId: u32
+    opNodeId: u32
+} out u64 is {
+    op9: ast.nodes.get i: (opNodeId - 1).u64
+    did0: u64
+    match (
+        op9
+    ) case expression then {
+        # unwrap: dispatch on the inner node, keep this def's name/node
+        return (indexDeclDef
+            :ty
+            :ast
+            :parentDeclId
+            :defKeyUnit
+            :nameRef
+            :nopNodeId
+            opNodeId: op9.expression
+        )
+    } case functiondef then {
+        did0 = (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.funcDecl
+            node: nopNodeId
+        )
+        indexDeclFnInner :ty :ast declId: did0 fnNodeId: opNodeId
+    } case objectdef then {
+        did0 = (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.typeDecl
+            node: nopNodeId
+        )
+        indexDeclObjInner :ty :ast declId: did0 objNodeId: opNodeId
+    } case unitdef then {
+        if (zast.nameTextEq :ast ref: nameRef s: "public") then {
+            # the exported-namespace block: entries become name -> sibling
+            # edges, filled by indexDeclPublicEntries after the unit walk
+            did0 = (ty.declNew
+                name: nameRef
+                parent: parentDeclId
+                kind: ztyping.declkind.publicNs
+                node: nopNodeId
+            )
+        } else {
+            did0 = (ty.declNew
+                name: nameRef
+                parent: parentDeclId
+                kind: ztyping.declkind.unitDecl
+                node: nopNodeId
+            )
+            with nbit9: op9.body.iterate do for nmId9: nbit9 loop {
+                nm9: ast.nodes.get i: (nmId9 - 1).u64
+                if nm9.namedoperation then {
+                    (indexDeclDef
+                        :ty
+                        :ast
+                        parentDeclId: did0
+                        defKeyUnit: ""
+                        nameRef: nm9.name
+                        nopNodeId: nm9.nodeid
+                        opNodeId: nm9.operation
+                    )
+                }
+            }
+        }
+    } case datablock then {
+        did0 = (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.dataDecl
+            node: nopNodeId
+        )
+    } case dottedpath then {
+        # a cross-unit re-export alias: its own Decl and node; shares the
+        # target's type id once minting routes through the Decl layer
+        did0 = (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.reexportDecl
+            node: nopNodeId
+        )
+    } else {
+        did0 = (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.constDecl
+            node: nopNodeId
+        )
+    }
+    if defKeyUnit.length > 0 then {
+        dn9: zast.nameTextCopy :ast ref: nameRef
+        dk9: "\{defKeyUnit}.\{dn9}"
+        ty.declOfDefKey.set key: dk9 value: did0
+    }
+    return did0
+}
+
+# indexDeclFnInner -- parameter and as-member Decls under a function
+# declaration (parameters are in the tree: a navigable signature).
+indexDeclFnInner: function {ty: ztyping.ZTyping ast: Ast declId: u64 fnNodeId: u32} is {
+    fn9: ast.nodes.get i: (fnNodeId - 1).u64
+    match (
+        fn9
+    ) case functiondef then {
+        with pit9: fn9.parameters.iterate do for pId9: pit9 loop {
+            pn9: ast.nodes.get i: (pId9 - 1).u64
+            if pn9.namedoperation then {
+                (ty.declNew
+                    name: pn9.name
+                    parent: declId
+                    kind: ztyping.declkind.paramDecl
+                    node: pn9.nodeid
+                )
+            }
+        }
+        with ait9: fn9.asItems.iterate do for aId9: ait9 loop {
+            an9: ast.nodes.get i: (aId9 - 1).u64
+            if an9.namedoperation then {
+                (indexDeclAsMember
+                    :ty
+                    :ast
+                    parentDeclId: declId
+                    nameRef: an9.name
+                    nopNodeId: an9.nodeid
+                    opNodeId: an9.operation
+                )
+            }
+        }
+    } else null
+}
+
+# indexDeclObjInner -- member Decls under a type declaration: is-block
+# entries (fields; arms for variant/union kinds) and as-block members.
+indexDeclObjInner: function {ty: ztyping.ZTyping ast: Ast declId: u64 objNodeId: u32} is {
+    ob9: ast.nodes.get i: (objNodeId - 1).u64
+    match (
+        ob9
+    ) case objectdef then {
+        isArm9: false
+        if ob9.kind.variantDef then isArm9 = true
+        if ob9.kind.unionDef then isArm9 = true
+        with iit9: ob9.isItems.iterate do for iId9: iit9 loop {
+            in9: ast.nodes.get i: (iId9 - 1).u64
+            if in9.namedoperation then {
+                mk9: ztyping.declkind.fieldDecl
+                if isArm9 then mk9 = ztyping.declkind.armDecl
+                ty.declNew name: in9.name parent: declId kind: mk9 node: in9.nodeid
+            }
+        }
+        with ait9: ob9.asItems.iterate do for aId9: ait9 loop {
+            an9: ast.nodes.get i: (aId9 - 1).u64
+            if an9.namedoperation then {
+                (indexDeclAsMember
+                    :ty
+                    :ast
+                    parentDeclId: declId
+                    nameRef: an9.name
+                    nopNodeId: an9.nodeid
+                    opNodeId: an9.operation
+                )
+            }
+        }
+    } else null
+}
+
+# indexDeclAsMember -- one as-block member Decl: a method when the member
+# is a function (with its own parameter Decls), a field-like entry
+# otherwise (generic parameters, tag specs, member constants).
+indexDeclAsMember: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    parentDeclId: u64
+    nameRef: u32
+    nopNodeId: u32
+    opNodeId: u32
+} is {
+    op9: ast.nodes.get i: (opNodeId - 1).u64
+    match (
+        op9
+    ) case expression then {
+        (indexDeclAsMember
+            :ty
+            :ast
+            :parentDeclId
+            :nameRef
+            :nopNodeId
+            opNodeId: op9.expression
+        )
+    } case functiondef then {
+        md9: (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.methodDecl
+            node: nopNodeId
+        )
+        indexDeclFnInner :ty :ast declId: md9 fnNodeId: opNodeId
+    } else {
+        (ty.declNew
+            name: nameRef
+            parent: parentDeclId
+            kind: ztyping.declkind.fieldDecl
+            node: nopNodeId
+        )
+    }
+}
+
+# indexDeclPublicEntries -- fill a publicNs Decl's namespace: one exposed
+# name -> sibling-declaration edge per `:member` / `alias: member` entry
+# (no fresh rows -- the exported namespace aliases the unit's own defs).
+# Runs after the unit's body walk so entries naming later siblings bind.
+indexDeclPublicEntries: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    unitDeclId: u64
+    pubDeclId: u64
+    pubOpId: u32
+} is {
+    pop9: ast.nodes.get i: (pubOpId - 1).u64
+    match (
+        pop9
+    ) case unitdef then {
+        with bit9: pop9.body.iterate do for mId9: bit9 loop {
+            m9: ast.nodes.get i: (mId9 - 1).u64
+            if m9.namedoperation then {
+                iref9: m9.name
+                mop9: ast.nodes.get i: (m9.operation - 1).u64
+                if mop9.atomid then iref9 = mop9.name
+                tgt9: ty.declFindChild parentDeclId: unitDeclId nameId: iref9
+                if tgt9 > 0 then {
+                    ty.declAddChildEdge parentDeclId: pubDeclId nameId: m9.name childDeclId: tgt9
+                }
+            }
+        }
+    } else null
+}
+
+# declKindMatchesTypetype -- Stage-1 agreement between a Decl's kind and
+# the typetype the declare-before-bind index recorded for the same def.
+declKindMatchesTypetype: function {k: ztyping.declkind tt: ztypes.ztypetype} out bool is {
+    if k.funcDecl then return tt.functionType
+    if k.dataDecl then return tt.dataType
+    if k.typeDecl then {
+        if tt.functionType then return false
+        if tt.dataType then return false
+        return true
+    }
+    return false
+}
+
+# assertDeclIndexAgrees -- Stage-1 invariant: the Decl tree and the legacy
+# string-keyed def-node index cover the same top-level definitions, in the
+# same units, with agreeing kinds. Any divergence is an indexer bug; panic
+# loudly so the suite catches drift while both structures coexist.
+assertDeclIndexAgrees: function {ty: ztyping.ZTyping} is {
+    with kit9: ty.defNodeUnitIdx.iterateItems do for e9: kit9 loop {
+        dko9: ty.declOfDefKey.getv key: e9.key.stringview
+        match (
+            dko9
+        ) case some then {
+            do9: ty.decls.get key: dko9
+            match (
+                do9
+            ) case some then {
+                uro9: ty.unitRootDecl.get key: e9.value
+                match (
+                    uro9
+                ) case some then {
+                    if do9.parent != uro9 then {
+                        pm9: "decl index: '\{e9.key}' parent decl \{do9.parent} != unit root \{uro9}"
+                        panic msg: pm9
+                    }
+                } case none then {
+                    pm8: "decl index: no unit root decl for unit \{e9.value} ('\{e9.key}')"
+                    panic msg: pm8
+                }
+                ttO9: ty.defTypetype.getv key: e9.key.stringview
+                match (
+                    ttO9
+                ) case some then {
+                    if (declKindMatchesTypetype k: do9.kind tt: ttO9) == false then {
+                        pm7: "decl index: kind mismatch for '\{e9.key}'"
+                        panic msg: pm7
+                    }
+                } case none then null
+            } case none then {
+                pm6: "decl index: dangling DeclId \{dko9} for '\{e9.key}'"
+                panic msg: pm6
+            }
+        } case none then {
+            pm5: "decl index: no Decl for indexed def '\{e9.key}'"
+            panic msg: pm5
+        }
+    }
+    with dit9: ty.declOfDefKey.iterateItems do for d9: dit9 loop {
+        if (ty.defNodeUnitIdx.has key: d9.key) == false then {
+            kv9: d9.key.stringview
+            if (kv9.contains needle: ".") then {
+                pm4: "decl index: Decl def key '\{kv9}' not in defNodeUnitIdx"
+                panic msg: pm4
+            }
+        }
+    }
+}
+
+# linkDeclType -- the Stage-1 bridge at the mint funnel: record the
+# canonical id on the indexed "defUnit.name" Decl and the Decl on the
+# type. References that mint outside the def index (literal shells,
+# forward names) find no Decl and no-op.
+linkDeclType: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    defUnit: StringView
+    name: StringView
+    tid: u64
+} is {
+    dk9: "\{defUnit}.\{name}"
+    dko9: ty.declOfDefKey.getv key: dk9.stringview
+    match (
+        dko9
+    ) case some then {
+        ty.declSetType declId: dko9 typeId: tid
+        reg.setDef typeId: tid declId: dko9
+    } case none then null
 }
 
 # defTypetypeOf -- the typetype a top-level definition node declares, mirroring
@@ -1062,6 +1437,7 @@ declareCanonicalType: function {
         match (
             exm
         ) case some then {
+            linkDeclType :ty :reg :defUnit :name tid: exm
             return exm
         } case none then null
     } case none then null
@@ -1075,6 +1451,7 @@ declareCanonicalType: function {
     idu: id
     duv: defUnit.string
     ty.definedInUnit.set key: idu value: duv
+    linkDeclType :ty :reg :defUnit :name tid: id
     return id
 }
 

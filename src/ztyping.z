@@ -20,6 +20,10 @@
 public: unit {
     :PendingUnitWalk
     :SynthNode
+    :Decl
+    :declchild
+    :declkind
+    :declkindName
     :ZTyping
     :newTyping
     :main
@@ -116,6 +120,77 @@ PendingUnitWalk: class {
     gpName: String
     argId: u64
     fn: Node
+}
+
+# --- declaration tree ---
+
+# The kind of declaration a Decl records: which definition shape the
+# indexer saw. Resolution semantics stay with the readers (a reexport
+# shares its target's type id; a publicNs holds the unit's exported
+# name -> declaration edges).
+declkind: variant {
+    unitDecl: null
+    funcDecl: null
+    typeDecl: null
+    constDecl: null
+    dataDecl: null
+    paramDecl: null
+    fieldDecl: null
+    methodDecl: null
+    armDecl: null
+    reexportDecl: null
+    publicNs: null
+} as { tag: u8.tag }
+
+# declkindName -- a declaration kind's dump/debug text.
+declkindName: function {k: declkind} out String is {
+    match (
+        k
+    ) case unitDecl then {
+        return "unit".string
+    } case funcDecl then {
+        return "function".string
+    } case typeDecl then {
+        return "type".string
+    } case constDecl then {
+        return "const".string
+    } case dataDecl then {
+        return "data".string
+    } case paramDecl then {
+        return "param".string
+    } case fieldDecl then {
+        return "field".string
+    } case methodDecl then {
+        return "method".string
+    } case armDecl then {
+        return "arm".string
+    } case reexportDecl then {
+        return "reexport".string
+    } case publicNs then {
+        return "publicns".string
+    }
+}
+
+# one name -> child-declaration edge of a Decl's namespace.
+declchild: record {
+    nameId: u32
+    declId: u64
+}
+
+# One declaration: a named definition site in the program. `name` is the
+# shared Ast.names pool id; `parent` the enclosing Decl (0 = a tree
+# root); `node` the declaring namedoperation's AST nodeid (location via
+# fsnoForNode); `typeId` the type this declaration minted (0 until one
+# is); `children` the ordered namespace the declaration owns. Body-local
+# variables are not Decls -- they keep the lexical variable-id system.
+Decl: class {
+    declId: u64
+    name: u32
+    parent: u64
+    kind: declkind
+    node: u32
+    typeId: u64
+    children: (List declchild)
 }
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
@@ -310,10 +385,78 @@ ZTyping: class {
     unitTypesById: (Map u64 value: u64)
     funcAliases: (Map String value: String)
     aliasDefNode: (Map String value: u64)
+    # --- declaration tree (parallel to the string-keyed def tables
+    # above; readers migrate to Decls stage by stage) ---
+    # every Decl row, keyed by DeclId (dense 1..N mint order)
+    decls: (Map u64 value: Decl)
+    # program unit index -> the unit's root DeclId
+    unitRootDecl: (Map u64 value: u64)
+    # "unit.name" -> top-level DeclId: the mint-site bridge until
+    # resolution walks the Decl tree directly
+    declOfDefKey: (Map String value: u64)
+    # reference nodeid -> resolved DeclId (stamped by resolution)
+    refDecl: (Map u64 value: u64)
     isError: bool
     errors: (List zast.ErrorData)
     currentReturnTypeId: u64
 } as {
+    # --- declaration tree ---
+
+    # declNew -- append one declaration row (DeclId = new row count) and
+    # link it into the parent's namespace; parent 0 = a tree root.
+    declNew: function {:this name: u32 parent: u64 kind: declkind node: u32} out u64 is {
+        id: this.decls.length + 1
+        this.decls.set key: id value: (Decl
+            declId: id
+            :name
+            :parent
+            :kind
+            :node
+            typeId: 0
+            children: (List declchild)
+        )
+        if parent > 0 then this.declAddChildEdge parentDeclId: parent nameId: name childDeclId: id
+        return id
+    }
+
+    # declAddChildEdge -- append a name -> declaration edge to a parent's
+    # namespace (also used for public-interface entries, whose targets are
+    # sibling declarations rather than fresh rows).
+    declAddChildEdge: function {:this parentDeclId: u64 nameId: u32 childDeclId: u64} is {
+        po9: this.decls.get key: parentDeclId
+        match (
+            po9
+        ) case some then {
+            po9.children.append (declchild :nameId declId: childDeclId)
+        } case none then null
+    }
+
+    # declSetType -- record the canonical type a declaration minted.
+    declSetType: function {:this declId: u64 typeId: u64} is {
+        do9: this.decls.get key: declId
+        match (
+            do9
+        ) case some then {
+            do9.typeId = typeId
+        } case none then null
+    }
+
+    # declFindChild -- the last child declaration named nameId under
+    # parentDeclId (0 when absent); last wins, matching the overwrite
+    # semantics of the string-keyed def tables.
+    declFindChild: function {:this parentDeclId: u64 nameId: u32} out u64 is {
+        po9: this.decls.get key: parentDeclId
+        found9: u64
+        match (
+            po9
+        ) case some then {
+            with cit9: po9.children.iterate do for c9: cit9 loop {
+                if c9.nameId == nameId then found9 = c9.declId
+            }
+        } case none then null
+        return found9
+    }
+
     # --- children table ---
 
     # Monotonic child-name id for (parentTypeId, name), minted from the
@@ -1154,6 +1297,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         unitTypesById: (Map u64 value: u64)
         funcAliases: (Map String value: String)
         aliasDefNode: (Map String value: u64)
+        decls: (Map u64 value: Decl)
+        unitRootDecl: (Map u64 value: u64)
+        declOfDefKey: (Map String value: u64)
+        refDecl: (Map u64 value: u64)
         errors: (List zast.ErrorData)
         currentReturnTypeId: 0
         isError: false)

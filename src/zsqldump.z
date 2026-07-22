@@ -85,6 +85,8 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS type_children (type_id INTEGER, child_name TEXT NOT NULL, child_type_id INTEGER, position INTEGER, child_id INTEGER, is_private INTEGER, is_lock_field INTEGER, is_lock_arm INTEGER, default_expr TEXT, param_ownership INTEGER);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS decl_child (parent_decl_id INTEGER NOT NULL, name TEXT NOT NULL, child_decl_id INTEGER NOT NULL, position INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, cname TEXT, is_const INTEGER, const_value TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL, vtable_cname TEXT, create_cname TEXT, create_owned_cname TEXT, destroy_cname TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS conformance_wrapper (conformance_id INTEGER NOT NULL, spec_method TEXT NOT NULL, wrapper_cname TEXT NOT NULL, PRIMARY KEY (conformance_id, spec_method));\n"
@@ -636,6 +638,45 @@ ZDumper: class {
             poSql: paramOwnSql o: (typing.childOwnership.get key: crow.childNameId)
             line: "INSERT OR IGNORE INTO type_children VALUES (\{crow.parentTypeId}, \{cnSql}, \{cidSql}, \{crow.position}, \{crow.childNameId}, 0, 0, 0, NULL, \{poSql});\n"
             this.acc.append s: line
+        }
+    }
+
+    # appendDecls -- one decl row per declaration and one decl_child row
+    # per namespace edge (the declaration tree the def indexer builds).
+    appendDecls: function {:this ast: Ast typing: ztyping.ZTyping} is {
+        n: typing.decls.length
+        did: u64
+        for did < n loop {
+            did = did + 1
+            dOpt: typing.decls.get key: did
+            match (
+                dOpt
+            ) case some then {
+                dnm: String
+                if dOpt.name > 0 then {
+                    dnB9: ast.names.texts.get i: (dOpt.name - 1).u64
+                    dnm = dnB9.copy
+                }
+                nameSql: sqlStr s: dnm.stringview
+                kn9: ztyping.declkindName k: dOpt.kind
+                kindSql: sqlStr s: kn9.stringview
+                row: "INSERT OR IGNORE INTO decl VALUES (\{did}, \{nameSql}, \{dOpt.parent}, \{kindSql}, \{dOpt.node}, \{dOpt.typeId});\n"
+                this.acc.append s: row
+                pos9: u64
+                cnt9: dOpt.children.length
+                for pos9 < cnt9 loop {
+                    ce9: dOpt.children.get i: pos9
+                    cnm: String
+                    if ce9.nameId > 0 then {
+                        cnB9: ast.names.texts.get i: (ce9.nameId - 1).u64
+                        cnm = cnB9.copy
+                    }
+                    cnSql: sqlStr s: cnm.stringview
+                    crow: "INSERT OR IGNORE INTO decl_child VALUES (\{did}, \{cnSql}, \{ce9.declId}, \{pos9});\n"
+                    this.acc.append s: crow
+                    pos9 = pos9 + 1
+                }
+            } case none then null
         }
     }
 
@@ -1491,6 +1532,7 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
         program
     ) case program then {
         d.appendTypeChildren ast: program.ast typing: symtab.typing
+        d.appendDecls ast: program.ast typing: symtab.typing
     } else null
     d.appendGenericChildren st: symtab
     d.appendGenericArgs st: symtab
