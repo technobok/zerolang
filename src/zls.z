@@ -1185,6 +1185,8 @@ Spans: class {
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: nAr9.stringview kind: 1
         } case labelvalue then {
             this.note id: n.nodeid line: n.lineno col: n.colno
+            nLb9: zast.nameTextCopy :ast ref: n.name
+            this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb9.stringview kind: 1
         } case stringchunk then {
             this.note id: n.nodeid line: n.lineno col: n.colno
         } case binop then {
@@ -1418,6 +1420,62 @@ useUnitDef: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
             g9
         ) case some then {
             return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+# the declaration id referenced at node `nid` (typing.refDecl), or 0.
+refDeclOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    match (
+        o
+    ) case some then {
+        g9: o.typing.refDecl.get key: nid
+        match (
+            g9
+        ) case some then {
+            return g9
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+# a declaration's defining AST node id, or 0.
+declNodeOf: function {o: (Option zenv.ZSymbolTable) declId: u64} out u64 is {
+    if declId == 0 then return 0
+    match (
+        o
+    ) case some then {
+        g9: o.typing.decls.get key: declId
+        match (
+            g9
+        ) case some then {
+            return g9.node.u64
+        } case none then {
+            return 0
+        }
+    } case none then {
+        return 0
+    }
+}
+
+# a declaration's minted type id, or 0.
+declTypeIdOf: function {o: (Option zenv.ZSymbolTable) declId: u64} out u64 is {
+    if declId == 0 then return 0
+    match (
+        o
+    ) case some then {
+        g9: o.typing.decls.get key: declId
+        match (
+            g9
+        ) case some then {
+            return g9.typeId
         } case none then {
             return 0
         }
@@ -2900,6 +2958,13 @@ navAnswer: function {
         if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
     }
     if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
+    # the Decl the reference resolved to (surface: a re-export keeps its
+    # own Decl); fills the type id for hits only the Decl layer knows
+    # (public-interface entries)
+    refDeclId9: refDeclOf o: snap.st nid: hnid
+    if refVid == 0 when refTid == 0 when refOwner == 0 then {
+        if refDeclId9 > 0 then refTid = declTypeIdOf o: snap.st declId: refDeclId9
+    }
 
     unitFsno9: u32
     if refVid == 0 when refTid == 0 then unitFsno9 = unitFsnoByName :snap name: hname.stringview
@@ -2921,6 +2986,9 @@ navAnswer: function {
         ud9: useUnitDef o: snap.st nid: tnid
         sigTid9: t9
         if ud9 > 0 then sigTid9 = ud9
+        # a hit only the Decl layer resolves (a public-interface entry)
+        # carries no node stamps; its Decl's type is the signature
+        if sigTid9 == 0 then sigTid9 = refTid
         body9: (fnSigTextOpt
             vfs: snap.vfs
             prog: snap.prog
@@ -2956,8 +3024,10 @@ navAnswer: function {
             }
         }
         docBody9: String
-        # append the `#` doc block above the definition, if any (cross-file ok)
-        dnd9: (defNodeOf
+        # append the `#` doc block above the definition, if any (cross-file
+        # ok). The reference's surface Decl wins (a bare `i64` reads core's
+        # re-export line); the canonical def node is the doc fallback.
+        legacyDnd9: (defNodeOf
             o: snap.st
             prog: snap.prog
             :refVid
@@ -2965,6 +3035,8 @@ navAnswer: function {
             :refOwner
             member: hname.stringview
         )
+        dnd9: declNodeOf o: snap.st declId: refDeclId9
+        if dnd9 == 0 then dnd9 = legacyDnd9
         if dnd9 > 0 then {
             dfs9: zcheck.fsnoFor r: snap nodeid: dnd9.u32.orPanic
             dpg9: sp.pos.get key: dnd9
@@ -2982,6 +3054,19 @@ navAnswer: function {
                             body9.append tc9
                         }
                     }
+                }
+            } case none then null
+        }
+        if docBody9.length == 0 when legacyDnd9 > 0 when legacyDnd9 != dnd9 then {
+            lfs9: zcheck.fsnoFor r: snap nodeid: legacyDnd9.u32.orPanic
+            lpg9: sp.pos.get key: legacyDnd9
+            match (
+                lpg9
+            ) case some then {
+                lln9: (lpg9 / 1048576).u32.orPanic
+                if lfs9 > 0 when lln9 > 1 then {
+                    ldoc9: docCommentForNode :snap fsno: lfs9 defLine: lln9
+                    if ldoc9.length > 0 then docBody9 = ldoc9
                 }
             } case none then null
         }
@@ -3031,7 +3116,17 @@ navAnswer: function {
         if unitFsno9 > 0 then {
             return (locationAtFileTop :snap fsno: unitFsno9 :docRel :docUri :srcDir :systemDir)
         }
-        dn9: defNodeOf o: snap.st prog: snap.prog :refVid :refTid :refOwner member: hname.stringview
+        dn9: declNodeOf o: snap.st declId: refDeclId9
+        if dn9 == 0 then {
+            dn9 = (defNodeOf
+                o: snap.st
+                prog: snap.prog
+                :refVid
+                :refTid
+                :refOwner
+                member: hname.stringview
+            )
+        }
         if dn9 == 0 then return Value.nul
         return (locationValue
             :snap
@@ -4246,6 +4341,7 @@ bareCalleeFuncId9: function {
         is9 = is9 - 1
     }
     if is9 == ws9 then return 0
+    idTxt9: (ltv.substring from: is9 to: ws9).string
     sub9: ltv.substring from: 0 to: is9
     cc9: sub9.count
     idCol9: cc9.u32.orPanic + 1
@@ -4258,13 +4354,19 @@ bareCalleeFuncId9: function {
         row9: sp.rows.get i: rix9
         if row9.line == l1u9 when row9.colLo <= idCol9 then {
             if idCol9 < row9.colHi then {
-                take9: false
-                if (found9) == false then take9 = true
-                if row9.kind == 2 when bk9 != 2 then take9 = true
-                if take9 then {
-                    leafNid9 = row9.nodeid
-                    bk9 = row9.kind
-                    found9 = true
+                # the walk spans every unit and rows carry no file id, so a
+                # same-line/column row from another file can collide; the
+                # identifier text disambiguates
+                nmR9: sp.names.get i: rix9
+                if nmR9.stringview == idTxt9.stringview then {
+                    take9: false
+                    if (found9) == false then take9 = true
+                    if row9.kind == 2 when bk9 != 2 then take9 = true
+                    if take9 then {
+                        leafNid9 = row9.nodeid
+                        bk9 = row9.kind
+                        found9 = true
+                    }
                 }
             }
         }
