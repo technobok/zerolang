@@ -959,15 +959,6 @@ indexUnitBody: function {
                 sk0: "\{unitName}.\{dn}"
                 uv0: unitIdx
                 ty.defNodeUnitIdx.set key: sk0 value: uv0
-                atgt0: dottedDefTarget :ast n: (ast.nodes.get i: (bm.operation - 1).u64)
-                if atgt0.length > 0 then {
-                    ak0: "\{unitName}.\{dn}"
-                    ty.funcAliases.set key: ak0 value: atgt0
-                    adn0: "\{unitName}.\{dn}"
-                    adnid0: nodeId n: (ast.nodes.get i: (bm.operation - 1).u64)
-                    adv0: adnid0.u64
-                    ty.aliasDefNode.set key: adn0 value: adv0
-                }
                 sk1: "\{unitName}.\{dn}"
                 bv1: bidx0
                 ty.defNodeBodyIdx.set key: sk1 value: bv1
@@ -6239,8 +6230,31 @@ descendIntoUnit: function {
 # Returns 0 when the name is not an indexed top-level def, so the caller keeps
 # its shell behavior.
 
+# reexportTargetOf -- the "unit.name" (or "Type.member") dotted target of
+# a re-export alias declaration, read off the alias Decl's own def node;
+# "" when the key names no indexed re-export.
+reexportTargetOf: function {ty: ztyping.ZTyping ast: Ast key: StringView} out String is {
+    dko9: ty.declOfDefKey.getv :key
+    match (
+        dko9
+    ) case some then {
+        do9: ty.decls.get key: dko9
+        match (
+            do9
+        ) case some then {
+            if do9.kind.reexportDecl then {
+                nop9: ast.nodes.get i: (do9.node - 1).u64
+                if nop9.namedoperation then {
+                    return (dottedDefTarget :ast n: (ast.nodes.get i: (nop9.operation - 1).u64))
+                }
+            }
+        } case none then null
+    } case none then null
+    return "".string
+}
+
 # resolveAliasKey -- single-minting for a unit-level re-export alias
-# ("unit.alias" recorded in funcAliases at index time): resolve the
+# (a reexportDecl in the Decl tree; target read off its def node): resolve the
 # TARGET's canonical id and reuse it -- the alias never mints its own
 # tid. Registers the unit child edge and the alias Decl's typeId so
 # every later lookup (childOf, resolveUnitChild, the Decl tree) sees
@@ -6254,15 +6268,7 @@ resolveAliasKey: function {
     name: StringView
 } out u64 is {
     ak9: "\{defUnit}.\{name}"
-    tgt9: String
-    {
-        fao9: ty.funcAliases.getv key: ak9.stringview
-        match (
-            fao9
-        ) case some then {
-            tgt9 = fao9.copy
-        } case none then null
-    }
+    tgt9: reexportTargetOf :ty :ast key: ak9.stringview
     if tgt9.length == 0 then return 0
     if (ty.resolving.has item: ak9) then return 0
     tu9: String
@@ -6278,6 +6284,36 @@ resolveAliasKey: function {
     ty.resolving.add item: gk9
     atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
     ty.resolving.delete item: ak9
+    typeRooted9: false
+    if atid9 == 0 then {
+        # a type-rooted target (`true: bool.true`): the root names a tagged
+        # type, the member one of its value arms -- the alias denotes a VALUE
+        # of the root type, so the edge binds the ROOT's tid
+        rto9: walkLookupTyperef :ast :ty :reg currentUnit: defUnit base: tu9.stringview
+        match (
+            rto9
+        ) case some then {
+            rtt9: reg.typetypeOf typeId: rto9
+            isTag9: false
+            if rtt9 == ztypes.ztypetype.variantType then isTag9 = true
+            if rtt9 == ztypes.ztypetype.unionType then isTag9 = true
+            if isTag9 then {
+                mo9: ty.childOf pool: ast.names parentTypeId: rto9 name: tn9.stringview
+                match (
+                    mo9
+                ) case some then {
+                    mtt9: reg.typetypeOf typeId: mo9
+                    isMem9: true
+                    if mtt9 == ztypes.ztypetype.functionType then isMem9 = false
+                    if mtt9 == ztypes.ztypetype.dataType then isMem9 = false
+                    if isMem9 then {
+                        atid9 = rto9
+                        typeRooted9 = true
+                    }
+                } case none then null
+            }
+        } case none then null
+    }
     if atid9 == 0 then return 0
     cud9: reg.unitNameTid.getv key: defUnit
     match (
@@ -6295,6 +6331,31 @@ resolveAliasKey: function {
     ) case some then {
         ty.declSetType declId: dko9 typeId: atid9
     } case none then null
+    if typeRooted9 then {
+        # the value alias's own dotted node resolves as a typeref to the
+        # root type post-demand (nav from the alias line into the tag type)
+        dnid9: u64
+        {
+            dko8: ty.declOfDefKey.getv key: ak9.stringview
+            match (
+                dko8
+            ) case some then {
+                do8: ty.decls.get key: dko8
+                match (
+                    do8
+                ) case some then {
+                    nop8: ast.nodes.get i: (do8.node - 1).u64
+                    if nop8.namedoperation then dnid9 = nop8.operation.u64
+                } case none then null
+            } case none then null
+        }
+        if dnid9 > 0 then {
+            ptn9: tu9.copy
+            ty.pendingTyperef.set key: dnid9 value: ptn9
+            ptu9: defUnit.string
+            ty.pendingTyperefUnit.set key: dnid9 value: ptu9
+        }
+    }
     return atid9
 }
 
@@ -6495,17 +6556,8 @@ resolveDef: function {
             reg.recordDemand name: acNm9.stringview
             reg.recordSeededDemand un: unitName name: acNm9.stringview
             tgtKey9: "\{apNm9}.\{acNm9}"
-            ark9: "\{unitName}.\{defName}"
-            # Record alias -> target; resolveTypeAliases repoints the alias to the
-            # target's canonical id once the demand fixpoint has resolved it. The
-            # target is usually still unresolved here, so the placeholder below would
-            # otherwise leave the alias a phantom RECORD shell (a second empty `Node`
-            # beside the real zast.Node union).
-            fk9: ark9.copy
-            fv9: tgtKey9.copy
-            ty.funcAliases.set key: fk9 value: fv9
-            # Use the canonical id if already resolved; else a shell placeholder
-            # (overwritten by resolveTypeAliases) so the demand fixpoint terminates.
+            # The alias target is read off the re-export Decl's node on demand
+            # (reexportTargetOf); resolution reuses the target's canonical id.
             if (ty.resolving.has item: tgtKey9) then {
                 aem9: "alias cycle: '\{unitName}.\{defName}' aliases '\{tgtKey9}' which is still resolving"
                 addResolveError :ty e: zast.err.typeError msg: aem9
@@ -6544,114 +6596,6 @@ resolveDef: function {
     ty.definedKeys.add item: dkk0
 }
 
-# resolveTypeAliases -- repoint each unit-level type alias (recorded in funcAliases
-# during resolveDef as "{unit}.{alias}" -> "{targetUnit}.{target}") to its target's
-# canonical type id, now that the cross-unit demand fixpoint has resolved targets.
-# Without this an alias whose target was unresolved when first walked stays bound to a
-# phantom RECORD shell (a second empty `Node` beside the real zast.Node union), which
-# breaks cross-unit return types and union-arm construction.
-resolveTypeAliases: function {ast: Ast ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry} is {
-    akeys9: (List String)
-    avals9: (List String)
-    with it: ty.funcAliases.iterateItems do for e: it loop {
-        ek9: e.key.copy
-        akeys9.append ek9
-        ev9: e.value.copy
-        avals9.append ev9
-    }
-    ai9: u64
-    an9: akeys9.length
-    for ai9 < an9 loop {
-        aek9: akeys9.get i: ai9
-        aev9: avals9.get i: ai9
-        ai9 = ai9 + 1
-        tgo: resolvedByKey :ast :ty :reg key: aev9.copy
-        match (
-            tgo
-        ) case some then {
-            tv: tgo
-            au: String
-            an: String
-            with skit: (aek9.stringview.split sep: ".") do for kseg: skit loop {
-                if au.length == 0 then {
-                    au = kseg.string
-                } else {
-                    an = kseg.string
-                }
-            }
-            uro: reg.unitNameTid.get key: au
-            match (
-                uro
-            ) case some then {
-                (ty.setChildId
-                    parentTypeId: uro
-                    nameId: (zast.poolFind pool: ast.names text: an.stringview).u64
-                    childTypeId: tv
-                )
-            } case none then null
-        } case none then {
-            vau: String
-            van: String
-            with vkit: (aek9.stringview.split sep: ".") do for vseg: vkit loop {
-                if vau.length == 0 then {
-                    vau = vseg.string
-                } else {
-                    van = vseg.string
-                }
-            }
-            vroot: String
-            vmem: String
-            with vvit: (aev9.stringview.split sep: ".") do for vvseg: vvit loop {
-                if vroot.length == 0 then {
-                    vroot = vvseg.string
-                } else {
-                    vmem = vvseg.string
-                }
-            }
-            tto: walkLookupTyperef :ast :ty :reg currentUnit: vau.stringview base: vroot.stringview
-            match (
-                tto
-            ) case some then {
-                memo: ty.childOf pool: ast.names parentTypeId: tto name: vmem.stringview
-                match (
-                    memo
-                ) case some then {
-                    rtt: reg.typetypeOf typeId: tto
-                    isTag: false
-                    if rtt == ztypes.ztypetype.variantType then isTag = true
-                    if rtt == ztypes.ztypetype.unionType then isTag = true
-                    if isTag then {
-                        mtt: reg.typetypeOf typeId: memo
-                        isMem: true
-                        if mtt == ztypes.ztypetype.functionType then isMem = false
-                        if mtt == ztypes.ztypetype.dataType then isMem = false
-                        if isMem then {
-                            vuro: reg.unitNameTid.get key: vau.copy
-                            match (
-                                vuro
-                            ) case some then {
-                                (ty.setChildId
-                                    parentTypeId: vuro
-                                    nameId: (zast.poolFind pool: ast.names text: van.stringview).u64
-                                    childTypeId: tto
-                                )
-                            } case none then null
-                            vno: ty.aliasDefNode.get key: aek9.copy
-                            match (
-                                vno
-                            ) case some then {
-                                vrn: vroot.copy
-                                ty.pendingTyperef.set key: vno value: vrn
-                                vun: vau.copy
-                                ty.pendingTyperefUnit.set key: vno value: vun
-                            } case none then null
-                        }
-                    }
-                } case none then null
-            } case none then null
-        }
-    }
-}
 
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
 # resolveUnitBody -- resolve a unit's definition signatures. Signature-only
@@ -7239,8 +7183,9 @@ seedIteratorDemands: function {reg: ztypes.ZTypeRegistry} is {
 # program can require without ever writing a resolvable reference to them.
 # Numeric scalars + tag back per-use literal shells (resolveAtomType mints
 # them by name; the canonical defs must exist as typedef/emission bases),
-# and bool backs core's true/false re-exports (resolveTypeAliases resolves
-# them against the already-resolved system.bool). Every other system type is
+# and bool backs core's true/false re-exports (the Decl probe resolves them
+# on first touch against the already-resolved system.bool). Every other system
+# type is
 # reached by reference descent at its first use.
 seedSystemDemands: function {reg: ztypes.ZTypeRegistry} is {
     reg.recordDemand name: "i8"
@@ -22664,7 +22609,13 @@ declSurfaceOfName: function {
 # its minted type id. 0 when the unit is unknown, the name is not an
 # indexed child, or the child's type is not yet declared -- callers
 # then fall to the declare-on-demand miss path exactly as before.
-declProbeUnitChildId: function {ty: ztyping.ZTyping uname: StringView nameId: u32} out u64 is {
+declProbeUnitChildId: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    uname: StringView
+    nameId: u32
+} out u64 is {
     if nameId == 0 then return 0
     ro9: ty.declOfDefKey.getv key: uname
     match (
@@ -22672,12 +22623,24 @@ declProbeUnitChildId: function {ty: ztyping.ZTyping uname: StringView nameId: u3
     ) case some then {
         cid9: ty.declFindChild parentDeclId: ro9 :nameId
         if cid9 == 0 then return 0
-        do9: ty.decls.get key: cid9
-        match (
-            do9
-        ) case some then {
-            return do9.typeId
-        } case none then null
+        ctid9: u64
+        isRx9: false
+        {
+            do9: ty.decls.get key: cid9
+            match (
+                do9
+            ) case some then {
+                ctid9 = do9.typeId
+                if do9.kind.reexportDecl then isRx9 = true
+            } case none then null
+        }
+        if ctid9 > 0 then return ctid9
+        if isRx9 then {
+            # a re-export not yet resolved: mint once through the alias,
+            # cache on the Decl (covers value re-exports like core.false)
+            nm9: zast.poolTextCopy pool: ast.names ref: nameId
+            return (resolveAliasKey :ty :reg :ast defUnit: uname name: nm9.stringview)
+        }
     } case none then null
     return 0
 }
@@ -22689,7 +22652,13 @@ walkUnitProbe9: function {
     uname: StringView
     base: StringView
 } out optionval u64 is {
-    dt9: declProbeUnitChildId :ty :uname nameId: (zast.poolFind pool: ast.names text: base)
+    dt9: (declProbeUnitChildId
+        :ty
+        :reg
+        :ast
+        :uname
+        nameId: (zast.poolFind pool: ast.names text: base)
+    )
     if dt9 > 0 then return (optionval.some dt9)
     uido: reg.unitNameTid.getv key: uname
     match (
@@ -22770,7 +22739,13 @@ resolveUnitChild: function {
     unitName: StringView
     name: StringView
 } out optionval u64 is {
-    dt9: declProbeUnitChildId :ty uname: unitName nameId: (zast.poolFind pool: ast.names text: name)
+    dt9: (declProbeUnitChildId
+        :ty
+        :reg
+        :ast
+        uname: unitName
+        nameId: (zast.poolFind pool: ast.names text: name)
+    )
     if dt9 > 0 then return (optionval.some dt9)
     ro: reg.unitNameTid.get key: unitName.string
     match (
@@ -22796,7 +22771,13 @@ resolveSystemChild: function {
     reg: ztypes.ZTypeRegistry
     name: StringView
 } out optionval u64 is {
-    dt9: declProbeUnitChildId :ty uname: "system" nameId: (zast.poolFind pool: ast.names text: name)
+    dt9: (declProbeUnitChildId
+        :ty
+        :reg
+        :ast
+        uname: "system"
+        nameId: (zast.poolFind pool: ast.names text: name)
+    )
     if dt9 > 0 then return (optionval.some dt9)
     if ty.systemUnitTid > 0 then {
         co: ty.childOf pool: ast.names parentTypeId: ty.systemUnitTid :name
@@ -22823,8 +22804,7 @@ walkUnitProbe9ById: function {
     uname: StringView
     baseId: u32
 } out optionval u64 is {
-    ast
-    dt9: declProbeUnitChildId :ty :uname nameId: baseId
+    dt9: declProbeUnitChildId :ty :reg :ast :uname nameId: baseId
     if dt9 > 0 then return (optionval.some dt9)
     uido: reg.unitNameTid.getv key: uname
     match (
@@ -22897,7 +22877,7 @@ resolveUnitChildById: function {
     unitName: StringView
     nameId: u32
 } out optionval u64 is {
-    dt9: declProbeUnitChildId :ty uname: unitName :nameId
+    dt9: declProbeUnitChildId :ty :reg :ast uname: unitName :nameId
     if dt9 > 0 then return (optionval.some dt9)
     ro: reg.unitNameTid.get key: unitName.string
     match (
@@ -22922,7 +22902,7 @@ resolveSystemChildById: function {
     reg: ztypes.ZTypeRegistry
     nameId: u32
 } out optionval u64 is {
-    dt9: declProbeUnitChildId :ty uname: "system" :nameId
+    dt9: declProbeUnitChildId :ty :reg :ast uname: "system" :nameId
     if dt9 > 0 then return (optionval.some dt9)
     if ty.systemUnitTid > 0 then {
         co: ty.childOfId parentTypeId: ty.systemUnitTid nameId: nameId.u64
@@ -23038,17 +23018,8 @@ resolvedByKey: function {
     # target walk does NOT recurse through this alias-follow, so it always terminates
     # and a cyclic alias (whose target never has a childOf edge) falls through to the
     # existing cycle diagnostic rather than being silently followed.
-    alTgt9: String
-    alHit9: false
-    {
-        ao: ty.funcAliases.getv key: key.stringview
-        match (
-            ao
-        ) case some then {
-            alTgt9 = ao.copy
-            alHit9 = true
-        } case none then null
-    }
+    alTgt9: reexportTargetOf :ty :ast key: key.stringview
+    alHit9: alTgt9.length > 0
     if alHit9 then {
         tgo: childOfWalk :ast :ty :reg key: alTgt9
         match (
@@ -23487,7 +23458,6 @@ typecheck: function {
     match (
         program
     ) case program then {
-        resolveTypeAliases ast: program.ast ty: st.typing reg: st.reg
         (fixupCustomTags
             ast: program.ast
             ty: st.typing
