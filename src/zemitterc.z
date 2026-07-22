@@ -921,16 +921,36 @@ dpTagReadOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
 }
 
 # memberOwnerOf9 -- the receiver's canonical type id for a dotted member
-# node; 0 when the path resolved through a non-member leg.
+# node (the member declaration's parent type via refDecl); 0 when the
+# path resolved through a non-member leg.
 memberOwnerOf9: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
-    go: symtab.typing.memberOwnerTid.get key: nid
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return 0
+    rdid9: u64
+    {
+        go: symtab.typing.refDecl.get key: nid
+        match (
+            go
+        ) case some then {
+            rdid9 = go
+        } case none then null
     }
+    if rdid9 == 0 then return 0
+    par9: u64
+    {
+        d9: symtab.typing.decls.get key: rdid9
+        match (
+            d9
+        ) case some then {
+            par9 = d9.parent
+        } case none then null
+    }
+    if par9 == 0 then return 0
+    p9: symtab.typing.decls.get key: par9
+    match (
+        p9
+    ) case some then {
+        if p9.kind.typeDecl then return p9.typeId
+    } case none then null
+    return 0
 }
 
 # matchDiverges -- true when a match node is stamped `never` (the typechecker's
@@ -1472,7 +1492,7 @@ emitNarrowedTakeZero: function {
 # implicitTakeSourceAtom -- the C move-source lvalue of a bare atom, decided by
 # the typechecker's stamps ALONE (the emitter never re-resolves a name; a local
 # may legitimately shadow a type). A local variable (atomVariableId) is a move
-# source; a def/type/fn reference (atomUnitDefId) is not; an atom the checker
+# source; a def/type/fn reference (refDecl) is not; an atom the checker
 # stamped as neither (e.g. a generator-promoted local, now instance state) is a
 # plain value and IS a move source.
 implicitTakeSourceAtom: function {
@@ -1487,7 +1507,7 @@ implicitTakeSourceAtom: function {
     ) case some then {
         return (takeSourceResolve :ctx name: nm)
     } case none then null
-    udo9: symtab.typing.atomUnitDefId.get key: nid
+    udo9: symtab.typing.refDecl.get key: nid
     match (
         udo9
     ) case some then {
@@ -6083,14 +6103,20 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # stamped tid; unstamped atoms (fn-mono template re-emission walks
         # the shared template AST) fall back to the name probe
         brid: u64
-        audo9: symtab.typing.atomUnitDefId.get key: n.nodeid.u64
-        match (
-            audo9
-        ) case some then {
-            brid = audo9
-        } case none then {
-            brid = userFnId :ast :symtab :ctx name: av
+        {
+            audo9: symtab.typing.refDecl.get key: n.nodeid.u64
+            match (
+                audo9
+            ) case some then {
+                d0x: symtab.typing.decls.get key: audo9
+                match (
+                    d0x
+                ) case some then {
+                    brid = d0x.typeId
+                } case none then null
+            } case none then null
         }
+        if brid == 0 then brid = userFnId :ast :symtab :ctx name: av
         if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
             btn: typeNameOfReg9 :symtab tid: brid
             cTypeLk1: cTypeOf name: btn.stringview

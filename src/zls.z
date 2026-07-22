@@ -1065,7 +1065,7 @@ codeOf: function {n: u32} out String is {
 # Positions are start-only in the AST; name-bearing leaves get a span
 # [colLo, colHi) in 1-based codepoint columns. Row kinds: 1 = bare atom
 # use, 2 = member access (nodeid is the DOTTED PATH's id, the
-# memberOwnerTid key; the name is the child atom's), 3 = binding name.
+# refDecl member declaration; the name is the child atom's), 3 = binding name.
 # `pos` records every node's start for def-target positioning.
 
 # one hit-testable span: a source range mapped to a resolvable reference.
@@ -1410,22 +1410,10 @@ useVarId: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
     }
 }
 
-# the unit-definition id referenced at node `nid`, or 0.
+# the unit-definition type id referenced at node `nid` (the referenced
+# declaration's minted tid via refDecl), or 0.
 useUnitDef: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
-    match (
-        o
-    ) case some then {
-        g9: o.typing.atomUnitDefId.get key: nid
-        match (
-            g9
-        ) case some then {
-            return g9
-        } case none then {
-            return 0
-        }
-    } case none then {
-        return 0
-    }
+    return (declTypeIdOf :o declId: (refDeclOf :o :nid))
 }
 
 # the declaration id referenced at node `nid` (typing.refDecl), or 0.
@@ -1484,16 +1472,32 @@ declTypeIdOf: function {o: (Option zenv.ZSymbolTable) declId: u64} out u64 is {
     }
 }
 
-# the owner type id of the member referenced at node `nid`, or 0.
+# the owner type id of the member referenced at node `nid` (the member
+# declaration's parent type via refDecl), or 0.
 memberOwnerOf: function {o: (Option zenv.ZSymbolTable) nid: u64} out u64 is {
+    rd9: refDeclOf :o :nid
+    if rd9 == 0 then return 0
+    par9: u64
     match (
         o
     ) case some then {
-        g9: o.typing.memberOwnerTid.get key: nid
+        d9: o.typing.decls.get key: rd9
         match (
-            g9
+            d9
         ) case some then {
-            return g9
+            par9 = d9.parent
+        } case none then null
+    } case none then null
+    if par9 == 0 then return 0
+    match (
+        o
+    ) case some then {
+        p9: o.typing.decls.get key: par9
+        match (
+            p9
+        ) case some then {
+            if p9.kind.typeDecl then return p9.typeId
+            return 0
         } case none then {
             return 0
         }

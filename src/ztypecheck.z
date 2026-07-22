@@ -6581,9 +6581,8 @@ resolveDef: function {
             }
             sda9: aid9
             ty.nodeType.set key: defn.nodeid.u64 value: sda9
-            # a cross-unit `unit.Type` alias carries its target tid for
-            # go-to-definition (dotted node; see the type-position stamp)
-            ty.atomUnitDefId.set key: defn.nodeid.u64 value: sda9
+            # a cross-unit `unit.Type` alias records its target's declaration
+            # for go-to-definition (dotted node; see the type-position stamp)
             stampRefDecl :ty nid: defn.nodeid.u64 declId: (declOfTypeId :reg tid: sda9)
         }
     } else null
@@ -9680,16 +9679,17 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                 ) case some then {
                     nid: uk
                     ty.nodeType.set key: nid value: r
-                    # every resolved type reference records the definition it
-                    # names, for go-to-definition (bare + dotted); codegen-inert
-                    # because a type-annotation atom is never emitted as an
-                    # expression (the emitter's only atomUnitDefId reader).
-                    ty.atomUnitDefId.set key: nid value: r
+                    # every resolved type reference records the declaration it
+                    # names (refDecl), for go-to-definition (bare + dotted);
+                    # codegen-inert -- a type-annotation atom is never emitted
+                    # as an expression.
+                    sfNmB9: zast.poolFind pool: program.ast.names text: pval9.stringview
                     sfB9: (declSurfaceOfName
                         :ty
                         :reg
+                        ast: program.ast
                         currentUnit: origin
-                        nameId: (zast.poolFind pool: program.ast.names text: pval9.stringview)
+                        nameId: sfNmB9
                         tid: r
                     )
                     stampRefDecl :ty :nid declId: sfB9
@@ -11861,7 +11861,7 @@ genericTypeConstruction: function {
                 ) then skipCr9 = true
             }
             # a skipped capacity: arg is still a value: check it so its
-            # atoms stamp (atomVariableId / atomUnitDefId) like any arg
+            # atoms stamp (atomVariableId / refDecl) like any arg
             if skipCr9 then {
                 (checkValue
                     :st
@@ -13651,10 +13651,8 @@ checkDotted: function {
             }
             setu9: result9
             stampGate :st nid: dp.nodeid.u64 tid: setu9
-            # record the resolved member so go-to-definition on a
+            # record the resolved declaration so go-to-definition on a
             # unit-qualified `unit.member` can locate its defining unit.
-            setud2: mo9
-            st.typing.atomUnitDefId.set key: dp.nodeid.u64 value: setud2
             udD9: u64
             udR9: st.typing.declOfDefKey.getv key: un9.stringview
             match (
@@ -13663,7 +13661,7 @@ checkDotted: function {
                 cnRef9: zast.poolFind pool: ast.names text: cn.stringview
                 udD9 = st.typing.declFindChild parentDeclId: udR9 nameId: cnRef9
             } case none then null
-            if udD9 == 0 then udD9 = declOfTypeId reg: st.reg tid: setud2
+            if udD9 == 0 then udD9 = declOfTypeId reg: st.reg tid: mo9
             stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: udD9
             return result9
         } case none then {
@@ -13774,8 +13772,6 @@ checkDotted: function {
             tat5: optU64Or o: (st.typing.tagAccessorTid.get key: bt) d: 0
             if tat5 > 0 then {
                 st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
-                setmo5: bt
-                st.typing.memberOwnerTid.set key: dp.nodeid.u64 value: setmo5
                 mD5: declMemberOf ty: st.typing reg: st.reg ownerTid: bt nameId: cnId9.u32.orPanic
                 stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD5
                 stampGate :st nid: dp.nodeid.u64 tid: tat5
@@ -13823,12 +13819,11 @@ checkDotted: function {
         mo
     ) case some then {
         # member-owner stamp: the use-site dotted path resolved a member of
-        # `bt` (field, method, or tagged arm). Tooling reads this for
-        # go-to-definition; the emitter reads it to gate the numeric-cast
-        # leg (a scalar-named member of a user type is not a conversion).
+        # `bt` (field, method, or tagged arm). Tooling reads the member's
+        # declaration for go-to-definition; the emitter derives the owner
+        # from it to gate the numeric-cast leg (a scalar-named member of a
+        # user type is not a conversion).
         if dp.nodeid > 0 when bt > 0 then {
-            setmo9: bt
-            st.typing.memberOwnerTid.set key: dp.nodeid.u64 value: setmo9
             mD9: declMemberOf ty: st.typing reg: st.reg ownerTid: bt nameId: cnId9.u32.orPanic
             stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD9
         }
@@ -14428,13 +14423,12 @@ checkAtomid: function {
                 }
                 setu: result
                 stampGate :st nid: node.nodeid.u64 tid: setu
-                # atom-use unit-def id: the DEF's tid (nodeType carries the
-                # auto-call RETURN type above, which is not the referent)
-                setud9: fo
-                st.typing.atomUnitDefId.set key: node.nodeid.u64 value: setud9
+                # atom-use def reference: the DEF's declaration (nodeType
+                # carries the auto-call RETURN type above, not the referent)
                 sfF9: (declSurfaceOfName
                     ty: st.typing
                     reg: st.reg
+                    :ast
                     currentUnit: unitName
                     nameId: node.name
                     tid: fo
@@ -17875,7 +17869,7 @@ checkCall: function {
             if dro == 0 then {
                 # unresolved dotted callable (a data block's `.index`): the
                 # call stays untyped, but its args are still values -- check
-                # them so their atoms stamp (atomVariableId / atomUnitDefId)
+                # them so their atoms stamp (atomVariableId / refDecl)
                 uwiter9: call.arguments.iterate
                 for uwArg9: uwiter9 loop {
                     uwa9: ast.nodes.get i: (uwArg9 - 1).u64
@@ -18607,11 +18601,10 @@ checkCall: function {
             # tooling: a bare callable resolving to a unit FUNCTION is a
             # def reference like any bare read (constructors excluded)
             if (isCtor) == false then {
-                setu9: funcId
-                st.typing.atomUnitDefId.set key: calid.u64 value: setu9
                 sfG9: (declSurfaceOfName
                     ty: st.typing
                     reg: st.reg
+                    :ast
                     currentUnit: unitName
                     nameId: (zast.poolFind pool: ast.names text: cn.stringview)
                     tid: funcId
@@ -22581,6 +22574,7 @@ declMemberOf: function {
 declSurfaceOfName: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
+    ast: Ast
     currentUnit: StringView
     nameId: u32
     tid: u64
@@ -22591,17 +22585,52 @@ declSurfaceOfName: function {
             ro9
         ) case some then {
             cd9: ty.declFindChild parentDeclId: ro9 :nameId
-            if cd9 > 0 then return cd9
+            sv9: declSurfaceEnsure9 :ty :reg :ast uname: currentUnit :nameId declId: cd9 want: tid
+            if sv9 > 0 then return sv9
         } case none then null
         co9: ty.declOfDefKey.getv key: "core"
         match (
             co9
         ) case some then {
             cd8: ty.declFindChild parentDeclId: co9 :nameId
-            if cd8 > 0 then return cd8
+            sv8: declSurfaceEnsure9 :ty :reg :ast uname: "core" :nameId declId: cd8 want: tid
+            if sv8 > 0 then return sv8
         } case none then null
     }
     return (declOfTypeId :reg :tid)
+}
+
+# declSurfaceEnsure9 -- accept a candidate surface Decl only when its
+# minted type id equals the reference's resolved tid, resolving a
+# not-yet-touched re-export on the spot -- a stamped surface must serve
+# both navigation (its node) and tid consumers like the emitter.
+declSurfaceEnsure9: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    uname: StringView
+    nameId: u32
+    declId: u64
+    want: u64
+} out u64 is {
+    if declId == 0 then return 0
+    dtid9: u64
+    isRx9: false
+    {
+        d9: ty.decls.get key: declId
+        match (
+            d9
+        ) case some then {
+            dtid9 = d9.typeId
+            if d9.kind.reexportDecl then isRx9 = true
+        } case none then null
+    }
+    if dtid9 == 0 when isRx9 then {
+        nm9: zast.poolTextCopy pool: ast.names ref: nameId
+        dtid9 = resolveAliasKey :ty :reg :ast defUnit: uname name: nm9.stringview
+    }
+    if dtid9 == want then return declId
+    return 0
 }
 
 # declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (by
@@ -23138,7 +23167,7 @@ canonShellTid: function {
 
 # canonicalizeShellNodeStamps -- checkBodies runs BEFORE the shell-child
 # canonicalization, so expression nodes typed through a then-shell edge
-# carry the shell id in nodeType (and memberOwnerTid / dpTaggedParent):
+# carry the shell id in nodeType (and dpTaggedParent):
 # the emitter reads receiver types from those stamps, and a shell has no
 # origin/children to dispatch on. Rebind them to the canonical type like
 # the child edges.
@@ -23159,22 +23188,6 @@ canonicalizeShellNodeStamps: function {ast: Ast st: zenv.ZSymbolTable mainName: 
         v9: vals9.get i: i9
         st.typing.nodeType.set key: k9 value: v9
         i9 = i9 + 1
-    }
-    mnids9: (List u64)
-    mvals9: (List u64)
-    with mt9: st.typing.memberOwnerTid.iterateItems do for m9: mt9 loop {
-        rid2: canonShellTid :ast :st :cache9 tid: m9.value :mainName
-        if rid2 > 0 then {
-            mnids9.append m9.key
-            mvals9.append rid2
-        }
-    }
-    j9: u64
-    for j9 < mnids9.length loop {
-        k2: mnids9.get i: j9
-        v2: mvals9.get i: j9
-        st.typing.memberOwnerTid.set key: k2 value: v2
-        j9 = j9 + 1
     }
     dnids9: (List u64)
     dvals9: (List u64)

@@ -2999,35 +2999,48 @@ Analysis: class {
             }
             if mainTid9 > 0 then {
                 usedE9: (Set u64)
-                refNames9: (List u32)
-                with a9: st.typing.atomUnitDefId.iterateItems do for e9: a9 loop {
-                    nid9: e9.key
-                    rn9: u32
+                # reference evidence off refDecl: a use of a unit-level def
+                # marks its unit child edge; a member use marks the member
+                # edge under the owning type's canonical tid
+                uNames9: (List u64)
+                mOwn9: (List u64)
+                mNms9: (List u64)
+                with a9: st.typing.refDecl.iterateItems do for e9: a9 loop {
+                    dNm9: u64
+                    dPar9: u64
                     {
-                        nd9: prog.ast.nodes.get i: (nid9 - 1).u64
+                        dlo9: st.typing.decls.get key: e9.value
                         match (
-                            nd9
-                        ) case atomid then {
-                            rn9 = nd9.name
-                        } case dottedpath then {
-                            chId9: nd9.child
-                            {
-                                ch9: prog.ast.nodes.get i: (chId9 - 1).u64
-                                match (
-                                    ch9
-                                ) case atomid then {
-                                    rn9 = ch9.name
-                                } else null
-                            }
-                        } else null
+                            dlo9
+                        ) case some then {
+                            dNm9 = dlo9.name.u64
+                            dPar9 = dlo9.parent
+                        } case none then null
                     }
-                    if rn9 > 0 then refNames9.append from: rn9
+                    if dPar9 > 0 when dNm9 > 0 then {
+                        pKindU9: false
+                        pTid9: u64
+                        {
+                            plo9: st.typing.decls.get key: dPar9
+                            match (
+                                plo9
+                            ) case some then {
+                                if plo9.kind.unitDecl then pKindU9 = true
+                                if plo9.kind.typeDecl then pTid9 = plo9.typeId
+                            } case none then null
+                        }
+                        if pKindU9 then uNames9.append from: dNm9
+                        if pTid9 > 0 then {
+                            mOwn9.append from: pTid9
+                            mNms9.append from: dNm9
+                        }
+                    }
                 }
-                rnI9: u64
-                for rnI9 < refNames9.length loop {
-                    rn9b: refNames9.get i: rnI9
-                    rnI9 = rnI9 + 1
-                    ceo9: st.typing.childNameIdOfId parentTypeId: mainTid9 nameId: rn9b.u64
+                unI9: u64
+                for unI9 < uNames9.length loop {
+                    un9b: uNames9.get i: unI9
+                    unI9 = unI9 + 1
+                    ceo9: st.typing.childNameIdOfId parentTypeId: mainTid9 nameId: un9b
                     match (
                         ceo9
                     ) case some then {
@@ -3053,38 +3066,12 @@ Analysis: class {
                         } case none then null
                     }
                 }
-                # member-access uses: a dotted path stamped with its owner
-                # type marks that type's member edge as referenced
-                moTids9: (List u64)
-                moNames9: (List u32)
-                astN9: prog.ast.nodes.length
-                with mo9: st.typing.memberOwnerTid.iterateItems do for me9: mo9 loop {
-                    mnid9: me9.key
-                    mnm9: u32
-                    if mnid9 <= astN9 then {
-                        mnd9: prog.ast.nodes.get i: (mnid9 - 1).u64
-                        match (
-                            mnd9
-                        ) case dottedpath then {
-                            mch9: prog.ast.nodes.get i: (mnd9.child - 1).u64
-                            match (
-                                mch9
-                            ) case atomid then {
-                                mnm9 = mch9.name
-                            } else null
-                        } else null
-                    }
-                    if mnm9 > 0 then {
-                        moTids9.append from: me9.value
-                        moNames9.append from: mnm9
-                    }
-                }
                 moI9: u64
-                for moI9 < moTids9.length loop {
-                    moTid9: moTids9.get i: moI9
-                    moNm9: moNames9.get i: moI9
+                for moI9 < mOwn9.length loop {
+                    moTid9: mOwn9.get i: moI9
+                    moNm9: mNms9.get i: moI9
                     moI9 = moI9 + 1
-                    meo9: st.typing.childNameIdOfId parentTypeId: moTid9 nameId: moNm9.u64
+                    meo9: st.typing.childNameIdOfId parentTypeId: moTid9 nameId: moNm9
                     match (
                         meo9
                     ) case some then {
