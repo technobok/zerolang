@@ -2343,19 +2343,6 @@ navWrapper: function {ast: Ast wId: u32 bidx: u64 member: StringView} out u64 is
     }
 }
 
-# resolve a member within a unit body for goto-definition.
-navBody: function {prog: zast.Node uidx: u64 bidx: u64 member: StringView} out u64 is {
-    match (
-        prog
-    ) case program then {
-        if uidx >= prog.ast.units.length then return 0
-        u9Id9: prog.ast.units.get i: uidx
-        return (navWrapper ast: prog.ast wId: u9Id9 :bidx :member)
-    } else {
-        return 0
-    }
-}
-
 # defNodeInfo -- the target nodeid for a top-level def (member == "")
 # or a named member inside it. Mono tids chase their generic origin.
 defNodeInfo: function {
@@ -2364,87 +2351,28 @@ defNodeInfo: function {
     tid: u64
     member: StringView
 } out u64 is {
-    key0: defKeyOfTid :o :tid
-    if key0.length == 0 then return 0
-    return (defNodeByKeyIn :o :prog key: key0.stringview :member)
-}
-
-# defKeyOfTid -- a type's "unit.name" def-finder key (mono tids chase
-# their generic origin); "" when the type has no source definition.
-# definedInUnit holds only the unit; the name comes from the registry.
-defKeyOfTid: function {o: (Option zenv.ZSymbolTable) tid: u64} out String is {
+    did9: u64
     match (
         o
     ) case some then {
-        t9: tid
-        tn9: String
-        rt9: o.reg.typeById.get key: t9
-        match (
-            rt9
-        ) case some then {
-            go9: rt9.genericOriginId
-            match (
-                go9
-            ) case some then {
-                t9 = go9
-            } case none then null
-        } case none then null
-        rt2: o.reg.typeById.get key: t9
-        match (
-            rt2
-        ) case some then {
-            tn9 = rt2.name.copy
-        } case none then null
-        if tn9.length == 0 then return "".string
-        ko9: o.typing.definedInUnit.get key: t9
-        match (
-            ko9
-        ) case some then {
-            k9: "\{ko9.stringview}.\{tn9.stringview}"
-            return k9
-        } case none then {
-            return "".string
-        }
-    } case none then {
-        return "".string
-    }
-}
-
-# defNodeByKeyIn -- target nodeid for a "unit.name" def-finder key.
-defNodeByKeyIn: function {
-    o: (Option zenv.ZSymbolTable)
-    prog: zast.Node
-    key: StringView
-    member: StringView
-} out u64 is {
+        did9 = ztypecheck.declOfTypeId reg: o.reg :tid
+    } case none then null
+    if did9 == 0 then return 0
+    if member.length == 0 then return (declNodeOf :o declId: did9)
     match (
-        o
-    ) case some then {
-        ui9: u64
-        bi9: u64
-        hasU9: false
-        hasB9: false
-        k1: key.string
-        ug9: o.typing.defNodeUnitIdx.get key: k1
+        prog
+    ) case program then {
+        mnid9: zast.poolFind pool: prog.ast.names text: member
+        if mnid9 == 0 then return 0
+        mdid9: u64
         match (
-            ug9
+            o
         ) case some then {
-            ui9 = ug9
-            hasU9 = true
+            mdid9 = o.typing.declFindChild parentDeclId: did9 nameId: mnid9
         } case none then null
-        k2: key.string
-        bg9: o.typing.defNodeBodyIdx.get key: k2
-        match (
-            bg9
-        ) case some then {
-            bi9 = bg9
-            hasB9 = true
-        } case none then null
-        if hasU9 when hasB9 then return (navBody :prog uidx: ui9 bidx: bi9 :member)
-        return 0
-    } case none then {
-        return 0
-    }
+        return (declNodeOf :o declId: mdid9)
+    } else null
+    return 0
 }
 
 # locationValue -- an LSP Location for a target node ({} miss -> nul).
