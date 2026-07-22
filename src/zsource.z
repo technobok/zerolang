@@ -4,6 +4,19 @@
 # reporter and (later) the fixer need. A full tier (project VFS + typecheck) is
 # added in Phase 2 for type-dependent rules.
 
+# Public interface -- the definitions other units may reference; all
+# other top-level definitions are private to this unit.
+public: unit {
+    :Analysis
+    :analyzeFileTiered
+    :analyzeSource
+    :lineDiffEdits
+    :renderDiff
+    :sourceParses
+    :unitNameOf
+    :wrapSource
+}
+
 Node: zast.Node
 Ast: zast.Ast
 
@@ -1234,6 +1247,56 @@ Analysis: class {
         }
     }
 
+    # checkPublicPosProgram -- L019 entry: check every unit's `public:` block placement.
+    checkPublicPosProgram: function {:this prog: Node} is {
+        match (
+            prog
+        ) case program then {
+            cui9: u64
+            cun9: prog.ast.units.length
+            for cui9 < cun9 loop {
+                cuid9: prog.ast.units.get i: cui9
+                this.checkPublicPosAt ast: prog.ast nId: cuid9
+                cui9 = cui9 + 1
+            }
+        } else null
+    }
+
+    # checkPublicPosAt -- L019: a unit's `public:` block must sit at the top,
+    # before any definition (only the file header comment may precede it).
+    checkPublicPosAt: function {:this ast: Ast nId: u32} is {
+        wn9: ast.nodes.get i: (nId - 1).u64
+        match (
+            wn9
+        ) case namedoperation then {
+            ud9: ast.nodes.get i: (wn9.operation - 1).u64
+            match (
+                ud9
+            ) case unitdef then {
+                sawDef9: false
+                with cbit9: ud9.body.iterate do for cbId9: cbit9 loop {
+                    mn9: ast.nodes.get i: (cbId9 - 1).u64
+                    match (
+                        mn9
+                    ) case namedoperation then {
+                        isPub9: zast.nameTextEq :ast ref: mn9.name s: "public"
+                        isPriv9: zast.nameTextEq :ast ref: mn9.name s: "private"
+                        if isPub9 when sawDef9 then {
+                            (this.warn
+                                code: "L019"
+                                msg: "the public interface block must be at the top of the unit, before any definition".string
+                                line: mn9.lineno
+                                col: mn9.colno
+                                width: 6
+                            )
+                        }
+                        if (isPub9 == false) when (isPriv9 == false) then sawDef9 = true
+                    } else null
+                }
+            } else null
+        } else null
+    }
+
     # hasDocAbove -- true when the source line directly above `line1` (1-based)
     # is a `#` comment line -- the start of a leading doc block.
     hasDocAbove: function {:this line1: u32} out bool is {
@@ -2037,6 +2100,7 @@ Analysis: class {
         )
         this.fastToks = tokenize.scan source: this.source.copy
         this.walkProgram prog: n
+        this.checkPublicPosProgram prog: n
         this.checkForWhile
         this.checkTrailingWs
         this.checkFinalNewline
@@ -4346,17 +4410,4 @@ wrapSource: function {source: StringView lineLength: u32} out String is {
         }
     }
     return cur
-}
-
-# Public interface -- the definitions other units may reference; all
-# other top-level definitions are private to this unit.
-public: unit {
-    :Analysis
-    :analyzeFileTiered
-    :analyzeSource
-    :lineDiffEdits
-    :renderDiff
-    :sourceParses
-    :unitNameOf
-    :wrapSource
 }
