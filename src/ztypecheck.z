@@ -1155,9 +1155,23 @@ indexDeclObjInner: function {ty: ztyping.ZTyping ast: Ast declId: u64 objNodeId:
         with iit9: ob9.isItems.iterate do for iId9: iit9 loop {
             in9: ast.nodes.get i: (iId9 - 1).u64
             if in9.namedoperation then {
-                mk9: ztyping.declkind.fieldDecl
-                if isArm9 then mk9 = ztyping.declkind.armDecl
-                ty.declNew name: in9.name parent: declId kind: mk9 node: in9.nodeid
+                if isArm9 then {
+                    (ty.declNew
+                        name: in9.name
+                        parent: declId
+                        kind: ztyping.declkind.armDecl
+                        node: in9.nodeid
+                    )
+                } else {
+                    (indexDeclAsMember
+                        :ty
+                        :ast
+                        parentDeclId: declId
+                        nameRef: in9.name
+                        nopNodeId: in9.nodeid
+                        opNodeId: in9.operation
+                    )
+                }
             }
         }
         with ait9: ob9.asItems.iterate do for aId9: ait9 loop {
@@ -6515,6 +6529,7 @@ resolveDef: function {
             # a cross-unit `unit.Type` alias carries its target tid for
             # go-to-definition (dotted node; see the type-position stamp)
             ty.atomUnitDefId.set key: defn.nodeid.u64 value: sda9
+            stampRefDecl :ty nid: defn.nodeid.u64 declId: (declOfTypeId :reg tid: sda9)
         }
     } else null
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
@@ -9722,6 +9737,14 @@ stampTyperefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                     # because a type-annotation atom is never emitted as an
                     # expression (the emitter's only atomUnitDefId reader).
                     ty.atomUnitDefId.set key: nid value: r
+                    sfB9: (declSurfaceOfName
+                        :ty
+                        :reg
+                        currentUnit: origin
+                        nameId: (zast.poolFind pool: program.ast.names text: pval9.stringview)
+                        tid: r
+                    )
+                    stampRefDecl :ty :nid declId: sfB9
                 } case none then {
                     # a signature typeref that resolves NOWHERE after every
                     # demand pass names a nonexistent type. Template param
@@ -13684,6 +13707,16 @@ checkDotted: function {
             # unit-qualified `unit.member` can locate its defining unit.
             setud2: mo9
             st.typing.atomUnitDefId.set key: dp.nodeid.u64 value: setud2
+            udD9: u64
+            udR9: st.typing.declOfDefKey.getv key: un9.stringview
+            match (
+                udR9
+            ) case some then {
+                cnRef9: zast.poolFind pool: ast.names text: cn.stringview
+                udD9 = st.typing.declFindChild parentDeclId: udR9 nameId: cnRef9
+            } case none then null
+            if udD9 == 0 then udD9 = declOfTypeId reg: st.reg tid: setud2
+            stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: udD9
             return result9
         } case none then {
             unc9: un9.copy
@@ -13764,12 +13797,14 @@ checkDotted: function {
     if btt5 == ztypes.ztypetype.unionType then isSum5 = true
     if isSum5 when (taggedRecvIsValue :ast :st n: (ast.nodes.get i: (dp.parent - 1).u64)) then {
         taHit5: false
-        tan5: st.typing.tagAccessorName.get key: bt
-        match (
-            tan5
-        ) case some then {
-            if tan5.stringview == cn.stringview then taHit5 = true
-        } case none then null
+        {
+            tan5: st.typing.tagAccessorName.get key: bt
+            match (
+                tan5
+            ) case some then {
+                if tan5.stringview == cn.stringview then taHit5 = true
+            } case none then null
+        }
         if taHit5 then {
             if st.typing.inAssignTarget then {
                 mro5: "'\{cn}' is read-only — the tag accessor cannot be assigned"
@@ -13793,6 +13828,8 @@ checkDotted: function {
                 st.typing.dpTagRead.set key: dp.nodeid.u64 value: bt
                 setmo5: bt
                 st.typing.memberOwnerTid.set key: dp.nodeid.u64 value: setmo5
+                mD5: declMemberOf ty: st.typing reg: st.reg ownerTid: bt nameId: cnId9.u32.orPanic
+                stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD5
                 stampGate :st nid: dp.nodeid.u64 tid: tat5
                 return tat5
             }
@@ -13844,6 +13881,8 @@ checkDotted: function {
         if dp.nodeid > 0 when bt > 0 then {
             setmo9: bt
             st.typing.memberOwnerTid.set key: dp.nodeid.u64 value: setmo9
+            mD9: declMemberOf ty: st.typing reg: st.reg ownerTid: bt nameId: cnId9.u32.orPanic
+            stampRefDecl ty: st.typing nid: dp.nodeid.u64 declId: mD9
         }
         # A subtype member named on a tagged TYPE (not a value of it, not the
         # tag, not a method) is a construction reference: record the dotted
@@ -14445,6 +14484,14 @@ checkAtomid: function {
                 # auto-call RETURN type above, which is not the referent)
                 setud9: fo
                 st.typing.atomUnitDefId.set key: node.nodeid.u64 value: setud9
+                sfF9: (declSurfaceOfName
+                    ty: st.typing
+                    reg: st.reg
+                    currentUnit: unitName
+                    nameId: node.name
+                    tid: fo
+                )
+                stampRefDecl ty: st.typing nid: node.nodeid.u64 declId: sfF9
                 maybeWalkMethods :st :unitName :ast :unitBody name: ndNm9.stringview
             } case none then null
         }
@@ -18614,6 +18661,14 @@ checkCall: function {
             if (isCtor) == false then {
                 setu9: funcId
                 st.typing.atomUnitDefId.set key: calid.u64 value: setu9
+                sfG9: (declSurfaceOfName
+                    ty: st.typing
+                    reg: st.reg
+                    currentUnit: unitName
+                    nameId: (zast.poolFind pool: ast.names text: cn.stringview)
+                    tid: funcId
+                )
+                stampRefDecl ty: st.typing nid: calid.u64 declId: sfG9
             }
             cm: st.pushCall
             lockRoot: (walkCallArgsHoist
@@ -22522,6 +22577,108 @@ lowerGeneratorItems: function {
 # where the index side (definingUnitFor) narrowed to current-unit + prelude.
 # walkUnitProbe9 -- one unit-scope probe of the typeref walk: none when the
 # unit is unknown or has no such child.
+
+
+# stampRefDecl -- record the declaration a reference node resolved to.
+stampRefDecl: function {ty: ztyping.ZTyping nid: u64 declId: u64} is {
+    if nid == 0 then return
+    if declId == 0 then return
+    ty.refDecl.set key: nid value: declId
+}
+
+# declOfTypeId -- the declaration that minted type `tid` (ZType.def); a
+# mono derives its home through genericOriginId -> the template's Decl.
+declOfTypeId: function {reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
+    cur9: tid
+    hops9: u64
+    for cur9 > 0 while hops9 < 8 loop {
+        next9: u64
+        zo9: reg.typeById.get key: cur9
+        match (
+            zo9
+        ) case some then {
+            if zo9.def > 0 then return zo9.def
+            go9: zo9.genericOriginId
+            match (
+                go9
+            ) case some then {
+                next9 = go9
+            } case none then null
+        } case none then null
+        cur9 = next9
+        hops9 = hops9 + 1
+    }
+    return 0
+}
+
+# declMemberOf -- the Decl of member `nameId` under the type that minted
+# `ownerTid` (monos resolve through their template's Decl); 0 when the
+# owner has no Decl or no such indexed member.
+declMemberOf: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ownerTid: u64
+    nameId: u32
+} out u64 is {
+    od9: declOfTypeId :reg tid: ownerTid
+    if od9 == 0 then return 0
+    return (ty.declFindChild parentDeclId: od9 :nameId)
+}
+
+# declSurfaceOfName -- the Decl a bare-name reference lands on: the
+# current unit's own def, else the prelude carrier's (core's) re-export,
+# else the definition that minted the resolved type. The SURFACE is
+# recorded (a re-export keeps its own Decl) so navigation lands where
+# the name was found, not where its type lives.
+declSurfaceOfName: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    currentUnit: StringView
+    nameId: u32
+    tid: u64
+} out u64 is {
+    if nameId > 0 then {
+        ro9: ty.declOfDefKey.getv key: currentUnit
+        match (
+            ro9
+        ) case some then {
+            cd9: ty.declFindChild parentDeclId: ro9 :nameId
+            if cd9 > 0 then return cd9
+        } case none then null
+        co9: ty.declOfDefKey.getv key: "core"
+        match (
+            co9
+        ) case some then {
+            cd8: ty.declFindChild parentDeclId: co9 :nameId
+            if cd8 > 0 then return cd8
+        } case none then null
+    }
+    return (declOfTypeId :reg :tid)
+}
+
+# declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (by
+# bare unit name in declOfDefKey) -> direct child (by pool name id) ->
+# its minted type id. 0 when the unit is unknown, the name is not an
+# indexed child, or the child's type is not yet declared -- callers
+# then fall to the declare-on-demand miss path exactly as before.
+declProbeUnitChildId: function {ty: ztyping.ZTyping uname: StringView nameId: u32} out u64 is {
+    if nameId == 0 then return 0
+    ro9: ty.declOfDefKey.getv key: uname
+    match (
+        ro9
+    ) case some then {
+        cid9: ty.declFindChild parentDeclId: ro9 :nameId
+        if cid9 == 0 then return 0
+        do9: ty.decls.get key: cid9
+        match (
+            do9
+        ) case some then {
+            return do9.typeId
+        } case none then null
+    } case none then null
+    return 0
+}
+
 walkUnitProbe9: function {
     ast: Ast
     ty: ztyping.ZTyping
@@ -22529,6 +22686,8 @@ walkUnitProbe9: function {
     uname: StringView
     base: StringView
 } out optionval u64 is {
+    dt9: declProbeUnitChildId :ty :uname nameId: (zast.poolFind pool: ast.names text: base)
+    if dt9 > 0 then return (optionval.some dt9)
     uido: reg.unitNameTid.getv key: uname
     match (
         uido
@@ -22608,6 +22767,8 @@ resolveUnitChild: function {
     unitName: StringView
     name: StringView
 } out optionval u64 is {
+    dt9: declProbeUnitChildId :ty uname: unitName nameId: (zast.poolFind pool: ast.names text: name)
+    if dt9 > 0 then return (optionval.some dt9)
     ro: reg.unitNameTid.get key: unitName.string
     match (
         ro
@@ -22632,6 +22793,8 @@ resolveSystemChild: function {
     reg: ztypes.ZTypeRegistry
     name: StringView
 } out optionval u64 is {
+    dt9: declProbeUnitChildId :ty uname: "system" nameId: (zast.poolFind pool: ast.names text: name)
+    if dt9 > 0 then return (optionval.some dt9)
     if ty.systemUnitTid > 0 then {
         co: ty.childOf pool: ast.names parentTypeId: ty.systemUnitTid :name
         match (
@@ -22658,6 +22821,8 @@ walkUnitProbe9ById: function {
     baseId: u32
 } out optionval u64 is {
     ast
+    dt9: declProbeUnitChildId :ty :uname nameId: baseId
+    if dt9 > 0 then return (optionval.some dt9)
     uido: reg.unitNameTid.getv key: uname
     match (
         uido
@@ -22729,6 +22894,8 @@ resolveUnitChildById: function {
     unitName: StringView
     nameId: u32
 } out optionval u64 is {
+    dt9: declProbeUnitChildId :ty uname: unitName :nameId
+    if dt9 > 0 then return (optionval.some dt9)
     ro: reg.unitNameTid.get key: unitName.string
     match (
         ro
@@ -22752,6 +22919,8 @@ resolveSystemChildById: function {
     reg: ztypes.ZTypeRegistry
     nameId: u32
 } out optionval u64 is {
+    dt9: declProbeUnitChildId :ty uname: "system" :nameId
+    if dt9 > 0 then return (optionval.some dt9)
     if ty.systemUnitTid > 0 then {
         co: ty.childOfId parentTypeId: ty.systemUnitTid nameId: nameId.u64
         match (

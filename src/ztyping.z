@@ -191,6 +191,9 @@ Decl: class {
     node: u32
     typeId: u64
     children: (List declchild)
+    # derived nameId -> declId accelerator over `children`, backfilled when
+    # the namespace outgrows a linear scan (bucketScanMax); not dumped
+    byName: (Map u64 value: u64)
 }
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
@@ -414,6 +417,7 @@ ZTyping: class {
             :node
             typeId: 0
             children: (List declchild)
+            byName: (Map u64 value: u64)
         )
         if parent > 0 then this.declAddChildEdge parentDeclId: parent nameId: name childDeclId: id
         return id
@@ -428,6 +432,7 @@ ZTyping: class {
             po9
         ) case some then {
             po9.children.append (declchild :nameId declId: childDeclId)
+            if po9.byName.length > 0 then po9.byName.set key: nameId.u64 value: childDeclId
         } case none then null
     }
 
@@ -450,8 +455,22 @@ ZTyping: class {
         match (
             po9
         ) case some then {
-            with cit9: po9.children.iterate do for c9: cit9 loop {
-                if c9.nameId == nameId then found9 = c9.declId
+            if po9.children.length > bucketScanMax then {
+                if po9.byName.length == 0 then {
+                    with cit8: po9.children.iterate do for c8: cit8 loop {
+                        po9.byName.set key: c8.nameId.u64 value: c8.declId
+                    }
+                }
+                bo9: po9.byName.get key: nameId.u64
+                match (
+                    bo9
+                ) case some then {
+                    found9 = bo9
+                } case none then null
+            } else {
+                with cit9: po9.children.iterate do for c9: cit9 loop {
+                    if c9.nameId == nameId then found9 = c9.declId
+                }
             }
         } case none then null
         return found9
