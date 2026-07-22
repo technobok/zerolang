@@ -724,18 +724,6 @@ typesCompatible: function {
             cur9 = nb9
         }
     }
-    # Last resort (only when the id-based checks all fail): cross-unit instances
-    # of one type get distinct tids -- a generic template is monomorphized per
-    # unit, and a unit-qualified alias (`tokenize.Token`) resolves apart from
-    # its target (`zlexer.Token`), so `List tokenize.Token` and `List Token`
-    # diverge by tid yet denote the same type and emitted struct. The structural
-    # name is the canonical signature (it encodes the full instantiation and
-    # collapses aliases), so equal non-empty names are the same type.
-    anA9: typeNameOf :st tid: a
-    if anA9.length > 0 then {
-        anB9: typeNameOf :st tid: b
-        if anA9.stringview == anB9.stringview then return true
-    }
     return false
 }
 
@@ -1563,35 +1551,8 @@ resolveNamedType: function {
             ) case some then {
                 return ex7
             } case none then null
-            k7c: "\{duo7}.\{name}"
-            fa7: ty.funcAliases.get key: k7c
-            match (
-                fa7
-            ) case some then {
-                ap7: String
-                ac7: String
-                with sit7: (fa7.stringview.split sep: ".") do for seg7: sit7 loop {
-                    if ap7.length == 0 then {
-                        ap7 = seg7.string
-                    } else {
-                        ac7 = seg7.string
-                    }
-                }
-                dtk7: "\{ap7}.\{ac7}"
-                tt7: ty.defTypetype.get key: dtk7
-                match (
-                    tt7
-                ) case some then {
-                    return (declareCanonicalType
-                        :ast
-                        :ty
-                        :reg
-                        defUnit: ap7.stringview
-                        name: ac7.stringview
-                        typetype: tt7
-                    )
-                } case none then null
-            } case none then null
+            al7: resolveAliasKey :ty :reg :ast defUnit: duo7.stringview :name
+            if al7 > 0 then return al7
             return (reg.newType :name typetype: ztypes.ztypetype.recordType)
         }
     } else {
@@ -6260,6 +6221,66 @@ descendIntoUnit: function {
 # (in-progress) or already-resolved target returns it without re-descending.
 # Returns 0 when the name is not an indexed top-level def, so the caller keeps
 # its shell behavior.
+
+# resolveAliasKey -- single-minting for a unit-level re-export alias
+# ("unit.alias" recorded in funcAliases at index time): resolve the
+# TARGET's canonical id and reuse it -- the alias never mints its own
+# tid. Registers the unit child edge and the alias Decl's typeId so
+# every later lookup (childOf, resolveUnitChild, the Decl tree) sees
+# the one canonical id. Returns 0 when the key is not an alias, the
+# alias is mid-follow (a cycle), or the target cannot resolve yet.
+resolveAliasKey: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    defUnit: StringView
+    name: StringView
+} out u64 is {
+    ak9: "\{defUnit}.\{name}"
+    tgt9: String
+    {
+        fao9: ty.funcAliases.getv key: ak9.stringview
+        match (
+            fao9
+        ) case some then {
+            tgt9 = fao9.copy
+        } case none then null
+    }
+    if tgt9.length == 0 then return 0
+    if (ty.resolving.has item: ak9) then return 0
+    tu9: String
+    tn9: String
+    with sit9: (tgt9.stringview.split sep: ".") do for seg9: sit9 loop {
+        if tu9.length == 0 then {
+            tu9 = seg9.string
+        } else {
+            tn9 = seg9.string
+        }
+    }
+    gk9: ak9.copy
+    ty.resolving.add item: gk9
+    atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
+    ty.resolving.delete item: ak9
+    if atid9 == 0 then return 0
+    cud9: reg.unitNameTid.getv key: defUnit
+    match (
+        cud9
+    ) case some then {
+        (ty.setChildId
+            parentTypeId: cud9
+            nameId: (ast.internString text: name).u64
+            childTypeId: atid9
+        )
+    } case none then null
+    dko9: ty.declOfDefKey.getv key: ak9.stringview
+    match (
+        dko9
+    ) case some then {
+        ty.declSetType declId: dko9 typeId: atid9
+    } case none then null
+    return atid9
+}
+
 descendNamed: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
@@ -6280,6 +6301,10 @@ descendNamed: function {
     } case none then null
     tid9: u64
     if classified9 then tid9 = declareCanonicalType :ast :ty :reg :defUnit :name typetype: ttv9
+    if classified9 == false then {
+        alo9: resolveAliasKey :ty :reg :ast :defUnit :name
+        if alo9 > 0 then return alo9
+    }
     dk9a: "\{defUnit}.\{name}"
     if (ty.definedKeys.has item: dk9a) then return tid9
     dk9b: "\{defUnit}.\{name}"
