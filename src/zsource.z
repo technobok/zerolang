@@ -3114,6 +3114,73 @@ Analysis: class {
                         bodyIds9: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp9
                         with bit9: bodyIds9.iterate do for mid9: bit9 loop memIds9.append from: mid9
                     }
+                    # syntactic fallback evidence: stamps exist only for
+                    # bodies the demand walk checked, so a private def used
+                    # only inside an unchecked body (a construction in a
+                    # never-demanded factory) would read as dead. Any atomid
+                    # in the unit's own file segment is a reference. The
+                    # unit's wrapper nodes are minted after its file segment
+                    # closes, so the first body member -- not the unitdef --
+                    # probes for the segment.
+                    probe9: u32
+                    if memIds9.length > 0 then probe9 = memIds9.get i: 0
+                    segStart9: u32
+                    segEnd9: u32
+                    sgN9: prog.ast.fileSegs.length
+                    {
+                        sgI9: u64
+                        for sgI9 < sgN9 loop {
+                            sg9: prog.ast.fileSegs.get i: sgI9
+                            sgI9 = sgI9 + 1
+                            if probe9 >= sg9.startId when probe9 < sg9.endId then {
+                                narrower9: segEnd9 == segStart9
+                                if (sg9.endId - sg9.startId) < (segEnd9 - segStart9) then narrower9 = true
+                                if narrower9 then {
+                                    segStart9 = sg9.startId
+                                    segEnd9 = sg9.endId
+                                }
+                            }
+                        }
+                    }
+                    refNameSet9: (Set u64)
+                    if segEnd9 > segStart9 then {
+                        ndI9: segStart9.u64
+                        for ndI9 < segEnd9.u64 loop {
+                            nd0: prog.ast.nodes.get i: (ndI9 - 1).u64
+                            match (
+                                nd0
+                            ) case atomid then {
+                                refNameSet9.add item: nd0.name.u64
+                            } else null
+                            ndI9 = ndI9 + 1
+                        }
+                    } else {
+                        # no segment covers the unit body: it is the root
+                        # parse (only subunit loads append segments), so
+                        # scan the nodes no segment covers.
+                        totN9: prog.ast.nodes.length
+                        ndJ9: u64
+                        for ndJ9 < totN9 loop {
+                            ndJ9 = ndJ9 + 1
+                            covered9: false
+                            {
+                                sgJ9: u64
+                                for sgJ9 < sgN9 loop {
+                                    sgB9: prog.ast.fileSegs.get i: sgJ9
+                                    sgJ9 = sgJ9 + 1
+                                    if ndJ9 >= sgB9.startId.u64 when ndJ9 < sgB9.endId.u64 then covered9 = true
+                                }
+                            }
+                            if covered9 == false then {
+                                ndB0: prog.ast.nodes.get i: (ndJ9 - 1)
+                                match (
+                                    ndB0
+                                ) case atomid then {
+                                    refNameSet9.add item: ndB0.name.u64
+                                } else null
+                            }
+                        }
+                    }
                     mN9: memIds9.length
                     mI9: u64
                     for mI9 < mN9 loop {
@@ -3147,7 +3214,9 @@ Analysis: class {
                                         priv9 = pr9
                                     } case none then null
                                 }
-                                if priv9 when (usedE9.has item: ceoD9) == false then {
+                                unref9: (usedE9.has item: ceoD9) == false
+                                if unref9 then unref9 = (refNameSet9.has item: mNameRef9.u64) == false
+                                if priv9 when unref9 then {
                                     dnm9: zast.poolTextCopy pool: prog.ast.names ref: mNameRef9
                                     (this.warn
                                         code: "L012"
