@@ -1733,6 +1733,134 @@ paramDocs: function {
     return result9
 }
 
+# paramStartsLine -- true when the source line `line1` (1-based) of file `fsno`,
+# leading whitespace removed, begins with `name` -- the parameter starts its own
+# line rather than sharing the function-head line with the name.
+paramStartsLine: function {vfs: zvfs.ZVfs fsno: u32 line1: u32 name: StringView} out bool is {
+    result9: false
+    if line1 == 0 then return result9
+    lg9: vfs.getline dentryid: fsno lineno: (line1 - 1).u64
+    match (
+        lg9
+    ) case some then {
+        lv9: lg9.stringview
+        tl9: lv9.trimStart
+        if tl9.startsWith name then result9 = true
+    } case none then null
+    return result9
+}
+
+# paramLeadDocs -- map of parameter name -> the contiguous `#` doc block on the
+# lines directly above the parameter's declaration, read from source. A block is
+# taken only for a parameter that starts its own source line; a parameter sharing
+# the function-head line or a preceding parameter's line has no line of its own
+# above it. Empty when no parameter carries a leading block.
+paramLeadDocs: function {
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    vfs: zvfs.ZVfs
+    tid: u64
+} out (Map String value: String) is {
+    result9: (Map String value: String)
+    defNid9: defNodeInfo :o :prog :tid member: ""
+    if defNid9 == 0 then return result9
+    fnNid9: u32
+    {
+        match (
+            prog
+        ) case program then {
+            wn9: prog.ast.nodes.get i: (defNid9 - 1).u64
+            match (
+                wn9
+            ) case namedoperation then {
+                fnNid9 = wn9.operation
+            } else null
+        } else null
+    }
+    if fnNid9 == 0 then return result9
+    fsno9: u32
+    {
+        match (
+            prog
+        ) case program then {
+            fsno9 = prog.ast.fsnoForNode nodeid: fnNid9
+        } else null
+    }
+    if fsno9 == 0 then return result9
+    paramIds9: (List u32)
+    {
+        match (
+            prog
+        ) case program then {
+            fd9: prog.ast.nodes.get i: (fnNid9 - 1).u64
+            match (
+                fd9
+            ) case functiondef then {
+                with pit9: fd9.parameters.iterate do for pid9: pit9 loop paramIds9.append pid9
+            } else null
+        } else null
+    }
+    pnms9: (List String)
+    plns9: (List u32)
+    pk9: u64
+    for pk9 < paramIds9.length loop {
+        pid9: paramIds9.get i: pk9
+        nameRef9: u32
+        ln9: u32
+        {
+            match (
+                prog
+            ) case program then {
+                pnode9: prog.ast.nodes.get i: (pid9 - 1).u64
+                match (
+                    pnode9
+                ) case namedoperation then {
+                    nameRef9 = pnode9.name
+                    ln9 = pnode9.lineno
+                } else null
+            } else null
+        }
+        if nameRef9 > 0 then {
+            match (
+                prog
+            ) case program then {
+                nm9: zast.nameTextCopy ast: prog.ast ref: nameRef9
+                pnms9.append nm9
+                plns9.append ln9
+            } else null
+        }
+        pk9 = pk9 + 1
+    }
+    ci9: u64
+    cn9: pnms9.length
+    for ci9 < cn9 loop {
+        firstOnLine9: true
+        if ci9 > 0 then {
+            thisLn9: plns9.get i: ci9
+            prevLn9: plns9.get i: (ci9 - 1)
+            if prevLn9 == thisLn9 then firstOnLine9 = false
+        }
+        if firstOnLine9 then {
+            curLn9: plns9.get i: ci9
+            startsOwn9: (paramStartsLine
+                :vfs
+                fsno: fsno9
+                line1: curLn9
+                name: (pnms9.get i: ci9).stringview
+            )
+            if startsOwn9 then {
+                blk9: docBlockAboveOf :vfs fsno: fsno9 line1: curLn9
+                if blk9.length > 0 then {
+                    kk9: (pnms9.get i: ci9).copy
+                    result9.set key: kk9 value: blk9
+                }
+            }
+        }
+        ci9 = ci9 + 1
+    }
+    return result9
+}
+
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
 fnSigTextOpt: function {
@@ -1743,6 +1871,7 @@ fnSigTextOpt: function {
     name: StringView
 } out String is {
     docs9: paramDocs :o :prog :vfs :tid
+    leads9: paramLeadDocs :o :prog :vfs :tid
     match (
         o
     ) case some then {
@@ -1847,10 +1976,12 @@ fnSigTextOpt: function {
         }
         # one line, or param-per-line (zl fmt >100-col style) when too long.
         pdocs9: (List String)
+        pleads9: (List String)
         hasDocs9: false
         pdi9: u64
         for pdi9 < pnames9.length loop {
             pdc9: String
+            plc9: String
             {
                 pn0: pnames9.get i: pdi9
                 dgot9: docs9.get key: pn0
@@ -1859,9 +1990,17 @@ fnSigTextOpt: function {
                 ) case some then {
                     pdc9 = dgot9.copy
                 } case none then null
+                lgot9: leads9.get key: pn0
+                match (
+                    lgot9
+                ) case some then {
+                    plc9 = lgot9.copy
+                } case none then null
             }
             if pdc9.length > 0 then hasDocs9 = true
+            if plc9.length > 0 then hasDocs9 = true
             pdocs9.append pdc9
+            pleads9.append plc9
             pdi9 = pdi9 + 1
         }
         one9: name.string
@@ -1883,6 +2022,27 @@ fnSigTextOpt: function {
         wrap9.append ": function {"
         wi9: u64
         for wi9 < pdisp9.length loop {
+            wlb9: pleads9.get i: wi9
+            if wlb9.length > 0 then {
+                wlv9: wlb9.stringview
+                wrap9.appendByte b: 10
+                wrap9.append "    # "
+                wbj9: u64
+                for wbj9 < wlv9.length loop {
+                    wcb9: wlv9.byteAt i: wbj9
+                    match (
+                        wcb9
+                    ) case some then {
+                        if wcb9 == 10 then {
+                            wrap9.appendByte b: 10
+                            wrap9.append "    # "
+                        } else {
+                            wrap9.appendByte b: wcb9
+                        }
+                    } case none then null
+                    wbj9 = wbj9 + 1
+                }
+            }
             wrap9.appendByte b: 10
             wrap9.append "    "
             wrap9.append (pdisp9.get i: wi9)
@@ -2328,17 +2488,16 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: u32 line1: u32} out String is {
     return result9
 }
 
-# docCommentForNode -- the contiguous `#` comment block immediately above the
-# definition at `defLine` (1-based) in file `fsno`, each line stripped of its
-# leading "# " and joined top-to-bottom by newlines; "" when there is none.
-# Reads through the vfs, so a definition in another unit works too.
-docCommentForNode: function {snap: zcheck.CheckResult fsno: u32 defLine: u32} out String is {
-    if defLine <= 1 then return "".string
+# docBlockAboveOf -- the contiguous `#` comment block immediately above `line1`
+# (1-based) in file `fsno`, each line stripped of its leading "# " and joined
+# top-to-bottom by newlines; "" when there is none. Reads through the vfs.
+docBlockAboveOf: function {vfs: zvfs.ZVfs fsno: u32 line1: u32} out String is {
+    if line1 <= 1 then return "".string
     acc9: (List String)
-    k9: defLine
+    k9: line1
     for k9 > 1 loop {
         k9 = k9 - 1
-        lg9: snap.vfs.getline dentryid: fsno lineno: (k9 - 1).u64
+        lg9: vfs.getline dentryid: fsno lineno: (k9 - 1).u64
         stop9: false
         match (
             lg9
@@ -2372,6 +2531,14 @@ docCommentForNode: function {snap: zcheck.CheckResult fsno: u32 defLine: u32} ou
         out9.append dl9
     }
     return out9
+}
+
+# docCommentForNode -- the contiguous `#` comment block immediately above the
+# definition at `defLine` (1-based) in file `fsno`; "" when there is none.
+# Reads through the vfs, so a definition in another unit works too.
+docCommentForNode: function {snap: zcheck.CheckResult fsno: u32 defLine: u32} out String is {
+    r9: docBlockAboveOf vfs: snap.vfs :fsno line1: defLine
+    return r9
 }
 
 # unitFsnoByName -- the vfs dentry id of the file for the unit named
