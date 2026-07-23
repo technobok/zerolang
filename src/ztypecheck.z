@@ -911,7 +911,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                 )
                 ty.unitRootDecl.set key: uidx0 value: udid9
                 udk9: unm9.copy
-                ty.declOfDefKey.set key: udk9 value: udid9
+                ty.unitRootByName.set key: udk9 value: udid9
                 utl9: reg.unitNameTid.getv key: unm9.stringview
                 match (
                     utl9
@@ -922,7 +922,6 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                 (indexUnitBody
                     :ty
                     ast: program.ast
-                    unitName: unm9.stringview
                     unitopId: opId9
                     unitDeclId: udid9
                 )
@@ -937,7 +936,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
             pxt9: ty.declProxyTids.get i: px9
             pxu9: ty.declProxyUnits.get i: px9
             px9 = px9 + 1
-            pxr9: ty.declOfDefKey.getv key: pxu9.stringview
+            pxr9: ty.unitRootByName.getv key: pxu9.stringview
             match (
                 pxr9
             ) case some then {
@@ -970,7 +969,14 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
             if unl9 then {
                 cnm9: regTypeNameOf :reg tid: cu9
                 if cnm9.length > 0 then {
-                    linkDeclType :ty :reg defUnit: "system" name: cnm9.stringview tid: cu9
+                    (linkDeclType
+                        :ty
+                        :reg
+                        ast: program.ast
+                        defUnit: "system"
+                        name: cnm9.stringview
+                        tid: cu9
+                    )
                 }
             }
             cu9 = cu9 + 1
@@ -983,7 +989,6 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
 indexUnitBody: function {
     ty: ztyping.ZTyping
     ast: Ast
-    unitName: StringView
     unitopId: u32
     unitDeclId: u64
 } is {
@@ -998,7 +1003,6 @@ indexUnitBody: function {
                     :ty
                     :ast
                     parentDeclId: unitDeclId
-                    defKeyUnit: unitName
                     nameRef: bm.name
                     nopNodeId: bm.nodeid
                     opNodeId: bm.operation
@@ -1024,13 +1028,11 @@ indexUnitBody: function {
 # indexDeclDef -- create the Decl for one definition (a namedoperation's
 # name + operation) under parentDeclId, descending into the definition's
 # own namespace (function params, object members, nested unit bodies).
-# Registers "defKeyUnit.name" in declOfDefKey when defKeyUnit is non-empty
-# (top-level defs). Returns the new DeclId.
+# Returns the new DeclId.
 indexDeclDef: function {
     ty: ztyping.ZTyping
     ast: Ast
     parentDeclId: u64
-    defKeyUnit: StringView
     nameRef: u32
     nopNodeId: u32
     opNodeId: u32
@@ -1045,7 +1047,6 @@ indexDeclDef: function {
             :ty
             :ast
             :parentDeclId
-            :defKeyUnit
             :nameRef
             :nopNodeId
             opNodeId: op9.expression
@@ -1090,7 +1091,6 @@ indexDeclDef: function {
                         :ty
                         :ast
                         parentDeclId: did0
-                        defKeyUnit: ""
                         nameRef: nm9.name
                         nopNodeId: nm9.nodeid
                         opNodeId: nm9.operation
@@ -1121,11 +1121,6 @@ indexDeclDef: function {
             kind: ztyping.declkind.constDecl
             node: nopNodeId
         )
-    }
-    if defKeyUnit.length > 0 then {
-        dn9: zast.nameTextCopy :ast ref: nameRef
-        dk9: "\{defKeyUnit}.\{dn9}"
-        ty.declOfDefKey.set key: dk9 value: did0
     }
     return did0
 }
@@ -1293,18 +1288,15 @@ indexDeclPublicEntries: function {
 linkDeclType: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
+    ast: Ast
     defUnit: StringView
     name: StringView
     tid: u64
 } is {
-    dk9: "\{defUnit}.\{name}"
-    dko9: ty.declOfDefKey.getv key: dk9.stringview
-    match (
-        dko9
-    ) case some then {
-        ty.declSetType declId: dko9 typeId: tid
-        reg.setDef typeId: tid declId: dko9
-    } case none then null
+    dko9: declOfUnitDef :ty :ast :defUnit :name
+    if dko9 == 0 then return
+    ty.declSetType declId: dko9 typeId: tid
+    reg.setDef typeId: tid declId: dko9
 }
 
 # defTypetypeOf -- the typetype a top-level definition node declares, mirroring
@@ -1393,7 +1385,7 @@ declareCanonicalType: function {
         match (
             exm
         ) case some then {
-            linkDeclType :ty :reg :defUnit :name tid: exm
+            linkDeclType :ty :reg :ast :defUnit :name tid: exm
             return exm
         } case none then null
     } case none then null
@@ -1404,7 +1396,7 @@ declareCanonicalType: function {
     ) case some then {
         ty.setChildId parentTypeId: cud0 nameId: (ast.internString text: name).u64 childTypeId: id
     } case none then null
-    linkDeclType :ty :reg :defUnit :name tid: id
+    linkDeclType :ty :reg :ast :defUnit :name tid: id
     prxOk9: false
     {
         pzo9: reg.typeById.get key: id
@@ -1418,7 +1410,7 @@ declareCanonicalType: function {
         # a canonically-declared name with no source Decl (a synthesized
         # type like tag__u8): attribute it to the unit's root Decl; a
         # pre-index mint pends until indexUnitDefs builds the roots
-        prx9: ty.declOfDefKey.getv key: defUnit
+        prx9: ty.unitRootByName.getv key: defUnit
         match (
             prx9
         ) case some then {
@@ -3671,7 +3663,7 @@ resolveFunction: function {
     }
     checkBorrowReturnLock :ast :ty :fnode :defName
     if thisName.length == 0 then {
-        linkDeclType :ty :reg defUnit: unitName name: defName tid: dfid
+        linkDeclType :ty :reg :ast defUnit: unitName name: defName tid: dfid
     } else {
         mown9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
         if mown9 > 0 then {
@@ -3728,7 +3720,7 @@ resolveFunction: function {
         # neither a free-fn Decl nor a member Decl (a synthesized function
         # like a generic-unit template's flattened method): attribute it
         # to the unit's root Decl
-        dfr9: ty.declOfDefKey.getv key: unitName
+        dfr9: ty.unitRootByName.getv key: unitName
         match (
             dfr9
         ) case some then {
@@ -6236,7 +6228,7 @@ registerEmptyType: function {
     ccname: "\{name}.create"
     ccid: reg.newType name: ccname.stringview typetype: ztypes.ztypetype.functionType
     ty.setChildId parentTypeId: nid nameId: wkCreate childTypeId: ccid
-    linkDeclType :ty :reg defUnit: unitName :name tid: nid
+    linkDeclType :ty :reg :ast defUnit: unitName :name tid: nid
     return nid
 }
 
@@ -6256,7 +6248,7 @@ declOfUnitDef: function {
     defUnit: StringView
     name: StringView
 } out u64 is {
-    ro9: ty.declOfDefKey.getv key: defUnit
+    ro9: ty.unitRootByName.getv key: defUnit
     match (
         ro9
     ) case some then {
@@ -6302,23 +6294,19 @@ declDefTypetype: function {
 
 # reexportTargetOf -- the "unit.name" (or "Type.member") dotted target of
 # a re-export alias declaration, read off the alias Decl's own def node;
-# "" when the key names no indexed re-export.
-reexportTargetOf: function {ty: ztyping.ZTyping ast: Ast key: StringView} out String is {
-    dko9: ty.declOfDefKey.getv :key
+# "" when the Decl is absent or not a re-export.
+reexportTargetOf: function {ty: ztyping.ZTyping ast: Ast declId: u64} out String is {
+    if declId == 0 then return "".string
+    do9: ty.decls.get key: declId
     match (
-        dko9
+        do9
     ) case some then {
-        do9: ty.decls.get key: dko9
-        match (
-            do9
-        ) case some then {
-            if do9.kind.reexportDecl then {
-                nop9: ast.nodes.get i: (do9.node - 1).u64
-                if nop9.namedoperation then {
-                    return (dottedDefTarget :ast n: (ast.nodes.get i: (nop9.operation - 1).u64))
-                }
+        if do9.kind.reexportDecl then {
+            nop9: ast.nodes.get i: (do9.node - 1).u64
+            if nop9.namedoperation then {
+                return (dottedDefTarget :ast n: (ast.nodes.get i: (nop9.operation - 1).u64))
             }
-        } case none then null
+        }
     } case none then null
     return "".string
 }
@@ -6338,7 +6326,8 @@ resolveAliasKey: function {
     name: StringView
 } out u64 is {
     ak9: "\{defUnit}.\{name}"
-    tgt9: reexportTargetOf :ty :ast key: ak9.stringview
+    adecl9: declOfUnitDef :ty :ast :defUnit :name
+    tgt9: reexportTargetOf :ty :ast declId: adecl9
     if tgt9.length == 0 then return 0
     if (ty.resolving.has item: ak9) then return 0
     tu9: String
@@ -6395,28 +6384,18 @@ resolveAliasKey: function {
             childTypeId: atid9
         )
     } case none then null
-    dko9: ty.declOfDefKey.getv key: ak9.stringview
-    match (
-        dko9
-    ) case some then {
-        ty.declSetType declId: dko9 typeId: atid9
-    } case none then null
+    ty.declSetType declId: adecl9 typeId: atid9
     if typeRooted9 then {
         # the value alias's own dotted node resolves as a typeref to the
         # root type post-demand (nav from the alias line into the tag type)
         dnid9: u64
         {
-            dko8: ty.declOfDefKey.getv key: ak9.stringview
+            do8: ty.decls.get key: adecl9
             match (
-                dko8
+                do8
             ) case some then {
-                do8: ty.decls.get key: dko8
-                match (
-                    do8
-                ) case some then {
-                    nop8: ast.nodes.get i: (do8.node - 1).u64
-                    if nop8.namedoperation then dnid9 = nop8.operation.u64
-                } case none then null
+                nop8: ast.nodes.get i: (do8.node - 1).u64
+                if nop8.namedoperation then dnid9 = nop8.operation.u64
             } case none then null
         }
         if dnid9 > 0 then {
@@ -6704,7 +6683,14 @@ resolveUnitBody: function {
                                 tid: gtid0
                             )
                         }
-                        linkDeclType :ty :reg defUnit: unitName name: gpn0.stringview tid: gtid0
+                        (linkDeclType
+                            :ty
+                            :reg
+                            :ast
+                            defUnit: unitName
+                            name: gpn0.stringview
+                            tid: gtid0
+                        )
                         gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
                         gtidV0: gtid0
                         ty.nodeType.set key: gpnid.u64 value: gtidV0
@@ -8644,7 +8630,7 @@ resolveInlineGenericUnit: function {
                 }
             }
         }
-        linkDeclType :ty :reg defUnit: unitName name: defName tid: did
+        linkDeclType :ty :reg :ast defUnit: unitName name: defName tid: did
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
@@ -8719,7 +8705,7 @@ createUnitMono: function {
         if gtp9 == 0 then {
             # a FILE-unit template instantiated cross-unit: attribute the
             # mono to the INSTANTIATING unit's root (matching its home)
-            gtr9: ty.declOfDefKey.getv key: unitName
+            gtr9: ty.unitRootByName.getv key: unitName
             match (
                 gtr9
             ) case some then {
@@ -10084,14 +10070,7 @@ checkString: function {
 # via the symbol table. (Numeric literals + unit-def atoms land in later slices.)
 # typeNameOf -- a registered type's name as an owned String ("" when absent).
 typeNameOf: function {st: zenv.ZSymbolTable tid: u64} out String is {
-    t: st.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        return t.name.copy
-    } case none then {
-        return "".string
-    }
+    return (regTypeNameOf reg: st.reg :tid)
 }
 
 # cloneMethodInto -- specialize one template method for an instance: a fresh
@@ -13712,7 +13691,7 @@ checkDotted: function {
             # record the resolved declaration so go-to-definition on a
             # unit-qualified `unit.member` can locate its defining unit.
             udD9: u64
-            udR9: st.typing.declOfDefKey.getv key: un9.stringview
+            udR9: st.typing.unitRootByName.getv key: un9.stringview
             match (
                 udR9
             ) case some then {
@@ -22708,7 +22687,7 @@ declSurfaceOfName: function {
     tid: u64
 } out u64 is {
     if nameId > 0 then {
-        ro9: ty.declOfDefKey.getv key: currentUnit
+        ro9: ty.unitRootByName.getv key: currentUnit
         match (
             ro9
         ) case some then {
@@ -22716,7 +22695,7 @@ declSurfaceOfName: function {
             sv9: declSurfaceEnsure9 :ty :reg :ast uname: currentUnit :nameId declId: cd9 want: tid
             if sv9 > 0 then return sv9
         } case none then null
-        co9: ty.declOfDefKey.getv key: "core"
+        co9: ty.unitRootByName.getv key: "core"
         match (
             co9
         ) case some then {
@@ -22762,7 +22741,7 @@ declSurfaceEnsure9: function {
 }
 
 # declProbeUnitChildId -- the Decl-tree unit-child probe: unit root (by
-# bare unit name in declOfDefKey) -> direct child (by pool name id) ->
+# bare unit name in unitRootByName) -> direct child (by pool name id) ->
 # its minted type id. 0 when the unit is unknown, the name is not an
 # indexed child, or the child's type is not yet declared -- callers
 # then fall to the declare-on-demand miss path exactly as before.
@@ -22774,7 +22753,7 @@ declProbeUnitChildId: function {
     nameId: u32
 } out u64 is {
     if nameId == 0 then return 0
-    ro9: ty.declOfDefKey.getv key: uname
+    ro9: ty.unitRootByName.getv key: uname
     match (
         ro9
     ) case some then {
@@ -22801,6 +22780,7 @@ declProbeUnitChildId: function {
     } case none then null
     return 0
 }
+
 
 walkUnitProbe9: function {
     ast: Ast
@@ -23175,22 +23155,26 @@ resolvedByKey: function {
     # target walk does NOT recurse through this alias-follow, so it always terminates
     # and a cyclic alias (whose target never has a childOf edge) falls through to the
     # existing cycle diagnostic rather than being silently followed.
-    alTgt9: reexportTargetOf :ty :ast key: key.stringview
+    au: String
+    an: String
+    segs9: u64
+    with sk: (key.stringview.split sep: ".") do for sg: sk loop {
+        segs9 = segs9 + 1
+        if au.length == 0 then {
+            au = sg.string
+        } else {
+            an = sg.string
+        }
+    }
+    alDecl9: u64
+    if segs9 == 2 then alDecl9 = declOfUnitDef :ty :ast defUnit: au.stringview name: an.stringview
+    alTgt9: reexportTargetOf :ty :ast declId: alDecl9
     alHit9: alTgt9.length > 0
     if alHit9 then {
         tgo: childOfWalk :ast :ty :reg key: alTgt9
         match (
             tgo
         ) case some then {
-            au: String
-            an: String
-            with sk: (key.stringview.split sep: ".") do for sg: sk loop {
-                if au.length == 0 then {
-                    au = sg.string
-                } else {
-                    an = sg.string
-                }
-            }
             uro: reg.unitNameTid.get key: au
             match (
                 uro
