@@ -184,7 +184,6 @@ declchild: record {
 # is); `children` the ordered namespace the declaration owns. Body-local
 # variables are not Decls -- they keep the lexical variable-id system.
 Decl: class {
-    declId: u64
     name: u32
     parent: u64
     kind: declkind
@@ -328,7 +327,6 @@ ZTyping: class {
     # dotted-path nodeid -> the internal member name a public alias resolved to
     aliasInternalName: (Map u64 value: String)
     implicitCreate: (Map u64 value: u64)
-    variableCname: (Map u64 value: String)
     variableZtype: (Map u64 value: u64)
     variableOwnership: (Map u64 value: ztypes.zownership)
     # variable origin kind: true = parameter, false = local (unit-level unstamped)
@@ -378,8 +376,6 @@ ZTyping: class {
     # above; readers migrate to Decls stage by stage) ---
     # every Decl row, keyed by DeclId (dense 1..N mint order)
     decls: (Map u64 value: Decl)
-    # program unit index -> the unit's root DeclId
-    unitRootDecl: (Map u64 value: u64)
     # bare unit name -> the unit's root DeclId (the root index)
     unitRootByName: (Map String value: u64)
     # reference nodeid -> resolved DeclId (stamped by resolution)
@@ -399,7 +395,6 @@ ZTyping: class {
     declNew: function {:this name: u32 parent: u64 kind: declkind node: u32} out u64 is {
         id: this.decls.length + 1
         this.decls.set key: id value: (Decl
-            declId: id
             :name
             :parent
             :kind
@@ -627,17 +622,6 @@ ZTyping: class {
             } case none then {
                 return (optionval.none u64)
             }
-        } case none then {
-            return (optionval.none u64)
-        }
-    }
-
-    childByIdValue: function {:this childNameId: u64} out optionval u64 is {
-        r: this.childTypeById.get key: childNameId
-        match (
-            r
-        ) case some then {
-            return (optionval.some r)
         } case none then {
             return (optionval.none u64)
         }
@@ -882,8 +866,7 @@ ZTyping: class {
         }
     }
 
-    # isChildFnptrFieldId -- the nameId-keyed form of isChildFnptrField
-    # (isChildFnptrFieldById stays the childNameId-keyed accessor).
+    # isChildFnptrFieldId -- the nameId-keyed form of isChildFnptrField.
     isChildFnptrFieldId: function {:this parentTypeId: u64 nameId: u64} out bool is {
         idopt: this.childNameIdOfId :parentTypeId :nameId
         match (
@@ -897,17 +880,6 @@ ZTyping: class {
             } case none then {
                 return false
             }
-        } case none then {
-            return false
-        }
-    }
-
-    isChildFnptrFieldById: function {:this childNameId: u64} out bool is {
-        r: this.childIsFnptrField.get key: childNameId
-        match (
-            r
-        ) case some then {
-            return r
         } case none then {
             return false
         }
@@ -1023,24 +995,6 @@ ZTyping: class {
         }
     }
 
-    hasChildDefault: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childDefault.get key: idopt
-            match (
-                r
-            ) case some then {
-                return true
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
-        }
-    }
-
     # hasChildDefaultId -- the id-keyed form of hasChildDefault.
     hasChildDefaultId: function {:this parentTypeId: u64 nameId: u64} out bool is {
         idopt: this.childNameIdOfId :parentTypeId :nameId
@@ -1119,24 +1073,6 @@ ZTyping: class {
             }
         } case none then {
             return "none".string
-        }
-    }
-
-    hasChildOwnership: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childOwnership.get key: idopt
-            match (
-                r
-            ) case some then {
-                return true
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
         }
     }
 
@@ -1270,7 +1206,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         atomVariableId: (Map u64 value: u64 capacity: nodeEst / 4)
         aliasInternalName: (Map u64 value: String)
         implicitCreate: (Map u64 value: u64)
-        variableCname: (Map u64 value: String)
         variableZtype: (Map u64 value: u64)
         variableOwnership: (Map u64 value: ztypes.zownership)
         variableOrigin: (Map u64 value: bool)
@@ -1297,7 +1232,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingTyperefUnit: (Map u64 value: String)
         unitTypesById: (Map u64 value: u64)
         decls: (Map u64 value: Decl)
-        unitRootDecl: (Map u64 value: u64)
         unitRootByName: (Map String value: u64)
         refDecl: (Map u64 value: u64)
         declProxyTids: (List u64)
