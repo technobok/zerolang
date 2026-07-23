@@ -47,7 +47,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check shadow-guard emitter-guard native-guard fallback-guard member-guard
+.PHONY: all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -254,6 +254,28 @@ docs:
 warn-check: bin/zc
 	$(CC) $(CFLAGS) $(OPTFLAGS) -Werror -c bin/zc.c -o /dev/null
 	@echo "warn-check OK: zero compiler warnings"
+
+# perf -- self-compile performance snapshot for docs/perf-baseline.md, measured the
+# same way as the rows there (default hash, --emit-c /dev/null): the zerolang line
+# count (compiler + relocated front-end/stdlib), self-compile wall best-of-5 + peak
+# RSS, the parse/typecheck/emit phase split, and -- when valgrind is installed -- the
+# ground-truth allocation total (heap blocks for one self-compile). Append the printed
+# numbers as a row to docs/perf-baseline.md in the commit that lands a perf-relevant
+# change. The glibc wall (make MIMALLOC=0), corpus wall (make test) and the DHAT
+# allocation-site census stay manual -- see the command list in that doc.
+PERFRUN := bin/zc zc --src src --system lib/system --emit-c /dev/null
+perf: bin/zc
+	@echo "== zerolang line count (.z) =="
+	@lsrc=$$(cat src/*.z | wc -l); llib=$$(cat lib/system/*.z | wc -l); \
+	  printf "  src/*.z: %s    lib/system/*.z: %s    total: %s\n" "$$lsrc" "$$llib" "$$((lsrc + llib))"
+	@echo "== self-compile wall best-of-5 (mimalloc; drop run 1) + peak RSS =="
+	@for i in 1 2 3 4 5; do /usr/bin/time -f "  %es  %MkB" $(PERFRUN) 2>&1 | tail -1; done
+	@echo "== phase split (parse / typecheck / emit) =="
+	@bin/zc zc --src src --system lib/system --time --emit-c /dev/null 2>&1 | tail -1 | sed 's/^/  /'
+	@echo "== allocations (valgrind memcheck: total heap blocks for one self-compile) =="
+	@if command -v valgrind >/dev/null 2>&1; then \
+	  valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: /  /'; \
+	else echo "  (valgrind not installed -- skipping alloc total)"; fi
 
 # shadow-guard -- ratchet against the user-shadow miscompile class. The C emitter
 # must derive a type's C type from its canonical type id (typeRefC / scalarCTypeFor

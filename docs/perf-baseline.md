@@ -7,17 +7,19 @@ changes.
 
 ## Commands (run from the repo root, warm tree)
 
+`make perf` prints the core row: the zerolang line count, self-compile wall
+best-of-5 + peak RSS, the parse/typecheck/emit phase split, and (when valgrind is
+installed) the allocation total. It measures with the default hash and
+`--emit-c /dev/null`, exactly as below. The remaining columns are manual:
+
 ```bash
-# self-compile wall + peak RSS, best of 5 (drop the first run):
+make perf                       # LOC + wall + RSS + phases + allocs (the core row)
+# glibc wall: rebuild pure-glibc, time it, then rebuild the mimalloc driver back:
+touch src/zc.z && make MIMALLOC=0 zc
 for i in 1 2 3 4 5; do /usr/bin/time -f "%es %MkB" \
     bin/zc zc --src src --system lib/system --emit-c /dev/null 2>&1 | tail -1; done
-# glibc variant: rebuild first with `touch src/zc.z && make MIMALLOC=0 zc`
-# phase split:
-bin/zc zc --src src --system lib/system --time --emit-c /dev/null
-# allocation totals:
-valgrind --tool=memcheck bin/zc zc --src src --system lib/system \
-    --emit-c /dev/null 2>&1 | grep 'total heap usage'
-# corpus wall:
+touch src/zc.z && make zc
+# corpus wall (bimodal -- see the 2026-07-21 note):
 time make test
 # allocation-site census (optional, slow):
 valgrind --tool=dhat --dhat-out-file=/tmp/zc.dhat bin/zc zc --src src \
@@ -27,29 +29,32 @@ valgrind --tool=dhat --dhat-out-file=/tmp/zc.dhat bin/zc zc --src src \
 ## Baseline table
 
 Machine: 24-core, gcc 15.2.0, glibc 2.43, Linux. Wall = best of 5.
-"allocs" = memcheck total heap blocks for one self-compile.
+"allocs" = memcheck total heap blocks for one self-compile. "LOC" = `wc -l` of
+`src/*.z` + `lib/system/*.z` (the self-hosted compiler + relocated front-end/stdlib).
+LOC tracking starts at the 2026-07-23 row; earlier rows are "—" (not back-measured).
 
-| date | commit | change | wall (mimalloc) | wall (glibc) | peak RSS (mi/glibc) | phases (parse/check/emit ms) | allocs | bytes churned | make test |
-|---|---|---|---|---|---|---|---|---|---|
-| 2026-07-17 | 4f10844 | GROUND (post emitter-completeness arc) | 0.77s | 0.89s | 125MB / 122MB | 86 / 247 / 423 (total 756) | 23,625,212 | 772MB | 11.0s |
-| 2026-07-17 | 3bcaba2 | W1: id-space queries, regNameIs scans, mainBodyMentions hoist, childOfWalk fast path, Map.getv | 0.69s | — | 126MB / — | 92 / 234 / 354 (total 680) | 11,210,996 | 546MB | — |
-| 2026-07-17 | 1b7c6d0 | W2: emitter buffer reserves, Map/Set/List capacity:, stamp-map pre-size | 0.69s | 0.75s | 117MB / 116MB | 84 / 242 / 351 (total 677) | 11,217,951 | 527MB | 10.7s |
-| 2026-07-17 | fbb3426 | capacity-inference fix + value-position capacity threading + right-sized stamp maps (the 1b7c6d0 pre-size was inert: value-position constructions dropped capacity) | 0.68s | — | 118MB / — | — | 11,222,033 | 501MB | — |
-| 2026-07-17 | 81b9297 | A: tokenizer source-span token text (goldens byte-identical) | 0.67s | — | 118MB / — | — | 11,010,123 | 492MB | — |
-| 2026-07-17 | ab2d177 | B: move-on-advance + parser payload moves (+ D: ctor-arg move gap proved stale, pinned in corpus) | 0.65s | — | 119MB / — | — | 10,597,979 | 489MB | — |
-| 2026-07-17 | 7f8524f | C: child-edge name interning (pool + id-keyed buckets) | 0.65s | — | 117MB / — | — | 10,093,238 | 482MB | — |
-| 2026-07-17 | 297f741 | A1: names-as-nodes interning (AtomId/LabelValue name -> u32 nameentry ref; hot readers on scoped row views; constVals probes on getv) | 0.66s | — | 117MB / — | 87 / 226 / 340 (total 653) | 10,161,794 | 485MB | — |
-| 2026-07-17 | 8727875 | C1: Ast carrier threaded (~570 sigs; ast.nodes indirection; ARCHITECTURE landing — B3-as-perf stays shelved) + StringView.hash native + unconditional z_hash.inc | 0.67s | — | 118MB / — | — | 10,280,730 | 487MB | — |
-| 2026-07-17 | dbd0899 | C2: names -> Ast.names StringPool; nameentry arm deleted; synth dedup (ref==ref sound); hot readers borrow pooled text | 0.66s | — | 116MB / — | — | 10,235,386 | 484MB | — |
-| 2026-07-17 | 17d8ba4 | C3 (a units, b fileSegs, c edge names, d well-known ids): tree-scoped state consolidated on the carrier; ZTyping's private edge-name pool deleted -- ZTypeChild.nameId IS the Ast.names id, member resolution int-keyed where provenance is certain (ARCHITECTURE landing; +0.5% allocs = edgeText "" fillers + edgeNameId cache) | 0.66s | — | 117MB / — | — | 10,292,415 | 486MB | — |
-| 2026-07-17 | c29bf3d | D1-D4 single pool: wk member ids 5..31, id-keyed lookups where ids in hand, ZTyping edgeText+edgeNameId DELETED (no name text outside Ast.names; StringPool.find read-only probe). +1.8% allocs = the third nameIds out-list on recFieldLists/variantArms/protoChildMethods call sites (superseded by the registry-ids arc) | 0.67s | — | 116MB / — | — | 10,473,463 | 494MB | — |
-| 2026-07-18 | 6eee916 | D5 (a: namedoperation label -> pool id, last owned Option String on the AST gone, 7 label helpers collapse to nameTextCopy/nameTextEq; b: text-taking setChild deleted -- analysis interns ONLY at 6 explicit ast.internString mint sites, else id-keyed setChildId via wk consts / in-hand ids / poolFind read-probe). Pure refactor: 129/129 examples behaviourally identical. -29k allocs (per-label Option removed) | 0.66s | — | 115MB / — | — | 10,444,134 | 493MB | — |
-| 2026-07-18 | (E1 seeded) | E1: id-key resolveTypeIdByName -- poolFind the name ONCE, then id-keyed stages (childOfId); the composed-key fallback materialises text lazily. The same name was find()-ed ~9+N times per resolve (once per stage + once per unit in the cross-unit loop); now once per resolve. Pure refactor (129/129 examples identical). -354k allocs (-3.4%) vs D5 | 0.64s | — | 113MB / — | — | 10,089,619 | 481MB | — |
-| 2026-07-18 | (E2a seeded) | E2a: cache the unit list. resolveTypeIdByNameId rebuilt utids9 (List u64) + the fallback uks9 (List String, every unit key copied) on EVERY cross-unit resolve, iterating unitNameTid each time. unitNameTid is typecheck-stable, so snapshot it once per Ctx (ensureUnitCache -> ctx.unitTidsC/unitKeysC). Pure refactor (129/129 identical). -533k allocs (-5.3%) vs E1; -8.5% cumulative from D5 | 0.64s | — | 111MB / — | — | 9,556,604 | 453MB | — |
-| 2026-07-21 | 1426aaa | HEAD re-measure (+72 feature commits since E2a, incl. the completion sweep): the accumulated regression the perf arc attributes | 0.71s | — | 125MB / — | 90 / 277 / 350 (total 715) | 10,520,665 | 510MB | 13.4s |
-| 2026-07-21 | (A1 seeded) | A1: walkedMethodOwners keys qualified "unit.name" everywhere. The sweep probed bare names while depWalkUnit marked qualified, so it re-walked every dep/stdlib type the dep walks had already checked, and same-named types across units masked each other's sweep entry; + mainMemberIndex gated to the unit it indexes (the qualified probe exposed a latent cross-unit index clash) | 0.69s | — | 122MB / — | 92 / 250 / 340 (total 690) | 10,203,138 | 491MB | 13.2s |
-| 2026-07-22 | (A2a seeded) | A2a: fnAutoCallable iterates childIndex rows by pool id (wkThis / poolFind'd thisParamName / hasChildDefaultId are all id-keyed) instead of materializing every param name String through dataFieldNames per dotted-reference probe. dhat attribution: the post-E2a alloc growth is the ctor-validation arc (walkCallArgsHoist 698k blk incl. this chain; emitter isCtorOwnerCall 272k blk) + the sweep/dep body walks (~235k blk, paid-for correctness); printableInterpTid measured at only 51k blk / 0.5% — memo not warranted; gpNames9 sub-1% — skipped as predicted | 0.67s | — | 122MB / — | 85 / 240 / 340 (total 665) | 9,916,042 | 472MB | — |
-| 2026-07-22 | (A2b seeded) | A2b: resolveTypeIdByNameId memoized on Ctx (nameId -> tid, misses cached as 0). isCtorOwnerCall probes every emitted call with base names that are usually VALUE names: each guaranteed miss walked all stages incl. the composed-key loop (one "unit.name" String per unit). The typed model is frozen during emission so per-name resolution is emit-stable; misses dominate, so caching 0 is the whole win. Emit -17%; regression vs E2a fully closed (allocs now 9.37M < 9.56M, wall 0.62s < 0.64s) | 0.62s | — | 122MB / — | 86 / 239 / 282 (total 610) | 9,368,977 | 457MB | — |
+| date | commit | change | wall (mimalloc) | wall (glibc) | peak RSS (mi/glibc) | phases (parse/check/emit ms) | allocs | bytes churned | make test | LOC |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-07-17 | 4f10844 | GROUND (post emitter-completeness arc) | 0.77s | 0.89s | 125MB / 122MB | 86 / 247 / 423 (total 756) | 23,625,212 | 772MB | 11.0s | — |
+| 2026-07-17 | 3bcaba2 | W1: id-space queries, regNameIs scans, mainBodyMentions hoist, childOfWalk fast path, Map.getv | 0.69s | — | 126MB / — | 92 / 234 / 354 (total 680) | 11,210,996 | 546MB | — | — |
+| 2026-07-17 | 1b7c6d0 | W2: emitter buffer reserves, Map/Set/List capacity:, stamp-map pre-size | 0.69s | 0.75s | 117MB / 116MB | 84 / 242 / 351 (total 677) | 11,217,951 | 527MB | 10.7s | — |
+| 2026-07-17 | fbb3426 | capacity-inference fix + value-position capacity threading + right-sized stamp maps (the 1b7c6d0 pre-size was inert: value-position constructions dropped capacity) | 0.68s | — | 118MB / — | — | 11,222,033 | 501MB | — | — |
+| 2026-07-17 | 81b9297 | A: tokenizer source-span token text (goldens byte-identical) | 0.67s | — | 118MB / — | — | 11,010,123 | 492MB | — | — |
+| 2026-07-17 | ab2d177 | B: move-on-advance + parser payload moves (+ D: ctor-arg move gap proved stale, pinned in corpus) | 0.65s | — | 119MB / — | — | 10,597,979 | 489MB | — | — |
+| 2026-07-17 | 7f8524f | C: child-edge name interning (pool + id-keyed buckets) | 0.65s | — | 117MB / — | — | 10,093,238 | 482MB | — | — |
+| 2026-07-17 | 297f741 | A1: names-as-nodes interning (AtomId/LabelValue name -> u32 nameentry ref; hot readers on scoped row views; constVals probes on getv) | 0.66s | — | 117MB / — | 87 / 226 / 340 (total 653) | 10,161,794 | 485MB | — | — |
+| 2026-07-17 | 8727875 | C1: Ast carrier threaded (~570 sigs; ast.nodes indirection; ARCHITECTURE landing — B3-as-perf stays shelved) + StringView.hash native + unconditional z_hash.inc | 0.67s | — | 118MB / — | — | 10,280,730 | 487MB | — | — |
+| 2026-07-17 | dbd0899 | C2: names -> Ast.names StringPool; nameentry arm deleted; synth dedup (ref==ref sound); hot readers borrow pooled text | 0.66s | — | 116MB / — | — | 10,235,386 | 484MB | — | — |
+| 2026-07-17 | 17d8ba4 | C3 (a units, b fileSegs, c edge names, d well-known ids): tree-scoped state consolidated on the carrier; ZTyping's private edge-name pool deleted -- ZTypeChild.nameId IS the Ast.names id, member resolution int-keyed where provenance is certain (ARCHITECTURE landing; +0.5% allocs = edgeText "" fillers + edgeNameId cache) | 0.66s | — | 117MB / — | — | 10,292,415 | 486MB | — | — |
+| 2026-07-17 | c29bf3d | D1-D4 single pool: wk member ids 5..31, id-keyed lookups where ids in hand, ZTyping edgeText+edgeNameId DELETED (no name text outside Ast.names; StringPool.find read-only probe). +1.8% allocs = the third nameIds out-list on recFieldLists/variantArms/protoChildMethods call sites (superseded by the registry-ids arc) | 0.67s | — | 116MB / — | — | 10,473,463 | 494MB | — | — |
+| 2026-07-18 | 6eee916 | D5 (a: namedoperation label -> pool id, last owned Option String on the AST gone, 7 label helpers collapse to nameTextCopy/nameTextEq; b: text-taking setChild deleted -- analysis interns ONLY at 6 explicit ast.internString mint sites, else id-keyed setChildId via wk consts / in-hand ids / poolFind read-probe). Pure refactor: 129/129 examples behaviourally identical. -29k allocs (per-label Option removed) | 0.66s | — | 115MB / — | — | 10,444,134 | 493MB | — | — |
+| 2026-07-18 | (E1 seeded) | E1: id-key resolveTypeIdByName -- poolFind the name ONCE, then id-keyed stages (childOfId); the composed-key fallback materialises text lazily. The same name was find()-ed ~9+N times per resolve (once per stage + once per unit in the cross-unit loop); now once per resolve. Pure refactor (129/129 examples identical). -354k allocs (-3.4%) vs D5 | 0.64s | — | 113MB / — | — | 10,089,619 | 481MB | — | — |
+| 2026-07-18 | (E2a seeded) | E2a: cache the unit list. resolveTypeIdByNameId rebuilt utids9 (List u64) + the fallback uks9 (List String, every unit key copied) on EVERY cross-unit resolve, iterating unitNameTid each time. unitNameTid is typecheck-stable, so snapshot it once per Ctx (ensureUnitCache -> ctx.unitTidsC/unitKeysC). Pure refactor (129/129 identical). -533k allocs (-5.3%) vs E1; -8.5% cumulative from D5 | 0.64s | — | 111MB / — | — | 9,556,604 | 453MB | — | — |
+| 2026-07-21 | 1426aaa | HEAD re-measure (+72 feature commits since E2a, incl. the completion sweep): the accumulated regression the perf arc attributes | 0.71s | — | 125MB / — | 90 / 277 / 350 (total 715) | 10,520,665 | 510MB | 13.4s | — |
+| 2026-07-21 | (A1 seeded) | A1: walkedMethodOwners keys qualified "unit.name" everywhere. The sweep probed bare names while depWalkUnit marked qualified, so it re-walked every dep/stdlib type the dep walks had already checked, and same-named types across units masked each other's sweep entry; + mainMemberIndex gated to the unit it indexes (the qualified probe exposed a latent cross-unit index clash) | 0.69s | — | 122MB / — | 92 / 250 / 340 (total 690) | 10,203,138 | 491MB | 13.2s | — |
+| 2026-07-22 | (A2a seeded) | A2a: fnAutoCallable iterates childIndex rows by pool id (wkThis / poolFind'd thisParamName / hasChildDefaultId are all id-keyed) instead of materializing every param name String through dataFieldNames per dotted-reference probe. dhat attribution: the post-E2a alloc growth is the ctor-validation arc (walkCallArgsHoist 698k blk incl. this chain; emitter isCtorOwnerCall 272k blk) + the sweep/dep body walks (~235k blk, paid-for correctness); printableInterpTid measured at only 51k blk / 0.5% — memo not warranted; gpNames9 sub-1% — skipped as predicted | 0.67s | — | 122MB / — | 85 / 240 / 340 (total 665) | 9,916,042 | 472MB | — | — |
+| 2026-07-22 | (A2b seeded) | A2b: resolveTypeIdByNameId memoized on Ctx (nameId -> tid, misses cached as 0). isCtorOwnerCall probes every emitted call with base names that are usually VALUE names: each guaranteed miss walked all stages incl. the composed-key loop (one "unit.name" String per unit). The typed model is frozen during emission so per-name resolution is emit-stable; misses dominate, so caching 0 is the whole win. Emit -17%; regression vs E2a fully closed (allocs now 9.37M < 9.56M, wall 0.62s < 0.64s) | 0.62s | — | 122MB / — | 86 / 239 / 282 (total 610) | 9,368,977 | 457MB | — | — |
+| 2026-07-23 | 5eccf67 | redesign HEAD re-baseline: name/Decl/Type identity + generic-metadata composite-key arc (first row since A2b -- the +0.8M allocs / +0.04s vs A2b is the whole redesign's Decl-tree build + probes, not one change) | 0.66s | — | 129MB / — | 96 / 254 / 312 (total 662) | 10,163,283 | 469MB | — | 80,396 |
 
 2026-07-21 arc notes: `make test` wall is bimodal — ~13.3s typical with an
 occasional ~25s run at identical CPU time (~2m45 user, 24 jobs), so
