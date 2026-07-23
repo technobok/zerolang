@@ -6576,6 +6576,7 @@ resolveUnitBody: function {
                         }
                         gtidK0: gtid0
                         ty.definedInUnit.set key: gtidK0 value: unitName.string
+                        linkDeclType :ty :reg defUnit: unitName name: gpn0.stringview tid: gtid0
                         gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
                         gtidV0: gtid0
                         ty.nodeType.set key: gpnid.u64 value: gtidV0
@@ -8513,6 +8514,7 @@ resolveInlineGenericUnit: function {
             }
         }
         ty.definedInUnit.set key: did value: unitName.string
+        linkDeclType :ty :reg defUnit: unitName name: defName tid: did
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
         # template, which would shadow instance lookups).
@@ -22483,6 +22485,61 @@ declOfTypeId: function {reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
     return 0
 }
 
+
+# unitDeclOfTid -- the top-level unit root Decl that owns type `tid`'s
+# declaration (declOfTypeId -> parent walk to the parentless unit root);
+# 0 when the type has no declaration. The id-valued unit-identity
+# primitive: compare unit ownership by this, not by name.
+unitDeclOfTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
+    cur9: declOfTypeId :reg :tid
+    hops9: u64
+    for cur9 > 0 while hops9 < 32 loop {
+        par9: u64
+        isU9: false
+        {
+            do9: ty.decls.get key: cur9
+            match (
+                do9
+            ) case some then {
+                par9 = do9.parent
+                if do9.kind.unitDecl then isU9 = true
+            } case none then null
+        }
+        if par9 == 0 then {
+            if isU9 then return cur9
+            return 0
+        }
+        cur9 = par9
+        hops9 = hops9 + 1
+    }
+    return 0
+}
+
+# unitNameOfTid -- the defining unit's name for type `tid`, read off the
+# Decl parent chain; "" when the type has no declaration. The display /
+# dump projection over unitDeclOfTid -- identity gates should compare
+# unitDeclOfTid ids instead.
+unitNameOfTid: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    tid: u64
+} out String is {
+    ud9: unitDeclOfTid :ty :reg :tid
+    if ud9 == 0 then return "".string
+    nref9: u32
+    {
+        do9: ty.decls.get key: ud9
+        match (
+            do9
+        ) case some then {
+            nref9 = do9.name
+        } case none then null
+    }
+    if nref9 == 0 then return "".string
+    return (zast.poolTextCopy pool: ast.names ref: nref9)
+}
+
 # declMemberOf -- the Decl of member `nameId` under the type that minted
 # `ownerTid` (monos resolve through their template's Decl); 0 when the
 # owner has no Decl or no such indexed member.
@@ -23430,6 +23487,125 @@ typecheck: function {
             :st
             mainName: program.mainUnitName.stringview
         )
+        declLinkChildren :st
+        devCompareDefinedInUnit9 ast: program.ast :st
     } else null
     return st
+}
+
+# declLinkChildren -- complete the Decl <-> type linkage over the child
+# edges once resolution has settled: every childOf edge whose child type
+# has no minting declaration gets one -- the member's own Decl when the
+# tree indexed it (filling the member Decl's typeId if still unset), else
+# the owner's Decl as the closest declaration (synthesized members).
+# Unit-parented edges link through the unit's root Decl. Completes
+# declOfTypeId / unitDeclOfTid coverage for every reachable type.
+declLinkChildren: function {st: zenv.ZSymbolTable} is {
+    uroots9: (Map u64 value: u64)
+    {
+        unams9: (List String)
+        utids9: (List u64)
+        with uit9: st.reg.unitNameTid.iterateItems do for ue9: uit9 loop {
+            unams9.append ue9.key.copy
+            utids9.append ue9.value
+        }
+        i9: u64
+        for i9 < unams9.length loop {
+            un9: unams9.get i: i9
+            ut9: utids9.get i: i9
+            i9 = i9 + 1
+            ro9: st.typing.declOfDefKey.getv key: un9.stringview
+            match (
+                ro9
+            ) case some then {
+                uroots9.set key: ut9 value: ro9
+            } case none then null
+        }
+    }
+    n9: st.typing.typeChild.length
+    ri9: u64
+    for ri9 < n9 loop {
+        pt9: u64
+        nm9: u64
+        cnid9: u64
+        {
+            row9: st.typing.typeChild.get i: ri9
+            pt9 = row9.parentTypeId
+            nm9 = row9.nameId
+            cnid9 = row9.childNameId
+        }
+        ri9 = ri9 + 1
+        ct9: u64
+        {
+            cto9: st.typing.childTypeById.get key: cnid9
+            match (
+                cto9
+            ) case some then {
+                ct9 = cto9
+            } case none then null
+        }
+        if ct9 > 0 when nm9 > 0 then {
+            hasDef9: false
+            {
+                zo9: st.reg.typeById.get key: ct9
+                match (
+                    zo9
+                ) case some then {
+                    if zo9.def > 0 then hasDef9 = true
+                } case none then null
+            }
+            if (hasDef9) == false then {
+                od9: u64
+                {
+                    uo9: uroots9.get key: pt9
+                    match (
+                        uo9
+                    ) case some then {
+                        od9 = uo9
+                    } case none then null
+                }
+                if od9 == 0 then od9 = declOfTypeId reg: st.reg tid: pt9
+                if od9 > 0 then {
+                    md9: st.typing.declFindChild parentDeclId: od9 nameId: nm9.u32.orPanic
+                    if md9 > 0 then {
+                        tOld9: u64
+                        {
+                            dg9: st.typing.decls.get key: md9
+                            match (
+                                dg9
+                            ) case some then {
+                                tOld9 = dg9.typeId
+                            } case none then null
+                        }
+                        if tOld9 == 0 then st.typing.declSetType declId: md9 typeId: ct9
+                        st.reg.setDef typeId: ct9 declId: md9
+                    } else {
+                        st.reg.setDef typeId: ct9 declId: od9
+                    }
+                }
+            }
+        }
+    }
+}
+
+# DEV -- compare every definedInUnit entry against the Decl-chain
+# derivation; divergences are the synth-Decl coverage inventory.
+devCompareDefinedInUnit9: function {ast: Ast st: zenv.ZSymbolTable} is {
+    tids9: (List u64)
+    unams9: (List String)
+    with it9: st.typing.definedInUnit.iterateItems do for e9: it9 loop {
+        tids9.append e9.key
+        unams9.append e9.value.copy
+    }
+    i9: u64
+    for i9 < tids9.length loop {
+        t9: tids9.get i: i9
+        u9: unams9.get i: i9
+        i9 = i9 + 1
+        nm9: unitNameOfTid ty: st.typing reg: st.reg :ast tid: t9
+        if nm9.stringview != u9.stringview then {
+            tn9: typeNameOf :st tid: t9
+            io.eprintln "/* DBG */ diu divergence tid=\{t9} name=\{tn9} table=\{u9} decl=\{nm9}"
+        }
+    }
 }
