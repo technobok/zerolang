@@ -62,8 +62,8 @@ ChildBucket: class {
 }
 
 # One edge of the generic-args table: a (parent, param-name) link. The
-# mutable arg-type id lives in genericArgTypeBy, keyed by parentTypeId +
-# paramName.
+# mutable arg-type id lives in genericArgTypeBy, keyed by a
+# (parentTypeId, paramNameId) composite.
 ZTypeGenericArg: class {
     parentTypeId: u64
     paramName: String
@@ -315,10 +315,10 @@ ZTyping: class {
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
     argDisposition: (Map u64 value: ztypes.zparamownership)
-    # generic arg-type id, keyed by "parentTypeId:paramName"
-    genericArgTypeBy: (Map String value: u64)
-    # inferred concrete tid per call, keyed by "callNodeid:genericParamName"
-    callGenericBinding: (Map String value: u64)
+    # generic arg-type id, keyed by (parentTypeId << 32 | paramNameId)
+    genericArgTypeBy: (Map u64 value: u64)
+    # inferred concrete tid per call, keyed by (callNodeid << 32 | paramNameId)
+    callGenericBinding: (Map u64 value: u64)
 
     # per-node single-valued stamps, keyed by parsed-AST nodeid
     nodeType: (Map u64 value: u64)
@@ -1152,7 +1152,7 @@ ZTyping: class {
         return false
     }
 
-    setGenericArg: function {:this parentTypeId: u64 paramName: StringView argTypeId: u64} is {
+    setGenericArg: function {:this pool: zast.StringPool parentTypeId: u64 paramName: StringView argTypeId: u64} is {
         present: this.hasGenericArgNamed :parentTypeId :paramName
         if present == false then {
             pos: this.typeGenericArg.length
@@ -1162,14 +1162,13 @@ ZTyping: class {
                 position: pos
             )
         }
-        memokey: "\{parentTypeId}:\{paramName}"
-        sv: argTypeId
-        this.genericArgTypeBy.set key: memokey.take value: sv
+        key9: (parentTypeId * 4294967296) + (pool.find s: paramName).u64
+        this.genericArgTypeBy.set key: key9 value: argTypeId
     }
 
-    genericArgOf: function {:this parentTypeId: u64 paramName: StringView} out optionval u64 is {
-        memokey: "\{parentTypeId}:\{paramName}"
-        r: this.genericArgTypeBy.get key: memokey.take
+    genericArgOf: function {:this pool: zast.StringPool parentTypeId: u64 paramName: StringView} out optionval u64 is {
+        key9: (parentTypeId * 4294967296) + (pool.find s: paramName).u64
+        r: this.genericArgTypeBy.get key: key9
         match (
             r
         ) case some then {
@@ -1261,8 +1260,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         childDefault: (Map u64 value: String)
         childOwnership: (Map u64 value: ztypes.zparamownership)
         argDisposition: (Map u64 value: ztypes.zparamownership)
-        genericArgTypeBy: (Map String value: u64)
-        callGenericBinding: (Map String value: u64)
+        genericArgTypeBy: (Map u64 value: u64)
+        callGenericBinding: (Map u64 value: u64)
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
         nodeType: (Map u64 value: u64 capacity: nodeEst)
@@ -1395,9 +1394,9 @@ main: function is {
     smokeOwn pool: pool9 :ty :pid name: "label"
 
     print "=== generic args ==="
-    ty.setGenericArg parentTypeId: lid paramName: "of" argTypeId: tInt
-    ty.setGenericArg parentTypeId: lid paramName: "of" argTypeId: tStr
-    smokeGenericArg :ty pid: lid name: "of"
+    ty.setGenericArg pool: pool9 parentTypeId: lid paramName: "of" argTypeId: tInt
+    ty.setGenericArg pool: pool9 parentTypeId: lid paramName: "of" argTypeId: tStr
+    smokeGenericArg pool: pool9 :ty pid: lid name: "of"
     print "hasGenericArgs List -> \{boolText (ty.hasGenericArgs parentTypeId: lid)}"
     print "hasGenericArgs point -> \{boolText (ty.hasGenericArgs parentTypeId: pid)}"
 
@@ -1516,8 +1515,8 @@ smokeOwn: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView}
 }
 
 # smoke-test: print the generic-argument bound for `name` on `pid`.
-smokeGenericArg: function {ty: ZTyping pid: u64 name: StringView} is {
-    r: ty.genericArgOf parentTypeId: pid paramName: name
+smokeGenericArg: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
+    r: ty.genericArgOf :pool parentTypeId: pid paramName: name
     print "genericArg List.\{name} -> \{optU64Text r}"
 }
 

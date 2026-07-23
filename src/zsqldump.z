@@ -113,7 +113,7 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS post_guard (node_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type_id INTEGER NOT NULL, arm TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS variable_origin (variable_id INTEGER PRIMARY KEY, is_param INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (key TEXT PRIMARY KEY, type_id INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (key INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
     return acc
 }
 
@@ -249,23 +249,6 @@ argAtomName: function {ast: Ast id: u64} out String is {
     } else {
         return "".string
     }
-}
-
-# holderAfterColon -- the generic-param holder in a "callNodeid:holder" key
-# (the substring after the first ':', byte 58), or "" when there is no colon.
-holderAfterColon: function {k: StringView} out String is {
-    kn: k.length
-    ki: u64
-    for ki < kn loop {
-        bo: k.byteAt ki
-        match (
-            bo
-        ) case some then {
-            if bo == 58 then return (k.substring from: ki + 1 to: kn).string
-        } case none then null
-        ki = ki + 1
-    }
-    return "".string
 }
 
 # --- the dumper ---
@@ -778,7 +761,7 @@ ZDumper: class {
             this.acc.append s: rowVo9
         }
         with cgit: typing.callGenericBinding.iterateItems do for cg: cgit loop {
-            rowCg9: "INSERT OR IGNORE INTO call_generic_binding VALUES ('\{cg.key}', \{cg.value});\n"
+            rowCg9: "INSERT OR IGNORE INTO call_generic_binding VALUES (\{cg.key}, \{cg.value});\n"
             this.acc.append s: rowCg9
         }
     }
@@ -1275,16 +1258,21 @@ ZDumper: class {
         this.emitSection title: "arg_disposition" :rows
     }
 
-    appendCallGenericBindingCanon: function {:this st: zenv.ZSymbolTable} is {
+    appendCallGenericBindingCanon: function {:this program: Node st: zenv.ZSymbolTable} is {
         rows: (List String)
-        with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
-            kc9: cg.key.copy
-            hld9: holderAfterColon k: kc9.stringview
-            tn9: canonTypeName reg: st.reg tid: cg.value
-            hSql9: sqlStr s: hld9.stringview
-            tSql9: sqlStr s: tn9.stringview
-            rows.append "\{hSql9} | \{tSql9}"
-        }
+        match (
+            program
+        ) case program then {
+            with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
+                nid9: cg.key / 4294967296
+                pnid9: (cg.key - (nid9 * 4294967296)).u32.orPanic
+                hld9: zast.poolTextCopy pool: program.ast.names ref: pnid9
+                tn9: canonTypeName reg: st.reg tid: cg.value
+                hSql9: sqlStr s: hld9.stringview
+                tSql9: sqlStr s: tn9.stringview
+                rows.append "\{hSql9} | \{tSql9}"
+            }
+        } else null
         this.emitSection title: "call_generic_binding" :rows
     }
 
@@ -1604,6 +1592,6 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     d.appendGenericArgsCanon unm: mu.stringview st: symtab
     d.appendConformanceCanon unm: mu.stringview st: symtab
     d.appendSymbolTableCanon st: symtab
-    d.appendCallGenericBindingCanon st: symtab
+    d.appendCallGenericBindingCanon :program st: symtab
     return d.acc.copy
 }

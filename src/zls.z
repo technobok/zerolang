@@ -2728,21 +2728,29 @@ dispositionNote: function {o: (Option zenv.ZSymbolTable) nid: u64} out String is
 # inferredGenericLines -- concrete generic bindings inferred for the call
 # `callId` whose callee is `calleeNid`, one "# T = Type" comment per bound
 # generic param (from the callGenericBinding stamp), or "".
-inferredGenericLines: function {o: (Option zenv.ZSymbolTable) callId: u64} out String is {
+inferredGenericLines: function {
+    o: (Option zenv.ZSymbolTable)
+    prog: zast.Node
+    callId: u64
+} out String is {
     match (
         o
     ) case some then {
-        prefix9: "\{callId}:"
         holders9: (List String)
         tids9: (List u64)
-        with git9: o.typing.callGenericBinding.iterateItems do for e9: git9 loop {
-            k9: e9.key.copy
-            if k9.startsWith prefix9 then {
-                hv9: k9.substring from: prefix9.length to: k9.length
-                holders9.append hv9.string
-                tids9.append e9.value
+        match (
+            prog
+        ) case program then {
+            with git9: o.typing.callGenericBinding.iterateItems do for e9: git9 loop {
+                nid9: e9.key / 4294967296
+                if nid9 == callId then {
+                    pnid9: (e9.key - (nid9 * 4294967296)).u32.orPanic
+                    hv9: zast.poolTextCopy pool: prog.ast.names ref: pnid9
+                    holders9.append hv9
+                    tids9.append e9.value
+                }
             }
-        }
+        } else null
         r9: String
         hi9: u64
         for hi9 < holders9.length loop {
@@ -3017,7 +3025,7 @@ navAnswer: function {
                 } case none then null
             }
             if callPos9 == hpos9 then {
-                gl9: inferredGenericLines o: snap.st callId: callId9.u64
+                gl9: inferredGenericLines o: snap.st prog: snap.prog callId: callId9.u64
                 if gl9.length > 0 then {
                     body9.appendByte b: 10
                     body9.append gl9
