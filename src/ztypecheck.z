@@ -1373,7 +1373,7 @@ definingUnitFor: function {
 }
 
 # declareCanonicalType -- get-or-declare the ONE canonical id for `unit.name` as a
-# childOf edge under its unit (with definedInUnit set). The single convergence point for both a
+# childOf edge under its unit, linked to its Decl. The single convergence point for both a
 # reference (resolveAtomType) and the definition (the resolveX resolvers): whoever
 # runs first mints; the rest reuse the same id. Does NOT touch definedKeys (the
 # body-resolved marker), so demanded bodies still resolve lazily.
@@ -1404,9 +1404,6 @@ declareCanonicalType: function {
     ) case some then {
         ty.setChildId parentTypeId: cud0 nameId: (ast.internString text: name).u64 childTypeId: id
     } case none then null
-    idu: id
-    duv: defUnit.string
-    ty.definedInUnit.set key: idu value: duv
     linkDeclType :ty :reg :defUnit :name tid: id
     prxOk9: false
     {
@@ -3293,8 +3290,7 @@ demandReturnType: function {
 # type: a child per parameter (param name -> type-ref shell, `this` params bound
 # to thisName), its defining unit (source-types filter), and a `{unit}.{name}`
 # entry in the resolved name-view. Returns the FUNCTION type id (a record method
-# binds it as a child; a free function discards it). The map `set`s TAKE the u64,
-# so copies are threaded for `definedInUnit.set` and the returned id.
+# binds it as a child; a free function discards it).
 # fnHasLockParam -- does any parameter (including a `this.lock` receiver) carry
 # a `.lock` marker? A `.borrow` return must borrow from a locked parameter so
 # the returned view has a locked parent to live in (docs/ownership.pdoc).
@@ -3674,7 +3670,6 @@ resolveFunction: function {
         ty.funcReturnsBorrow.set key: fbk value: fbv
     }
     checkBorrowReturnLock :ast :ty :fnode :defName
-    ty.definedInUnit.set key: dfid value: unitName.string
     if thisName.length == 0 then {
         linkDeclType :ty :reg defUnit: unitName name: defName tid: dfid
     } else {
@@ -4209,7 +4204,6 @@ resolveData: function {ast: Ast
         typetype: ztypes.ztypetype.recordType
     )
     ty.setChildId parentTypeId: did nameId: wkTag childTypeId: tagId
-    ty.definedInUnit.set key: ddid value: unitName.string
 }
 
 # isTypedefField -- true when a type-expr Node is an `X.typedef` dottedpath (the
@@ -5129,7 +5123,6 @@ resolveRecord: function {
     }
     applyPrivateExclusions :ty parentId: rrid excl: pvExcl_rrid
     applyGrantsPrivate :ty parentId: rrid grants: pvGrants_rrid
-    ty.definedInUnit.set key: rrid value: unitName.string
 }
 
 # resolveVariant -- resolve a variant ObjectDef into a VARIANT valtype: a child per
@@ -5345,7 +5338,6 @@ resolveVariant: function {
     }
     applyPrivateExclusions :ty parentId: vvid excl: pvExcl_vvid
     applyGrantsPrivate :ty parentId: vvid grants: pvGrants_vvid
-    ty.definedInUnit.set key: vvid value: unitName.string
 }
 
 # dottedParentName -- the parent atom name of a `parent.child` dottedpath Node, ""
@@ -5625,7 +5617,6 @@ resolveUnion: function {
     }
     applyPrivateExclusions :ty parentId: uuid excl: pvExcl_uuid
     applyGrantsPrivate :ty parentId: uuid grants: pvGrants_uuid
-    ty.definedInUnit.set key: uuid value: unitName.string
 }
 
 # fieldTypeNeedsCleanup -- true when a class field needs cleanup (so the holder keeps
@@ -6044,7 +6035,6 @@ resolveClass: function {
     }
     applyPrivateExclusions :ty parentId: ccid excl: pvExcl_ccid
     applyGrantsPrivate :ty parentId: ccid grants: pvGrants_ccid
-    ty.definedInUnit.set key: ccid value: unitName.string
 }
 
 # resolveFacet -- resolve a facet ObjectDef into a FACET valtype: a child per
@@ -6125,7 +6115,6 @@ resolveFacet: function {
     }
     applyPrivateExclusions :ty parentId: ffid excl: pvExcl_ffid
     applyGrantsPrivate :ty parentId: ffid grants: pvGrants_ffid
-    ty.definedInUnit.set key: ffid value: unitName.string
 }
 
 # resolveProtocol -- resolve a protocol ObjectDef into a PROTOCOL reftype: a child
@@ -6217,7 +6206,6 @@ resolveProtocol: function {
     reg.setDestructorName typeId: pid name: dn.stringview
     applyPrivateExclusions :ty parentId: ppid excl: pvExcl_ppid
     applyGrantsPrivate :ty parentId: ppid grants: pvGrants_ppid
-    ty.definedInUnit.set key: ppid value: unitName.string
 }
 
 # registerEmptyType -- register a native bottom type (null -> NULL, never -> NEVER) as a
@@ -6240,7 +6228,6 @@ registerEmptyType: function {
         ccn0: "\{name}.create"
         cci0: reg.newType name: ccn0.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: ex0 nameId: wkCreate childTypeId: cci0
-        ty.definedInUnit.set key: ex0 value: unitName.string
         return ex0
     } case none then null
     nid: reg.newType :name typetype: tt
@@ -6249,7 +6236,6 @@ registerEmptyType: function {
     ccname: "\{name}.create"
     ccid: reg.newType name: ccname.stringview typetype: ztypes.ztypetype.functionType
     ty.setChildId parentTypeId: nid nameId: wkCreate childTypeId: ccid
-    ty.definedInUnit.set key: nnid value: unitName.string
     linkDeclType :ty :reg defUnit: unitName :name tid: nid
     return nid
 }
@@ -6718,8 +6704,6 @@ resolveUnitBody: function {
                                 tid: gtid0
                             )
                         }
-                        gtidK0: gtid0
-                        ty.definedInUnit.set key: gtidK0 value: unitName.string
                         linkDeclType :ty :reg defUnit: unitName name: gpn0.stringview tid: gtid0
                         gpnid: nodeId n: (ast.nodes.get i: (gm.operation - 1).u64)
                         gtidV0: gtid0
@@ -8506,7 +8490,6 @@ synthGeneratorIterClass: function {
     iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.classType
     iid: iterId
     reg.setValtype typeId: iterId value: false
-    ty.definedInUnit.set key: iid value: unitName.string
     # the synthesized iter class has no Decl of its own; its closest
     # declaration is the generator function it was lowered from
     gfp9: declOfUnitDef :ty :ast defUnit: unitName name: fnName
@@ -8517,12 +8500,10 @@ synthGeneratorIterClass: function {
     createName: "\{iterName}.create"
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
     cdid: createId
-    ty.definedInUnit.set key: cdid value: unitName.string
     if gfp9 > 0 then reg.setDef typeId: createId declId: gfp9
     callName: "\{iterName}.call"
     callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.functionType
     clid: callId
-    ty.definedInUnit.set key: clid value: unitName.string
     if gfp9 > 0 then reg.setDef typeId: callId declId: gfp9
     ty.setChildId parentTypeId: callId nameId: wkThisMember childTypeId: iterId
     (ty.setChildOwnershipId
@@ -8663,7 +8644,6 @@ resolveInlineGenericUnit: function {
                 }
             }
         }
-        ty.definedInUnit.set key: did value: unitName.string
         linkDeclType :ty :reg defUnit: unitName name: defName tid: did
         # A non-generic inline unit is a real type; lay its unit->def childOf edge
         # (a generic template must NOT get one -- its id is the pre-instantiation
@@ -8735,7 +8715,6 @@ createUnitMono: function {
         monoId: reg.newType name: monoName typetype: ztypes.ztypetype.unitType
         did: monoId
         rid: monoId
-        ty.definedInUnit.set key: did value: unitName.string
         gtp9: declOfUnitDef :ty :ast defUnit: unitName name: templateName
         if gtp9 == 0 then {
             # a FILE-unit template instantiated cross-unit: attribute the
@@ -23634,42 +23613,6 @@ typecheck: function {
             :st
             mainName: program.mainUnitName.stringview
         )
-        devCompareDefinedInUnit9 :st
     } else null
     return st
-}
-
-# DEV -- compare every definedInUnit entry against the Decl-chain
-# derivation; divergences are the synth-Decl coverage inventory.
-devCompareDefinedInUnit9: function {st: zenv.ZSymbolTable} is {
-    tids9: (List u64)
-    unams9: (List String)
-    with it9: st.typing.definedInUnit.iterateItems do for e9: it9 loop {
-        tids9.append e9.key
-        unams9.append e9.value.copy
-    }
-    i9: u64
-    for i9 < tids9.length loop {
-        t9: tids9.get i: i9
-        u9: unams9.get i: i9
-        i9 = i9 + 1
-        nm9: unitNameOfTid ty: st.typing reg: st.reg tid: t9
-        if nm9.stringview != u9.stringview then {
-            tn9: typeNameOf :st tid: t9
-            io.eprintln "/* DBG */ diu divergence tid=\{t9} name=\{tn9} table=\{u9} decl=\{nm9}"
-        }
-    }
-    rt9: u64
-    rn9: st.reg.nextTypeId
-    for rt9 < rn9 loop {
-        if (st.typing.definedInUnit.has key: rt9) == false then {
-            rnm9: unitNameOfTid ty: st.typing reg: st.reg tid: rt9
-            if rnm9.length > 0 then {
-                rtn9: typeNameOf :st tid: rt9
-                rtt9: ztypes.ztypetypeName t: (st.reg.typetypeOf typeId: rt9)
-                io.eprintln "/* DBG */ diu expansion tid=\{rt9} name=\{rtn9} tt=\{rtt9} decl=\{rnm9}"
-            }
-        }
-        rt9 = rt9 + 1
-    }
 }

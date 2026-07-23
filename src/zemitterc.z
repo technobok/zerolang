@@ -12797,7 +12797,7 @@ isListPtrParam: function {
     cid: tid
     listT9: builtinTid :ast :symtab base: "List"
     if (originIsTid :symtab :tid originTid: listT9) == false then {
-        # a param type is a List SHELL (no genericOriginId, definedInUnit none);
+        # a param type is a List SHELL (no genericOriginId, no declaration);
         # resolve the canonical mono by its mangled name to read its origin.
         tn: typeNameOfReg9 :symtab :tid
         mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: tn.stringview
@@ -13220,7 +13220,7 @@ typeRefC: function {
     if ct.length > 0 then {
         # A user type shadowing a builtin scalar carries the scalar NAME but is
         # defined in a USER unit -- emit its struct, not the C scalar. System
-        # scalars (definedInUnit a stdlib unit) and shells (none) keep the C type.
+        # scalars (declared in a stdlib unit) and shells (no declaration) keep the C type.
         scDu9: definedInUnitOf :symtab :tid
         scShadow9: false
         match (
@@ -15846,24 +15846,18 @@ internUnitId9: function {ctx: Ctx name: StringView} out u64 is {
 }
 
 # buildDefUnitIndex -- snapshot tid -> interned defining-unit id once per
-# emission. typing.definedInUnit is written only during typecheck, so the
-# index is immutable here; zero-alloc id lookups then serve the hot
-# definedInNonMain path instead of per-query owned-Option rewraps.
+# emission, derived off the Decl chain (immutable during emission);
+# zero-alloc id lookups then serve the hot definedInNonMain path.
 buildDefUnitIndex: function {symtab: zenv.ZSymbolTable ctx: Ctx} is {
-    keys9: (List u64)
-    names9: (List String)
-    with dit: symtab.typing.definedInUnit.iterateItems do for de: dit loop {
-        keys9.append de.key
-        dv9: de.value.copy
-        names9.append dv9
-    }
-    di9: u64
-    dn9: keys9.length
-    for di9 < dn9 loop {
-        dnm9: names9.get i: di9
-        uid9: internUnitId9 :ctx name: dnm9.stringview
-        ctx.defUnitId.set key: (keys9.get i: di9) value: uid9
-        di9 = di9 + 1
+    t9: u64
+    n9: symtab.reg.nextTypeId
+    for t9 < n9 loop {
+        dnm9: ztypecheck.unitNameOfTid ty: symtab.typing reg: symtab.reg tid: t9
+        if dnm9.length > 0 then {
+            uid9: internUnitId9 :ctx name: dnm9.stringview
+            ctx.defUnitId.set key: t9 value: uid9
+        }
+        t9 = t9 + 1
     }
 }
 
@@ -17805,7 +17799,7 @@ collectLateMonosKind: function {
 
 # fnptrTypedefEligible -- a FUNCTION type worth a `_ft` typedef: a real spec /
 # free function / method defined in an emittable unit. Synthetic create/==/!=
-# carry no definedInUnit; generic templates and monos are skipped.
+# carry no declaration; generic templates and monos are skipped.
 # stdFnRefEmittable -- a FUNCTION worth a reference cname / _ft typedef:
 # emittable-unit fns always; a runtime-backed unit's fn only when it is a
 # BODIED (non-native), DEMANDED free fn (natives keep routing through the
@@ -18852,7 +18846,7 @@ protoParamCtype: function {
     # The spec param is usually a SHELL named after the system type; canonicalize
     # it by name (resolveTypeIdByName covers system types) so typeRefC resolves it
     # (and chases ByteView/Bytes to their collection mono). But a param already
-    # resolved to a CANONICAL id (definedInUnit set, e.g. system i64) is trusted
+    # resolved to a CANONICAL id (a linked declaration, e.g. system i64) is trusted
     # as-is -- re-resolving "i64" by name would wrongly pick up a user shadow of
     # the scalar in the main unit. Mirrors typeRefC's none-branch shell gate.
     cpid: pid
