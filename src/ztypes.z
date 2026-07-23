@@ -559,8 +559,8 @@ ConstraintDesc: record {
 
 # ParamDesc / ParamList -- a template's generic parameters in declaration
 # order, each with the constraint classified at registration. The resolved
-# GENERIC_PARAM type id stays in genericParamTid (set later, during
-# resolution). ParamDesc is a class because it holds a String.
+# GENERIC_PARAM type id rides the ordinal-keyed genericParamTid map (set
+# during resolution). ParamDesc is a class because it holds a String.
 ParamDesc: class {
     name: String
     constraint: ConstraintDesc
@@ -585,8 +585,11 @@ ZTypeRegistry: class {
     unitNameTid: (Map String value: u64)
     unitSeededDemand: (Map String value: bool)
     regMainUnit: String
-    genericParams: (Map String value: ParamList)
-    genericParamTid: (Map String value: u64)
+    # generic-template metadata, keyed by the TEMPLATE's DeclId; the
+    # per-(template, param-ordinal) GENERIC_PARAM tid rides a composite
+    # key (tdecl * 256 + ordinal)
+    genericParams: (Map u64 value: ParamList)
+    genericParamTid: (Map u64 value: u64)
 } as {
     allocType: function {:this} out u64 is {
         r: this.nextTypeId
@@ -1032,55 +1035,86 @@ ZTypeRegistry: class {
         return (this.crossUnitDemand.has item: name.string)
     }
 
-    # addGenericParam / isGenericParamOf -- the generic-param names of a type,
-    # keyed `{unit}.{type}.{param}`. A method param typed by its enclosing type's
-    # generic param is NOT a child (the oracle resolves a generic type's methods
-    # without the type's generic context, so the param type is unresolvable).
-    # one canonical GENERIC_PARAM type per (template, parameter): references
-    # inside the template's members resolve the parameter name to this id.
-    genericParamTidOf: function {:this typeKey: StringView paramName: StringView} out optionval u64 is {
-        k: "\{typeKey}.\{paramName}"
-        return (this.genericParamTid.get key: k)
-    }
-
-    setGenericParamTid: function {:this typeKey: StringView paramName: StringView tid: u64} is {
-        k: "\{typeKey}.\{paramName}"
-        v: tid
-        this.genericParamTid.set key: k value: v
-    }
-
-    addGenericParam: function {:this typeKey: StringView paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
-        tk: typeKey.string
-        plo: this.genericParams.get key: tk
+    # addGenericParam / isGenericParamOf -- a template's generic-param
+    # names and constraints, keyed by the template's DeclId (tdecl). A
+    # method param typed by its enclosing type's generic param is NOT a
+    # child (the oracle resolves a generic type's methods without the
+    # type's generic context, so the param type is unresolvable).
+    # paramOrdinalOf -- a parameter's declaration ordinal, or none.
+    paramOrdinalOf: function {:this tdecl: u64 paramName: StringView} out optionval u64 is {
+        plo: this.genericParams.get key: tdecl
         match (
             plo
         ) case some then {
-            has9: false
             i9: u64
             n9: plo.params.length
             for i9 < n9 loop {
                 pdx: plo.params.get i: i9
-                if pdx.name.stringview == paramName then has9 = true
+                if pdx.name.stringview == paramName then return (optionval.some i9)
                 i9 = i9 + 1
             }
-            if (has9) == false then {
-                plo.params.append (ParamDesc
-                    name: paramName.string
-                    constraint: (ConstraintDesc :kind :numericMax)
-                )
-            }
-        } case none then {
+        } case none then null
+        return (optionval.none u64)
+    }
+
+    # one canonical GENERIC_PARAM type per (template, parameter): references
+    # inside the template's members resolve the parameter name to this id.
+    genericParamTidOf: function {:this tdecl: u64 paramName: StringView} out optionval u64 is {
+        po9: this.paramOrdinalOf :tdecl :paramName
+        match (
+            po9
+        ) case some then {
+            return (this.genericParamTid.get key: ((tdecl * 256) + po9))
+        } case none then null
+        return (optionval.none u64)
+    }
+
+    setGenericParamTid: function {:this tdecl: u64 paramName: StringView tid: u64} is {
+        po9: this.paramOrdinalOf :tdecl :paramName
+        match (
+            po9
+        ) case some then {
+            v: tid
+            this.genericParamTid.set key: ((tdecl * 256) + po9) value: v
+        } case none then null
+    }
+
+    addGenericParam: function {:this tdecl: u64 paramName: StringView kind: constraintkind numericMax: (optionval u64)} is {
+        found9: false
+        {
+            plo: this.genericParams.get key: tdecl
+            match (
+                plo
+            ) case some then {
+                found9 = true
+                has9: false
+                i9: u64
+                n9: plo.params.length
+                for i9 < n9 loop {
+                    pdx: plo.params.get i: i9
+                    if pdx.name.stringview == paramName then has9 = true
+                    i9 = i9 + 1
+                }
+                if (has9) == false then {
+                    plo.params.append (ParamDesc
+                        name: paramName.string
+                        constraint: (ConstraintDesc :kind :numericMax)
+                    )
+                }
+            } case none then null
+        }
+        if (found9) == false then {
             np: (ParamList params: (List ParamDesc))
             np.params.append (ParamDesc
                 name: paramName.string
                 constraint: (ConstraintDesc :kind :numericMax)
             )
-            this.genericParams.set key: tk value: np
+            this.genericParams.set key: tdecl value: np
         }
     }
 
-    isGenericParamOf: function {:this typeKey: StringView name: StringView} out bool is {
-        plo: this.genericParams.get key: typeKey.string
+    isGenericParamOf: function {:this tdecl: u64 name: StringView} out bool is {
+        plo: this.genericParams.get key: tdecl
         match (
             plo
         ) case some then {
@@ -1097,8 +1131,8 @@ ZTypeRegistry: class {
 
     # genericParamConstraintOf -- the classified constraint for a template
     # parameter, or a NONE-kind descriptor when the parameter is unknown.
-    genericParamConstraintOf: function {:this typeKey: StringView paramName: StringView} out ConstraintDesc is {
-        plo: this.genericParams.get key: typeKey.string
+    genericParamConstraintOf: function {:this tdecl: u64 paramName: StringView} out ConstraintDesc is {
+        plo: this.genericParams.get key: tdecl
         match (
             plo
         ) case some then {
@@ -1118,9 +1152,9 @@ ZTypeRegistry: class {
         return (ConstraintDesc kind: constraintkind.none numericMax: (optionval.none u64))
     }
 
-    genericParamNamesOf: function {:this typeKey: StringView} out List String is {
+    genericParamNamesOf: function {:this tdecl: u64} out List String is {
         names: (List String)
-        plo: this.genericParams.get key: typeKey.string
+        plo: this.genericParams.get key: tdecl
         match (
             plo
         ) case some then {
@@ -1153,8 +1187,8 @@ newRegistry: function {} out ZTypeRegistry is {
         unitNameTid: (Map String value: u64)
         unitSeededDemand: (Map String value: bool)
         regMainUnit: "".string
-        genericParams: (Map String value: ParamList)
-        genericParamTid: (Map String value: u64)
+        genericParams: (Map u64 value: ParamList)
+        genericParamTid: (Map u64 value: u64)
     )
 }
 

@@ -21,7 +21,6 @@ public: unit {
     :dataFieldNames
     :descendNamed
     :fnReturnBaseNameOf
-    :genericTypeKey
     :isBareGenericParam
     :isComparisonOp
     :isGenericParam
@@ -1495,16 +1494,16 @@ resolveNamedType: function {
         return (reg.newType name: dn7 typetype: ztypes.ztypetype.recordType)
     }
     if thisName.length > 0 then {
-        etk7: "\{unitName}.\{thisName}"
-        if (reg.isGenericParamOf typeKey: etk7.stringview :name) then {
-            pgo7: reg.genericParamTidOf typeKey: etk7.stringview paramName: name
+        etk7: declOfUnitDef :ty :ast defUnit: unitName name: thisName
+        if (reg.isGenericParamOf tdecl: etk7 :name) then {
+            pgo7: reg.genericParamTidOf tdecl: etk7 paramName: name
             match (
                 pgo7
             ) case some then {
                 return pgo7
             } case none then null
             ptid7: reg.newType :name typetype: ztypes.ztypetype.genericParam
-            reg.setGenericParamTid typeKey: etk7.stringview paramName: name tid: ptid7
+            reg.setGenericParamTid tdecl: etk7 paramName: name tid: ptid7
             return ptid7
         }
     }
@@ -1839,13 +1838,58 @@ isGenericParam: function {ast: Ast op: Node} out bool is {
     }
 }
 
-# registerGenericParams -- record a type's generic-param names (keyed
-# `{unit}.{type}.{param}`) so method-param resolution can drop params typed by them.
+# declOfFnDef -- the Decl of a resolved function definition: a free
+# function's unit child, or a method's member Decl under its owner (the
+# defName arrives owner-composed -- "u8.+" -- and the owner may be the
+# DECLARING protocol rather than thisName, so the owner splits at the
+# composed name's last dot). 0 when unindexed (synthesized functions).
+declOfFnDef: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    unitName: StringView
+    defName: StringView
+    thisName: StringView
+} out u64 is {
+    if thisName.length == 0 then return (declOfUnitDef :ty :ast defUnit: unitName name: defName)
+    mown9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
+    mnm9: defName
+    mdot9: u64
+    mhas9: false
+    {
+        mi9: u64
+        mn0: defName.length
+        for mi9 < mn0 loop {
+            mb9: defName.byteAt i: mi9
+            match (
+                mb9
+            ) case some then {
+                if mb9 == 46 then {
+                    mdot9 = mi9
+                    mhas9 = true
+                }
+            } case none then null
+            mi9 = mi9 + 1
+        }
+    }
+    if mhas9 then {
+        mownNm9: (defName.substring from: 0 to: mdot9).string
+        if mownNm9.stringview != thisName then {
+            malt9: declOfUnitDef :ty :ast defUnit: unitName name: mownNm9.stringview
+            if malt9 > 0 then mown9 = malt9
+        }
+        mnm9 = defName.substring from: (mdot9 + 1) to: defName.length
+    }
+    if mown9 == 0 then return 0
+    return (ty.declFindChild parentDeclId: mown9 nameId: (zast.poolFind pool: ast.names text: mnm9))
+}
+
+# registerGenericParams -- record a type's generic-param names (keyed by
+# the template's DeclId) so method-param resolution can drop params typed by them.
 # registerGenericParamOne -- record one member's generic-param declaration.
 registerGenericParamOne: function {
     ast: Ast
     reg: ztypes.ZTypeRegistry
-    typeKey: StringView
+    tdecl: u64
     m: Node
 } is {
     match (
@@ -1862,7 +1906,7 @@ registerGenericParamOne: function {
             if k9 == ztypes.constraintkind.numeric then {
                 mx9 = constraintNumericMax cv: cf9x.stringview
             }
-            reg.addGenericParam :typeKey paramName: pn.stringview kind: k9 numericMax: mx9
+            reg.addGenericParam :tdecl paramName: pn.stringview kind: k9 numericMax: mx9
         }
     } else null
 }
@@ -1924,7 +1968,7 @@ hasGenericParam: function {ast: Ast items: List u32} out bool is {
 registerGenericParams: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
-    typeKey: StringView
+    tdecl: u64
     items: List u32
 } is {
     ri9: u64
@@ -1932,7 +1976,7 @@ registerGenericParams: function {
     for ri9 < rn9 loop {
         rid9: items.get i: ri9
         rm9: ast.nodes.get i: (rid9 - 1).u64
-        registerGenericParamOne :ast :reg :typeKey m: rm9
+        registerGenericParamOne :ast :reg :tdecl m: rm9
         ri9 = ri9 + 1
     }
 }
@@ -2027,6 +2071,7 @@ recordNodeName: function {ty: ztyping.ZTyping unitName: StringView name: StringV
 recordResolvedName: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
+    ast: Ast
     unitName: StringView
     thisName: StringView
     name: StringView
@@ -2050,14 +2095,11 @@ recordResolvedName: function {
                 # it no-stamp so resolution doesn't chase or report it
                 gskip9: false
                 if thisName.length > 0 then {
-                    enclK9: "\{unitName}.\{thisName}"
-                    if (reg.isGenericParamOf typeKey: enclK9.stringview :name) then gskip9 = true
+                    enclK9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
+                    if (reg.isGenericParamOf tdecl: enclK9 :name) then gskip9 = true
                 }
-                if gskip9 == false when ty.sigGenericKey.length > 0 then {
-                    if (reg.isGenericParamOf
-                        typeKey: ty.sigGenericKey.stringview
-                        :name
-                    ) then gskip9 = true
+                if gskip9 == false when ty.sigGenericDecl > 0 then {
+                    if (reg.isGenericParamOf tdecl: ty.sigGenericDecl :name) then gskip9 = true
                 }
                 recordNodeName :ty :unitName :name :nid
                 if gskip9 then {
@@ -2151,7 +2193,7 @@ resolveMonoRefInline: function {
     ast: Ast
     unitName: StringView
     thisName: StringView
-    enclKey: StringView
+    enclDecl: u64
     op: Node
     nid: u32
 } out u64 is {
@@ -2164,7 +2206,7 @@ resolveMonoRefInline: function {
             :ast
             :unitName
             :thisName
-            :enclKey
+            :enclDecl
             op: (ast.nodes.get i: (op.expression - 1).u64)
             :nid
         )
@@ -2175,7 +2217,7 @@ resolveMonoRefInline: function {
             :ast
             :unitName
             :thisName
-            :enclKey
+            :enclDecl
             callable: (ast.nodes.get i: (op.callable - 1).u64)
             arguments: op.arguments
             :nid
@@ -2192,7 +2234,7 @@ resolveMonoRefParts: function {
     ast: Ast
     unitName: StringView
     thisName: StringView
-    enclKey: StringView
+    enclDecl: u64
     callable: Node
     arguments: List u32
     nid: u32
@@ -2236,7 +2278,7 @@ resolveMonoRefParts: function {
                                 :ast
                                 :unitName
                                 :thisName
-                                :enclKey
+                                :enclDecl
                                 op: (ast.nodes.get i: (arg9.operation - 1).u64)
                                 nid: 0
                             )
@@ -2251,12 +2293,12 @@ resolveMonoRefParts: function {
                         if anc9.length == 0 then {
                             allOk9 = false
                         } else {
-                            if enclKey.length > 0 when (reg.isGenericParamOf
-                                typeKey: enclKey
+                            if enclDecl > 0 when (reg.isGenericParamOf
+                                tdecl: enclDecl
                                 name: anc9.stringview
                             ) then {
                                 epo9: (reg.genericParamTidOf
-                                    typeKey: enclKey
+                                    tdecl: enclDecl
                                     paramName: anc9.stringview
                                 )
                                 match (
@@ -2269,7 +2311,7 @@ resolveMonoRefParts: function {
                                         typetype: ztypes.ztypetype.genericParam
                                     )
                                     (reg.setGenericParamTid
-                                        typeKey: enclKey
+                                        tdecl: enclDecl
                                         paramName: anc9.stringview
                                         tid: aid9
                                     )
@@ -2450,7 +2492,7 @@ recordTyperef: function {
             :ast
             :unitName
             :thisName
-            enclKey: ""
+            enclDecl: 0
             op: (ast.nodes.get i: (node.expression - 1).u64)
             nid: node.nodeid
         )
@@ -2514,6 +2556,7 @@ recordTyperef: function {
             (recordResolvedName
                 :ty
                 :reg
+                :ast
                 unitName: pn.stringview
                 :thisName
                 name: cn.stringview
@@ -2525,6 +2568,7 @@ recordTyperef: function {
                 (recordResolvedName
                     :ty
                     :reg
+                    :ast
                     :unitName
                     :thisName
                     name: bn.stringview
@@ -2539,7 +2583,7 @@ recordTyperef: function {
                         :ast
                         :unitName
                         :thisName
-                        enclKey: ""
+                        enclDecl: 0
                         op: (ast.nodes.get i: (node.parent - 1).u64)
                         nid: node.nodeid
                     )
@@ -2564,6 +2608,7 @@ recordTyperef: function {
         (recordResolvedName
             :ty
             :reg
+            :ast
             :unitName
             :thisName
             name: rrA9.stringview
@@ -2574,6 +2619,7 @@ recordTyperef: function {
         (recordResolvedName
             :ty
             :reg
+            :ast
             :unitName
             :thisName
             name: rrA9.stringview
@@ -2586,7 +2632,7 @@ recordTyperef: function {
 # template's generic parameters, its canonical parameter type id; else 0.
 returnParamTid: function {
     reg: ztypes.ZTypeRegistry
-    enclKey: StringView
+    enclDecl: u64
     ast: Ast
     oId: u32
 } out u64 is {
@@ -2596,15 +2642,15 @@ returnParamTid: function {
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent.
     if bn.length == 0 then bn = markerPeeledBase :ast n: o
-    if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
-        po: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
+    if (reg.isGenericParamOf tdecl: enclDecl name: bn.stringview) then {
+        po: reg.genericParamTidOf tdecl: enclDecl paramName: bn.stringview
         match (
             po
         ) case some then {
             return po
         } case none then null
         rpt7: reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
-        reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: rpt7
+        reg.setGenericParamTid tdecl: enclDecl paramName: bn.stringview tid: rpt7
         return rpt7
     }
 
@@ -2621,19 +2667,19 @@ partialTyperefTid: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
     unitName: StringView
-    enclKey: StringView
+    enclDecl: u64
     n: Node
 } out u64 is {
     match (
         n
     ) case expression then {
         iexM9: ast.nodes.get i: (n.expression - 1).u64
-        return (partialTyperefTid :ty :reg :ast :unitName :enclKey n: iexM9)
+        return (partialTyperefTid :ty :reg :ast :unitName :enclDecl n: iexM9)
     } case dottedpath then {
         dcn6: atomName :ast n: (ast.nodes.get i: (n.child - 1).u64)
         if (isStripMarker name: dcn6.stringview) then {
             dpq9: ast.nodes.get i: (n.parent - 1).u64
-            return (partialTyperefTid :ty :reg :ast :unitName :enclKey n: dpq9)
+            return (partialTyperefTid :ty :reg :ast :unitName :enclDecl n: dpq9)
         }
         return 0
     } case call then {
@@ -2643,7 +2689,7 @@ partialTyperefTid: function {
             :ast
             :unitName
             thisName: ""
-            :enclKey
+            :enclDecl
             callable: (ast.nodes.get i: (n.callable - 1).u64)
             arguments: n.arguments
             nid: 0
@@ -2662,12 +2708,12 @@ partialReturnTid: function {
     reg: ztypes.ZTypeRegistry
     ast: Ast
     unitName: StringView
-    enclKey: StringView
+    enclDecl: u64
     oId: u32
 } out u64 is {
     if oId == 0 then return 0
     o: ast.nodes.get i: (oId - 1).u64
-    return (partialTyperefTid :ty :reg :ast :unitName :enclKey n: o)
+    return (partialTyperefTid :ty :reg :ast :unitName :enclDecl n: o)
 
     return 0
 }
@@ -2726,7 +2772,7 @@ markerPeeledBase: function {ast: Ast n: Node} out String is {
 stampGenericParamRef: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    enclKey: StringView
+    enclDecl: u64
     ast: Ast oId: u32
 } is {
     if oId == 0 then return
@@ -2736,16 +2782,16 @@ stampGenericParamRef: function {
     # base name through the peeled parent; the marker dp wears the stamp,
     # matching recordTyperef's convention for concrete marked returns.
     if bn.length == 0 then bn = markerPeeledBase :ast n: o
-    if (reg.isGenericParamOf typeKey: enclKey name: bn.stringview) then {
+    if (reg.isGenericParamOf tdecl: enclDecl name: bn.stringview) then {
         gpt3: u64
-        gpo3: reg.genericParamTidOf typeKey: enclKey paramName: bn.stringview
+        gpo3: reg.genericParamTidOf tdecl: enclDecl paramName: bn.stringview
         match (
             gpo3
         ) case some then {
             gpt3 = gpo3
         } case none then {
             gpt3 = reg.newType name: bn.stringview typetype: ztypes.ztypetype.genericParam
-            reg.setGenericParamTid typeKey: enclKey paramName: bn.stringview tid: gpt3
+            reg.setGenericParamTid tdecl: enclDecl paramName: bn.stringview tid: gpt3
         }
         gnid3: nodeId n: o
         gpv3b: gpt3
@@ -2763,13 +2809,13 @@ recordGenericMarkerReturn: function {
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
     unitName: StringView
-    enclKey: StringView
+    enclDecl: u64
     ast: Ast oId: u32
 } is {
     if oId == 0 then return
     o: ast.nodes.get i: (oId - 1).u64
     mpb3: markerPeeledBase :ast n: o
-    if mpb3.length > 0 when (reg.isGenericParamOf typeKey: enclKey name: mpb3.stringview) then {
+    if mpb3.length > 0 when (reg.isGenericParamOf tdecl: enclDecl name: mpb3.stringview) then {
         mnid3: nodeId n: o
         recordNodeName :ty :unitName name: mpb3.stringview nid: mnid3.u64
         # the entry feeds mono-return substitution (the pending MAP is the
@@ -2936,7 +2982,7 @@ resolveTyperefShell: function {
             :ast
             :unitName
             :thisName
-            enclKey: ""
+            enclDecl: 0
             callable: (ast.nodes.get i: (typeExpr.callable - 1).u64)
             arguments: typeExpr.arguments
             nid: 0
@@ -3358,12 +3404,12 @@ resolveFunction: function {
     dfid: fid
     rfid: fid
     isgen: hasGenericParam :ast items: fnode.asItems
+    fnDecl9: declOfFnDef :ty :ast :unitName :defName :thisName
     if isgen then {
         reg.setGeneric typeId: fid value: true
         # Function templates register their param constraints like type
         # templates do (checkGenericCall checks satisfaction per call).
-        fgtk9: "\{unitName}.\{defName}"
-        registerGenericParams :ast :reg typeKey: fgtk9.stringview items: fnode.asItems
+        registerGenericParams :ast :reg tdecl: fnDecl9 items: fnode.asItems
         aiter2: fnode.asItems.iterate
         for amId9: aiter2 loop {
             am: ast.nodes.get i: (amId9 - 1).u64
@@ -3383,12 +3429,19 @@ resolveFunction: function {
             ty.fnBodyDiverges.set key: fidd value: dvg
         }
     }
-    enclKey: unitName.string
-    if thisName.length != 0 then enclKey = "\{unitName}.\{thisName}"
-    fnKey9: String
-    if isgen then fnKey9 = "\{unitName}.\{defName}"
-    sgkPrev9: ty.sigGenericKey.copy
-    if isgen then ty.sigGenericKey = fnKey9.copy
+    enclDecl9: u64
+    if thisName.length != 0 then {
+        enclDecl9 = declOfUnitDef :ty :ast defUnit: unitName name: thisName
+    } else {
+        ero9: ty.unitRootByName.getv key: unitName
+        match (
+            ero9
+        ) case some then {
+            enclDecl9 = ero9
+        } case none then null
+    }
+    sgkPrev9: ty.sigGenericDecl
+    if isgen then ty.sigGenericDecl = fnDecl9
     piter: fnode.parameters.iterate
     for pmId9: piter loop {
         pm: ast.nodes.get i: (pmId9 - 1).u64
@@ -3403,13 +3456,13 @@ resolveFunction: function {
                 if ptn.stringview == "this" then skipParam = true
             }
             if skipParam == false when isgen then {
-                if (reg.isGenericParamOf typeKey: fnKey9.stringview name: ptn.stringview) then {
+                if (reg.isGenericParamOf tdecl: fnDecl9 name: ptn.stringview) then {
                     skipParam = true
                     fnParam9 = true
                 }
             }
             if skipParam == false when (reg.isGenericParamOf
-                typeKey: enclKey.stringview
+                tdecl: enclDecl9
                 name: ptn.stringview
             ) then {
                 skipParam = true
@@ -3424,7 +3477,7 @@ resolveFunction: function {
                     # AST) and no typeref/demand recording (a user type
                     # coincidentally named like the param must not bind).
                     fpt9: u64
-                    fpo9: reg.genericParamTidOf typeKey: fnKey9.stringview paramName: ptn.stringview
+                    fpo9: reg.genericParamTidOf tdecl: fnDecl9 paramName: ptn.stringview
                     match (
                         fpo9
                     ) case some then {
@@ -3434,11 +3487,7 @@ resolveFunction: function {
                             name: ptn.stringview
                             typetype: ztypes.ztypetype.genericParam
                         )
-                        (reg.setGenericParamTid
-                            typeKey: fnKey9.stringview
-                            paramName: ptn.stringview
-                            tid: fpt9
-                        )
+                        reg.setGenericParamTid tdecl: fnDecl9 paramName: ptn.stringview tid: fpt9
                     }
                     (ty.setChildId
                         parentTypeId: fid
@@ -3452,10 +3501,7 @@ resolveFunction: function {
                     # setChild -- unit template methods stay childless (emit
                     # `(void)`); unit bodies clone, so the stamp is per-clone.
                     gpt2: u64
-                    gpo2: (reg.genericParamTidOf
-                        typeKey: enclKey.stringview
-                        paramName: ptn.stringview
-                    )
+                    gpo2: reg.genericParamTidOf tdecl: enclDecl9 paramName: ptn.stringview
                     match (
                         gpo2
                     ) case some then {
@@ -3465,11 +3511,7 @@ resolveFunction: function {
                             name: ptn.stringview
                             typetype: ztypes.ztypetype.genericParam
                         )
-                        (reg.setGenericParamTid
-                            typeKey: enclKey.stringview
-                            paramName: ptn.stringview
-                            tid: gpt2
-                        )
+                        reg.setGenericParamTid tdecl: enclDecl9 paramName: ptn.stringview tid: gpt2
                     }
                     pnid2: nodeId n: (ast.nodes.get i: (pm.operation - 1).u64)
                     gpv2b: gpt2
@@ -3608,7 +3650,7 @@ resolveFunction: function {
         :ty
         :reg
         :ast
-        enclKey: enclKey.stringview
+        enclDecl: enclDecl9
         oId: fnode.returntype
     )
     (recordGenericMarkerReturn
@@ -3616,17 +3658,17 @@ resolveFunction: function {
         :reg
         :ast
         :unitName
-        enclKey: enclKey.stringview
+        enclDecl: enclDecl9
         oId: fnode.returntype
     )
     rpt4: u64
     frOpt9: fnode.returntype
     if isgen then {
-        rpt4 = returnParamTid :ast :reg enclKey: fnKey9.stringview oId: frOpt9
+        rpt4 = returnParamTid :ast :reg enclDecl: fnDecl9 oId: frOpt9
     }
     if rpt4 == 0 then {
         frOpt9b: fnode.returntype
-        rpt4 = returnParamTid :ast :reg enclKey: enclKey.stringview oId: frOpt9b
+        rpt4 = returnParamTid :ast :reg enclDecl: enclDecl9 oId: frOpt9b
     }
     if rpt4 > 0 then {
         reg.setReturnType typeId: fid value: rpt4
@@ -3650,7 +3692,7 @@ resolveFunction: function {
                 :reg
                 :ast
                 :unitName
-                enclKey: enclKey.stringview
+                enclDecl: enclDecl9
                 oId: fnode.returntype
             )
             if prt4 > 0 then reg.setReturnType typeId: fid value: prt4
@@ -3662,50 +3704,9 @@ resolveFunction: function {
         ty.funcReturnsBorrow.set key: fbk value: fbv
     }
     checkBorrowReturnLock :ast :ty :fnode :defName
-    if thisName.length == 0 then {
-        linkDeclType :ty :reg :ast defUnit: unitName name: defName tid: dfid
-    } else {
-        mown9: declOfUnitDef :ty :ast defUnit: unitName name: thisName
-        if mown9 > 0 then {
-            # a method's defName arrives owner-composed ("u8.+", and the
-            # owner may be the DECLARING protocol rather than thisName --
-            # "Text.stringview" resolved for String); split at the last dot
-            mnm9: defName
-            mdot9: u64
-            mhas9: false
-            {
-                mi9: u64
-                mn0: defName.length
-                for mi9 < mn0 loop {
-                    mb9: defName.byteAt i: mi9
-                    match (
-                        mb9
-                    ) case some then {
-                        if mb9 == 46 then {
-                            mdot9 = mi9
-                            mhas9 = true
-                        }
-                    } case none then null
-                    mi9 = mi9 + 1
-                }
-            }
-            if mhas9 then {
-                mownNm9: (defName.substring from: 0 to: mdot9).string
-                if mownNm9.stringview != thisName then {
-                    malt9: declOfUnitDef :ty :ast defUnit: unitName name: mownNm9.stringview
-                    if malt9 > 0 then mown9 = malt9
-                }
-                mnm9 = defName.substring from: (mdot9 + 1) to: defName.length
-            }
-            mfd9: (ty.declFindChild
-                parentDeclId: mown9
-                nameId: (zast.poolFind pool: ast.names text: mnm9)
-            )
-            if mfd9 > 0 then {
-                ty.declSetType declId: mfd9 typeId: dfid
-                reg.setDef typeId: dfid declId: mfd9
-            }
-        }
+    if fnDecl9 > 0 then {
+        ty.declSetType declId: fnDecl9 typeId: dfid
+        reg.setDef typeId: dfid declId: fnDecl9
     }
     dfp9: false
     {
@@ -3727,7 +3728,7 @@ resolveFunction: function {
             reg.setDef typeId: dfid declId: dfr9
         } case none then null
     }
-    ty.sigGenericKey = sgkPrev9
+    ty.sigGenericDecl = sgkPrev9
     return rfid
 }
 
@@ -4152,7 +4153,6 @@ resolveData: function {ast: Ast
         name: defName
         typetype: ztypes.ztypetype.dataType
     )
-    ddid: did
     reg.setValtype typeId: did value: false
     if ty.literalIntShellId == 0 then {
         ty.literalIntShellId = reg.newType name: "literal_int" typetype: ztypes.ztypetype.recordType
@@ -4934,8 +4934,12 @@ resolveRecord: function {
     eqOptR9: eqNullOptOut :ast asItems: rnode.asItems
     if isgen then {
         reg.setGeneric typeId: rid value: true
-        rtk: "\{unitName}.\{defName}"
-        registerGenericParams :ast :reg typeKey: rtk.stringview items: rnode.asItems
+        (registerGenericParams
+            :ast
+            :reg
+            tdecl: (declOfUnitDef :ty :ast defUnit: unitName name: defName)
+            items: rnode.asItems
+        )
     }
     istd: recordIsTypedef :ast :rnode
     if istd then {
@@ -5194,8 +5198,12 @@ resolveVariant: function {
     eqOptV9: eqNullOptOut :ast asItems: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: vid value: true
-        gtk9: "\{unitName}.\{defName}"
-        registerGenericParams :ast :reg typeKey: gtk9.stringview items: vnode.asItems
+        (registerGenericParams
+            :ast
+            :reg
+            tdecl: (declOfUnitDef :ty :ast defUnit: unitName name: defName)
+            items: vnode.asItems
+        )
     }
     armNames9: (Set String)
     fiter: vnode.isItems.iterate
@@ -5474,8 +5482,12 @@ resolveUnion: function {
     isgen: hasGenericParam :ast items: vnode.asItems
     if isgen then {
         reg.setGeneric typeId: uid value: true
-        gtk9: "\{unitName}.\{defName}"
-        registerGenericParams :ast :reg typeKey: gtk9.stringview items: vnode.asItems
+        (registerGenericParams
+            :ast
+            :reg
+            tdecl: (declOfUnitDef :ty :ast defUnit: unitName name: defName)
+            items: vnode.asItems
+        )
     }
     allNull: true
     armNames9: (Set String)
@@ -5700,8 +5712,12 @@ resolveClass: function {
     isgen: hasGenericParam :ast items: cnode.asItems
     if isgen then {
         reg.setGeneric typeId: cid value: true
-        gtk9: "\{unitName}.\{defName}"
-        registerGenericParams :ast :reg typeKey: gtk9.stringview items: cnode.asItems
+        (registerGenericParams
+            :ast
+            :reg
+            tdecl: (declOfUnitDef :ty :ast defUnit: unitName name: defName)
+            items: cnode.asItems
+        )
     }
     istd: recordIsTypedef :ast rnode: cnode
     if istd then {
@@ -6223,7 +6239,6 @@ registerEmptyType: function {
         return ex0
     } case none then null
     nid: reg.newType :name typetype: tt
-    nnid: nid
     reg.setValtype typeId: nid value: true
     ccname: "\{name}.create"
     ccid: reg.newType name: ccname.stringview typetype: ztypes.ztypetype.functionType
@@ -6651,7 +6666,16 @@ resolveUnitBody: function {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
     {
         if (hasGenericParam :ast items: bodyIds9) then {
-            registerGenericParams :reg :ast typeKey: unitName items: bodyIds9
+            urd0: u64
+            {
+                uro0: ty.unitRootByName.getv key: unitName
+                match (
+                    uro0
+                ) case some then {
+                    urd0 = uro0
+                } case none then null
+            }
+            registerGenericParams :reg :ast tdecl: urd0 items: bodyIds9
             # Each generic-param name gets a canonical per-(unit,param)
             # GENERIC_PARAM tid (get-or-mint), attributed to the unit; the
             # param definition's value node carries it so template signatures
@@ -6667,7 +6691,7 @@ resolveUnitBody: function {
                     ) then {
                         gpn0: zast.nameTextCopy :ast ref: gm.name
                         gtid0: u64
-                        gpo0: reg.genericParamTidOf typeKey: unitName paramName: gpn0.stringview
+                        gpo0: reg.genericParamTidOf tdecl: urd0 paramName: gpn0.stringview
                         match (
                             gpo0
                         ) case some then {
@@ -6677,11 +6701,7 @@ resolveUnitBody: function {
                                 name: gpn0.stringview
                                 typetype: ztypes.ztypetype.genericParam
                             )
-                            (reg.setGenericParamTid
-                                typeKey: unitName
-                                paramName: gpn0.stringview
-                                tid: gtid0
-                            )
+                            reg.setGenericParamTid tdecl: urd0 paramName: gpn0.stringview tid: gtid0
                         }
                         (linkDeclType
                             :ty
@@ -8474,7 +8494,6 @@ synthGeneratorIterClass: function {
 } is {
     iterName: "\{fnName}_iter"
     iterId: reg.newType name: iterName.stringview typetype: ztypes.ztypetype.classType
-    iid: iterId
     reg.setValtype typeId: iterId value: false
     # the synthesized iter class has no Decl of its own; its closest
     # declaration is the generator function it was lowered from
@@ -8485,11 +8504,9 @@ synthGeneratorIterClass: function {
     ty.setChildId parentTypeId: iterId nameId: wkState childTypeId: st1
     createName: "\{iterName}.create"
     createId: reg.newType name: createName.stringview typetype: ztypes.ztypetype.functionType
-    cdid: createId
     if gfp9 > 0 then reg.setDef typeId: createId declId: gfp9
     callName: "\{iterName}.call"
     callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.functionType
-    clid: callId
     if gfp9 > 0 then reg.setDef typeId: callId declId: gfp9
     ty.setChildId parentTypeId: callId nameId: wkThisMember childTypeId: iterId
     (ty.setChildOwnershipId
@@ -8583,7 +8600,8 @@ resolveInlineGenericUnit: function {
         rid: uid
         if (hasGenericParam :ast items: bodyIds9) then {
             reg.setGeneric typeId: uid value: true
-            registerGenericParams :reg :ast typeKey: defName items: bodyIds9
+            tdl5: declOfUnitDef :ty :ast defUnit: unitName name: defName
+            registerGenericParams :reg :ast tdecl: tdl5 items: bodyIds9
             if ty.fullMainUnit.length > 0 then {
                 # mirror the reference's inline-template touch:
                 # the unit node and each bare generic-param def stamp, and
@@ -8601,12 +8619,8 @@ resolveInlineGenericUnit: function {
                             op: (ast.nodes.get i: (gm.operation - 1).u64)
                         ) then {
                             gpn5: zast.nameTextCopy :ast ref: gm.name
-                            ik5: "\{unitName}.\{defName}"
                             gtid5: u64
-                            gpo5: (reg.genericParamTidOf
-                                typeKey: ik5.stringview
-                                paramName: gpn5.stringview
-                            )
+                            gpo5: reg.genericParamTidOf tdecl: tdl5 paramName: gpn5.stringview
                             match (
                                 gpo5
                             ) case some then {
@@ -8617,7 +8631,7 @@ resolveInlineGenericUnit: function {
                                     typetype: ztypes.ztypetype.genericParam
                                 )
                                 (reg.setGenericParamTid
-                                    typeKey: ik5.stringview
+                                    tdecl: tdl5
                                     paramName: gpn5.stringview
                                     tid: gtid5
                                 )
@@ -8699,7 +8713,6 @@ createUnitMono: function {
     } case none then null
     if (exists) == false then {
         monoId: reg.newType name: monoName typetype: ztypes.ztypetype.unitType
-        did: monoId
         rid: monoId
         gtp9: declOfUnitDef :ty :ast defUnit: unitName name: templateName
         if gtp9 == 0 then {
@@ -9352,10 +9365,27 @@ completeUnitInstantiations: function {
             tplId: u64
             tk: "\{mainName}.\{rt}"
             tgo: (optionval.none u64)
+            tplDecl9: u64
             match (
                 program
             ) case program then {
                 tgo = resolvedByKey ast: program.ast :ty :reg key: tk
+                tplDecl9 = (declOfUnitDef
+                    :ty
+                    ast: program.ast
+                    defUnit: mainName.stringview
+                    name: rt.stringview
+                )
+                if tplDecl9 == 0 then {
+                    # a generic FILE unit used as the template: its params
+                    # live on its root Decl
+                    tro9: ty.unitRootByName.getv key: rt.stringview
+                    match (
+                        tro9
+                    ) case some then {
+                        tplDecl9 = tro9
+                    } case none then null
+                }
             } else null
             match (
                 tgo
@@ -9372,7 +9402,7 @@ completeUnitInstantiations: function {
                 } case none then null
             }
             if (reg.genericArgCount specId: mid9) == 0 then {
-                pnR9: reg.genericParamNamesOf typeKey: rt.stringview
+                pnR9: reg.genericParamNamesOf tdecl: tplDecl9
                 pnN9: pnR9.length
                 pnI9: u64
                 for pnI9 < pnN9 loop {
@@ -9530,8 +9560,7 @@ runUnitMonoWalks: function {
                     } case none then null
                 }
                 if orgU9 > 0 then {
-                    ukU9: typeNameOfReg reg: st.reg tid: orgU9
-                    pnU9: st.reg.genericParamNamesOf typeKey: ukU9.stringview
+                    pnU9: st.reg.genericParamNamesOf tdecl: (declOfTypeId reg: st.reg tid: orgU9)
                     pcU9: pnU9.length
                     pjU9: u64
                     for pjU9 < pcU9 loop {
@@ -10298,8 +10327,8 @@ respecialize: function {
         ai9 = ai9 + 1
     }
     if changed9 == false then return 0
-    tk9: genericTypeKey :ty :reg tid: origin9
-    pn9: reg.genericParamNamesOf typeKey: tk9.stringview
+    tk9: declOfTypeId :reg tid: origin9
+    pn9: reg.genericParamNamesOf tdecl: tk9
     if pn9.length != an9 then return 0
     subs9: (Map String value: u64)
     rvSubs9: (Map String value: u64)
@@ -10585,13 +10614,13 @@ mintMono: function {
         isSized9: false
         if templateId == (builtinTidT :ast :ty :reg base: "str") then isSized9 = true
         if templateId == (builtinTidT :ast :ty :reg base: "array") then isSized9 = true
-        tk9: genericTypeKey :ty :reg tid: templateId
-        pNames9: reg.genericParamNamesOf typeKey: tk9.stringview
+        tk9: declOfTypeId :reg tid: templateId
+        pNames9: reg.genericParamNamesOf tdecl: tk9
         pi9: u64
         pn0: pNames9.length
         for pi9 < pn0 loop {
             pname9: pNames9.get i: pi9
-            cdx9: reg.genericParamConstraintOf typeKey: tk9.stringview paramName: pname9.stringview
+            cdx9: reg.genericParamConstraintOf tdecl: tk9 paramName: pname9.stringview
             isNum9: true
             if cdx9.kind == ztypes.constraintkind.any then isNum9 = false
             if cdx9.kind == ztypes.constraintkind.none then isNum9 = false
@@ -10842,12 +10871,12 @@ checkConstraintSat: function {
     ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    typeKey: StringView
+    tdecl: u64
     paramName: StringView
     argTid: u64
 } is {
     if (reg.typetypeOf typeId: argTid) == ztypes.ztypetype.genericParam then return
-    cd9: reg.genericParamConstraintOf :typeKey :paramName
+    cd9: reg.genericParamConstraintOf :tdecl :paramName
     ck9: cd9.kind
     if ck9 == ztypes.constraintkind.none then return
     ok9: true
@@ -10903,7 +10932,18 @@ checkConstraintSat: function {
     if (ok9) == false then {
         an9: regTypeNameOf :reg tid: argTid
         con9: constraintTextOf desc: cd9
-        m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{typeKey}'"
+        tdn9: String
+        {
+            tdo9: ty.decls.get key: tdecl
+            match (
+                tdo9
+            ) case some then {
+                tdn9 = regTypeNameOf :reg tid: tdo9.typeId
+                un9x: unitNameOfTid :ty :reg tid: tdo9.typeId
+                if un9x.length > 0 then tdn9 = "\{un9x}.\{tdn9}"
+            } case none then null
+        }
+        m9: "generic argument '\{an9}' does not satisfy constraint '\{con9}' on parameter '\{paramName}' of '\{tdn9}'"
         addResolveError :ty e: zast.err.genericError msg: m9
     }
 }
@@ -10976,8 +11016,8 @@ getOrMintSpec: function {
     valSubs: (Map String value: u64)
     fallbackArg: u64
 } out u64 is {
-    tk8: genericTypeKey :ty :reg tid: templateId
-    pnames8: reg.genericParamNamesOf typeKey: tk8.stringview
+    tk8: declOfTypeId :reg tid: templateId
+    pnames8: reg.genericParamNamesOf tdecl: tk8
     # An elided leading type argument stages under the empty name; rebind it
     # to the primary generic parameter before the trie keys and idSubs build
     # (mintMono's own rebind happens after both).
@@ -11011,7 +11051,7 @@ getOrMintSpec: function {
                 :ast
                 :ty
                 :reg
-                typeKey: tk8.stringview
+                tdecl: tk8
                 paramName: pn8.stringview
                 argTid: pgot8
             )
@@ -11025,7 +11065,7 @@ getOrMintSpec: function {
                 # a numeric literal keys its trie level by VALUE; per-level
                 # kind is fixed by the parameter, so values and type ids
                 # cannot collide
-                cd8: reg.genericParamConstraintOf typeKey: tk8.stringview paramName: pn8.stringview
+                cd8: reg.genericParamConstraintOf tdecl: tk8 paramName: pn8.stringview
                 nmx8: cd8.numericMax
                 match (
                     nmx8
@@ -11095,7 +11135,7 @@ getOrMintSpec: function {
         pt8: pnames8.length
         for pi8 < pt8 loop {
             pnm8: pnames8.get i: pi8
-            pto8: reg.genericParamTidOf typeKey: tk8.stringview paramName: pnm8.stringview
+            pto8: reg.genericParamTidOf tdecl: tk8 paramName: pnm8.stringview
             match (
                 pto8
             ) case some then {
@@ -11541,15 +11581,6 @@ mintCollectionChildren: function {
     }
 }
 
-# genericTypeKey -- "{defining-unit}.{name}" for the registry's generic-param
-# set lookups.
-genericTypeKey: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out String is {
-    tn: regTypeNameOf :reg :tid
-    duo: unitNameOfTid :ty :reg :tid
-    if duo.length > 0 then return ("\{duo}.\{tn}")
-    return tn
-}
-
 # firstGenericParamName -- the primary (first-declared) generic parameter
 # name of a template, or empty when it has none. Binds an elided leading type
 # argument (`(List String)` == `(List of: String)`) to its parameter.
@@ -11558,8 +11589,8 @@ firstGenericParamName: function {
     reg: ztypes.ZTypeRegistry
     templateId: u64
 } out String is {
-    tk: genericTypeKey :ty :reg tid: templateId
-    names: reg.genericParamNamesOf typeKey: tk.stringview
+    tk: declOfTypeId :reg tid: templateId
+    names: reg.genericParamNamesOf tdecl: tk
     if names.length > 0 then {
         firstNm: names.get i: 0
         return firstNm.copy
@@ -11583,7 +11614,7 @@ inferGenericConstruction: function {
 } out u64 is {
     tname: typeNameOf :st tid: tplId
     if tname.length == 0 then return 0
-    tk: genericTypeKey ty: st.typing reg: st.reg tid: tplId
+    tk: declOfTypeId reg: st.reg tid: tplId
     # Stage the template's children, then keep the ones whose TYPE NAME is a
     # registered generic param (field shells carry the param name, not a
     # GENERIC_PARAM typetype).
@@ -11616,7 +11647,7 @@ inferGenericConstruction: function {
     for ci3 < cn3 loop {
         cid3: cIds3.get i: ci3
         pnm3: typeNameOf :st tid: cid3
-        if (st.reg.isGenericParamOf typeKey: tk.stringview name: pnm3.stringview) then {
+        if (st.reg.isGenericParamOf tdecl: tk name: pnm3.stringview) then {
             nm3: cNames3.get i: ci3
             nv3: nm3.stringview
             n3: nv3.string
@@ -11664,7 +11695,7 @@ inferGenericConstruction: function {
             }
             isP: false
             if pk.length > 0 then {
-                isP = st.reg.isGenericParamOf typeKey: tk.stringview name: pk.stringview
+                isP = st.reg.isGenericParamOf tdecl: tk name: pk.stringview
             }
             if isP then {
                 an: paramTypeBaseName :ast op: (ast.nodes.get i: (arg.operation - 1).u64)
@@ -11743,7 +11774,7 @@ inferGenericConstruction: function {
         argIdx = argIdx + 1
     }
     st.truncateEntries marker: infMark9
-    paramsM: st.reg.genericParamNamesOf typeKey: tk.stringview
+    paramsM: st.reg.genericParamNamesOf tdecl: tk
     firstMissing: String
     pmi: u64
     pmn: paramsM.length
@@ -11830,7 +11861,7 @@ genericTypeConstruction: function {
 } out u64 is {
     tname: typeNameOf :st tid: tplId
     if tname.length == 0 then return 0
-    tk0: genericTypeKey ty: st.typing reg: st.reg tid: tplId
+    tk0: declOfTypeId reg: st.reg tid: tplId
     sfx: String
     subs: (Map String value: u64)
     valSubs2: (Map String value: u64)
@@ -11877,7 +11908,7 @@ genericTypeConstruction: function {
             }
             isP0: false
             if pk0.length > 0 then {
-                isP0 = st.reg.isGenericParamOf typeKey: tk0.stringview name: pk0.stringview
+                isP0 = st.reg.isGenericParamOf tdecl: tk0 name: pk0.stringview
             }
             # `capacity:` on a builtin container is a create argument riding
             # the construction sugar: skip it here (it must not reach the
@@ -12036,7 +12067,7 @@ validateGenericTypeArgs: function {
 } out bool is {
     tname: typeNameOf :st tid: tplId
     if tname.length == 0 then return true
-    tk: genericTypeKey ty: st.typing reg: st.reg tid: tplId
+    tk: declOfTypeId reg: st.reg tid: tplId
     childNames: (List String)
     {
         vgb9: st.typing.childIndex.get key: tplId
@@ -12086,7 +12117,7 @@ validateGenericTypeArgs: function {
             skipFrom: false
             if allowFrom when pk.stringview == "from" then skipFrom = true
             if pk.length > 0 when (skipFrom) == false then {
-                isP: st.reg.isGenericParamOf typeKey: tk.stringview name: pk.stringview
+                isP: st.reg.isGenericParamOf tdecl: tk name: pk.stringview
                 if isP then {
                     if (seen.has item: pk.copy) when (allowFrom) == false then {
                         pkc: pk.copy
@@ -12135,7 +12166,7 @@ validateGenericTypeArgs: function {
                     if (isField) == false then {
                         pkc2: pk.copy
                         m2: "unknown type argument '\{pkc2}' for generic type '\{tname}'"
-                        plist: st.reg.genericParamNamesOf typeKey: tk.stringview
+                        plist: st.reg.genericParamNamesOf tdecl: tk
                         note2: "valid type parameters: ".string
                         pi: u64
                         pn2: plist.length
@@ -19017,7 +19048,7 @@ checkGenericCall: function {
     mname: typeNameOf :st tid: funcId
     if mname.length == 0 then return 0
     allOk: true
-    gtk4: genericTypeKey ty: st.typing reg: st.reg tid: funcId
+    gtk4: declOfTypeId reg: st.reg tid: funcId
     giter2: gparams.iterate
     for gp3: giter2 loop {
         gv: gp3.stringview
@@ -19030,7 +19061,7 @@ checkGenericCall: function {
                 :ast
                 ty: st.typing
                 reg: st.reg
-                typeKey: gtk4.stringview
+                tdecl: gtk4
                 paramName: gv
                 argTid: ggot
             )
@@ -19284,19 +19315,84 @@ checkCase: function {
     if subjT == 0 then {
         gsn9: subjectAtomName :ast n: (ast.nodes.get i: (casenode.subject - 1).u64)
         if gsn9.length > 0 then {
-            gkey9: String
-            if (st.reg.isGenericParamOf
-                typeKey: st.typing.synthLabel.stringview
-                name: gsn9.stringview
-            ) then {
-                gkey9 = st.typing.synthLabel.copy
-            } else {
-                if (st.reg.isGenericParamOf typeKey: unitName name: gsn9.stringview) then {
-                    gkey9 = unitName.string
+            gdecl9: u64
+            {
+                slOwn9: st.typing.synthLabel.copy
+                slv9: slOwn9.stringview
+                sdot9: slv9.indexOf needle: "."
+                match (
+                    sdot9
+                ) case some then {
+                    su9: (slv9.substring from: 0 to: sdot9).string
+                    sn9: (slv9.substring from: (sdot9 + 1) to: slv9.length).string
+                    gdecl9 = (declOfUnitDef
+                        ty: st.typing
+                        :ast
+                        defUnit: su9.stringview
+                        name: sn9.stringview
+                    )
+                } case none then null
+            }
+            if gdecl9 > 0 then {
+                if (st.reg.isGenericParamOf tdecl: gdecl9 name: gsn9.stringview) == false then {
+                    gdecl9 = 0
                 }
             }
-            if gkey9.length > 0 then {
-                pgo9: st.reg.genericParamTidOf typeKey: gkey9.stringview paramName: gsn9.stringview
+            if gdecl9 == 0 then {
+                gur9: st.typing.unitRootByName.getv key: unitName
+                match (
+                    gur9
+                ) case some then {
+                    if (st.reg.isGenericParamOf tdecl: gur9 name: gsn9.stringview) then {
+                        gdecl9 = gur9
+                    }
+                } case none then null
+            }
+            if gdecl9 == 0 when st.typing.curMonoStamp > 0 then {
+                # a mono-clone body walk: the subject's template is the
+                # current mono's generic origin
+                mog9: u64
+                {
+                    mzo9: st.reg.typeById.get key: st.typing.curMonoStamp
+                    match (
+                        mzo9
+                    ) case some then {
+                        mgo9: mzo9.genericOriginId
+                        match (
+                            mgo9
+                        ) case some then {
+                            mog9 = mgo9
+                        } case none then null
+                    } case none then null
+                }
+                if mog9 > 0 then {
+                    gdecl9 = declOfTypeId reg: st.reg tid: mog9
+                    if gdecl9 > 0 then {
+                        if (st.reg.isGenericParamOf
+                            tdecl: gdecl9
+                            name: gsn9.stringview
+                        ) == false then gdecl9 = 0
+                    }
+                }
+            }
+            if gdecl9 == 0 then {
+                # the template's own body walk runs with unitName = the
+                # TEMPLATE's name; the template def lives in the main unit
+                fmu9: st.typing.fullMainUnit.copy
+                gcand9: (declOfUnitDef
+                    ty: st.typing
+                    :ast
+                    defUnit: fmu9.stringview
+                    name: unitName
+                )
+                if gcand9 > 0 then {
+                    if (st.reg.isGenericParamOf tdecl: gcand9 name: gsn9.stringview) then {
+                        gdecl9 = gcand9
+                    }
+                }
+            }
+            if gdecl9 > 0 then {
+                pgo9: st.reg.genericParamTidOf tdecl: gdecl9 paramName: gsn9.stringview
                 match (
                     pgo9
                 ) case some then {
@@ -19306,11 +19402,7 @@ checkCase: function {
                         name: gsn9.stringview
                         typetype: ztypes.ztypetype.genericParam
                     )
-                    (st.reg.setGenericParamTid
-                        typeKey: gkey9.stringview
-                        paramName: gsn9.stringview
-                        tid: ptid9
-                    )
+                    st.reg.setGenericParamTid tdecl: gdecl9 paramName: gsn9.stringview tid: ptid9
                     subjT = ptid9
                 }
                 gsnid9: nodeId n: (ast.nodes.get i: (casenode.subject - 1).u64)
@@ -19318,8 +19410,15 @@ checkCase: function {
                     # direct write, NOT stampGate: this genericParam stamp IS
                     # the dissection marker the emitter dispatches on -- it
                     # must survive the template walk's param-stamp suppression
+                    # AND override any substituted per-mono stamp the general
+                    # subject walk wrote (the canonical param tid is in
+                    # monoParamSubst now, so stampGate substitutes it)
                     setgs9: subjT
                     st.typing.nodeType.set key: gsnid9.u64 value: setgs9
+                    if st.typing.curMonoStamp > 0 then {
+                        gmk9: (st.typing.curMonoStamp * 4294967296) + gsnid9.u64
+                        st.typing.monoNodeType.set key: gmk9 value: setgs9
+                    }
                 }
             }
         }
@@ -19337,6 +19436,23 @@ checkCase: function {
             ) case some then null case none then {
                 st.popTo marker: matchMarker
                 return 0
+            }
+        }
+    }
+    if subjT > 0 then {
+        if (st.reg.typetypeOf typeId: subjT) == ztypes.ztypetype.genericParam then {
+            # a genericParam subject IS a compile-time dissection: write the
+            # marker stamp directly (stampGate suppresses param stamps in
+            # template walks, and the per-mono slot must carry the param,
+            # not its substitution, for the emitter's dispatch gate)
+            gmn9: nodeId n: (ast.nodes.get i: (casenode.subject - 1).u64)
+            if gmn9 > 0 then {
+                gmv9: subjT
+                st.typing.nodeType.set key: gmn9.u64 value: gmv9
+                if st.typing.curMonoStamp > 0 then {
+                    gmk8: (st.typing.curMonoStamp * 4294967296) + gmn9.u64
+                    st.typing.monoNodeType.set key: gmk8 value: gmv9
+                }
             }
         }
     }
@@ -20966,16 +21082,27 @@ sweepUnwalkedMethods: function {st: zenv.ZSymbolTable ast: Ast} is {
 
 # bindMonoParams -- scope-define one mono's type args under the template's
 # param names, and fill monoParamSubst (param tid -> arg tid) for flat
-# substitution at stamp time. Param names and tids key asymmetrically in the
-# registry (registry type name vs qualified "unit.name"), so both are probed.
+# substitution at stamp time; the template's Decl is the one key.
 bindMonoParams: function {
     st: zenv.ZSymbolTable
-    tplKey: StringView
-    altKey: StringView
     monoId: u64
 } is {
-    pn9: st.reg.genericParamNamesOf typeKey: tplKey
-    if pn9.length == 0 then pn9 = st.reg.genericParamNamesOf typeKey: altKey
+    morig9: u64
+    {
+        mzo9: st.reg.typeById.get key: monoId
+        match (
+            mzo9
+        ) case some then {
+            mgo9: mzo9.genericOriginId
+            match (
+                mgo9
+            ) case some then {
+                morig9 = mgo9
+            } case none then null
+        } case none then null
+    }
+    tdecl: declOfTypeId reg: st.reg tid: morig9
+    pn9: st.reg.genericParamNamesOf :tdecl
     pc9: pn9.length
     pj9: u64
     for pj9 < pc9 loop {
@@ -20984,12 +21111,7 @@ bindMonoParams: function {
             if av9 > 0 then {
                 pnm9: (pn9.get i: pj9).copy
                 st.define name: pnm9.stringview ztypeId: av9
-                pto9: st.reg.genericParamTidOf typeKey: tplKey paramName: pnm9.stringview
-                match (
-                    pto9
-                ) case some then null case none then {
-                    pto9 = st.reg.genericParamTidOf typeKey: altKey paramName: pnm9.stringview
-                }
+                pto9: st.reg.genericParamTidOf :tdecl paramName: pnm9.stringview
                 match (
                     pto9
                 ) case some then {
@@ -21072,8 +21194,7 @@ stampOneFnMono: function {
     st.push name: sn9.stringview
     st.typing.monoParamSubst = (Map u64 value: u64)
     {
-        altk9: "\{unitName}.\{fnName}"
-        bindMonoParams :st :tplKey altKey: altk9.stringview :monoId
+        bindMonoParams :st :monoId
     }
     st.typing.curMonoStamp = monoId
     st.typing.curMonoFnTid = monoId
@@ -21184,8 +21305,7 @@ stampOneClassMono: function {
     st.push name: sn9.stringview
     st.typing.monoParamSubst = (Map u64 value: u64)
     {
-        altk9: "\{unitName}.\{clsName}"
-        bindMonoParams :st :tplKey altKey: altk9.stringview :monoId
+        bindMonoParams :st :monoId
     }
     mNames9: (List String)
     mOps9: (List u32)
@@ -21492,8 +21612,7 @@ stampOneUnitMono: function {
     st.push name: sn9.stringview
     st.typing.monoParamSubst = (Map u64 value: u64)
     {
-        altk9: "\{unitName}.\{templateName}"
-        bindMonoParams :st :tplKey altKey: altk9.stringview :monoId
+        bindMonoParams :st :monoId
     }
     idxs9: (List u64)
     {
