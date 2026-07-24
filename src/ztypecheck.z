@@ -4871,10 +4871,11 @@ applyUnitVisibility: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry pro
                     # the entry `main` of the primary unit must stay public:
                     # a `public:` block that omits it hides the entry point
                     if nmV9.stringview == program.mainUnitName.stringview then {
-                        if (ty.isChildPrivate
-                            pool: program.ast.names
-                            parentTypeId: utidV9
-                            name: "main"
+                        if (declMemberIsPrivate
+                            :ty
+                            :reg
+                            tid: utidV9
+                            nameId: (program.ast.names.find s: "main")
                         ) then {
                             mnid9: u32
                             mnln9: u32
@@ -13624,7 +13625,13 @@ checkDotted: function {
         if (st.typing.privacySeen) when un9.stringview != unitName then {
             aliasHitU9: false
             if st.typing.renameSeen then {
-                intU9: st.typing.childPublicAliasOf parentTypeId: bt name: cn.stringview
+                intU9: (declPublicAliasInternal
+                    ty: st.typing
+                    reg: st.reg
+                    pool: ast.names
+                    tid: bt
+                    name: cn.stringview
+                )
                 if intU9.length > 0 then {
                     (st.typing.setAliasInternalName
                         nodeid: dp.nodeid.u64
@@ -13634,10 +13641,11 @@ checkDotted: function {
                     aliasHitU9 = true
                 }
             }
-            if (aliasHitU9) == false when (st.typing.isChildPrivate
-                pool: ast.names
-                parentTypeId: bt
-                name: cn.stringview
+            if (aliasHitU9) == false when (declMemberIsPrivate
+                ty: st.typing
+                reg: st.reg
+                tid: bt
+                nameId: (ast.names.find s: cn.stringview)
             ) then {
                 ucnid9: nodeId n: (ast.nodes.get i: (dp.child - 1).u64)
                 ucln9: nodeLine n: (ast.nodes.get i: (dp.child - 1).u64)
@@ -13757,10 +13765,11 @@ checkDotted: function {
                 hh3: "did you mean '\{sgc3}'?"
                 h3 = hh3
             }
-            if (st.typing.isChildPrivate
-                pool: ast.names
-                parentTypeId: bt
-                name: cn.stringview
+            if (declMemberIsPrivate
+                ty: st.typing
+                reg: st.reg
+                tid: bt
+                nameId: (ast.names.find s: cn.stringview)
             ) then {
                 hp3: "'\{cnc9}' is private (not in the public interface)"
                 h3 = hp3
@@ -13797,7 +13806,13 @@ checkDotted: function {
             :bt
             baseNode: baseNodeX9
         ) == false then {
-            intNmX9 = st.typing.childPublicAliasOf parentTypeId: bt name: cn.stringview
+            intNmX9 = (declPublicAliasInternal
+                ty: st.typing
+                reg: st.reg
+                pool: ast.names
+                tid: bt
+                name: cn.stringview
+            )
         }
     }
     if intNmX9.length > 0 then {
@@ -13936,10 +13951,11 @@ checkDotted: function {
                     if aliasViaX9 == false then {
                         baseNodeC9: ast.nodes.get i: (dp.parent - 1).u64
                         if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC9) == false then {
-                            if (st.typing.isChildPrivate
-                                pool: ast.names
-                                parentTypeId: bt
-                                name: cn.stringview
+                            if (declMemberIsPrivate
+                                ty: st.typing
+                                reg: st.reg
+                                tid: bt
+                                nameId: (ast.names.find s: cn.stringview)
                             ) then armHidden9 = true
                         }
                     }
@@ -14130,10 +14146,11 @@ checkDotted: function {
                 }
             }
         }
-        if aliasViaX9 == false when (st.typing.isChildPrivate
-            pool: ast.names
-            parentTypeId: bt
-            name: cn.stringview
+        if aliasViaX9 == false when (declMemberIsPrivate
+            ty: st.typing
+            reg: st.reg
+            tid: bt
+            nameId: (ast.names.find s: cn.stringview)
         ) then {
             baseN9: ast.nodes.get i: (dp.parent - 1).u64
             if (baseIsPrivateCapable :st :ast :bt baseNode: baseN9) == false then {
@@ -14275,10 +14292,11 @@ checkDotted: function {
                         hhMm9: "did you mean '\{sgMm9}'?"
                         hMm9 = hhMm9
                     }
-                    if (st.typing.isChildPrivate
-                        pool: ast.names
-                        parentTypeId: bt
-                        name: cn.stringview
+                    if (declMemberIsPrivate
+                        ty: st.typing
+                        reg: st.reg
+                        tid: bt
+                        nameId: (ast.names.find s: cn.stringview)
                     ) then {
                         hpMm9: "'\{cnMm9}' is private (not in the public interface)"
                         hMm9 = hpMm9
@@ -23640,7 +23658,15 @@ canonicalizeShellChildren: function {ast: Ast st: zenv.ZSymbolTable mainName: St
 # (0 when the type has no `public:` block). Collect child ids first, then scan
 # kinds, to avoid overlapping ty.decls borrows.
 publicNsOf: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
-    od9: declOfTypeId :reg :tid
+    od9: u64
+    {
+        zo9: reg.typeById.get key: tid
+        match (
+            zo9
+        ) case some then {
+            od9 = zo9.def
+        } case none then null
+    }
     if od9 == 0 then return 0
     kids9: (List u64)
     {
@@ -23665,6 +23691,63 @@ publicNsOf: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} ou
         ki9 = ki9 + 1
     }
     return r9
+}
+
+# declMemberIsPrivate -- member `nameId` is private on the type/unit that minted
+# `tid`: true iff that type has a publicNs (a `public:` block) and `nameId` is not
+# one of its exposed edges. Exact-tid: a mono has no own publicNs, so all its
+# members read public (matching the childPrivate map's exact-tid keying).
+declMemberIsPrivate: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    tid: u64
+    nameId: u32
+} out bool is {
+    pn9: publicNsOf :ty :reg :tid
+    if pn9 == 0 then return false
+    od9: u64
+    {
+        po9: ty.decls.get key: pn9
+        match (
+            po9
+        ) case some then {
+            od9 = po9.parent
+        } case none then null
+    }
+    # not private if `nameId` is not a declared member (matches isChildPrivate,
+    # which is false when the type has no such member edge)
+    if (ty.declFindChild parentDeclId: od9 :nameId) == 0 then return false
+    return (ty.declFindChild parentDeclId: pn9 :nameId) == 0
+}
+
+# declPublicAliasInternal -- the internal member name that public alias `name`
+# exposes on `tid`, or "" when `name` is not a renamed public entry (the exposed
+# name equals the internal name, or there is no such entry).
+declPublicAliasInternal: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    pool: zast.StringPool
+    tid: u64
+    name: StringView
+} out String is {
+    nid9: pool.find s: name
+    if nid9 == 0 then return "".string
+    pn9: publicNsOf :ty :reg :tid
+    if pn9 == 0 then return "".string
+    tgt9: ty.declFindChild parentDeclId: pn9 nameId: nid9
+    if tgt9 == 0 then return "".string
+    intName9: u32
+    {
+        do9: ty.decls.get key: tgt9
+        match (
+            do9
+        ) case some then {
+            intName9 = do9.name
+        } case none then null
+    }
+    if intName9 == nid9 then return "".string
+    if intName9 == 0 then return "".string
+    return (zast.poolTextCopy :pool ref: intName9)
 }
 
 # q2SpikeVerify -- Q2 Phase-0 spike gate (env ZC_Q2_SPIKE): stamps ownership +
@@ -23769,14 +23852,8 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
                 ) case some then {
                     mapPriv9 = cp9
                 } case none then null
-                pnPriv9: false
-                if lastPnid9 > 0 then {
-                    visMembers = visMembers + 1
-                    if (st.typing.declFindChild
-                        parentDeclId: lastPnid9
-                        nameId: nid32
-                    ) == 0 then pnPriv9 = true
-                }
+                if lastPnid9 > 0 then visMembers = visMembers + 1
+                pnPriv9: declMemberIsPrivate ty: st.typing reg: st.reg tid: ptid9 nameId: nid32
                 if mapPriv9 != pnPriv9 then visPrivMismatch = visPrivMismatch + 1
             }
             do9: st.typing.decls.get key: did9
