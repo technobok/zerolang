@@ -1003,14 +1003,23 @@ specStemTid: function {
     arg1: StringView
     arg2: StringView
 } out u64 is {
-    args9: (List u64)
-    args9.append (builtinTid :ast :symtab base: arg1)
-    if arg2.length > 0 then args9.append (builtinTid :ast :symtab base: arg2)
-    return (ztypecheck.specLookup
-        reg: symtab.reg
-        templateId: (builtinTid :ast :symtab :base)
-        args: args9
+    a29: u64
+    if arg2.length > 0 then a29 = builtinTid :ast :symtab base: arg2
+    return (specTidArgs
+        :symtab
+        templateTid: (builtinTid :ast :symtab :base)
+        a1: (builtinTid :ast :symtab base: arg1)
+        a2: a29
     )
+}
+
+# specTidArgs -- specStemTid's core, taking the argument TYPE IDS directly so a
+# nested instance (Result over List_String) can be composed one level at a time.
+specTidArgs: function {symtab: zenv.ZSymbolTable templateTid: u64 a1: u64 a2: u64} out u64 is {
+    args9: (List u64)
+    args9.append a1
+    if a2 > 0 then args9.append a2
+    return (ztypecheck.specLookup reg: symtab.reg templateId: templateTid args: args9)
 }
 
 # originTidOf -- a type's genericOriginId (the template it monomorphized from), or
@@ -16404,6 +16413,78 @@ emitMapMono: function {
 
 # emitMonos -- emit every collection-mono instance in the registry (List
 # today; Map/Set/iterators land with their slices).
+# ioCanonTid -- the type id behind an io/cli runtime fragment's canonical stem,
+# for the GENERIC INSTANCES only: resolved through the spec trie from
+# SOURCE-named parts (Result over filestat and IoError), never by the mangled
+# spelling. 0 for a plain source-name stem (File, IoError, Reader), which keeps
+# the by-name path, and 0 when the instance was never demanded.
+ioCanonTid: function {ast: Ast symtab: zenv.ZSymbolTable canon: StringView} out u64 is {
+    if canon == "Option_StringView" then {
+        return (specStemTid :ast :symtab base: "Option" arg1: "StringView" arg2: "")
+    }
+    if canon == "Option_String" then {
+        return (specStemTid :ast :symtab base: "Option" arg1: "String" arg2: "")
+    }
+    if canon == "OptionView_String" then {
+        return (specStemTid :ast :symtab base: "OptionView" arg1: "String" arg2: "")
+    }
+    if canon == "ListView_u8" then {
+        return (specStemTid :ast :symtab base: "ListView" arg1: "u8" arg2: "")
+    }
+    if canon == "List_u8" then return (specStemTid :ast :symtab base: "List" arg1: "u8" arg2: "")
+    if canon == "List_String" then {
+        return (specStemTid :ast :symtab base: "List" arg1: "String" arg2: "")
+    }
+    if canon == "List_PositionalDef" then {
+        return (specStemTid :ast :symtab base: "List" arg1: "PositionalDef" arg2: "")
+    }
+    if canon == "List_OptionDef" then {
+        return (specStemTid :ast :symtab base: "List" arg1: "OptionDef" arg2: "")
+    }
+    if canon == "List_FlagDef" then {
+        return (specStemTid :ast :symtab base: "List" arg1: "FlagDef" arg2: "")
+    }
+    if canon == "Map_String_String" then {
+        return (specStemTid :ast :symtab base: "Map" arg1: "String" arg2: "String")
+    }
+    if canon == "Result_filestat_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "filestat" arg2: "IoError")
+    }
+    if canon == "Result_String_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "String" arg2: "IoError")
+    }
+    if canon == "Result_File_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "File" arg2: "IoError")
+    }
+    if canon == "Result_null_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "null" arg2: "IoError")
+    }
+    if canon == "Result_u64_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "u64" arg2: "IoError")
+    }
+    if canon == "Result_Listener_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "Listener" arg2: "IoError")
+    }
+    if canon == "Result_Conn_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "Conn" arg2: "IoError")
+    }
+    if canon == "Result_bool_IoError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "bool" arg2: "IoError")
+    }
+    if canon == "Result_Parsed_CliError" then {
+        return (specStemTid :ast :symtab base: "Result" arg1: "Parsed" arg2: "CliError")
+    }
+    if canon == "Result_List_String_IoError" then {
+        return (specTidArgs
+            :symtab
+            templateTid: (builtinTid :ast :symtab base: "Result")
+            a1: (specStemTid :ast :symtab base: "List" arg1: "String" arg2: "")
+            a2: (builtinTid :ast :symtab base: "IoError")
+        )
+    }
+    return 0
+}
+
 # ioCanonCname -- the id-based cname for an io canonical stem (the part after
 # `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its
 # else a named system type (IoError/File/filestat/Reader/...) by registry name.
@@ -16414,6 +16495,10 @@ ioCanonCname: function {
     ctx: Ctx
     canon: StringView
 } out String is {
+    st9: ioCanonTid :ast :symtab :canon
+    if st9 > 0 then return (cnameOf tid: st9 name: canon)
+    # a plain source-name stem (File, IoError, Reader): the system unit first,
+    # then the registry scan below for the io/cli units it does not cover.
     mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: canon
     match (
         mo
