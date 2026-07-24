@@ -15617,7 +15617,7 @@ emitListMono: function {
             :buf
         )
     } case none then null
-    emitListIter :ast :symtab :ctx :monoId nm: nm.stringview elemName: eln9.stringview :buf
+    emitListIter :symtab :ctx :monoId nm: nm.stringview :buf
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
@@ -15625,27 +15625,17 @@ emitListMono: function {
 # used (the ListIter / OptionView monos were minted). The OptionView mono is
 # emitted by the earlier OptionView pass, so this can reference it.
 emitListIter: function {
-    ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     monoId: u64
     nm: StringView
-    elemName: StringView
     buf: String.borrow
 } is {
     ctx
     liId: monoMethodReturn :symtab :monoId nameId: wkIterate
-    if liId == 0 then {
-        liNameF: "ListIter_\{elemName}"
-        liId = monoIdByName :ast :symtab name: liNameF.stringview
-    }
     if liId == 0 then return
     liName: typeNameOfReg9 :symtab tid: liId
     ovId: monoMethodReturn :symtab monoId: liId nameId: wkCall
-    if ovId == 0 then {
-        ovNameF: "OptionView_\{elemName}"
-        ovId = monoIdByName :ast :symtab name: ovNameF.stringview
-    }
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: ovId
     li: cbaseNoPrefix tid: liId name: liName.stringview
@@ -15978,21 +15968,6 @@ payloadDestructor: function {
     return "".string
 }
 
-# monoIdByName -- a mono instance id looked up by its registry name, 0 absent.
-monoIdByName: function {ast: Ast symtab: zenv.ZSymbolTable name: StringView} out u64 is {
-    mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg :name
-    match (
-        mo
-    ) case some then {
-        if symtab.reg.monoNameStats then {
-            symtab.reg.siteMonoIdByName = symtab.reg.siteMonoIdByName + 1
-        }
-        return mo
-    } case none then {
-        return 0
-    }
-}
-
 # monoMethodReturn -- a mono method child's registered return id (0 when the
 # method or its return is absent). The id-first way to reach a collection's
 # iterator/view/wrapper companions.
@@ -16131,17 +16106,9 @@ emitSetMono: function {
     ekind: keyHashKind :symtab :ctx tid: elemTid
     isStr: ekind == 1
     siId: monoMethodReturn :symtab :monoId nameId: wkIterate
-    if siId == 0 then {
-        siNameF: "SetIter_\{elemName}"
-        siId = monoIdByName :ast :symtab name: siNameF.stringview
-    }
     if siId == 0 then return
     siName: typeNameOfReg9 :symtab tid: siId
     ovId: monoMethodReturn :symtab monoId: siId nameId: wkCall
-    if ovId == 0 then {
-        ovNameF: "OptionView_\{elemName}"
-        ovId = monoIdByName :ast :symtab name: ovNameF.stringview
-    }
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: ovId
     ov: cbaseNoPrefix tid: ovId name: ovName.stringview
@@ -16241,44 +16208,25 @@ mapValFreeStmt: function {
 # (OptionView_<K>, OptionView_MapEntry_<K>_<V>) are defined by the earlier
 # OptionView leg.
 emitMapIters: function {
-    ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     monoId: u64
     runtimeDir: StringView
     nm: StringView
-    keyName: StringView
-    valName: StringView
     keyT: StringView
     valT: StringView
     buf: String.borrow
 } is {
     miiId: monoMethodReturn :symtab :monoId nameId: wkIterateItems
-    if miiId == 0 then {
-        miiNameF: "MapItemIter_\{keyName}_\{valName}"
-        miiId = monoIdByName :ast :symtab name: miiNameF.stringview
-    }
     if miiId == 0 then return
     miiName: typeNameOfReg9 :symtab tid: miiId
     mkiId: monoMethodReturn :symtab :monoId nameId: wkIterate
-    if mkiId == 0 then {
-        mkiNameF: "MapKeyIter_\{keyName}_\{valName}"
-        mkiId = monoIdByName :ast :symtab name: mkiNameF.stringview
-    }
     if mkiId == 0 then return
     mkiName: typeNameOfReg9 :symtab tid: mkiId
     ovkId: monoMethodReturn :symtab monoId: mkiId nameId: wkCall
-    if ovkId == 0 then {
-        ovkNameF: "OptionView_\{keyName}"
-        ovkId = monoIdByName :ast :symtab name: ovkNameF.stringview
-    }
     if ovkId == 0 then return
     ovkName: typeNameOfReg9 :symtab tid: ovkId
     oveId: monoMethodReturn :symtab monoId: miiId nameId: wkCall
-    if oveId == 0 then {
-        oveNameF: "OptionView_MapEntry_\{keyName}_\{valName}"
-        oveId = monoIdByName :ast :symtab name: oveNameF.stringview
-    }
     if oveId == 0 then return
     oveName: typeNameOfReg9 :symtab tid: oveId
     meId: u64
@@ -16288,10 +16236,6 @@ emitMapIters: function {
     ) case some then {
         meId = meo
     } case none then null
-    if meId == 0 then {
-        meNameF: "MapEntry_\{keyName}_\{valName}"
-        meId = monoIdByName :ast :symtab name: meNameF.stringview
-    }
     if meId == 0 then return
     meName: typeNameOfReg9 :symtab tid: meId
     mki: cbaseNoPrefix tid: mkiId name: mkiName.stringview
@@ -16510,14 +16454,11 @@ emitMapMono: function {
         buf.append gv2
     }
     (emitMapIters
-        :ast
         :symtab
         :ctx
         :monoId
         :runtimeDir
         nm: nm.stringview
-        keyName: keyName.stringview
-        valName: valName.stringview
         keyT: keyT.stringview
         valT: valT.stringview
         :buf
