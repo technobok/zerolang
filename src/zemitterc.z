@@ -1131,6 +1131,31 @@ Ctx: class {
     resultvalOriginTid: u64
 }
 
+# canonFnId -- userFnId, but a tid already carrying a generic origin is a
+# registered mono and inherently canonical: skip the name round-trip and use it.
+canonFnId: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    tid: u64
+    name: StringView
+} out u64 is {
+    if (originTidOf :symtab :tid) > 0 then return tid
+    return (userFnId :ast :symtab :ctx :name)
+}
+
+# canonTypeId -- resolveTypeIdByName with the same mono short-circuit.
+canonTypeId: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    tid: u64
+    name: StringView
+} out u64 is {
+    if (originTidOf :symtab :tid) > 0 then return tid
+    return (resolveTypeIdByName :ast :symtab :ctx :name)
+}
+
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
 userFnId: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} out u64 is {
     go: (ztypecheck.resolveUnitChild
@@ -1201,7 +1226,7 @@ pathIsPointer: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} ou
         pnid: atomNodeId9 n: (ast.nodes.get i: (n.parent - 1).u64)
         pstamp: stampIdOf :symtab nid: pnid
         pstn: typeNameOfReg9 :symtab tid: pstamp
-        prid: resolveTypeIdByName :ast :symtab :ctx name: pstn.stringview
+        prid: canonTypeId :ast :symtab :ctx tid: pstamp name: pstn.stringview
         ptid: pstamp
         if prid > 0 then ptid = prid
         return (symtab.typing.isChildLockField
@@ -2702,7 +2727,7 @@ hoistBorrowValArg: function {
         vduo
     ) case none then {
         vtn: typeNameOfReg9 :symtab tid: pid
-        vrr: resolveTypeIdByName :ast :symtab :ctx name: vtn.stringview
+        vrr: canonTypeId :ast :symtab :ctx tid: pid name: vtn.stringview
         if vrr > 0 then vrid = vrr
     } case some then null
     isStrH9: vrid == ctx.strTid
@@ -4148,14 +4173,14 @@ renderDefault: function {
     ) case some then {
         if b1 == 102 then {
             tn: typeNameOfReg9 :symtab tid: targetTid
-            cf9: userFnId :ast :symtab :ctx name: tn.stringview
+            cf9: canonFnId :ast :symtab :ctx tid: targetTid name: tn.stringview
             if cf9 > 0 then return (cnameOf tid: cf9 name: tn.stringview)
             return (cnameOf tid: targetTid name: tn.stringview)
         }
         if b1 == 118 then {
             arm: sliceAfterColon s: default
             tn2: typeNameOfReg9 :symtab tid: targetTid
-            cv9: userFnId :ast :symtab :ctx name: tn2.stringview
+            cv9: canonFnId :ast :symtab :ctx tid: targetTid name: tn2.stringview
             vtarget9: targetTid
             if cv9 > 0 then vtarget9 = cv9
             tg: variantTag :symtab tid: vtarget9 arm: arm.stringview
@@ -4880,7 +4905,7 @@ emitByrefArg: function {
         hduo
     ) case none then {
         htn0: typeNameOfReg9 :symtab tid: pid
-        hrr: resolveTypeIdByName :ast :symtab :ctx name: htn0.stringview
+        hrr: canonTypeId :ast :symtab :ctx tid: pid name: htn0.stringview
         if hrr > 0 then hrid = hrr
     } case some then null
     htn: typeNameOfReg9 :symtab tid: hrid
@@ -6708,7 +6733,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             bstamp0: stampIdOf :symtab nid: bnid2
             bstamp: bstamp0
             bsn0: typeNameOfReg9 :symtab tid: bstamp0
-            bcid: userFnId :ast :symtab :ctx name: bsn0.stringview
+            bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0.stringview
             if bcid > 0 then {
                 bstamp = bcid
             } else {
@@ -9645,7 +9670,7 @@ emitReassignLvalue: function {
         rpnid9: nodeIdOf9 n: (ast.nodes.get i: (n.parent - 1).u64)
         rs09: stampIdOf :symtab nid: rpnid9
         rsn9: typeNameOfReg9 :symtab tid: rs09
-        rsc9: userFnId :ast :symtab :ctx name: rsn9.stringview
+        rsc9: canonFnId :ast :symtab :ctx tid: rs09 name: rsn9.stringview
         rsFp9: rs09
         if rsc9 > 0 then rsFp9 = rsc9
         rsFpc9: chaseColMono :symtab :ctx tid: rsFp9
@@ -12648,7 +12673,7 @@ isReftypeParam: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} 
     } case none then null
     if isShell0 then {
         rtn0: typeNameOfReg9 :symtab :tid
-        rrid0: resolveTypeIdByName :ast :symtab :ctx name: rtn0.stringview
+        rrid0: canonTypeId :ast :symtab :ctx :tid name: rtn0.stringview
         if rrid0 > 0 then cid = rrid0
     }
     tt: symtab.reg.typetypeOf typeId: cid
@@ -17859,7 +17884,7 @@ ensureFwdStruct: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64 buf: Stri
 isComplexFnptrParam: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     nm: typeNameOfReg9 :symtab :tid
     ct: tid
-    can: userFnId :ast :symtab :ctx name: nm.stringview
+    can: canonFnId :ast :symtab :ctx :tid name: nm.stringview
     if can > 0 then ct = can
     tt: symtab.reg.typetypeOf typeId: ct
     if tt == ztypes.ztypetype.protocolType then return true
@@ -18761,7 +18786,7 @@ protoParamCtype: function {
     }
     if pidShell9 then {
         pn9: typeNameOfReg9 :symtab tid: pid
-        rcid: resolveTypeIdByName :ast :symtab :ctx name: pn9.stringview
+        rcid: canonTypeId :ast :symtab :ctx tid: pid name: pn9.stringview
         if rcid > 0 then cpid = rcid
     }
     pct: typeRefC :ast :symtab :ctx tid: cpid :thisTid
@@ -19458,7 +19483,7 @@ wrapperCreateArg: function {
     ptid: u64
 } out String is {
     prtn: typeNameOfReg9 :symtab tid: ptid
-    prtid: resolveTypeIdByName :ast :symtab :ctx name: prtn.stringview
+    prtid: canonTypeId :ast :symtab :ctx tid: ptid name: prtn.stringview
     aiter: call.arguments.iterate
     for aId9: aiter loop {
         a: ast.nodes.get i: (aId9 - 1).u64
@@ -20028,7 +20053,7 @@ emitUserIterCall: function {
     itorig9: monoOriginName :symtab tid: iterId
     if itorig9.length != 0 then return "".string
     itn9: typeNameOfReg9 :symtab tid: iterId
-    if (userFnId :ast :symtab :ctx name: itn9.stringview) <= 0 then return "".string
+    if (canonFnId :ast :symtab :ctx tid: iterId name: itn9.stringview) <= 0 then return "".string
     cco9: symtab.typing.childOfId parentTypeId: iterId nameId: wkCall
     match (
         cco9
@@ -20091,7 +20116,7 @@ emitProtocolDispatch: function {
     if (dispatchableTid9 :symtab tid: rtid) == false then {
         rtn0: typeNameOfReg9 :symtab tid: rtid
         if rtn0.length > 0 then {
-            brid: resolveTypeIdByName :ast :symtab :ctx name: rtn0.stringview
+            brid: canonTypeId :ast :symtab :ctx tid: rtid name: rtn0.stringview
             if (dispatchableTid9 :symtab tid: brid) then rtid = brid
         }
     }
@@ -20621,7 +20646,7 @@ emitOneVariant: function {
                     qtn: typeNameOfReg9 :symtab tid: qco
                     qsc: scalarCTypeFor :symtab name: qtn.stringview tid: qco
                     if qsc.length == 0 then {
-                        qrid: resolveTypeIdByName :ast :symtab :ctx name: qtn.stringview
+                        qrid: canonTypeId :ast :symtab :ctx tid: qco name: qtn.stringview
                         if qrid > 0 then {
                             qtt: symtab.reg.typetypeOf typeId: qrid
                             isAgg: false
@@ -20775,7 +20800,7 @@ emitStructDestructor: function {
 # input) is stored by value.
 lockFieldIsReftypePtr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
     ftn: typeNameOfReg9 :symtab tid: fid
-    ftid: resolveTypeIdByName :ast :symtab :ctx name: ftn.stringview
+    ftid: canonTypeId :ast :symtab :ctx tid: fid name: ftn.stringview
     if ftid == 0 then ftid = fid
     tt: symtab.reg.typetypeOf typeId: ftid
     if tt == ztypes.ztypetype.classType then return true
@@ -20889,7 +20914,7 @@ emitOneRecord: function {
             fscalar: scalarCTypeFor :symtab name: ftn.stringview tid: fki
             fdone: false
             if fscalar.length == 0 then {
-                frid: resolveTypeIdByName :ast :symtab :ctx name: ftn.stringview
+                frid: canonTypeId :ast :symtab :ctx tid: fki name: ftn.stringview
                 if frid > 0 then {
                     ftt: symtab.reg.typetypeOf typeId: frid
                     isAggF: false
