@@ -12654,7 +12654,7 @@ typedefBaseMangledOf: function {
 } out u64 is {
     bm9: copiedMapStr m: st.typing.typedefBaseMangled key: tid
     if bm9.length == 0 then return 0
-    return (optU64Or
+    rM9: (optU64Or
         o: (walkLookupTyperef
             :ast
             ty: st.typing
@@ -12664,6 +12664,10 @@ typedefBaseMangledOf: function {
         )
         d: 0
     )
+    if st.reg.monoNameStats when rM9 > 0 then {
+        st.reg.typedefMangledHits = st.reg.typedefMangledHits + 1
+    }
+    return rM9
 }
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
@@ -13802,7 +13806,12 @@ checkDotted: function {
         tdw9
     ) case some then null case none then {
         tdd9: typedefBaseMangledOf :ast :st :unitName tid: bt
-        if tdd9 == 0 then tdd9 = typedefBaseOf :ast :st :unitName tid: bt
+        if tdd9 == 0 then {
+            tdd9 = typedefBaseOf :ast :st :unitName tid: bt
+            if st.reg.monoNameStats when tdd9 > 0 then {
+                st.reg.typedefFallbackHits = st.reg.typedefFallbackHits + 1
+            }
+        }
         if tdd9 > 0 then bt = tdd9
     }
     # explicit tag accessor: a variant/union as-item `name: <numeric>.tag`
@@ -22890,6 +22899,26 @@ declProbeUnitChildId: function {
 }
 
 
+# noteMonoNameHit -- ZC_MONO_STATS instrumentation: count a unit-root name
+# resolution that landed on a mono. Monos carry a genericOriginId and have no
+# Decl, so a childOf hit under a unit root whose result has an origin came off
+# mintMono's synthetic `unit.<mangled>` / `system.<mangled>` namespace.
+noteMonoNameHit: function {reg: ztypes.ZTypeRegistry tid: u64} is {
+    if reg.monoNameStats when tid > 0 then {
+        zo9: reg.typeById.get key: tid
+        match (
+            zo9
+        ) case some then {
+            go9: zo9.genericOriginId
+            match (
+                go9
+            ) case some then {
+                if go9 > 0 then reg.monoNameHits = reg.monoNameHits + 1
+            } case none then null
+        } case none then null
+    }
+}
+
 walkUnitProbe9: function {
     ast: Ast
     ty: ztyping.ZTyping
@@ -22909,7 +22938,14 @@ walkUnitProbe9: function {
     match (
         uido
     ) case some then {
-        return (ty.childOf pool: ast.names parentTypeId: uido name: base)
+        co9: ty.childOf pool: ast.names parentTypeId: uido name: base
+        match (
+            co9
+        ) case some then {
+            noteMonoNameHit :reg tid: co9
+            return (optionval.some co9)
+        } case none then null
+        return (optionval.none u64)
     } case none then {
         return (optionval.none u64)
     }
@@ -23000,6 +23036,7 @@ resolveUnitChild: function {
         match (
             co
         ) case some then {
+            noteMonoNameHit :reg tid: co
             return (optionval.some co)
         } case none then null
     } case none then null
@@ -23029,6 +23066,7 @@ resolveSystemChild: function {
         match (
             co
         ) case some then {
+            noteMonoNameHit :reg tid: co
             return (optionval.some co)
         } case none then null
     }
@@ -23055,7 +23093,14 @@ walkUnitProbe9ById: function {
     match (
         uido
     ) case some then {
-        return (ty.childOfId parentTypeId: uido nameId: baseId.u64)
+        co9: ty.childOfId parentTypeId: uido nameId: baseId.u64
+        match (
+            co9
+        ) case some then {
+            noteMonoNameHit :reg tid: co9
+            return (optionval.some co9)
+        } case none then null
+        return (optionval.none u64)
     } case none then {
         return (optionval.none u64)
     }
@@ -23132,6 +23177,7 @@ resolveUnitChildById: function {
         match (
             co
         ) case some then {
+            noteMonoNameHit :reg tid: co
             return (optionval.some co)
         } case none then null
     } case none then null
@@ -23154,6 +23200,7 @@ resolveSystemChildById: function {
         match (
             co
         ) case some then {
+            noteMonoNameHit :reg tid: co
             return (optionval.some co)
         } case none then null
     }
