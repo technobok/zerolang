@@ -23612,6 +23612,208 @@ canonicalizeShellChildren: function {ast: Ast st: zenv.ZSymbolTable mainName: St
 # typecheck a whole program against registry `reg`: resolve every type,
 # stamp all nodes, and return the populated symbol table (diagnostics
 # ride in the typing tables).
+# q2SpikeVerify -- Q2 Phase-0 spike gate (env ZC_Q2_SPIKE): stamps ownership +
+# grantsPrivate from the tid-keyed member index onto member decls via
+# declMemberOf, then verifies the bridge (the resolved decl's name/parent match
+# the member), parity (stamped == map), coverage (decl misses = synth/mono
+# members with no decl yet), and that a type's Decl.children declared-member
+# order is an order-preserving subsequence of the typeChild position order
+# (split into a genuine reorder vs a declared member absent from typeChild).
+# Prints one summary line to stderr; a no-op when the env var is unset, and
+# nothing reads the stamped fields, so emitted C is unchanged. ZC_Q2_SABOTAGE
+# corrupts each stamp to prove the parity assert is non-vacuous.
+# NB: iterate the typeChild List, NEVER childIndex.iterateItems -- binding a
+# reftype map value (the ChildBucket) moves it out of the map and corrupts it.
+q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
+    en9: os.env key: "ZC_Q2_SPIKE"
+    match (
+        en9
+    ) case some then null case none then {
+        return
+    }
+    sabotage9: false
+    sb9: os.env key: "ZC_Q2_SABOTAGE"
+    match (
+        sb9
+    ) case some then {
+        sabotage9 = true
+    } case none then null
+    members: u64
+    declHits: u64
+    declMisses: u64
+    bridgeNameErr: u64
+    bridgeParentErr: u64
+    ownSet: u64
+    ownMismatch: u64
+    grantSet: u64
+    grantMismatch: u64
+    orderTypes: u64
+    orderBad: u64
+    orderMissing: u64
+    orderReorder: u64
+    # Pass A -- collect member tuples by iterating the typeChild List (each row
+    # carries its parentTypeId).
+    aOwner9: (List u64)
+    aNid9: (List u64)
+    aCnid9: (List u64)
+    with tit9: st.typing.typeChild.iterate do for tc9: tit9 loop {
+        aOwner9.append tc9.parentTypeId
+        aNid9.append tc9.nameId
+        aCnid9.append tc9.childNameId
+    }
+    # Pass B -- bridge + stamp + parity.
+    bi9: u64
+    btot9: aOwner9.length
+    for bi9 < btot9 loop {
+        ptid9: aOwner9.get i: bi9
+        nid9: aNid9.get i: bi9
+        cnid9: aCnid9.get i: bi9
+        bi9 = bi9 + 1
+        members = members + 1
+        mapOwnInt9: 3.u64
+        mo9: st.typing.childOwnership.get key: cnid9
+        match (
+            mo9
+        ) case some then {
+            mapOwnInt9 = ztypes.zparamownershipInt mo9
+            ownSet = ownSet + 1
+        } case none then null
+        mapGrant9: false
+        mg9: st.typing.childGrantsPrivate.get key: cnid9
+        match (
+            mg9
+        ) case some then {
+            mapGrant9 = mg9
+            if mg9 then grantSet = grantSet + 1
+        } case none then null
+        nid32: nid9.u32.orPanic
+        expParent9: declOfTypeId reg: st.reg tid: ptid9
+        did9: declMemberOf ty: st.typing reg: st.reg ownerTid: ptid9 nameId: nid32
+        if did9 == 0 then {
+            declMisses = declMisses + 1
+        } else {
+            declHits = declHits + 1
+            do9: st.typing.decls.get key: did9
+            match (
+                do9
+            ) case some then {
+                if do9.name != nid32 then bridgeNameErr = bridgeNameErr + 1
+                if do9.parent != expParent9 then bridgeParentErr = bridgeParentErr + 1
+                match (
+                    mo9
+                ) case some then {
+                    do9.ownership = mo9
+                } case none then {
+                    do9.ownership = ztypes.zparamownership.noneMode
+                }
+                if sabotage9 then do9.ownership = ztypes.zparamownership.takeMode
+                do9.grantsPrivate = mapGrant9
+                if sabotage9 when mapGrant9 == false then do9.grantsPrivate = true
+                if (ztypes.zparamownershipInt do9.ownership) != mapOwnInt9 then ownMismatch = ownMismatch + 1
+                if do9.grantsPrivate != mapGrant9 then grantMismatch = grantMismatch + 1
+            } case none then null
+        }
+    }
+    # Order -- per distinct type (deduped via seen9), its declared-member nameId
+    # order must be an order-preserving subsequence of its complete typeChild
+    # nameId order (via the borrowing childIndex.get); split reorder vs missing.
+    seen9: (Set u64)
+    oi9: u64
+    otot9: aOwner9.length
+    for oi9 < otot9 loop {
+        curTid9: aOwner9.get i: oi9
+        oi9 = oi9 + 1
+        if (seen9.has item: curTid9) == false then {
+            seen9.add item: curTid9
+            tNms9: (List u64)
+            {
+                bo9: st.typing.childIndex.get key: curTid9
+                match (
+                    bo9
+                ) case some then {
+                    with rjt9: bo9.rows.iterate do for rj9: rjt9 loop {
+                        trow9: st.typing.typeChild.get i: rj9
+                        tNms9.append trow9.nameId
+                    }
+                } case none then null
+            }
+            tdid9: declOfTypeId reg: st.reg tid: curTid9
+            if tdid9 > 0 then {
+                orderTypes = orderTypes + 1
+                cIds9: (List u64)
+                cNms9: (List u64)
+                {
+                    tdo9: st.typing.decls.get key: tdid9
+                    match (
+                        tdo9
+                    ) case some then {
+                        with dit9: tdo9.children.iterate do for dc9: dit9 loop {
+                            cIds9.append dc9.declId
+                            cNms9.append dc9.nameId.u64
+                        }
+                    } case none then null
+                }
+                mNms9: (List u64)
+                ci9: u64
+                cn9: cIds9.length
+                for ci9 < cn9 loop {
+                    isM9: false
+                    {
+                        kdo9: st.typing.decls.get key: (cIds9.get i: ci9)
+                        match (
+                            kdo9
+                        ) case some then {
+                            if kdo9.kind.fieldDecl then isM9 = true
+                            if kdo9.kind.methodDecl then isM9 = true
+                            if kdo9.kind.paramDecl then isM9 = true
+                            if kdo9.kind.armDecl then isM9 = true
+                        } case none then null
+                    }
+                    if isM9 then mNms9.append (cNms9.get i: ci9)
+                    ci9 = ci9 + 1
+                }
+                nrows9: tNms9.length
+                mn9: mNms9.length
+                allPresent9: true
+                api9: u64
+                for api9 < mn9 loop {
+                    wp9: mNms9.get i: api9
+                    inTc9: false
+                    kp9: u64
+                    for kp9 < nrows9 loop {
+                        if (tNms9.get i: kp9) == wp9 then inTc9 = true
+                        kp9 = kp9 + 1
+                    }
+                    if inTc9 == false then allPresent9 = false
+                    api9 = api9 + 1
+                }
+                ri9b: u64
+                ok9: true
+                mi9: u64
+                for mi9 < mn9 loop {
+                    want9: mNms9.get i: mi9
+                    found9b: false
+                    for found9b == false while ri9b < nrows9 loop {
+                        rn9: tNms9.get i: ri9b
+                        ri9b = ri9b + 1
+                        if rn9 == want9 then found9b = true
+                    }
+                    if found9b == false then ok9 = false
+                    mi9 = mi9 + 1
+                }
+                if ok9 == false then {
+                    orderBad = orderBad + 1
+                    if allPresent9 == false then {
+                        orderMissing = orderMissing + 1
+                    } else {
+                        orderReorder = orderReorder + 1
+                    }
+                }
+            }
+        }
+    }
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder}"
+}
 typecheck: function {
     program: Node
     reg: ztypes.ZTypeRegistry.take
@@ -23705,5 +23907,6 @@ typecheck: function {
             mainName: program.mainUnitName.stringview
         )
     } else null
+    q2SpikeVerify :st
     return st
 }
