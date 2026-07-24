@@ -318,8 +318,8 @@ emitter-guard:
 	fail=0; \
 	if [ "$$e1" -gt 23 ]; then echo "emitter-guard FAIL: ztypecheck.resolvedByKey = $$e1 (baseline 23)"; fail=1; fi; \
 	if [ "$$e2" -gt 5 ]; then echo "emitter-guard FAIL: ztypecheck.walkLookupTyperef = $$e2 (baseline 5)"; fail=1; fi; \
-	if [ "$$e3" -gt 31 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 31)"; fail=1; fi; \
-	if [ "$$e4" -gt 37 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 37)"; fail=1; fi; \
+	if [ "$$e3" -gt 23 ]; then echo "emitter-guard FAIL: resolveTypeIdByName = $$e3 (baseline 23)"; fail=1; fi; \
+	if [ "$$e4" -gt 35 ]; then echo "emitter-guard FAIL: userFnId = $$e4 (baseline 35)"; fail=1; fi; \
 	if [ "$$e5" -gt 0 ]; then echo "emitter-guard FAIL: childOwnershipText = $$e5 (baseline 0)"; fail=1; fi; \
 	if [ "$$e6" -gt 121 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 121)"; fail=1; fi; \
 	if [ "$$e7" -gt 20 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 20)"; fail=1; fi; \
