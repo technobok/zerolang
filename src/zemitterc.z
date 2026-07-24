@@ -1757,7 +1757,7 @@ emitCallTakeInvalidations: function {
                             :symtab
                             nid: (nodeIdOf9 n: (ast.nodes.get i: (a9.operation - 1).u64))
                         )
-                        if (isHeapPtrCollection :ast :symtab :ctx tid: istid9) then {
+                        if (isHeapPtrCollection :symtab :ctx tid: istid9) then {
                             iinvh9: "\{ind}\{isrc9} = NULL;\n"
                             buf.append iinvh9
                         } else {
@@ -7147,7 +7147,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         # a Map/Set-typed base is a heap pointer regardless of how it was
         # reached (a field path fails pathIsPointer's lock-field test)
         nstPtr9: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
-        if nstPtr9 == false then nstPtr9 = isHeapPtrCollection :ast :symtab :ctx tid: nlid9
+        if nstPtr9 == false then nstPtr9 = isHeapPtrCollection :symtab :ctx tid: nlid9
         if nstPtr9 then {
             ep9: "\{base9}->\{mn2}"
             return ep9
@@ -8878,7 +8878,7 @@ emitStmt: function {
                 rrt9: "\{ctx.strC}_t"
                 if (stampIdOf :symtab nid: rtnid9) != ctx.strTid then {
                     rrt9 = typeRefC :ast :symtab :ctx tid: rtsid9 thisTid: 0
-                    if (isHeapPtrCollection :ast :symtab :ctx tid: rtsid9) then rrt9 = "\{rrt9}*"
+                    if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then rrt9 = "\{rrt9}*"
                 }
                 rrn9: tmp.next
                 rrh9: "\{ind}\{rrt9} _rr\{rrn9} = \{rv2};\n"
@@ -8895,7 +8895,7 @@ emitStmt: function {
                 # the chased mono's registry cname is authoritative (the
                 # stamp name still says the typedef)
                 if rtChased9 then rdcb9 = symtab.reg.cnameOf tid: rtsid9
-                if (isHeapPtrCollection :ast :symtab :ctx tid: rtsid9) then {
+                if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
                     rdoh9: "\{ind}\{rdcb9}_destroy(\{nm2});\n"
                     buf.append rdoh9
                 } else {
@@ -8921,7 +8921,7 @@ emitStmt: function {
             }
         }
         if (isFieldTake :ast n: rvn29) when rftFn9 == false then {
-            if (isHeapPtrCollection :ast :symtab :ctx tid: rtsid9) then {
+            if (isHeapPtrCollection :symtab :ctx tid: rtsid9) then {
                 rftzh9: "\{ind}\{rv2} = NULL;\n"
                 buf.append rftzh9
             } else {
@@ -8947,7 +8947,7 @@ emitStmt: function {
         if zsrc9.length > 0 then {
             znid9: nodeIdOf9 n: rvn29
             zid9: stampIdOf :symtab nid: znid9
-            if (isHeapPtrCollection :ast :symtab :ctx tid: zid9) then {
+            if (isHeapPtrCollection :symtab :ctx tid: zid9) then {
                 zinvh9: "\{ind}\{zsrc9} = NULL;\n"
                 buf.append zinvh9
             } else {
@@ -12147,7 +12147,7 @@ emitReturnOfNode: function {
             )
             retCt9: typeRefC :ast :symtab :ctx tid: rtid9 thisTid: 0
             isPtr9: ctEndsWithStar ct: retCt9.stringview
-            if (isHeapPtrCollection :ast :symtab :ctx tid: rtid9) then isPtr9 = true
+            if (isHeapPtrCollection :symtab :ctx tid: rtid9) then isPtr9 = true
             trivial9: isBareCName s: rv.stringview
             hoist9: false
             if (trivial9 == false) when (isPtr9 == false) when (retCt9.length > 0) then {
@@ -12935,7 +12935,6 @@ fnSignature: function {
         retColId9: fnReturnTidOf :symtab tid: fid
         if retColId9 == 0 then retColId9 = fnReturnTypeId :ast :symtab :op
         if retColId9 > 0 when (isHeapPtrCollection
-            :ast
             :symtab
             :ctx
             tid: retColId9
@@ -14592,7 +14591,7 @@ emitFnBody: function {
                     # owned .take Set/Map params are skipped: declared by value, but a
                     # Set/Map _destroy frees the container as a heap pointer (would need
                     # &name); none exist in the self-host.
-                    if (isHeapPtrCollection :ast :symtab :ctx tid: ppid9) == false then {
+                    if (isHeapPtrCollection :symtab :ctx tid: ppid9) == false then {
                         pcm9: chaseColMono :symtab tid: ppid9
                         puse9: pcm9
                         if (symtab.reg.hasDestructorName typeId: pcm9) == false then {
@@ -16201,7 +16200,6 @@ mapFreeKeyDel: function {isStr: bool strC: StringView valFree: StringView} out S
 # via the String free, reftype / heap-collection value via its destructor, empty
 # for scalars. Mirrors emitStructDestructor's per-field cleanup.
 mapValFreeStmt: function {
-    ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     valName: StringView
@@ -16214,11 +16212,10 @@ mapValFreeStmt: function {
         vmid: chaseColMono :symtab tid: valTid
         needs: false
         if (symtab.reg.hasDestructorName typeId: vmid) then needs = true
-        if (isHeapPtrCollection :ast :symtab :ctx tid: valTid) then needs = true
+        if (isHeapPtrCollection :symtab :ctx tid: valTid) then needs = true
         if needs then {
             vcb: symtab.reg.cnameOf tid: vmid
             if (isHeapPtrCollection
-                :ast
                 :symtab
                 :ctx
                 tid: valTid
@@ -16408,7 +16405,6 @@ emitMapMono: function {
     hashKeyBody: setHashBody kind: kkind fast: ctx.fastHash
     keysEqBody: setEqBody kind: kkind
     vfDestroy: (mapValFreeStmt
-        :ast
         :symtab
         :ctx
         valName: valName.stringview
@@ -16416,7 +16412,6 @@ emitMapMono: function {
         slot: "p->entries[i].value"
     )
     vfDup: (mapValFreeStmt
-        :ast
         :symtab
         :ctx
         valName: valName.stringview
@@ -16722,7 +16717,7 @@ cliClassTypeId: function {symtab: zenv.ZSymbolTable ctx: Ctx name: StringView} o
 
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
 # embedded by value); a struct field of one is a pointer, freed without `&`.
-isHeapPtrCollection: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+isHeapPtrCollection: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
     cm: chaseColMono :symtab :tid
     if (originIsTid :symtab tid: cm originTid: ctx.mapOriginTid) then return true
     if (originIsTid :symtab tid: cm originTid: ctx.setOriginTid) then return true
@@ -17582,7 +17577,7 @@ userDefnRefsUnemitted: function {
     for fi < fn loop {
         fid: fids.get i: fi
         cfid: chaseColMono :symtab tid: fid
-        skip: isHeapPtrCollection :ast :symtab :ctx tid: fid
+        skip: isHeapPtrCollection :symtab :ctx tid: fid
         if skip == false then {
             if (idSetHas s: group id: cfid) then {
                 if (idSetHas s: emitted id: cfid) == false then return true
@@ -20769,7 +20764,7 @@ structDestroyNontrivial: function {
             if fid == ctx.strTid then return true
             fmid9: chaseColMono :symtab tid: fid
             if (symtab.reg.hasDestructorName typeId: fmid9) then return true
-            if (isHeapPtrCollection :ast :symtab :ctx tid: fid) then return true
+            if (isHeapPtrCollection :symtab :ctx tid: fid) then return true
         }
         fi = fi + 1
     }
@@ -20814,10 +20809,10 @@ emitStructDestructor: function {
                 fmid9: chaseColMono :symtab tid: fid
                 fneeds9: false
                 if (symtab.reg.hasDestructorName typeId: fmid9) then fneeds9 = true
-                if (isHeapPtrCollection :ast :symtab :ctx tid: fid) then fneeds9 = true
+                if (isHeapPtrCollection :symtab :ctx tid: fid) then fneeds9 = true
                 if fneeds9 then {
                     fcb: symtab.reg.cnameOf tid: fmid9
-                    if (isHeapPtrCollection :ast :symtab :ctx tid: fid) then {
+                    if (isHeapPtrCollection :symtab :ctx tid: fid) then {
                         df: "    \{fcb}_destroy(p->\{fname});\n"
                         buf.append df
                     } else {
@@ -20888,7 +20883,7 @@ emitOneRecord: function {
         if (symtab.typing.isChildLockFieldId parentTypeId: tid nameId: fnameId) then {
             if (lockFieldIsReftypePtr :ast :symtab :ctx :fid) then fct = "\{fct}*"
         }
-        if (isHeapPtrCollection :ast :symtab :ctx tid: fid) then fct = "\{fct}*"
+        if (isHeapPtrCollection :symtab :ctx tid: fid) then fct = "\{fct}*"
         l1: "    \{fct} \{fname};\n"
         buf.append l1
         fi = fi + 1
@@ -20912,7 +20907,7 @@ emitOneRecord: function {
         if (symtab.typing.isChildLockFieldId parentTypeId: tid nameId: fname2Id) then {
             if (lockFieldIsReftypePtr :ast :symtab :ctx fid: fid2) then fct2 = "\{fct2}*"
         }
-        if (isHeapPtrCollection :ast :symtab :ctx tid: fid2) then fct2 = "\{fct2}*"
+        if (isHeapPtrCollection :symtab :ctx tid: fid2) then fct2 = "\{fct2}*"
         if fj > 0 then {
             params.append ", "
             inits.append ", "
@@ -21014,7 +21009,7 @@ emitCliCompositeClass: function {
         fid: fids.get i: fi
         fct: typeRefC :ast :symtab :ctx tid: fid thisTid: 0
         if fct.length == 0 then fct = "int64_t".string
-        if (isHeapPtrCollection :ast :symtab :ctx tid: fid) then fct = "\{fct}*"
+        if (isHeapPtrCollection :symtab :ctx tid: fid) then fct = "\{fct}*"
         l1: "    \{fct} \{fname};\n"
         buf.append l1
         fi = fi + 1
@@ -21028,7 +21023,7 @@ emitCliCompositeClass: function {
         fid2: fids.get i: fj
         fct2: typeRefC :ast :symtab :ctx tid: fid2 thisTid: 0
         if fct2.length == 0 then fct2 = "int64_t".string
-        if (isHeapPtrCollection :ast :symtab :ctx tid: fid2) then fct2 = "\{fct2}*"
+        if (isHeapPtrCollection :symtab :ctx tid: fid2) then fct2 = "\{fct2}*"
         if fj > 0 then {
             params.append ", "
             inits.append ", "
@@ -21065,10 +21060,10 @@ emitCliCompositeClass: function {
             dcm: chaseColMono :symtab tid: dfi
             dneeds9: false
             if (symtab.reg.hasDestructorName typeId: dcm) then dneeds9 = true
-            if (isHeapPtrCollection :ast :symtab :ctx tid: dfi) then dneeds9 = true
+            if (isHeapPtrCollection :symtab :ctx tid: dfi) then dneeds9 = true
             if dneeds9 then {
                 dcb: symtab.reg.cnameOf tid: dcm
-                if (isHeapPtrCollection :ast :symtab :ctx tid: dfi) then {
+                if (isHeapPtrCollection :symtab :ctx tid: dfi) then {
                     df: "    \{dcb}_destroy(p->\{dfn});\n"
                     buf.append df
                 } else {
@@ -21737,7 +21732,6 @@ emitOneMethod: function {
             } case none then null
         }
         if retColId9 > 0 when (isHeapPtrCollection
-            :ast
             :symtab
             :ctx
             tid: retColId9
