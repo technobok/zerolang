@@ -12708,36 +12708,12 @@ isSetMapPtrParam: function {
         name: pname
         own: ztypes.zparamownership.takeMode
     ) then return false
-    # id-only: the param's own origin (a typedef wrapper chases to its base
-    # mono) against the cached Set/Map template ids
-    btS9: chaseColMono :symtab :ctx :tid
-    stV9: false
-    if (originIsTid :symtab tid: btS9 originTid: ctx.setOriginTid) then stV9 = true
-    if (originIsTid :symtab tid: btS9 originTid: ctx.mapOriginTid) then stV9 = true
-    cid: tid
-    omn0: monoOriginName :symtab :tid
-    if omn0.length == 0 then {
-        tn: typeNameOfReg9 :symtab :tid
-        mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: tn.stringview
-        match (
-            mo
-        ) case some then {
-            cid = mo
-            if symtab.reg.monoNameStats then {
-                symtab.reg.siteShellCanon = symtab.reg.siteShellCanon + 1
-            }
-        } case none then null
-    }
-    bt: chaseColMono :symtab :ctx tid: cid
-    byV9: false
-    setT9: builtinTid :ast :symtab base: "Set"
-    if (originIsTid :symtab tid: bt originTid: setT9) then byV9 = true
-    mapT9: builtinTid :ast :symtab base: "Map"
-    if (originIsTid :symtab tid: bt originTid: mapT9) then byV9 = true
-    if symtab.reg.monoNameStats when stV9 != byV9 then {
-        symtab.reg.predParityMismatch = symtab.reg.predParityMismatch + 1
-    }
-    return byV9
+    # the param's own origin (a typedef wrapper chases to its base mono)
+    # against the cached Set/Map template ids
+    bt: chaseColMono :symtab :ctx :tid
+    if (originIsTid :symtab tid: bt originTid: ctx.setOriginTid) then return true
+    if (originIsTid :symtab tid: bt originTid: ctx.mapOriginTid) then return true
+    return false
 }
 
 # isListPtrParam -- a non-TAKE List param (a value-struct collection) passes BY
@@ -12757,31 +12733,8 @@ isListPtrParam: function {
         name: pname
         own: ztypes.zparamownership.takeMode
     ) then return false
-    btS9: chaseColMono :symtab :ctx :tid
-    stV9: originIsTid :symtab tid: btS9 originTid: ctx.listOriginTid
-    cid: tid
-    listT9: builtinTid :ast :symtab base: "List"
-    if (originIsTid :symtab :tid originTid: listT9) == false then {
-        # a param type is a List SHELL (no genericOriginId, no declaration);
-        # resolve the canonical mono by its mangled name to read its origin.
-        tn: typeNameOfReg9 :symtab :tid
-        mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: tn.stringview
-        match (
-            mo
-        ) case some then {
-            cid = mo
-            if symtab.reg.monoNameStats then {
-                symtab.reg.siteShellCanon = symtab.reg.siteShellCanon + 1
-            }
-        } case none then null
-    }
-    bt: chaseColMono :symtab :ctx tid: cid
-    listT8: builtinTid :ast :symtab base: "List"
-    byV9: originIsTid :symtab tid: bt originTid: listT8
-    if symtab.reg.monoNameStats when stV9 != byV9 then {
-        symtab.reg.predParityMismatch = symtab.reg.predParityMismatch + 1
-    }
-    return byV9
+    bt: chaseColMono :symtab :ctx :tid
+    return (originIsTid :symtab tid: bt originTid: ctx.listOriginTid)
 }
 
 # record which of function `fid`'s parameters are reftypes.
@@ -13071,23 +13024,9 @@ nodeIsAtomBox: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} ou
     }
 }
 
-# isCollectionOrigin -- a generic-origin template name that mints a C
-# struct type (List/ListView/Set/Map/MapEntry and the iterators).
-isCollectionOrigin: function {name: StringView} out bool is {
-    if name == "List" then return true
-    if name == "ListView" then return true
-    if name == "Set" then return true
-    if name == "Map" then return true
-    if name == "MapEntry" then return true
-    if name == "ListIter" then return true
-    if name == "SetIter" then return true
-    if name == "MapKeyIter" then return true
-    if name == "MapItemIter" then return true
-    return false
-}
-
-# isCollectionOriginTid -- the id form of isCollectionOrigin: originTid (a
-# genericOriginId) is one of the nine cached collection/iterator origin ids.
+# isCollectionOriginTid -- originTid (a genericOriginId) is one of the nine
+# cached collection/iterator origin ids, i.e. a template that mints a C struct
+# type (List/ListView/Set/Map/MapEntry and the iterators).
 isCollectionOriginTid: function {ctx: Ctx originTid: u64} out bool is {
     if originTid == 0 then return false
     if originTid == ctx.listOriginTid then return true
@@ -13160,13 +13099,7 @@ chaseColMono: function {symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out u64 is 
     match (
         bo
     ) case some then {
-        stC9: isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: bo)
-        cmo9: monoOriginName :symtab tid: bo
-        byC9: isCollectionOrigin name: cmo9.stringview
-        if symtab.reg.monoNameStats when stC9 != byC9 then {
-            symtab.reg.chaseParityMismatch = symtab.reg.chaseParityMismatch + 1
-        }
-        if byC9 then return bo
+        if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: bo)) then return bo
     } case none then null
     return tid
 }

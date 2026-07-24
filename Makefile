@@ -324,14 +324,14 @@ emitter-guard:
 	if [ "$$e6" -gt 121 ]; then echo "emitter-guard FAIL: typeNameOfReg9 = $$e6 (baseline 121)"; fail=1; fi; \
 	if [ "$$e7" -gt 20 ]; then echo "emitter-guard FAIL: ztypes.mangleVarName = $$e7 (baseline 20)"; fail=1; fi; \
 	if [ "$$e8" -gt 5 ]; then echo "emitter-guard FAIL: io.readText = $$e8 (baseline 5)"; fail=1; fi; \
-	if [ "$$e9" -gt 39 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 39)"; fail=1; fi; \
+	if [ "$$e9" -gt 37 ]; then echo "emitter-guard FAIL: monoOriginName = $$e9 (baseline 37)"; fail=1; fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \
 	  echo "  stamp (atomVariableId/atomUnitDefId/callKind), the canonical child id, or"; \
 	  echo "  reg.cnameOf instead of resolving by name."; \
 	  exit 1; \
 	fi; \
-	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 (monoOrigin baseline 39)"
+	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 (monoOrigin baseline 37)"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. The single-source-of-truth arc removed the hardcoded member
