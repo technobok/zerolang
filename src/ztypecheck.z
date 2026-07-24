@@ -1014,7 +1014,7 @@ indexUnitBody: function {
             (indexDeclPublicEntries
                 :ty
                 :ast
-                :unitDeclId
+                ownerDeclId: unitDeclId
                 pubDeclId: pubDeclId0
                 pubOpId: pubOpId0
             )
@@ -1188,18 +1188,42 @@ indexDeclObjInner: function {ty: ztyping.ZTyping ast: Ast declId: u64 objNodeId:
                 }
             }
         }
+        pubDeclId0: u64
+        pubOpId0: u32
         with ait9: ob9.asItems.iterate do for aId9: ait9 loop {
             an9: ast.nodes.get i: (aId9 - 1).u64
             if an9.namedoperation then {
-                (indexDeclAsMember
-                    :ty
-                    :ast
-                    parentDeclId: declId
-                    nameRef: an9.name
-                    nopNodeId: an9.nodeid
-                    opNodeId: an9.operation
-                )
+                if (zast.nameTextEq :ast ref: an9.name s: "public") then {
+                    # the type's exported-namespace block: a publicNs Decl whose
+                    # edges (public name -> internal member Decl) are filled after
+                    # all members are indexed. Mirrors the unit `public:` block.
+                    pubDeclId0 = (ty.declNew
+                        name: an9.name
+                        parent: declId
+                        kind: ztyping.declkind.publicNs
+                        node: an9.nodeid
+                    )
+                    pubOpId0 = an9.operation
+                } else {
+                    (indexDeclAsMember
+                        :ty
+                        :ast
+                        parentDeclId: declId
+                        nameRef: an9.name
+                        nopNodeId: an9.nodeid
+                        opNodeId: an9.operation
+                    )
+                }
             }
+        }
+        if pubDeclId0 > 0 then {
+            (indexDeclPublicEntries
+                :ty
+                :ast
+                ownerDeclId: declId
+                pubDeclId: pubDeclId0
+                pubOpId: pubOpId0
+            )
         }
     } else null
 }
@@ -1252,7 +1276,7 @@ indexDeclAsMember: function {
 indexDeclPublicEntries: function {
     ty: ztyping.ZTyping
     ast: Ast
-    unitDeclId: u64
+    ownerDeclId: u64
     pubDeclId: u64
     pubOpId: u32
 } is {
@@ -1266,7 +1290,7 @@ indexDeclPublicEntries: function {
                 iref9: m9.name
                 mop9: ast.nodes.get i: (m9.operation - 1).u64
                 if mop9.atomid then iref9 = mop9.name
-                tgt9: ty.declFindChild parentDeclId: unitDeclId nameId: iref9
+                tgt9: ty.declFindChild parentDeclId: ownerDeclId nameId: iref9
                 if tgt9 > 0 then {
                     ty.declAddChildEdge parentDeclId: pubDeclId nameId: m9.name childDeclId: tgt9
                     # the entry's value node (`:m` labelvalue / `alias: m`
@@ -23612,6 +23636,37 @@ canonicalizeShellChildren: function {ast: Ast st: zenv.ZSymbolTable mainName: St
 # typecheck a whole program against registry `reg`: resolve every type,
 # stamp all nodes, and return the populated symbol table (diagnostics
 # ride in the typing tables).
+# publicNsOf -- the publicNs child Decl of the type/unit that minted `tid`
+# (0 when the type has no `public:` block). Collect child ids first, then scan
+# kinds, to avoid overlapping ty.decls borrows.
+publicNsOf: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
+    od9: declOfTypeId :reg :tid
+    if od9 == 0 then return 0
+    kids9: (List u64)
+    {
+        do9: ty.decls.get key: od9
+        match (
+            do9
+        ) case some then {
+            with cit9: do9.children.iterate do for c9: cit9 loop kids9.append c9.declId
+        } case none then null
+    }
+    r9: u64
+    ki9: u64
+    kn9: kids9.length
+    for ki9 < kn9 loop {
+        kd9: kids9.get i: ki9
+        ko9: ty.decls.get key: kd9
+        match (
+            ko9
+        ) case some then {
+            if ko9.kind.publicNs then r9 = kd9
+        } case none then null
+        ki9 = ki9 + 1
+    }
+    return r9
+}
+
 # q2SpikeVerify -- Q2 Phase-0 spike gate (env ZC_Q2_SPIKE): stamps ownership +
 # grantsPrivate from the tid-keyed member index onto member decls via
 # declMemberOf, then verifies the bridge (the resolved decl's name/parent match
@@ -23651,6 +23706,8 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     orderBad: u64
     orderMissing: u64
     orderReorder: u64
+    visMembers: u64
+    visPrivMismatch: u64
     # Pass A -- collect member tuples by iterating the typeChild List (each row
     # carries its parentTypeId).
     aOwner9: (List u64)
@@ -23664,6 +23721,9 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     # Pass B -- bridge + stamp + parity.
     bi9: u64
     btot9: aOwner9.length
+    visInit9: false
+    lastVisTid9: u64
+    lastPnid9: u64
     for bi9 < btot9 loop {
         ptid9: aOwner9.get i: bi9
         nid9: aNid9.get i: bi9
@@ -23687,12 +23747,38 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             if mg9 then grantSet = grantSet + 1
         } case none then null
         nid32: nid9.u32.orPanic
+        if visInit9 == false then {
+            lastPnid9 = publicNsOf ty: st.typing reg: st.reg tid: ptid9
+            lastVisTid9 = ptid9
+            visInit9 = true
+        } else if ptid9 != lastVisTid9 then {
+            lastPnid9 = publicNsOf ty: st.typing reg: st.reg tid: ptid9
+            lastVisTid9 = ptid9
+        }
         expParent9: declOfTypeId reg: st.reg tid: ptid9
         did9: declMemberOf ty: st.typing reg: st.reg ownerTid: ptid9 nameId: nid32
         if did9 == 0 then {
             declMisses = declMisses + 1
         } else {
             declHits = declHits + 1
+            if did9 != lastPnid9 then {
+                mapPriv9: false
+                cp9: st.typing.childPrivate.get key: cnid9
+                match (
+                    cp9
+                ) case some then {
+                    mapPriv9 = cp9
+                } case none then null
+                pnPriv9: false
+                if lastPnid9 > 0 then {
+                    visMembers = visMembers + 1
+                    if (st.typing.declFindChild
+                        parentDeclId: lastPnid9
+                        nameId: nid32
+                    ) == 0 then pnPriv9 = true
+                }
+                if mapPriv9 != pnPriv9 then visPrivMismatch = visPrivMismatch + 1
+            }
             do9: st.typing.decls.get key: did9
             match (
                 do9
@@ -23812,7 +23898,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             }
         }
     }
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} visMembers=\{visMembers} visPrivMismatch=\{visPrivMismatch}"
 }
 typecheck: function {
     program: Node
