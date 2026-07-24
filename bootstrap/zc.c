@@ -114428,6 +114428,7 @@ z_t74_String_t z_t3529_emitNativeArg(z_t1067_Ast_t* ast, z_t1266_ZSymbolTable_t*
 z_t74_String_t z_t3530_emitNativeFreeFnCall(z_t1067_Ast_t* ast, z_t1266_ZSymbolTable_t* symtab, z_t3063_Ctx_t* ctx, z_t1081_CallData_t* call) {
     z_t74_String_t un = ((z_t74_String_t){0});
     z_t74_String_t mn = ((z_t74_String_t){0});
+    uint64_t fidHint = ((uint64_t)0);
     z_t1068_Node_t _ah1404 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(call->callable - 1)));
     z_t74_String_t bn = z_t3160_dottedBaseAtom(ast, _ah1404);
     if ((bn.size > 0)) {
@@ -114508,6 +114509,7 @@ z_t74_String_t z_t3530_emitNativeFreeFnCall(z_t1067_Ast_t* ast, z_t1266_ZSymbolT
         z_t74_String_free(&mn);
         mn = cn0;
         cn0 = (z_t74_String_t){0};
+        fidHint = fid0;
     z_t947_Option_String_destroy(&duo0);
     z_t74_String_free(&cn0);
     }
@@ -114518,39 +114520,43 @@ z_t74_String_t z_t3530_emitNativeFreeFnCall(z_t1067_Ast_t* ast, z_t1266_ZSymbolT
         z_t74_String_free(&bn);
         return _ret9;
     }
-    z_t74_String_t _s10 = z_t74_String_create((uint64_t)33);
-    z_t74_String_append(&_s10, un.data, un.size);
-    z_t74_String_append(&_s10, ".", sizeof(".")-1);
-    z_t74_String_append(&_s10, mn.data, mn.size);
-    z_t74_String_t fk9 = _s10;
-    z_t169_optionval_u64_t fo9 = z_t2960_resolvedByKey(ast, &symtab->typing, &symtab->reg, &fk9);
     uint64_t fid = ((uint64_t)0);
-    z_t169_optionval_u64_t _m13 = fo9;
-    switch (_m13.tag) {
-        case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t fo9 = _m13.data.some;
-            (void)fo9;
-            fid = fo9;
-            break;
+    if ((fidHint > 0)) {
+        fid = fidHint;
+    } else {
+        z_t74_String_t _s10 = z_t74_String_create((uint64_t)33);
+        z_t74_String_append(&_s10, un.data, un.size);
+        z_t74_String_append(&_s10, ".", sizeof(".")-1);
+        z_t74_String_append(&_s10, mn.data, mn.size);
+        z_t74_String_t fk9 = _s10;
+        z_t169_optionval_u64_t fo9 = z_t2960_resolvedByKey(ast, &symtab->typing, &symtab->reg, &fk9);
+        z_t169_optionval_u64_t _m13 = fo9;
+        switch (_m13.tag) {
+            case Z_OPTIONVAL_U64_TAG_SOME: {
+                uint64_t fo9 = _m13.data.some;
+                (void)fo9;
+                fid = fo9;
+                break;
+            }
+            case Z_OPTIONVAL_U64_TAG_NONE: {
+                z_t74_String_t _ret14 = z_t74_String_from_view(_zs3823);
+                z_t74_String_free(&un);
+                z_t74_String_free(&mn);
+                z_t74_String_free(&bn);
+                z_t74_String_free(&fk9);
+                return _ret14;
+                break;
+            }
+            default: break;
         }
-        case Z_OPTIONVAL_U64_TAG_NONE: {
-            z_t74_String_t _ret14 = z_t74_String_from_view(_zs3823);
-            z_t74_String_free(&un);
-            z_t74_String_free(&mn);
-            z_t74_String_free(&bn);
-            z_t74_String_free(&fk9);
-            return _ret14;
-            break;
-        }
-        default: break;
+        /* post-guard alias: fo9 => fo9.data.some */
+    z_t74_String_free(&fk9);
     }
-    /* post-guard alias: fo9 => fo9.data.some */
     if (!z_t1413_ztypetype_eq(z_t1589_ZTypeRegistry_typetypeOf(&symtab->reg, fid), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }))) {
         z_t74_String_t _ret15 = z_t74_String_from_view(_zs3824);
         z_t74_String_free(&un);
         z_t74_String_free(&mn);
         z_t74_String_free(&bn);
-        z_t74_String_free(&fk9);
         return _ret15;
     }
     if ((z_t3237_fnIsNativeId(symtab, fid) == false)) {
@@ -114558,7 +114564,6 @@ z_t74_String_t z_t3530_emitNativeFreeFnCall(z_t1067_Ast_t* ast, z_t1266_ZSymbolT
         z_t74_String_free(&un);
         z_t74_String_free(&mn);
         z_t74_String_free(&bn);
-        z_t74_String_free(&fk9);
         return _ret16;
     }
     (void)(z_t3154_needsAdd(ctx, ((z_t105_StringView_t){ un.data, un.size })));
@@ -114609,7 +114614,6 @@ z_t74_String_t z_t3530_emitNativeFreeFnCall(z_t1067_Ast_t* ast, z_t1266_ZSymbolT
     z_t74_String_free(&un);
     z_t74_String_free(&mn);
     z_t74_String_free(&bn);
-    z_t74_String_free(&fk9);
     z_t74_String_free(&nk9);
     z_t74_String_free(&args);
     z_t989_List_String_destroy(&pn);
@@ -114619,7 +114623,6 @@ z_t74_String_t z_t3530_emitNativeFreeFnCall(z_t1067_Ast_t* ast, z_t1266_ZSymbolT
     z_t74_String_free(&un);
     z_t74_String_free(&mn);
     z_t74_String_free(&bn);
-    z_t74_String_free(&fk9);
     z_t74_String_free(&nk9);
     z_t74_String_free(&args);
     z_t989_List_String_destroy(&pn);
