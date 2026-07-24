@@ -1013,28 +1013,6 @@ specStemTid: function {
     )
 }
 
-# stemParity -- Phase 2 gate: the structural stem lookup must agree with the
-# mangled-name resolution it replaces, including when both find nothing.
-stemParity: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
-    mono: StringView
-    structural: u64
-} is {
-    if symtab.reg.monoNameStats then {
-        byName9: u64
-        mo9: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: mono
-        match (
-            mo9
-        ) case some then {
-            byName9 = mo9
-        } case none then null
-        if byName9 != structural then {
-            symtab.reg.stemParityMismatch = symtab.reg.stemParityMismatch + 1
-        }
-    }
-}
-
 # originTidOf -- a type's genericOriginId (the template it monomorphized from), or
 # 0 when it has none. The id form of monoOriginName.
 originTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
@@ -15176,8 +15154,6 @@ emitNeededNatives: function {
     if (needsHas :ctx name: "indexOf") then needRaw = true
     if (needsHas :ctx name: "lastIndexOf") then needRaw = true
     if needRaw then (emitMonoNative
-        :ast
-        :symtab
         :ctx
         :runtimeDir
         frag: "_Z_SV_INDEX_OF_RAW"
@@ -15251,8 +15227,6 @@ emitNeededNatives: function {
     if hasCp then emitCodepointsNatives :ast :symtab :ctx :runtimeDir :buf
     if (needsHas :ctx name: "indexOf") then {
         (emitMonoNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_INDEX_OF"
@@ -15263,8 +15237,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "lastIndexOf") then {
         (emitMonoNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_LAST_INDEX_OF"
@@ -15275,8 +15247,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "byteAt") then {
         (emitMonoNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_BYTE_AT"
@@ -15287,8 +15257,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "stripPrefix") then {
         (emitMonoNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_STRIP_PREFIX"
@@ -15299,8 +15267,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "stripSuffix") then {
         (emitMonoNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_STRIP_SUFFIX"
@@ -15311,8 +15277,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "splitOnce") then {
         (emitMonoNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_SPLIT_ONCE"
@@ -15323,8 +15287,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseI64") then {
         (emitParseNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_I64"
@@ -15335,8 +15297,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseU64") then {
         (emitParseNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_U64"
@@ -15347,8 +15307,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseF64") then {
         (emitParseNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_F64"
@@ -15359,8 +15317,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseF16") then {
         (emitParseNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_F16"
@@ -15371,8 +15327,6 @@ emitNeededNatives: function {
     }
     if (needsHas :ctx name: "parseF128") then {
         (emitParseNative
-            :ast
-            :symtab
             :ctx
             :runtimeDir
             frag: "_Z_SV_PARSE_F128"
@@ -16684,32 +16638,9 @@ ioFileId: function {symtab: zenv.ZSymbolTable ctx: Ctx} out u64 is {
 ioFileLive: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx} out bool is {
     fid9: ioFileId :symtab :ctx
     if fid9 == 0 then return false
-    lo9: (ztypecheck.resolvedByKey
-        :ast
-        ty: symtab.typing
-        reg: symtab.reg
-        key: "system.List_u8".string
-    )
-    hasL9: false
-    match (
-        lo9
-    ) case some then {
-        hasL9 = true
-    } case none then null
-    lvo9: (ztypecheck.resolvedByKey
-        :ast
-        ty: symtab.typing
-        reg: symtab.reg
-        key: "system.ListView_u8".string
-    )
-    hasLV9: false
-    match (
-        lvo9
-    ) case some then {
-        hasLV9 = true
-    } case none then null
-    if hasL9 when hasLV9 then return true
-    return false
+    if (specStemTid :ast :symtab base: "List" arg1: "u8" arg2: "") == 0 then return false
+    if (specStemTid :ast :symtab base: "ListView" arg1: "u8" arg2: "") == 0 then return false
+    return true
 }
 
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
@@ -21845,8 +21776,6 @@ emitOneMethod: function {
 # emitMonoNative -- a native fragment substituting z_StringView and (when
 # mono is non-empty) the canonical z_{mono} to the mono's id-based cname.
 emitMonoNative: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
     ctx: Ctx
     runtimeDir: StringView
     frag: StringView
@@ -21860,15 +21789,7 @@ emitMonoNative: function {
         scv: ctx.svC.copy
         cur: substituteAll text: raw needle: "z_StringView" repl: scv.stringview
         if mono.length > 0 then {
-            mid: u64
-            moo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: mono
-            match (
-                moo
-            ) case some then {
-                mid = moo
-            } case none then null
-            stemParity :ast :symtab :mono structural: stemTid
-            mc: cnameOf tid: mid name: mono
+            mc: cnameOf tid: stemTid name: mono
             cn: "z_\{mono}"
             cur = substituteAll text: cur needle: cn.stringview repl: mc.stringview
         }
@@ -21880,8 +21801,6 @@ emitMonoNative: function {
 # emitParseNative -- a parse fragment, substituting the canonical
 # z_resultval_*_parseerror to the mono's id-based cname and z_StringView.
 emitParseNative: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
     ctx: Ctx
     runtimeDir: StringView
     frag: StringView
@@ -21889,15 +21808,7 @@ emitParseNative: function {
     stemTid: u64
     buf: String.borrow
 } is {
-    mid: u64
-    mo: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: mono
-    match (
-        mo
-    ) case some then {
-        mid = mo
-    } case none then null
-    stemParity :ast :symtab :mono structural: stemTid
-    mc: cnameOf tid: mid name: mono
+    mc: cnameOf tid: stemTid name: mono
     p: "\{runtimeDir}/natives/\{frag}.inc"
     raw: readTemplateCached :ctx path: p.stringview
     if raw.length > 0 then {
@@ -21919,30 +21830,8 @@ emitCodepointsNatives: function {
     runtimeDir: StringView
     buf: String.borrow
 } is {
-    cpId: u64
-    cpo: (ztypecheck.resolvedByKey
-        :ast
-        ty: symtab.typing
-        reg: symtab.reg
-        key: "system.CpIter".string
-    )
-    match (
-        cpo
-    ) case some then {
-        cpId = cpo
-    } case none then null
-    ovId: u64
-    ovo: (ztypecheck.resolvedByKey
-        :ast
-        ty: symtab.typing
-        reg: symtab.reg
-        key: "system.optionval_u32".string
-    )
-    match (
-        ovo
-    ) case some then {
-        ovId = ovo
-    } case none then null
+    cpId: builtinTid :ast :symtab base: "CpIter"
+    ovId: specStemTid :ast :symtab base: "optionval" arg1: "u32" arg2: ""
     cpc: cnameOf tid: cpId name: "CpIter"
     ovc: cnameOf tid: ovId name: "optionval_u32"
     (emitCpFrag
