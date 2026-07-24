@@ -4330,6 +4330,70 @@ objectTypedefMangled: function {ast: Ast onode: zast.ObjectDefData} out String i
     return "".string
 }
 
+# typedefFieldBaseTid -- the type id of an `X.typedef` field's `X`. A
+# parameterized base (`(List of: u8).typedef`) resolves through the spec trie,
+# which materializes the instance; a bare atom (`String.typedef`) resolves
+# through the unit ladder. 0 when the node is not a typedef field or the base
+# does not resolve.
+typedefFieldBaseTid: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    unitName: StringView
+    n: Node
+} out u64 is {
+    match (
+        n
+    ) case dottedpath then {
+        bn9: ast.nodes.get i: (n.parent - 1).u64
+        mid9: (resolveMonoRefInline
+            :ty
+            :reg
+            :ast
+            :unitName
+            thisName: ""
+            enclDecl: 0
+            op: bn9
+            nid: 0
+        )
+        if mid9 > 0 then return mid9
+        an9: paramTypeBaseName :ast op: bn9
+        if an9.length == 0 then return 0
+        return (resolveAtomType :ty :reg :ast :unitName nm: an9.stringview thisName: "")
+    } else {
+        return 0
+    }
+}
+
+# objectTypedefBaseTid -- the base type id of an objectdef's single `X.typedef`
+# field, or 0 when the object is not a typedef.
+objectTypedefBaseTid: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    ast: Ast
+    unitName: StringView
+    onode: zast.ObjectDefData
+} out u64 is {
+    fiter: onode.isItems.iterate
+    for fmId9: fiter loop {
+        fm: ast.nodes.get i: (fmId9 - 1).u64
+        match (
+            fm
+        ) case namedoperation then {
+            if (isTypedefField :ast n: (ast.nodes.get i: (fm.operation - 1).u64)) then {
+                return (typedefFieldBaseTid
+                    :ty
+                    :reg
+                    :ast
+                    :unitName
+                    n: (ast.nodes.get i: (fm.operation - 1).u64)
+                )
+            }
+        } else null
+    }
+    return 0
+}
+
 # resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
 # record: a child per field (field name -> type-ref shell), a child per as-block
 # method, then synthesized `create`/`==`/`!=`. A typedef record (single
@@ -4954,6 +5018,11 @@ resolveRecord: function {
         if tdm.length > 0 then {
             tdk2: rid
             ty.typedefBaseMangled.set key: tdk2 value: tdm
+        }
+        tdt: objectTypedefBaseTid :ty :reg :ast :unitName onode: rnode
+        if tdt > 0 then {
+            tdk5: rid
+            ty.typedefBaseTid.set key: tdk5 value: tdt
         }
     }
     hasCreateIs: false
@@ -5740,6 +5809,11 @@ resolveClass: function {
         if tdm3.length > 0 then {
             tdk4: cid
             ty.typedefBaseMangled.set key: tdk4 value: tdm3
+        }
+        tdt3: objectTypedefBaseTid :ty :reg :ast :unitName onode: cnode
+        if tdt3 > 0 then {
+            tdk6: cid
+            ty.typedefBaseTid.set key: tdk6 value: tdt3
         }
     }
     fiter: cnode.isItems.iterate
@@ -12652,20 +12726,26 @@ typedefBaseMangledOf: function {
     unitName: StringView
     tid: u64
 } out u64 is {
+    rM9: u64
     bm9: copiedMapStr m: st.typing.typedefBaseMangled key: tid
-    if bm9.length == 0 then return 0
-    rM9: (optU64Or
-        o: (walkLookupTyperef
-            :ast
-            ty: st.typing
-            reg: st.reg
-            currentUnit: unitName
-            base: bm9.stringview
+    if bm9.length > 0 then {
+        rM9 = (optU64Or
+            o: (walkLookupTyperef
+                :ast
+                ty: st.typing
+                reg: st.reg
+                currentUnit: unitName
+                base: bm9.stringview
+            )
+            d: 0
         )
-        d: 0
-    )
-    if st.reg.monoNameStats when rM9 > 0 then {
-        st.reg.typedefMangledHits = st.reg.typedefMangledHits + 1
+    }
+    if st.reg.monoNameStats then {
+        if rM9 > 0 then st.reg.typedefMangledHits = st.reg.typedefMangledHits + 1
+        # the stored tid must equal what the mangled string resolves to, in
+        # BOTH directions -- a tid recorded where no string was counts too
+        tT9: optU64Or o: (st.typing.typedefBaseTid.get key: tid) d: 0
+        if tT9 != rM9 then st.reg.typedefParityMismatch = st.reg.typedefParityMismatch + 1
     }
     return rM9
 }
