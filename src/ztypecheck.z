@@ -4591,26 +4591,8 @@ scanVisibility: function {
             )
             okAlias9 = false
         }
-        if okAlias9 then {
-            pTxt2: zast.nameTextCopy :ast ref: pRef9
-            iTxt2: zast.nameTextCopy :ast ref: iRef9
-            (ty.setChildPublicAlias
-                parentTypeId: parentId
-                publicName: pTxt2.stringview
-                internalName: iTxt2.stringview
-            )
-        }
+        if okAlias9 then ty.renameSeen = true
         ax9 = ax9 + 1
-    }
-}
-
-# applyPrivateExclusions -- mark each excluded member private, by pool id.
-applyPrivateExclusions: function {ty: ztyping.ZTyping parentId: u64 excl: (List u64)} is {
-    ei9: u64
-    en9: excl.length
-    for ei9 < en9 loop {
-        ty.setChildPrivateId parentTypeId: parentId nameId: (excl.get i: ei9)
-        ei9 = ei9 + 1
     }
 }
 
@@ -4713,9 +4695,7 @@ scanUnitVisibility: function {
     emiU9: u64
     for emiU9 < memberNameList.length loop {
         mnidU9: memberNameList.get i: emiU9
-        if (pubIds.has item: mnidU9) == false then {
-            ty.setChildPrivateId parentTypeId: unitTid nameId: mnidU9
-        }
+        if (pubIds.has item: mnidU9) == false then ty.privacySeen = true
         emiU9 = emiU9 + 1
     }
     axU9: u64
@@ -4749,15 +4729,7 @@ scanUnitVisibility: function {
             )
             okU9 = false
         }
-        if okU9 then {
-            pTxU9: zast.nameTextCopy :ast ref: pRefU9
-            iTxU9: zast.nameTextCopy :ast ref: iRefU9
-            (ty.setChildPublicAlias
-                parentTypeId: unitTid
-                publicName: pTxU9.stringview
-                internalName: iTxU9.stringview
-            )
-        }
+        if okU9 then ty.renameSeen = true
         axU9 = axU9 + 1
     }
 }
@@ -5129,7 +5101,7 @@ resolveRecord: function {
             }
         }
     }
-    applyPrivateExclusions :ty parentId: rrid excl: pvExcl_rrid
+    if pvExcl_rrid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: rrid grants: pvGrants_rrid
 }
 
@@ -5348,7 +5320,7 @@ resolveVariant: function {
         neqId: reg.newType name: neqName.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: vid nameId: wkOpNe childTypeId: neqId
     }
-    applyPrivateExclusions :ty parentId: vvid excl: pvExcl_vvid
+    if pvExcl_vvid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: vvid grants: pvGrants_vvid
 }
 
@@ -5631,7 +5603,7 @@ resolveUnion: function {
         dn: "\{defName}_destroy"
         reg.setDestructorName typeId: uid name: dn.stringview
     }
-    applyPrivateExclusions :ty parentId: uuid excl: pvExcl_uuid
+    if pvExcl_uuid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: uuid grants: pvGrants_uuid
 }
 
@@ -6053,7 +6025,7 @@ resolveClass: function {
         dn: "\{defName}_destroy"
         reg.setDestructorName typeId: cid name: dn.stringview
     }
-    applyPrivateExclusions :ty parentId: ccid excl: pvExcl_ccid
+    if pvExcl_ccid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: ccid grants: pvGrants_ccid
 }
 
@@ -6133,7 +6105,7 @@ resolveFacet: function {
         borrowId: reg.newType name: borrowName.stringview typetype: ztypes.ztypetype.functionType
         ty.setChildId parentTypeId: fid nameId: wkBorrow childTypeId: borrowId
     }
-    applyPrivateExclusions :ty parentId: ffid excl: pvExcl_ffid
+    if pvExcl_ffid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: ffid grants: pvGrants_ffid
 }
 
@@ -6224,7 +6196,7 @@ resolveProtocol: function {
     }
     dn: "\{defName}_destroy"
     reg.setDestructorName typeId: pid name: dn.stringview
-    applyPrivateExclusions :ty parentId: ppid excl: pvExcl_ppid
+    if pvExcl_ppid.length > 0 then ty.privacySeen = true
     applyGrantsPrivate :ty parentId: ppid grants: pvGrants_ppid
 }
 
@@ -23841,8 +23813,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     orderBad: u64
     orderMissing: u64
     orderReorder: u64
-    visMembers: u64
-    visPrivMismatch: u64
     # Pass A -- collect member tuples by iterating the typeChild List (each row
     # carries its parentTypeId).
     aOwner9: (List u64)
@@ -23856,9 +23826,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     # Pass B -- bridge + stamp + parity.
     bi9: u64
     btot9: aOwner9.length
-    visInit9: false
-    lastVisTid9: u64
-    lastPnid9: u64
     for bi9 < btot9 loop {
         ptid9: aOwner9.get i: bi9
         nid9: aNid9.get i: bi9
@@ -23882,32 +23849,12 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             if mg9 then grantSet = grantSet + 1
         } case none then null
         nid32: nid9.u32.orPanic
-        if visInit9 == false then {
-            lastPnid9 = publicNsOf ty: st.typing reg: st.reg tid: ptid9
-            lastVisTid9 = ptid9
-            visInit9 = true
-        } else if ptid9 != lastVisTid9 then {
-            lastPnid9 = publicNsOf ty: st.typing reg: st.reg tid: ptid9
-            lastVisTid9 = ptid9
-        }
         expParent9: declOfTypeId reg: st.reg tid: ptid9
         did9: declMemberOf ty: st.typing reg: st.reg ownerTid: ptid9 nameId: nid32
         if did9 == 0 then {
             declMisses = declMisses + 1
         } else {
             declHits = declHits + 1
-            if did9 != lastPnid9 then {
-                mapPriv9: false
-                cp9: st.typing.childPrivate.get key: cnid9
-                match (
-                    cp9
-                ) case some then {
-                    mapPriv9 = cp9
-                } case none then null
-                if lastPnid9 > 0 then visMembers = visMembers + 1
-                pnPriv9: declMemberIsPrivate ty: st.typing reg: st.reg tid: ptid9 nameId: nid32
-                if mapPriv9 != pnPriv9 then visPrivMismatch = visPrivMismatch + 1
-            }
             do9: st.typing.decls.get key: did9
             match (
                 do9
@@ -24027,7 +23974,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             }
         }
     }
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} visMembers=\{visMembers} visPrivMismatch=\{visPrivMismatch}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder}"
 }
 typecheck: function {
     program: Node

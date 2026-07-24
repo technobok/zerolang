@@ -287,9 +287,6 @@ ZTyping: class {
 
     # per-edge mutable state, keyed by childNameId
     childTypeById: (Map u64 value: u64)
-    childPrivate: (Map u64 value: bool)
-    # public-interface rename: "{parentTypeId}:{publicName}" -> internalName
-    childPublicAlias: (Map String value: String)
     # true once any public-interface rename exists (skips alias lookups otherwise)
     renameSeen: bool
     # true once any member has been marked private (gates cross-unit checks)
@@ -697,51 +694,6 @@ ZTyping: class {
 
     # --- bool sidecars (private / lock-field / lock-arm) ---
 
-    setChildPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            this.childPrivate.set key: idopt value: true
-        } case none then null
-    }
-
-    # setChildPrivateId -- mark a child edge private by its Ast.names pool id
-    # (id-keyed twin of setChildPrivate; the visibility pass has the id in hand).
-    setChildPrivateId: function {:this parentTypeId: u64 nameId: u64} is {
-        this.privacySeen = true
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            this.childPrivate.set key: idopt value: true
-        } case none then null
-    }
-
-    # --- public-interface rename map (publicName -> internalName) ---
-    # setChildPublicAlias -- record that `publicName` in parentTypeId's public
-    # interface exposes the internal member `internalName`.
-    setChildPublicAlias: function {:this parentTypeId: u64 publicName: StringView internalName: StringView} is {
-        k9: "\{parentTypeId}:\{publicName}"
-        v9: internalName.string
-        this.childPublicAlias.set key: k9.take value: v9
-        this.renameSeen = true
-    }
-
-    # childPublicAliasOf -- the internal member a public alias exposes, "" when
-    # `name` is not a renamed public entry of parentTypeId.
-    childPublicAliasOf: function {:this parentTypeId: u64 name: StringView} out String is {
-        k9: "\{parentTypeId}:\{name}"
-        r9: this.childPublicAlias.get key: k9
-        match (
-            r9
-        ) case some then {
-            return r9.copy
-        } case none then {
-            return "".string
-        }
-    }
-
     # setAliasInternalName / aliasInternalNameOf -- per dotted-path-node record
     # of the internal member an external access resolved to through a public
     # alias; the emitter reads it to emit the internal C name.
@@ -780,24 +732,6 @@ ZTyping: class {
             idopt
         ) case some then {
             r: this.childGrantsPrivate.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
-        }
-    }
-
-    isChildPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childPrivate.get key: idopt
             match (
                 r
             ) case some then {
@@ -1186,8 +1120,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         childIndex: (Map u64 value: ChildBucket)
         typeGenericArg: (List ZTypeGenericArg)
         childTypeById: (Map u64 value: u64)
-        childPrivate: (Map u64 value: bool)
-        childPublicAlias: (Map String value: String)
         renameSeen: false
         privacySeen: false
         childLockField: (Map u64 value: bool)
@@ -1332,7 +1264,6 @@ main: function is {
     dumpChildren :ty pool: pool9 parentTypeId: pid
 
     print "=== sidecars ==="
-    ty.setChildPrivate pool: pool9 parentTypeId: pid name: "x"
     ty.setChildLockField pool: pool9 parentTypeId: pid name: "y"
     ty.setChildLockArm pool: pool9 parentTypeId: pid name: "label"
     ty.setDefaultNumeric pool: pool9 parentTypeId: pid name: "x" value: 7
@@ -1351,8 +1282,6 @@ main: function is {
         ownership: ztypes.zparamownership.borrowMode
     )
 
-    smokeIsPrivate pool: pool9 :ty :pid name: "x"
-    smokeIsPrivate pool: pool9 :ty :pid name: "y"
     smokeIsLockField pool: pool9 :ty :pid name: "y"
     smokeIsLockArm pool: pool9 :ty :pid name: "label"
     smokeDefault pool: pool9 :ty :pid name: "x"
@@ -1451,12 +1380,6 @@ smokeHasChild: function {pool: zast.StringPool ty: ZTyping pid: u64 name: String
 smokeChildOf: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
     r: ty.childOf :pool parentTypeId: pid :name
     print "childOf point.\{name} -> \{optU64Text r}"
-}
-
-# smoke-test: print whether member `name` of `pid` is private.
-smokeIsPrivate: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.isChildPrivate :pool parentTypeId: pid :name
-    print "isPrivate point.\{name} -> \{boolText b}"
 }
 
 # smoke-test: print whether member `name` of `pid` is a lock field.
