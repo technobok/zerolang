@@ -10600,69 +10600,6 @@ emitIfBindValue: function {
     }
 }
 
-# loopVarTypeName -- the yield type name of an iterator loop, read from
-# the loop variable's first stamped reference in the body ("" if none).
-loopVarTypeName: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
-    bodyId: u32
-    lbl: StringView
-} out String is {
-    res: String
-    if bodyId > 0 then {
-        b9: ast.nodes.get i: (bodyId - 1).u64
-        scanLoopVar :ast :symtab n: b9 :lbl :res
-    }
-    return res
-}
-
-# scan a for-loop header for its loop variable.
-scanLoopVar: function {
-    ast: Ast
-    symtab: zenv.ZSymbolTable
-    n: Node
-    lbl: StringView
-    res: String.borrow
-} is {
-    if res.length > 0 then return
-    match (
-        n
-    ) case atomid then {
-        if (zast.nameTextEq :ast ref: n.name s: lbl) then {
-            tid: stampIdOf :symtab nid: n.nodeid.u64
-            if tid > 0 then {
-                tn: typeNameOfReg9 :symtab :tid
-                if tn.length > 0 then {
-                    tv: tn.stringview
-                    res.append tv
-                }
-            }
-        }
-    } case expression then {
-        scanLoopVar :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64) :lbl :res
-    } case statement then {
-        with sit: n.statements.iterate do for sId9: sit loop {
-            scanLoopVar :ast :symtab n: (ast.nodes.get i: (sId9 - 1).u64) :lbl :res
-        }
-    } case statementline then {
-        scanLoopVar :ast :symtab n: (ast.nodes.get i: (n.statementline - 1).u64) :lbl :res
-    } case call then {
-        with ait: n.arguments.iterate do for a: ait loop {
-            an9: ast.nodes.get i: (a - 1).u64
-            scanLoopVar :ast :symtab n: an9 :lbl :res
-        }
-    } case namedoperation then {
-        scanLoopVar :ast :symtab n: (ast.nodes.get i: (n.operation - 1).u64) :lbl :res
-    } case binop then {
-        scanLoopVar :ast :symtab n: (ast.nodes.get i: (n.lhs - 1).u64) :lbl :res
-        scanLoopVar :ast :symtab n: (ast.nodes.get i: (n.rhs - 1).u64) :lbl :res
-    } case atomstring then {
-        with pit: n.stringparts.iterate do for pId9: pit loop {
-            scanLoopVar :ast :symtab n: (ast.nodes.get i: (pId9 - 1).u64) :lbl :res
-        }
-    } else null
-}
-
 # emitObjIterFor -- `for x: <iter> loop` where <iter> is an iterator value
 # (a type with a `.call` child returning optionval/Option). Emits the
 # while(1) / call / tag==NONE break / payload-extract pattern. Value
@@ -10794,26 +10731,9 @@ emitObjIterFor: function {
                     ovid = mro
                 } case none then null
             }
-            if ovid == 0 then {
-                # native iterator call: returnTypeId unset. Resolve the
-                # yield type from the loop var's body usage -> optionval_T.
-                ytn: loopVarTypeName :ast :symtab bodyId: m.body lbl: lbl.stringview
-                if ytn.length == 0 then return false
-                ovnm: "optionval_\{ytn}"
-                ovo: (ztypecheck.resolveSystemChild
-                    :ast
-                    ty: symtab.typing
-                    reg: symtab.reg
-                    name: ovnm.stringview
-                )
-                match (
-                    ovo
-                ) case some then {
-                    ovid = ovo
-                } case none then {
-                    return false
-                }
-            }
+            # neither the registered return nor the .call stamp names a yield
+            # type: there is no iterator to emit against.
+            if ovid == 0 then return false
             itn: typeNameOfReg9 :symtab tid: itid
             # a main-unit user-class iterator's .call is emitted by emitOneMethod
             # (its own cname id); native/collection iterators (CpIter, SetIter,
