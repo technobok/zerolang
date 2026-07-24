@@ -1095,6 +1095,7 @@ Ctx: class {
     emittedUserTypes: (Map u64 value: bool)
     fwdDeclaredTypes: (Map u64 value: bool)
     tmplCache: (Map String value: String)
+    ioCanonC: (Map String value: String)
     argHoistNames: (List String)
     argHoistVals: (List String)
     argHoistTypes: (List String)
@@ -14973,6 +14974,7 @@ emitC: function {
         emittedUserTypes: (Map u64 value: bool)
         fwdDeclaredTypes: (Map u64 value: bool)
         tmplCache: (Map String value: String)
+        ioCanonC: (Map String value: String)
         argHoistNames: (List String)
         argHoistVals: (List String)
         argHoistTypes: (List String)
@@ -16563,11 +16565,38 @@ ioCanonTid: function {ast: Ast symtab: zenv.ZSymbolTable canon: StringView} out 
     return 0
 }
 
-# ioCanonCname -- the id-based cname for an io canonical stem (the part after
-# `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its
-# else a named system type (IoError/File/filestat/Reader/...) by registry name.
-# "" when the type is not in the (demand-driven) registry for this program.
+# ioCanonCname -- memoized wrapper: the canon->cname map is emit-stable and io
+# fragments reload the same canons once per unit, so cache each result (incl.
+# the "" miss) per program, mirroring resolveByNameC. Avoids re-running the
+# O(nextTypeId) registry scan in ioCanonCnameUncached ~30x per canon.
 ioCanonCname: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    canon: StringView
+} out String is {
+    found9: false
+    cached9: String
+    {
+        h9: ctx.ioCanonC.get key: canon.string
+        match (
+            h9
+        ) case some then {
+            found9 = true
+            cached9 = h9.copy
+        } case none then null
+    }
+    if found9 then return cached9
+    r9: ioCanonCnameUncached :ast :symtab :ctx :canon
+    ctx.ioCanonC.set key: canon.string value: r9.copy
+    return r9
+}
+
+# ioCanonCnameUncached -- the id-based cname for an io canonical stem (the part
+# after `z_` in a runtime fragment): a mono (Result_*/List_u8/...) via its spec
+# trie, else a named system type (IoError/File/filestat/Reader/...) by registry
+# name. "" when the type is not in the (demand-driven) registry for this program.
+ioCanonCnameUncached: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
