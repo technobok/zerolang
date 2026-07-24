@@ -36,6 +36,8 @@ public: unit {
     :paramIsThisReceiverId
     :regTypeNameOf
     :declOfTypeId
+    :declMemberIsPrivate
+    :publicAliasInternalNames
     :unitNameOfTid
     :resolveSystemChild
     :resolveSystemChildById
@@ -23714,9 +23716,11 @@ declMemberIsPrivate: function {
             od9 = po9.parent
         } case none then null
     }
-    # not private if `nameId` is not a declared member (matches isChildPrivate,
-    # which is false when the type has no such member edge)
-    if (ty.declFindChild parentDeclId: od9 :nameId) == 0 then return false
+    md9: ty.declFindChild parentDeclId: od9 :nameId
+    # not private if `nameId` is not a declared member (isChildPrivate is false
+    # for a missing member edge), nor the publicNs block pseudo-member itself
+    if md9 == 0 then return false
+    if md9 == pn9 then return false
     return (ty.declFindChild parentDeclId: pn9 :nameId) == 0
 }
 
@@ -23748,6 +23752,54 @@ declPublicAliasInternal: function {
     if intName9 == nid9 then return "".string
     if intName9 == 0 then return "".string
     return (zast.poolTextCopy :pool ref: intName9)
+}
+
+# publicAliasInternalNames -- the internal member names `tid`'s public interface
+# exposes under a DIFFERENT public name (its alias targets); empty when `tid` has
+# no publicNs. The linter marks these as used so a renamed def is not flagged.
+publicAliasInternalNames: function {
+    ty: ztyping.ZTyping
+    reg: ztypes.ZTypeRegistry
+    pool: zast.StringPool
+    tid: u64
+} out (List String) is {
+    out9: (List String)
+    pn9: publicNsOf :ty :reg :tid
+    if pn9 == 0 then return out9
+    ename9: (List u64)
+    edecl9: (List u64)
+    {
+        po9: ty.decls.get key: pn9
+        match (
+            po9
+        ) case some then {
+            with cit9: po9.children.iterate do for c9: cit9 loop {
+                ename9.append from: c9.nameId.u64
+                edecl9.append from: c9.declId
+            }
+        } case none then null
+    }
+    ei9: u64
+    en9: ename9.length
+    for ei9 < en9 loop {
+        pubNid9: ename9.get i: ei9
+        tdecl9: edecl9.get i: ei9
+        ei9 = ei9 + 1
+        intNid9: u32
+        {
+            do9: ty.decls.get key: tdecl9
+            match (
+                do9
+            ) case some then {
+                intNid9 = do9.name
+            } case none then null
+        }
+        if intNid9 > 0 when intNid9.u64 != pubNid9 then out9.append from: (zast.poolTextCopy
+            :pool
+            ref: intNid9
+        )
+    }
+    return out9
 }
 
 # q2SpikeVerify -- Q2 Phase-0 spike gate (env ZC_Q2_SPIKE): stamps ownership +
