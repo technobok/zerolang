@@ -992,6 +992,49 @@ builtinTid: function {ast: Ast symtab: zenv.ZSymbolTable base: StringView} out u
     )
 }
 
+# specStemTid -- the minted instance of a system template over one or two
+# concrete arguments, every part named by its SOURCE name (`optionval` over
+# `u64`). A runtime fragment's text still carries the mangled spelling, but the
+# identity comes off the spec trie. 0 when that instance was never demanded.
+specStemTid: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    base: StringView
+    arg1: StringView
+    arg2: StringView
+} out u64 is {
+    args9: (List u64)
+    args9.append (builtinTid :ast :symtab base: arg1)
+    if arg2.length > 0 then args9.append (builtinTid :ast :symtab base: arg2)
+    return (ztypecheck.specLookup
+        reg: symtab.reg
+        templateId: (builtinTid :ast :symtab :base)
+        args: args9
+    )
+}
+
+# stemParity -- Phase 2 gate: the structural stem lookup must agree with the
+# mangled-name resolution it replaces, including when both find nothing.
+stemParity: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    mono: StringView
+    structural: u64
+} is {
+    if symtab.reg.monoNameStats then {
+        byName9: u64
+        mo9: ztypecheck.resolveSystemChild :ast ty: symtab.typing reg: symtab.reg name: mono
+        match (
+            mo9
+        ) case some then {
+            byName9 = mo9
+        } case none then null
+        if byName9 != structural then {
+            symtab.reg.stemParityMismatch = symtab.reg.stemParityMismatch + 1
+        }
+    }
+}
+
 # originTidOf -- a type's genericOriginId (the template it monomorphized from), or
 # 0 when it has none. The id form of monoOriginName.
 originTidOf: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
@@ -15139,6 +15182,7 @@ emitNeededNatives: function {
         :runtimeDir
         frag: "_Z_SV_INDEX_OF_RAW"
         mono: ""
+        stemTid: 0
         :buf
     )
     emitNativeIf :ctx need: "contains" frag: "_Z_SV_CONTAINS" :runtimeDir :buf
@@ -15213,6 +15257,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_INDEX_OF"
             mono: "optionval_u64"
+            stemTid: (specStemTid :ast :symtab base: "optionval" arg1: "u64" arg2: "")
             :buf
         )
     }
@@ -15224,11 +15269,21 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_LAST_INDEX_OF"
             mono: "optionval_u64"
+            stemTid: (specStemTid :ast :symtab base: "optionval" arg1: "u64" arg2: "")
             :buf
         )
     }
     if (needsHas :ctx name: "byteAt") then {
-        emitMonoNative :ast :symtab :ctx :runtimeDir frag: "_Z_SV_BYTE_AT" mono: "optionval_u8" :buf
+        (emitMonoNative
+            :ast
+            :symtab
+            :ctx
+            :runtimeDir
+            frag: "_Z_SV_BYTE_AT"
+            mono: "optionval_u8"
+            stemTid: (specStemTid :ast :symtab base: "optionval" arg1: "u8" arg2: "")
+            :buf
+        )
     }
     if (needsHas :ctx name: "stripPrefix") then {
         (emitMonoNative
@@ -15238,6 +15293,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_STRIP_PREFIX"
             mono: "Option_StringView"
+            stemTid: (specStemTid :ast :symtab base: "Option" arg1: "StringView" arg2: "")
             :buf
         )
     }
@@ -15249,6 +15305,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_STRIP_SUFFIX"
             mono: "Option_StringView"
+            stemTid: (specStemTid :ast :symtab base: "Option" arg1: "StringView" arg2: "")
             :buf
         )
     }
@@ -15260,6 +15317,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_SPLIT_ONCE"
             mono: "optionval_u64"
+            stemTid: (specStemTid :ast :symtab base: "optionval" arg1: "u64" arg2: "")
             :buf
         )
     }
@@ -15271,6 +15329,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_PARSE_I64"
             mono: "resultval_i64_parseerror"
+            stemTid: (specStemTid :ast :symtab base: "resultval" arg1: "i64" arg2: "parseerror")
             :buf
         )
     }
@@ -15282,6 +15341,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_PARSE_U64"
             mono: "resultval_u64_parseerror"
+            stemTid: (specStemTid :ast :symtab base: "resultval" arg1: "u64" arg2: "parseerror")
             :buf
         )
     }
@@ -15293,6 +15353,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_PARSE_F64"
             mono: "resultval_f64_parseerror"
+            stemTid: (specStemTid :ast :symtab base: "resultval" arg1: "f64" arg2: "parseerror")
             :buf
         )
     }
@@ -15304,6 +15365,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_PARSE_F16"
             mono: "resultval_f16_parseerror"
+            stemTid: (specStemTid :ast :symtab base: "resultval" arg1: "f16" arg2: "parseerror")
             :buf
         )
     }
@@ -15315,6 +15377,7 @@ emitNeededNatives: function {
             :runtimeDir
             frag: "_Z_SV_PARSE_F128"
             mono: "resultval_f128_parseerror"
+            stemTid: (specStemTid :ast :symtab base: "resultval" arg1: "f128" arg2: "parseerror")
             :buf
         )
     }
@@ -21788,6 +21851,7 @@ emitMonoNative: function {
     runtimeDir: StringView
     frag: StringView
     mono: StringView
+    stemTid: u64
     buf: String.borrow
 } is {
     p: "\{runtimeDir}/natives/\{frag}.inc"
@@ -21803,6 +21867,7 @@ emitMonoNative: function {
             ) case some then {
                 mid = moo
             } case none then null
+            stemParity :ast :symtab :mono structural: stemTid
             mc: cnameOf tid: mid name: mono
             cn: "z_\{mono}"
             cur = substituteAll text: cur needle: cn.stringview repl: mc.stringview
@@ -21821,6 +21886,7 @@ emitParseNative: function {
     runtimeDir: StringView
     frag: StringView
     mono: StringView
+    stemTid: u64
     buf: String.borrow
 } is {
     mid: u64
@@ -21830,6 +21896,7 @@ emitParseNative: function {
     ) case some then {
         mid = mo
     } case none then null
+    stemParity :ast :symtab :mono structural: stemTid
     mc: cnameOf tid: mid name: mono
     p: "\{runtimeDir}/natives/\{frag}.inc"
     raw: readTemplateCached :ctx path: p.stringview
