@@ -7727,6 +7727,37 @@ methodReturnByName: function {ast: Ast symtab: zenv.ZSymbolTable dotted: StringV
 }
 
 # the fully-resolved emitted name for node `n`.
+# stampIdDeep -- stampNameDeep's id form: the stamped type id, peeling
+# expression wrappers and unwrapping a value-position FUNCTION stamp to its
+# return tid. 0 where stampNameDeep would resolve a shell method by name (no
+# clean id) or find nothing.
+stampIdDeep: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out u64 is {
+    nid: nodeIdOf9 :n
+    sid: stampIdOf :symtab :nid
+    if sid > 0 then {
+        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+            rto: fnReturnTidOf :symtab tid: sid
+            if rto > 0 then return rto
+            rno9: symtab.typing.funcReturnNode.get key: sid
+            match (
+                rno9
+            ) case some then {
+                rrt9: stampIdOf :symtab nid: rno9
+                if rrt9 > 0 then return rrt9
+            } case none then null
+            return 0
+        }
+        return sid
+    }
+    match (
+        n
+    ) case expression then {
+        return (stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.expression - 1).u64))
+    } else {
+        return 0
+    }
+}
+
 stampNameDeep: function {ast: Ast symtab: zenv.ZSymbolTable n: Node} out String is {
     nid: nodeIdOf9 :n
     sid: stampIdOf :symtab :nid
@@ -9197,8 +9228,14 @@ emitStmt: function {
     } case withexpr then {
         wn9: n.name.stringview
         wnm: wn9.string
-        wtn: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
-        wct: cTypeForName :ast :symtab :ctx name: wtn.stringview
+        wsid9: stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
+        wct: String
+        if (originTidOf :symtab tid: wsid9) > 0 then {
+            wct = typeRefC :ast :symtab :ctx tid: wsid9 thisTid: 0
+        } else {
+            wtn: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
+            wct = cTypeForName :ast :symtab :ctx name: wtn.stringview
+        }
         wv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
         if wct.length > 0 then {
             lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
@@ -12233,8 +12270,14 @@ emitTailStmt: function {
     } case withexpr then {
         wnT9: n.name.stringview
         wnmT9: wnT9.string
-        wtnT9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
-        wctT9: cTypeForName :ast :symtab :ctx name: wtnT9.stringview
+        wsidT9: stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
+        wctT9: String
+        if (originTidOf :symtab tid: wsidT9) > 0 then {
+            wctT9 = typeRefC :ast :symtab :ctx tid: wsidT9 thisTid: 0
+        } else {
+            wtnT9: stampNameDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
+            wctT9 = cTypeForName :ast :symtab :ctx name: wtnT9.stringview
+        }
         wvT9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.value - 1).u64)
         if wctT9.length > 0 then {
             lwT9: "\{ind}\{wctT9} \{wnmT9} = \{wvT9};\n"
