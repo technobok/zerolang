@@ -177,6 +177,17 @@ declchild: record {
     declId: u64
 }
 
+# DefaultVal -- a member's default value, de-hacking the childDefault string
+# sentinels (`#function:`/`#variant:`). `literal` carries the default-expression
+# nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId; `none`
+# means no default.
+DefaultVal: variant {
+    none: null
+    literal: u32
+    func: u64
+    arm: u64
+} as { tag: u8.tag }
+
 # One declaration: a named definition site in the program. `name` is the
 # shared Ast.names pool id; `parent` the enclosing Decl (0 = a tree
 # root); `node` the declaring namedoperation's AST nodeid (location via
@@ -189,6 +200,22 @@ Decl: class {
     kind: declkind
     node: u32
     typeId: u64
+    # originDecl -- a mono member decl's template member decl (Phase 4
+    # navigation); 0 for template/source members.
+    originDecl: u64
+    # ownership -- a param member's binding mode (noneMode when unset); where a
+    # param's lock status lives.
+    ownership: ztypes.zparamownership
+    # defaultVal -- a member's default value (none when unset). (Named
+    # defaultVal, not default, which is a C keyword the emitter would not mangle.)
+    defaultVal: DefaultVal
+    # grantsPrivate -- the field's declared type was a `.private` friend handle
+    # (syntactic; not derivable from typeId).
+    grantsPrivate: bool
+    # lockArm -- a variant arm marked as the lock arm.
+    lockArm: bool
+    # lockFieldDecl -- on a TYPE decl, which member is the type's lock (0 = none).
+    lockFieldDecl: u64
     children: (List declchild)
     # derived nameId -> declId accelerator over `children`, backfilled when
     # the namespace outgrows a linear scan (bucketScanMax); not dumped
@@ -402,6 +429,12 @@ ZTyping: class {
             :kind
             :node
             typeId: 0
+            originDecl: 0
+            ownership: ztypes.zparamownership.noneMode
+            defaultVal: DefaultVal.none
+            grantsPrivate: false
+            lockArm: false
+            lockFieldDecl: 0
             children: (List declchild)
             byName: (Map u64 value: u64)
         )
