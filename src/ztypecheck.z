@@ -4243,42 +4243,6 @@ typedefFieldBaseName: function {ast: Ast n: Node} out String is {
     }
 }
 
-# mangledTypeName -- a type ref's resolvable name: bare atoms as-is, a
-# parameterized ref as its instance mangling (`(List of: u8)` ->
-# "List_u8"), matching the shell/mono naming so member delegation finds
-# the minted instance.
-mangledTypeName: function {ast: Ast op: Node} out String is {
-    match (
-        op
-    ) case atomid then {
-        return (zast.nameTextCopy :ast ref: op.name)
-    } case labelvalue then {
-        return (zast.nameTextCopy :ast ref: op.name)
-    } case expression then {
-        return (mangledTypeName :ast op: (ast.nodes.get i: (op.expression - 1).u64))
-    } case call then {
-        base: atomName :ast n: (ast.nodes.get i: (op.callable - 1).u64)
-        aiter: op.arguments.iterate
-        for argId9: aiter loop {
-            arg: ast.nodes.get i: (argId9 - 1).u64
-            match (
-                arg
-            ) case namedoperation then {
-                an: atomName :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
-                if an.length > 0 then {
-                    base.append s: "_"
-                    base.append s: an
-                }
-            } else null
-        }
-        return base
-    } case dottedpath then {
-        return (atomName :ast n: (ast.nodes.get i: (op.child - 1).u64))
-    } else {
-        return "".string
-    }
-}
-
 # objectTypedefBase -- the base type name of an objectdef's single `X.typedef`
 # field (the typedef wrapper base), or "" when the object is not a typedef.
 objectTypedefBase: function {ast: Ast onode: zast.ObjectDefData} out String is {
@@ -4295,36 +4259,6 @@ objectTypedefBase: function {ast: Ast onode: zast.ObjectDefData} out String is {
                 :ast
                 n: (ast.nodes.get i: (fm.operation - 1).u64)
             )
-        } else null
-    }
-    return "".string
-}
-
-# typedefFieldMangledName -- the mangled instance name of an `X.typedef`
-# field's `X` (`(List of: u8).typedef` -> "List_u8"), the minted-mono key
-# member delegation resolves through.
-typedefFieldMangledName: function {ast: Ast n: Node} out String is {
-    match (
-        n
-    ) case dottedpath then {
-        return (mangledTypeName :ast op: (ast.nodes.get i: (n.parent - 1).u64))
-    } else {
-        return "".string
-    }
-}
-
-# objectTypedefMangled -- the mangled base-instance name of an objectdef's
-# single `X.typedef` field, or "" when the object is not a typedef.
-objectTypedefMangled: function {ast: Ast onode: zast.ObjectDefData} out String is {
-    fiter: onode.isItems.iterate
-    for fmId9: fiter loop {
-        fm: ast.nodes.get i: (fmId9 - 1).u64
-        match (
-            fm
-        ) case namedoperation then {
-            if (isTypedefField :ast n: (ast.nodes.get i: (fm.operation - 1).u64)) then {
-                return (typedefFieldMangledName :ast n: (ast.nodes.get i: (fm.operation - 1).u64))
-            }
         } else null
     }
     return "".string
@@ -5013,11 +4947,6 @@ resolveRecord: function {
         if tdb.length > 0 then {
             tdk: rid
             ty.typedefBaseName.set key: tdk value: tdb
-        }
-        tdm: objectTypedefMangled :ast onode: rnode
-        if tdm.length > 0 then {
-            tdk2: rid
-            ty.typedefBaseMangled.set key: tdk2 value: tdm
         }
         tdt: objectTypedefBaseTid :ty :reg :ast :unitName onode: rnode
         if tdt > 0 then {
@@ -5804,11 +5733,6 @@ resolveClass: function {
         if tdbase.length > 0 then {
             tdk3: cid
             ty.typedefBaseName.set key: tdk3 value: tdbase
-        }
-        tdm3: objectTypedefMangled :ast onode: cnode
-        if tdm3.length > 0 then {
-            tdk4: cid
-            ty.typedefBaseMangled.set key: tdk4 value: tdm3
         }
         tdt3: objectTypedefBaseTid :ty :reg :ast :unitName onode: cnode
         if tdt3 > 0 then {
@@ -10072,7 +9996,7 @@ printableInterpTid: function {
     t9: tid
     tc9: u64
     for tc9 < 8 loop {
-        b9: typedefBaseMangledOf :ast :st :unitName tid: t9
+        b9: typedefBaseTidOf :st tid: t9
         if b9 == 0 then break
         t9 = b9
         tc9 = tc9 + 1
@@ -12717,37 +12641,10 @@ typedefBaseOf: function {ast: Ast st: zenv.ZSymbolTable unitName: StringView tid
     )
 }
 
-# typedefBaseMangledOf -- a typedef type's base INSTANCE id (the recorded
-# mangled name resolved at read time -- monos register in resolved once
-# minted), or 0.
-typedefBaseMangledOf: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitName: StringView
-    tid: u64
-} out u64 is {
-    rM9: u64
-    bm9: copiedMapStr m: st.typing.typedefBaseMangled key: tid
-    if bm9.length > 0 then {
-        rM9 = (optU64Or
-            o: (walkLookupTyperef
-                :ast
-                ty: st.typing
-                reg: st.reg
-                currentUnit: unitName
-                base: bm9.stringview
-            )
-            d: 0
-        )
-    }
-    if st.reg.monoNameStats then {
-        if rM9 > 0 then st.reg.typedefMangledHits = st.reg.typedefMangledHits + 1
-        # the stored tid must equal what the mangled string resolves to, in
-        # BOTH directions -- a tid recorded where no string was counts too
-        tT9: optU64Or o: (st.typing.typedefBaseTid.get key: tid) d: 0
-        if tT9 != rM9 then st.reg.typedefParityMismatch = st.reg.typedefParityMismatch + 1
-    }
-    return rM9
+# typedefBaseTidOf -- a typedef type's base INSTANCE id, resolved structurally
+# when the wrapper was declared, or 0.
+typedefBaseTidOf: function {st: zenv.ZSymbolTable tid: u64} out u64 is {
+    return (optU64Or o: (st.typing.typedefBaseTid.get key: tid) d: 0)
 }
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
@@ -13885,7 +13782,7 @@ checkDotted: function {
     match (
         tdw9
     ) case some then null case none then {
-        tdd9: typedefBaseMangledOf :ast :st :unitName tid: bt
+        tdd9: typedefBaseTidOf :st tid: bt
         if tdd9 == 0 then {
             tdd9 = typedefBaseOf :ast :st :unitName tid: bt
             if st.reg.monoNameStats when tdd9 > 0 then {
@@ -18081,7 +17978,7 @@ checkCall: function {
                         tdo: optU64Or o: (st.typing.nodeType.get key: tdcid.u64) d: 0
                         isTd: false
                         if (typedefBaseOf :ast :st :unitName tid: tdo) > 0 then isTd = true
-                        if (typedefBaseMangledOf :ast :st :unitName tid: tdo) > 0 then isTd = true
+                        if (typedefBaseTidOf :st tid: tdo) > 0 then isTd = true
                         if isTd when isBorrowForm then {
                             return (checkTypedefBorrow
                                 :st
