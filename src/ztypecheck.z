@@ -4536,6 +4536,10 @@ materializeCreateParams: function {
     typeTid: u64
     createId: u64
 } is {
+    # every field edge is written by now -- only the synthesized borrow / == /
+    # != follow this call -- so settle the type here rather than waiting for
+    # resolveDef's settle, which lands after the parameter order is decided
+    declSettleOrder :ty tid: typeTid
     mkNames8: (List String)
     with cfit8: ty.conformance.iterate do for crow8: cfit8 loop {
         if crow8.implTypeId == typeTid then mkNames8.append crow8.label.copy
@@ -4544,35 +4548,7 @@ materializeCreateParams: function {
     ftypeIds: (List u64)
     rowNids9: (List u64)
     rowCtos9: (List u64)
-    {
-        bd9: ty.childIndex.get key: typeTid
-        match (
-            bd9
-        ) case some then {
-            with rdit9: bd9.rows.iterate do for rdi9: rdit9 loop {
-                tc: ty.typeChild.get i: rdi9
-                rowNids9.append tc.nameId
-                rowCtos9.append (optU64Or o: (ty.childTypeById.get key: tc.childNameId) d: 0)
-            }
-        } case none then null
-    }
-    {
-        dcNms9: (List u64)
-        dcTds9: (List u64)
-        ty.declMemberList ownerTid: typeTid names: dcNms9 tids: dcTds9
-        if dcNms9.length != rowNids9.length then {
-            ty.createParamLenDiff = ty.createParamLenDiff + 1
-        } else {
-            same9: true
-            dci9: u64
-            dcn9: dcNms9.length
-            for dci9 < dcn9 loop {
-                if (dcNms9.get i: dci9) != (rowNids9.get i: dci9) then same9 = false
-                dci9 = dci9 + 1
-            }
-            if (same9) == false then ty.createParamOrderDiff = ty.createParamOrderDiff + 1
-        }
-    }
+    ty.declMemberList ownerTid: typeTid names: rowNids9 tids: rowCtos9
     {
         {
             ri9: u64
@@ -24576,8 +24552,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     reorderPermuted: st.typing.reorderPermuted
     reorderPermutedLate: st.typing.reorderPermutedLate
     monoTemplateUnsettled: st.typing.monoTemplateUnsettled
-    createParamOrderDiff: st.typing.createParamOrderDiff
-    createParamLenDiff: st.typing.createParamLenDiff
     ensureMinted: st.typing.ensureMinted
     parityCalls: st.typing.parityCalls
     parityEdgeOnly: st.typing.parityEdgeOnly
@@ -24587,7 +24561,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     parityDeclOnlyZero: st.typing.parityDeclOnlyZero
     childOfFallback: st.typing.childOfFallback
     childOfFallbackHit: st.typing.childOfFallbackHit
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner} reorderPermuted=\{reorderPermuted} reorderPermutedLate=\{reorderPermutedLate} monoTemplateUnsettled=\{monoTemplateUnsettled} createParamOrderDiff=\{createParamOrderDiff} createParamLenDiff=\{createParamLenDiff} ensureMinted=\{ensureMinted} parityCalls=\{parityCalls} parityEdgeOnly=\{parityEdgeOnly} parityDeclOnly=\{parityDeclOnly} parityDiff=\{parityDiff} parityZero=\{parityZero} parityDeclOnlyZero=\{parityDeclOnlyZero} childOfFallback=\{childOfFallback} childOfFallbackHit=\{childOfFallbackHit}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner} reorderPermuted=\{reorderPermuted} reorderPermutedLate=\{reorderPermutedLate} monoTemplateUnsettled=\{monoTemplateUnsettled} ensureMinted=\{ensureMinted} parityCalls=\{parityCalls} parityEdgeOnly=\{parityEdgeOnly} parityDeclOnly=\{parityDeclOnly} parityDiff=\{parityDiff} parityZero=\{parityZero} parityDeclOnlyZero=\{parityDeclOnlyZero} childOfFallback=\{childOfFallback} childOfFallbackHit=\{childOfFallbackHit}"
 }
 typecheck: function {
     program: Node
