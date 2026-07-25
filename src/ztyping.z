@@ -194,7 +194,9 @@ DefaultVal: variant {
 # root); `node` the declaring namedoperation's AST nodeid (location via
 # fsnoForNode); `typeId` the type this declaration minted (0 until one
 # is); `children` the ordered namespace the declaration owns. Body-local
-# variables are not Decls -- they keep the lexical variable-id system.
+# variables are not Decls -- they keep the lexical variable-id system. On a
+# MEMBER declaration `typeId` is the member's own type (what the tid-keyed
+# child index records), not one it minted.
 Decl: class {
     name: u32
     parent: u64
@@ -446,7 +448,36 @@ ZTyping: class {
             children: (List declchild)
             byName: (Map u64 value: u64)
         )
-        if parent > 0 then this.declAddChildEdge parentDeclId: parent nameId: name childDeclId: id
+        if parent > 0 then {
+            this.declAddChildEdge parentDeclId: parent nameId: name childDeclId: id
+            # the child edge and its metadata can predate this declaration
+            # (builtin seeding writes a system unit's edges before the unit's
+            # defs are indexed), so adopt whatever the sidecars already hold
+            ptid9: u64
+            {
+                po9: this.decls.get key: parent
+                match (
+                    po9
+                ) case some then {
+                    ptid9 = po9.typeId
+                } case none then null
+            }
+            if ptid9 > 0 then {
+                cno9: this.childNameIdOfId parentTypeId: ptid9 nameId: name.u64
+                match (
+                    cno9
+                ) case some then {
+                    if (this.declStampFromSidecars childNameId: cno9 declId: id) then {
+                        lo9: this.decls.get key: parent
+                        match (
+                            lo9
+                        ) case some then {
+                            lo9.lockFieldDecl = id
+                        } case none then null
+                    }
+                } case none then null
+            }
+        }
         return id
     }
 
@@ -492,6 +523,79 @@ ZTyping: class {
         }
     }
 
+    # declStampFromSidecars -- copy child edge `childNameId`'s recorded
+    # metadata onto member declaration `declId`. True when the member is its
+    # type's lock field, which the owning type's declaration records itself.
+    declStampFromSidecars: function {:this childNameId: u64 declId: u64} out bool is {
+        isLock9: false
+        {
+            lg9: this.childLockField.get key: childNameId
+            match (
+                lg9
+            ) case some then {
+                isLock9 = lg9
+            } case none then null
+        }
+        hasOwn9: false
+        own9: ztypes.zparamownership.noneMode
+        {
+            go9: this.childOwnership.get key: childNameId
+            match (
+                go9
+            ) case some then {
+                hasOwn9 = true
+                own9 = go9
+            } case none then null
+        }
+        grant9: false
+        {
+            gg9: this.childGrantsPrivate.get key: childNameId
+            match (
+                gg9
+            ) case some then {
+                grant9 = gg9
+            } case none then null
+        }
+        fnp9: false
+        {
+            fg9: this.childIsFnptrField.get key: childNameId
+            match (
+                fg9
+            ) case some then {
+                fnp9 = fg9
+            } case none then null
+        }
+        arm9: false
+        {
+            ag9: this.childLockArm.get key: childNameId
+            match (
+                ag9
+            ) case some then {
+                arm9 = ag9
+            } case none then null
+        }
+        mtid9: u64
+        {
+            tg9: this.childTypeById.get key: childNameId
+            match (
+                tg9
+            ) case some then {
+                mtid9 = tg9
+            } case none then null
+        }
+        do9: this.decls.get key: declId
+        match (
+            do9
+        ) case some then {
+            if mtid9 > 0 then do9.typeId = mtid9
+            if hasOwn9 then do9.ownership = own9
+            if grant9 then do9.grantsPrivate = true
+            if fnp9 then do9.fnptrField = true
+            if arm9 then do9.lockArm = true
+        } case none then null
+        return isLock9
+    }
+
     # declReplayMembers -- stamp the member declarations of a type whose
     # declaration link is recorded after its child edges were written. A
     # sidecar setter skips a type with no link yet (resolveFunction records
@@ -521,61 +625,7 @@ ZTyping: class {
             i9 = i9 + 1
             md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
             if md9 > 0 then {
-                {
-                    lg9: this.childLockField.get key: cid9
-                    match (
-                        lg9
-                    ) case some then {
-                        if lg9 then lockMember9 = md9
-                    } case none then null
-                }
-                hasOwn9: false
-                own9: ztypes.zparamownership.noneMode
-                {
-                    go9: this.childOwnership.get key: cid9
-                    match (
-                        go9
-                    ) case some then {
-                        hasOwn9 = true
-                        own9 = go9
-                    } case none then null
-                }
-                grant9: false
-                {
-                    gg9: this.childGrantsPrivate.get key: cid9
-                    match (
-                        gg9
-                    ) case some then {
-                        grant9 = gg9
-                    } case none then null
-                }
-                fnp9: false
-                {
-                    fg9: this.childIsFnptrField.get key: cid9
-                    match (
-                        fg9
-                    ) case some then {
-                        fnp9 = fg9
-                    } case none then null
-                }
-                arm9: false
-                {
-                    ag9: this.childLockArm.get key: cid9
-                    match (
-                        ag9
-                    ) case some then {
-                        arm9 = ag9
-                    } case none then null
-                }
-                do9: this.decls.get key: md9
-                match (
-                    do9
-                ) case some then {
-                    if hasOwn9 then do9.ownership = own9
-                    if grant9 then do9.grantsPrivate = true
-                    if fnp9 then do9.fnptrField = true
-                    if arm9 then do9.lockArm = true
-                } case none then null
+                if (this.declStampFromSidecars childNameId: cid9 declId: md9) then lockMember9 = md9
             }
         }
         if lockMember9 > 0 then {
@@ -632,6 +682,20 @@ ZTyping: class {
             } case none then null
         }
         return od9
+    }
+
+    # declSetMemberType -- record a member declaration's type. Deliberately
+    # not declSetType: the member did not mint the type, so it must not claim
+    # the reverse declByTypeId edge.
+    declSetMemberType: function {:this parentTypeId: u64 nameId: u64 typeId: u64} is {
+        md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
+        if md8 == 0 then return
+        do8: this.decls.get key: md8
+        match (
+            do8
+        ) case some then {
+            do8.typeId = typeId
+        } case none then null
     }
 
     # declMemberIdOf -- the declaration of member `nameId` under the type
@@ -737,6 +801,7 @@ ZTyping: class {
             sv: childTypeId
             this.childTypeById.set key: cid value: sv
         }
+        this.declSetMemberType :parentTypeId :nameId typeId: childTypeId
     }
 
     # Record a new typeChild row index under its parent's bucket (get-or-create),
