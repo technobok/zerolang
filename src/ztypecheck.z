@@ -58,7 +58,8 @@ Ast: zast.Ast
 DefaultVal: ztyping.DefaultVal
 
 # Well-known Ast.names pool ids (fixed by Ast.create's intern order in
-# zast.z -- the authority).
+# zast.z -- the authority). A local copy, not an import: a unit constant does
+# not resolve cross-unit, so zast's block cannot be read from here.
 wkThis: 1.u32
 wkReturn: 2.u32
 wkBreak: 3.u32
@@ -66,7 +67,6 @@ wkContinue: 4.u32
 
 # Well-known member-name pool ids (zast.z is the authority; append-only),
 # widened to the u64 member-name id space.
-wkThisMember: 1.u64
 wkCreate: 5.u64
 wkBorrow: 6.u64
 wkCall: 7.u64
@@ -8744,7 +8744,7 @@ synthGeneratorIterClass: function {
     callName: "\{iterName}.call"
     callId: reg.newType name: callName.stringview typetype: ztypes.ztypetype.functionType
     if gfp9 > 0 then reg.setDef typeId: callId declId: gfp9
-    ty.setMemberType parentTypeId: callId nameId: wkThisMember childTypeId: iterId
+    ty.setMemberType parentTypeId: callId nameId: wkThis.u64 childTypeId: iterId
     (ty.setChildOwnershipId
         parentTypeId: callId
         nameId: wkThis.u64
@@ -19516,38 +19516,11 @@ subjectAtomName: function {ast: Ast n: Node} out String is {
     }
 }
 
-# sumSubtypeNames -- a union/variant's arm names: its children minus the
-# synthesized members (functions, the tag data record, enums).
+# sumSubtypeNames -- a union/variant's arm names: its members minus the
+# synthesized ones (functions, the tag data record, enums).
 sumSubtypeNames: function {ast: Ast st: zenv.ZSymbolTable sid: u64} out List String is {
-    names: (List String)
-    cids: (List u64)
-    ssNms9: (List u64)
-    st.typing.declMemberList ownerTid: sid names: ssNms9 tids: cids
-    ssi9: u64
-    ssn9: ssNms9.length
-    for ssi9 < ssn9 loop {
-        nmB2: ast.names.texts.get i: ((ssNms9.get i: ssi9) - 1).u64
-        nm2: nmB2.copy
-        names.append nm2
-        ssi9 = ssi9 + 1
-    }
     arms: (List String)
-    i: u64
-    n: names.length
-    for i < n loop {
-        cid: cids.get :i
-        tt: st.reg.typetypeOf typeId: cid
-        keep: true
-        if tt == ztypes.ztypetype.functionType then keep = false
-        if tt == ztypes.ztypetype.dataType then keep = false
-        if tt == ztypes.ztypetype.tagType then keep = false
-        if keep then {
-            nm3: names.get :i
-            nm4: nm3.copy
-            arms.append nm4
-        }
-        i = i + 1
-    }
+    zenv.sumArmNames ty: st.typing reg: st.reg pool: ast.names tid: sid names: arms
     return arms
 }
 

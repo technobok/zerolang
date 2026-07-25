@@ -17,14 +17,15 @@
 # live in id-keyed side tables instead.
 #
 # An entry stores a u64 type id (never a live type); type metadata is read
-# through the owned registry (`this.reg`) and child/narrowing edges
-# through the owned typecheck-output container (`this.typing`).
+# through the owned registry (`this.reg`) and member declarations plus the
+# narrowing overlays through the typecheck-output container (`this.typing`).
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
     :ZSymbolTable
     :isExcludableKind
+    :sumArmNames
     :newSymbolTable
     :zlockstateNameLower
     :main
@@ -149,6 +150,36 @@ isExcludableKind: function {k: ztypes.ztypetype} out bool is {
     if k == ztypes.ztypetype.dataType then return false
     if k == ztypes.ztypetype.tagType then return false
     return true
+}
+
+# sumArmNames -- a sum type's arm names, in declaration order: the member
+# children that are not a function, the tag data record or an enum, and are not
+# a tag generic origin. The one definition of what a sum's arms are -- the
+# checker (sumSubtypeNames), the emitter (sumArmNames9) and the exclusion
+# narrowing below all route here, so they cannot disagree about the arm set.
+sumArmNames: function {
+    ty: ZTyping
+    reg: ztypes.ZTypeRegistry
+    pool: zast.StringPool
+    tid: u64
+    names: List String
+} is {
+    nms9: (List u64)
+    tds9: (List u64)
+    ty.declMemberList ownerTid: tid names: nms9 tids: tds9
+    i9: u64
+    n9: nms9.length
+    for i9 < n9 loop {
+        nid9: nms9.get i: i9
+        ctid9: tds9.get i: i9
+        i9 = i9 + 1
+        if (isExcludableKind k: (reg.typetypeOf typeId: ctid9)) then {
+            if (reg.isTagGenericOriginOf typeId: ctid9) == false then {
+                nb9: pool.texts.get i: (nid9 - 1).u64
+                names.append nb9.copy
+            }
+        }
+    }
 }
 
 # the lower-case display name of lock state `t` (for diagnostics).
@@ -1023,29 +1054,8 @@ ZSymbolTable: class {
     # when one excludable subtype remains; marks the scope unreachable when
     # none remain.
     exclude: function {:this pool: zast.StringPool name: StringView subtypeName: StringView fullTypeId: u64} is {
-        # The excludable arms of fullTypeId, read from their declarations, and
-        # keep each data-bearing one.
         allSubs: (List String)
-        {
-            exNms9: (List u64)
-            exTds9: (List u64)
-            this.typing.declMemberList ownerTid: fullTypeId names: exNms9 tids: exTds9
-            exi9: u64
-            exn9: exNms9.length
-            for exi9 < exn9 loop {
-                exNid9: exNms9.get i: exi9
-                childTypeId: exTds9.get i: exi9
-                exi9 = exi9 + 1
-                kind: this.reg.typetypeOf typeId: childTypeId
-                if isExcludableKind kind then {
-                    isOrigin: this.reg.isTagGenericOriginOf typeId: childTypeId
-                    if isOrigin == false then {
-                        rnB9: pool.texts.get i: (exNid9 - 1).u64
-                        allSubs.append rnB9.copy
-                    }
-                }
-            }
-        }
+        sumArmNames ty: this.typing reg: this.reg :pool tid: fullTypeId names: allSubs
 
         newExcl: (Set String)
         this.collectExcluded :name into: newExcl
