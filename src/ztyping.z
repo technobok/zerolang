@@ -214,6 +214,10 @@ Decl: class {
     grantsPrivate: bool
     # lockArm -- a variant arm marked as the lock arm.
     lockArm: bool
+    # fnptrField -- the member occupies a struct function-pointer slot: an
+    # is-block function member of a record or class, or an as-block member of a
+    # generic class. Where it was declared, not its kind, decides this.
+    fnptrField: bool
     # lockFieldDecl -- on a TYPE decl, which member is the type's lock (0 = none).
     lockFieldDecl: u64
     children: (List declchild)
@@ -402,6 +406,11 @@ ZTyping: class {
     # above; readers migrate to Decls stage by stage) ---
     # every Decl row, keyed by DeclId (dense 1..N mint order)
     decls: (Map u64 value: Decl)
+    # type id -> the declaration that minted it (first mint wins), so a member
+    # setter reaches the owner's declaration without the type registry. A
+    # monomorphisation is absent: it links to its template through the
+    # registry, never through declSetType.
+    declByTypeId: (Map u64 value: u64)
     # bare unit name -> the unit's root DeclId (the root index)
     unitRootByName: (Map String value: u64)
     # reference nodeid -> resolved DeclId (stamped by resolution)
@@ -431,6 +440,7 @@ ZTyping: class {
             defaultVal: DefaultVal.none
             grantsPrivate: false
             lockArm: false
+            fnptrField: false
             lockFieldDecl: 0
             children: (List declchild)
             byName: (Map u64 value: u64)
@@ -452,14 +462,30 @@ ZTyping: class {
         } case none then null
     }
 
-    # declSetType -- record the canonical type a declaration minted.
+    # declSetType -- record the canonical type a declaration minted, and the
+    # reverse edge. The first mint wins, so a later alias declaration sharing
+    # the type does not displace the defining one.
     declSetType: function {:this declId: u64 typeId: u64} is {
-        do9: this.decls.get key: declId
-        match (
-            do9
-        ) case some then {
-            do9.typeId = typeId
-        } case none then null
+        {
+            do9: this.decls.get key: declId
+            match (
+                do9
+            ) case some then {
+                do9.typeId = typeId
+            } case none then null
+        }
+        if typeId > 0 then {
+            seen9: false
+            {
+                ex9: this.declByTypeId.get key: typeId
+                match (
+                    ex9
+                ) case some then {
+                    seen9 = true
+                } case none then null
+            }
+            if seen9 == false then this.declByTypeId.set key: typeId value: declId
+        }
     }
 
     # declFindChild -- the last child declaration named nameId under
@@ -490,6 +516,24 @@ ZTyping: class {
             }
         } case none then null
         return found9
+    }
+
+    # declMemberIdOf -- the declaration of member `nameId` under the type
+    # `parentTypeId` minted; 0 when that type has no declaration (a
+    # monomorphisation) or the member is not declared (a synthesized create,
+    # comparison or tag).
+    declMemberIdOf: function {:this parentTypeId: u64 nameId: u32} out u64 is {
+        od9: u64
+        {
+            go9: this.declByTypeId.get key: parentTypeId
+            match (
+                go9
+            ) case some then {
+                od9 = go9
+            } case none then null
+        }
+        if od9 == 0 then return 0
+        return (this.declFindChild parentDeclId: od9 :nameId)
     }
 
     # --- children table ---
@@ -815,6 +859,18 @@ ZTyping: class {
         ) case some then {
             this.childIsFnptrField.set key: idopt value: true
         } case none then null
+        nid8: pool.find s: name
+        if nid8 > 0 then {
+            md8: this.declMemberIdOf :parentTypeId nameId: nid8
+            if md8 > 0 then {
+                do8: this.decls.get key: md8
+                match (
+                    do8
+                ) case some then {
+                    do8.fnptrField = true
+                } case none then null
+            }
+        }
     }
 
     isChildFnptrField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -1199,6 +1255,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingTyperefUnit: (Map u64 value: String)
         unitTypesById: (Map u64 value: u64)
         decls: (Map u64 value: Decl)
+        declByTypeId: (Map u64 value: u64)
         unitRootByName: (Map String value: u64)
         refDecl: (Map u64 value: u64)
         declProxyTids: (List u64)
