@@ -8,12 +8,10 @@
 #
 # Representation is id-first and relational: cross-type references are
 # stored as u64 type ids (resolved through the registry by the producer),
-# the per-(parent,child) edges live in append-only row tables, and the
-# mutable per-edge sidecars live in id-keyed Maps. Every mutator runs on
-# :this -- a container that owns all of its state -- so mutations persist.
-# edge names live in the shared Ast.names pool (ZTypeChild.nameId IS the
-# pool id); childNameIds are minted by ZTyping itself (the registry's id
-# space is for ZType ids), idempotent per (parent, name).
+# and the per-node stamps live in id-keyed Maps. A type's members live on
+# its declaration -- the Decl tree is the single member index -- and their
+# names are shared Ast.names pool ids. Every mutator runs on :this -- a
+# container that owns all of its state -- so mutations persist.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -35,32 +33,9 @@ Node: zast.Node
 
 # --- relational row carriers ---
 
-# One edge of the children table: a (parent, child-name) -> child-type
-# link. Append-only; the mutable child-type id and the sidecars live in
-# id-keyed Maps on ZTyping, keyed by childNameId. nameId is the shared
-# Ast.names pool id of the edge name (1-based; 0 = absent);
-# childNameId stays a per-(parent, name) edge id -- two id spaces.
-ZTypeChild: class {
-    parentTypeId: u64
-    nameId: u64
-    childNameId: u64
-    position: u64
-}
-
-# Per-parent row-index bucket: append-order indices into ZTyping.typeChild for
-# one parentTypeId, plus a childName -> childNameId map over the same rows. A
-# derived accelerator (not dumped): name resolution is a map get, ordered
-# iteration and child counting walk the row indices.
-# Buckets up to this many rows resolve names by a linear row scan (no owned
-# key, no hash); larger buckets (unit roots) switch to the byName index,
-# backfilled at the crossing.
+# A declaration's name index switches from a linear child scan to the byName
+# map past this many children (no owned key, no hash below it).
 bucketScanMax: 16.u64
-
-# one parent type's child-edge rows, grouped for lookup.
-ChildBucket: class {
-    rows: (List u64)
-    byName: (Map u64 value: u64)
-}
 
 # One edge of the generic-args table: a (parent, param-name) link. The
 # mutable arg-type id lives in genericArgTypeBy, keyed by a
@@ -282,18 +257,13 @@ ZTyping: class {
     mainMemberUnit: String
 
     # child-name id minting (ztyping-local id space)
-    nextChildId: u64
     # base type name id (pool id) -> resolved builtin tid (currentUnit "");
     # an unresolved 0 is never stored so later resolution can still fill it
     builtinTidMemo: (Map u64 value: u64)
 
     # flat edge tables
-    typeChild: (List ZTypeChild)
-    childIndex: (Map u64 value: ChildBucket)
     typeGenericArg: (List ZTypeGenericArg)
 
-    # per-edge mutable state, keyed by childNameId
-    childTypeById: (Map u64 value: u64)
     # true once any public-interface rename exists (skips alias lookups otherwise)
     renameSeen: bool
     # true once any member has been marked private (gates cross-unit checks)
@@ -440,15 +410,6 @@ ZTyping: class {
     # is resolution order, so a declaration walk would permute the mono's
     # field layout silently. Must be 0 before mintMono reads declarations.
     monoTemplateUnsettled: u64
-    # ZC_Q2_SPIKE: childOf/childOfId compare their edge answer against the
-    # declaration answer on every call, so no call site can escape the sample.
-    probeParity: bool
-    parityCalls: u64
-    parityEdgeOnly: u64
-    parityDeclOnly: u64
-    parityDiff: u64
-    parityZero: u64
-    parityDeclOnlyZero: u64
     # Member-type writes that found no declaration to land on. Generator
     # lowering pre-resolves system.optionval and system.Iterator, and the
     # never/null canonical pair is minted, before indexUnitDefs builds the
@@ -592,7 +553,7 @@ ZTyping: class {
             # the edge bucket's: the first append past the scan threshold
             # backfills it and later appends keep it filled. Backfilling in the
             # reader instead would make every lookup a mutation, and a mutating
-            # lookup cannot run under a live typeChild borrow.
+            # lookup cannot run under a live children borrow.
             if po9.children.length > bucketScanMax then {
                 if po9.byName.length == 0 then {
                     with cit7: po9.children.iterate do for c7: cit7 loop {
@@ -817,30 +778,6 @@ ZTyping: class {
         nid9: pool.find s: name
         if nid9 == 0 then return (optionval.none u64)
         return (this.declChildOfId :parentTypeId nameId: nid9.u64)
-    }
-
-    # declMemberTypeOf -- the declared type of member `nameId`, reported the way
-    # a raw child edge would: `some 0` when the member is declared but carries
-    # no type, `none` only when it is not declared. Used ONLY by the parity probe --
-    # production reads go through declChildOfId, whose collapse of type 0 to
-    # none is what actually matches the edge tables (measured: the edge never
-    # answers `some 0`, and every declaration-only answer carries 0).
-    declMemberTypeOf: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
-        # a pool id out of u32 range never labels a member; 0 is the absent id
-        n32: nameId.u32.or d: 0
-        if n32 == 0 then return (optionval.none u64)
-        md9: this.declMemberIdOf :parentTypeId nameId: n32
-        if md9 == 0 then return (optionval.none u64)
-        t9: u64
-        {
-            mo9: this.decls.get key: md9
-            match (
-                mo9
-            ) case some then {
-                t9 = mo9.typeId
-            } case none then null
-        }
-        return (optionval.some t9)
     }
 
     declChildOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
@@ -1286,11 +1223,9 @@ ZTyping: class {
 
     # declTypedMemberIdOf -- the declaration of member `nameId` under the type
     # `parentTypeId` minted, but only when that declaration carries a type; 0
-    # otherwise. This is declMemberIdOf narrowed to exactly the population a
-    # child edge covered, so a member DeclId can stand in for an edge id as an
-    # identity: measured corpus-wide, every declaration the edges did not have
-    # carries type 0 (parityDeclOnlyZero == parityDeclOnly), so a typed member
-    # declaration and a child edge answer over the same members.
+    # otherwise. The narrowing is what lets a member DeclId serve as the
+    # identity of a (parent, name) pair: a declaration carrying no type was
+    # never a member anything could name.
     declTypedMemberIdOf: function {:this parentTypeId: u64 nameId: u32} out u64 is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9 == 0 then return 0
@@ -1309,198 +1244,28 @@ ZTyping: class {
 
     # --- children table ---
 
-    # Monotonic child-name id for (parentTypeId, name), minted from the
-    # local counter and memoized so repeat calls return the same id.
-    # The existing edge's id when the bucket has one, else a fresh mint (the
-    # caller appends the row right after, so repeats resolve via the bucket).
-    childIdFor: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out u64 is {
-        existing: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            existing
-        ) case some then {
-            return existing
-        } case none then {
-            newId: this.nextChildId
-            this.nextChildId = this.nextChildId + 1
-            return newId
-        }
-    }
-
-    # childIdForId -- the id-keyed form of childIdFor.
-    childIdForId: function {:this parentTypeId: u64 nameId: u64} out u64 is {
-        existing: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            existing
-        ) case some then {
-            return existing
-        } case none then {
-            newId: this.nextChildId
-            this.nextChildId = this.nextChildId + 1
-            return newId
-        }
-    }
-
-    # Resolve the childNameId of an existing (parent, name) edge by text.
-    # A name interned nowhere cannot label any edge.
-    childNameIdOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
-        nid9: (pool.find s: name).u64
-        if nid9 == 0 then return (optionval.none u64)
-        return (this.childNameIdOfId :parentTypeId nameId: nid9)
-    }
-
-    # Resolve the childNameId of an existing (parent, nameId) edge by pool
-    # id. Small buckets scan their rows (int compares, no allocation);
-    # large buckets probe the byName index.
-    childNameIdOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
-        b: this.childIndex.get key: parentTypeId
-        match (
-            b
-        ) case some then {
-            if b.rows.length <= bucketScanMax then {
-                ridx: b.rows.iterate
-                for ri: ridx loop {
-                    row: this.typeChild.get i: ri
-                    if row.nameId == nameId then return (optionval.some row.childNameId)
-                }
-            } else {
-                got: b.byName.get key: nameId
-                match (
-                    got
-                ) case some then {
-                    return (optionval.some got)
-                } case none then null
-            }
-        } case none then null
-        return (optionval.none u64)
-    }
-
-    # Record a (parent, name) -> child-type edge. Idempotent on the key:
-    # a repeat call updates the child-type id in place. The name interns
-    # into the shared pool; the row's nameId is the pool id.
-    # Record a (parent, nameId) -> child-type edge by pool id. Idempotent
-    # on the key: a repeat call updates the child-type id in place.
-    setChildId: function {:this parentTypeId: u64 nameId: u64 childTypeId: u64} is {
-        existing: this.childNameIdOfId :parentTypeId :nameId
+    # setMemberType -- record the type of member `nameId` on `parentTypeId`:
+    # ensure the member's declaration, stamp the type onto it, and on first
+    # sight position it in the owner's last member slot, so declaration order
+    # is built as member order rather than corrected afterwards.
+    setMemberType: function {:this parentTypeId: u64 nameId: u64 childTypeId: u64} is {
+        n329: nameId.u32.or d: 0
+        # first sight is "the declaration does not carry a type yet". It also
+        # reads true for a unit's `public:` pseudo-member, which already has
+        # one; that costs nothing, because declMoveChildToEnd rotates member
+        # slots only and a publicNs child is not among them.
         first9: false
-        match (
-            existing
-        ) case some then {
-            sv: childTypeId
-            this.childTypeById.set key: existing value: sv
-        } case none then {
-            first9 = true
-            cid: this.childIdForId :parentTypeId :nameId
-            pos: u64
-            {
-                bq9: this.childIndex.get key: parentTypeId
-                match (
-                    bq9
-                ) case some then {
-                    pos = bq9.rows.length
-                } case none then null
-            }
-            this.typeChild.append (ZTypeChild
-                :parentTypeId
-                :nameId
-                childNameId: cid
-                position: pos
-            )
-            ridx: this.typeChild.length - 1
-            this.pushChildIndex :parentTypeId rowIdx: ridx
-            sv: childTypeId
-            this.childTypeById.set key: cid value: sv
-        }
+        if n329 > 0 then first9 = (this.declTypedMemberIdOf :parentTypeId nameId: n329) == 0
         # declSetMemberType can be what CREATES the member declaration, so the
         # position is fixed after it, not before
         this.declSetMemberType :parentTypeId :nameId typeId: childTypeId
         if first9 then {
             od9: this.declIdOfType typeId: parentTypeId
-            n329: nameId.u32.or d: 0
-            if od9 > 0 when n329 > 0 then {
-                this.declMoveChildToEnd parentDeclId: od9 nameId: n329
-            }
+            if od9 > 0 then this.declMoveChildToEnd parentDeclId: od9 nameId: n329
         }
     }
 
-    # Record a new typeChild row index under its parent's bucket (get-or-create),
-    # and the row's name -> childNameId link in the bucket's map.
-    # The byName index stays empty while the bucket is scan-sized; the first
-    # append past bucketScanMax backfills it, and later appends keep it filled.
-    pushChildIndex: function {:this parentTypeId: u64 rowIdx: u64} is {
-        needNew9: false
-        {
-            b: this.childIndex.get key: parentTypeId
-            match (
-                b
-            ) case some then {
-                b.rows.append rowIdx
-                if b.rows.length > bucketScanMax then {
-                    if b.rows.length == (bucketScanMax + 1) then {
-                        bri9: b.rows.iterate
-                        for bi9: bri9 loop {
-                            brow9: this.typeChild.get i: bi9
-                            b.byName.set key: brow9.nameId value: brow9.childNameId
-                        }
-                    } else {
-                        nrow9: this.typeChild.get i: rowIdx
-                        b.byName.set key: nrow9.nameId value: nrow9.childNameId
-                    }
-                }
-            } case none then {
-                needNew9 = true
-            }
-        }
-        if needNew9 then {
-            nb: (ChildBucket rows: (List u64) byName: (Map u64 value: u64))
-            nb.rows.append rowIdx
-            this.childIndex.set key: parentTypeId value: nb
-        }
-    }
-
-    # parityProbeEdge -- compare the child edge's answer for one member against
-    # the declaration's. Called from childOfId under ZC_Q2_SPIKE only, so the
-    # sample covers every call site rather than the ones anyone thought to look
-    # at. parityDiff must stay 0.
-    parityProbeEdge: function {:this parentTypeId: u64 nameId: u64} is {
-        this.parityCalls = this.parityCalls + 1
-        edgeHas9: false
-        edgeTid9: u64
-        {
-            idopt: this.childNameIdOfId :parentTypeId :nameId
-            match (
-                idopt
-            ) case some then {
-                r: this.childTypeById.get key: idopt
-                match (
-                    r
-                ) case some then {
-                    edgeHas9 = true
-                    edgeTid9 = r
-                } case none then null
-            } case none then null
-        }
-        if edgeHas9 when edgeTid9 == 0 then this.parityZero = this.parityZero + 1
-        declHas9: false
-        declTid9: u64
-        {
-            d9: this.declMemberTypeOf :parentTypeId :nameId
-            match (
-                d9
-            ) case some then {
-                declHas9 = true
-                declTid9 = d9
-            } case none then null
-        }
-        if edgeHas9 when declHas9 == false then this.parityEdgeOnly = this.parityEdgeOnly + 1
-        if declHas9 when edgeHas9 == false then {
-            this.parityDeclOnly = this.parityDeclOnly + 1
-            if declTid9 == 0 then this.parityDeclOnlyZero = this.parityDeclOnlyZero + 1
-        }
-        if edgeHas9 when declHas9 then {
-            if edgeTid9 != declTid9 then this.parityDiff = this.parityDiff + 1
-        }
-    }
-
+    # childOf -- the type of member `name` on `parentTypeId`, by text.
     childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
         nid9: (pool.find s: name).u64
         if nid9 == 0 then return (optionval.none u64)
@@ -1509,13 +1274,12 @@ ZTyping: class {
 
     # childOfId -- the type of member `nameId` on `parentTypeId`. The member's
     # DECLARATION is the source of truth: a declared member with no type reads
-    # as absent, exactly as a missing edge does. A member with no declaration
-    # falls back to the pended pre-index writes; childOfFallback counts that
-    # and childOfFallbackHit counts the few one of them actually answers.
+    # as absent. A member with no declaration at all falls back to the pended
+    # pre-index writes; childOfFallback counts that and childOfFallbackHit
+    # counts the few one of them actually answers.
     childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
         n32: nameId.u32.or d: 0
         if n32 == 0 then return (optionval.none u64)
-        if this.probeParity then this.parityProbeEdge :parentTypeId :nameId
         od9: this.declIdOfType typeId: parentTypeId
         md9: u64
         if od9 > 0 then md9 = this.declFindChild parentDeclId: od9 nameId: n32
@@ -1842,12 +1606,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         curMonoFnTid: 0
         mainMemberIndex: (Map String value: u64)
         mainMemberUnit: "".string
-        nextChildId: 0
         builtinTidMemo: (Map u64 value: u64)
-        typeChild: (List ZTypeChild)
-        childIndex: (Map u64 value: ChildBucket)
         typeGenericArg: (List ZTypeGenericArg)
-        childTypeById: (Map u64 value: u64)
         renameSeen: false
         privacySeen: false
         asConstClone: (Map u64 value: bool)
@@ -1937,13 +1697,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         synthNoOwner: 0
         enumFallback: 0
         monoTemplateUnsettled: 0
-        probeParity: false
-        parityCalls: 0
-        parityEdgeOnly: 0
-        parityDeclOnly: 0
-        parityDiff: 0
-        parityZero: 0
-        parityDeclOnlyZero: 0
         pendParent: (List u64)
         pendName: (List u64)
         pendType: (List u64)
@@ -2013,10 +1766,10 @@ main: function is {
     armDecl9: ty.declNew name: (pool9.set s: "none") parent: 0 kind: declkind.armDecl node: 0
 
     print "=== children ==="
-    ty.setChildId parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
-    ty.setChildId parentTypeId: pid nameId: (pool9.set s: "y").u64 childTypeId: tInt
-    ty.setChildId parentTypeId: pid nameId: (pool9.set s: "label").u64 childTypeId: tStr
-    ty.setChildId parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "y").u64 childTypeId: tInt
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "label").u64 childTypeId: tStr
+    ty.setMemberType parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
 
     print "memberCount point -> \{ty.declMemberCount ownerTid: pid}"
     smokeHasChild pool: pool9 :ty :pid name: "x"
