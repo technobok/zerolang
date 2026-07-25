@@ -620,13 +620,34 @@ ZDumper: class {
     # The private/lock/default columns are constant for SMOKE and
     # param_ownership is NULL until ownership-annotated params land.
     appendTypeChildren: function {:this ast: Ast typing: ztyping.ZTyping} is {
-        citer: typing.typeChild.iterate
-        for crow: citer loop {
-            cidSql: optIdStr o: (typing.childTypeById.get key: crow.childNameId)
-            cnB9: ast.names.texts.get i: (crow.nameId - 1).u64
+        # collect the rows before reading them: resolving a member declaration
+        # locks the whole ZTyping, which this iteration is holding open.
+        pids9: (List u64)
+        nids9: (List u64)
+        cnids9: (List u64)
+        poss9: (List u64)
+        {
+            citer: typing.typeChild.iterate
+            for crow: citer loop {
+                pids9.append crow.parentTypeId
+                nids9.append crow.nameId
+                cnids9.append crow.childNameId
+                poss9.append crow.position
+            }
+        }
+        ri9: u64
+        for ri9 < pids9.length loop {
+            pid9: pids9.get i: ri9
+            nid9: nids9.get i: ri9
+            cnid9: cnids9.get i: ri9
+            pos9: poss9.get i: ri9
+            ri9 = ri9 + 1
+            cidSql: optIdStr o: (typing.childTypeById.get key: cnid9)
+            cnB9: ast.names.texts.get i: (nid9 - 1).u64
             cnSql: sqlStr s: cnB9.stringview
-            poSql: paramOwnSql o: (typing.childOwnership.get key: crow.childNameId)
-            line: "INSERT OR IGNORE INTO type_children VALUES (\{crow.parentTypeId}, \{cnSql}, \{cidSql}, \{crow.position}, \{crow.childNameId}, 0, 0, 0, NULL, \{poSql});\n"
+            own9: typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
+            poSql: paramOwnSql o: own9
+            line: "INSERT OR IGNORE INTO type_children VALUES (\{pid9}, \{cnSql}, \{cidSql}, \{pos9}, \{cnid9}, 0, 0, 0, NULL, \{poSql});\n"
             this.acc.append s: line
         }
     }
@@ -1102,9 +1123,29 @@ ZDumper: class {
 
     appendTypeChildrenCanon: function {:this ast: Ast unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
-        citer: st.typing.typeChild.iterate
-        for crow: citer loop {
-            pdu: definedUnitOf9 :st tid: crow.parentTypeId
+        # collect the rows before reading them: resolving a member declaration
+        # locks the whole ZTyping, which this iteration is holding open.
+        pids9: (List u64)
+        nids9: (List u64)
+        cnids9: (List u64)
+        poss9: (List u64)
+        {
+            citer: st.typing.typeChild.iterate
+            for crow: citer loop {
+                pids9.append crow.parentTypeId
+                nids9.append crow.nameId
+                cnids9.append crow.childNameId
+                poss9.append crow.position
+            }
+        }
+        ri9: u64
+        for ri9 < pids9.length loop {
+            pid9: pids9.get i: ri9
+            nid9: nids9.get i: ri9
+            cnid9: cnids9.get i: ri9
+            pos9: poss9.get i: ri9
+            ri9 = ri9 + 1
+            pdu: definedUnitOf9 :st tid: pid9
             inUnit: false
             match (
                 pdu
@@ -1112,15 +1153,16 @@ ZDumper: class {
                 if pdu.stringview == unm then inUnit = true
             } case none then null
             if inUnit then {
-                pName: canonTypeName reg: st.reg tid: crow.parentTypeId
-                cTid: optU64Or0 o: (st.typing.childTypeById.get key: crow.childNameId)
+                pName: canonTypeName reg: st.reg tid: pid9
+                cTid: optU64Or0 o: (st.typing.childTypeById.get key: cnid9)
                 cName: canonTypeName reg: st.reg tid: cTid
                 pSql: sqlStr s: pName.stringview
-                cnB8: ast.names.texts.get i: (crow.nameId - 1).u64
+                cnB8: ast.names.texts.get i: (nid9 - 1).u64
                 cnSql: sqlStr s: cnB8.stringview
                 ctSql: sqlStr s: cName.stringview
-                poSql: paramOwnSql o: (st.typing.childOwnership.get key: crow.childNameId)
-                line: "\{pSql} | \{cnSql} | \{ctSql} | \{crow.position} | \{poSql}"
+                own9: st.typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
+                poSql: paramOwnSql o: own9
+                line: "\{pSql} | \{cnSql} | \{ctSql} | \{pos9} | \{poSql}"
                 rows.append line
             }
         }

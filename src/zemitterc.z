@@ -13396,27 +13396,44 @@ recFieldLists: function {
             if crow0.implTypeId == tid then mkNames0.append crow0.label.copy
         }
     }
-    b0: symtab.typing.childIndex.get key: tid
-    match (
-        b0
-    ) case some then {
-        with rit0: b0.rows.iterate do for ri0: rit0 loop {
-            tc: symtab.typing.typeChild.get i: ri0
-            cto: symtab.typing.childTypeById.get key: tc.childNameId
-            match (
-                cto
-            ) case some then {
+    # collect the rows first: the fnptr probe below resolves a member
+    # declaration, which locks the whole ZTyping this iteration is holding
+    rowNids0: (List u64)
+    rowCtos0: (List u64)
+    {
+        b0: symtab.typing.childIndex.get key: tid
+        match (
+            b0
+        ) case some then {
+            with rit0: b0.rows.iterate do for ri0: rit0 loop {
+                tc: symtab.typing.typeChild.get i: ri0
+                cto: symtab.typing.childTypeById.get key: tc.childNameId
+                match (
+                    cto
+                ) case some then {
+                    rowNids0.append tc.nameId
+                    ctv0: cto
+                    rowCtos0.append ctv0
+                } case none then null
+            }
+        } case none then null
+    }
+    {
+        {
+            rx0: u64
+            for rx0 < rowNids0.length loop {
+                tcNameId0: rowNids0.get i: rx0
+                cto: rowCtos0.get i: rx0
+                rx0 = rx0 + 1
                 includeFld0: false
                 if parentFn0 then {
                     includeFld0 = true
                 } else {
                     fptrFld0: false
-                    fpo0: symtab.typing.childIsFnptrField.get key: tc.childNameId
-                    match (
-                        fpo0
-                    ) case some then {
-                        fptrFld0 = fpo0
-                    } case none then null
+                    fptrFld0 = (symtab.typing.declIsFnptrFieldId
+                        parentTypeId: tid
+                        nameId: tcNameId0.u32.orPanic
+                    )
                     if fptrFld0 then {
                         includeFld0 = true
                     } else {
@@ -13431,7 +13448,7 @@ recFieldLists: function {
                             if isConst0 == false then {
                                 isMk0: false
                                 mi0: u64
-                                cnBe2: ast.names.texts.get i: (tc.nameId - 1).u64
+                                cnBe2: ast.names.texts.get i: (tcNameId0 - 1).u64
                                 mn0: mkNames0.length
                                 for mi0 < mn0 loop {
                                     mv0: mkNames0.get i: mi0
@@ -13444,17 +13461,17 @@ recFieldLists: function {
                     }
                 }
                 if includeFld0 then {
-                    cnBe3: ast.names.texts.get i: (tc.nameId - 1).u64
+                    cnBe3: ast.names.texts.get i: (tcNameId0 - 1).u64
                     cn0: cnBe3.copy
                     names.append cn0
                     cid0: cto
                     ids.append cid0
-                    nid0: tc.nameId
+                    nid0: tcNameId0
                     nameIds.append nid0
                 }
-            } case none then null
+            }
         }
-    } case none then null
+    }
 }
 
 # regNameIs -- compare a type's registry name without materializing it

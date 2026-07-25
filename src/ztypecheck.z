@@ -4511,6 +4511,8 @@ materializeCreateParams: function {
     }
     fnameIds: (List u64)
     ftypeIds: (List u64)
+    rowNids9: (List u64)
+    rowCtos9: (List u64)
     {
         bd9: ty.childIndex.get key: typeTid
         match (
@@ -4518,15 +4520,24 @@ materializeCreateParams: function {
         ) case some then {
             with rdit9: bd9.rows.iterate do for rdi9: rdit9 loop {
                 tc: ty.typeChild.get i: rdi9
-                cto: optU64Or o: (ty.childTypeById.get key: tc.childNameId) d: 0
+                rowNids9.append tc.nameId
+                rowCtos9.append (optU64Or o: (ty.childTypeById.get key: tc.childNameId) d: 0)
+            }
+        } case none then null
+    }
+    {
+        {
+            ri9: u64
+            for ri9 < rowNids9.length loop {
+                tcNameId9: rowNids9.get i: ri9
+                cto: rowCtos9.get i: ri9
+                ri9 = ri9 + 1
                 inc: false
                 fptr: false
-                fpo: ty.childIsFnptrField.get key: tc.childNameId
-                match (
-                    fpo
-                ) case some then {
-                    fptr = fpo
-                } case none then null
+                fptr = (ty.declIsFnptrFieldId
+                    parentTypeId: typeTid
+                    nameId: tcNameId9.u32.orPanic
+                )
                 if fptr then {
                     inc = true
                 } else {
@@ -4539,7 +4550,7 @@ materializeCreateParams: function {
                             isC = aco
                         } case none then null
                         isMk8: false
-                        cnBm8: ast.names.texts.get i: (tc.nameId - 1).u64
+                        cnBm8: ast.names.texts.get i: (tcNameId9 - 1).u64
                         mi8: u64
                         mn8: mkNames8.length
                         for mi8 < mn8 loop {
@@ -4551,11 +4562,11 @@ materializeCreateParams: function {
                     }
                 }
                 if inc then {
-                    fnameIds.append tc.nameId.u64
+                    fnameIds.append tcNameId9
                     ftypeIds.append cto
                 }
             }
-        } case none then null
+        }
     }
     i9: u64
     for i9 < fnameIds.length loop {
@@ -10358,6 +10369,7 @@ cloneMethodInto: function {
     if frn0 > 0 then ty.funcReturnNode.set key: fid5 value: frn0
     cN5: (List String)
     cI5: (List u64)
+    cNid5: (List u64)
     cOh5: (List bool)
     cOv5: (List ztypes.zparamownership)
     {
@@ -10376,20 +10388,30 @@ cloneMethodInto: function {
                     cN5.append nm5
                     cv5: co5
                     cI5.append cv5
-                    oo5: ty.childOwnership.get key: tc5.childNameId
-                    match (
-                        oo5
-                    ) case some then {
-                        cOh5.append true
-                        ov5c: oo5
-                        cOv5.append ov5c
-                    } case none then {
-                        cOh5.append false
-                        cOv5.append ztypes.zparamownership.borrowMode
-                    }
+                    cNid5.append tc5.nameId
                 } case none then null
             }
         } case none then null
+    }
+    # the template's parameter ownership, read once the row borrow above is
+    # released: resolving a member declaration locks the whole ZTyping
+    {
+        oi5: u64
+        for oi5 < cNid5.length loop {
+            onid5: cNid5.get i: oi5
+            oi5 = oi5 + 1
+            oo5: ty.declOwnershipOfId parentTypeId: tplFnId nameId: onid5.u32.orPanic
+            match (
+                oo5
+            ) case some then {
+                cOh5.append true
+                ov5c: oo5
+                cOv5.append ov5c
+            } case none then {
+                cOh5.append false
+                cOv5.append ztypes.zparamownership.borrowMode
+            }
+        }
     }
     tplNm5: regTypeNameOf :reg tid: tplClassId
     pi5: u64
@@ -13288,7 +13310,7 @@ baseIsPrivateCapable: function {st: zenv.ZSymbolTable ast: Ast bt: u64 baseNode:
         pbNode9: ast.nodes.get i: (baseNode.parent - 1).u64
         pbNid9: nodeId n: pbNode9
         pbType9: optU64Or o: (st.typing.nodeType.get key: pbNid9.u64) d: 0
-        if pbType9 > 0 when (st.typing.isChildGrantsPrivate
+        if pbType9 > 0 when (st.typing.declGrantsPrivate
             pool: ast.names
             parentTypeId: pbType9
             name: cnm9.stringview
@@ -16996,24 +17018,38 @@ dataFieldNames: function {
             if crow8.implTypeId == tid then mkNames8.append crow8.label.copy
         }
     }
-    bd9: st.typing.childIndex.get key: tid
-    match (
-        bd9
-    ) case some then {
-        with rdit9: bd9.rows.iterate do for rdi9: rdit9 loop {
-            tc: st.typing.typeChild.get i: rdi9
-            cto: optU64Or o: (st.typing.childTypeById.get key: tc.childNameId) d: 0
-            inc: false
+    # collect the rows first: the fnptr probe below resolves a member
+    # declaration, which locks the whole ZTyping this iteration is holding
+    rowNids9: (List u64)
+    rowCtos9: (List u64)
+    {
+        bd9: st.typing.childIndex.get key: tid
+        match (
+            bd9
+        ) case some then {
+            with rdit9: bd9.rows.iterate do for rdi9: rdit9 loop {
+                tc: st.typing.typeChild.get i: rdi9
+                rowNids9.append tc.nameId
+                rowCtos9.append (optU64Or o: (st.typing.childTypeById.get key: tc.childNameId) d: 0)
+            }
+        } case none then null
+    }
+    {
+        {
+            ri9: u64
+            for ri9 < rowNids9.length loop {
+                tcNameId9: rowNids9.get i: ri9
+                cto: rowCtos9.get i: ri9
+                ri9 = ri9 + 1
+                inc: false
             if isFn then {
                 inc = true
             } else {
                 fptr: false
-                fpo: st.typing.childIsFnptrField.get key: tc.childNameId
-                match (
-                    fpo
-                ) case some then {
-                    fptr = fpo
-                } case none then null
+                fptr = (st.typing.declIsFnptrFieldId
+                    parentTypeId: tid
+                    nameId: tcNameId9.u32.orPanic
+                )
                 if fptr then {
                     inc = true
                 } else {
@@ -17027,7 +17063,7 @@ dataFieldNames: function {
                         } case none then null
                         isMk8: false
                         mi8: u64
-                        cnBm8: ast.names.texts.get i: (tc.nameId - 1).u64
+                        cnBm8: ast.names.texts.get i: (tcNameId9 - 1).u64
                         mn8: mkNames8.length
                         for mi8 < mn8 loop {
                             mv8: mkNames8.get i: mi8
@@ -17039,16 +17075,17 @@ dataFieldNames: function {
                 }
             }
             if inc then {
-                cnBx9: ast.names.texts.get i: (tc.nameId - 1).u64
+                cnBx9: ast.names.texts.get i: (tcNameId9 - 1).u64
                 cnx: cnBx9.copy
                 names.append cnx
                 idx0: cto
                 ids.append idx0
-                nid0: tc.nameId
+                nid0: tcNameId9
                 nameIds.append nid0
             }
+            }
         }
-    } case none then null
+    }
 }
 
 # missingCtorFields -- collect each required field/param (no default) of
@@ -17497,12 +17534,10 @@ walkCallArgsHoist: function {
                             pt = po
                         } case none then null
                     }
-                    cnid: (st.typing.childIdFor
-                        pool: ast.names
+                    oo: (st.typing.declOwnershipOfId
                         parentTypeId: funcId
-                        name: pn.stringview
+                        nameId: (zast.poolFind pool: ast.names text: pn.stringview)
                     )
-                    oo: st.typing.childOwnership.get key: cnid
                     match (
                         oo
                     ) case some then {

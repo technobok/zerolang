@@ -499,7 +499,20 @@ ZTyping: class {
             po9
         ) case some then {
             po9.children.append (declchild :nameId declId: childDeclId)
-            if po9.byName.length > 0 then po9.byName.set key: nameId.u64 value: childDeclId
+            # keep the name index in the WRITER, the way pushChildIndex keeps
+            # the edge bucket's: the first append past the scan threshold
+            # backfills it and later appends keep it filled. Backfilling in the
+            # reader instead would make every lookup a mutation, and a mutating
+            # lookup cannot run under a live typeChild borrow.
+            if po9.children.length > bucketScanMax then {
+                if po9.byName.length == 0 then {
+                    with cit7: po9.children.iterate do for c7: cit7 loop {
+                        po9.byName.set key: c7.nameId.u64 value: c7.declId
+                    }
+                } else {
+                    po9.byName.set key: nameId.u64 value: childDeclId
+                }
+            }
         } case none then null
     }
 
@@ -608,12 +621,7 @@ ZTyping: class {
         match (
             po9
         ) case some then {
-            if po9.children.length > bucketScanMax then {
-                if po9.byName.length == 0 then {
-                    with cit8: po9.children.iterate do for c8: cit8 loop {
-                        po9.byName.set key: c8.nameId.u64 value: c8.declId
-                    }
-                }
+            if po9.byName.length > 0 then {
                 bo9: po9.byName.get key: nameId.u64
                 match (
                     bo9
@@ -835,6 +843,44 @@ ZTyping: class {
     # of parentTypeId equals `own`; false when the member is undeclared or
     # carries no mode. A zero-inited declaration reads noneMode, so an unset
     # mode never matches take, borrow or lock.
+    # declOwnershipOfId -- a member's recorded parameter ownership, or none
+    # when it has none. An unset declaration reads noneMode, which is exactly
+    # the sidecar's absent entry, so both report none.
+    declOwnershipOfId: function {:this parentTypeId: u64 nameId: u32} out optionval ztypes.zparamownership is {
+        md9: this.declMemberIdOf :parentTypeId :nameId
+        if md9 == 0 then return (optionval.none ztypes.zparamownership)
+        r9: ztypes.zparamownership.noneMode
+        {
+            mo9: this.decls.get key: md9
+            match (
+                mo9
+            ) case some then {
+                r9 = mo9.ownership
+            } case none then null
+        }
+        if r9.noneMode then return (optionval.none ztypes.zparamownership)
+        return (optionval.some r9)
+    }
+
+    # declGrantsPrivate -- was member `name` declared with a `.private` handle
+    # type, so reads through it stay private-capable?
+    declGrantsPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
+        nid9: pool.find s: name
+        if nid9 == 0 then return false
+        md9: this.declMemberIdOf :parentTypeId nameId: nid9
+        if md9 == 0 then return false
+        r9: false
+        {
+            mo9: this.decls.get key: md9
+            match (
+                mo9
+            ) case some then {
+                r9 = mo9.grantsPrivate
+            } case none then null
+        }
+        return r9
+    }
+
     declOwnershipIs: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView own: ztypes.zparamownership} out bool is {
         nid9: pool.find s: name
         if nid9 == 0 then return false
