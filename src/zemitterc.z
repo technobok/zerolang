@@ -7700,46 +7700,25 @@ methodReturnByName: function {ast: Ast symtab: zenv.ZSymbolTable dotted: StringV
     # scan for a parent type named `base` that actually declares the
     # `member` child (a typedef has both a shell and a canonical id;
     # only the canonical bears children).
-    pids: (List u64)
-    cids: (List u64)
-    {
-        # stage the matching rows: resolving a member declaration locks the
-        # whole ZTyping, which this iteration is holding open
-        rowP9: (List u64)
-        rowN9: (List u64)
-        with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-            cnBe9: ast.names.texts.get i: (tc.nameId - 1).u64
-            if cnBe9.stringview == member.stringview then {
-                pv9: tc.parentTypeId
-                rowP9.append pv9
-                nv9: tc.nameId
-                rowN9.append nv9
-            }
-        }
-        mk9: u64
-        mn9: rowP9.length
-        for mk9 < mn9 loop {
-            mp9: rowP9.get i: mk9
-            mnm9: rowN9.get i: mk9
-            mk9 = mk9 + 1
-            cto: symtab.typing.declChildOfId parentTypeId: mp9 nameId: mnm9
-            match (
-                cto
-            ) case some then {
-                pids.append mp9
-                cv9: cto
-                cids.append cv9
-            } case none then null
-        }
-    }
+    mnid9: (zast.poolFind pool: ast.names text: member.stringview).u64
     found: u64
-    si: u64
-    sn: pids.length
-    for si < sn loop {
-        pid: pids.get i: si
-        pn: typeNameOfReg9 :symtab tid: pid
-        if pn.stringview == base.stringview when found == 0 then found = cids.get i: si
-        si = si + 1
+    if mnid9 > 0 then {
+        lastT9: symtab.reg.nextTypeId
+        t9: u64
+        for t9 < lastT9 loop {
+            if found == 0 then {
+                pn: typeNameOfReg9 :symtab tid: t9
+                if pn.stringview == base.stringview then {
+                    cto: symtab.typing.declChildOfId parentTypeId: t9 nameId: mnid9
+                    match (
+                        cto
+                    ) case some then {
+                        found = cto
+                    } case none then null
+                }
+            }
+            t9 = t9 + 1
+        }
     }
     if found > 0 then {
         rt2: fnReturnTidOf :symtab tid: found
@@ -18072,38 +18051,32 @@ emitFnptrTypedefs: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx buf: St
     # method FUNCTION tid -> owning object tid, for receiver-param resolution
     fnOwner: (Map u64 value: u64)
     {
-        # stage the rows first: resolving a member declaration locks the whole
-        # ZTyping, which this iteration is holding open
         fowP0: (List u64)
         fowN0: (List u64)
-        with fociter: symtab.typing.typeChild.iterate do for foc: fociter loop {
-            fpv0: foc.parentTypeId
-            fowP0.append fpv0
-            fnv0: foc.nameId
-            fowN0.append fnv0
-        }
+        fowT0: (List u64)
+        (symtab.typing.declAllMemberRows
+            lastTid: symtab.reg.nextTypeId
+            owners: fowP0
+            names: fowN0
+            tids: fowT0
+        )
         fk0: u64
         fn0: fowP0.length
         for fk0 < fn0 loop {
             fp0: fowP0.get i: fk0
-            fnm0: fowN0.get i: fk0
+            fco: fowT0.get i: fk0
             fk0 = fk0 + 1
-            fco: symtab.typing.declChildOfId parentTypeId: fp0 nameId: fnm0
-            match (
-                fco
-            ) case some then {
-                if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.functionType then {
-                    fpt0: symtab.reg.typetypeOf typeId: fp0
-                    isObj0: false
-                    if fpt0 == ztypes.ztypetype.recordType then isObj0 = true
-                    if fpt0 == ztypes.ztypetype.classType then isObj0 = true
-                    if fpt0 == ztypes.ztypetype.unionType then isObj0 = true
-                    if fpt0 == ztypes.ztypetype.variantType then isObj0 = true
-                    if fpt0 == ztypes.ztypetype.protocolType then isObj0 = true
-                    if fpt0 == ztypes.ztypetype.facetType then isObj0 = true
-                    if isObj0 then fnOwner.set key: fco value: fp0
-                }
-            } case none then null
+            if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.functionType then {
+                fpt0: symtab.reg.typetypeOf typeId: fp0
+                isObj0: false
+                if fpt0 == ztypes.ztypetype.recordType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.classType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.unionType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.variantType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.protocolType then isObj0 = true
+                if fpt0 == ztypes.ztypetype.facetType then isObj0 = true
+                if isObj0 then fnOwner.set key: fco value: fp0
+            }
         }
     }
     t0: u64
