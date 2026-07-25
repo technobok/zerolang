@@ -2980,10 +2980,10 @@ Analysis: class {
     }
 
     # reportUnusedDefs -- L012 (unused private definition). A private unit-level definition
-    # (function, type, or alias excluded from a `public:` block) whose child edge is never
-    # referenced is dead. Usage is edge-based (childNameId): a reference name resolved against
-    # the unit maps to the same edge id that carries the private flag, so an unused alias is
-    # flagged even when its target is used directly elsewhere.
+    # (function, type, or alias excluded from a `public:` block) that is never referenced is
+    # dead. Usage is declaration-based: a reference name resolved against the unit maps to the
+    # same member DeclId that carries the private flag, so an unused alias is flagged even when
+    # its target is used directly elsewhere.
     reportUnusedDefs: function {:this prog: Node uname: StringView st: zenv.ZSymbolTable} is {
         match (
             prog
@@ -3000,8 +3000,8 @@ Analysis: class {
             if mainTid9 > 0 then {
                 usedE9: (Set u64)
                 # reference evidence off refDecl: a use of a unit-level def
-                # marks its unit child edge; a member use marks the member
-                # edge under the owning type's canonical tid
+                # marks its declaration under the unit; a member use marks
+                # the member declaration under the owning type's canonical tid
                 uNames9: (List u64)
                 mOwn9: (List u64)
                 mNms9: (List u64)
@@ -3040,12 +3040,11 @@ Analysis: class {
                 for unI9 < uNames9.length loop {
                     un9b: uNames9.get i: unI9
                     unI9 = unI9 + 1
-                    ceo9: st.typing.childNameIdOfId parentTypeId: mainTid9 nameId: un9b
-                    match (
-                        ceo9
-                    ) case some then {
-                        usedE9.add item: ceo9
-                    } case none then null
+                    cdi9: (st.typing.declTypedMemberIdOf
+                        parentTypeId: mainTid9
+                        nameId: un9b.u32.orPanic
+                    )
+                    if cdi9 > 0 then usedE9.add item: cdi9
                 }
                 tgtNames9: (ztypecheck.publicAliasInternalNames
                     ty: st.typing
@@ -3059,12 +3058,11 @@ Analysis: class {
                     tI9 = tI9 + 1
                     tpid9: (prog.ast.names.find s: tnm9.stringview).u64
                     if tpid9 > 0 then {
-                        teo9: st.typing.childNameIdOfId parentTypeId: mainTid9 nameId: tpid9
-                        match (
-                            teo9
-                        ) case some then {
-                            usedE9.add item: teo9
-                        } case none then null
+                        tdi9: (st.typing.declTypedMemberIdOf
+                            parentTypeId: mainTid9
+                            nameId: tpid9.u32.orPanic
+                        )
+                        if tdi9 > 0 then usedE9.add item: tdi9
                     }
                 }
                 moI9: u64
@@ -3072,12 +3070,11 @@ Analysis: class {
                     moTid9: mOwn9.get i: moI9
                     moNm9: mNms9.get i: moI9
                     moI9 = moI9 + 1
-                    meo9: st.typing.childNameIdOfId parentTypeId: moTid9 nameId: moNm9
-                    match (
-                        meo9
-                    ) case some then {
-                        usedE9.add item: meo9
-                    } case none then null
+                    mdi9: (st.typing.declTypedMemberIdOf
+                        parentTypeId: moTid9
+                        nameId: moNm9.u32.orPanic
+                    )
+                    if mdi9 > 0 then usedE9.add item: mdi9
                 }
                 mainOp9: u32
                 uN9: prog.ast.units.length
@@ -3186,20 +3183,18 @@ Analysis: class {
                             }
                         }
                         if mNameRef9 > 0 then {
-                            ceoD9: (st.typing.childNameIdOfId
+                            dmD9: (st.typing.declTypedMemberIdOf
                                 parentTypeId: mainTid9
-                                nameId: mNameRef9.u64
+                                nameId: mNameRef9
                             )
-                            match (
-                                ceoD9
-                            ) case some then {
+                            if dmD9 > 0 then {
                                 priv9: (ztypecheck.declMemberIsPrivate
                                     ty: st.typing
                                     reg: st.reg
                                     tid: mainTid9
                                     nameId: mNameRef9
                                 )
-                                unref9: (usedE9.has item: ceoD9) == false
+                                unref9: (usedE9.has item: dmD9) == false
                                 if unref9 then unref9 = (refNameSet9.has item: mNameRef9.u64) == false
                                 if priv9 when unref9 then {
                                     dnm9: zast.poolTextCopy pool: prog.ast.names ref: mNameRef9
@@ -3211,7 +3206,7 @@ Analysis: class {
                                         width: dnm9.length.u32.orPanic
                                     )
                                 }
-                            } case none then null
+                            }
                         }
                     }
                     # private type members: walk each type definition's is/as
@@ -3276,20 +3271,18 @@ Analysis: class {
                                         }
                                     }
                                     if tmName9 > 0 then {
-                                        tmeo9: (st.typing.childNameIdOfId
+                                        tmdi9: (st.typing.declTypedMemberIdOf
                                             parentTypeId: typeTid9
-                                            nameId: tmName9.u64
+                                            nameId: tmName9
                                         )
-                                        match (
-                                            tmeo9
-                                        ) case some then {
+                                        if tmdi9 > 0 then {
                                             tpriv9: (ztypecheck.declMemberIsPrivate
                                                 ty: st.typing
                                                 reg: st.reg
                                                 tid: typeTid9
                                                 nameId: tmName9
                                             )
-                                            if tpriv9 when (usedE9.has item: tmeo9) == false then {
+                                            if tpriv9 when (usedE9.has item: tmdi9) == false then {
                                                 tmnm9: (zast.poolTextCopy
                                                     pool: prog.ast.names
                                                     ref: tmName9
@@ -3302,7 +3295,7 @@ Analysis: class {
                                                     width: tmnm9.length.u32.orPanic
                                                 )
                                             }
-                                        } case none then null
+                                        }
                                     }
                                 }
                             }
