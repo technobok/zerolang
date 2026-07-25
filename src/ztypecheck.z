@@ -935,7 +935,7 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
         pxn9: ty.declProxyTids.length
         for px9 < pxn9 loop {
             pxt9: ty.declProxyTids.get i: px9
-            pxu9: ty.declProxyUnits.get i: px9
+            pxu9: (ty.declProxyUnits.get i: px9).copy
             px9 = px9 + 1
             pxr9: ty.unitRootByName.getv key: pxu9.stringview
             match (
@@ -950,7 +950,42 @@ indexUnitDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: 
                         if pzz9.def == 0 then stillp9 = true
                     } case none then null
                 }
-                if stillp9 then reg.setDef typeId: pxt9 declId: pxr9
+                if stillp9 then {
+                    # the def index exists now, so try the real link first: a
+                    # pre-index mint of a genuine source def (system.never,
+                    # system.null) has a declaration to bind, and only a
+                    # synthesized name needs the unit root as a proxy
+                    pxnm9: regTypeNameOf :reg tid: pxt9
+                    if pxnm9.length > 0 then {
+                        (linkDeclType
+                            :ty
+                            :reg
+                            ast: program.ast
+                            defUnit: pxu9.stringview
+                            name: pxnm9.stringview
+                            tid: pxt9
+                        )
+                    }
+                    linked9: false
+                    {
+                        pzz8: reg.typeById.get key: pxt9
+                        match (
+                            pzz8
+                        ) case some then {
+                            if pzz8.def > 0 then linked9 = true
+                        } case none then null
+                    }
+                    if linked9 == false then {
+                        reg.setDef typeId: pxt9 declId: pxr9
+                    } else {
+                        # the members were edged before this type had a
+                        # declaration; the index has them now
+                        pxd9: ty.declIdOfType typeId: pxt9
+                        if pxd9 > 0 then {
+                            ty.declStampPreIndexMembers parentTypeId: pxt9 declId: pxd9
+                        }
+                    }
+                }
             } case none then null
         }
         # pre-index mints (lowerGenerators' system pre-resolves) predate
