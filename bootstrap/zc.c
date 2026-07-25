@@ -104005,46 +104005,25 @@ uint64_t z_t3333_exprNodeId9(z_t1068_Node_t n) {
 }
 
 void z_t3334_sumArmNames9(z_t1067_Ast_t* ast, z_t1266_ZSymbolTable_t* symtab, uint64_t tid, z_t989_List_String_t* names) {
-    z_t1706_OptionView_ChildBucket_t b0 = z_t1687_Map_u64_ChildBucket_get(symtab->typing.childIndex, tid);
-    z_t1706_OptionView_ChildBucket_t _m0 = b0;
-    switch (_m0.tag) {
-        case Z_OPTIONVIEW_CHILDBUCKET_TAG_SOME: {
-            /* alias: b0 => (*(z_t1685_ChildBucket_t*)_m0.data) */
-            z_t1435_ListIter_u64_t bit9 = z_t1421_List_u64_iterate(&(*(z_t1685_ChildBucket_t*)_m0.data).rows);
-            while (1) {
-                z_t1319_OptionView_u64_t _iter1 = z_t1435_ListIter_u64_call(&bit9);
-                if (_iter1.tag == Z_OPTIONVIEW_U64_TAG_NONE) break;
-                uint64_t r9 = *(uint64_t*)_iter1.data;
-                z_t1666_ZTypeChild_t row9 = z_t1668_List_ZTypeChild_get(&symtab->typing.typeChild, r9);
-                z_t169_optionval_u64_t cto9 = z_t1368_Map_u64_u64_get(symtab->typing.childTypeById, row9.childNameId);
-                z_t169_optionval_u64_t _m2 = cto9;
-                switch (_m2.tag) {
-                    case Z_OPTIONVAL_U64_TAG_SOME: {
-                        uint64_t cto9 = _m2.data.some;
-                        (void)cto9;
-                        z_t1413_ztypetype_t k9 = z_t1589_ZTypeRegistry_typetypeOf(&symtab->reg, cto9);
-                        if (z_t2371_isExcludableKind(k9)) {
-                            if ((z_t1590_ZTypeRegistry_isTagGenericOriginOf(&symtab->reg, cto9) == false)) {
-                                z_t74_String_t rnBe9 = z_t989_List_String_get(&ast->names.texts, ((uint64_t)(row9.nameId - 1)));
-                                (void)(z_t989_List_String_append(names, z_t74_String_copy(&rnBe9)));
-                            }
-                        }
-                        break;
-                    }
-                    case Z_OPTIONVAL_U64_TAG_NONE: {
-                        break;
-                    }
-                    default: break;
-                }
+    z_t1421_List_u64_t mNms9 = z_t1421_List_u64_create((uint64_t)0);
+    z_t1421_List_u64_t mTds9 = z_t1421_List_u64_create((uint64_t)0);
+    (void)(z_t2109_ZTyping_declMemberList(&symtab->typing, tid, &mNms9, &mTds9));
+    uint64_t sk9 = ((uint64_t)0);
+    uint64_t sn9 = mNms9.length;
+    while ((sk9 < sn9)) {
+        uint64_t snid9 = z_t1421_List_u64_get(&mNms9, sk9);
+        uint64_t stid9 = z_t1421_List_u64_get(&mTds9, sk9);
+        sk9 = (sk9 + 1);
+        z_t1413_ztypetype_t k9 = z_t1589_ZTypeRegistry_typetypeOf(&symtab->reg, stid9);
+        if (z_t2371_isExcludableKind(k9)) {
+            if ((z_t1590_ZTypeRegistry_isTagGenericOriginOf(&symtab->reg, stid9) == false)) {
+                z_t74_String_t rnBe9 = z_t989_List_String_get(&ast->names.texts, ((uint64_t)(snid9 - 1)));
+                (void)(z_t989_List_String_append(names, z_t74_String_copy(&rnBe9)));
             }
-            break;
         }
-        case Z_OPTIONVIEW_CHILDBUCKET_TAG_NONE: {
-            break;
-        }
-        default: break;
     }
-    z_t1706_OptionView_ChildBucket_destroy(&b0);
+    z_t1421_List_u64_destroy(&mNms9);
+    z_t1421_List_u64_destroy(&mTds9);
 }
 
 z_t74_String_t z_t3335_armAliasText9(z_t1067_Ast_t* ast, z_t1266_ZSymbolTable_t* symtab, z_t3079_Ctx_t* ctx, uint64_t tid, z_t105_StringView_t arm, z_t105_StringView_t recv, z_t105_StringView_t acc) {
