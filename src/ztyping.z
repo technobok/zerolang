@@ -440,6 +440,15 @@ ZTyping: class {
     # if it is, declaration order is edge order THROUGHOUT typecheck, not just
     # after the end-of-typecheck sweep.
     reorderPermuted: u64
+    # ZC_Q2_SPIKE: childOf/childOfId compare their edge answer against the
+    # declaration answer on every call, so no call site can escape the sample.
+    probeParity: bool
+    parityCalls: u64
+    parityEdgeOnly: u64
+    parityDeclOnly: u64
+    parityDiff: u64
+    parityZero: u64
+    parityDeclOnlyZero: u64
     isError: bool
     errors: (List zast.ErrorData)
     currentReturnTypeId: u64
@@ -724,6 +733,30 @@ ZTyping: class {
         nid9: pool.find s: name
         if nid9 == 0 then return (optionval.none u64)
         return (this.declChildOfId :parentTypeId nameId: nid9.u64)
+    }
+
+    # declMemberTypeOf -- the declared type of member `nameId`, faithful to
+    # what the child edge records: `some 0` when the member is declared but
+    # carries no type, `none` only when it is not declared at all. That is what
+    # childOf/childOfId report, and it matters -- several callers use `some` as
+    # a presence test ("already a member, do not synthesize"), so collapsing a
+    # 0 to none the way declChildOfId does would make them mint instead.
+    declMemberTypeOf: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
+        # a pool id out of u32 range never labels a member; 0 is the absent id
+        n32: nameId.u32.or d: 0
+        if n32 == 0 then return (optionval.none u64)
+        md9: this.declMemberIdOf :parentTypeId nameId: n32
+        if md9 == 0 then return (optionval.none u64)
+        t9: u64
+        {
+            mo9: this.decls.get key: md9
+            match (
+                mo9
+            ) case some then {
+                t9 = mo9.typeId
+            } case none then null
+        }
+        return (optionval.some t9)
     }
 
     declChildOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
@@ -1334,41 +1367,68 @@ ZTyping: class {
         }
     }
 
-    childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childTypeById.get key: idopt
+    # parityProbe -- compare an edge answer against the declaration answer for
+    # one member. Called from childOf/childOfId under ZC_Q2_SPIKE only.
+    parityProbe: function {:this parentTypeId: u64 nameId: u64 edgeHas: bool edgeTid: u64} is {
+        this.parityCalls = this.parityCalls + 1
+        if edgeHas when edgeTid == 0 then this.parityZero = this.parityZero + 1
+        declHas9: false
+        declTid9: u64
+        {
+            d9: this.declMemberTypeOf :parentTypeId :nameId
             match (
-                r
+                d9
             ) case some then {
-                return (optionval.some r)
-            } case none then {
-                return (optionval.none u64)
-            }
-        } case none then {
-            return (optionval.none u64)
+                declHas9 = true
+                declTid9 = d9
+            } case none then null
         }
+        if edgeHas when declHas9 == false then this.parityEdgeOnly = this.parityEdgeOnly + 1
+        if declHas9 when edgeHas == false then {
+            this.parityDeclOnly = this.parityDeclOnly + 1
+            if declTid9 == 0 then this.parityDeclOnlyZero = this.parityDeclOnlyZero + 1
+        }
+        if edgeHas when declHas9 then {
+            if edgeTid != declTid9 then this.parityDiff = this.parityDiff + 1
+        }
+    }
+
+    childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
+        nid9: (pool.find s: name).u64
+        if nid9 == 0 then return (optionval.none u64)
+        return (this.childOfId :parentTypeId nameId: nid9)
     }
 
     # childOfId -- the id-keyed form of childOf.
     childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            r: this.childTypeById.get key: idopt
+        # resolve the edge answer into locals first: the bucket borrow must be
+        # closed before the probe resolves a member declaration
+        edgeHas9: false
+        edgeTid9: u64
+        {
+            idopt: this.childNameIdOfId :parentTypeId :nameId
             match (
-                r
+                idopt
             ) case some then {
-                return (optionval.some r)
-            } case none then {
-                return (optionval.none u64)
-            }
-        } case none then {
-            return (optionval.none u64)
+                r: this.childTypeById.get key: idopt
+                match (
+                    r
+                ) case some then {
+                    edgeHas9 = true
+                    edgeTid9 = r
+                } case none then null
+            } case none then null
         }
+        if this.probeParity then {
+            (this.parityProbe
+                :parentTypeId
+                :nameId
+                edgeHas: edgeHas9
+                edgeTid: edgeTid9
+            )
+        }
+        if edgeHas9 == false then return (optionval.none u64)
+        return (optionval.some edgeTid9)
     }
 
     hasChild: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -1798,6 +1858,13 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         synthNoOwner: 0
         enumFallback: 0
         reorderPermuted: 0
+        probeParity: false
+        parityCalls: 0
+        parityEdgeOnly: 0
+        parityDeclOnly: 0
+        parityDiff: 0
+        parityZero: 0
+        parityDeclOnlyZero: 0
         errors: (List zast.ErrorData)
         currentReturnTypeId: 0
         isError: false)
