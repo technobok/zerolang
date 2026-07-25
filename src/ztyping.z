@@ -1238,6 +1238,24 @@ ZTyping: class {
         }
     }
 
+    # declMemberCount -- how many members the type's declaration carries: the
+    # declaration-side form of childCount. Routed through declMemberList so the
+    # two can never disagree about what counts as a member.
+    declMemberCount: function {:this ownerTid: u64} out u64 is {
+        nms9: (List u64)
+        tds9: (List u64)
+        this.declMemberList :ownerTid names: nms9 tids: tds9
+        return nms9.length
+    }
+
+    # declHasMemberId -- does the type that minted `parentTypeId` declare a
+    # typed member `nameId`? The declaration-side form of hasChildId.
+    declHasMemberId: function {:this parentTypeId: u64 nameId: u64} out bool is {
+        n329: nameId.u32.or d: 0
+        if n329 == 0 then return false
+        return (this.declTypedMemberIdOf :parentTypeId nameId: n329) > 0
+    }
+
     # declMemberIdOf -- the declaration of member `nameId` under the type
     # `parentTypeId` minted; 0 when that type has no declaration of its own or
     # the member is not declared.
@@ -1353,7 +1371,15 @@ ZTyping: class {
         } case none then {
             first9 = true
             cid: this.childIdForId :parentTypeId :nameId
-            pos: this.childCount :parentTypeId
+            pos: u64
+            {
+                bq9: this.childIndex.get key: parentTypeId
+                match (
+                    bq9
+                ) case some then {
+                    pos = bq9.rows.length
+                } case none then null
+            }
             this.typeChild.append (ZTypeChild
                 :parentTypeId
                 :nameId
@@ -1508,39 +1534,6 @@ ZTyping: class {
         } case none then {
             return (optionval.none u64)
         }
-    }
-
-    hasChild: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
-    }
-
-    # hasChildId -- the id-keyed form of hasChild.
-    hasChildId: function {:this parentTypeId: u64 nameId: u64} out bool is {
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
-    }
-
-    childCount: function {:this parentTypeId: u64} out u64 is {
-        b: this.childIndex.get key: parentTypeId
-        match (
-            b
-        ) case some then {
-            return b.rows.length
-        } case none then null
-        return 0
     }
 
     # --- bool sidecars (private / lock-field / lock-arm) ---
@@ -2015,7 +2008,7 @@ main: function is {
     ty.setChildId parentTypeId: pid nameId: (pool9.set s: "label").u64 childTypeId: tStr
     ty.setChildId parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
 
-    print "childCount point -> \{ty.childCount parentTypeId: pid}"
+    print "memberCount point -> \{ty.declMemberCount ownerTid: pid}"
     smokeHasChild pool: pool9 :ty :pid name: "x"
     smokeHasChild pool: pool9 :ty :pid name: "z"
     smokeChildOf pool: pool9 :ty :pid name: "x"
@@ -2134,8 +2127,10 @@ main: function is {
 
 # smoke-test: print whether type `pid` has a child named `name`.
 smokeHasChild: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.hasChild :pool parentTypeId: pid :name
-    print "hasChild point.\{name} -> \{boolText b}"
+    nid9: pool.find s: name
+    b: false
+    if nid9 > 0 then b = ty.declHasMemberId parentTypeId: pid nameId: nid9.u64
+    print "hasMember point.\{name} -> \{boolText b}"
 }
 
 # smoke-test: print the child type id of `pid`'s member `name`.
@@ -2168,22 +2163,17 @@ smokeGenericArg: function {pool: zast.StringPool ty: ZTyping pid: u64 name: Stri
     print "genericArg List.\{name} -> \{optU64Text r}"
 }
 
-# smoke-test: print every child edge of parent type `parentTypeId`.
+# smoke-test: print every declared member of parent type `parentTypeId`.
 dumpChildren: function {ty: ZTyping pool: zast.StringPool parentTypeId: u64} is {
-    iter: ty.typeChild.iterate
-    for row: iter loop {
-        if row.parentTypeId == parentTypeId then {
-            ctOpt: ty.childTypeById.get key: row.childNameId
-            match (
-                ctOpt
-            ) case some then {
-                rnB9: pool.texts.get i: (row.nameId - 1).u64
-                print "  child \{row.position} \{rnB9} -> \{ctOpt}"
-            } case none then {
-                rnB8: pool.texts.get i: (row.nameId - 1).u64
-                print "  child \{row.position} \{rnB8} -> none"
-            }
-        }
+    nms9: (List u64)
+    tds9: (List u64)
+    ty.declMemberList ownerTid: parentTypeId names: nms9 tids: tds9
+    i9: u64
+    n9: nms9.length
+    for i9 < n9 loop {
+        rnB9: pool.texts.get i: ((nms9.get i: i9) - 1)
+        print "  child \{i9} \{rnB9} -> \{tds9.get i: i9}"
+        i9 = i9 + 1
     }
 }
 
