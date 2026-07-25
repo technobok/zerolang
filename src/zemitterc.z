@@ -4126,60 +4126,45 @@ emitTypeQualCall: function {
 
 # emitRecordCtor -- a record construction call: args reordered to field
 # order by label, emitted through the create alias.
-# sliceAfterColon -- the substring after the first ':' (the payload of a tagged
-# default encoding `#kind:payload`).
-sliceAfterColon: function {s: StringView} out String is {
-    r: String
-    n: s.length
-    i: u64
-    found: false
-    for i < n loop {
-        b: s.byteAt :i
-        match (
-            b
-        ) case some then {
-            if found then {
-                r.appendByte :b
-            } else {
-                if b == 58 then found = true
-            }
-        } case none then null
-        i = i + 1
-    }
-    return r
-}
-
-# renderDefault -- a stored default string as a C expression. Numeric defaults
-# pass through; `#function:NAME` -> the target FUNCTION type's symbol (the param
-# IS that function); `#variant:ARM` -> a tag-only struct literal of the target.
+# renderDefault -- a member's recorded default as a C expression. A literal
+# re-renders from its expression node; a function default is the target
+# FUNCTION type's symbol (the parameter IS that function); an arm default is a
+# tag-only struct literal of the target.
 renderDefault: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    default: StringView
+    dv: ztyping.DefaultVal
     targetTid: u64
 } out String is {
-    if default.length == 0 then return "".string
-    fb: default.byteAt i: 0
-    isHash: false
-    match (
-        fb
-    ) case some then {
-        if fb == 35 then isHash = true
-    } case none then null
-    if isHash == false then return default.string
-    b1: default.byteAt i: 1
-    match (
-        b1
-    ) case some then {
-        if b1 == 102 then {
+    {
+        dl9: dv
+        if dl9.literal then {
+            if dl9 == 0 then return "".string
+            return (ztypecheck.rootNameOf :ast n: (ast.nodes.get i: (dl9 - 1).u64))
+        }
+    }
+    {
+        df9: dv
+        if df9.func then {
             tn: typeNameOfReg9 :symtab tid: targetTid
             cf9: canonFnId :ast :symtab :ctx tid: targetTid name: tn.stringview
             if cf9 > 0 then return (cnameOf tid: cf9 name: tn.stringview)
             return (cnameOf tid: targetTid name: tn.stringview)
         }
-        if b1 == 118 then {
-            arm: sliceAfterColon s: default
+    }
+    {
+        da9: dv
+        if da9.arm then {
+            arm: String
+            {
+                ao9: symtab.typing.decls.get key: da9
+                match (
+                    ao9
+                ) case some then {
+                    arm = zast.poolTextCopy pool: ast.names ref: ao9.name
+                } case none then null
+            }
             tn2: typeNameOfReg9 :symtab tid: targetTid
             cv9: canonFnId :ast :symtab :ctx tid: targetTid name: tn2.stringview
             vtarget9: targetTid
@@ -4188,8 +4173,8 @@ renderDefault: function {
             tc: typeRefC :ast :symtab :ctx tid: vtarget9 thisTid: 0
             return "(\{tc}){ .tag = \{tg} }"
         }
-    } case none then null
-    return default.string
+    }
+    return "".string
 }
 
 # fnTypeTakesThis -- a FUNCTION type whose signature carries a `this` receiver
@@ -4242,8 +4227,8 @@ emitAllDefaultedCall: function {
     for k < m loop {
         pik: pidl.get i: k
         pnkId: pidlNm.get i: k
-        dt: symtab.typing.childDefaultTextId parentTypeId: fnTid nameId: pnkId
-        rv: renderDefault :ast :symtab :ctx default: dt.stringview targetTid: pik
+        dt: symtab.typing.declDefaultOfId parentTypeId: fnTid nameId: pnkId
+        rv: renderDefault :ast :symtab :ctx dv: dt targetTid: pik
         if k > 0 then args.append ", "
         args.append rv
         k = k + 1
@@ -4290,8 +4275,8 @@ renderedMethodDefaultArgs: function {
             userSeen9 = true
             hd9: symtab.typing.declHasDefaultId parentTypeId: fnTid nameId: pnjId
             if (hd9) == false then return "".string
-            dt: symtab.typing.childDefaultTextId parentTypeId: fnTid nameId: pnjId
-            rv: renderDefault :ast :symtab :ctx default: dt.stringview targetTid: pij
+            dt: symtab.typing.declDefaultOfId parentTypeId: fnTid nameId: pnjId
+            rv: renderDefault :ast :symtab :ctx dv: dt targetTid: pij
             if args.length > 0 then args.append ", "
             args.append rv
         }
@@ -4343,12 +4328,12 @@ emitCtorDefaultsFill: function {
                     ci = ci + 1
                     cav: "0".string
                     if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: cpnameId) then {
-                        cdt: symtab.typing.childDefaultTextId parentTypeId: tid nameId: cpnameId
+                        cdt: symtab.typing.declDefaultOfId parentTypeId: tid nameId: cpnameId
                         cav = (renderDefault
                             :ast
                             :symtab
                             :ctx
-                            default: cdt.stringview
+                            dv: cdt
                             targetTid: cpid
                         )
                     }
@@ -4373,8 +4358,8 @@ emitCtorDefaultsFill: function {
         fi = fi + 1
         av: "0".string
         if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: fnameId) then {
-            cdt1: symtab.typing.childDefaultTextId parentTypeId: tid nameId: fnameId
-            av = renderDefault :ast :symtab :ctx default: cdt1.stringview targetTid: ffid
+            cdt1: symtab.typing.declDefaultOfId parentTypeId: tid nameId: fnameId
+            av = renderDefault :ast :symtab :ctx dv: cdt1 targetTid: ffid
         } else {
             if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: fnameId) then {
                 av = symtab.reg.cnameOf tid: ffid
@@ -4436,7 +4421,7 @@ emitRecordCtor: function {
                                 parentTypeId: tid
                                 nameId: cpnameId
                             ) then {
-                                cdt0: (symtab.typing.childDefaultTextId
+                                cdt0: (symtab.typing.declDefaultOfId
                                     parentTypeId: tid
                                     nameId: cpnameId
                                 )
@@ -4445,7 +4430,7 @@ emitRecordCtor: function {
                                     :ast
                                     :symtab
                                     :ctx
-                                    default: cdt0.stringview
+                                    dv: cdt0
                                     targetTid: cpid0
                                 )
                             }
@@ -4486,8 +4471,8 @@ emitRecordCtor: function {
             fposIdx = fposIdx + 1
             if (fposUsed) == false then {
                 if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: fnameId) then {
-                    cdt1: symtab.typing.childDefaultTextId parentTypeId: tid nameId: fnameId
-                    av = renderDefault :ast :symtab :ctx default: cdt1.stringview targetTid: ffid0
+                    cdt1: symtab.typing.declDefaultOfId parentTypeId: tid nameId: fnameId
+                    av = renderDefault :ast :symtab :ctx dv: cdt1 targetTid: ffid0
                 } else {
                     if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: fnameId) then {
                         av = symtab.reg.cnameOf tid: ffid0
@@ -6013,13 +5998,13 @@ emitCallValue: function {
             } case none then {
                 pdpn9Id: fpIdsNm.get i: pp9
                 if (symtab.typing.declHasDefaultId parentTypeId: fid nameId: pdpn9Id) then {
-                    pddt9: symtab.typing.childDefaultTextId parentTypeId: fid nameId: pdpn9Id
+                    pddt9: symtab.typing.declDefaultOfId parentTypeId: fid nameId: pdpn9Id
                     pdpid9: fpIds.get i: pp9
                     pdrv9: (renderDefault
                         :ast
                         :symtab
                         :ctx
-                        default: pddt9.stringview
+                        dv: pddt9
                         targetTid: pdpid9
                     )
                     if emitted9 > 0 then args.append ", "
