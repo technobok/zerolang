@@ -435,20 +435,11 @@ ZTyping: class {
     synthNoOwner: u64
     # declMemberList answered from the child edges: the owner had no declaration
     enumFallback: u64
-    # types whose member children declReorderMembers actually had to permute,
-    # split by when. A type is settled as soon as its own resolver finishes;
-    # reorderPermutedLate is what the end-of-typecheck sweep still has to fix,
-    # and it should be monomorphisations only -- nothing else gains a member
-    # edge after its resolver returns.
-    reorderPermuted: u64
-    reorderPermutedLate: u64
     # mintMono entered while its TEMPLATE was still resolving: inside that
     # window the template's declaration order is AST order and its edge order
     # is resolution order, so a declaration walk would permute the mono's
     # field layout silently. Must be 0 before mintMono reads declarations.
     monoTemplateUnsettled: u64
-    # set by declReorderAllMembers for the duration of the final sweep
-    reorderLate: bool
     # ZC_Q2_SPIKE: childOf/childOfId compare their edge answer against the
     # declaration answer on every call, so no call site can escape the sample.
     probeParity: bool
@@ -494,6 +485,93 @@ ZTyping: class {
     # declAddChildEdge -- append a name -> declaration edge to a parent's
     # namespace (also used for public-interface entries, whose targets are
     # sibling declarations rather than fresh rows).
+    # declMoveChildToEnd -- move a member's entry to the LAST MEMBER SLOT of its
+    # parent's namespace. Called when the member is first edged, so declaration
+    # order BECOMES child-edge order as it is built, instead of being permuted
+    # to match it afterwards. Non-member children (a type's `public:` block)
+    # keep their positions; only the member slots rotate.
+    declMoveChildToEnd: function {:this parentDeclId: u64 nameId: u32} is {
+        cn9: (List u32)
+        cd9: (List u64)
+        {
+            po9: this.decls.get key: parentDeclId
+            match (
+                po9
+            ) case some then {
+                with cit9: po9.children.iterate do for c9: cit9 loop {
+                    cn9.append c9.nameId
+                    cd9.append c9.declId
+                }
+            } case none then null
+        }
+        n9: cn9.length
+        if n9 < 2 then return
+        # the member slots, probed once the children borrow is released
+        slots9: (List u64)
+        si9: u64
+        for si9 < n9 loop {
+            isMem9: false
+            {
+                ko9: this.decls.get key: (cd9.get i: si9)
+                match (
+                    ko9
+                ) case some then {
+                    if ko9.kind.fieldDecl then isMem9 = true
+                    if ko9.kind.methodDecl then isMem9 = true
+                    if ko9.kind.paramDecl then isMem9 = true
+                    if ko9.kind.armDecl then isMem9 = true
+                } case none then null
+            }
+            if isMem9 then slots9.append si9
+            si9 = si9 + 1
+        }
+        m9: slots9.length
+        if m9 < 2 then return
+        # the LAST match, not the first: declFindChild is last-wins, so a
+        # variant arm and an as-block method sharing a name must keep their
+        # relative order or the name resolves to the other one
+        at9: u64
+        found9: false
+        ki9: u64
+        for ki9 < m9 loop {
+            sp9: slots9.get i: ki9
+            if (cn9.get i: sp9) == nameId then {
+                at9 = ki9
+                found9 = true
+            }
+            ki9 = ki9 + 1
+        }
+        if (found9) == false then return
+        if at9 == (m9 - 1) then return
+        movS9: slots9.get i: at9
+        movN9: cn9.get i: movS9
+        movD9: cd9.get i: movS9
+        ri9: at9
+        for ri9 < (m9 - 1) loop {
+            dst9: slots9.get i: ri9
+            src9: slots9.get i: (ri9 + 1)
+            cn9.set i: dst9 val: (cn9.get i: src9)
+            cd9.set i: dst9 val: (cd9.get i: src9)
+            ri9 = ri9 + 1
+        }
+        lst9: slots9.get i: (m9 - 1)
+        cn9.set i: lst9 val: movN9
+        cd9.set i: lst9 val: movD9
+        wo9: this.decls.get key: parentDeclId
+        match (
+            wo9
+        ) case some then {
+            wi9: u64
+            for wi9 < n9 loop {
+                (wo9.children.set
+                    i: wi9
+                    val: (declchild nameId: (cn9.get i: wi9) declId: (cd9.get i: wi9))
+                )
+                wi9 = wi9 + 1
+            }
+        } case none then null
+    }
+
     declAddChildEdge: function {:this parentDeclId: u64 nameId: u32 childDeclId: u64} is {
         po9: this.decls.get key: parentDeclId
         match (
@@ -948,136 +1026,6 @@ ZTyping: class {
         return r9
     }
 
-    # declReorderMembers -- put a declaration's member children in the order
-    # their child edges were appended. Index-time declarations follow source
-    # order, which differs whenever resolution appends a member later: a
-    # protocol conformance marker lands after the synthesized create. The
-    # emitter lays out C structs in edge order, so the two have to agree.
-    # Non-member children keep their positions; members are permuted among the
-    # positions they already occupy.
-    declReorderMembers: function {:this parentTypeId: u64 declId: u64} is {
-        # the call count roughly doubles once resolvers settle their own types,
-        # so the no-bucket path must not allocate
-        if (this.childCount :parentTypeId) == 0 then return
-        ordOf9: (Map u64 value: u64)
-        {
-            bo9: this.childIndex.get key: parentTypeId
-            match (
-                bo9
-            ) case some then {
-                pos9: u64
-                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
-                    row9: this.typeChild.get i: ri9
-                    seen9: false
-                    {
-                        hv9: ordOf9.get key: row9.nameId
-                        match (
-                            hv9
-                        ) case some then {
-                            seen9 = true
-                        } case none then null
-                    }
-                    if seen9 == false then ordOf9.set key: row9.nameId value: pos9
-                    pos9 = pos9 + 1
-                }
-            } case none then null
-        }
-        if ordOf9.length == 0 then return
-        cnames9: (List u32)
-        cids9: (List u64)
-        {
-            do9: this.decls.get key: declId
-            match (
-                do9
-            ) case some then {
-                with cit9: do9.children.iterate do for c9: cit9 loop {
-                    cnames9.append c9.nameId
-                    cids9.append c9.declId
-                }
-            } case none then null
-        }
-        # the positions holding member children, and each one's edge ordinal
-        slots9: (List u64)
-        keys9: (List u64)
-        ci9: u64
-        cn9: cnames9.length
-        for ci9 < cn9 loop {
-            isMem9: false
-            {
-                ko9: this.decls.get key: (cids9.get i: ci9)
-                match (
-                    ko9
-                ) case some then {
-                    if ko9.kind.fieldDecl then isMem9 = true
-                    if ko9.kind.methodDecl then isMem9 = true
-                    if ko9.kind.armDecl then isMem9 = true
-                } case none then null
-            }
-            if isMem9 then {
-                slots9.append ci9
-                # a member with no edge sorts after every edge, order kept
-                k9: 1000000.u64
-                {
-                    oo9: ordOf9.get key: (cnames9.get i: ci9).u64
-                    match (
-                        oo9
-                    ) case some then {
-                        k9 = oo9
-                    } case none then null
-                }
-                keys9.append k9
-            }
-            ci9 = ci9 + 1
-        }
-        sn9: slots9.length
-        if sn9 < 2 then return
-        # selection sort: member counts are small and the keys are dense
-        swapped9: false
-        si9: u64
-        for si9 < sn9 loop {
-            best9: si9
-            sj9: si9 + 1
-            for sj9 < sn9 loop {
-                if (keys9.get i: sj9) < (keys9.get i: best9) then best9 = sj9
-                sj9 = sj9 + 1
-            }
-            if best9 != si9 then {
-                swapped9 = true
-                tk9: keys9.get i: si9
-                keys9.set i: si9 val: (keys9.get i: best9)
-                keys9.set i: best9 val: tk9
-                pa9: slots9.get i: si9
-                pb9: slots9.get i: best9
-                tn9: cnames9.get i: pa9
-                td9: cids9.get i: pa9
-                cnames9.set i: pa9 val: (cnames9.get i: pb9)
-                cids9.set i: pa9 val: (cids9.get i: pb9)
-                cnames9.set i: pb9 val: tn9
-                cids9.set i: pb9 val: td9
-            }
-            si9 = si9 + 1
-        }
-        if swapped9 then {
-            if this.reorderLate then {
-                this.reorderPermutedLate = this.reorderPermutedLate + 1
-            } else {
-                this.reorderPermuted = this.reorderPermuted + 1
-            }
-        }
-        wo9: this.decls.get key: declId
-        match (
-            wo9
-        ) case some then {
-            wi9: u64
-            for wi9 < cn9 loop {
-                (wo9.children.set
-                    i: wi9
-                    val: (declchild nameId: (cnames9.get i: wi9) declId: (cids9.get i: wi9))
-                )
-                wi9 = wi9 + 1
-            }
-        } case none then null
-    }
 
     # declCloneType -- a monomorphisation's own type declaration: the
     # template's name, node and home unit, with the template's members cloned
@@ -1331,12 +1279,14 @@ ZTyping: class {
     # on the key: a repeat call updates the child-type id in place.
     setChildId: function {:this parentTypeId: u64 nameId: u64 childTypeId: u64} is {
         existing: this.childNameIdOfId :parentTypeId :nameId
+        first9: false
         match (
             existing
         ) case some then {
             sv: childTypeId
             this.childTypeById.set key: existing value: sv
         } case none then {
+            first9 = true
             cid: this.childIdForId :parentTypeId :nameId
             pos: this.childCount :parentTypeId
             this.typeChild.append (ZTypeChild
@@ -1350,7 +1300,16 @@ ZTyping: class {
             sv: childTypeId
             this.childTypeById.set key: cid value: sv
         }
+        # declSetMemberType can be what CREATES the member declaration, so the
+        # position is fixed after it, not before
         this.declSetMemberType :parentTypeId :nameId typeId: childTypeId
+        if first9 then {
+            od9: this.declIdOfType typeId: parentTypeId
+            n329: nameId.u32.or d: 0
+            if od9 > 0 when n329 > 0 then {
+                this.declMoveChildToEnd parentDeclId: od9 nameId: n329
+            }
+        }
     }
 
     # Record a new typeChild row index under its parent's bucket (get-or-create),
@@ -1912,10 +1871,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         dropDefault: 0
         synthNoOwner: 0
         enumFallback: 0
-        reorderPermuted: 0
-        reorderPermutedLate: 0
         monoTemplateUnsettled: 0
-        reorderLate: false
         probeParity: false
         parityCalls: 0
         parityEdgeOnly: 0
