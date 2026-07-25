@@ -449,7 +449,17 @@ ZTyping: class {
     parityDiff: u64
     parityZero: u64
     parityDeclOnlyZero: u64
-    # childOfId answered from the child edge: the member had no declaration
+    # Member-type writes that found no declaration to land on. Generator
+    # lowering pre-resolves system.optionval and system.Iterator, and the
+    # never/null canonical pair is minted, before indexUnitDefs builds the
+    # unit-root Decls, so those types' members are typed before anything
+    # declares them. The write is held here until the index exists and
+    # declStampPreIndexMembers can land it, and answers reads during the
+    # window. Keyed by (parent, name), last write wins, a handful of entries.
+    pendParent: (List u64)
+    pendName: (List u64)
+    pendType: (List u64)
+    # childOfId answered from a pended write: the member had no declaration
     childOfFallback: u64
     childOfFallbackHit: u64
     isError: bool
@@ -621,46 +631,74 @@ ZTyping: class {
         }
     }
 
-    # declStampPreIndexMembers -- type the member declarations of a type whose
-    # child edges were written before the def index existed. Generator lowering
-    # pre-resolves system.optionval and system.Iterator, and the never/null
-    # canonical pair is minted ahead of indexUnitDefs, so those types' members
-    # are edged before anything declares them. indexUnitDefs calls this once on
-    # the pre-index mints it drains; no other path needs it, because every
-    # other member is declared before its edge is written.
+    # declPendWrite -- hold a member-type write whose owner has no declaration
+    # yet. In place on a repeat, so the buffer carries one entry per
+    # (parent, name) exactly as a child edge did.
+    declPendWrite: function {:this parentTypeId: u64 nameId: u64 typeId: u64} is {
+        i9: u64
+        n9: this.pendParent.length
+        for i9 < n9 loop {
+            hit9: (this.pendParent.get i: i9) == parentTypeId
+            if hit9 then hit9 = (this.pendName.get i: i9) == nameId
+            if hit9 then {
+                this.pendType.set i: i9 val: typeId
+                return
+            }
+            i9 = i9 + 1
+        }
+        pp9: parentTypeId
+        this.pendParent.append pp9
+        pn9: nameId
+        this.pendName.append pn9
+        pt9: typeId
+        this.pendType.append pt9
+    }
+
+    # declPendMemberType -- the type a pended write recorded for
+    # (parent, name); 0 when there is none.
+    declPendMemberType: function {:this parentTypeId: u64 nameId: u64} out u64 is {
+        r9: u64
+        i9: u64
+        n9: this.pendParent.length
+        for i9 < n9 loop {
+            hit9: (this.pendParent.get i: i9) == parentTypeId
+            if hit9 then hit9 = (this.pendName.get i: i9) == nameId
+            if hit9 then r9 = this.pendType.get i: i9
+            i9 = i9 + 1
+        }
+        return r9
+    }
+
+    # declPendRows -- one parent's pended writes, in write order.
+    declPendRows: function {:this parentTypeId: u64 names: List u64 tids: List u64} is {
+        i9: u64
+        n9: this.pendParent.length
+        for i9 < n9 loop {
+            if (this.pendParent.get i: i9) == parentTypeId then {
+                names.append (this.pendName.get i: i9)
+                tids.append (this.pendType.get i: i9)
+            }
+            i9 = i9 + 1
+        }
+    }
+
+    # declStampPreIndexMembers -- land the member-type writes a type held while
+    # it had no declaration. indexUnitDefs calls this once on each pre-index
+    # mint it drains; no other path needs it, because every other member is
+    # declared before its type is written.
     declStampPreIndexMembers: function {:this parentTypeId: u64 declId: u64} is {
         nids9: (List u64)
-        cnids9: (List u64)
-        {
-            bo9: this.childIndex.get key: parentTypeId
-            match (
-                bo9
-            ) case some then {
-                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
-                    row9: this.typeChild.get i: ri9
-                    nids9.append row9.nameId
-                    cnids9.append row9.childNameId
-                }
-            } case none then null
-        }
+        tids9: (List u64)
+        this.declPendRows :parentTypeId names: nids9 tids: tids9
         i9: u64
         n9: nids9.length
         for i9 < n9 loop {
             nid9: nids9.get i: i9
-            cid9: cnids9.get i: i9
+            mtid9: tids9.get i: i9
             i9 = i9 + 1
-            md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
-            if md9 > 0 then {
-                mtid9: u64
-                {
-                    tg9: this.childTypeById.get key: cid9
-                    match (
-                        tg9
-                    ) case some then {
-                        mtid9 = tg9
-                    } case none then null
-                }
-                if mtid9 > 0 then {
+            if mtid9 > 0 then {
+                md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
+                if md9 > 0 then {
                     do9: this.decls.get key: md9
                     match (
                         do9
@@ -727,6 +765,7 @@ ZTyping: class {
             od8: this.declIdOfType typeId: parentTypeId
             if od8 == 0 then {
                 this.dropTypeIdNoOwner = this.dropTypeIdNoOwner + 1
+                this.declPendWrite :parentTypeId :nameId :typeId
                 return
             }
             isFn8: false
@@ -743,6 +782,7 @@ ZTyping: class {
             }
             if isFn8 == false then {
                 this.dropTypeIdNotFn = this.dropTypeIdNotFn + 1
+                this.declPendWrite :parentTypeId :nameId :typeId
                 return
             }
             md8 = (this.declNew
@@ -766,53 +806,7 @@ ZTyping: class {
         # namespace -- its parameters attach here. A field's type belongs to
         # whatever declared it, so a field never claims one.
         if isMethod8 when typeId > 0 then {
-            if (this.declIdOfType :typeId) == 0 then {
-                this.declByTypeId.set key: typeId value: md8
-                this.declEnsureParams parentTypeId: typeId declId: md8
-            }
-        }
-    }
-
-    # declEnsureParams -- declare the parameters of a function type whose
-    # members were edged before anything declared them: a synthesized
-    # constructor never runs through resolveFunction, so nothing indexed its
-    # parameter list. Called only where the owner is known to be a function
-    # type, so every member edge is a parameter.
-    declEnsureParams: function {:this parentTypeId: u64 declId: u64} is {
-        nids9: (List u64)
-        {
-            bo9: this.childIndex.get key: parentTypeId
-            match (
-                bo9
-            ) case some then {
-                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
-                    row9: this.typeChild.get i: ri9
-                    nids9.append row9.nameId
-                }
-            } case none then null
-        }
-        node9: u32
-        {
-            oo9: this.decls.get key: declId
-            match (
-                oo9
-            ) case some then {
-                node9 = oo9.node
-            } case none then null
-        }
-        i9: u64
-        n9: nids9.length
-        for i9 < n9 loop {
-            nid9: (nids9.get i: i9).u32.orPanic
-            i9 = i9 + 1
-            if (this.declFindChild parentDeclId: declId nameId: nid9) == 0 then {
-                (this.declNew
-                    name: nid9
-                    parent: declId
-                    kind: declkind.paramDecl
-                    node: node9
-                )
-            }
+            if (this.declIdOfType :typeId) == 0 then this.declByTypeId.set key: typeId value: md8
         }
     }
 
@@ -1131,30 +1125,15 @@ ZTyping: class {
     # declaration tree rather than the child-edge tables: the member names
     # (pool ids) and their types. Members are the field / method / arm / param
     # children carrying a type; a unit's definitions and a type's `public:`
-    # block are not members and are skipped. False when the type has no
-    # declaration of its own, the child edges answer instead and enumFallback
+    # block are not members and are skipped. When the type has no declaration
+    # of its own the pended pre-index writes answer instead and enumFallback
     # counts it. Declaration order IS member order: declMoveChildToEnd places
     # each member in the last member slot as it is first edged.
     declMemberList: function {:this ownerTid: u64 names: List u64 tids: List u64} is {
         od9: this.declIdOfType typeId: ownerTid
         if od9 == 0 then {
             this.enumFallback = this.enumFallback + 1
-            bo9: this.childIndex.get key: ownerTid
-            match (
-                bo9
-            ) case some then {
-                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
-                    row9: this.typeChild.get i: ri9
-                    cto9: this.childTypeById.get key: row9.childNameId
-                    match (
-                        cto9
-                    ) case some then {
-                        names.append row9.nameId
-                        ctv9: cto9
-                        tids.append ctv9
-                    } case none then null
-                }
-            } case none then null
+            this.declPendRows parentTypeId: ownerTid :names :tids
             return
         }
         kids9: (List u64)
@@ -1201,27 +1180,13 @@ ZTyping: class {
     # come out alongside a type's members -- the SQL dumps want the whole
     # namespace a declaration describes. `typeId > 0` is the only filter it
     # needs: an untyped child (a re-exported generic param, a `public:` block)
-    # never had a child edge either.
+    # never had a child edge either. As in declMemberList, a type with no
+    # declaration of its own answers from the pended pre-index writes.
     declChildRows: function {:this ownerTid: u64 names: List u64 tids: List u64} is {
         od9: this.declIdOfType typeId: ownerTid
         if od9 == 0 then {
             this.enumFallback = this.enumFallback + 1
-            bo9: this.childIndex.get key: ownerTid
-            match (
-                bo9
-            ) case some then {
-                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
-                    row9: this.typeChild.get i: ri9
-                    cto9: this.childTypeById.get key: row9.childNameId
-                    match (
-                        cto9
-                    ) case some then {
-                        names.append row9.nameId
-                        ctv9: cto9
-                        tids.append ctv9
-                    } case none then null
-                }
-            } case none then null
+            this.declPendRows parentTypeId: ownerTid :names :tids
             return
         }
         kids9: (List u64)
@@ -1545,8 +1510,8 @@ ZTyping: class {
     # childOfId -- the type of member `nameId` on `parentTypeId`. The member's
     # DECLARATION is the source of truth: a declared member with no type reads
     # as absent, exactly as a missing edge does. A member with no declaration
-    # falls back to the child edges; childOfFallback counts that and
-    # childOfFallbackHit counts the few where the edge actually answers.
+    # falls back to the pended pre-index writes; childOfFallback counts that
+    # and childOfFallbackHit counts the few one of them actually answers.
     childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
         n32: nameId.u32.or d: 0
         if n32 == 0 then return (optionval.none u64)
@@ -1567,27 +1532,15 @@ ZTyping: class {
             if t9 == 0 then return (optionval.none u64)
             return (optionval.some t9)
         }
-        # the member is not declared, so the edge is the only source. Almost
-        # every one of these is a genuine miss on both sides -- childOfFallbackHit
-        # counts the ones where the edge really does answer, which is the
-        # dropTypeIdNoOwner/NotFn residue and the last thing keeping the map here.
+        # the member is not declared, so a write held for the pre-index window
+        # is the only source. Almost every one of these is a genuine miss on
+        # both sides -- childOfFallbackHit counts the ones a pended write
+        # really does answer.
         this.childOfFallback = this.childOfFallback + 1
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            r: this.childTypeById.get key: idopt
-            match (
-                r
-            ) case some then {
-                this.childOfFallbackHit = this.childOfFallbackHit + 1
-                return (optionval.some r)
-            } case none then {
-                return (optionval.none u64)
-            }
-        } case none then {
-            return (optionval.none u64)
-        }
+        pv9: this.declPendMemberType :parentTypeId :nameId
+        if pv9 == 0 then return (optionval.none u64)
+        this.childOfFallbackHit = this.childOfFallbackHit + 1
+        return (optionval.some pv9)
     }
 
     # --- bool sidecars (private / lock-field / lock-arm) ---
@@ -1991,6 +1944,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         parityDiff: 0
         parityZero: 0
         parityDeclOnlyZero: 0
+        pendParent: (List u64)
+        pendName: (List u64)
+        pendType: (List u64)
         childOfFallback: 0
         childOfFallbackHit: 0
         errors: (List zast.ErrorData)
