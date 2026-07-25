@@ -58983,6 +58983,7 @@ void z_t2712_attachMonoUnitFuncs(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t*
                     z_t74_String_append(&_s2, fn.data, fn.size);
                     z_t74_String_t shellName = _s2;
                     uint64_t shellId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ shellName.data, shellName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+                    (void)(z_t2109_ZTyping_declSynthMember(ty, monoId, ((uint64_t)(*(z_t1085_NamedOperationData_t*)_m1.data).name), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
                     (void)(z_t2115_ZTyping_setChildId(ty, monoId, ((uint64_t)(*(z_t1085_NamedOperationData_t*)_m1.data).name), shellId));
     z_t74_String_free(&shellName);
     z_t74_String_free(&fn);
@@ -60095,6 +60096,8 @@ void z_t2744_buildUnitMono(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, 
                         default: break;
                     }
                     uint64_t newFnId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ qn.data, qn.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+                    (void)(z_t2109_ZTyping_declSynthMember(ty, monoId, ((uint64_t)(*(z_t1085_NamedOperationData_t*)_m3.data).name), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+                    (void)(z_t2115_ZTyping_setChildId(ty, monoId, ((uint64_t)(*(z_t1085_NamedOperationData_t*)_m3.data).name), newFnId));
                     if ((srcId > 0)) {
                         z_t989_List_String_t cNames = z_t989_List_String_create((uint64_t)0);
                         z_t1421_List_u64_t cIds = z_t1421_List_u64_create((uint64_t)0);
@@ -60289,7 +60292,6 @@ void z_t2744_buildUnitMono(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, 
                     }
                     z_t1068_Node_t _ah420 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m3.data).operation - 1)));
                     (void)(z_t2743_registerMonoFnParams(ast, ty, _ah420, newFnId, subs));
-                    (void)(z_t2115_ZTyping_setChildId(ty, monoId, ((uint64_t)(*(z_t1085_NamedOperationData_t*)_m3.data).name), newFnId));
                     z_t1068_Node_t _ah421 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1085_NamedOperationData_t*)_m3.data).operation - 1)));
                     z_t2273_Option_Node_t co9 = z_t2739_cloneUnitMethod(ast, &ids9, _ah421);
                     z_t2273_Option_Node_t _m24 = co9;
