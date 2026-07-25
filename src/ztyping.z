@@ -705,9 +705,11 @@ ZTyping: class {
         }
     }
 
-    # declChildOf / declChildOfId -- the type of member `name` on parentTypeId,
-    # read from the member's declaration. none when the member is undeclared or
-    # carries no type, matching an absent child edge.
+    # declChildOf / declChildOfId -- the type of member `name` on parentTypeId.
+    # The member's DECLARATION is the source of truth: undeclared, or declared
+    # carrying no type, both read as absent. A member with no declaration at
+    # all falls back to the pended pre-index writes, which is the only record
+    # of a type whose owner never acquires a declaration.
     declChildOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
         nid9: pool.find s: name
         if nid9 == 0 then return (optionval.none u64)
@@ -715,19 +717,25 @@ ZTyping: class {
     }
 
     declChildOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
-        md9: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
-        if md9 == 0 then return (optionval.none u64)
-        t9: u64
-        {
-            mo9: this.decls.get key: md9
-            match (
-                mo9
-            ) case some then {
-                t9 = mo9.typeId
-            } case none then null
+        n329: nameId.u32.or d: 0
+        if n329 == 0 then return (optionval.none u64)
+        md9: this.declMemberIdOf :parentTypeId nameId: n329
+        if md9 > 0 then {
+            t9: u64
+            {
+                mo9: this.decls.get key: md9
+                match (
+                    mo9
+                ) case some then {
+                    t9 = mo9.typeId
+                } case none then null
+            }
+            if t9 == 0 then return (optionval.none u64)
+            return (optionval.some t9)
         }
-        if t9 == 0 then return (optionval.none u64)
-        return (optionval.some t9)
+        pv9: this.declPendMemberType :parentTypeId :nameId
+        if pv9 == 0 then return (optionval.none u64)
+        return (optionval.some pv9)
     }
 
     # declIsLockField / declIsLockFieldId -- is `name` the lock field of the
@@ -1162,43 +1170,6 @@ ZTyping: class {
             od9: this.declIdOfType typeId: parentTypeId
             if od9 > 0 then this.declMoveChildToEnd parentDeclId: od9 nameId: n329
         }
-    }
-
-    # childOf -- the type of member `name` on `parentTypeId`, by text.
-    childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
-        nid9: (pool.find s: name).u64
-        if nid9 == 0 then return (optionval.none u64)
-        return (this.childOfId :parentTypeId nameId: nid9)
-    }
-
-    # childOfId -- the type of member `nameId` on `parentTypeId`. The member's
-    # DECLARATION is the source of truth: a declared member with no type reads
-    # as absent. A member with no declaration at all falls back to the pended
-    # pre-index writes.
-    childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
-        n32: nameId.u32.or d: 0
-        if n32 == 0 then return (optionval.none u64)
-        od9: this.declIdOfType typeId: parentTypeId
-        md9: u64
-        if od9 > 0 then md9 = this.declFindChild parentDeclId: od9 nameId: n32
-        if md9 > 0 then {
-            t9: u64
-            {
-                mo9: this.decls.get key: md9
-                match (
-                    mo9
-                ) case some then {
-                    t9 = mo9.typeId
-                } case none then null
-            }
-            if t9 == 0 then return (optionval.none u64)
-            return (optionval.some t9)
-        }
-        # the member is not declared, so a write held for the pre-index window
-        # is the only source.
-        pv9: this.declPendMemberType :parentTypeId :nameId
-        if pv9 == 0 then return (optionval.none u64)
-        return (optionval.some pv9)
     }
 
     # --- bool sidecars (private / lock-field / lock-arm) ---
@@ -1725,7 +1696,7 @@ smokeHasChild: function {pool: zast.StringPool ty: ZTyping pid: u64 name: String
 
 # smoke-test: print the child type id of `pid`'s member `name`.
 smokeChildOf: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    r: ty.childOf :pool parentTypeId: pid :name
+    r: ty.declChildOf :pool parentTypeId: pid :name
     print "childOf point.\{name} -> \{optU64Text r}"
 }
 
