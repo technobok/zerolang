@@ -23931,8 +23931,8 @@ canonicalizeShellChildren: function {ast: Ast st: zenv.ZSymbolTable mainName: St
 # stamp all nodes, and return the populated symbol table (diagnostics
 # ride in the typing tables).
 # publicNsOf -- the publicNs child Decl of the type/unit that minted `tid`
-# (0 when the type has no `public:` block). Collect child ids first, then scan
-# kinds, to avoid overlapping ty.decls borrows.
+# (0 when the type has no `public:` block). The children are read one index at
+# a time: a second ty.decls probe cannot run under a live children borrow.
 publicNsOf: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} out u64 is {
     od9: u64
     {
@@ -23944,27 +23944,26 @@ publicNsOf: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64} ou
         } case none then null
     }
     if od9 == 0 then return 0
-    kids9: (List u64)
-    {
-        do9: ty.decls.get key: od9
-        match (
-            do9
-        ) case some then {
-            with cit9: do9.children.iterate do for c9: cit9 loop kids9.append c9.declId
-        } case none then null
-    }
     r9: u64
+    kn9: ty.declChildSlots declId: od9
     ki9: u64
-    kn9: kids9.length
     for ki9 < kn9 loop {
-        kd9: kids9.get i: ki9
+        kd9: u64
+        {
+            do9: ty.decls.get key: od9
+            match (
+                do9
+            ) case some then {
+                kd9 = (do9.children.get i: ki9).declId
+            } case none then null
+        }
+        ki9 = ki9 + 1
         ko9: ty.decls.get key: kd9
         match (
             ko9
         ) case some then {
             if ko9.kind.publicNs then r9 = kd9
         } case none then null
-        ki9 = ki9 + 1
     }
     return r9
 }
