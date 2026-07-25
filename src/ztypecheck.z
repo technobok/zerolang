@@ -24249,6 +24249,16 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     orderBad: u64
     orderMissing: u64
     orderReorder: u64
+    enumTypes: u64
+    enumEdgeOnly: u64
+    enumEdgeOnlyFn: u64
+    enumDeclOnly: u64
+    enumTypeDiff: u64
+    enumOrder: u64
+    enumEdgeOnlyZero: u64
+    enumEdgeOnlyNoDecl: u64
+    enumEdgeOnlyUnit: u64
+    enumEdgeOnlyObj: u64
     # Pass A -- collect member tuples by iterating the typeChild List (each row
     # carries its parentTypeId).
     aOwner9: (List u64)
@@ -24437,6 +24447,158 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             }
         }
     }
+    # Enumeration substitution -- for every type with a declaration of its own,
+    # compare the member list the emitter reads today (childIndex rows ->
+    # childTypeById) against the one a Decl.children walk would give. edgeOnly
+    # is the dangerous direction: an edge the declaration walk would MISS, i.e.
+    # a struct field, variant arm or vtable slot that would silently vanish.
+    eSeen9: (Set u64)
+    ei9: u64
+    etot9: aOwner9.length
+    for ei9 < etot9 loop {
+        eTid9: aOwner9.get i: ei9
+        ei9 = ei9 + 1
+        if (eSeen9.has item: eTid9) == false then {
+            eSeen9.add item: eTid9
+            eDid9: st.typing.declIdOfType typeId: eTid9
+            if eDid9 > 0 then {
+                enumTypes = enumTypes + 1
+                # edge side, exactly as the emitter reads it
+                eNms9: (List u64)
+                eTds9: (List u64)
+                {
+                    ebo9: st.typing.childIndex.get key: eTid9
+                    match (
+                        ebo9
+                    ) case some then {
+                        with ert9: ebo9.rows.iterate do for erw9: ert9 loop {
+                            erow9: st.typing.typeChild.get i: erw9
+                            ecto9: st.typing.childTypeById.get key: erow9.childNameId
+                            match (
+                                ecto9
+                            ) case some then {
+                                eNms9.append erow9.nameId
+                                ectv9: ecto9
+                                eTds9.append ectv9
+                            } case none then null
+                        }
+                    } case none then null
+                }
+                # declaration side: member kinds only, typed members only
+                dIds9: (List u64)
+                dRaw9: (List u64)
+                {
+                    edo9: st.typing.decls.get key: eDid9
+                    match (
+                        edo9
+                    ) case some then {
+                        with edt9: edo9.children.iterate do for edc9: edt9 loop {
+                            dIds9.append edc9.declId
+                            dRaw9.append edc9.nameId.u64
+                        }
+                    } case none then null
+                }
+                dNms9: (List u64)
+                dTds9: (List u64)
+                dk9: u64
+                dkn9: dIds9.length
+                for dk9 < dkn9 loop {
+                    dIsM9: false
+                    dTy9: u64
+                    {
+                        dko9: st.typing.decls.get key: (dIds9.get i: dk9)
+                        match (
+                            dko9
+                        ) case some then {
+                            if dko9.kind.fieldDecl then dIsM9 = true
+                            if dko9.kind.methodDecl then dIsM9 = true
+                            if dko9.kind.paramDecl then dIsM9 = true
+                            if dko9.kind.armDecl then dIsM9 = true
+                            dTy9 = dko9.typeId
+                        } case none then null
+                    }
+                    if dIsM9 when dTy9 > 0 then {
+                        dNms9.append (dRaw9.get i: dk9)
+                        dTds9.append dTy9
+                    }
+                    dk9 = dk9 + 1
+                }
+                # edge -> decl
+                eOwnerFn9: (st.reg.typetypeOf typeId: eTid9) == ztypes.ztypetype.functionType
+                eOwnerU9: (st.reg.typetypeOf typeId: eTid9) == ztypes.ztypetype.unitType
+                ex9: u64
+                exn9: eNms9.length
+                dn9: dNms9.length
+                for ex9 < exn9 loop {
+                    eWant9: eNms9.get i: ex9
+                    eWantT9: eTds9.get i: ex9
+                    eHit9: false
+                    eSameT9: false
+                    dy9: u64
+                    for dy9 < dn9 loop {
+                        if (dNms9.get i: dy9) == eWant9 then {
+                            eHit9 = true
+                            if (dTds9.get i: dy9) == eWantT9 then eSameT9 = true
+                        }
+                        dy9 = dy9 + 1
+                    }
+                    if eHit9 == false then {
+                        enumEdgeOnly = enumEdgeOnly + 1
+                        if eOwnerFn9 then enumEdgeOnlyFn = enumEdgeOnlyFn + 1
+                        if eWantT9 == 0 then enumEdgeOnlyZero = enumEdgeOnlyZero + 1
+                        if eOwnerU9 then enumEdgeOnlyUnit = enumEdgeOnlyUnit + 1
+                        if eOwnerU9 == false when eOwnerFn9 == false then {
+                            enumEdgeOnlyObj = enumEdgeOnlyObj + 1
+                        }
+                        eMd9: (st.typing.declMemberIdOf
+                            parentTypeId: eTid9
+                            nameId: eWant9.u32.orPanic
+                        )
+                        if eMd9 == 0 then enumEdgeOnlyNoDecl = enumEdgeOnlyNoDecl + 1
+                    } else {
+                        if eSameT9 == false then enumTypeDiff = enumTypeDiff + 1
+                    }
+                    ex9 = ex9 + 1
+                }
+                # decl -> edge
+                dz9: u64
+                for dz9 < dn9 loop {
+                    dWant9: dNms9.get i: dz9
+                    dHit9: false
+                    ez9: u64
+                    for ez9 < exn9 loop {
+                        if (eNms9.get i: ez9) == dWant9 then dHit9 = true
+                        ez9 = ez9 + 1
+                    }
+                    if dHit9 == false then enumDeclOnly = enumDeclOnly + 1
+                    dz9 = dz9 + 1
+                }
+                # relative order of the names both sides agree on
+                eCur9: u64
+                eOk9: true
+                dw9: u64
+                for dw9 < dn9 loop {
+                    dWant8: dNms9.get i: dw9
+                    dSeen8: false
+                    for dSeen8 == false while eCur9 < exn9 loop {
+                        if (eNms9.get i: eCur9) == dWant8 then dSeen8 = true
+                        eCur9 = eCur9 + 1
+                    }
+                    if dSeen8 == false then {
+                        eIn9: false
+                        eq9: u64
+                        for eq9 < exn9 loop {
+                            if (eNms9.get i: eq9) == dWant8 then eIn9 = true
+                            eq9 = eq9 + 1
+                        }
+                        if eIn9 then eOk9 = false
+                    }
+                    dw9 = dw9 + 1
+                }
+                if eOk9 == false then enumOrder = enumOrder + 1
+            }
+        }
+    }
     dropOwn: st.typing.dropOwn
     dropOwnId: st.typing.dropOwnId
     dropTypeIdNoOwner: st.typing.dropTypeIdNoOwner
@@ -24446,7 +24608,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     dropGrant: st.typing.dropGrant
     dropDefault: st.typing.dropDefault
     synthNoOwner: st.typing.synthNoOwner
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner}"
 }
 typecheck: function {
     program: Node
