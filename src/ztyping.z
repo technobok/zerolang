@@ -698,6 +698,125 @@ ZTyping: class {
         } case none then null
     }
 
+    # declReorderMembers -- put a declaration's member children in the order
+    # their child edges were appended. Index-time declarations follow source
+    # order, which differs whenever resolution appends a member later: a
+    # protocol conformance marker lands after the synthesized create. The
+    # emitter lays out C structs in edge order, so the two have to agree.
+    # Non-member children keep their positions; members are permuted among the
+    # positions they already occupy.
+    declReorderMembers: function {:this parentTypeId: u64 declId: u64} is {
+        ordOf9: (Map u64 value: u64)
+        {
+            bo9: this.childIndex.get key: parentTypeId
+            match (
+                bo9
+            ) case some then {
+                pos9: u64
+                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
+                    row9: this.typeChild.get i: ri9
+                    seen9: false
+                    {
+                        hv9: ordOf9.get key: row9.nameId
+                        match (
+                            hv9
+                        ) case some then {
+                            seen9 = true
+                        } case none then null
+                    }
+                    if seen9 == false then ordOf9.set key: row9.nameId value: pos9
+                    pos9 = pos9 + 1
+                }
+            } case none then null
+        }
+        if ordOf9.length == 0 then return
+        cnames9: (List u32)
+        cids9: (List u64)
+        {
+            do9: this.decls.get key: declId
+            match (
+                do9
+            ) case some then {
+                with cit9: do9.children.iterate do for c9: cit9 loop {
+                    cnames9.append c9.nameId
+                    cids9.append c9.declId
+                }
+            } case none then null
+        }
+        # the positions holding member children, and each one's edge ordinal
+        slots9: (List u64)
+        keys9: (List u64)
+        ci9: u64
+        cn9: cnames9.length
+        for ci9 < cn9 loop {
+            isMem9: false
+            {
+                ko9: this.decls.get key: (cids9.get i: ci9)
+                match (
+                    ko9
+                ) case some then {
+                    if ko9.kind.fieldDecl then isMem9 = true
+                    if ko9.kind.methodDecl then isMem9 = true
+                    if ko9.kind.armDecl then isMem9 = true
+                } case none then null
+            }
+            if isMem9 then {
+                slots9.append ci9
+                # a member with no edge sorts after every edge, order kept
+                k9: 1000000.u64
+                {
+                    oo9: ordOf9.get key: (cnames9.get i: ci9).u64
+                    match (
+                        oo9
+                    ) case some then {
+                        k9 = oo9
+                    } case none then null
+                }
+                keys9.append k9
+            }
+            ci9 = ci9 + 1
+        }
+        sn9: slots9.length
+        if sn9 < 2 then return
+        # selection sort: member counts are small and the keys are dense
+        si9: u64
+        for si9 < sn9 loop {
+            best9: si9
+            sj9: si9 + 1
+            for sj9 < sn9 loop {
+                if (keys9.get i: sj9) < (keys9.get i: best9) then best9 = sj9
+                sj9 = sj9 + 1
+            }
+            if best9 != si9 then {
+                tk9: keys9.get i: si9
+                keys9.set i: si9 val: (keys9.get i: best9)
+                keys9.set i: best9 val: tk9
+                pa9: slots9.get i: si9
+                pb9: slots9.get i: best9
+                tn9: cnames9.get i: pa9
+                td9: cids9.get i: pa9
+                cnames9.set i: pa9 val: (cnames9.get i: pb9)
+                cids9.set i: pa9 val: (cids9.get i: pb9)
+                cnames9.set i: pb9 val: tn9
+                cids9.set i: pb9 val: td9
+            }
+            si9 = si9 + 1
+        }
+        wo9: this.decls.get key: declId
+        match (
+            wo9
+        ) case some then {
+            wi9: u64
+            for wi9 < cn9 loop {
+                (wo9.children.set
+                    i: wi9
+                    val: (declchild nameId: (cnames9.get i: wi9) declId: (cids9.get i: wi9))
+                )
+                wi9 = wi9 + 1
+            }
+        } case none then null
+    }
+
     # declCloneType -- a monomorphisation's own type declaration: the
     # template's name, node and home unit, with the template's members cloned
     # in order and originDecl pointing back at each. The clone is reachable by
