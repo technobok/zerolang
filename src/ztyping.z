@@ -466,9 +466,9 @@ ZTyping: class {
         )
         if parent > 0 then {
             this.declAddChildEdge parentDeclId: parent nameId: name childDeclId: id
-            # the child edge and its metadata can predate this declaration
-            # (builtin seeding writes a system unit's edges before the unit's
-            # defs are indexed), so adopt whatever the sidecars already hold
+            # the child edge can predate this declaration -- the mono
+            # back-fill declares members BY reading the edge table -- so take
+            # the type the edge already records
             ptid9: u64
             {
                 po9: this.decls.get key: parent
@@ -483,14 +483,7 @@ ZTyping: class {
                 match (
                     cno9
                 ) case some then {
-                    if (this.declStampFromSidecars childNameId: cno9 declId: id) then {
-                        lo9: this.decls.get key: parent
-                        match (
-                            lo9
-                        ) case some then {
-                            lo9.lockFieldDecl = id
-                        } case none then null
-                    }
+                    this.declAdoptMemberType childNameId: cno9 declId: id
                 } case none then null
             }
         }
@@ -539,48 +532,12 @@ ZTyping: class {
         }
     }
 
-    # declStampFromSidecars -- copy child edge `childNameId`'s recorded
-    # metadata onto member declaration `declId`. True when the member is its
-    # type's lock field, which the owning type's declaration records itself.
-    declStampFromSidecars: function {:this childNameId: u64 declId: u64} out bool is {
-        isLock9: false
-        {
-            lg9: this.childLockField.get key: childNameId
-            match (
-                lg9
-            ) case some then {
-                isLock9 = lg9
-            } case none then null
-        }
-        hasOwn9: false
-        own9: ztypes.zparamownership.noneMode
-        {
-            go9: this.childOwnership.get key: childNameId
-            match (
-                go9
-            ) case some then {
-                hasOwn9 = true
-                own9 = go9
-            } case none then null
-        }
-        grant9: false
-        {
-            gg9: this.childGrantsPrivate.get key: childNameId
-            match (
-                gg9
-            ) case some then {
-                grant9 = gg9
-            } case none then null
-        }
-        fnp9: false
-        {
-            fg9: this.childIsFnptrField.get key: childNameId
-            match (
-                fg9
-            ) case some then {
-                fnp9 = fg9
-            } case none then null
-        }
+    # declAdoptMemberType -- give a member declaration created after its own
+    # child edge the type that edge records. Every OTHER piece of per-member
+    # metadata now reaches its declaration at write time (the drop counters are
+    # 0 corpus-wide), so the type is all that is left to adopt -- and it comes
+    # from childTypeById, the live member index, not from a sidecar.
+    declAdoptMemberType: function {:this childNameId: u64 declId: u64} is {
         mtid9: u64
         {
             tg9: this.childTypeById.get key: childNameId
@@ -590,36 +547,32 @@ ZTyping: class {
                 mtid9 = tg9
             } case none then null
         }
+        if mtid9 == 0 then return
         isMethod9: false
         {
             do9: this.decls.get key: declId
             match (
                 do9
             ) case some then {
-                if mtid9 > 0 then do9.typeId = mtid9
-                if hasOwn9 then do9.ownership = own9
-                if grant9 then do9.grantsPrivate = true
-                if fnp9 then do9.fnptrField = true
-                    if do9.kind.methodDecl then isMethod9 = true
+                do9.typeId = mtid9
+                if do9.kind.methodDecl then isMethod9 = true
             } case none then null
         }
         # a method declared after its own child edge existed still owns its
         # function type's namespace (the synthesized create is edged before
         # anything declares it)
-        if isMethod9 when mtid9 > 0 then {
+        if isMethod9 then {
             if (this.declIdOfType typeId: mtid9) == 0 then {
                 this.declByTypeId.set key: mtid9 value: declId
                 this.declEnsureParams parentTypeId: mtid9 :declId
             }
         }
-        return isLock9
     }
 
-    # declReplayMembers -- stamp the member declarations of a type whose
-    # declaration link is recorded after its child edges were written. A
-    # sidecar setter skips a type with no link yet (resolveFunction records
-    # parameter ownership before its own declSetType), so linking replays
-    # what those setters recorded.
+    # declReplayMembers -- give the member declarations of a type whose
+    # declaration link lands after its child edges the types those edges
+    # record. Linking is what makes the members reachable, so it is also when
+    # they can first be typed.
     declReplayMembers: function {:this parentTypeId: u64 declId: u64} is {
         nids9: (List u64)
         cnids9: (List u64)
@@ -635,7 +588,6 @@ ZTyping: class {
                 }
             } case none then null
         }
-        lockMember9: u64
         i9: u64
         n9: nids9.length
         for i9 < n9 loop {
@@ -643,17 +595,7 @@ ZTyping: class {
             cid9: cnids9.get i: i9
             i9 = i9 + 1
             md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
-            if md9 > 0 then {
-                if (this.declStampFromSidecars childNameId: cid9 declId: md9) then lockMember9 = md9
-            }
-        }
-        if lockMember9 > 0 then {
-            po9: this.decls.get key: declId
-            match (
-                po9
-            ) case some then {
-                po9.lockFieldDecl = lockMember9
-            } case none then null
+            if md9 > 0 then this.declAdoptMemberType childNameId: cid9 declId: md9
         }
     }
 

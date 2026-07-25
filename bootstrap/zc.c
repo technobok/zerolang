@@ -15955,6 +15955,7 @@ typedef z_t1523_ConstraintDesc_t (*z_t1623_ZTypeRegistry_genericParamConstraintO
 typedef z_t989_List_String_t (*z_t1624_ZTypeRegistry_genericParamNamesOf_ft)(z_t1411_ZTypeRegistry_t*, uint64_t);
 typedef void (*z_t2087_ZTyping_declAddChildEdge_ft)(z_t1626_ZTyping_t*, uint64_t, uint32_t, uint64_t);
 typedef void (*z_t2088_ZTyping_declSetType_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t);
+typedef void (*z_t2089_ZTyping_declAdoptMemberType_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t);
 typedef void (*z_t2090_ZTyping_declReplayMembers_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t);
 typedef uint64_t (*z_t2091_ZTyping_declFindChild_ft)(z_t1626_ZTyping_t*, uint64_t, uint32_t);
 typedef uint64_t (*z_t2092_ZTyping_declIdOfType_ft)(z_t1626_ZTyping_t*, uint64_t);
@@ -25542,7 +25543,7 @@ void z_t2384_dumpScopeLog(z_t1266_ZSymbolTable_t* st);
 static uint64_t z_t2086_ZTyping_declNew(z_t1626_ZTyping_t* this, uint32_t name, uint64_t parent, z_t2015_declkind_t kind, uint32_t node);
 static void z_t2087_ZTyping_declAddChildEdge(z_t1626_ZTyping_t* this, uint64_t parentDeclId, uint32_t nameId, uint64_t childDeclId);
 static void z_t2088_ZTyping_declSetType(z_t1626_ZTyping_t* this, uint64_t declId, uint64_t typeId);
-static bool z_t2089_ZTyping_declStampFromSidecars(z_t1626_ZTyping_t* this, uint64_t childNameId, uint64_t declId);
+static void z_t2089_ZTyping_declAdoptMemberType(z_t1626_ZTyping_t* this, uint64_t childNameId, uint64_t declId);
 static void z_t2090_ZTyping_declReplayMembers(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t declId);
 static uint64_t z_t2091_ZTyping_declFindChild(z_t1626_ZTyping_t* this, uint64_t parentDeclId, uint32_t nameId);
 static uint64_t z_t2092_ZTyping_declIdOfType(z_t1626_ZTyping_t* this, uint64_t typeId);
@@ -29709,22 +29710,7 @@ static uint64_t z_t2086_ZTyping_declNew(z_t1626_ZTyping_t* this, uint32_t name, 
                 case Z_OPTIONVAL_U64_TAG_SOME: {
                     uint64_t cno9 = _m1.data.some;
                     (void)cno9;
-                    if (z_t2089_ZTyping_declStampFromSidecars(this, cno9, id)) {
-                        z_t2064_OptionView_Decl_t lo9 = z_t2045_Map_u64_Decl_get(this->decls, parent);
-                        z_t2064_OptionView_Decl_t _m2 = lo9;
-                        switch (_m2.tag) {
-                            case Z_OPTIONVIEW_DECL_TAG_SOME: {
-                                /* alias: lo9 => (*(z_t2014_Decl_t*)_m2.data) */
-                                (*(z_t2014_Decl_t*)_m2.data).lockFieldDecl = id;
-                                break;
-                            }
-                            case Z_OPTIONVIEW_DECL_TAG_NONE: {
-                                break;
-                            }
-                            default: break;
-                        }
-    z_t2064_OptionView_Decl_destroy(&lo9);
-                    }
+                    (void)(z_t2089_ZTyping_declAdoptMemberType(this, cno9, id));
                     break;
                 }
                 case Z_OPTIONVAL_U64_TAG_NONE: {
@@ -29796,75 +29782,13 @@ static void z_t2088_ZTyping_declSetType(z_t1626_ZTyping_t* this, uint64_t declId
     z_t2064_OptionView_Decl_destroy(&do9);
 }
 
-static bool z_t2089_ZTyping_declStampFromSidecars(z_t1626_ZTyping_t* this, uint64_t childNameId, uint64_t declId) {
-    bool isLock9 = false;
-    z_t1417_optionval_bool_t lg9 = z_t1646_Map_u64_bool_get(this->childLockField, childNameId);
-    z_t1417_optionval_bool_t _m0 = lg9;
-    switch (_m0.tag) {
-        case Z_OPTIONVAL_BOOL_TAG_SOME: {
-            bool lg9 = _m0.data.some;
-            (void)lg9;
-            isLock9 = lg9;
-            break;
-        }
-        case Z_OPTIONVAL_BOOL_TAG_NONE: {
-            break;
-        }
-        default: break;
-    }
-    bool hasOwn9 = false;
-    z_t1809_zparamownership_t own9 = ((z_t1809_zparamownership_t){ .tag = Z_ZPARAMOWNERSHIP_TAG_NONEMODE });
-    z_t1832_optionval_zparamownership_t go9 = z_t1813_Map_u64_zparamownership_get(this->childOwnership, childNameId);
-    z_t1832_optionval_zparamownership_t _m1 = go9;
-    switch (_m1.tag) {
-        case Z_OPTIONVAL_ZPARAMOWNERSHIP_TAG_SOME: {
-            z_t1809_zparamownership_t go9 = _m1.data.some;
-            (void)go9;
-            hasOwn9 = true;
-            own9 = go9;
-            break;
-        }
-        case Z_OPTIONVAL_ZPARAMOWNERSHIP_TAG_NONE: {
-            break;
-        }
-        default: break;
-    }
-    bool grant9 = false;
-    z_t1417_optionval_bool_t gg9 = z_t1646_Map_u64_bool_get(this->childGrantsPrivate, childNameId);
-    z_t1417_optionval_bool_t _m2 = gg9;
-    switch (_m2.tag) {
-        case Z_OPTIONVAL_BOOL_TAG_SOME: {
-            bool gg9 = _m2.data.some;
-            (void)gg9;
-            grant9 = gg9;
-            break;
-        }
-        case Z_OPTIONVAL_BOOL_TAG_NONE: {
-            break;
-        }
-        default: break;
-    }
-    bool fnp9 = false;
-    z_t1417_optionval_bool_t fg9 = z_t1646_Map_u64_bool_get(this->childIsFnptrField, childNameId);
-    z_t1417_optionval_bool_t _m3 = fg9;
-    switch (_m3.tag) {
-        case Z_OPTIONVAL_BOOL_TAG_SOME: {
-            bool fg9 = _m3.data.some;
-            (void)fg9;
-            fnp9 = fg9;
-            break;
-        }
-        case Z_OPTIONVAL_BOOL_TAG_NONE: {
-            break;
-        }
-        default: break;
-    }
+static void z_t2089_ZTyping_declAdoptMemberType(z_t1626_ZTyping_t* this, uint64_t childNameId, uint64_t declId) {
     uint64_t mtid9 = ((uint64_t)0);
     z_t169_optionval_u64_t tg9 = z_t1368_Map_u64_u64_get(this->childTypeById, childNameId);
-    z_t169_optionval_u64_t _m4 = tg9;
-    switch (_m4.tag) {
+    z_t169_optionval_u64_t _m0 = tg9;
+    switch (_m0.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t tg9 = _m4.data.some;
+            uint64_t tg9 = _m0.data.some;
             (void)tg9;
             mtid9 = tg9;
             break;
@@ -29874,25 +29798,17 @@ static bool z_t2089_ZTyping_declStampFromSidecars(z_t1626_ZTyping_t* this, uint6
         }
         default: break;
     }
+    if ((mtid9 == 0)) {
+        return;
+    }
     bool isMethod9 = false;
     z_t2064_OptionView_Decl_t do9 = z_t2045_Map_u64_Decl_get(this->decls, declId);
-    z_t2064_OptionView_Decl_t _m5 = do9;
-    switch (_m5.tag) {
+    z_t2064_OptionView_Decl_t _m1 = do9;
+    switch (_m1.tag) {
         case Z_OPTIONVIEW_DECL_TAG_SOME: {
-            /* alias: do9 => (*(z_t2014_Decl_t*)_m5.data) */
-            if ((mtid9 > 0)) {
-                (*(z_t2014_Decl_t*)_m5.data).typeId = mtid9;
-            }
-            if (hasOwn9) {
-                (*(z_t2014_Decl_t*)_m5.data).ownership = own9;
-            }
-            if (grant9) {
-                (*(z_t2014_Decl_t*)_m5.data).grantsPrivate = true;
-            }
-            if (fnp9) {
-                (*(z_t2014_Decl_t*)_m5.data).fnptrField = true;
-            }
-            if ((((*(z_t2014_Decl_t*)_m5.data).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
+            /* alias: do9 => (*(z_t2014_Decl_t*)_m1.data) */
+            (*(z_t2014_Decl_t*)_m1.data).typeId = mtid9;
+            if ((((*(z_t2014_Decl_t*)_m1.data).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
                 isMethod9 = true;
             }
             break;
@@ -29902,14 +29818,12 @@ static bool z_t2089_ZTyping_declStampFromSidecars(z_t1626_ZTyping_t* this, uint6
         }
         default: break;
     }
-    if (isMethod9 && (mtid9 > 0)) {
+    if (isMethod9) {
         if ((z_t2092_ZTyping_declIdOfType(this, mtid9) == 0)) {
             (void)(z_t1368_Map_u64_u64_set(this->declByTypeId, mtid9, declId));
             (void)(z_t2094_ZTyping_declEnsureParams(this, mtid9, declId));
         }
     }
-    z_t2064_OptionView_Decl_destroy(&do9);
-    return isLock9;
     z_t2064_OptionView_Decl_destroy(&do9);
 }
 
@@ -29937,7 +29851,6 @@ static void z_t2090_ZTyping_declReplayMembers(z_t1626_ZTyping_t* this, uint64_t 
         }
         default: break;
     }
-    uint64_t lockMember9 = ((uint64_t)0);
     uint64_t i9 = ((uint64_t)0);
     uint64_t n9 = nids9.length;
     while ((i9 < n9)) {
@@ -29946,26 +29859,8 @@ static void z_t2090_ZTyping_declReplayMembers(z_t1626_ZTyping_t* this, uint64_t 
         i9 = (i9 + 1);
         uint64_t md9 = z_t2091_ZTyping_declFindChild(this, declId, ({ __auto_type _rc = (({ uint64_t _v = nid9; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; }));
         if ((md9 > 0)) {
-            if (z_t2089_ZTyping_declStampFromSidecars(this, cid9, md9)) {
-                lockMember9 = md9;
-            }
+            (void)(z_t2089_ZTyping_declAdoptMemberType(this, cid9, md9));
         }
-    }
-    if ((lockMember9 > 0)) {
-        z_t2064_OptionView_Decl_t po9 = z_t2045_Map_u64_Decl_get(this->decls, declId);
-        z_t2064_OptionView_Decl_t _m2 = po9;
-        switch (_m2.tag) {
-            case Z_OPTIONVIEW_DECL_TAG_SOME: {
-                /* alias: po9 => (*(z_t2014_Decl_t*)_m2.data) */
-                (*(z_t2014_Decl_t*)_m2.data).lockFieldDecl = lockMember9;
-                break;
-            }
-            case Z_OPTIONVIEW_DECL_TAG_NONE: {
-                break;
-            }
-            default: break;
-        }
-    z_t2064_OptionView_Decl_destroy(&po9);
     }
     z_t1421_List_u64_destroy(&nids9);
     z_t1421_List_u64_destroy(&cnids9);
