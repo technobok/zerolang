@@ -30561,6 +30561,7 @@ static uint64_t z_t2106_ZTyping_declCloneType(z_t1626_ZTyping_t* this, uint64_t 
     uint32_t tname9 = ((uint32_t)0);
     uint32_t tnode9 = ((uint32_t)0);
     uint64_t tparent9 = ((uint64_t)0);
+    z_t2015_declkind_t tkind9 = ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_TYPEDECL });
     z_t1421_List_u64_t kids9 = z_t1421_List_u64_create((uint64_t)0);
     z_t2064_OptionView_Decl_t to9 = z_t2045_Map_u64_Decl_get(this->decls, templateDeclId);
     z_t2064_OptionView_Decl_t _m0 = to9;
@@ -30570,6 +30571,7 @@ static uint64_t z_t2106_ZTyping_declCloneType(z_t1626_ZTyping_t* this, uint64_t 
             tname9 = (*(z_t2014_Decl_t*)_m0.data).name;
             tnode9 = (*(z_t2014_Decl_t*)_m0.data).node;
             tparent9 = (*(z_t2014_Decl_t*)_m0.data).parent;
+            tkind9 = (*(z_t2014_Decl_t*)_m0.data).kind;
             z_t2039_ListIter_declchild_t cit9 = z_t2027_List_declchild_iterate(&(*(z_t2014_Decl_t*)_m0.data).children);
             while (1) {
                 z_t2041_OptionView_declchild_t _iter1 = z_t2039_ListIter_declchild_call(&cit9);
@@ -30589,7 +30591,7 @@ static uint64_t z_t2106_ZTyping_declCloneType(z_t1626_ZTyping_t* this, uint64_t 
     z_t2064_OptionView_Decl_destroy(&to9);
         return 0;
     }
-    uint64_t id9 = z_t2086_ZTyping_declNew(this, tname9, 0, ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_TYPEDECL }), tnode9);
+    uint64_t id9 = z_t2086_ZTyping_declNew(this, tname9, 0, tkind9, tnode9);
     z_t2064_OptionView_Decl_t no9 = z_t2045_Map_u64_Decl_get(this->decls, id9);
     z_t2064_OptionView_Decl_t _m2 = no9;
     switch (_m2.tag) {
@@ -54557,8 +54559,8 @@ void z_t2621_resolveData(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_t1411_ZTyp
         tagName = _s4;
     }
     uint64_t tagId = z_t2548_declareCanonicalType(ast, ty, reg, _zs1516, ((z_t105_StringView_t){ tagName.data, tagName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_RECORDTYPE }));
-    (void)(z_t2113_ZTyping_setChildId(ty, did, ((uint64_t)22ULL), tagId));
     (void)(z_t2107_ZTyping_declSynthMember(ty, did, ((uint64_t)22ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_FIELDDECL })));
+    (void)(z_t2113_ZTyping_setChildId(ty, did, ((uint64_t)22ULL), tagId));
     z_t74_String_free(&etn);
     z_t74_String_free(&tagName);
 }
@@ -55565,8 +55567,8 @@ void z_t2636_resolveRecord(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, 
         z_t74_String_append(&_s11, ".create", sizeof(".create")-1);
         z_t74_String_t createName = _s11;
         uint64_t createId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ createName.data, createName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)5ULL), createId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, rid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)5ULL), createId));
         (void)(z_t2630_materializeCreateParams(ty, reg, ast, rid, createId));
     z_t74_String_free(&createName);
     }
@@ -55576,8 +55578,8 @@ void z_t2636_resolveRecord(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, 
         z_t74_String_append(&_s13, ".borrow", sizeof(".borrow")-1);
         z_t74_String_t borrowName = _s13;
         uint64_t borrowId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ borrowName.data, borrowName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)6ULL), borrowId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, rid, ((uint64_t)6ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)6ULL), borrowId));
     z_t74_String_free(&borrowName);
     } else {
         if ((isgen == false)) {
@@ -55587,15 +55589,15 @@ void z_t2636_resolveRecord(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, 
                 z_t74_String_append(&_s15, ".==", sizeof(".==")-1);
                 z_t74_String_t eqName = _s15;
                 uint64_t eqId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ eqName.data, eqName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-                (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)29ULL), eqId));
                 (void)(z_t2107_ZTyping_declSynthMember(ty, rid, ((uint64_t)29ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+                (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)29ULL), eqId));
                 z_t74_String_t _s17 = z_t74_String_create((uint64_t)19);
                 z_t74_String_append(&_s17, defName.data, defName.length);
                 z_t74_String_append(&_s17, ".!=", sizeof(".!=")-1);
                 z_t74_String_t neqName = _s17;
                 uint64_t neqId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ neqName.data, neqName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-                (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)30ULL), neqId));
                 (void)(z_t2107_ZTyping_declSynthMember(ty, rid, ((uint64_t)30ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+                (void)(z_t2113_ZTyping_setChildId(ty, rid, ((uint64_t)30ULL), neqId));
     z_t74_String_free(&neqName);
     z_t74_String_free(&eqName);
             }
@@ -55725,8 +55727,8 @@ void z_t2638_resolveVariant(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg,
             }
             default: break;
         }
-        (void)(z_t2113_ZTyping_setChildId(ty, vid, ((uint64_t)22ULL), tagId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, vid, ((uint64_t)22ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_FIELDDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, vid, ((uint64_t)22ULL), tagId));
     }
     z_t1050_ListIter_u32_t aiter = z_t1036_List_u32_iterate(&vnode->asItems);
     while (1) {
@@ -55794,15 +55796,15 @@ void z_t2638_resolveVariant(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg,
         z_t74_String_append(&_s14, ".==", sizeof(".==")-1);
         z_t74_String_t eqName = _s14;
         uint64_t eqId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ eqName.data, eqName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, vid, ((uint64_t)29ULL), eqId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, vid, ((uint64_t)29ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, vid, ((uint64_t)29ULL), eqId));
         z_t74_String_t _s16 = z_t74_String_create((uint64_t)19);
         z_t74_String_append(&_s16, defName.data, defName.length);
         z_t74_String_append(&_s16, ".!=", sizeof(".!=")-1);
         z_t74_String_t neqName = _s16;
         uint64_t neqId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ neqName.data, neqName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, vid, ((uint64_t)30ULL), neqId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, vid, ((uint64_t)30ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, vid, ((uint64_t)30ULL), neqId));
     z_t74_String_free(&neqName);
     z_t74_String_free(&eqName);
     }
@@ -56046,8 +56048,8 @@ void z_t2642_resolveUnion(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
             }
             default: break;
         }
-        (void)(z_t2113_ZTyping_setChildId(ty, uid, ((uint64_t)22ULL), tagId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, uid, ((uint64_t)22ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_FIELDDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, uid, ((uint64_t)22ULL), tagId));
     }
     z_t1050_ListIter_u32_t aiter = z_t1036_List_u32_iterate(&vnode->asItems);
     while (1) {
@@ -56562,8 +56564,8 @@ void z_t2644_resolveClass(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
             z_t74_String_append(&_s18, ".create", sizeof(".create")-1);
             z_t74_String_t createName = _s18;
             uint64_t createId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ createName.data, createName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-            (void)(z_t2113_ZTyping_setChildId(ty, cid, ((uint64_t)5ULL), createId));
             (void)(z_t2107_ZTyping_declSynthMember(ty, cid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+            (void)(z_t2113_ZTyping_setChildId(ty, cid, ((uint64_t)5ULL), createId));
             (void)(z_t2630_materializeCreateParams(ty, reg, ast, cid, createId));
     z_t74_String_free(&createName);
         }
@@ -56574,8 +56576,8 @@ void z_t2644_resolveClass(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
         z_t74_String_append(&_s20, ".borrow", sizeof(".borrow")-1);
         z_t74_String_t borrowName = _s20;
         uint64_t borrowId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ borrowName.data, borrowName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, cid, ((uint64_t)6ULL), borrowId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, cid, ((uint64_t)6ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, cid, ((uint64_t)6ULL), borrowId));
     z_t74_String_free(&borrowName);
     }
     if (z_t105_StringView_eq(defName, _zs1584)) {
@@ -56676,15 +56678,15 @@ void z_t2645_resolveFacet(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
         z_t74_String_append(&_s8, ".create", sizeof(".create")-1);
         z_t74_String_t createName = _s8;
         uint64_t createId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ createName.data, createName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, fid, ((uint64_t)5ULL), createId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, fid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, fid, ((uint64_t)5ULL), createId));
         z_t74_String_t _s10 = z_t74_String_create((uint64_t)23);
         z_t74_String_append(&_s10, defName.data, defName.length);
         z_t74_String_append(&_s10, ".borrow", sizeof(".borrow")-1);
         z_t74_String_t borrowName = _s10;
         uint64_t borrowId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ borrowName.data, borrowName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, fid, ((uint64_t)6ULL), borrowId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, fid, ((uint64_t)6ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, fid, ((uint64_t)6ULL), borrowId));
     z_t74_String_free(&borrowName);
     z_t74_String_free(&createName);
     }
@@ -56784,15 +56786,15 @@ void z_t2646_resolveProtocol(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg
         z_t74_String_append(&_s9, ".create", sizeof(".create")-1);
         z_t74_String_t createName = _s9;
         uint64_t createId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ createName.data, createName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, pid, ((uint64_t)5ULL), createId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, pid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, pid, ((uint64_t)5ULL), createId));
         z_t74_String_t _s11 = z_t74_String_create((uint64_t)23);
         z_t74_String_append(&_s11, defName.data, defName.length);
         z_t74_String_append(&_s11, ".borrow", sizeof(".borrow")-1);
         z_t74_String_t borrowName = _s11;
         uint64_t borrowId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ borrowName.data, borrowName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(ty, pid, ((uint64_t)6ULL), borrowId));
         (void)(z_t2107_ZTyping_declSynthMember(ty, pid, ((uint64_t)6ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(ty, pid, ((uint64_t)6ULL), borrowId));
     z_t74_String_free(&borrowName);
     z_t74_String_free(&createName);
     }
@@ -56829,8 +56831,8 @@ uint64_t z_t2647_registerEmptyType(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_
             z_t74_String_append(&_s4, ".create", sizeof(".create")-1);
             z_t74_String_t ccn0 = _s4;
             uint64_t cci0 = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ ccn0.data, ccn0.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-            (void)(z_t2113_ZTyping_setChildId(ty, ex0, ((uint64_t)5ULL), cci0));
             (void)(z_t2107_ZTyping_declSynthMember(ty, ex0, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+            (void)(z_t2113_ZTyping_setChildId(ty, ex0, ((uint64_t)5ULL), cci0));
             z_t74_String_free(&rk0);
             z_t74_String_free(&ccn0);
             return ex0;
@@ -56849,8 +56851,8 @@ uint64_t z_t2647_registerEmptyType(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_
     z_t74_String_append(&_s6, ".create", sizeof(".create")-1);
     z_t74_String_t ccname = _s6;
     uint64_t ccid = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ ccname.data, ccname.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-    (void)(z_t2113_ZTyping_setChildId(ty, nid, ((uint64_t)5ULL), ccid));
     (void)(z_t2107_ZTyping_declSynthMember(ty, nid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+    (void)(z_t2113_ZTyping_setChildId(ty, nid, ((uint64_t)5ULL), ccid));
     (void)(z_t2541_linkDeclType(ty, reg, ast, unitName, name, nid));
     z_t74_String_free(&rk0);
     z_t74_String_free(&ccname);
@@ -58198,8 +58200,8 @@ void z_t2671_fixupCustomTags(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_t1411_
         if ((ctid > 0)) {
             if (z_t1413_ztypetype_eq(z_t1589_ZTypeRegistry_typetypeOf(reg, ctid), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_DATATYPE }))) {
                 uint64_t cuidc = cuid;
-                (void)(z_t2113_ZTyping_setChildId(ty, cuidc, ((uint64_t)22ULL), ctid));
                 (void)(z_t2107_ZTyping_declSynthMember(ty, cuidc, ((uint64_t)22ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_FIELDDECL })));
+                (void)(z_t2113_ZTyping_setChildId(ty, cuidc, ((uint64_t)22ULL), ctid));
             } else {
                 uint64_t cuidn = cuid;
                 z_t169_optionval_u64_t cngo = z_t1368_Map_u64_u64_get(ty->pendingCustomTagNode, cuidn);
@@ -62468,6 +62470,7 @@ uint64_t z_t2766_mintMono(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_t1411_ZTy
             z_t74_String_append(&_s15, ".create", sizeof(".create")-1);
             z_t74_String_t crq9 = _s15;
             uint64_t crId9 = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ crq9.data, crq9.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+            (void)(z_t2107_ZTyping_declSynthMember(ty, mid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
             (void)(z_t2113_ZTyping_setChildId(ty, mid, ((uint64_t)5ULL), crId9));
             z_t169_optionval_u64_t eqo9 = z_t2116_ZTyping_childOfId(ty, mid, ((uint64_t)29ULL));
             z_t169_optionval_u64_t _m17 = eqo9;
@@ -62483,12 +62486,14 @@ uint64_t z_t2766_mintMono(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_t1411_ZTy
                     z_t74_String_append(&_s18, ".==", sizeof(".==")-1);
                     z_t74_String_t req9 = _s18;
                     uint64_t reqId9 = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ req9.data, req9.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+                    (void)(z_t2107_ZTyping_declSynthMember(ty, mid, ((uint64_t)29ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
                     (void)(z_t2113_ZTyping_setChildId(ty, mid, ((uint64_t)29ULL), reqId9));
                     z_t74_String_t _s20 = z_t74_String_create((uint64_t)19);
                     z_t74_String_append(&_s20, name.data, name.length);
                     z_t74_String_append(&_s20, ".!=", sizeof(".!=")-1);
                     z_t74_String_t rne9 = _s20;
                     uint64_t rneId9 = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ rne9.data, rne9.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+                    (void)(z_t2107_ZTyping_declSynthMember(ty, mid, ((uint64_t)30ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
                     (void)(z_t2113_ZTyping_setChildId(ty, mid, ((uint64_t)30ULL), rneId9));
     z_t74_String_free(&rne9);
     z_t74_String_free(&req9);
@@ -62513,6 +62518,7 @@ uint64_t z_t2766_mintMono(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_t1411_ZTy
         z_t74_String_append(&_s22, ":tag:data", sizeof(":tag:data")-1);
         z_t74_String_t tagName = _s22;
         uint64_t tagId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ tagName.data, tagName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_DATATYPE }));
+        (void)(z_t2107_ZTyping_declSynthMember(ty, mid, ((uint64_t)22ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_FIELDDECL })));
         (void)(z_t2113_ZTyping_setChildId(ty, mid, ((uint64_t)22ULL), tagId));
     z_t74_String_free(&tagName);
     }
@@ -62522,12 +62528,14 @@ uint64_t z_t2766_mintMono(z_t1067_Ast_t* ast, z_t1626_ZTyping_t* ty, z_t1411_ZTy
         z_t74_String_append(&_s24, ".==", sizeof(".==")-1);
         z_t74_String_t eqName = _s24;
         uint64_t eqId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ eqName.data, eqName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+        (void)(z_t2107_ZTyping_declSynthMember(ty, mid, ((uint64_t)29ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
         (void)(z_t2113_ZTyping_setChildId(ty, mid, ((uint64_t)29ULL), eqId));
         z_t74_String_t _s26 = z_t74_String_create((uint64_t)19);
         z_t74_String_append(&_s26, name.data, name.length);
         z_t74_String_append(&_s26, ".!=", sizeof(".!=")-1);
         z_t74_String_t neName = _s26;
         uint64_t neId = z_t1580_ZTypeRegistry_newType(reg, ((z_t105_StringView_t){ neName.data, neName.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
+        (void)(z_t2107_ZTyping_declSynthMember(ty, mid, ((uint64_t)30ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
         (void)(z_t2113_ZTyping_setChildId(ty, mid, ((uint64_t)30ULL), neId));
     z_t74_String_free(&neName);
     z_t74_String_free(&eqName);
@@ -64133,8 +64141,8 @@ uint64_t z_t2785_inferGenericConstruction(z_t1266_ZSymbolTable_t* st, z_t105_Str
             z_t74_String_append(&_s18, ".create", sizeof(".create")-1);
             z_t74_String_t crn = _s18;
             uint64_t crId = z_t1580_ZTypeRegistry_newType(&st->reg, ((z_t105_StringView_t){ crn.data, crn.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-            (void)(z_t2113_ZTyping_setChildId(&st->typing, mid, ((uint64_t)5ULL), crId));
             (void)(z_t2107_ZTyping_declSynthMember(&st->typing, mid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+            (void)(z_t2113_ZTyping_setChildId(&st->typing, mid, ((uint64_t)5ULL), crId));
     z_t74_String_free(&crn);
             break;
         }
@@ -71256,8 +71264,8 @@ uint64_t z_t2891_checkBoxConstruction(z_t1266_ZSymbolTable_t* st, z_t105_StringV
         z_t74_String_append(&_s12, ".create", sizeof(".create")-1);
         z_t74_String_t crn = _s12;
         uint64_t crId = z_t1580_ZTypeRegistry_newType(&st->reg, ((z_t105_StringView_t){ crn.data, crn.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
-        (void)(z_t2113_ZTyping_setChildId(&st->typing, mid, ((uint64_t)5ULL), crId));
         (void)(z_t2107_ZTyping_declSynthMember(&st->typing, mid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
+        (void)(z_t2113_ZTyping_setChildId(&st->typing, mid, ((uint64_t)5ULL), crId));
         z_t989_List_String_t cNames2 = z_t989_List_String_create((uint64_t)0);
         z_t1421_List_u64_t cIds2 = z_t1421_List_u64_create((uint64_t)0);
         z_t1421_List_u64_t cNid2 = z_t1421_List_u64_create((uint64_t)0);
