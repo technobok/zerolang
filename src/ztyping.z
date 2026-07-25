@@ -690,12 +690,69 @@ ZTyping: class {
     declSetMemberType: function {:this parentTypeId: u64 nameId: u64 typeId: u64} is {
         md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
         if md8 == 0 then return
-        do8: this.decls.get key: md8
-        match (
-            do8
-        ) case some then {
-            do8.typeId = typeId
-        } case none then null
+        isMethod8: false
+        {
+            do8: this.decls.get key: md8
+            match (
+                do8
+            ) case some then {
+                do8.typeId = typeId
+                if do8.kind.methodDecl then isMethod8 = true
+            } case none then null
+        }
+        # a method's type IS the function it declares, so it owns that type's
+        # namespace -- its parameters attach here. A field's type belongs to
+        # whatever declared it, so a field never claims one.
+        if isMethod8 when typeId > 0 then {
+            if (this.declIdOfType :typeId) == 0 then {
+                this.declByTypeId.set key: typeId value: md8
+                this.declEnsureParams parentTypeId: typeId declId: md8
+                this.declReplayMembers parentTypeId: typeId declId: md8
+            }
+        }
+    }
+
+    # declEnsureParams -- declare the parameters of a function type whose
+    # members were edged before anything declared them: a synthesized
+    # constructor never runs through resolveFunction, so nothing indexed its
+    # parameter list. Called only where the owner is known to be a function
+    # type, so every member edge is a parameter.
+    declEnsureParams: function {:this parentTypeId: u64 declId: u64} is {
+        nids9: (List u64)
+        {
+            bo9: this.childIndex.get key: parentTypeId
+            match (
+                bo9
+            ) case some then {
+                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
+                    row9: this.typeChild.get i: ri9
+                    nids9.append row9.nameId
+                }
+            } case none then null
+        }
+        node9: u32
+        {
+            oo9: this.decls.get key: declId
+            match (
+                oo9
+            ) case some then {
+                node9 = oo9.node
+            } case none then null
+        }
+        i9: u64
+        n9: nids9.length
+        for i9 < n9 loop {
+            nid9: (nids9.get i: i9).u32.orPanic
+            i9 = i9 + 1
+            if (this.declFindChild parentDeclId: declId nameId: nid9) == 0 then {
+                (this.declNew
+                    name: nid9
+                    parent: declId
+                    kind: declkind.paramDecl
+                    node: node9
+                )
+            }
+        }
     }
 
     # declReorderMembers -- put a declaration's member children in the order
