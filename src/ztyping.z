@@ -511,6 +511,7 @@ ZTyping: class {
                 }
             } case none then null
         }
+        lockMember9: u64
         i9: u64
         n9: nids9.length
         for i9 < n9 loop {
@@ -519,6 +520,14 @@ ZTyping: class {
             i9 = i9 + 1
             md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
             if md9 > 0 then {
+                {
+                    lg9: this.childLockField.get key: cid9
+                    match (
+                        lg9
+                    ) case some then {
+                        if lg9 then lockMember9 = md9
+                    } case none then null
+                }
                 hasOwn9: false
                 own9: ztypes.zparamownership.noneMode
                 {
@@ -568,6 +577,14 @@ ZTyping: class {
                 } case none then null
             }
         }
+        if lockMember9 > 0 then {
+            po9: this.decls.get key: declId
+            match (
+                po9
+            ) case some then {
+                po9.lockFieldDecl = lockMember9
+            } case none then null
+        }
     }
 
     # declFindChild -- the last child declaration named nameId under
@@ -600,20 +617,28 @@ ZTyping: class {
         return found9
     }
 
-    # declMemberIdOf -- the declaration of member `nameId` under the type
-    # `parentTypeId` minted; 0 when that type has no declaration (a
-    # monomorphisation) or the member is not declared (a synthesized create,
-    # comparison or tag).
-    declMemberIdOf: function {:this parentTypeId: u64 nameId: u32} out u64 is {
+    # declIdOfType -- the declaration that minted `typeId`; 0 for a type with
+    # none of its own (a monomorphisation links to its template through the
+    # type registry instead).
+    declIdOfType: function {:this typeId: u64} out u64 is {
         od9: u64
         {
-            go9: this.declByTypeId.get key: parentTypeId
+            go9: this.declByTypeId.get key: typeId
             match (
                 go9
             ) case some then {
                 od9 = go9
             } case none then null
         }
+        return od9
+    }
+
+    # declMemberIdOf -- the declaration of member `nameId` under the type
+    # `parentTypeId` minted; 0 when that type has no declaration (a
+    # monomorphisation) or the member is not declared (a synthesized create,
+    # comparison or tag).
+    declMemberIdOf: function {:this parentTypeId: u64 nameId: u32} out u64 is {
+        od9: this.declIdOfType typeId: parentTypeId
         if od9 == 0 then return 0
         return (this.declFindChild parentDeclId: od9 :nameId)
     }
@@ -904,6 +929,21 @@ ZTyping: class {
         ) case some then {
             this.childLockField.set key: idopt value: true
         } case none then null
+        nid8: pool.find s: name
+        if nid8 > 0 then {
+            od8: this.declIdOfType typeId: parentTypeId
+            if od8 > 0 then {
+                md8: this.declFindChild parentDeclId: od8 nameId: nid8
+                if md8 > 0 then {
+                    do8: this.decls.get key: od8
+                    match (
+                        do8
+                    ) case some then {
+                        do8.lockFieldDecl = md8
+                    } case none then null
+                }
+            }
+        }
     }
 
     isChildLockField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
