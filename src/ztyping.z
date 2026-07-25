@@ -449,6 +449,9 @@ ZTyping: class {
     parityDiff: u64
     parityZero: u64
     parityDeclOnlyZero: u64
+    # childOfId answered from the child edge: the member had no declaration
+    childOfFallback: u64
+    childOfFallbackHit: u64
     isError: bool
     errors: (List zast.ErrorData)
     currentReturnTypeId: u64
@@ -735,12 +738,12 @@ ZTyping: class {
         return (this.declChildOfId :parentTypeId nameId: nid9.u64)
     }
 
-    # declMemberTypeOf -- the declared type of member `nameId`, faithful to
-    # what the child edge records: `some 0` when the member is declared but
-    # carries no type, `none` only when it is not declared at all. That is what
-    # childOf/childOfId report, and it matters -- several callers use `some` as
-    # a presence test ("already a member, do not synthesize"), so collapsing a
-    # 0 to none the way declChildOfId does would make them mint instead.
+    # declMemberTypeOf -- the declared type of member `nameId`, reported the way
+    # a raw child edge would: `some 0` when the member is declared but carries
+    # no type, `none` only when it is not declared. Used ONLY by the parity probe --
+    # production reads go through declChildOfId, whose collapse of type 0 to
+    # none is what actually matches the edge tables (measured: the edge never
+    # answers `some 0`, and every declaration-only answer carries 0).
     declMemberTypeOf: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
         # a pool id out of u32 range never labels a member; 0 is the absent id
         n32: nameId.u32.or d: 0
@@ -1367,42 +1370,12 @@ ZTyping: class {
         }
     }
 
-    # parityProbe -- compare an edge answer against the declaration answer for
-    # one member. Called from childOf/childOfId under ZC_Q2_SPIKE only.
-    parityProbe: function {:this parentTypeId: u64 nameId: u64 edgeHas: bool edgeTid: u64} is {
+    # parityProbeEdge -- compare the child edge's answer for one member against
+    # the declaration's. Called from childOfId under ZC_Q2_SPIKE only, so the
+    # sample covers every call site rather than the ones anyone thought to look
+    # at. parityDiff must stay 0.
+    parityProbeEdge: function {:this parentTypeId: u64 nameId: u64} is {
         this.parityCalls = this.parityCalls + 1
-        if edgeHas when edgeTid == 0 then this.parityZero = this.parityZero + 1
-        declHas9: false
-        declTid9: u64
-        {
-            d9: this.declMemberTypeOf :parentTypeId :nameId
-            match (
-                d9
-            ) case some then {
-                declHas9 = true
-                declTid9 = d9
-            } case none then null
-        }
-        if edgeHas when declHas9 == false then this.parityEdgeOnly = this.parityEdgeOnly + 1
-        if declHas9 when edgeHas == false then {
-            this.parityDeclOnly = this.parityDeclOnly + 1
-            if declTid9 == 0 then this.parityDeclOnlyZero = this.parityDeclOnlyZero + 1
-        }
-        if edgeHas when declHas9 then {
-            if edgeTid != declTid9 then this.parityDiff = this.parityDiff + 1
-        }
-    }
-
-    childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
-        nid9: (pool.find s: name).u64
-        if nid9 == 0 then return (optionval.none u64)
-        return (this.childOfId :parentTypeId nameId: nid9)
-    }
-
-    # childOfId -- the id-keyed form of childOf.
-    childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
-        # resolve the edge answer into locals first: the bucket borrow must be
-        # closed before the probe resolves a member declaration
         edgeHas9: false
         edgeTid9: u64
         {
@@ -1419,16 +1392,80 @@ ZTyping: class {
                 } case none then null
             } case none then null
         }
-        if this.probeParity then {
-            (this.parityProbe
-                :parentTypeId
-                :nameId
-                edgeHas: edgeHas9
-                edgeTid: edgeTid9
-            )
+        if edgeHas9 when edgeTid9 == 0 then this.parityZero = this.parityZero + 1
+        declHas9: false
+        declTid9: u64
+        {
+            d9: this.declMemberTypeOf :parentTypeId :nameId
+            match (
+                d9
+            ) case some then {
+                declHas9 = true
+                declTid9 = d9
+            } case none then null
         }
-        if edgeHas9 == false then return (optionval.none u64)
-        return (optionval.some edgeTid9)
+        if edgeHas9 when declHas9 == false then this.parityEdgeOnly = this.parityEdgeOnly + 1
+        if declHas9 when edgeHas9 == false then {
+            this.parityDeclOnly = this.parityDeclOnly + 1
+            if declTid9 == 0 then this.parityDeclOnlyZero = this.parityDeclOnlyZero + 1
+        }
+        if edgeHas9 when declHas9 then {
+            if edgeTid9 != declTid9 then this.parityDiff = this.parityDiff + 1
+        }
+    }
+
+    childOf: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out optionval u64 is {
+        nid9: (pool.find s: name).u64
+        if nid9 == 0 then return (optionval.none u64)
+        return (this.childOfId :parentTypeId nameId: nid9)
+    }
+
+    # childOfId -- the type of member `nameId` on `parentTypeId`. The member's
+    # DECLARATION is the source of truth: a declared member with no type reads
+    # as absent, exactly as a missing edge does. A member with no declaration
+    # falls back to the child edges; childOfFallback counts that and
+    # childOfFallbackHit counts the few where the edge actually answers.
+    childOfId: function {:this parentTypeId: u64 nameId: u64} out optionval u64 is {
+        n32: nameId.u32.or d: 0
+        if n32 == 0 then return (optionval.none u64)
+        if this.probeParity then this.parityProbeEdge :parentTypeId :nameId
+        od9: this.declIdOfType typeId: parentTypeId
+        md9: u64
+        if od9 > 0 then md9 = this.declFindChild parentDeclId: od9 nameId: n32
+        if md9 > 0 then {
+            t9: u64
+            {
+                mo9: this.decls.get key: md9
+                match (
+                    mo9
+                ) case some then {
+                    t9 = mo9.typeId
+                } case none then null
+            }
+            if t9 == 0 then return (optionval.none u64)
+            return (optionval.some t9)
+        }
+        # the member is not declared, so the edge is the only source. Almost
+        # every one of these is a genuine miss on both sides -- childOfFallbackHit
+        # counts the ones where the edge really does answer, which is the
+        # dropTypeIdNoOwner/NotFn residue and the last thing keeping the map here.
+        this.childOfFallback = this.childOfFallback + 1
+        idopt: this.childNameIdOfId :parentTypeId :nameId
+        match (
+            idopt
+        ) case some then {
+            r: this.childTypeById.get key: idopt
+            match (
+                r
+            ) case some then {
+                this.childOfFallbackHit = this.childOfFallbackHit + 1
+                return (optionval.some r)
+            } case none then {
+                return (optionval.none u64)
+            }
+        } case none then {
+            return (optionval.none u64)
+        }
     }
 
     hasChild: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -1865,6 +1902,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         parityDiff: 0
         parityZero: 0
         parityDeclOnlyZero: 0
+        childOfFallback: 0
+        childOfFallbackHit: 0
         errors: (List zast.ErrorData)
         currentReturnTypeId: 0
         isError: false)

@@ -15968,6 +15968,7 @@ typedef uint64_t (*z_t2112_ZTyping_childIdFor_ft)(z_t1626_ZTyping_t*, z_t1147_St
 typedef uint64_t (*z_t2113_ZTyping_childIdForId_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t);
 typedef void (*z_t2116_ZTyping_setChildId_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t, uint64_t);
 typedef void (*z_t2117_ZTyping_pushChildIndex_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t);
+typedef void (*z_t2118_ZTyping_parityProbeEdge_ft)(z_t1626_ZTyping_t*, uint64_t, uint64_t);
 typedef uint64_t (*z_t2123_ZTyping_childCount_ft)(z_t1626_ZTyping_t*, uint64_t);
 typedef void (*z_t2124_ZTyping_setAliasInternalName_ft)(z_t1626_ZTyping_t*, uint64_t, z_t105_StringView_t);
 typedef z_t74_String_t (*z_t2125_ZTyping_aliasInternalNameOf_ft)(z_t1626_ZTyping_t*, uint64_t);
@@ -23911,12 +23912,14 @@ struct z_t1626_ZTyping_t {
     uint64_t parityDiff;
     uint64_t parityZero;
     uint64_t parityDeclOnlyZero;
+    uint64_t childOfFallback;
+    uint64_t childOfFallbackHit;
     bool isError;
     z_t2069_List_ErrorData_t errors;
     uint64_t currentReturnTypeId;
 };
-static z_t1626_ZTyping_t z_t1626_ZTyping_meta_create(z_t1629_List_SynthNode_t synthNodes, uint32_t nextSynthNodeId, uint64_t nextTempId, z_t74_String_t synthLabel, z_t74_String_t currentThisName, z_t74_String_t lastLockParamRoot, z_t1646_Map_u64_bool_t* fnBodyDiverges, z_t1646_Map_u64_bool_t* funcReturnsBorrow, bool currentReturnsBorrow, z_t989_List_String_t pendingBorrowPath, bool pendingBorrowShared, z_t1501_Map_String_bool_t* walkedMethodOwners, z_t1368_Map_u64_u64_t* monoNodeType, z_t1368_Map_u64_u64_t* monoParamSubst, uint64_t curMonoStamp, uint64_t curMonoFnTid, z_t1481_Map_String_u64_t* mainMemberIndex, z_t74_String_t mainMemberUnit, uint64_t nextChildId, z_t1368_Map_u64_u64_t* builtinTidMemo, z_t1668_List_ZTypeChild_t typeChild, z_t1687_Map_u64_ChildBucket_t* childIndex, z_t1713_List_ZTypeGenericArg_t typeGenericArg, z_t1368_Map_u64_u64_t* childTypeById, bool renameSeen, bool privacySeen, z_t1646_Map_u64_bool_t* asConstClone, z_t1646_Map_u64_bool_t* generatorWrapper, z_t1730_Map_u64_u32_t* typeofShell, z_t1646_Map_u64_bool_t* noStampNode, z_t1646_Map_u64_bool_t* fnHasBody, bool inAssignTarget, uint64_t sigGenericDecl, bool inContainmentEdge, bool suppressParamStamps, bool suppressBareCtor, bool suppressFnAutoCall, z_t1750_Map_u64_String_t* typedefBaseName, z_t1368_Map_u64_u64_t* typedefBaseTid, z_t1770_Map_String_String_t* protocolThisContext, z_t1501_Map_String_bool_t* mainDefIsReftype, z_t1368_Map_u64_u64_t* dpTaggedParent, z_t1368_Map_u64_u64_t* dpArmPredicate, z_t1368_Map_u64_u64_t* dpTagRead, z_t1750_Map_u64_String_t* tagAccessorName, z_t1368_Map_u64_u64_t* tagAccessorTid, z_t1750_Map_u64_String_t* postGuardName, z_t1750_Map_u64_String_t* postGuardRecv, z_t1368_Map_u64_u64_t* postGuardTid, z_t1750_Map_u64_String_t* postGuardArm, z_t74_String_t fullMainUnit, z_t1750_Map_u64_String_t* pendingCustomTag, z_t1368_Map_u64_u64_t* pendingCustomTagNode, z_t1368_Map_u64_u64_t* pendingDefaultOwner, z_t1368_Map_u64_u64_t* pendingDefaultId, z_t1750_Map_u64_String_t* pendingDefaultName, z_t1646_Map_u64_bool_t* constructedTypes, z_t1646_Map_u64_bool_t* collectionChildrenBuilt, z_t1792_List_PendingUnitWalk_t pendingUnitWalk, z_t1646_Map_u64_bool_t* unitMonoWalksPending, z_t1813_Map_u64_zparamownership_t* argDisposition, z_t1368_Map_u64_u64_t* genericArgTypeBy, z_t1368_Map_u64_u64_t* callGenericBinding, z_t1368_Map_u64_u64_t* nodeType, z_t1841_Map_u64_numbase_t* nodeLiteralBase, z_t1865_Map_u64_callkind_t* callKind, z_t1368_Map_u64_u64_t* atomVariableId, z_t1750_Map_u64_String_t* aliasInternalName, z_t1368_Map_u64_u64_t* implicitCreate, z_t1368_Map_u64_u64_t* variableZtype, z_t1889_Map_u64_zownership_t* variableOwnership, z_t1646_Map_u64_bool_t* variableOrigin, z_t1646_Map_u64_bool_t* variableIsPrivate, z_t1750_Map_u64_String_t* variableBorrowOrigin, z_t1750_Map_u64_String_t* variableSynthOrigin, z_t1368_Map_u64_u64_t* funcReturnNode, z_t1368_Map_u64_u64_t* defVariableId, z_t1889_Map_u64_zownership_t* withOwnership, z_t1921_List_NodeConstRow_t nodeConst, z_t1940_List_TakenVarRow_t ifTakenVars, z_t1959_List_NodeNameRow_t caseSubjectTakenArms, z_t1978_List_ZConformance_t conformance, z_t1997_List_MonoRow_t monoTypes, z_t1770_Map_String_String_t* preludeUnit, z_t1303_Set_String_t* definedKeys, z_t1303_Set_String_t* resolving, bool defNodeIndexBuilt, uint64_t systemUnitTid, uint64_t literalIntShellId, uint64_t literalFloatShellId, bool nativeLinkTargetsDone, z_t1750_Map_u64_String_t* pendingTyperef, z_t1750_Map_u64_String_t* pendingTyperefUnit, z_t1368_Map_u64_u64_t* unitTypesById, z_t2045_Map_u64_Decl_t* decls, z_t1368_Map_u64_u64_t* declByTypeId, z_t1481_Map_String_u64_t* unitRootByName, z_t1368_Map_u64_u64_t* refDecl, z_t1421_List_u64_t declProxyTids, z_t989_List_String_t declProxyUnits, uint64_t dropOwn, uint64_t dropOwnId, uint64_t dropTypeIdNoOwner, uint64_t dropTypeIdNotFn, uint64_t dropFnptr, uint64_t dropLock, uint64_t dropGrant, uint64_t dropDefault, uint64_t synthNoOwner, uint64_t enumFallback, uint64_t reorderPermuted, bool probeParity, uint64_t parityCalls, uint64_t parityEdgeOnly, uint64_t parityDeclOnly, uint64_t parityDiff, uint64_t parityZero, uint64_t parityDeclOnlyZero, bool isError, z_t2069_List_ErrorData_t errors, uint64_t currentReturnTypeId) {
-    z_t1626_ZTyping_t _this = { synthNodes, nextSynthNodeId, nextTempId, synthLabel, currentThisName, lastLockParamRoot, fnBodyDiverges, funcReturnsBorrow, currentReturnsBorrow, pendingBorrowPath, pendingBorrowShared, walkedMethodOwners, monoNodeType, monoParamSubst, curMonoStamp, curMonoFnTid, mainMemberIndex, mainMemberUnit, nextChildId, builtinTidMemo, typeChild, childIndex, typeGenericArg, childTypeById, renameSeen, privacySeen, asConstClone, generatorWrapper, typeofShell, noStampNode, fnHasBody, inAssignTarget, sigGenericDecl, inContainmentEdge, suppressParamStamps, suppressBareCtor, suppressFnAutoCall, typedefBaseName, typedefBaseTid, protocolThisContext, mainDefIsReftype, dpTaggedParent, dpArmPredicate, dpTagRead, tagAccessorName, tagAccessorTid, postGuardName, postGuardRecv, postGuardTid, postGuardArm, fullMainUnit, pendingCustomTag, pendingCustomTagNode, pendingDefaultOwner, pendingDefaultId, pendingDefaultName, constructedTypes, collectionChildrenBuilt, pendingUnitWalk, unitMonoWalksPending, argDisposition, genericArgTypeBy, callGenericBinding, nodeType, nodeLiteralBase, callKind, atomVariableId, aliasInternalName, implicitCreate, variableZtype, variableOwnership, variableOrigin, variableIsPrivate, variableBorrowOrigin, variableSynthOrigin, funcReturnNode, defVariableId, withOwnership, nodeConst, ifTakenVars, caseSubjectTakenArms, conformance, monoTypes, preludeUnit, definedKeys, resolving, defNodeIndexBuilt, systemUnitTid, literalIntShellId, literalFloatShellId, nativeLinkTargetsDone, pendingTyperef, pendingTyperefUnit, unitTypesById, decls, declByTypeId, unitRootByName, refDecl, declProxyTids, declProxyUnits, dropOwn, dropOwnId, dropTypeIdNoOwner, dropTypeIdNotFn, dropFnptr, dropLock, dropGrant, dropDefault, synthNoOwner, enumFallback, reorderPermuted, probeParity, parityCalls, parityEdgeOnly, parityDeclOnly, parityDiff, parityZero, parityDeclOnlyZero, isError, errors, currentReturnTypeId };
+static z_t1626_ZTyping_t z_t1626_ZTyping_meta_create(z_t1629_List_SynthNode_t synthNodes, uint32_t nextSynthNodeId, uint64_t nextTempId, z_t74_String_t synthLabel, z_t74_String_t currentThisName, z_t74_String_t lastLockParamRoot, z_t1646_Map_u64_bool_t* fnBodyDiverges, z_t1646_Map_u64_bool_t* funcReturnsBorrow, bool currentReturnsBorrow, z_t989_List_String_t pendingBorrowPath, bool pendingBorrowShared, z_t1501_Map_String_bool_t* walkedMethodOwners, z_t1368_Map_u64_u64_t* monoNodeType, z_t1368_Map_u64_u64_t* monoParamSubst, uint64_t curMonoStamp, uint64_t curMonoFnTid, z_t1481_Map_String_u64_t* mainMemberIndex, z_t74_String_t mainMemberUnit, uint64_t nextChildId, z_t1368_Map_u64_u64_t* builtinTidMemo, z_t1668_List_ZTypeChild_t typeChild, z_t1687_Map_u64_ChildBucket_t* childIndex, z_t1713_List_ZTypeGenericArg_t typeGenericArg, z_t1368_Map_u64_u64_t* childTypeById, bool renameSeen, bool privacySeen, z_t1646_Map_u64_bool_t* asConstClone, z_t1646_Map_u64_bool_t* generatorWrapper, z_t1730_Map_u64_u32_t* typeofShell, z_t1646_Map_u64_bool_t* noStampNode, z_t1646_Map_u64_bool_t* fnHasBody, bool inAssignTarget, uint64_t sigGenericDecl, bool inContainmentEdge, bool suppressParamStamps, bool suppressBareCtor, bool suppressFnAutoCall, z_t1750_Map_u64_String_t* typedefBaseName, z_t1368_Map_u64_u64_t* typedefBaseTid, z_t1770_Map_String_String_t* protocolThisContext, z_t1501_Map_String_bool_t* mainDefIsReftype, z_t1368_Map_u64_u64_t* dpTaggedParent, z_t1368_Map_u64_u64_t* dpArmPredicate, z_t1368_Map_u64_u64_t* dpTagRead, z_t1750_Map_u64_String_t* tagAccessorName, z_t1368_Map_u64_u64_t* tagAccessorTid, z_t1750_Map_u64_String_t* postGuardName, z_t1750_Map_u64_String_t* postGuardRecv, z_t1368_Map_u64_u64_t* postGuardTid, z_t1750_Map_u64_String_t* postGuardArm, z_t74_String_t fullMainUnit, z_t1750_Map_u64_String_t* pendingCustomTag, z_t1368_Map_u64_u64_t* pendingCustomTagNode, z_t1368_Map_u64_u64_t* pendingDefaultOwner, z_t1368_Map_u64_u64_t* pendingDefaultId, z_t1750_Map_u64_String_t* pendingDefaultName, z_t1646_Map_u64_bool_t* constructedTypes, z_t1646_Map_u64_bool_t* collectionChildrenBuilt, z_t1792_List_PendingUnitWalk_t pendingUnitWalk, z_t1646_Map_u64_bool_t* unitMonoWalksPending, z_t1813_Map_u64_zparamownership_t* argDisposition, z_t1368_Map_u64_u64_t* genericArgTypeBy, z_t1368_Map_u64_u64_t* callGenericBinding, z_t1368_Map_u64_u64_t* nodeType, z_t1841_Map_u64_numbase_t* nodeLiteralBase, z_t1865_Map_u64_callkind_t* callKind, z_t1368_Map_u64_u64_t* atomVariableId, z_t1750_Map_u64_String_t* aliasInternalName, z_t1368_Map_u64_u64_t* implicitCreate, z_t1368_Map_u64_u64_t* variableZtype, z_t1889_Map_u64_zownership_t* variableOwnership, z_t1646_Map_u64_bool_t* variableOrigin, z_t1646_Map_u64_bool_t* variableIsPrivate, z_t1750_Map_u64_String_t* variableBorrowOrigin, z_t1750_Map_u64_String_t* variableSynthOrigin, z_t1368_Map_u64_u64_t* funcReturnNode, z_t1368_Map_u64_u64_t* defVariableId, z_t1889_Map_u64_zownership_t* withOwnership, z_t1921_List_NodeConstRow_t nodeConst, z_t1940_List_TakenVarRow_t ifTakenVars, z_t1959_List_NodeNameRow_t caseSubjectTakenArms, z_t1978_List_ZConformance_t conformance, z_t1997_List_MonoRow_t monoTypes, z_t1770_Map_String_String_t* preludeUnit, z_t1303_Set_String_t* definedKeys, z_t1303_Set_String_t* resolving, bool defNodeIndexBuilt, uint64_t systemUnitTid, uint64_t literalIntShellId, uint64_t literalFloatShellId, bool nativeLinkTargetsDone, z_t1750_Map_u64_String_t* pendingTyperef, z_t1750_Map_u64_String_t* pendingTyperefUnit, z_t1368_Map_u64_u64_t* unitTypesById, z_t2045_Map_u64_Decl_t* decls, z_t1368_Map_u64_u64_t* declByTypeId, z_t1481_Map_String_u64_t* unitRootByName, z_t1368_Map_u64_u64_t* refDecl, z_t1421_List_u64_t declProxyTids, z_t989_List_String_t declProxyUnits, uint64_t dropOwn, uint64_t dropOwnId, uint64_t dropTypeIdNoOwner, uint64_t dropTypeIdNotFn, uint64_t dropFnptr, uint64_t dropLock, uint64_t dropGrant, uint64_t dropDefault, uint64_t synthNoOwner, uint64_t enumFallback, uint64_t reorderPermuted, bool probeParity, uint64_t parityCalls, uint64_t parityEdgeOnly, uint64_t parityDeclOnly, uint64_t parityDiff, uint64_t parityZero, uint64_t parityDeclOnlyZero, uint64_t childOfFallback, uint64_t childOfFallbackHit, bool isError, z_t2069_List_ErrorData_t errors, uint64_t currentReturnTypeId) {
+    z_t1626_ZTyping_t _this = { synthNodes, nextSynthNodeId, nextTempId, synthLabel, currentThisName, lastLockParamRoot, fnBodyDiverges, funcReturnsBorrow, currentReturnsBorrow, pendingBorrowPath, pendingBorrowShared, walkedMethodOwners, monoNodeType, monoParamSubst, curMonoStamp, curMonoFnTid, mainMemberIndex, mainMemberUnit, nextChildId, builtinTidMemo, typeChild, childIndex, typeGenericArg, childTypeById, renameSeen, privacySeen, asConstClone, generatorWrapper, typeofShell, noStampNode, fnHasBody, inAssignTarget, sigGenericDecl, inContainmentEdge, suppressParamStamps, suppressBareCtor, suppressFnAutoCall, typedefBaseName, typedefBaseTid, protocolThisContext, mainDefIsReftype, dpTaggedParent, dpArmPredicate, dpTagRead, tagAccessorName, tagAccessorTid, postGuardName, postGuardRecv, postGuardTid, postGuardArm, fullMainUnit, pendingCustomTag, pendingCustomTagNode, pendingDefaultOwner, pendingDefaultId, pendingDefaultName, constructedTypes, collectionChildrenBuilt, pendingUnitWalk, unitMonoWalksPending, argDisposition, genericArgTypeBy, callGenericBinding, nodeType, nodeLiteralBase, callKind, atomVariableId, aliasInternalName, implicitCreate, variableZtype, variableOwnership, variableOrigin, variableIsPrivate, variableBorrowOrigin, variableSynthOrigin, funcReturnNode, defVariableId, withOwnership, nodeConst, ifTakenVars, caseSubjectTakenArms, conformance, monoTypes, preludeUnit, definedKeys, resolving, defNodeIndexBuilt, systemUnitTid, literalIntShellId, literalFloatShellId, nativeLinkTargetsDone, pendingTyperef, pendingTyperefUnit, unitTypesById, decls, declByTypeId, unitRootByName, refDecl, declProxyTids, declProxyUnits, dropOwn, dropOwnId, dropTypeIdNoOwner, dropTypeIdNotFn, dropFnptr, dropLock, dropGrant, dropDefault, synthNoOwner, enumFallback, reorderPermuted, probeParity, parityCalls, parityEdgeOnly, parityDeclOnly, parityDiff, parityZero, parityDeclOnlyZero, childOfFallback, childOfFallbackHit, isError, errors, currentReturnTypeId };
     return _this;
 }
 #define z_t1626_ZTyping_create z_t1626_ZTyping_meta_create
@@ -25570,7 +25573,7 @@ static z_t169_optionval_u64_t z_t2114_ZTyping_childNameIdOf(z_t1626_ZTyping_t* t
 static z_t169_optionval_u64_t z_t2115_ZTyping_childNameIdOfId(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId);
 static void z_t2116_ZTyping_setChildId(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId, uint64_t childTypeId);
 static void z_t2117_ZTyping_pushChildIndex(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t rowIdx);
-static void z_t2118_ZTyping_parityProbe(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId, bool edgeHas, uint64_t edgeTid);
+static void z_t2118_ZTyping_parityProbeEdge(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId);
 static z_t169_optionval_u64_t z_t2119_ZTyping_childOf(z_t1626_ZTyping_t* this, z_t1147_StringPool_t* pool, uint64_t parentTypeId, z_t105_StringView_t name);
 static z_t169_optionval_u64_t z_t2120_ZTyping_childOfId(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId);
 static bool z_t2121_ZTyping_hasChild(z_t1626_ZTyping_t* this, z_t1147_StringPool_t* pool, uint64_t parentTypeId, z_t105_StringView_t name);
@@ -30914,53 +30917,8 @@ static void z_t2117_ZTyping_pushChildIndex(z_t1626_ZTyping_t* this, uint64_t par
     z_t1706_OptionView_ChildBucket_destroy(&b);
 }
 
-static void z_t2118_ZTyping_parityProbe(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId, bool edgeHas, uint64_t edgeTid) {
+static void z_t2118_ZTyping_parityProbeEdge(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId) {
     this->parityCalls = (this->parityCalls + 1);
-    if (edgeHas && (edgeTid == 0)) {
-        this->parityZero = (this->parityZero + 1);
-    }
-    bool declHas9 = false;
-    uint64_t declTid9 = ((uint64_t)0);
-    z_t169_optionval_u64_t d9 = z_t2095_ZTyping_declMemberTypeOf(this, parentTypeId, nameId);
-    z_t169_optionval_u64_t _m0 = d9;
-    switch (_m0.tag) {
-        case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t d9 = _m0.data.some;
-            (void)d9;
-            declHas9 = true;
-            declTid9 = d9;
-            break;
-        }
-        case Z_OPTIONVAL_U64_TAG_NONE: {
-            break;
-        }
-        default: break;
-    }
-    if (edgeHas && (declHas9 == false)) {
-        this->parityEdgeOnly = (this->parityEdgeOnly + 1);
-    }
-    if (declHas9 && (edgeHas == false)) {
-        this->parityDeclOnly = (this->parityDeclOnly + 1);
-        if ((declTid9 == 0)) {
-            this->parityDeclOnlyZero = (this->parityDeclOnlyZero + 1);
-        }
-    }
-    if (edgeHas && declHas9) {
-        if ((edgeTid != declTid9)) {
-            this->parityDiff = (this->parityDiff + 1);
-        }
-    }
-}
-
-static z_t169_optionval_u64_t z_t2119_ZTyping_childOf(z_t1626_ZTyping_t* this, z_t1147_StringPool_t* pool, uint64_t parentTypeId, z_t105_StringView_t name) {
-    uint64_t nid9 = ((uint64_t)z_t1154_StringPool_find(pool, name));
-    if ((nid9 == 0)) {
-        return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
-    }
-    return z_t2120_ZTyping_childOfId(this, parentTypeId, nid9);
-}
-
-static z_t169_optionval_u64_t z_t2120_ZTyping_childOfId(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId) {
     bool edgeHas9 = false;
     uint64_t edgeTid9 = ((uint64_t)0);
     z_t169_optionval_u64_t idopt = z_t2115_ZTyping_childNameIdOfId(this, parentTypeId, nameId);
@@ -30991,13 +30949,119 @@ static z_t169_optionval_u64_t z_t2120_ZTyping_childOfId(z_t1626_ZTyping_t* this,
         }
         default: break;
     }
-    if (this->probeParity) {
-        (void)(z_t2118_ZTyping_parityProbe(this, parentTypeId, nameId, edgeHas9, edgeTid9));
+    if (edgeHas9 && (edgeTid9 == 0)) {
+        this->parityZero = (this->parityZero + 1);
     }
-    if ((edgeHas9 == false)) {
+    bool declHas9 = false;
+    uint64_t declTid9 = ((uint64_t)0);
+    z_t169_optionval_u64_t d9 = z_t2095_ZTyping_declMemberTypeOf(this, parentTypeId, nameId);
+    z_t169_optionval_u64_t _m2 = d9;
+    switch (_m2.tag) {
+        case Z_OPTIONVAL_U64_TAG_SOME: {
+            uint64_t d9 = _m2.data.some;
+            (void)d9;
+            declHas9 = true;
+            declTid9 = d9;
+            break;
+        }
+        case Z_OPTIONVAL_U64_TAG_NONE: {
+            break;
+        }
+        default: break;
+    }
+    if (edgeHas9 && (declHas9 == false)) {
+        this->parityEdgeOnly = (this->parityEdgeOnly + 1);
+    }
+    if (declHas9 && (edgeHas9 == false)) {
+        this->parityDeclOnly = (this->parityDeclOnly + 1);
+        if ((declTid9 == 0)) {
+            this->parityDeclOnlyZero = (this->parityDeclOnlyZero + 1);
+        }
+    }
+    if (edgeHas9 && declHas9) {
+        if ((edgeTid9 != declTid9)) {
+            this->parityDiff = (this->parityDiff + 1);
+        }
+    }
+}
+
+static z_t169_optionval_u64_t z_t2119_ZTyping_childOf(z_t1626_ZTyping_t* this, z_t1147_StringPool_t* pool, uint64_t parentTypeId, z_t105_StringView_t name) {
+    uint64_t nid9 = ((uint64_t)z_t1154_StringPool_find(pool, name));
+    if ((nid9 == 0)) {
         return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
     }
-    return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_SOME, .data.some = (edgeTid9) });
+    return z_t2120_ZTyping_childOfId(this, parentTypeId, nid9);
+}
+
+static z_t169_optionval_u64_t z_t2120_ZTyping_childOfId(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId) {
+    uint32_t n32 = ({ __auto_type _rc = (({ uint64_t _v = nameId; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); (_rc.tag == Z_RESULTVAL_U32_CONVERROR_TAG_OK) ? _rc.data.ok : (0); });
+    if ((n32 == 0)) {
+        return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
+    }
+    if (this->probeParity) {
+        (void)(z_t2118_ZTyping_parityProbeEdge(this, parentTypeId, nameId));
+    }
+    uint64_t od9 = z_t2091_ZTyping_declIdOfType(this, parentTypeId);
+    uint64_t md9 = ((uint64_t)0);
+    if ((od9 > 0)) {
+        md9 = z_t2090_ZTyping_declFindChild(this, od9, n32);
+    }
+    if ((md9 > 0)) {
+        uint64_t t9 = ((uint64_t)0);
+        z_t2064_OptionView_Decl_t mo9 = z_t2045_Map_u64_Decl_get(this->decls, md9);
+        z_t2064_OptionView_Decl_t _m0 = mo9;
+        switch (_m0.tag) {
+            case Z_OPTIONVIEW_DECL_TAG_SOME: {
+                /* alias: mo9 => (*(z_t2014_Decl_t*)_m0.data) */
+                t9 = (*(z_t2014_Decl_t*)_m0.data).typeId;
+                break;
+            }
+            case Z_OPTIONVIEW_DECL_TAG_NONE: {
+                break;
+            }
+            default: break;
+        }
+        if ((t9 == 0)) {
+            z_t169_optionval_u64_t _ret1 = ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
+    z_t2064_OptionView_Decl_destroy(&mo9);
+            return _ret1;
+        }
+        z_t169_optionval_u64_t _ret2 = ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_SOME, .data.some = (t9) });
+    z_t2064_OptionView_Decl_destroy(&mo9);
+        return _ret2;
+    z_t2064_OptionView_Decl_destroy(&mo9);
+    }
+    this->childOfFallback = (this->childOfFallback + 1);
+    z_t169_optionval_u64_t idopt = z_t2115_ZTyping_childNameIdOfId(this, parentTypeId, nameId);
+    z_t169_optionval_u64_t _m3 = idopt;
+    switch (_m3.tag) {
+        case Z_OPTIONVAL_U64_TAG_SOME: {
+            uint64_t idopt = _m3.data.some;
+            (void)idopt;
+            z_t169_optionval_u64_t r = z_t1368_Map_u64_u64_get(this->childTypeById, idopt);
+            z_t169_optionval_u64_t _m4 = r;
+            switch (_m4.tag) {
+                case Z_OPTIONVAL_U64_TAG_SOME: {
+                    uint64_t r = _m4.data.some;
+                    (void)r;
+                    this->childOfFallbackHit = (this->childOfFallbackHit + 1);
+                    return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_SOME, .data.some = (r) });
+                    break;
+                }
+                case Z_OPTIONVAL_U64_TAG_NONE: {
+                    return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
+                    break;
+                }
+                default: z_unreachable();
+            }
+            break;
+        }
+        case Z_OPTIONVAL_U64_TAG_NONE: {
+            return ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
+            break;
+        }
+        default: z_unreachable();
+    }
 }
 
 static bool z_t2121_ZTyping_hasChild(z_t1626_ZTyping_t* this, z_t1147_StringPool_t* pool, uint64_t parentTypeId, z_t105_StringView_t name) {
@@ -46485,7 +46549,7 @@ z_t74_String_t z_t2386_declkindName(z_t2015_declkind_t k) {
 }
 
 z_t1626_ZTyping_t z_t2387_newTyping(uint64_t nodeEst) {
-    return z_t1626_ZTyping_create(z_t1629_List_SynthNode_create((uint64_t)0), 0x40000000, 0, z_t74_String_from_view(_zs686), z_t74_String_from_view(_zs687), z_t74_String_from_view(_zs688), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), false, z_t989_List_String_create((uint64_t)0), false, z_t1501_Map_String_bool_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), 0, 0, z_t1481_Map_String_u64_create((uint64_t)0), z_t74_String_from_view(_zs689), 0, z_t1368_Map_u64_u64_create((uint64_t)0), z_t1668_List_ZTypeChild_create((uint64_t)0), z_t1687_Map_u64_ChildBucket_create((uint64_t)0), z_t1713_List_ZTypeGenericArg_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), false, false, z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1730_Map_u64_u32_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), false, 0, false, false, false, false, z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1770_Map_String_String_create((uint64_t)0), z_t1501_Map_String_bool_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t74_String_from_view(_zs690), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1792_List_PendingUnitWalk_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1813_Map_u64_zparamownership_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)nodeEst), z_t1841_Map_u64_numbase_create((uint64_t)0), z_t1865_Map_u64_callkind_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)(nodeEst / 4)), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1889_Map_u64_zownership_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1889_Map_u64_zownership_create((uint64_t)0), z_t1921_List_NodeConstRow_create((uint64_t)0), z_t1940_List_TakenVarRow_create((uint64_t)0), z_t1959_List_NodeNameRow_create((uint64_t)0), z_t1978_List_ZConformance_create((uint64_t)0), z_t1997_List_MonoRow_create((uint64_t)0), z_t1770_Map_String_String_create((uint64_t)0), z_t1303_Set_String_create((uint64_t)0), z_t1303_Set_String_create((uint64_t)0), false, 0, 0, 0, false, z_t1750_Map_u64_String_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t2045_Map_u64_Decl_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1481_Map_String_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1421_List_u64_create((uint64_t)0), z_t989_List_String_create((uint64_t)0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, false, z_t2069_List_ErrorData_create((uint64_t)0), 0);
+    return z_t1626_ZTyping_create(z_t1629_List_SynthNode_create((uint64_t)0), 0x40000000, 0, z_t74_String_from_view(_zs686), z_t74_String_from_view(_zs687), z_t74_String_from_view(_zs688), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), false, z_t989_List_String_create((uint64_t)0), false, z_t1501_Map_String_bool_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), 0, 0, z_t1481_Map_String_u64_create((uint64_t)0), z_t74_String_from_view(_zs689), 0, z_t1368_Map_u64_u64_create((uint64_t)0), z_t1668_List_ZTypeChild_create((uint64_t)0), z_t1687_Map_u64_ChildBucket_create((uint64_t)0), z_t1713_List_ZTypeGenericArg_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), false, false, z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1730_Map_u64_u32_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), false, 0, false, false, false, false, z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1770_Map_String_String_create((uint64_t)0), z_t1501_Map_String_bool_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t74_String_from_view(_zs690), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1792_List_PendingUnitWalk_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1813_Map_u64_zparamownership_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)nodeEst), z_t1841_Map_u64_numbase_create((uint64_t)0), z_t1865_Map_u64_callkind_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)(nodeEst / 4)), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1889_Map_u64_zownership_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1646_Map_u64_bool_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1889_Map_u64_zownership_create((uint64_t)0), z_t1921_List_NodeConstRow_create((uint64_t)0), z_t1940_List_TakenVarRow_create((uint64_t)0), z_t1959_List_NodeNameRow_create((uint64_t)0), z_t1978_List_ZConformance_create((uint64_t)0), z_t1997_List_MonoRow_create((uint64_t)0), z_t1770_Map_String_String_create((uint64_t)0), z_t1303_Set_String_create((uint64_t)0), z_t1303_Set_String_create((uint64_t)0), false, 0, 0, 0, false, z_t1750_Map_u64_String_create((uint64_t)0), z_t1750_Map_u64_String_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t2045_Map_u64_Decl_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1481_Map_String_u64_create((uint64_t)0), z_t1368_Map_u64_u64_create((uint64_t)0), z_t1421_List_u64_create((uint64_t)0), z_t989_List_String_create((uint64_t)0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0, false, z_t2069_List_ErrorData_create((uint64_t)0), 0);
 }
 
 z_t74_String_t z_t2388_boolText(bool b) {
@@ -79596,7 +79660,9 @@ void z_t2983_q2SpikeVerify(z_t1266_ZSymbolTable_t* st) {
     uint64_t parityDiff = st->typing.parityDiff;
     uint64_t parityZero = st->typing.parityZero;
     uint64_t parityDeclOnlyZero = st->typing.parityDeclOnlyZero;
-    z_t74_String_t _ah754 = ({  z_t74_String_t _s0 = z_t74_String_create((uint64_t)1321);
+    uint64_t childOfFallback = st->typing.childOfFallback;
+    uint64_t childOfFallbackHit = st->typing.childOfFallbackHit;
+    z_t74_String_t _ah754 = ({  z_t74_String_t _s0 = z_t74_String_create((uint64_t)1390);
  z_t74_String_append(&_s0, "Q2-SPIKE members=", sizeof("Q2-SPIKE members=")-1);
  char _b1[32]; int _b1_n = snprintf(_b1, 32, "%ld", (long)(int64_t)members);
  z_t74_String_append(&_s0, _b1, (uint64_t)_b1_n);
@@ -79729,6 +79795,12 @@ void z_t2983_q2SpikeVerify(z_t1266_ZSymbolTable_t* st) {
  z_t74_String_append(&_s0, " parityDeclOnlyZero=", sizeof(" parityDeclOnlyZero=")-1);
  char _b44[32]; int _b44_n = snprintf(_b44, 32, "%ld", (long)(int64_t)parityDeclOnlyZero);
  z_t74_String_append(&_s0, _b44, (uint64_t)_b44_n);
+ z_t74_String_append(&_s0, " childOfFallback=", sizeof(" childOfFallback=")-1);
+ char _b45[32]; int _b45_n = snprintf(_b45, 32, "%ld", (long)(int64_t)childOfFallback);
+ z_t74_String_append(&_s0, _b45, (uint64_t)_b45_n);
+ z_t74_String_append(&_s0, " childOfFallbackHit=", sizeof(" childOfFallbackHit=")-1);
+ char _b46[32]; int _b46_n = snprintf(_b46, 32, "%ld", (long)(int64_t)childOfFallbackHit);
+ z_t74_String_append(&_s0, _b46, (uint64_t)_b46_n);
 _s0; });
     (void)(z_io_eprintln(((z_t105_StringView_t){ _ah754.data, _ah754.size })));
     z_t947_Option_String_destroy(&en9);
