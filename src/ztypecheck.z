@@ -24201,18 +24201,10 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
     declMisses: u64
     bridgeNameErr: u64
     bridgeParentErr: u64
-    ownSet: u64
-    ownMismatch: u64
-    grantSet: u64
-    grantMismatch: u64
     exactHits: u64
     exactMisses: u64
-    fnptrSet: u64
-    fnptrMismatch: u64
     lockArmSet: u64
     lockArmMismatch: u64
-    lockFieldSet: u64
-    lockFieldMismatch: u64
     typeIdSet: u64
     typeIdMismatch: u64
     missNoOwner: u64
@@ -24246,22 +24238,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
         cnid9: aCnid9.get i: bi9
         bi9 = bi9 + 1
         members = members + 1
-        mapOwnInt9: 3.u64
-        mo9: st.typing.childOwnership.get key: cnid9
-        match (
-            mo9
-        ) case some then {
-            mapOwnInt9 = ztypes.zparamownershipInt mo9
-            ownSet = ownSet + 1
-        } case none then null
-        mapGrant9: false
-        mg9: st.typing.childGrantsPrivate.get key: cnid9
-        match (
-            mg9
-        ) case some then {
-            mapGrant9 = mg9
-            if mg9 then grantSet = grantSet + 1
-        } case none then null
         nid32: nid9.u32.orPanic
         expParent9: declOfTypeId reg: st.reg tid: ptid9
         did9: declMemberOf ty: st.typing reg: st.reg ownerTid: ptid9 nameId: nid32
@@ -24280,25 +24256,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
         # the exact-owner bridge the production stamps use: a mono has no
         # declaration of its own (declMemberOf would reach its template's), so
         # a production-written field is checked only through this leg.
-        mapFn9: false
-        {
-            fo9: st.typing.childIsFnptrField.get key: cnid9
-            match (
-                fo9
-            ) case some then {
-                mapFn9 = fo9
-            } case none then null
-        }
         mapArm9: false
-        mapLock9: false
-        {
-            lf9: st.typing.childLockField.get key: cnid9
-            match (
-                lf9
-            ) case some then {
-                mapLock9 = lf9
-            } case none then null
-        }
         dqText9: st.typing.childDefaultTextId parentTypeId: ptid9 nameId: nid9
         # 0 none, 1 literal, 2 function, 3 variant arm -- the sentinel is read
         # the way renderDefault reads it, on the first byte after the hash
@@ -24365,47 +24323,21 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
             }
         } else {
             exactHits = exactHits + 1
-            if mapFn9 then fnptrSet = fnptrSet + 1
             if mapArm9 then lockArmSet = lockArmSet + 1
-            if mapLock9 then lockFieldSet = lockFieldSet + 1
-            odX9: st.typing.declIdOfType typeId: ptid9
-            ownerLock9: u64
-            {
-                oo9: st.typing.decls.get key: odX9
-                match (
-                    oo9
-                ) case some then {
-                    if sabotage9 then {
-                        oo9.lockFieldDecl = mdX9
-                        if mapLock9 then oo9.lockFieldDecl = 0
-                    }
-                    ownerLock9 = oo9.lockFieldDecl
-                } case none then null
-            }
-            if (ownerLock9 == mdX9) != mapLock9 then lockFieldMismatch = lockFieldMismatch + 1
             dx9: st.typing.decls.get key: mdX9
             match (
                 dx9
             ) case some then {
                 if sabotage9 then {
-                    dx9.fnptrField = true
-                    if mapFn9 then dx9.fnptrField = false
                     dx9.lockArm = true
                     if mapArm9 then dx9.lockArm = false
-                    dx9.grantsPrivate = true
-                    if mapGrant9 then dx9.grantsPrivate = false
-                    dx9.ownership = ztypes.zparamownership.lockMode
-                    if mapOwnInt9 == 2 then dx9.ownership = ztypes.zparamownership.takeMode
                     if dx9.defaultVal.none then {
                         dx9.defaultVal = (DefaultVal.literal 0)
                     } else {
                         dx9.defaultVal = DefaultVal.none
                     }
                 }
-                if dx9.fnptrField != mapFn9 then fnptrMismatch = fnptrMismatch + 1
                 if dx9.lockArm != mapArm9 then lockArmMismatch = lockArmMismatch + 1
-                if dx9.grantsPrivate != mapGrant9 then grantMismatch = grantMismatch + 1
-                if (ztypes.zparamownershipInt dx9.ownership) != mapOwnInt9 then ownMismatch = ownMismatch + 1
                 mapTid9: u64
                 {
                     tq9: st.typing.childTypeById.get key: cnid9
@@ -24587,7 +24519,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
     dropGrant: st.typing.dropGrant
     dropDefault: st.typing.dropDefault
     synthNoOwner: st.typing.synthNoOwner
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} fnptrSet=\{fnptrSet} fnptrMismatch=\{fnptrMismatch} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} lockFieldSet=\{lockFieldSet} lockFieldMismatch=\{lockFieldMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} defSet=\{defSet} defFunc=\{defFunc} defArm=\{defArm} defMismatch=\{defMismatch} defUnresolved=\{defUnresolved} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} defSet=\{defSet} defFunc=\{defFunc} defArm=\{defArm} defMismatch=\{defMismatch} defUnresolved=\{defUnresolved} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner}"
 }
 typecheck: function {
     program: Node

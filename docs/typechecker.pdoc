@@ -123,14 +123,22 @@ Key fields:
   [#*: #~"cname": the C identifier the emitter uses]
   [#*: #~"typeId": monotonic id for SQL dumps]
 
-A #~"ZType" carries identity-data only. #_*"Per-edge" metadata --
+A #~"ZType" carries identity-data only. #_*"Per-member" metadata --
 parameter ownership annotations, field defaults, the lock-field and
-function-pointer-slot marks -- lives on #~"ZTyping.typeChild" rows
-(the flat children table), not on the parent #~"ZType". The member's
-own #~"Decl" carries the same metadata, written by the same setters;
-readers still take it from the child rows. Member #_*"visibility" is
-the exception: it is already structural, held by the type's
-#~"publicNs" declaration subtree rather than on an edge.
+function-pointer-slot marks -- lives on the member's own #~"Decl",
+not on the parent #~"ZType" and no longer on the
+#~"ZTyping.typeChild" row either. Member #_*"visibility" is likewise
+structural, held by the type's #~"publicNs" declaration subtree.
+
+A member's declaration must therefore exist #_*"before" any metadata
+write, which is why every synthesis site declares the member and then
+edges it, in that order: #~"setChildId" stamps the member's type onto
+its declaration, and a method's declaration is what claims its own
+function type, which every later parameter write reaches through. The
+setters count any write that finds no declaration
+(#~"ZTyping.dropOwn" and its siblings, reported by #~"q2SpikeVerify"
+under #~"ZC_Q2_SPIKE"); all of them are 0, and a non-zero one is a
+write that never landed.
 
 
 #---: ZVariable -- per-binding ownership carrier
@@ -571,10 +579,11 @@ The dedicated #~".take" / #~".borrow" / #~".lock" / #~".release" /
 #~".private" handling lives in #~"checkDotted".
 
 #~"public:"/#~"private:" visibility is enforced from that same machinery.
-#~"scanVisibility" (run per type in the resolvers) marks every user-declared
-member outside a type's #~"public:" block private in #~"ztyping.childPrivate",
-and fields whose declared type is a #~".private" handle in
-#~"childGrantsPrivate". Two gates in #~"checkDotted" then apply, both keyed on
+#~"scanVisibility" (run per type in the resolvers) records fields whose
+declared type is a #~".private" handle on the member declaration
+(#~"Decl.grantsPrivate"); privacy itself is structural -- a member is public
+exactly when the type's #~"publicNs" subtree reaches it. Two gates in
+#~"checkDotted" then apply, both keyed on
 #~"baseIsPrivateCapable" (is the base #~"this" / a same-type receiver, a
 #~".private"-typed variable, or a #~".private"-typed field read): reading a
 private member from a non-capable base raises E0101, and taking #~".private" of

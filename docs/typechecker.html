@@ -214,14 +214,21 @@ holding the raw allocator</li>
 <li><code>cname</code>: the C identifier the emitter uses</li>
 <li><code>typeId</code>: monotonic id for SQL dumps</li>
 </ul>
-<p>A <code>ZType</code> carries identity-data only. <em><strong>Per-edge</strong></em> metadata --
+<p>A <code>ZType</code> carries identity-data only. <em><strong>Per-member</strong></em> metadata --
 parameter ownership annotations, field defaults, the lock-field and
-function-pointer-slot marks -- lives on <code>ZTyping.typeChild</code> rows
-(the flat children table), not on the parent <code>ZType</code>. The member's
-own <code>Decl</code> carries the same metadata, written by the same setters;
-readers still take it from the child rows. Member <em><strong>visibility</strong></em> is
-the exception: it is already structural, held by the type's
-<code>publicNs</code> declaration subtree rather than on an edge.</p>
+function-pointer-slot marks -- lives on the member's own <code>Decl</code>,
+not on the parent <code>ZType</code> and no longer on the
+<code>ZTyping.typeChild</code> row either. Member <em><strong>visibility</strong></em> is likewise
+structural, held by the type's <code>publicNs</code> declaration subtree.</p>
+<p>A member's declaration must therefore exist <em><strong>before</strong></em> any metadata
+write, which is why every synthesis site declares the member and then
+edges it, in that order: <code>setChildId</code> stamps the member's type onto
+its declaration, and a method's declaration is what claims its own
+function type, which every later parameter write reaches through. The
+setters count any write that finds no declaration
+(<code>ZTyping.dropOwn</code> and its siblings, reported by <code>q2SpikeVerify</code>
+under <code>ZC_Q2_SPIKE</code>); all of them are 0, and a non-zero one is a
+write that never landed.</p>
 <h3 id="zvariable-per-binding-ownership-carrier"><a href="#zvariable-per-binding-ownership-carrier">3.2. ZVariable -- per-binding ownership carrier</a></h3>
 <p><code>ZVariable</code> (<code>src/ztypes.z</code>) wraps a <code>ZType</code> with the
 state that is per-variable rather than per-type. A <code>ZVariable</code>
@@ -595,10 +602,11 @@ installs the borrow lock against the actual destination scope.
 The dedicated <code>.take</code> / <code>.borrow</code> / <code>.lock</code> / <code>.release</code> /
 <code>.private</code> handling lives in <code>checkDotted</code>.</p>
 <p><code>public:</code>/<code>private:</code> visibility is enforced from that same machinery.
-<code>scanVisibility</code> (run per type in the resolvers) marks every user-declared
-member outside a type's <code>public:</code> block private in <code>ztyping.childPrivate</code>,
-and fields whose declared type is a <code>.private</code> handle in
-<code>childGrantsPrivate</code>. Two gates in <code>checkDotted</code> then apply, both keyed on
+<code>scanVisibility</code> (run per type in the resolvers) records fields whose
+declared type is a <code>.private</code> handle on the member declaration
+(<code>Decl.grantsPrivate</code>); privacy itself is structural -- a member is public
+exactly when the type's <code>publicNs</code> subtree reaches it. Two gates in
+<code>checkDotted</code> then apply, both keyed on
 <code>baseIsPrivateCapable</code> (is the base <code>this</code> / a same-type receiver, a
 <code>.private</code>-typed variable, or a <code>.private</code>-typed field read): reading a
 private member from a non-capable base raises E0101, and taking <code>.private</code> of

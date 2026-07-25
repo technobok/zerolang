@@ -298,9 +298,6 @@ ZTyping: class {
     renameSeen: bool
     # true once any member has been marked private (gates cross-unit checks)
     privacySeen: bool
-    childLockField: (Map u64 value: bool)
-    childGrantsPrivate: (Map u64 value: bool)
-    childIsFnptrField: (Map u64 value: bool)
     asConstClone: (Map u64 value: bool)
     generatorWrapper: (Map u64 value: bool)
     typeofShell: (Map u64 value: u32)
@@ -342,7 +339,6 @@ ZTyping: class {
     pendingUnitWalk: (List PendingUnitWalk)
     unitMonoWalksPending: (Map u64 value: bool)
     childDefault: (Map u64 value: String)
-    childOwnership: (Map u64 value: ztypes.zparamownership)
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
     argDisposition: (Map u64 value: ztypes.zparamownership)
@@ -1395,12 +1391,6 @@ ZTyping: class {
     # setChildGrantsPrivateId -- mark a field edge as one whose declared type
     # was a `.private` handle, so reads through it are private-capable.
     setChildGrantsPrivateId: function {:this parentTypeId: u64 nameId: u64} is {
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            this.childGrantsPrivate.set key: idopt value: true
-        } case none then null
         md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
         if md8 > 0 then {
             do8: this.decls.get key: md8
@@ -1411,26 +1401,6 @@ ZTyping: class {
             } case none then null
         } else {
             this.dropGrant = this.dropGrant + 1
-        }
-    }
-
-    # isChildGrantsPrivate -- does reading child `name` of parentTypeId yield a
-    # private-capable handle (its declared type was `X.private...`)?
-    isChildGrantsPrivate: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childGrantsPrivate.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
         }
     }
 
@@ -1453,12 +1423,6 @@ ZTyping: class {
     }
 
     setChildLockField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            this.childLockField.set key: idopt value: true
-        } case none then null
         nid8: pool.find s: name
         landed8: false
         if nid8 > 0 then {
@@ -1479,31 +1443,7 @@ ZTyping: class {
         if (landed8) == false then this.dropLock = this.dropLock + 1
     }
 
-    isChildLockField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childLockField.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
-        }
-    }
-
     setChildFnptrField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            this.childIsFnptrField.set key: idopt value: true
-        } case none then null
         nid8: pool.find s: name
         landed8: false
         if nid8 > 0 then {
@@ -1519,24 +1459,6 @@ ZTyping: class {
             }
         }
         if (landed8) == false then this.dropFnptr = this.dropFnptr + 1
-    }
-
-    isChildFnptrField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childIsFnptrField.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
-        }
     }
 
     # --- default sidecar ---
@@ -1649,13 +1571,6 @@ ZTyping: class {
     # --- ownership sidecar ---
 
     setChildOwnership: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView ownership: ztypes.zparamownership} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            oc: ownership
-            this.childOwnership.set key: idopt value: oc
-        } case none then null
         nid8: pool.find s: name
         landed8: false
         if nid8 > 0 then {
@@ -1676,13 +1591,6 @@ ZTyping: class {
 
     # setChildOwnershipId -- the id-keyed form of setChildOwnership.
     setChildOwnershipId: function {:this parentTypeId: u64 nameId: u64 ownership: ztypes.zparamownership} is {
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            oc: ownership
-            this.childOwnership.set key: idopt value: oc
-        } case none then null
         md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
         if md8 > 0 then {
             do8: this.decls.get key: md8
@@ -1697,19 +1605,16 @@ ZTyping: class {
         }
     }
 
-    childOwnershipText: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out String is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
+    # declOwnershipText -- a member's ownership as display text, "none" when
+    # it has none.
+    declOwnershipText: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out String is {
+        nid9: pool.find s: name
+        if nid9 == 0 then return "none".string
+        r9: this.declOwnershipOfId :parentTypeId nameId: nid9
         match (
-            idopt
+            r9
         ) case some then {
-            r: this.childOwnership.get key: idopt
-            match (
-                r
-            ) case some then {
-                return (ztypes.zparamownershipName r)
-            } case none then {
-                return "none".string
-            }
+            return (ztypes.zparamownershipName r9)
         } case none then {
             return "none".string
         }
@@ -1792,9 +1697,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         childTypeById: (Map u64 value: u64)
         renameSeen: false
         privacySeen: false
-        childLockField: (Map u64 value: bool)
-    childGrantsPrivate: (Map u64 value: bool)
-        childIsFnptrField: (Map u64 value: bool)
         asConstClone: (Map u64 value: bool)
         generatorWrapper: (Map u64 value: bool)
         typeofShell: (Map u64 value: u32)
@@ -1830,7 +1732,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingUnitWalk: (List PendingUnitWalk)
         unitMonoWalksPending: (Map u64 value: bool)
         childDefault: (Map u64 value: String)
-        childOwnership: (Map u64 value: ztypes.zparamownership)
         argDisposition: (Map u64 value: ztypes.zparamownership)
         genericArgTypeBy: (Map u64 value: u64)
         callGenericBinding: (Map u64 value: u64)
@@ -1918,6 +1819,10 @@ optU64Text: function {o: optionval u64} out String is {
 # standalone entry point for the ztyping smoke tests.
 main: function is {
     reg: ztypes.newRegistry
+    # id 0 is the no-type sentinel, exactly as typecheck seeds it: a member's
+    # metadata reaches its declaration through the owner's type id, and 0
+    # never links to one.
+    reg.newType name: "notype" typetype: ztypes.ztypetype.nullType
     tPoint: reg.newType name: "point" typetype: ztypes.ztypetype.recordType
     tInt: reg.newType name: "i64" typetype: ztypes.ztypetype.recordType
     tStr: reg.newType name: "String" typetype: ztypes.ztypetype.classType
@@ -1927,6 +1832,15 @@ main: function is {
 
     ty: newTyping
     pool9: zast.StringPool.create
+
+    # the per-member metadata setters record onto member DECLARATIONS, so the
+    # smoke declares the type and its fields the way the def indexer would.
+    # Without this the sidecar section reads back empty.
+    pDecl9: ty.declNew name: (pool9.set s: "point") parent: 0 kind: declkind.typeDecl node: 0
+    ty.declSetType declId: pDecl9 typeId: pid
+    ty.declNew name: (pool9.set s: "x") parent: pDecl9 kind: declkind.fieldDecl node: 0
+    ty.declNew name: (pool9.set s: "y") parent: pDecl9 kind: declkind.fieldDecl node: 0
+    ty.declNew name: (pool9.set s: "label") parent: pDecl9 kind: declkind.fieldDecl node: 0
 
     print "=== children ==="
     ty.setChildId parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
@@ -2066,7 +1980,7 @@ smokeChildOf: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringV
 
 # smoke-test: print whether member `name` of `pid` is a lock field.
 smokeIsLockField: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.isChildLockField :pool parentTypeId: pid :name
+    b: ty.declIsLockField :pool parentTypeId: pid :name
     print "isLockField point.\{name} -> \{boolText b}"
 }
 
@@ -2078,7 +1992,7 @@ smokeDefault: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringV
 
 # smoke-test: print the ownership of member `name` of `pid`.
 smokeOwn: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    o: ty.childOwnershipText :pool parentTypeId: pid :name
+    o: ty.declOwnershipText :pool parentTypeId: pid :name
     print "ownership point.\{name} -> \{o}"
 }
 
