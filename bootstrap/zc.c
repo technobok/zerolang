@@ -16137,9 +16137,9 @@ typedef void (*z_t2614_resolveData_ft)(z_t1067_Ast_t*, z_t1626_ZTyping_t*, z_t14
 typedef z_t74_String_t (*z_t2618_objectTypedefBase_ft)(z_t1067_Ast_t*, z_t1119_ObjectDefData_t*);
 typedef uint64_t (*z_t2620_objectTypedefBaseTid_ft)(z_t1626_ZTyping_t*, z_t1411_ZTypeRegistry_t*, z_t1067_Ast_t*, z_t105_StringView_t, z_t1119_ObjectDefData_t*);
 typedef void (*z_t2623_materializeCreateParams_ft)(z_t1626_ZTyping_t*, z_t1411_ZTypeRegistry_t*, z_t1067_Ast_t*, uint64_t, uint64_t);
-typedef void (*z_t2624_scanVisibility_ft)(z_t1626_ZTyping_t*, z_t1067_Ast_t*, uint64_t, z_t1119_ObjectDefData_t*, z_t1421_List_u64_t*, z_t1421_List_u64_t*);
+typedef void (*z_t2624_scanVisibility_ft)(z_t1626_ZTyping_t*, z_t1067_Ast_t*, z_t1119_ObjectDefData_t*, z_t1421_List_u64_t*, z_t1421_List_u64_t*);
 typedef void (*z_t2625_applyGrantsPrivate_ft)(z_t1626_ZTyping_t*, uint64_t, z_t1421_List_u64_t*);
-typedef void (*z_t2626_scanUnitVisibility_ft)(z_t1626_ZTyping_t*, z_t1067_Ast_t*, z_t105_StringView_t, uint64_t, uint32_t);
+typedef void (*z_t2626_scanUnitVisibility_ft)(z_t1626_ZTyping_t*, z_t1067_Ast_t*, z_t105_StringView_t, uint32_t);
 typedef void (*z_t2629_resolveRecord_ft)(z_t1626_ZTyping_t*, z_t1411_ZTypeRegistry_t*, z_t1067_Ast_t*, z_t105_StringView_t, z_t105_StringView_t, z_t1119_ObjectDefData_t*);
 typedef void (*z_t2630_detectTagAccessor_ft)(z_t1626_ZTyping_t*, z_t1411_ZTypeRegistry_t*, z_t1067_Ast_t*, z_t105_StringView_t, z_t105_StringView_t, uint64_t, z_t1303_Set_String_t*, z_t1085_NamedOperationData_t*);
 typedef void (*z_t2631_resolveVariant_ft)(z_t1626_ZTyping_t*, z_t1411_ZTypeRegistry_t*, z_t1067_Ast_t*, z_t105_StringView_t, z_t105_StringView_t, z_t1119_ObjectDefData_t*);
@@ -25943,9 +25943,9 @@ uint64_t z_t2620_objectTypedefBaseTid(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegist
 bool z_t2621_fnFieldFlaggableName(z_t105_StringView_t name);
 bool z_t2622_typeExprHasPrivate(z_t1067_Ast_t* ast, z_t1068_Node_t n);
 void z_t2623_materializeCreateParams(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1067_Ast_t* ast, uint64_t typeTid, uint64_t createId);
-void z_t2624_scanVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, uint64_t parentId, z_t1119_ObjectDefData_t* onode, z_t1421_List_u64_t* excl, z_t1421_List_u64_t* grants);
+void z_t2624_scanVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t1119_ObjectDefData_t* onode, z_t1421_List_u64_t* excl, z_t1421_List_u64_t* grants);
 void z_t2625_applyGrantsPrivate(z_t1626_ZTyping_t* ty, uint64_t parentId, z_t1421_List_u64_t* grants);
-void z_t2626_scanUnitVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, uint64_t unitTid, uint32_t unitdefId);
+void z_t2626_scanUnitVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, uint32_t unitdefId);
 void z_t2627_demandUnitRenameTargets(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1068_Node_t program);
 void z_t2628_applyUnitVisibility(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1068_Node_t program);
 void z_t2629_resolveRecord(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, z_t105_StringView_t defName, z_t1119_ObjectDefData_t* rnode);
@@ -39670,9 +39670,9 @@ uint64_t z_t2620_objectTypedefBaseTid(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegist
 bool z_t2621_fnFieldFlaggableName(z_t105_StringView_t name);
 bool z_t2622_typeExprHasPrivate(z_t1067_Ast_t* ast, z_t1068_Node_t n);
 void z_t2623_materializeCreateParams(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1067_Ast_t* ast, uint64_t typeTid, uint64_t createId);
-void z_t2624_scanVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, uint64_t parentId, z_t1119_ObjectDefData_t* onode, z_t1421_List_u64_t* excl, z_t1421_List_u64_t* grants);
+void z_t2624_scanVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t1119_ObjectDefData_t* onode, z_t1421_List_u64_t* excl, z_t1421_List_u64_t* grants);
 void z_t2625_applyGrantsPrivate(z_t1626_ZTyping_t* ty, uint64_t parentId, z_t1421_List_u64_t* grants);
-void z_t2626_scanUnitVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, uint64_t unitTid, uint32_t unitdefId);
+void z_t2626_scanUnitVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, uint32_t unitdefId);
 void z_t2627_demandUnitRenameTargets(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1068_Node_t program);
 void z_t2628_applyUnitVisibility(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1068_Node_t program);
 void z_t2629_resolveRecord(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, z_t105_StringView_t defName, z_t1119_ObjectDefData_t* rnode);
@@ -54276,7 +54276,7 @@ void z_t2623_materializeCreateParams(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistr
     z_t1706_OptionView_ChildBucket_destroy(&bd9);
 }
 
-void z_t2624_scanVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, uint64_t parentId, z_t1119_ObjectDefData_t* onode, z_t1421_List_u64_t* excl, z_t1421_List_u64_t* grants) {
+void z_t2624_scanVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t1119_ObjectDefData_t* onode, z_t1421_List_u64_t* excl, z_t1421_List_u64_t* grants) {
     z_t1312_Set_u64_t* pubIds = z_t1312_Set_u64_create((uint64_t)0);
     z_t1312_Set_u64_t* memberIds = z_t1312_Set_u64_create((uint64_t)0);
     z_t1036_List_u32_t aliasPubRef = z_t1036_List_u32_create((uint64_t)0);
@@ -54485,7 +54485,7 @@ void z_t2625_applyGrantsPrivate(z_t1626_ZTyping_t* ty, uint64_t parentId, z_t142
     }
 }
 
-void z_t2626_scanUnitVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, uint64_t unitTid, uint32_t unitdefId) {
+void z_t2626_scanUnitVisibility(z_t1626_ZTyping_t* ty, z_t1067_Ast_t* ast, z_t105_StringView_t unitName, uint32_t unitdefId) {
     (void)(unitName);
     z_t1312_Set_u64_t* pubIds = z_t1312_Set_u64_create((uint64_t)0);
     z_t1312_Set_u64_t* memberIds = z_t1312_Set_u64_create((uint64_t)0);
@@ -54773,7 +54773,7 @@ void z_t2628_applyUnitVisibility(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t*
                         default: break;
                     }
                     if ((utidV9 > 0)) {
-                        (void)(z_t2626_scanUnitVisibility(ty, &(*(z_t1127_ProgramData_t*)_m0.data).ast, ((z_t105_StringView_t){ nmV9.data, nmV9.size }), utidV9, opIdV9));
+                        (void)(z_t2626_scanUnitVisibility(ty, &(*(z_t1127_ProgramData_t*)_m0.data).ast, ((z_t105_StringView_t){ nmV9.data, nmV9.size }), opIdV9));
                         if (z_t105_StringView_eq(((z_t105_StringView_t){ nmV9.data, nmV9.size }), ((z_t105_StringView_t){ (*(z_t1127_ProgramData_t*)_m0.data).mainUnitName.data, (*(z_t1127_ProgramData_t*)_m0.data).mainUnitName.size }))) {
                             if (z_t2970_declMemberIsPrivate(ty, reg, utidV9, z_t1154_StringPool_find(&(*(z_t1127_ProgramData_t*)_m0.data).ast.names, _zs1540))) {
                                 uint32_t mnid9 = ((uint32_t)0);
@@ -54830,7 +54830,7 @@ void z_t2629_resolveRecord(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, 
     uint64_t rrid = rid;
     z_t1421_List_u64_t pvExcl_rrid = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t pvGrants_rrid = z_t1421_List_u64_create((uint64_t)0);
-    (void)(z_t2624_scanVisibility(ty, ast, rrid, rnode, &pvExcl_rrid, &pvGrants_rrid));
+    (void)(z_t2624_scanVisibility(ty, ast, rnode, &pvExcl_rrid, &pvGrants_rrid));
     (void)(z_t1597_ZTypeRegistry_setValtype(reg, rid, true));
     bool isgen = z_t2560_hasGenericParam(ast, &rnode->asItems);
     bool eqOptR9 = z_t2609_eqNullOptOut(ast, &rnode->asItems);
@@ -55092,7 +55092,7 @@ void z_t2631_resolveVariant(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg,
     uint64_t vvid = vid;
     z_t1421_List_u64_t pvExcl_vvid = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t pvGrants_vvid = z_t1421_List_u64_create((uint64_t)0);
-    (void)(z_t2624_scanVisibility(ty, ast, vvid, vnode, &pvExcl_vvid, &pvGrants_vvid));
+    (void)(z_t2624_scanVisibility(ty, ast, vnode, &pvExcl_vvid, &pvGrants_vvid));
     (void)(z_t1597_ZTypeRegistry_setValtype(reg, vid, true));
     bool isgen = z_t2560_hasGenericParam(ast, &vnode->asItems);
     bool eqOptV9 = z_t2609_eqNullOptOut(ast, &vnode->asItems);
@@ -55404,7 +55404,7 @@ void z_t2635_resolveUnion(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
     uint64_t uuid = uid;
     z_t1421_List_u64_t pvExcl_uuid = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t pvGrants_uuid = z_t1421_List_u64_create((uint64_t)0);
-    (void)(z_t2624_scanVisibility(ty, ast, uuid, vnode, &pvExcl_uuid, &pvGrants_uuid));
+    (void)(z_t2624_scanVisibility(ty, ast, vnode, &pvExcl_uuid, &pvGrants_uuid));
     (void)(z_t1597_ZTypeRegistry_setValtype(reg, uid, false));
     bool isgen = z_t2560_hasGenericParam(ast, &vnode->asItems);
     if (isgen) {
@@ -55656,7 +55656,7 @@ void z_t2637_resolveClass(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
     uint64_t ccid = cid;
     z_t1421_List_u64_t pvExcl_ccid = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t pvGrants_ccid = z_t1421_List_u64_create((uint64_t)0);
-    (void)(z_t2624_scanVisibility(ty, ast, ccid, cnode, &pvExcl_ccid, &pvGrants_ccid));
+    (void)(z_t2624_scanVisibility(ty, ast, cnode, &pvExcl_ccid, &pvGrants_ccid));
     (void)(z_t1597_ZTypeRegistry_setValtype(reg, cid, false));
     bool needsDtor = false;
     bool isgen = z_t2560_hasGenericParam(ast, &cnode->asItems);
@@ -56024,7 +56024,7 @@ void z_t2638_resolveFacet(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg, z
     uint64_t ffid = fid;
     z_t1421_List_u64_t pvExcl_ffid = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t pvGrants_ffid = z_t1421_List_u64_create((uint64_t)0);
-    (void)(z_t2624_scanVisibility(ty, ast, ffid, fnode, &pvExcl_ffid, &pvGrants_ffid));
+    (void)(z_t2624_scanVisibility(ty, ast, fnode, &pvExcl_ffid, &pvGrants_ffid));
     (void)(z_t1597_ZTypeRegistry_setValtype(reg, fid, true));
     bool isgen = z_t2560_hasGenericParam(ast, &fnode->isItems);
     if (isgen) {
@@ -56122,7 +56122,7 @@ void z_t2639_resolveProtocol(z_t1626_ZTyping_t* ty, z_t1411_ZTypeRegistry_t* reg
     uint64_t ppid = pid;
     z_t1421_List_u64_t pvExcl_ppid = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t pvGrants_ppid = z_t1421_List_u64_create((uint64_t)0);
-    (void)(z_t2624_scanVisibility(ty, ast, ppid, fnode, &pvExcl_ppid, &pvGrants_ppid));
+    (void)(z_t2624_scanVisibility(ty, ast, fnode, &pvExcl_ppid, &pvGrants_ppid));
     (void)(z_t1597_ZTypeRegistry_setValtype(reg, pid, false));
     bool isgen = z_t2560_hasGenericParam(ast, &fnode->isItems);
     if (isgen) {
