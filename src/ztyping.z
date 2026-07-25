@@ -54,28 +54,6 @@ NodeConstRow: class {
     value: ztypes.ZConst
 }
 
-# One (node -> (name, optional type)) row: the relational form of the
-# if/case post-block ownership-cleanup lists. Order-significant (append).
-TakenVarRow: class {
-    nodeid: u64
-    name: String
-    typeId: (optionval u64)
-}
-
-# One (node -> name) row: the relational form of the set-valued node
-# stamps (generic-param names, taken-arm names, for-iterator bindings).
-NodeNameRow: class {
-    nodeid: u64
-    name: String
-}
-
-# One monomorphized (mono-type, originating-AST-node) pair.
-MonoRow: class {
-    monoTypeId: u64
-    astNodeId: u64
-}
-
-
 # One typecheck-synthesised AST row for the dump: a node minted during the
 # body walk (call-arg hoist temps) that the parsed-program walk cannot reach.
 SynthNode: class {
@@ -178,9 +156,6 @@ Decl: class {
     kind: declkind
     node: u32
     typeId: u64
-    # originDecl -- a mono member decl's template member decl (Phase 4
-    # navigation); 0 for template/source members.
-    originDecl: u64
     # ownership -- a param member's binding mode (noneMode when unset); where a
     # param's lock status lives.
     ownership: ztypes.zparamownership
@@ -190,8 +165,6 @@ Decl: class {
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
-    # lockArm -- a variant arm marked as the lock arm.
-    lockArm: bool
     # fnptrField -- the member occupies a struct function-pointer slot: an
     # is-block function member of a record or class, or an as-block member of a
     # generic class. Where it was declared, not its kind, decides this.
@@ -318,7 +291,6 @@ ZTyping: class {
 
     # per-node single-valued stamps, keyed by parsed-AST nodeid
     nodeType: (Map u64 value: u64)
-    nodeLiteralBase: (Map u64 value: ztypes.numbase)
     callKind: (Map u64 value: zast.callkind)
     atomVariableId: (Map u64 value: u64)
     # dotted-path nodeid -> the internal member name a public alias resolved to
@@ -333,19 +305,12 @@ ZTyping: class {
     variableSynthOrigin: (Map u64 value: String)
     funcReturnNode: (Map u64 value: u64)
     defVariableId: (Map u64 value: u64)
-    withOwnership: (Map u64 value: ztypes.zownership)
-    # member access: dotted-path nodeid -> the receiver's canonical type id
-    # (the member's owner). Tooling (zls go-to-definition) resolves the
-    # member by name inside the owner's definition body.
 
     # per-node collection-valued stamps, flattened to append-only rows
     nodeConst: (List NodeConstRow)
-    ifTakenVars: (List TakenVarRow)
-    caseSubjectTakenArms: (List NodeNameRow)
 
     # aggregate typecheck state
     conformance: (List ztypes.ZConformance)
-    monoTypes: (List MonoRow)
     preludeUnit: (Map String value: String)
     # names whose definition BODY has been resolved (the demand "done" marker);
     # distinct from `resolved` now that references pre-populate it.
@@ -412,11 +377,9 @@ ZTyping: class {
             :kind
             :node
             typeId: 0
-            originDecl: 0
             ownership: ztypes.zparamownership.noneMode
             defaultVal: DefaultVal.none
             grantsPrivate: false
-            lockArm: false
             fnptrField: false
             lockFieldDecl: 0
             children: (List declchild)
@@ -910,28 +873,9 @@ ZTyping: class {
         return r9
     }
 
-    # declIsLockArm -- is arm `name` of parentTypeId marked as the lock arm?
-    declIsLockArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        nid9: pool.find s: name
-        if nid9 == 0 then return false
-        md9: this.declMemberIdOf :parentTypeId nameId: nid9
-        if md9 == 0 then return false
-        r9: false
-        {
-            mo9: this.decls.get key: md9
-            match (
-                mo9
-            ) case some then {
-                r9 = mo9.lockArm
-            } case none then null
-        }
-        return r9
-    }
-
-
     # declCloneType -- a monomorphisation's own type declaration: the
     # template's name, node and home unit, with the template's members cloned
-    # in order and originDecl pointing back at each. The clone is reachable by
+    # in order. The clone is reachable by
     # no name -- it is linked into no parent namespace, so resolving the
     # template's name still finds the template.
     declCloneType: function {:this templateDeclId: u64} out u64 is {
@@ -963,7 +907,6 @@ ZTyping: class {
                 no9
             ) case some then {
                 no9.parent = tparent9
-                no9.originDecl = templateDeclId
             } case none then null
         }
         ki9: u64
@@ -988,17 +931,7 @@ ZTyping: class {
                     if ko9.kind.armDecl then isM9 = true
                 } case none then null
             }
-            if isM9 then {
-                cid9: this.declNew name: cn9 parent: id9 kind: ck9 node: cnode9
-                {
-                    co9: this.decls.get key: cid9
-                    match (
-                        co9
-                    ) case some then {
-                        co9.originDecl = kd9
-                    } case none then null
-                }
-            }
+            if isM9 then this.declNew name: cn9 parent: id9 kind: ck9 node: cnode9
         }
         return id9
     }
@@ -1592,7 +1525,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
         nodeType: (Map u64 value: u64 capacity: nodeEst)
-        nodeLiteralBase: (Map u64 value: ztypes.numbase)
         callKind: (Map u64 value: zast.callkind)
         atomVariableId: (Map u64 value: u64 capacity: nodeEst / 4)
         aliasInternalName: (Map u64 value: String)
@@ -1605,12 +1537,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         variableSynthOrigin: (Map u64 value: String)
         funcReturnNode: (Map u64 value: u64)
         defVariableId: (Map u64 value: u64)
-        withOwnership: (Map u64 value: ztypes.zownership)
         nodeConst: (List NodeConstRow)
-        ifTakenVars: (List TakenVarRow)
-        caseSubjectTakenArms: (List NodeNameRow)
         conformance: (List ztypes.ZConformance)
-        monoTypes: (List MonoRow)
         preludeUnit: (Map String value: String)
         definedKeys: (Set String)
         resolving: (Set String)
@@ -1765,15 +1693,6 @@ main: function is {
     } case none then {
         print "callKind[101] -> none"
     }
-    ty.withOwnership.set key: 102 value: ztypes.zownership.borrowed
-    wo: ty.withOwnership.get key: 102
-    match (
-        wo
-    ) case some then {
-        print "withOwnership[102] -> \{ztypes.zownershipName wo}"
-    } case none then {
-        print "withOwnership[102] -> none"
-    }
     ty.atomVariableId.set key: 103 value: 42
     av: ty.atomVariableId.get key: 103
     match (
@@ -1783,37 +1702,16 @@ main: function is {
     } case none then {
         print "atomVariableId[103] -> none"
     }
-    ty.nodeLiteralBase.set key: 104 value: ztypes.numbase.nonDec
-    nb: ty.nodeLiteralBase.get key: 104
-    match (
-        nb
-    ) case some then {
-        print "nodeLiteralBase[104] -> \{ztypes.numbaseName nb}"
-    } case none then {
-        print "nodeLiteralBase[104] -> none"
-    }
 
     print "=== node tables ==="
     k0: ztypes.makeIntConst 1024.i64
     ty.nodeConst.append (NodeConstRow nodeid: 200 value: k0)
     dumpNodeConst :ty
-    ty.ifTakenVars.append (TakenVarRow nodeid: 300 name: "tmp".string typeId: (optionval.some tStr))
-    ty.ifTakenVars.append (TakenVarRow
-        nodeid: 300
-        name: "scratch".string
-        typeId: (optionval.none u64)
-    )
-    dumpTakenVars :ty
-    ty.caseSubjectTakenArms.append (NodeNameRow nodeid: 400 name: "ok".string)
-    ty.caseSubjectTakenArms.append (NodeNameRow nodeid: 400 name: "err".string)
-    print "  takenArms count=\{ty.caseSubjectTakenArms.length}"
 
     print "=== aggregates ==="
     cf: reg.newConformance implTypeId: pid specTypeId: lid label: "drawable" isFacet: false
     ty.conformance.append cf
     dumpConformance :ty
-    ty.monoTypes.append (MonoRow monoTypeId: tList astNodeId: 600)
-    print "monoTypes count -> \{ty.monoTypes.length}"
     print "isError -> \{boolText ty.isError}"
 }
 
@@ -1874,14 +1772,6 @@ dumpNodeConst: function {ty: ZTyping} is {
     iter: ty.nodeConst.iterate
     for row: iter loop {
         print "  const node=\{row.nodeid} kind=\{ztypes.zconstkindName row.value.kind} ival=\{row.value.ival}"
-    }
-}
-
-# smoke-test: print the taken-variable overlay.
-dumpTakenVars: function {ty: ZTyping} is {
-    iter: ty.ifTakenVars.iterate
-    for row: iter loop {
-        print "  ifTaken node=\{row.nodeid} name=\{row.name} type=\{optU64Text row.typeId}"
     }
 }
 
