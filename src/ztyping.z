@@ -1133,9 +1133,8 @@ ZTyping: class {
     # children carrying a type; a unit's definitions and a type's `public:`
     # block are not members and are skipped. False when the type has no
     # declaration of its own, the child edges answer instead and enumFallback
-    # counts it. Order matches child-edge order once declReorderAllMembers has
-    # run, which is the last thing typecheck does -- measured equal for every
-    # record, class, variant, union, protocol, facet and function owner.
+    # counts it. Declaration order IS member order: declMoveChildToEnd places
+    # each member in the last member slot as it is first edged.
     declMemberList: function {:this ownerTid: u64 names: List u64 tids: List u64} is {
         od9: this.declIdOfType typeId: ownerTid
         if od9 == 0 then {
@@ -1189,6 +1188,49 @@ ZTyping: class {
                 } case none then null
             }
             if isMem9 when mt9 > 0 then {
+                names.append (raw9.get i: i9)
+                tids.append mt9
+            }
+            i9 = i9 + 1
+        }
+    }
+
+    # declChildRows -- every child of the type's own declaration that carries a
+    # type, in declaration order: the child names (pool ids) and their types.
+    # Unlike declMemberList this applies no kind filter, so a unit's definitions
+    # come out alongside a type's members -- the SQL dumps want the whole
+    # namespace a declaration describes. `typeId > 0` is the only filter it
+    # needs: an untyped child (a re-exported generic param, a `public:` block)
+    # never had a child edge either.
+    declChildRows: function {:this ownerTid: u64 names: List u64 tids: List u64} is {
+        od9: this.declIdOfType typeId: ownerTid
+        if od9 == 0 then return
+        kids9: (List u64)
+        raw9: (List u64)
+        {
+            oo9: this.decls.get key: od9
+            match (
+                oo9
+            ) case some then {
+                with cit9: oo9.children.iterate do for c9: cit9 loop {
+                    kids9.append c9.declId
+                    raw9.append c9.nameId.u64
+                }
+            } case none then null
+        }
+        i9: u64
+        n9: kids9.length
+        for i9 < n9 loop {
+            mt9: u64
+            {
+                ko9: this.decls.get key: (kids9.get i: i9)
+                match (
+                    ko9
+                ) case some then {
+                    mt9 = ko9.typeId
+                } case none then null
+            }
+            if mt9 > 0 then {
                 names.append (raw9.get i: i9)
                 tids.append mt9
             }

@@ -616,38 +616,51 @@ ZDumper: class {
         }
     }
 
-    # appendTypeChildren -- one row per parent->child edge (function params).
-    # The private/lock/default columns are constant for SMOKE and
-    # param_ownership is NULL until ownership-annotated params land.
-    appendTypeChildren: function {:this ast: Ast typing: ztyping.ZTyping} is {
-        # collect the rows before reading them: resolving a member declaration
-        # locks the whole ZTyping, which this iteration is holding open.
+    # appendTypeChildren -- one row per typed child of a type's declaration (a
+    # record field, a method, a function parameter, a unit definition), in
+    # declaration order. child_id is the member's DeclId. The private/lock/
+    # default columns are constant for SMOKE and param_ownership is NULL until
+    # ownership-annotated params land.
+    appendTypeChildren: function {:this ast: Ast st: zenv.ZSymbolTable} is {
+        # stage the rows first: every per-member lookup below is a :this call on
+        # the typing, which cannot run while an enumeration of it is open
         pids9: (List u64)
         nids9: (List u64)
-        cnids9: (List u64)
         poss9: (List u64)
         {
-            citer: typing.typeChild.iterate
-            for crow: citer loop {
-                pids9.append crow.parentTypeId
-                nids9.append crow.nameId
-                cnids9.append crow.childNameId
-                poss9.append crow.position
+            tn9: st.reg.nextTypeId
+            tid9: u64
+            for tid9 < tn9 loop {
+                nms9: (List u64)
+                tds9: (List u64)
+                st.typing.declChildRows ownerTid: tid9 names: nms9 tids: tds9
+                cpos9: u64
+                cn9: nms9.length
+                for cpos9 < cn9 loop {
+                    pv9: tid9
+                    pids9.append pv9
+                    nv9: nms9.get i: cpos9
+                    nids9.append nv9
+                    ov9: cpos9
+                    poss9.append ov9
+                    cpos9 = cpos9 + 1
+                }
+                tid9 = tid9 + 1
             }
         }
         ri9: u64
         for ri9 < pids9.length loop {
             pid9: pids9.get i: ri9
             nid9: nids9.get i: ri9
-            cnid9: cnids9.get i: ri9
             pos9: poss9.get i: ri9
             ri9 = ri9 + 1
-            cidSql: optIdStr o: (typing.declChildOfId parentTypeId: pid9 nameId: nid9)
+            cidSql: optIdStr o: (st.typing.declChildOfId parentTypeId: pid9 nameId: nid9)
+            did9: st.typing.declTypedMemberIdOf parentTypeId: pid9 nameId: nid9.u32.orPanic
             cnB9: ast.names.texts.get i: (nid9 - 1).u64
             cnSql: sqlStr s: cnB9.stringview
-            own9: typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
+            own9: st.typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
             poSql: paramOwnSql o: own9
-            line: "INSERT OR IGNORE INTO type_children VALUES (\{pid9}, \{cnSql}, \{cidSql}, \{pos9}, \{cnid9}, 0, 0, 0, NULL, \{poSql});\n"
+            line: "INSERT OR IGNORE INTO type_children VALUES (\{pid9}, \{cnSql}, \{cidSql}, \{pos9}, \{did9}, 0, 0, 0, NULL, \{poSql});\n"
             this.acc.append s: line
         }
     }
@@ -1123,17 +1136,30 @@ ZDumper: class {
 
     appendTypeChildrenCanon: function {:this ast: Ast unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
-        # collect the rows before reading them: resolving a member declaration
-        # locks the whole ZTyping, which this iteration is holding open.
+        # stage the rows first: every per-member lookup below is a :this call on
+        # the typing, which cannot run while an enumeration of it is open
         pids9: (List u64)
         nids9: (List u64)
         poss9: (List u64)
         {
-            citer: st.typing.typeChild.iterate
-            for crow: citer loop {
-                pids9.append crow.parentTypeId
-                nids9.append crow.nameId
-                poss9.append crow.position
+            tn9: st.reg.nextTypeId
+            tid9: u64
+            for tid9 < tn9 loop {
+                nms9: (List u64)
+                tds9: (List u64)
+                st.typing.declChildRows ownerTid: tid9 names: nms9 tids: tds9
+                cpos9: u64
+                cn9: nms9.length
+                for cpos9 < cn9 loop {
+                    pv9: tid9
+                    pids9.append pv9
+                    nv9: nms9.get i: cpos9
+                    nids9.append nv9
+                    ov9: cpos9
+                    poss9.append ov9
+                    cpos9 = cpos9 + 1
+                }
+                tid9 = tid9 + 1
             }
         }
         ri9: u64
@@ -1560,7 +1586,7 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     match (
         program
     ) case program then {
-        d.appendTypeChildren ast: program.ast typing: symtab.typing
+        d.appendTypeChildren ast: program.ast st: symtab
         d.appendDecls ast: program.ast typing: symtab.typing
     } else null
     d.appendGenericChildren st: symtab
