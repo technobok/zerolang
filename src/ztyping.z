@@ -698,6 +698,75 @@ ZTyping: class {
         } case none then null
     }
 
+    # declCloneType -- a monomorphisation's own type declaration: the
+    # template's name, node and home unit, with the template's members cloned
+    # in order and originDecl pointing back at each. The clone is reachable by
+    # no name -- it is linked into no parent namespace, so resolving the
+    # template's name still finds the template.
+    declCloneType: function {:this templateDeclId: u64} out u64 is {
+        tname9: u32
+        tnode9: u32
+        tparent9: u64
+        kids9: (List u64)
+        {
+            to9: this.decls.get key: templateDeclId
+            match (
+                to9
+            ) case some then {
+                tname9 = to9.name
+                tnode9 = to9.node
+                tparent9 = to9.parent
+                with cit9: to9.children.iterate do for c9: cit9 loop kids9.append c9.declId
+            } case none then null
+        }
+        if tname9 == 0 then return 0
+        id9: this.declNew name: tname9 parent: 0 kind: declkind.typeDecl node: tnode9
+        {
+            no9: this.decls.get key: id9
+            match (
+                no9
+            ) case some then {
+                no9.parent = tparent9
+                no9.originDecl = templateDeclId
+            } case none then null
+        }
+        ki9: u64
+        kn9: kids9.length
+        for ki9 < kn9 loop {
+            kd9: kids9.get i: ki9
+            ki9 = ki9 + 1
+            cn9: u32
+            cnode9: u32
+            ck9: declkind.fieldDecl
+            isM9: false
+            {
+                ko9: this.decls.get key: kd9
+                match (
+                    ko9
+                ) case some then {
+                    cn9 = ko9.name
+                    cnode9 = ko9.node
+                    ck9 = ko9.kind
+                    if ko9.kind.fieldDecl then isM9 = true
+                    if ko9.kind.methodDecl then isM9 = true
+                    if ko9.kind.armDecl then isM9 = true
+                } case none then null
+            }
+            if isM9 then {
+                cid9: this.declNew name: cn9 parent: id9 kind: ck9 node: cnode9
+                {
+                    co9: this.decls.get key: cid9
+                    match (
+                        co9
+                    ) case some then {
+                        co9.originDecl = kd9
+                    } case none then null
+                }
+            }
+        }
+        return id9
+    }
+
     # declSynthMember -- mint the declaration of a member the checker
     # synthesises (create, borrow, ==, !=, tag) under the type that minted
     # `parentTypeId`, appended in the position its child edge took. A no-op
