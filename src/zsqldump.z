@@ -91,14 +91,12 @@ schemaSql: function {} out String is {
     acc.append s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, parent_type_id INTEGER, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS type_children (type_id INTEGER, child_name TEXT NOT NULL, child_type_id INTEGER, position INTEGER, child_id INTEGER, is_private INTEGER, is_lock_field INTEGER, is_lock_arm INTEGER, default_expr TEXT, param_ownership INTEGER);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, destructor_name TEXT, is_heap_allocated INTEGER, cname TEXT, defined_in_unit TEXT);\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, ownership INTEGER NOT NULL, is_fnptr_field INTEGER NOT NULL, grants_private INTEGER NOT NULL, lock_field_decl_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS decl_child (parent_decl_id INTEGER NOT NULL, name TEXT NOT NULL, child_decl_id INTEGER NOT NULL, position INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS ref_decl (node_id INTEGER PRIMARY KEY, decl_id INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, cname TEXT, is_const INTEGER, const_value TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL, vtable_cname TEXT, create_cname TEXT, create_owned_cname TEXT, destroy_cname TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS conformance_wrapper (conformance_id INTEGER NOT NULL, spec_method TEXT NOT NULL, wrapper_cname TEXT NOT NULL, PRIMARY KEY (conformance_id, spec_method));\n"
+    acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, opened_at_seq INTEGER NOT NULL, closed_at_seq INTEGER, unreachable INTEGER NOT NULL);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT);\n"
     acc.append s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
@@ -173,8 +171,8 @@ cnameSql: function {c: StringView} out String is {
     }
 }
 
-# paramOwnSql -- a child edge's param-ownership as its integer code
-# (TAKE=0, BORROW=1, LOCK=2), or "NULL" when the edge carries no ownership.
+# paramOwnSql -- a member's param-ownership as its integer code
+# (TAKE=0, BORROW=1, LOCK=2), or "NULL" when it carries no ownership.
 paramOwnSql: function {o: optionval ztypes.zparamownership} out String is {
     match (
         o
@@ -600,7 +598,6 @@ ZDumper: class {
                 nameSql: sqlStr s: zt.name.stringview
                 ttName: ztypes.ztypetypeName t: zt.typetype
                 ttSql: sqlStr s: ttName.stringview
-                parentSql: optIdStr o: zt.boundId
                 valSql: optBoolSql o: zt.isValtype
                 genSql: boolNum b: zt.isgeneric
                 goSql: optIdStr o: zt.genericOriginId
@@ -609,59 +606,10 @@ ZDumper: class {
                 heapSql: boolNum b: zt.isHeapAllocated
                 cnSql: cnameSql c: zt.cname.stringview
                 duSql: optStrSql o: (definedUnitOf9 :st :tid)
-                row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{parentSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
+                row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
                 this.acc.append s: row
             } case none then null
             tid = tid + 1
-        }
-    }
-
-    # appendTypeChildren -- one row per typed child of a type's declaration (a
-    # record field, a method, a function parameter, a unit definition), in
-    # declaration order. child_id is the member's DeclId. The private/lock/
-    # default columns are constant for SMOKE and param_ownership is NULL until
-    # ownership-annotated params land.
-    appendTypeChildren: function {:this ast: Ast st: zenv.ZSymbolTable} is {
-        # stage the rows first: every per-member lookup below is a :this call on
-        # the typing, which cannot run while an enumeration of it is open
-        pids9: (List u64)
-        nids9: (List u64)
-        poss9: (List u64)
-        {
-            tn9: st.reg.nextTypeId
-            tid9: u64
-            for tid9 < tn9 loop {
-                nms9: (List u64)
-                tds9: (List u64)
-                st.typing.declChildRows ownerTid: tid9 names: nms9 tids: tds9
-                cpos9: u64
-                cn9: nms9.length
-                for cpos9 < cn9 loop {
-                    pv9: tid9
-                    pids9.append pv9
-                    nv9: nms9.get i: cpos9
-                    nids9.append nv9
-                    ov9: cpos9
-                    poss9.append ov9
-                    cpos9 = cpos9 + 1
-                }
-                tid9 = tid9 + 1
-            }
-        }
-        ri9: u64
-        for ri9 < pids9.length loop {
-            pid9: pids9.get i: ri9
-            nid9: nids9.get i: ri9
-            pos9: poss9.get i: ri9
-            ri9 = ri9 + 1
-            cidSql: optIdStr o: (st.typing.declChildOfId parentTypeId: pid9 nameId: nid9)
-            did9: st.typing.declTypedMemberIdOf parentTypeId: pid9 nameId: nid9.u32.orPanic
-            cnB9: ast.names.texts.get i: (nid9 - 1).u64
-            cnSql: sqlStr s: cnB9.stringview
-            own9: st.typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
-            poSql: paramOwnSql o: own9
-            line: "INSERT OR IGNORE INTO type_children VALUES (\{pid9}, \{cnSql}, \{cidSql}, \{pos9}, \{did9}, 0, 0, 0, NULL, \{poSql});\n"
-            this.acc.append s: line
         }
     }
 
@@ -684,7 +632,10 @@ ZDumper: class {
                 nameSql: sqlStr s: dnm.stringview
                 kn9: ztyping.declkindName k: dOpt.kind
                 kindSql: sqlStr s: kn9.stringview
-                row: "INSERT OR IGNORE INTO decl VALUES (\{did}, \{nameSql}, \{dOpt.parent}, \{kindSql}, \{dOpt.node}, \{dOpt.typeId});\n"
+                ownSql: ztypes.zparamownershipInt dOpt.ownership
+                fpSql: boolNum b: dOpt.fnptrField
+                gpSql: boolNum b: dOpt.grantsPrivate
+                row: "INSERT OR IGNORE INTO decl VALUES (\{did}, \{nameSql}, \{dOpt.parent}, \{kindSql}, \{dOpt.node}, \{dOpt.typeId}, \{ownSql}, \{fpSql}, \{gpSql}, \{dOpt.lockFieldDecl});\n"
                 this.acc.append s: row
                 pos9: u64
                 cnt9: dOpt.children.length
@@ -800,19 +751,14 @@ ZDumper: class {
         }
     }
 
-    # appendConformance -- one row per recorded conformance (impl satisfies spec under a
-    # label). The vtable/create/destroy cnames embed the impl type id and are excluded
-    # from the differential. conformance_wrapper (spec-method wrappers) lands in a follow-up.
+    # appendConformance -- one row per recorded conformance (impl satisfies spec
+    # under a label).
     appendConformance: function {:this typing: ztyping.ZTyping} is {
         citer: typing.conformance.iterate
         for cf: citer loop {
             lblSql: sqlStr s: cf.label.stringview
             facetSql: boolNum b: cf.isFacet
-            vtSql: cnameSql c: cf.vtableCname.stringview
-            ccSql: cnameSql c: cf.createCname.stringview
-            coSql: cnameSql c: cf.createOwnedCname.stringview
-            dcSql: cnameSql c: cf.destroyCname.stringview
-            row: "INSERT OR IGNORE INTO conformance VALUES (\{cf.conformanceId}, \{cf.implTypeId}, \{cf.specTypeId}, \{lblSql}, \{facetSql}, \{vtSql}, \{ccSql}, \{coSql}, \{dcSql});\n"
+            row: "INSERT OR IGNORE INTO conformance VALUES (\{cf.conformanceId}, \{cf.implTypeId}, \{cf.specTypeId}, \{lblSql}, \{facetSql});\n"
             this.acc.append s: row
         }
     }
@@ -1134,40 +1080,17 @@ ZDumper: class {
         this.emitSection title: "types" :rows
     }
 
-    appendTypeChildrenCanon: function {:this ast: Ast unm: StringView st: zenv.ZSymbolTable} is {
+    # appendDeclChildCanon -- the declaration namespace of every type defined in
+    # this unit, one row per typed child: owner name, child name, child type
+    # name, position, param ownership. The canon dump's only view of member
+    # structure, so it resolves ids to names rather than dumping the decl tree.
+    appendDeclChildCanon: function {:this ast: Ast unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
-        # stage the rows first: every per-member lookup below is a :this call on
-        # the typing, which cannot run while an enumeration of it is open
-        pids9: (List u64)
-        nids9: (List u64)
-        poss9: (List u64)
-        {
-            tn9: st.reg.nextTypeId
-            tid9: u64
-            for tid9 < tn9 loop {
-                nms9: (List u64)
-                tds9: (List u64)
-                st.typing.declChildRows ownerTid: tid9 names: nms9 tids: tds9
-                cpos9: u64
-                cn9: nms9.length
-                for cpos9 < cn9 loop {
-                    pv9: tid9
-                    pids9.append pv9
-                    nv9: nms9.get i: cpos9
-                    nids9.append nv9
-                    ov9: cpos9
-                    poss9.append ov9
-                    cpos9 = cpos9 + 1
-                }
-                tid9 = tid9 + 1
-            }
-        }
-        ri9: u64
-        for ri9 < pids9.length loop {
-            pid9: pids9.get i: ri9
-            nid9: nids9.get i: ri9
-            pos9: poss9.get i: ri9
-            ri9 = ri9 + 1
+        tn9: st.reg.nextTypeId
+        tid9: u64
+        for tid9 < tn9 loop {
+            pid9: tid9
+            tid9 = tid9 + 1
             pdu: definedUnitOf9 :st tid: pid9
             inUnit: false
             match (
@@ -1176,20 +1099,28 @@ ZDumper: class {
                 if pdu.stringview == unm then inUnit = true
             } case none then null
             if inUnit then {
+                nms9: (List u64)
+                tds9: (List u64)
+                st.typing.declChildRows ownerTid: pid9 names: nms9 tids: tds9
                 pName: canonTypeName reg: st.reg tid: pid9
-                cTid: optU64Or0 o: (st.typing.declChildOfId parentTypeId: pid9 nameId: nid9)
-                cName: canonTypeName reg: st.reg tid: cTid
                 pSql: sqlStr s: pName.stringview
-                cnB8: ast.names.texts.get i: (nid9 - 1).u64
-                cnSql: sqlStr s: cnB8.stringview
-                ctSql: sqlStr s: cName.stringview
-                own9: st.typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
-                poSql: paramOwnSql o: own9
-                line: "\{pSql} | \{cnSql} | \{ctSql} | \{pos9} | \{poSql}"
-                rows.append line
+                pos9: u64
+                cn9: nms9.length
+                for pos9 < cn9 loop {
+                    nid9: nms9.get i: pos9
+                    cName: canonTypeName reg: st.reg tid: (tds9.get i: pos9)
+                    cnB8: ast.names.texts.get i: (nid9 - 1).u64
+                    cnSql: sqlStr s: cnB8.stringview
+                    ctSql: sqlStr s: cName.stringview
+                    own9: st.typing.declOwnershipOfId parentTypeId: pid9 nameId: nid9.u32.orPanic
+                    poSql: paramOwnSql o: own9
+                    line: "\{pSql} | \{cnSql} | \{ctSql} | \{pos9} | \{poSql}"
+                    rows.append line
+                    pos9 = pos9 + 1
+                }
             }
         }
-        this.emitSection title: "type_children" :rows
+        this.emitSection title: "decl_child" :rows
     }
 
     appendConformanceCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
@@ -1586,7 +1517,6 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     match (
         program
     ) case program then {
-        d.appendTypeChildren ast: program.ast st: symtab
         d.appendDecls ast: program.ast typing: symtab.typing
     } else null
     d.appendGenericChildren st: symtab
@@ -1624,7 +1554,7 @@ canonTypeName: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
 }
 
 # dumpCanon -- a canonical, id-normalized rendering of the typecheck state
-# (unit, types, type_children, conformance, and the body-walk symbol table:
+# (unit, types, decl_child, conformance, and the body-walk symbol table:
 # scope / entry / variable / narrowed_subtype) for the Python-free dump-canon
 # regression gate. PK ids are omitted, FK ids resolved to names, id-embedding
 # cnames dropped, rows sorted. Parse-level tables (files / ast_nodes) are
@@ -1650,7 +1580,7 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     match (
         program
     ) case program then {
-        d.appendTypeChildrenCanon ast: program.ast unm: mu.stringview st: symtab
+        d.appendDeclChildCanon ast: program.ast unm: mu.stringview st: symtab
         d.appendArgDispositionCanon ast: program.ast st: symtab
     } else null
     d.appendGenericChildrenCanon unm: mu.stringview st: symtab
