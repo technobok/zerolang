@@ -6781,6 +6781,7 @@ resolveDef: function {
             dbrid
         ) case some then {
             ty.nodeType.set key: defn.nodeid.u64 value: dbrid
+            declSettleOrder :ty tid: dbrid
         } case none then null
     } case objectdef then {
         match (
@@ -6821,6 +6822,7 @@ resolveDef: function {
             objrid
         ) case some then {
             ty.nodeType.set key: defn.nodeid.u64 value: objrid
+            declSettleOrder :ty tid: objrid
         } case none then null
     } case dottedpath then {
         # A unit-level type alias (`Node: zast.Node`): resolve the cross-unit dotted
@@ -11035,6 +11037,7 @@ mintCollectionMethod: function {
         nameId: mnid9.u64
         childTypeId: fid
     )
+    declSettleOrder :ty tid: monoId
     return fid
 }
 
@@ -23157,11 +23160,28 @@ declEnsureMembers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry owner
         }
         ty.declSynthMember parentTypeId: ownerTid nameId: nid9 kind: kk9
     }
+    # a monomorphisation's members land in clone order, then its own edges are
+    # written: settle it here, the way a resolver settles the type it built
+    declSettleOrder :ty tid: ownerTid
 }
 
 # declReorderAllMembers -- put every declared type's member children in edge
 # order. Runs at the end of typecheck, when no further child edge can appear.
+# declSettleOrder -- put one type's member declarations in child-edge order,
+# called as soon as the resolver that built it has written its last member
+# edge. Nothing appends a member edge to a record / class / variant / union /
+# facet / protocol after its resolver returns, so from here on the declaration
+# order IS the edge order -- which is what lets a reader mid-body-check
+# enumerate members from declarations instead of from the edge table.
+declSettleOrder: function {ty: ztyping.ZTyping tid: u64} is {
+    if tid == 0 then return
+    did9: ty.declIdOfType typeId: tid
+    if did9 == 0 then return
+    ty.declReorderMembers parentTypeId: tid declId: did9
+}
+
 declReorderAllMembers: function {st: zenv.ZSymbolTable} is {
+    st.typing.reorderLate = true
     tids9: (List u64)
     dids9: (List u64)
     with dit9: st.typing.declByTypeId.iterateItems do for de9: dit9 loop {
@@ -24609,6 +24629,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     dropDefault: st.typing.dropDefault
     synthNoOwner: st.typing.synthNoOwner
     reorderPermuted: st.typing.reorderPermuted
+    reorderPermutedLate: st.typing.reorderPermutedLate
     parityCalls: st.typing.parityCalls
     parityEdgeOnly: st.typing.parityEdgeOnly
     parityDeclOnly: st.typing.parityDeclOnly
@@ -24617,7 +24638,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     parityDeclOnlyZero: st.typing.parityDeclOnlyZero
     childOfFallback: st.typing.childOfFallback
     childOfFallbackHit: st.typing.childOfFallbackHit
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner} reorderPermuted=\{reorderPermuted} parityCalls=\{parityCalls} parityEdgeOnly=\{parityEdgeOnly} parityDeclOnly=\{parityDeclOnly} parityDiff=\{parityDiff} parityZero=\{parityZero} parityDeclOnlyZero=\{parityDeclOnlyZero} childOfFallback=\{childOfFallback} childOfFallbackHit=\{childOfFallbackHit}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner} reorderPermuted=\{reorderPermuted} reorderPermutedLate=\{reorderPermutedLate} parityCalls=\{parityCalls} parityEdgeOnly=\{parityEdgeOnly} parityDeclOnly=\{parityDeclOnly} parityDiff=\{parityDiff} parityZero=\{parityZero} parityDeclOnlyZero=\{parityDeclOnlyZero} childOfFallback=\{childOfFallback} childOfFallbackHit=\{childOfFallbackHit}"
 }
 typecheck: function {
     program: Node

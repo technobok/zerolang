@@ -435,11 +435,15 @@ ZTyping: class {
     synthNoOwner: u64
     # declMemberList answered from the child edges: the owner had no declaration
     enumFallback: u64
-    # types whose member children declReorderMembers actually had to permute.
-    # Phase 6 made every member declared before its edge, so this should be 0:
-    # if it is, declaration order is edge order THROUGHOUT typecheck, not just
-    # after the end-of-typecheck sweep.
+    # types whose member children declReorderMembers actually had to permute,
+    # split by when. A type is settled as soon as its own resolver finishes;
+    # reorderPermutedLate is what the end-of-typecheck sweep still has to fix,
+    # and it should be monomorphisations only -- nothing else gains a member
+    # edge after its resolver returns.
     reorderPermuted: u64
+    reorderPermutedLate: u64
+    # set by declReorderAllMembers for the duration of the final sweep
+    reorderLate: bool
     # ZC_Q2_SPIKE: childOf/childOfId compare their edge answer against the
     # declaration answer on every call, so no call site can escape the sample.
     probeParity: bool
@@ -947,6 +951,9 @@ ZTyping: class {
     # Non-member children keep their positions; members are permuted among the
     # positions they already occupy.
     declReorderMembers: function {:this parentTypeId: u64 declId: u64} is {
+        # the call count roughly doubles once resolvers settle their own types,
+        # so the no-bucket path must not allocate
+        if (this.childCount :parentTypeId) == 0 then return
         ordOf9: (Map u64 value: u64)
         {
             bo9: this.childIndex.get key: parentTypeId
@@ -1045,7 +1052,13 @@ ZTyping: class {
             }
             si9 = si9 + 1
         }
-        if swapped9 then this.reorderPermuted = this.reorderPermuted + 1
+        if swapped9 then {
+            if this.reorderLate then {
+                this.reorderPermutedLate = this.reorderPermutedLate + 1
+            } else {
+                this.reorderPermuted = this.reorderPermuted + 1
+            }
+        }
         wo9: this.decls.get key: declId
         match (
             wo9
@@ -1895,6 +1908,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         synthNoOwner: 0
         enumFallback: 0
         reorderPermuted: 0
+        reorderPermutedLate: 0
+        reorderLate: false
         probeParity: false
         parityCalls: 0
         parityEdgeOnly: 0
