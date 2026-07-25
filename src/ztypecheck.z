@@ -3656,11 +3656,10 @@ resolveFunction: function {
                     childTypeId: cid
                 )
                 if (isNumericLiteralName name: ptn.stringview) then {
-                    (ty.setChildDefault
+                    (ty.setDefaultLiteral
                         pool: ast.names
                         parentTypeId: fid
                         name: pname.stringview
-                        default: ptn.stringview
                         node: pm.operation
                     )
                 } else {
@@ -3686,7 +3685,6 @@ resolveFunction: function {
                             pool: ast.names
                             parentTypeId: fid
                             name: pname.stringview
-                            funcname: ptn.stringview
                             targetDecl: (declOfTypeId :reg tid: fnRefTid9)
                         )
                     } else {
@@ -3697,11 +3695,10 @@ resolveFunction: function {
                             # default, not a variant arm (mirrors the field
                             # classifiers' rootNameOf guard)
                             if (isNumericLiteralName name: prn9.stringview) then {
-                                (ty.setChildDefault
+                                (ty.setDefaultLiteral
                                     pool: ast.names
                                     parentTypeId: fid
                                     name: pname.stringview
-                                    default: prn9.stringview
                                     node: pm.operation
                                 )
                             } else if (reg.isUnitName name: prn9.stringview) == false then {
@@ -3711,7 +3708,6 @@ resolveFunction: function {
                                     pool: ast.names
                                     parentTypeId: fid
                                     name: pname.stringview
-                                    armName: pdcn9.stringview
                                     targetDecl: pArmDecl9
                                 )
                             }
@@ -5160,11 +5156,10 @@ resolveRecord: function {
                         dcn1: dottedChildName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                         rdnr: rootNameOf :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                         if (isNumericLiteralName name: rdnr.stringview) then {
-                            (ty.setChildDefault
+                            (ty.setDefaultLiteral
                                 pool: ast.names
                                 parentTypeId: rid
                                 name: fname.stringview
-                                default: rdnr.stringview
                                 node: fm.operation
                             )
                         } else {
@@ -5175,7 +5170,6 @@ resolveRecord: function {
                                     pool: ast.names
                                     parentTypeId: rid
                                     name: fname.stringview
-                                    armName: dcn1.stringview
                                     targetDecl: rArmDecl9
                                 )
                             }
@@ -6056,11 +6050,10 @@ resolveClass: function {
                         dcn0: dottedChildName :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                         rdnc: rootNameOf :ast n: (ast.nodes.get i: (fm.operation - 1).u64)
                         if (isNumericLiteralName name: rdnc.stringview) then {
-                            (ty.setChildDefault
+                            (ty.setDefaultLiteral
                                 pool: ast.names
                                 parentTypeId: cid
                                 name: fname.stringview
-                                default: rdnc.stringview
                                 node: fm.operation
                             )
                         } else {
@@ -6071,7 +6064,6 @@ resolveClass: function {
                                     pool: ast.names
                                     parentTypeId: cid
                                     name: fname.stringview
-                                    armName: dcn0.stringview
                                     targetDecl: cArmDecl9
                                 )
                             }
@@ -12150,7 +12142,6 @@ genericTypeConstruction: function {
     subs: (Map String value: u64)
     valSubs2: (Map String value: u64)
     numParamNames9: (List String)
-    numParamVals9: (List String)
     numParamNodes9: (List u32)
     firstA: u64
     anyMiss: false
@@ -12238,8 +12229,6 @@ genericTypeConstruction: function {
                 if pk0.length > 0 then {
                     npn0: pk0.copy
                     numParamNames9.append npn0
-                    npv0: an.copy
-                    numParamVals9.append npv0
                     numParamNodes9.append arg.operation
                     pdv0: parseDecimalU64 text: an.stringview
                     match (
@@ -12298,13 +12287,11 @@ genericTypeConstruction: function {
     npn9: numParamNames9.length
     for npi9 < npn9 loop {
         npName9: numParamNames9.get i: npi9
-        npVal9: numParamVals9.get i: npi9
         npNode9: numParamNodes9.get i: npi9
-        (st.typing.setChildDefault
+        (st.typing.setDefaultLiteral
             pool: ast.names
             parentTypeId: mid
             name: npName9.stringview
-            default: npVal9.stringview
             node: npNode9
         )
         npi9 = npi9 + 1
@@ -24182,7 +24169,7 @@ publicAliasInternalNames: function {
 # corrupts each stamp to prove the parity assert is non-vacuous.
 # NB: iterate the typeChild List, NEVER childIndex.iterateItems -- binding a
 # reftype map value (the ChildBucket) moves it out of the map and corrupts it.
-q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
+q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     en9: os.env key: "ZC_Q2_SPIKE"
     match (
         en9
@@ -24210,11 +24197,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
     missNoOwner: u64
     missMemberDecl: u64
     missUnitReg: u64
-    defSet: u64
-    defFunc: u64
-    defArm: u64
-    defMismatch: u64
-    defUnresolved: u64
     orderTypes: u64
     orderBad: u64
     orderMissing: u64
@@ -24257,45 +24239,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
         # declaration of its own (declMemberOf would reach its template's), so
         # a production-written field is checked only through this leg.
         mapArm9: false
-        dqText9: st.typing.childDefaultTextId parentTypeId: ptid9 nameId: nid9
-        # 0 none, 1 literal, 2 function, 3 variant arm -- the sentinel is read
-        # the way renderDefault reads it, on the first byte after the hash
-        dqMap9: u64
-        if dqText9.length > 0 then {
-            dqMap9 = 1
-            dqb0: dqText9.stringview.byteAt i: 0
-            match (
-                dqb0
-            ) case some then {
-                if dqb0 == 35 then {
-                    dqb1: dqText9.stringview.byteAt i: 1
-                    match (
-                        dqb1
-                    ) case some then {
-                        if dqb1 == 102 then dqMap9 = 2
-                        if dqb1 == 118 then dqMap9 = 3
-                    } case none then null
-                }
-            } case none then null
-        }
-        dqPay9: String
-        if dqMap9 > 1 then {
-            dqsv9: dqText9.stringview
-            dqci9: u64
-            dqn9: dqsv9.length
-            dqfound9: false
-            for dqci9 < dqn9 loop {
-                dqcb9: dqsv9.byteAt i: dqci9
-                match (
-                    dqcb9
-                ) case some then {
-                    if dqcb9 == 58 then dqfound9 = true
-                } case none then null
-                if dqfound9 then break
-                dqci9 = dqci9 + 1
-            }
-            if dqfound9 then dqPay9 = (dqsv9.substring from: dqci9 + 1 to: dqn9).string
-        }
         mdX9: st.typing.declMemberIdOf parentTypeId: ptid9 nameId: nid32
         if mdX9 == 0 then {
             exactMisses = exactMisses + 1
@@ -24331,11 +24274,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
                 if sabotage9 then {
                     dx9.lockArm = true
                     if mapArm9 then dx9.lockArm = false
-                    if dx9.defaultVal.none then {
-                        dx9.defaultVal = (DefaultVal.literal 0)
-                    } else {
-                        dx9.defaultVal = DefaultVal.none
-                    }
                 }
                 if dx9.lockArm != mapArm9 then lockArmMismatch = lockArmMismatch + 1
                 mapTid9: u64
@@ -24350,65 +24288,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
                 if mapTid9 > 0 then typeIdSet = typeIdSet + 1
                 if sabotage9 then dx9.typeId = mapTid9 + 1
                 if dx9.typeId != mapTid9 then typeIdMismatch = typeIdMismatch + 1
-                if dqMap9 > 0 then defSet = defSet + 1
-                if dqMap9 == 2 then defFunc = defFunc + 1
-                if dqMap9 == 3 then defArm = defArm + 1
-                dqKind9: u64
-                dqNode9: u32
-                dqTgt9: u64
-                {
-                    dqv9: dx9.defaultVal
-                    if dqv9.literal then {
-                        dqKind9 = 1
-                        dqNode9 = dqv9
-                    }
-                }
-                {
-                    dqv8: dx9.defaultVal
-                    if dqv8.func then {
-                        dqKind9 = 2
-                        dqTgt9 = dqv8
-                    }
-                }
-                {
-                    dqv7: dx9.defaultVal
-                    if dqv7.arm then {
-                        dqKind9 = 3
-                        dqTgt9 = dqv7
-                    }
-                }
-                if dqKind9 != dqMap9 then {
-                    defMismatch = defMismatch + 1
-                } else {
-                    # the payload must reproduce the text the sidecar stored:
-                    # a literal through its node, a function or arm through the
-                    # declaration's name
-                    if dqKind9 == 1 then {
-                        if dqNode9 == 0 then {
-                            defUnresolved = defUnresolved + 1
-                        } else {
-                            dqrn9: rootNameOf :ast n: (ast.nodes.get i: (dqNode9 - 1).u64)
-                            if (dqrn9.stringview == dqText9.stringview) == false then defMismatch = defMismatch + 1
-                        }
-                    }
-                    if dqKind9 > 1 then {
-                        if dqTgt9 == 0 then {
-                            defUnresolved = defUnresolved + 1
-                        } else {
-                            dqnm9: u32
-                            {
-                                dqt9: st.typing.decls.get key: dqTgt9
-                                match (
-                                    dqt9
-                                ) case some then {
-                                    dqnm9 = dqt9.name
-                                } case none then null
-                            }
-                            dqtx9: zast.poolTextCopy pool: ast.names ref: dqnm9
-                            if (dqtx9.stringview == dqPay9.stringview) == false then defMismatch = defMismatch + 1
-                        }
-                    }
-                }
             } case none then null
         }
     }
@@ -24519,7 +24398,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable ast: Ast} is {
     dropGrant: st.typing.dropGrant
     dropDefault: st.typing.dropDefault
     synthNoOwner: st.typing.synthNoOwner
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} defSet=\{defSet} defFunc=\{defFunc} defArm=\{defArm} defMismatch=\{defMismatch} defUnresolved=\{defUnresolved} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner}"
 }
 typecheck: function {
     program: Node
@@ -24614,7 +24493,7 @@ typecheck: function {
             mainName: program.mainUnitName.stringview
         )
         declReorderAllMembers :st
-        q2SpikeVerify :st ast: program.ast
+        q2SpikeVerify :st
     } else null
     return st
 }

@@ -338,7 +338,6 @@ ZTyping: class {
     collectionChildrenBuilt: (Map u64 value: bool)
     pendingUnitWalk: (List PendingUnitWalk)
     unitMonoWalksPending: (Map u64 value: bool)
-    childDefault: (Map u64 value: String)
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # tooling-only; the emitter never reads it.
     argDisposition: (Map u64 value: ztypes.zparamownership)
@@ -1463,17 +1462,10 @@ ZTyping: class {
 
     # --- default sidecar ---
 
-    # setChildDefault -- a literal default. `node` is the default expression's
-    # AST node, which the declaration carries the way a unit constant does (its
-    # value is re-rendered from the node, never stored).
-    setChildDefault: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView default: StringView node: u32} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            d: default.string
-            this.childDefault.set key: idopt value: d
-        } case none then null
+    # setDefaultLiteral -- a literal default. `node` is the default
+    # expression's AST node, which the declaration carries the way a unit
+    # constant does (its value is re-rendered from the node, never stored).
+    setDefaultLiteral: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView node: u32} is {
         this.declSetDefault :parentTypeId :pool :name value: (DefaultVal.literal node)
     }
 
@@ -1502,70 +1494,54 @@ ZTyping: class {
 
     # setDefaultFunction -- a default naming a function; `targetDecl` is that
     # function's declaration (0 when it resolved to no declaration).
-    setDefaultFunction: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView funcname: StringView targetDecl: u64} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            d: "#function:\{funcname}"
-            this.childDefault.set key: idopt value: d
-        } case none then null
+    setDefaultFunction: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView targetDecl: u64} is {
         this.declSetDefault :parentTypeId :pool :name value: (DefaultVal.func targetDecl)
     }
 
     # setDefaultVariantArm -- a default naming an arm of the member's own
     # type; `targetDecl` is that arm's declaration (0 when it resolved to no
     # declaration).
-    setDefaultVariantArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView armName: StringView targetDecl: u64} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            d: "#variant:\{armName}"
-            this.childDefault.set key: idopt value: d
-        } case none then null
+    setDefaultVariantArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView targetDecl: u64} is {
         this.declSetDefault :parentTypeId :pool :name value: (DefaultVal.arm targetDecl)
     }
 
-    # Default text for (parent, name), or "" when none. `.copy` returns an
-    # owned deep copy of the map's String (the map keeps its own); `.string`
-    # on an already-owned String is an identity that would alias the Option
-    # payload destroyed at return.
-    childDefaultText: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out String is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childDefault.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r.copy
-            } case none then {
-                return "".string
-            }
-        } case none then {
-            return "".string
+    # declDefaultText -- a member's default as display text, "" when it has
+    # none. A literal renders as its expression nodeid (the caller needs an Ast
+    # to re-render it); a function or arm renders as its target's declared name.
+    declDefaultText: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out String is {
+        nid9: pool.find s: name
+        if nid9 == 0 then return "".string
+        dv9: this.declDefaultOfId :parentTypeId nameId: nid9
+        {
+            dl9: dv9
+            if dl9.literal then return "literal node \{dl9}"
         }
-    }
-
-    # childDefaultTextId -- the id-keyed form of childDefaultText.
-    childDefaultTextId: function {:this parentTypeId: u64 nameId: u64} out String is {
-        idopt: this.childNameIdOfId :parentTypeId :nameId
-        match (
-            idopt
-        ) case some then {
-            r: this.childDefault.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r.copy
-            } case none then {
-                return "".string
-            }
-        } case none then {
-            return "".string
+        tgt9: u64
+        {
+            df9: dv9
+            if df9.func then tgt9 = df9
         }
+        isArm9: false
+        {
+            da9: dv9
+            if da9.arm then {
+                tgt9 = da9
+                isArm9 = true
+            }
+        }
+        if tgt9 == 0 then return "".string
+        nm9: u32
+        {
+            to9: this.decls.get key: tgt9
+            match (
+                to9
+            ) case some then {
+                nm9 = to9.name
+            } case none then null
+        }
+        tx9: zast.poolTextCopy :pool ref: nm9
+        if isArm9 then return "arm \{tx9}"
+        return "func \{tx9}"
     }
 
     # --- ownership sidecar ---
@@ -1731,7 +1707,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         collectionChildrenBuilt: (Map u64 value: bool)
         pendingUnitWalk: (List PendingUnitWalk)
         unitMonoWalksPending: (Map u64 value: bool)
-        childDefault: (Map u64 value: String)
         argDisposition: (Map u64 value: ztypes.zparamownership)
         genericArgTypeBy: (Map u64 value: u64)
         callGenericBinding: (Map u64 value: u64)
@@ -1841,6 +1816,10 @@ main: function is {
     ty.declNew name: (pool9.set s: "x") parent: pDecl9 kind: declkind.fieldDecl node: 0
     ty.declNew name: (pool9.set s: "y") parent: pDecl9 kind: declkind.fieldDecl node: 0
     ty.declNew name: (pool9.set s: "label") parent: pDecl9 kind: declkind.fieldDecl node: 0
+    # a function / arm default names its target by DeclId, so the targets have
+    # to be declared for the defaults below to resolve to anything
+    mkDecl9: ty.declNew name: (pool9.set s: "makeY") parent: 0 kind: declkind.funcDecl node: 0
+    armDecl9: ty.declNew name: (pool9.set s: "none") parent: 0 kind: declkind.armDecl node: 0
 
     print "=== children ==="
     ty.setChildId parentTypeId: pid nameId: (pool9.set s: "x").u64 childTypeId: tInt
@@ -1858,13 +1837,12 @@ main: function is {
 
     print "=== sidecars ==="
     ty.setChildLockField pool: pool9 parentTypeId: pid name: "y"
-    ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" funcname: "makeY" targetDecl: 0
+    ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" targetDecl: mkDecl9
     (ty.setDefaultVariantArm
         pool: pool9
         parentTypeId: pid
         name: "label"
-        armName: "none"
-        targetDecl: 0
+        targetDecl: armDecl9
     )
     (ty.setChildOwnership
         pool: pool9
@@ -1986,7 +1964,7 @@ smokeIsLockField: function {pool: zast.StringPool ty: ZTyping pid: u64 name: Str
 
 # smoke-test: print the default value of member `name` of `pid`.
 smokeDefault: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    d: ty.childDefaultText :pool parentTypeId: pid :name
+    d: ty.declDefaultText :pool parentTypeId: pid :name
     print "default point.\{name} -> \{d}"
 }
 
