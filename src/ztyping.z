@@ -21,6 +21,7 @@ public: unit {
     :PendingUnitWalk
     :SynthNode
     :Decl
+    :DefaultVal
     :declchild
     :declkind
     :declkindName
@@ -1082,13 +1083,34 @@ ZTyping: class {
 
     # --- default sidecar ---
 
-    setChildDefault: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView default: StringView} is {
+    # setChildDefault -- a literal default. `node` is the default expression's
+    # AST node, which the declaration carries the way a unit constant does (its
+    # value is re-rendered from the node, never stored).
+    setChildDefault: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView default: StringView node: u32} is {
         idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
         ) case some then {
             d: default.string
             this.childDefault.set key: idopt value: d
+        } case none then null
+        this.declSetDefault :parentTypeId :pool :name value: (DefaultVal.literal node)
+    }
+
+    # declSetDefault -- record a member declaration's default value; a no-op
+    # when the owner type has no declaration (a monomorphisation) or the
+    # member is not a declared one.
+    declSetDefault: function {:this parentTypeId: u64 pool: zast.StringPool name: StringView value: DefaultVal} is {
+        nid8: pool.find s: name
+        if nid8 == 0 then return
+        md8: this.declMemberIdOf :parentTypeId nameId: nid8
+        if md8 == 0 then return
+        do8: this.decls.get key: md8
+        match (
+            do8
+        ) case some then {
+            dv8: value
+            do8.defaultVal = dv8
         } case none then null
     }
 
@@ -1102,7 +1124,9 @@ ZTyping: class {
         } case none then null
     }
 
-    setDefaultFunction: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView funcname: StringView} is {
+    # setDefaultFunction -- a default naming a function; `targetDecl` is that
+    # function's declaration (0 when it resolved to no declaration).
+    setDefaultFunction: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView funcname: StringView targetDecl: u64} is {
         idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
@@ -1110,9 +1134,13 @@ ZTyping: class {
             d: "#function:\{funcname}"
             this.childDefault.set key: idopt value: d
         } case none then null
+        this.declSetDefault :parentTypeId :pool :name value: (DefaultVal.func targetDecl)
     }
 
-    setDefaultVariantArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView armName: StringView} is {
+    # setDefaultVariantArm -- a default naming an arm of the member's own
+    # type; `targetDecl` is that arm's declaration (0 when it resolved to no
+    # declaration).
+    setDefaultVariantArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView armName: StringView targetDecl: u64} is {
         idopt: this.childNameIdOf :pool :parentTypeId :name
         match (
             idopt
@@ -1120,6 +1148,7 @@ ZTyping: class {
             d: "#variant:\{armName}"
             this.childDefault.set key: idopt value: d
         } case none then null
+        this.declSetDefault :parentTypeId :pool :name value: (DefaultVal.arm targetDecl)
     }
 
     # Default text for (parent, name), or "" when none. `.copy` returns an
@@ -1490,8 +1519,14 @@ main: function is {
     ty.setChildLockField pool: pool9 parentTypeId: pid name: "y"
     ty.setChildLockArm pool: pool9 parentTypeId: pid name: "label"
     ty.setDefaultNumeric pool: pool9 parentTypeId: pid name: "x" value: 7
-    ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" funcname: "makeY"
-    ty.setDefaultVariantArm pool: pool9 parentTypeId: pid name: "label" armName: "none"
+    ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" funcname: "makeY" targetDecl: 0
+    (ty.setDefaultVariantArm
+        pool: pool9
+        parentTypeId: pid
+        name: "label"
+        armName: "none"
+        targetDecl: 0
+    )
     (ty.setChildOwnership
         pool: pool9
         parentTypeId: pid
