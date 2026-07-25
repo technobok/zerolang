@@ -178,8 +178,8 @@ Decl: class {
 }
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
-# (types, child edges, monomorphisations, lock overlays), kept separate
-# from the frozen AST so the tree is never mutated.
+# (types, monomorphisations, lock overlays) plus the declaration tree, kept
+# separate from the frozen AST so the tree is never mutated.
 ZTyping: class {
     # typecheck-synthesised AST rows, the per-run `_t` temp-name counter, the
     # synth node-id mint (starts above any parsed id), and the current
@@ -234,7 +234,7 @@ ZTyping: class {
     # an unresolved 0 is never stored so later resolution can still fill it
     builtinTidMemo: (Map u64 value: u64)
 
-    # flat edge tables
+    # one row per (generic parent, param name) link
     typeGenericArg: (List ZTypeGenericArg)
 
     # true once any public-interface rename exists (skips alias lookups otherwise)
@@ -389,14 +389,10 @@ ZTyping: class {
         return id
     }
 
-    # declAddChildEdge -- append a name -> declaration edge to a parent's
-    # namespace (also used for public-interface entries, whose targets are
-    # sibling declarations rather than fresh rows).
     # declMoveChildToEnd -- move a member's entry to the LAST MEMBER SLOT of its
-    # parent's namespace. Called when the member is first edged, so declaration
-    # order BECOMES child-edge order as it is built, instead of being permuted
-    # to match it afterwards. Non-member children (a type's `public:` block)
-    # keep their positions; only the member slots rotate.
+    # parent's namespace. Called when the member is first typed, so declaration
+    # order IS member order as it is built. Non-member children (a type's
+    # `public:` block) keep their positions; only the member slots rotate.
     declMoveChildToEnd: function {:this parentDeclId: u64 nameId: u32} is {
         cnt9: this.declChildSlots declId: parentDeclId
         if cnt9 < 2 then return
@@ -516,16 +512,19 @@ ZTyping: class {
         } case none then null
     }
 
+    # declAddChildEdge -- append a name -> declaration edge to a parent's
+    # namespace (also used for public-interface entries, whose targets are
+    # sibling declarations rather than fresh rows).
     declAddChildEdge: function {:this parentDeclId: u64 nameId: u32 childDeclId: u64} is {
         po9: this.decls.get key: parentDeclId
         match (
             po9
         ) case some then {
             po9.children.append (declchild :nameId declId: childDeclId)
-            # keep the name index in the WRITER, the way pushChildIndex keeps
-            # the edge bucket's: the first append past the scan threshold
-            # backfills it and later appends keep it filled. Backfilling in the
-            # reader instead would make every lookup a mutation, and a mutating
+            # keep the name index in the WRITER: the first append past the
+            # scan threshold backfills it and later appends keep it filled.
+            # Backfilling in the reader instead would make every lookup a
+            # mutation, and a mutating
             # lookup cannot run under a live children borrow.
             if po9.children.length > bucketScanMax then {
                 if po9.byName.length == 0 then {
@@ -567,7 +566,7 @@ ZTyping: class {
 
     # declPendWrite -- hold a member-type write whose owner has no declaration
     # yet. In place on a repeat, so the buffer carries one entry per
-    # (parent, name) exactly as a child edge did.
+    # (parent, name).
     declPendWrite: function {:this parentTypeId: u64 nameId: u64 typeId: u64} is {
         i9: u64
         n9: this.pendParent.length
@@ -851,8 +850,7 @@ ZTyping: class {
     # carries no mode. A zero-inited declaration reads noneMode, so an unset
     # mode never matches take, borrow or lock.
     # declOwnershipOfId -- a member's recorded parameter ownership, or none
-    # when it has none. An unset declaration reads noneMode, which is exactly
-    # the sidecar's absent entry, so both report none.
+    # when it has none: an unset declaration reads noneMode.
     declOwnershipOfId: function {:this parentTypeId: u64 nameId: u32} out optionval ztypes.zparamownership is {
         md9: this.declMemberIdOf :parentTypeId :nameId
         if md9 == 0 then return (optionval.none ztypes.zparamownership)
@@ -995,7 +993,7 @@ ZTyping: class {
 
     # declSynthMember -- mint the declaration of a member the checker
     # synthesises (create, borrow, ==, !=, tag) under the type that minted
-    # `parentTypeId`, appended in the position its child edge took. A no-op
+    # `parentTypeId`, appended in member order. A no-op
     # when that type has no declaration of its own, or when the member is
     # already declared (a type writing its own `create` in an is-block).
     declSynthMember: function {:this parentTypeId: u64 nameId: u64 kind: declkind} is {
@@ -1252,7 +1250,7 @@ ZTyping: class {
         return md9
     }
 
-    # --- children table ---
+    # --- member types ---
 
     # setMemberType -- record the type of member `nameId` on `parentTypeId`:
     # ensure the member's declaration, stamp the type onto it, and on first
@@ -1275,7 +1273,7 @@ ZTyping: class {
         }
     }
 
-    # --- bool sidecars (private / lock-field / lock-arm) ---
+    # --- per-member flags ---
 
     # setAliasInternalName / aliasInternalNameOf -- per dotted-path-node record
     # of the internal member an external access resolved to through a public
@@ -1361,7 +1359,7 @@ ZTyping: class {
         }
     }
 
-    # --- default sidecar ---
+    # --- member defaults ---
 
     # setDefaultLiteral -- a literal default. `node` is the default
     # expression's AST node, which the declaration carries the way a unit
@@ -1439,7 +1437,7 @@ ZTyping: class {
         return "func \{tx9}"
     }
 
-    # --- ownership sidecar ---
+    # --- member ownership ---
 
     setChildOwnership: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView ownership: ztypes.zparamownership} is {
         nid8: pool.find s: name
@@ -1685,7 +1683,6 @@ main: function is {
 
     # the per-member metadata setters record onto member DECLARATIONS, so the
     # smoke declares the type and its fields the way the def indexer would.
-    # Without this the sidecar section reads back empty.
     pDecl9: ty.declNew name: (pool9.set s: "point") parent: 0 kind: declkind.typeDecl node: 0
     ty.declSetType declId: pDecl9 typeId: pid
     ty.declNew name: (pool9.set s: "x") parent: pDecl9 kind: declkind.fieldDecl node: 0
@@ -1710,7 +1707,7 @@ main: function is {
     smokeChildOf pool: pool9 :ty :pid name: "z"
     dumpChildren :ty pool: pool9 parentTypeId: pid
 
-    print "=== sidecars ==="
+    print "=== member metadata ==="
     ty.setChildLockField pool: pool9 parentTypeId: pid name: "y"
     ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" targetDecl: mkDecl9
     (ty.setDefaultVariantArm

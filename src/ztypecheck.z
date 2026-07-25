@@ -1202,8 +1202,8 @@ indexDeclFnInner: function {ty: ztyping.ZTyping ast: Ast declId: u64 fnNodeId: u
 }
 
 # indexDeclDataInner -- member Decls under a data (enum) declaration: one arm
-# per element, named the way resolveData names its child edge, so an unnamed
-# element takes its ordinal.
+# per element, named the way resolveData names it, so an unnamed element
+# takes its ordinal.
 indexDeclDataInner: function {ty: ztyping.ZTyping ast: Ast declId: u64 dataNodeId: u32} is {
     nrefs9: (List u32)
     nodes9: (List u32)
@@ -1550,11 +1550,11 @@ declareCanonicalType: function {
             match (
                 cud0
             ) case some then {
-                # declare the unit child before edging it. A synthesized name
+                # declare the unit child before typing it. A synthesized name
                 # (a mangled `Tmpl_fn`, a `tag__u8`) has no source def for
-                # linkDeclType to find, so without this the edge is the only
-                # record of it and childOf has to fall back to the edge table.
-                # declSynthMember no-ops when the name is already declared.
+                # linkDeclType to find, so without this nothing declares it and
+                # declChildOf cannot answer. declSynthMember no-ops when the
+                # name is already declared.
                 unid9: (ast.internString text: name).u64
                 ukk9: ztyping.declkind.typeDecl
                 if typetype == ztypes.ztypetype.functionType then ukk9 = ztyping.declkind.funcDecl
@@ -3663,7 +3663,7 @@ resolveFunction: function {
                 if genParam then {
                     # the unit's own param: stamp the param node with the
                     # canonical per-(enclosing,param) tid (get-or-mint). No
-                    # setChild -- unit template methods stay childless (emit
+                    # member type -- unit template methods stay childless (emit
                     # `(void)`); unit bodies clone, so the stamp is per-clone.
                     gpt2: u64
                     gpo2: reg.genericParamTidOf tdecl: enclDecl9 paramName: ptn.stringview
@@ -4531,13 +4531,7 @@ typeExprHasPrivate: function {ast: Ast n: Node} out bool is {
     }
 }
 
-# scanVisibility -- one AST-only pass filling two out-lists (with-scoped
-# iterators, no lock outlives the scan): `excl` = pool ids of USER-declared
-# members NOT in the `public:` block (empty when there is no block -- the
-# all-public default; synthesized edges are never listed); `grants` = pool ids
-# of fields whose declared type is a `.private` handle (independent of any
-# `public:` block). The resolver applies both once child edges are registered.
-# materializeCreateParams -- give a synthesized `.create` one parameter edge per
+# materializeCreateParams -- give a synthesized `.create` one parameter per
 # the type's data field, in declaration order, so the create method carries the
 # signature the construction sugar validates and dispatches against. Mirrors
 # dataFieldNames' field filter (fnptr fields + non-FUNCTION fields, excluding
@@ -4616,7 +4610,12 @@ materializeCreateParams: function {
     }
 }
 
-# read a type's `public:` block into the public/private edge sets.
+# scanVisibility -- one AST-only pass over a type's `public:` block filling two
+# out-lists (with-scoped iterators, no lock outlives the scan): `excl` = pool
+# ids of USER-declared members NOT in the block (empty when there is no block --
+# the all-public default; synthesized members are never listed); `grants` = pool
+# ids of fields whose declared type is a `.private` handle (independent of any
+# `public:` block). The resolver applies both once the members are registered.
 scanVisibility: function {
     ty: ztyping.ZTyping
     ast: Ast
@@ -4966,7 +4965,7 @@ demandUnitRenameTargets: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry
 }
 
 # applyUnitVisibility -- run scanUnitVisibility for every file unit that
-# declares a `public:` block, after all unit child edges are registered.
+# declares a `public:` block, after all unit members are registered.
 applyUnitVisibility: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
@@ -6558,8 +6557,8 @@ reexportTargetOf: function {ty: ztyping.ZTyping ast: Ast declId: u64} out String
 # resolveAliasKey -- single-minting for a unit-level re-export alias
 # (a reexportDecl in the Decl tree; target read off its def node): resolve the
 # TARGET's canonical id and reuse it -- the alias never mints its own
-# tid. Registers the unit child edge and the alias Decl's typeId so
-# every later lookup (childOf, resolveUnitChild, the Decl tree) sees
+# tid. Registers the unit member and the alias Decl's typeId so
+# every later lookup (declChildOf, resolveUnitChild, the Decl tree) sees
 # the one canonical id. Returns 0 when the key is not an alias, the
 # alias is mid-follow (a cycle), or the target cannot resolve yet.
 resolveAliasKey: function {
@@ -10396,10 +10395,10 @@ cloneMethodInto: function {
     fn5: "\{specName}.\{m}"
     fid5: reg.newType name: fn5.stringview typetype: ztypes.ztypetype.functionType
     reg.setGenericOrigin typeId: fid5 value: tplFnId
-    # declare and edge the method before filling its parameters: edging claims
+    # declare and type the method before filling its parameters: typing claims
     # the method's own function type for its declaration, which is what the
-    # parameter writes below reach through. Doing it last left every parameter
-    # of every cloned method recorded in the sidecar alone.
+    # parameter writes below reach through. Doing it last leaves every parameter
+    # of every cloned method with nowhere to land.
     mnid5: (zast.poolFind pool: ast.names text: m).u64
     (ty.declSynthMember
         parentTypeId: specId
@@ -11023,10 +11022,10 @@ mintCollectionMethod: function {
     fid: reg.newType name: fname.stringview typetype: ztypes.ztypetype.functionType
     reg.setNative typeId: fid value: true
     mnid9: zast.poolFind pool: ast.names text: m
-    # declare before edging: setMemberType claims the method's own function type
-    # for its declaration, and the parameter writes that follow need it. Edging
-    # first leaves the method undeclared, so nothing claims and every parameter
-    # lands in the sidecar alone.
+    # declare before typing: setMemberType claims the method's own function type
+    # for its declaration, and the parameter writes that follow need it. Typing
+    # first leaves the method undeclared, so nothing claims it and every
+    # parameter has nowhere to land.
     (ty.declSynthMember
         parentTypeId: monoId
         nameId: mnid9.u64
@@ -11834,7 +11833,7 @@ mintCollectionChildren: function {
     # produce+clone has nothing to substitute. Their templates resolve from source (record
     # attachMethods runs regardless of genericity) and copy their children
     # at mint time; the branches below REPLACE the value-dependent members
-    # in place (setChild keeps positions) -- fresh const-clone size fields,
+    # in place (setMemberType keeps positions) -- fresh const-clone size fields,
     # element-typed get/set returns, String-returning string, and the ==/!=
     # that resolveRecord and mintMono both skip for sized records. The
     # emitter builds the structs from the z_str/z_array tmpls by name-parsed
@@ -14976,7 +14975,7 @@ predFactOf: function {
 }
 
 # shadowCollapseIfSingle -- when exclusions have collapsed `name` to a
-# single PAYLOAD arm (the sidecar form), upgrade to the shadow narrowing:
+# single PAYLOAD arm, upgrade to the shadow narrowing:
 # the bare name becomes the payload, exactly as in a match arm. A null
 # payload keeps the outer type (nothing to read). Condition-derived
 # call sites only -- construction narrowing never routes through here.
@@ -15298,7 +15297,7 @@ checkAssignment: function {
         }
         # Binding a tagged-subtype construction narrows the name to the
         # constructed arm (assignment-based narrowing: the overlay keeps the
-        # subject's type with the narrowed-subtype sidecar).
+        # subject's type and records the narrowed subtype).
         ucArm: unionCreateArmName :ast :st n: av9
         if ucArm.length > 0 then {
             (st.narrow
@@ -17836,8 +17835,8 @@ checkBoxConstruction: function {
             kind: ztyping.declkind.methodDecl
         )
         st.typing.setMemberType parentTypeId: mid nameId: wkCreate childTypeId: crId
-        # Stage the element's children first: setChild appends to the very
-        # table being iterated.
+        # Stage the element's members first: setMemberType appends to the very
+        # declaration being iterated.
         cIds2: (List u64)
         cNid2: (List u64)
         st.typing.declMemberList ownerTid: vt names: cNid2 tids: cIds2
@@ -23724,8 +23723,8 @@ canonShellTid: function {
 # canonicalization, so expression nodes typed through a then-shell edge
 # carry the shell id in nodeType (and dpTaggedParent):
 # the emitter reads receiver types from those stamps, and a shell has no
-# origin/children to dispatch on. Rebind them to the canonical type like
-# the child edges.
+# origin/children to dispatch on. Rebind them to the canonical type the way
+# canonicalizeShellChildren rebinds the members.
 canonicalizeShellNodeStamps: function {ast: Ast st: zenv.ZSymbolTable mainName: StringView} is {
     cache9: (Map u64 value: u64)
     nids9: (List u64)
