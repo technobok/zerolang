@@ -29320,46 +29320,23 @@ static void z_t2191_ZSymbolTable_narrow(z_t1266_ZSymbolTable_t* this, z_t1147_St
 
 static void z_t2192_ZSymbolTable_exclude(z_t1266_ZSymbolTable_t* this, z_t1147_StringPool_t* pool, z_t105_StringView_t name, z_t105_StringView_t subtypeName, uint64_t fullTypeId) {
     z_t989_List_String_t allSubs = z_t989_List_String_create((uint64_t)0);
-    z_t1706_OptionView_ChildBucket_t exb9 = z_t1687_Map_u64_ChildBucket_get(this->typing.childIndex, fullTypeId);
-    z_t1706_OptionView_ChildBucket_t _m0 = exb9;
-    switch (_m0.tag) {
-        case Z_OPTIONVIEW_CHILDBUCKET_TAG_SOME: {
-            /* alias: exb9 => (*(z_t1685_ChildBucket_t*)_m0.data) */
-            z_t1435_ListIter_u64_t exit9 = z_t1421_List_u64_iterate(&(*(z_t1685_ChildBucket_t*)_m0.data).rows);
-            while (1) {
-                z_t1319_OptionView_u64_t _iter1 = z_t1435_ListIter_u64_call(&exit9);
-                if (_iter1.tag == Z_OPTIONVIEW_U64_TAG_NONE) break;
-                uint64_t exr9 = *(uint64_t*)_iter1.data;
-                z_t1666_ZTypeChild_t row = z_t1668_List_ZTypeChild_get(&this->typing.typeChild, exr9);
-                z_t169_optionval_u64_t ctOpt = z_t1368_Map_u64_u64_get(this->typing.childTypeById, row.childNameId);
-                z_t169_optionval_u64_t _m2 = ctOpt;
-                switch (_m2.tag) {
-                    case Z_OPTIONVAL_U64_TAG_SOME: {
-                        uint64_t ctOpt = _m2.data.some;
-                        (void)ctOpt;
-                        uint64_t childTypeId = ctOpt;
-                        z_t1413_ztypetype_t kind = z_t1589_ZTypeRegistry_typetypeOf(&this->reg, childTypeId);
-                        if (z_t2373_isExcludableKind(kind)) {
-                            bool isOrigin = z_t1590_ZTypeRegistry_isTagGenericOriginOf(&this->reg, childTypeId);
-                            if ((isOrigin == false)) {
-                                z_t74_String_t rnB9 = z_t989_List_String_get(&pool->texts, ((uint64_t)(row.nameId - 1)));
-                                (void)(z_t989_List_String_append(&allSubs, z_t74_String_copy(&rnB9)));
-                            }
-                        }
-                        break;
-                    }
-                    case Z_OPTIONVAL_U64_TAG_NONE: {
-                        break;
-                    }
-                    default: break;
-                }
+    z_t1421_List_u64_t exNms9 = z_t1421_List_u64_create((uint64_t)0);
+    z_t1421_List_u64_t exTds9 = z_t1421_List_u64_create((uint64_t)0);
+    (void)(z_t2110_ZTyping_declMemberList(&this->typing, fullTypeId, &exNms9, &exTds9));
+    uint64_t exi9 = ((uint64_t)0);
+    uint64_t exn9 = exNms9.length;
+    while ((exi9 < exn9)) {
+        uint64_t exNid9 = z_t1421_List_u64_get(&exNms9, exi9);
+        uint64_t childTypeId = z_t1421_List_u64_get(&exTds9, exi9);
+        exi9 = (exi9 + 1);
+        z_t1413_ztypetype_t kind = z_t1589_ZTypeRegistry_typetypeOf(&this->reg, childTypeId);
+        if (z_t2373_isExcludableKind(kind)) {
+            bool isOrigin = z_t1590_ZTypeRegistry_isTagGenericOriginOf(&this->reg, childTypeId);
+            if ((isOrigin == false)) {
+                z_t74_String_t rnB9 = z_t989_List_String_get(&pool->texts, ((uint64_t)(exNid9 - 1)));
+                (void)(z_t989_List_String_append(&allSubs, z_t74_String_copy(&rnB9)));
             }
-            break;
         }
-        case Z_OPTIONVIEW_CHILDBUCKET_TAG_NONE: {
-            break;
-        }
-        default: break;
     }
     z_t1303_Set_String_t* newExcl = z_t1303_Set_String_create((uint64_t)0);
     (void)(z_t2193_ZSymbolTable_collectExcluded(this, name, newExcl));
@@ -29383,9 +29360,9 @@ static void z_t2192_ZSymbolTable_exclude(z_t1266_ZSymbolTable_t* this, z_t1147_S
         if ((remainIdx.length == 1)) {
             uint64_t soleIx9 = z_t1421_List_u64_get(&remainIdx, 0);
             z_t74_String_t sole = z_t989_List_String_get(&allSubs, soleIx9);
-            z_t74_String_t _rr3 = z_t74_String_copy(&sole);
+            z_t74_String_t _rr0 = z_t74_String_copy(&sole);
             z_t74_String_free(&narrowedSub);
-            narrowedSub = _rr3;
+            narrowedSub = _rr0;
         }
         z_t169_optionval_u64_t nsId = ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
         if ((narrowedSub.size > 0)) {
@@ -29393,15 +29370,15 @@ static void z_t2192_ZSymbolTable_exclude(z_t1266_ZSymbolTable_t* this, z_t1147_S
             nsId = ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_SOME, .data.some = (cid) });
         }
         z_t1290_ZEntry_t e = z_t1586_ZTypeRegistry_newEntry(&this->reg, name, fullTypeId, false);
-        z_t74_String_t _rr4 = z_t74_String_copy(&narrowedSub);
+        z_t74_String_t _rr1 = z_t74_String_copy(&narrowedSub);
         z_t74_String_free(&e.narrowedSubtype);
-        e.narrowedSubtype = _rr4;
+        e.narrowedSubtype = _rr1;
         e.narrowedSubtypeId = nsId;
         z_t1308_SetIter_String_t eit = z_t1303_Set_String_iterate(newExcl);
         while (1) {
-            z_t944_OptionView_String_t _iter5 = z_t1308_SetIter_String_call(&eit);
-            if (_iter5.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
-            z_t74_String_t s = *(z_t74_String_t*)_iter5.data;
+            z_t944_OptionView_String_t _iter2 = z_t1308_SetIter_String_call(&eit);
+            if (_iter2.tag == Z_OPTIONVIEW_STRING_TAG_NONE) break;
+            z_t74_String_t s = *(z_t74_String_t*)_iter2.data;
             (void)(z_t1303_Set_String_add(e.excludedSubtypes, z_t74_String_copy(&s)));
             uint64_t cid2 = z_t2112_ZTyping_childIdFor(&this->typing, pool, fullTypeId, ((z_t105_StringView_t){ s.data, s.size }));
             (void)(z_t1312_Set_u64_add(e.excludedSubtypeIds, cid2));
@@ -29412,7 +29389,8 @@ static void z_t2192_ZSymbolTable_exclude(z_t1266_ZSymbolTable_t* this, z_t1147_S
     z_t74_String_free(&narrowedSub);
     }
     z_t989_List_String_destroy(&allSubs);
-    z_t1706_OptionView_ChildBucket_destroy(&exb9);
+    z_t1421_List_u64_destroy(&exNms9);
+    z_t1421_List_u64_destroy(&exTds9);
     z_t1303_Set_String_destroy(newExcl);
     z_t1421_List_u64_destroy(&remainIdx);
 }
