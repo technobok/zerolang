@@ -56,6 +56,7 @@ LOC tracking starts at the 2026-07-23 row; earlier rows are "—" (not back-meas
 | 2026-07-22 | (A2b seeded) | A2b: resolveTypeIdByNameId memoized on Ctx (nameId -> tid, misses cached as 0). isCtorOwnerCall probes every emitted call with base names that are usually VALUE names: each guaranteed miss walked all stages incl. the composed-key loop (one "unit.name" String per unit). The typed model is frozen during emission so per-name resolution is emit-stable; misses dominate, so caching 0 is the whole win. Emit -17%; regression vs E2a fully closed (allocs now 9.37M < 9.56M, wall 0.62s < 0.64s) | 0.62s | — | 122MB / — | 86 / 239 / 282 (total 610) | 9,368,977 | 457MB | — | — |
 | 2026-07-23 | 5eccf67 | redesign HEAD re-baseline: name/Decl/Type identity + generic-metadata composite-key arc (first row since A2b -- the +0.8M allocs / +0.04s vs A2b is the whole redesign's Decl-tree build + probes, not one change) | 0.66s | — | 129MB / — | 96 / 254 / 312 (total 662) | 10,163,283 | 469MB | — | 80,396 |
 | 2026-07-24 | 6f19e46 | mangled-mono-name namespace retirement (arc P4, `8640c29`..`6f19e46`): delete the synthetic `unit.<mangled>`/`system.<mangled>` namespace; the emitter no longer resolves io/net mono canon stems or shells by an O(nextTypeId) name scan -- `ioCanonCname` memoized on Ctx (P4.6, dissolves the ground census's single largest chain, ~5.85M blk) and `shellResolveByName`'s all-units brute-name scan deleted (P4.7, the delete's ~48k-alloc regression, DHAT-localized). Emit 312->217ms. | 0.55s | 0.63s | 120MB / 112MB | 87 / 246 / 217 (total 550) | 9,665,936 | 458MB | 13.5s | 80,358 |
+| 2026-07-26 | ada99da | child-edge table retirement (arc Q2, `3dca56c`..`ada99da`, 72 commits): the Decl tree becomes the single member index -- visibility, member metadata, member order and member enumeration all answer from declarations; `typeChild`/`childIndex`/`childNameId`/`childTypeById`/`ZTypeChild` and the 8 metadata sidecars are deleted. **Regression owned, not attributed elsewhere**: typecheck 246->306ms, allocs +1.1M, bytes churned +140MB, LOC +972. The edge tables were flat rows read in place; the Decl helpers replacing them allocate per call -- `declMemberList`/`declChildRows` 2 Lists each (the emitter's `recFieldLists` has 33 callers), `declMemberCount` 4 to return a length (2 call sites are inside `walkCallArgs`' per-argument loop), `declMoveChildToEnd` 3 per first-sight member -- and `childOfId`'s pre-index fallback scans a 2-entry buffer 105,592x per self-compile for 0 hits. | 0.61s | 0.70s | 122MB / 114MB | 90 / 306 / 221 (total 617) | 10,771,277 | 598MB | 14.0s | 81,330 |
 
 2026-07-21 arc notes: `make test` wall is bimodal — ~13.3s typical with an
 occasional ~25s run at identical CPU time (~2m45 user, 24 jobs), so
@@ -155,6 +156,12 @@ Single largest chain: ~5.85M blocks (25%) under the emitter's
 `ioCanonCname` → `definedInNonMain`/`definedInUnitOf`/`typeNameOfReg9` queries
 (linear registry scan with per-iteration String materialization).
 
+STALE as of the 2026-07-24 row: `ioCanonCname` is memoized on Ctx and that chain
+is dissolved. The bucket shares above have not been re-measured since; re-run the
+DHAT census before treating any of them as current. The one line that still
+holds is Map/Set storage — rehash churn, pre-sizing target — and it is still
+unacted-on: only `nodeType` and `atomVariableId` carry `capacity:`.
+
 ## String-side census (DHAT, 2026-07-17 @ 8bd3aef, post-carrier arc)
 
 10.29M blocks total; no single chain exceeds 0.5%. Where owned Strings
@@ -172,7 +179,14 @@ still come from, by subsystem (chains containing the frame):
 
 The pool is the single authoritative copy of AST identifier text; the
 remaining churn is (a) the emitter resolving types by NAME over registry
-Strings -- migrating registry type names to pool ids is the big lever and
-would also dissolve ZTyping's edgeNameId/edgeText caches -- and (b)
-nameTextCopy call sites that could borrow or id-compare instead.
+Strings -- migrating registry type names to pool ids is the big lever -- and
+(b) nameTextCopy call sites that could borrow or id-compare instead.
+(The edgeNameId/edgeText caches this once also named are already deleted.)
+
+Not in the 2026-07-17 census, and visible only after the Decl-tree arc: the
+demand-resolution done/grey sets `ZTyping.definedKeys`/`resolving` are
+`Set String` probed with a freshly interpolated `"{unit}.{name}"` per probe --
+sometimes the same key twice in adjacent statements. Both halves are already
+pool ids, so a composite u64 key removes a String allocation from the hottest
+loop of the phase that regressed.
 
