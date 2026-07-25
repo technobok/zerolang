@@ -10322,6 +10322,17 @@ cloneMethodInto: function {
     fn5: "\{specName}.\{m}"
     fid5: reg.newType name: fn5.stringview typetype: ztypes.ztypetype.functionType
     reg.setGenericOrigin typeId: fid5 value: tplFnId
+    # declare and edge the method before filling its parameters: edging claims
+    # the method's own function type for its declaration, which is what the
+    # parameter writes below reach through. Doing it last left every parameter
+    # of every cloned method recorded in the sidecar alone.
+    mnid5: (zast.poolFind pool: ast.names text: m).u64
+    (ty.declSynthMember
+        parentTypeId: specId
+        nameId: mnid5
+        kind: ztyping.declkind.methodDecl
+    )
+    (ty.setChildId parentTypeId: specId nameId: mnid5 childTypeId: fid5)
     # The clone answers call-site questions the same way the template does:
     # isNative gates arg validation, thisParamName drives receiver auto-fill
     # and the no-paren auto-call, funcReturnsBorrow carries the `.borrow`
@@ -10460,11 +10471,6 @@ cloneMethodInto: function {
             reg.setReturnType typeId: fid5 value: rt5
         }
     }
-    (ty.setChildId
-        parentTypeId: specId
-        nameId: (zast.poolFind pool: ast.names text: m).u64
-        childTypeId: fid5
-    )
 }
 
 # respecialize -- a type that is itself a specialization (nonempty genericArgs)
@@ -10934,15 +10940,19 @@ mintCollectionMethod: function {
     fid: reg.newType name: fname.stringview typetype: ztypes.ztypetype.functionType
     reg.setNative typeId: fid value: true
     mnid9: zast.poolFind pool: ast.names text: m
-    (ty.setChildId
-        parentTypeId: monoId
-        nameId: mnid9.u64
-        childTypeId: fid
-    )
+    # declare before edging: setChildId claims the method's own function type
+    # for its declaration, and the parameter writes that follow need it. Edging
+    # first leaves the method undeclared, so nothing claims and every parameter
+    # lands in the sidecar alone.
     (ty.declSynthMember
         parentTypeId: monoId
         nameId: mnid9.u64
         kind: ztyping.declkind.methodDecl
+    )
+    (ty.setChildId
+        parentTypeId: monoId
+        nameId: mnid9.u64
+        childTypeId: fid
     )
     return fid
 }
