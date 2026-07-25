@@ -8349,7 +8349,7 @@ attachMonoUnitFuncs: function {
             } else null
         }
     }
-    declEnsureMembers :ty :reg ownerTid: monoId
+    declSettleOrder :ty tid: monoId
 }
 
 # resolveUnitMono -- create a mono UNIT (mangled name, defined_in_unit=the instantiating
@@ -9435,7 +9435,7 @@ buildUnitMono: function {
         }
         ty.nextSynthNodeId = ids9.nextId
     }
-    declEnsureMembers :ty :reg ownerTid: monoId
+    declSettleOrder :ty tid: monoId
 }
 
 # completeInlineReq -- locate an inline template member by name in the main
@@ -10926,7 +10926,7 @@ mintMono: function {
         (ty.declSynthMember parentTypeId: mid nameId: wkOpNe kind: ztyping.declkind.methodDecl)
         ty.setChildId parentTypeId: mid nameId: wkOpNe childTypeId: neId
     }
-    declEnsureMembers :ty :reg ownerTid: mid
+    declSettleOrder :ty tid: mid
     return mid
 }
 
@@ -11681,7 +11681,7 @@ mintCollectionChildren: function {
         if u64L > 0 then {
             ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64L
             ty.setChildId parentTypeId: monoId nameId: wkCapacity childTypeId: u64L
-            declEnsureMembers :ty :reg ownerTid: monoId
+            declSettleOrder :ty tid: monoId
         }
         return
     }
@@ -11715,7 +11715,7 @@ mintCollectionChildren: function {
     if templateId == setTid then {
         ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
         ty.setChildId parentTypeId: monoId nameId: wkCapacity childTypeId: u64id
-        declEnsureMembers :ty :reg ownerTid: monoId
+        declSettleOrder :ty tid: monoId
         mintCollectionMethod :ast :ty :reg :monoName :monoId m: "create"
         return
     }
@@ -11735,7 +11735,7 @@ mintCollectionChildren: function {
     if templateId == mapTid when valArg > 0 then {
         ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
         ty.setChildId parentTypeId: monoId nameId: wkCapacity childTypeId: u64id
-        declEnsureMembers :ty :reg ownerTid: monoId
+        declSettleOrder :ty tid: monoId
         vnM: monoValName :ast :ty :reg tid: valArg
         mgoM: ty.childOfId parentTypeId: monoId nameId: wkGet
         match (
@@ -11852,7 +11852,7 @@ mintCollectionChildren: function {
     if templateId == strTid then {
         ty.setChildId parentTypeId: monoId nameId: wkLength childTypeId: u64id
         ty.setChildId parentTypeId: monoId nameId: wkSize childTypeId: u64id
-        declEnsureMembers :ty :reg ownerTid: monoId
+        declSettleOrder :ty tid: monoId
         tstId: mintCollectionMethod :ast :ty :reg :monoName :monoId m: "string"
         sgo: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: "String"
         sgid: optU64Or o: sgo d: 0
@@ -17857,7 +17857,7 @@ checkBoxConstruction: function {
             }
             bi = bi + 1
         }
-        declEnsureMembers ty: st.typing reg: st.reg ownerTid: mid
+        declSettleOrder ty: st.typing tid: mid
     }
     bcal: nodeId n: (ast.nodes.get i: (call.callable - 1).u64)
     if bcal > 0 then {
@@ -23035,56 +23035,6 @@ unitNameOfTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64}
     return "".string
 }
 
-# declEnsureMembers -- mint a declaration for every member edge of `ownerTid`
-# that has none, in row order. A monomorphisation gains members its template
-# never had (its own create / == / tag, collection methods minted on demand),
-# so the clone cannot know them up front. A member's kind comes from its type:
-# a function type is a method, anything else a field. A no-op for a type with
-# no declaration of its own.
-declEnsureMembers: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry ownerTid: u64} is {
-    if (ty.declIdOfType typeId: ownerTid) == 0 then return
-    ownerIsFn9: (reg.typetypeOf typeId: ownerTid) == ztypes.ztypetype.functionType
-    nids9: (List u64)
-    ctids9: (List u64)
-    {
-        bo9: ty.childIndex.get key: ownerTid
-        match (
-            bo9
-        ) case some then {
-            with rit9: bo9.rows.iterate do for ri9: rit9 loop {
-                row9: ty.typeChild.get i: ri9
-                nids9.append row9.nameId
-                cto9: ty.childTypeById.get key: row9.childNameId
-                ct9: u64
-                match (
-                    cto9
-                ) case some then {
-                    ct9 = cto9
-                } case none then null
-                ctids9.append ct9
-            }
-        } case none then null
-    }
-    i9: u64
-    n9: nids9.length
-    for i9 < n9 loop {
-        nid9: nids9.get i: i9
-        ct9: ctids9.get i: i9
-        i9 = i9 + 1
-        kk9: ztyping.declkind.fieldDecl
-        if ownerIsFn9 then {
-            kk9 = ztyping.declkind.paramDecl
-        } else if (reg.typetypeOf typeId: ct9) == ztypes.ztypetype.functionType then {
-            kk9 = ztyping.declkind.methodDecl
-        }
-        beforeN9: ty.decls.length
-        ty.declSynthMember parentTypeId: ownerTid nameId: nid9 kind: kk9
-        if ty.decls.length > beforeN9 then ty.ensureMinted = ty.ensureMinted + 1
-    }
-    # a monomorphisation's members land in clone order, then its own edges are
-    # written: settle it here, the way a resolver settles the type it built
-    declSettleOrder :ty tid: ownerTid
-}
 
 # declReorderAllMembers -- put every declared type's member children in edge
 # order. Runs at the end of typecheck, when no further child edge can appear.
@@ -24552,7 +24502,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     reorderPermuted: st.typing.reorderPermuted
     reorderPermutedLate: st.typing.reorderPermutedLate
     monoTemplateUnsettled: st.typing.monoTemplateUnsettled
-    ensureMinted: st.typing.ensureMinted
     parityCalls: st.typing.parityCalls
     parityEdgeOnly: st.typing.parityEdgeOnly
     parityDeclOnly: st.typing.parityDeclOnly
@@ -24561,7 +24510,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     parityDeclOnlyZero: st.typing.parityDeclOnlyZero
     childOfFallback: st.typing.childOfFallback
     childOfFallbackHit: st.typing.childOfFallbackHit
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner} reorderPermuted=\{reorderPermuted} reorderPermutedLate=\{reorderPermutedLate} monoTemplateUnsettled=\{monoTemplateUnsettled} ensureMinted=\{ensureMinted} parityCalls=\{parityCalls} parityEdgeOnly=\{parityEdgeOnly} parityDeclOnly=\{parityDeclOnly} parityDiff=\{parityDiff} parityZero=\{parityZero} parityDeclOnlyZero=\{parityDeclOnlyZero} childOfFallback=\{childOfFallback} childOfFallbackHit=\{childOfFallbackHit}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} exactHits=\{exactHits} exactMisses=\{exactMisses} missNoOwner=\{missNoOwner} missMemberDecl=\{missMemberDecl} missUnitReg=\{missUnitReg} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} typeIdSet=\{typeIdSet} typeIdMismatch=\{typeIdMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder} enumTypes=\{enumTypes} enumEdgeOnly=\{enumEdgeOnly} enumEdgeOnlyFn=\{enumEdgeOnlyFn} enumDeclOnly=\{enumDeclOnly} enumTypeDiff=\{enumTypeDiff} enumOrder=\{enumOrder} enumEdgeOnlyZero=\{enumEdgeOnlyZero} enumEdgeOnlyNoDecl=\{enumEdgeOnlyNoDecl} enumEdgeOnlyUnit=\{enumEdgeOnlyUnit} enumEdgeOnlyObj=\{enumEdgeOnlyObj} dropOwn=\{dropOwn} dropOwnId=\{dropOwnId} dropTypeIdNoOwner=\{dropTypeIdNoOwner} dropTypeIdNotFn=\{dropTypeIdNotFn} dropFnptr=\{dropFnptr} dropLock=\{dropLock} dropGrant=\{dropGrant} dropDefault=\{dropDefault} synthNoOwner=\{synthNoOwner} reorderPermuted=\{reorderPermuted} reorderPermutedLate=\{reorderPermutedLate} monoTemplateUnsettled=\{monoTemplateUnsettled} parityCalls=\{parityCalls} parityEdgeOnly=\{parityEdgeOnly} parityDeclOnly=\{parityDeclOnly} parityDiff=\{parityDiff} parityZero=\{parityZero} parityDeclOnlyZero=\{parityDeclOnlyZero} childOfFallback=\{childOfFallback} childOfFallbackHit=\{childOfFallbackHit}"
 }
 typecheck: function {
     program: Node
