@@ -341,7 +341,6 @@ ZTyping: class {
     collectionChildrenBuilt: (Map u64 value: bool)
     pendingUnitWalk: (List PendingUnitWalk)
     unitMonoWalksPending: (Map u64 value: bool)
-    childLockArm: (Map u64 value: bool)
     childDefault: (Map u64 value: String)
     childOwnership: (Map u64 value: ztypes.zparamownership)
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
@@ -565,15 +564,6 @@ ZTyping: class {
                 fnp9 = fg9
             } case none then null
         }
-        arm9: false
-        {
-            ag9: this.childLockArm.get key: childNameId
-            match (
-                ag9
-            ) case some then {
-                arm9 = ag9
-            } case none then null
-        }
         mtid9: u64
         {
             tg9: this.childTypeById.get key: childNameId
@@ -593,8 +583,7 @@ ZTyping: class {
                 if hasOwn9 then do9.ownership = own9
                 if grant9 then do9.grantsPrivate = true
                 if fnp9 then do9.fnptrField = true
-                if arm9 then do9.lockArm = true
-                if do9.kind.methodDecl then isMethod9 = true
+                    if do9.kind.methodDecl then isMethod9 = true
             } case none then null
         }
         # a method declared after its own child edge existed still owns its
@@ -1561,45 +1550,6 @@ ZTyping: class {
         }
     }
 
-    setChildLockArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            this.childLockArm.set key: idopt value: true
-        } case none then null
-        nid8: pool.find s: name
-        if nid8 > 0 then {
-            md8: this.declMemberIdOf :parentTypeId nameId: nid8
-            if md8 > 0 then {
-                do8: this.decls.get key: md8
-                match (
-                    do8
-                ) case some then {
-                    do8.lockArm = true
-                } case none then null
-            }
-        }
-    }
-
-    isChildLockArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
-        idopt: this.childNameIdOf :pool :parentTypeId :name
-        match (
-            idopt
-        ) case some then {
-            r: this.childLockArm.get key: idopt
-            match (
-                r
-            ) case some then {
-                return r
-            } case none then {
-                return false
-            }
-        } case none then {
-            return false
-        }
-    }
-
     # --- default sidecar ---
 
     # setChildDefault -- a literal default. `node` is the default expression's
@@ -1929,7 +1879,6 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         collectionChildrenBuilt: (Map u64 value: bool)
         pendingUnitWalk: (List PendingUnitWalk)
         unitMonoWalksPending: (Map u64 value: bool)
-        childLockArm: (Map u64 value: bool)
         childDefault: (Map u64 value: String)
         childOwnership: (Map u64 value: ztypes.zparamownership)
         argDisposition: (Map u64 value: ztypes.zparamownership)
@@ -2036,7 +1985,6 @@ main: function is {
 
     print "=== sidecars ==="
     ty.setChildLockField pool: pool9 parentTypeId: pid name: "y"
-    ty.setChildLockArm pool: pool9 parentTypeId: pid name: "label"
     ty.setDefaultNumeric pool: pool9 parentTypeId: pid name: "x" value: 7
     ty.setDefaultFunction pool: pool9 parentTypeId: pid name: "y" funcname: "makeY" targetDecl: 0
     (ty.setDefaultVariantArm
@@ -2060,7 +2008,6 @@ main: function is {
     )
 
     smokeIsLockField pool: pool9 :ty :pid name: "y"
-    smokeIsLockArm pool: pool9 :ty :pid name: "label"
     smokeDefault pool: pool9 :ty :pid name: "x"
     smokeDefault pool: pool9 :ty :pid name: "y"
     smokeDefault pool: pool9 :ty :pid name: "label"
@@ -2163,12 +2110,6 @@ smokeChildOf: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringV
 smokeIsLockField: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
     b: ty.isChildLockField :pool parentTypeId: pid :name
     print "isLockField point.\{name} -> \{boolText b}"
-}
-
-# smoke-test: print whether arm `name` of `pid` is a lock arm.
-smokeIsLockArm: function {pool: zast.StringPool ty: ZTyping pid: u64 name: StringView} is {
-    b: ty.isChildLockArm :pool parentTypeId: pid :name
-    print "isLockArm point.\{name} -> \{boolText b}"
 }
 
 # smoke-test: print the default value of member `name` of `pid`.
