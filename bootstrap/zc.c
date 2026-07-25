@@ -29882,6 +29882,7 @@ static bool z_t2089_ZTyping_declStampFromSidecars(z_t1626_ZTyping_t* this, uint6
         }
         default: break;
     }
+    bool isMethod9 = false;
     z_t2064_OptionView_Decl_t do9 = z_t2045_Map_u64_Decl_get(this->decls, declId);
     z_t2064_OptionView_Decl_t _m6 = do9;
     switch (_m6.tag) {
@@ -29902,12 +29903,21 @@ static bool z_t2089_ZTyping_declStampFromSidecars(z_t1626_ZTyping_t* this, uint6
             if (arm9) {
                 (*(z_t2014_Decl_t*)_m6.data).lockArm = true;
             }
+            if ((((*(z_t2014_Decl_t*)_m6.data).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
+                isMethod9 = true;
+            }
             break;
         }
         case Z_OPTIONVIEW_DECL_TAG_NONE: {
             break;
         }
         default: break;
+    }
+    if (isMethod9 && (mtid9 > 0)) {
+        if ((z_t2092_ZTyping_declIdOfType(this, mtid9) == 0)) {
+            (void)(z_t1368_Map_u64_u64_set(this->declByTypeId, mtid9, declId));
+            (void)(z_t2094_ZTyping_declEnsureParams(this, mtid9, declId));
+        }
     }
     z_t2064_OptionView_Decl_destroy(&do9);
     return isLock9;
@@ -30047,18 +30057,49 @@ static uint64_t z_t2092_ZTyping_declIdOfType(z_t1626_ZTyping_t* this, uint64_t t
 }
 
 static void z_t2093_ZTyping_declSetMemberType(z_t1626_ZTyping_t* this, uint64_t parentTypeId, uint64_t nameId, uint64_t typeId) {
-    uint64_t md8 = z_t2098_ZTyping_declMemberIdOf(this, parentTypeId, ({ __auto_type _rc = (({ uint64_t _v = nameId; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; }));
+    uint32_t nid8 = ({ __auto_type _rc = (({ uint64_t _v = nameId; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; });
+    uint64_t md8 = z_t2098_ZTyping_declMemberIdOf(this, parentTypeId, nid8);
     if ((md8 == 0)) {
-        return;
+        uint64_t od8 = z_t2092_ZTyping_declIdOfType(this, parentTypeId);
+        if ((od8 == 0)) {
+            return;
+        }
+        bool isFn8 = false;
+        uint32_t node8 = ((uint32_t)0);
+        z_t2064_OptionView_Decl_t oo8 = z_t2045_Map_u64_Decl_get(this->decls, od8);
+        z_t2064_OptionView_Decl_t _m0 = oo8;
+        switch (_m0.tag) {
+            case Z_OPTIONVIEW_DECL_TAG_SOME: {
+                /* alias: oo8 => (*(z_t2014_Decl_t*)_m0.data) */
+                if ((((*(z_t2014_Decl_t*)_m0.data).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
+                    isFn8 = true;
+                }
+                if ((((*(z_t2014_Decl_t*)_m0.data).kind).tag == Z_DECLKIND_TAG_FUNCDECL)) {
+                    isFn8 = true;
+                }
+                node8 = (*(z_t2014_Decl_t*)_m0.data).node;
+                break;
+            }
+            case Z_OPTIONVIEW_DECL_TAG_NONE: {
+                break;
+            }
+            default: break;
+        }
+        if ((isFn8 == false)) {
+    z_t2064_OptionView_Decl_destroy(&oo8);
+            return;
+        }
+        md8 = z_t2086_ZTyping_declNew(this, nid8, od8, ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_PARAMDECL }), node8);
+    z_t2064_OptionView_Decl_destroy(&oo8);
     }
     bool isMethod8 = false;
     z_t2064_OptionView_Decl_t do8 = z_t2045_Map_u64_Decl_get(this->decls, md8);
-    z_t2064_OptionView_Decl_t _m0 = do8;
-    switch (_m0.tag) {
+    z_t2064_OptionView_Decl_t _m1 = do8;
+    switch (_m1.tag) {
         case Z_OPTIONVIEW_DECL_TAG_SOME: {
-            /* alias: do8 => (*(z_t2014_Decl_t*)_m0.data) */
-            (*(z_t2014_Decl_t*)_m0.data).typeId = typeId;
-            if ((((*(z_t2014_Decl_t*)_m0.data).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
+            /* alias: do8 => (*(z_t2014_Decl_t*)_m1.data) */
+            (*(z_t2014_Decl_t*)_m1.data).typeId = typeId;
+            if ((((*(z_t2014_Decl_t*)_m1.data).kind).tag == Z_DECLKIND_TAG_METHODDECL)) {
                 isMethod8 = true;
             }
             break;

@@ -583,16 +583,29 @@ ZTyping: class {
                 mtid9 = tg9
             } case none then null
         }
-        do9: this.decls.get key: declId
-        match (
-            do9
-        ) case some then {
-            if mtid9 > 0 then do9.typeId = mtid9
-            if hasOwn9 then do9.ownership = own9
-            if grant9 then do9.grantsPrivate = true
-            if fnp9 then do9.fnptrField = true
-            if arm9 then do9.lockArm = true
-        } case none then null
+        isMethod9: false
+        {
+            do9: this.decls.get key: declId
+            match (
+                do9
+            ) case some then {
+                if mtid9 > 0 then do9.typeId = mtid9
+                if hasOwn9 then do9.ownership = own9
+                if grant9 then do9.grantsPrivate = true
+                if fnp9 then do9.fnptrField = true
+                if arm9 then do9.lockArm = true
+                if do9.kind.methodDecl then isMethod9 = true
+            } case none then null
+        }
+        # a method declared after its own child edge existed still owns its
+        # function type's namespace (the synthesized create is edged before
+        # anything declares it)
+        if isMethod9 when mtid9 > 0 then {
+            if (this.declIdOfType typeId: mtid9) == 0 then {
+                this.declByTypeId.set key: mtid9 value: declId
+                this.declEnsureParams parentTypeId: mtid9 :declId
+            }
+        }
         return isLock9
     }
 
@@ -688,8 +701,33 @@ ZTyping: class {
     # not declSetType: the member did not mint the type, so it must not claim
     # the reverse declByTypeId edge.
     declSetMemberType: function {:this parentTypeId: u64 nameId: u64 typeId: u64} is {
-        md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
-        if md8 == 0 then return
+        nid8: nameId.u32.orPanic
+        md8: this.declMemberIdOf :parentTypeId nameId: nid8
+        if md8 == 0 then {
+            # a function type's members are its parameters, and a synthesized
+            # constructor gains them after its own declaration exists
+            od8: this.declIdOfType typeId: parentTypeId
+            if od8 == 0 then return
+            isFn8: false
+            node8: u32
+            {
+                oo8: this.decls.get key: od8
+                match (
+                    oo8
+                ) case some then {
+                    if oo8.kind.methodDecl then isFn8 = true
+                    if oo8.kind.funcDecl then isFn8 = true
+                    node8 = oo8.node
+                } case none then null
+            }
+            if isFn8 == false then return
+            md8 = (this.declNew
+                name: nid8
+                parent: od8
+                kind: declkind.paramDecl
+                node: node8
+            )
+        }
         isMethod8: false
         {
             do8: this.decls.get key: md8
