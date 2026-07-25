@@ -1545,9 +1545,18 @@ declareCanonicalType: function {
             match (
                 cud0
             ) case some then {
+                # declare the unit child before edging it. A synthesized name
+                # (a mangled `Tmpl_fn`, a `tag__u8`) has no source def for
+                # linkDeclType to find, so without this the edge is the only
+                # record of it and childOf has to fall back to the edge table.
+                # declSynthMember no-ops when the name is already declared.
+                unid9: (ast.internString text: name).u64
+                ukk9: ztyping.declkind.typeDecl
+                if typetype == ztypes.ztypetype.functionType then ukk9 = ztyping.declkind.funcDecl
+                ty.declSynthMember parentTypeId: cud0 nameId: unid9 kind: ukk9
                 (ty.setChildId
                     parentTypeId: cud0
-                    nameId: (ast.internString text: name).u64
+                    nameId: unid9
                     childTypeId: id
                 )
             } case none then null
@@ -8909,6 +8918,14 @@ resolveInlineGenericUnit: function {
                 match (
                     mido
                 ) case some then {
+                    (declLinkTemplateMethod
+                        :ty
+                        :ast
+                        :unitName
+                        tmplName: defName
+                        memberNameId: bmNode9.name
+                        fnTid: mido
+                    )
                     (ty.setChildId
                         parentTypeId: uid
                         nameId: bmNode9.name.u64
@@ -8965,9 +8982,18 @@ createUnitMono: function {
         match (
             ccu2
         ) case some then {
+            # declare the mono's mangled name under the instantiating unit
+            # before edging it: it is not a source def, so nothing else
+            # declares it and childOf would have only the edge to read
+            mnid9: (ast.internString text: monoName).u64
+            (ty.declSynthMember
+                parentTypeId: ccu2
+                nameId: mnid9
+                kind: ztyping.declkind.typeDecl
+            )
             (ty.setChildId
                 parentTypeId: ccu2
-                nameId: (ast.internString text: monoName).u64
+                nameId: mnid9
                 childTypeId: rid
             )
         } case none then null
@@ -9270,6 +9296,17 @@ buildUnitMono: function {
                             thisName: ""
                             op: (ast.nodes.get i: (fmNode9.operation - 1).u64)
                         )
+                        {
+                            mo0v9: optU64Or o: mo0 d: 0
+                            (declLinkTemplateMethod
+                                :ty
+                                :ast
+                                unitName: tmplUnitName
+                                :tmplName
+                                memberNameId: fmNode9.name
+                                fnTid: mo0v9
+                            )
+                        }
                         match (
                             mo0
                         ) case some then {
@@ -23038,6 +23075,28 @@ unitNameOfTid: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry tid: u64}
 
 # declReorderAllMembers -- put every declared type's member children in edge
 # order. Runs at the end of typecheck, when no further child edge can appear.
+# declLinkTemplateMethod -- a generic unit template's method is minted under a
+# mangled `Tmpl_fn` name that no top-level def carries, so linkDeclType cannot
+# find a declaration for it and the function type ends up with none. Bind the
+# template's own method declaration to that type, which makes its parameters --
+# indexed in AST order at pre-index time -- reachable from the type id.
+declLinkTemplateMethod: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    unitName: StringView
+    tmplName: StringView
+    memberNameId: u32
+    fnTid: u64
+} is {
+    if fnTid == 0 then return
+    if (ty.declIdOfType typeId: fnTid) > 0 then return
+    tud9: declOfUnitDef :ty :ast defUnit: unitName name: tmplName
+    if tud9 == 0 then return
+    md9: ty.declFindChild parentDeclId: tud9 nameId: memberNameId
+    if md9 == 0 then return
+    ty.declSetType declId: md9 typeId: fnTid
+}
+
 # declSettleOrder -- put one type's member declarations in child-edge order,
 # called as soon as the resolver that built it has written its last member
 # edge. Nothing appends a member edge to a record / class / variant / union /
