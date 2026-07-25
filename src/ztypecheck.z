@@ -23813,6 +23813,8 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
     exactMisses: u64
     fnptrSet: u64
     fnptrMismatch: u64
+    lockArmSet: u64
+    lockArmMismatch: u64
     orderTypes: u64
     orderBad: u64
     orderMissing: u64
@@ -23865,18 +23867,6 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             ) case some then {
                 if do9.name != nid32 then bridgeNameErr = bridgeNameErr + 1
                 if do9.parent != expParent9 then bridgeParentErr = bridgeParentErr + 1
-                match (
-                    mo9
-                ) case some then {
-                    do9.ownership = mo9
-                } case none then {
-                    do9.ownership = ztypes.zparamownership.noneMode
-                }
-                if sabotage9 then do9.ownership = ztypes.zparamownership.takeMode
-                do9.grantsPrivate = mapGrant9
-                if sabotage9 when mapGrant9 == false then do9.grantsPrivate = true
-                if (ztypes.zparamownershipInt do9.ownership) != mapOwnInt9 then ownMismatch = ownMismatch + 1
-                if do9.grantsPrivate != mapGrant9 then grantMismatch = grantMismatch + 1
             } case none then null
         }
         # the exact-owner bridge the production stamps use: a mono has no
@@ -23891,12 +23881,22 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
                 mapFn9 = fo9
             } case none then null
         }
+        mapArm9: false
+        {
+            la9: st.typing.childLockArm.get key: cnid9
+            match (
+                la9
+            ) case some then {
+                mapArm9 = la9
+            } case none then null
+        }
         mdX9: st.typing.declMemberIdOf parentTypeId: ptid9 nameId: nid32
         if mdX9 == 0 then {
             exactMisses = exactMisses + 1
         } else {
             exactHits = exactHits + 1
             if mapFn9 then fnptrSet = fnptrSet + 1
+            if mapArm9 then lockArmSet = lockArmSet + 1
             dx9: st.typing.decls.get key: mdX9
             match (
                 dx9
@@ -23904,8 +23904,17 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
                 if sabotage9 then {
                     dx9.fnptrField = true
                     if mapFn9 then dx9.fnptrField = false
+                    dx9.lockArm = true
+                    if mapArm9 then dx9.lockArm = false
+                    dx9.grantsPrivate = true
+                    if mapGrant9 then dx9.grantsPrivate = false
+                    dx9.ownership = ztypes.zparamownership.lockMode
+                    if mapOwnInt9 == 2 then dx9.ownership = ztypes.zparamownership.takeMode
                 }
                 if dx9.fnptrField != mapFn9 then fnptrMismatch = fnptrMismatch + 1
+                if dx9.lockArm != mapArm9 then lockArmMismatch = lockArmMismatch + 1
+                if dx9.grantsPrivate != mapGrant9 then grantMismatch = grantMismatch + 1
+                if (ztypes.zparamownershipInt dx9.ownership) != mapOwnInt9 then ownMismatch = ownMismatch + 1
             } case none then null
         }
     }
@@ -24007,7 +24016,7 @@ q2SpikeVerify: function {st: zenv.ZSymbolTable} is {
             }
         }
     }
-    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} exactHits=\{exactHits} exactMisses=\{exactMisses} fnptrSet=\{fnptrSet} fnptrMismatch=\{fnptrMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder}"
+    io.eprintln "Q2-SPIKE members=\{members} declHits=\{declHits} declMisses=\{declMisses} bridgeNameErr=\{bridgeNameErr} bridgeParentErr=\{bridgeParentErr} ownSet=\{ownSet} ownMismatch=\{ownMismatch} grantSet=\{grantSet} grantMismatch=\{grantMismatch} exactHits=\{exactHits} exactMisses=\{exactMisses} fnptrSet=\{fnptrSet} fnptrMismatch=\{fnptrMismatch} lockArmSet=\{lockArmSet} lockArmMismatch=\{lockArmMismatch} orderTypes=\{orderTypes} orderBad=\{orderBad} orderMissing=\{orderMissing} orderReorder=\{orderReorder}"
 }
 typecheck: function {
     program: Node

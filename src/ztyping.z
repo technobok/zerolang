@@ -484,7 +484,89 @@ ZTyping: class {
                     seen9 = true
                 } case none then null
             }
-            if seen9 == false then this.declByTypeId.set key: typeId value: declId
+            if seen9 == false then {
+                this.declByTypeId.set key: typeId value: declId
+                this.declReplayMembers parentTypeId: typeId :declId
+            }
+        }
+    }
+
+    # declReplayMembers -- stamp the member declarations of a type whose
+    # declaration link is recorded after its child edges were written. A
+    # sidecar setter skips a type with no link yet (resolveFunction records
+    # parameter ownership before its own declSetType), so linking replays
+    # what those setters recorded.
+    declReplayMembers: function {:this parentTypeId: u64 declId: u64} is {
+        nids9: (List u64)
+        cnids9: (List u64)
+        {
+            bo9: this.childIndex.get key: parentTypeId
+            match (
+                bo9
+            ) case some then {
+                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
+                    row9: this.typeChild.get i: ri9
+                    nids9.append row9.nameId
+                    cnids9.append row9.childNameId
+                }
+            } case none then null
+        }
+        i9: u64
+        n9: nids9.length
+        for i9 < n9 loop {
+            nid9: nids9.get i: i9
+            cid9: cnids9.get i: i9
+            i9 = i9 + 1
+            md9: this.declFindChild parentDeclId: declId nameId: nid9.u32.orPanic
+            if md9 > 0 then {
+                hasOwn9: false
+                own9: ztypes.zparamownership.noneMode
+                {
+                    go9: this.childOwnership.get key: cid9
+                    match (
+                        go9
+                    ) case some then {
+                        hasOwn9 = true
+                        own9 = go9
+                    } case none then null
+                }
+                grant9: false
+                {
+                    gg9: this.childGrantsPrivate.get key: cid9
+                    match (
+                        gg9
+                    ) case some then {
+                        grant9 = gg9
+                    } case none then null
+                }
+                fnp9: false
+                {
+                    fg9: this.childIsFnptrField.get key: cid9
+                    match (
+                        fg9
+                    ) case some then {
+                        fnp9 = fg9
+                    } case none then null
+                }
+                arm9: false
+                {
+                    ag9: this.childLockArm.get key: cid9
+                    match (
+                        ag9
+                    ) case some then {
+                        arm9 = ag9
+                    } case none then null
+                }
+                do9: this.decls.get key: md9
+                match (
+                    do9
+                ) case some then {
+                    if hasOwn9 then do9.ownership = own9
+                    if grant9 then do9.grantsPrivate = true
+                    if fnp9 then do9.fnptrField = true
+                    if arm9 then do9.lockArm = true
+                } case none then null
+            }
         }
     }
 
@@ -766,6 +848,15 @@ ZTyping: class {
         ) case some then {
             this.childGrantsPrivate.set key: idopt value: true
         } case none then null
+        md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
+        if md8 > 0 then {
+            do8: this.decls.get key: md8
+            match (
+                do8
+            ) case some then {
+                do8.grantsPrivate = true
+            } case none then null
+        }
     }
 
     # isChildGrantsPrivate -- does reading child `name` of parentTypeId yield a
@@ -917,6 +1008,18 @@ ZTyping: class {
         ) case some then {
             this.childLockArm.set key: idopt value: true
         } case none then null
+        nid8: pool.find s: name
+        if nid8 > 0 then {
+            md8: this.declMemberIdOf :parentTypeId nameId: nid8
+            if md8 > 0 then {
+                do8: this.decls.get key: md8
+                match (
+                    do8
+                ) case some then {
+                    do8.lockArm = true
+                } case none then null
+            }
+        }
     }
 
     isChildLockArm: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -1049,6 +1152,19 @@ ZTyping: class {
             oc: ownership
             this.childOwnership.set key: idopt value: oc
         } case none then null
+        nid8: pool.find s: name
+        if nid8 > 0 then {
+            md8: this.declMemberIdOf :parentTypeId nameId: nid8
+            if md8 > 0 then {
+                do8: this.decls.get key: md8
+                match (
+                    do8
+                ) case some then {
+                    oc8: ownership
+                    do8.ownership = oc8
+                } case none then null
+            }
+        }
     }
 
     # setChildOwnershipId -- the id-keyed form of setChildOwnership.
@@ -1060,6 +1176,16 @@ ZTyping: class {
             oc: ownership
             this.childOwnership.set key: idopt value: oc
         } case none then null
+        md8: this.declMemberIdOf :parentTypeId nameId: nameId.u32.orPanic
+        if md8 > 0 then {
+            do8: this.decls.get key: md8
+            match (
+                do8
+            ) case some then {
+                oc8: ownership
+                do8.ownership = oc8
+            } case none then null
+        }
     }
 
     # Ownership name for (parent, name), or "none" when unset.
