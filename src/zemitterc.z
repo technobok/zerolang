@@ -7702,15 +7702,31 @@ methodReturnByName: function {ast: Ast symtab: zenv.ZSymbolTable dotted: StringV
     # only the canonical bears children).
     pids: (List u64)
     cids: (List u64)
-    with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
-        cnBe9: ast.names.texts.get i: (tc.nameId - 1).u64
-        if cnBe9.stringview == member.stringview then {
-            cto: symtab.typing.childTypeById.get key: tc.childNameId
+    {
+        # stage the matching rows: resolving a member declaration locks the
+        # whole ZTyping, which this iteration is holding open
+        rowP9: (List u64)
+        rowN9: (List u64)
+        with citer: symtab.typing.typeChild.iterate do for tc: citer loop {
+            cnBe9: ast.names.texts.get i: (tc.nameId - 1).u64
+            if cnBe9.stringview == member.stringview then {
+                pv9: tc.parentTypeId
+                rowP9.append pv9
+                nv9: tc.nameId
+                rowN9.append nv9
+            }
+        }
+        mk9: u64
+        mn9: rowP9.length
+        for mk9 < mn9 loop {
+            mp9: rowP9.get i: mk9
+            mnm9: rowN9.get i: mk9
+            mk9 = mk9 + 1
+            cto: symtab.typing.declChildOfId parentTypeId: mp9 nameId: mnm9
             match (
                 cto
             ) case some then {
-                pv9: tc.parentTypeId
-                pids.append pv9
+                pids.append mp9
                 cv9: cto
                 cids.append cv9
             } case none then null
@@ -18055,23 +18071,40 @@ emitFnptrTypedefs: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx buf: St
     seen: (List u64)
     # method FUNCTION tid -> owning object tid, for receiver-param resolution
     fnOwner: (Map u64 value: u64)
-    with fociter: symtab.typing.typeChild.iterate do for foc: fociter loop {
-        fco: symtab.typing.childTypeById.get key: foc.childNameId
-        match (
-            fco
-        ) case some then {
-            if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.functionType then {
-                fpt0: symtab.reg.typetypeOf typeId: foc.parentTypeId
-                isObj0: false
-                if fpt0 == ztypes.ztypetype.recordType then isObj0 = true
-                if fpt0 == ztypes.ztypetype.classType then isObj0 = true
-                if fpt0 == ztypes.ztypetype.unionType then isObj0 = true
-                if fpt0 == ztypes.ztypetype.variantType then isObj0 = true
-                if fpt0 == ztypes.ztypetype.protocolType then isObj0 = true
-                if fpt0 == ztypes.ztypetype.facetType then isObj0 = true
-                if isObj0 then fnOwner.set key: fco value: foc.parentTypeId
-            }
-        } case none then null
+    {
+        # stage the rows first: resolving a member declaration locks the whole
+        # ZTyping, which this iteration is holding open
+        fowP0: (List u64)
+        fowN0: (List u64)
+        with fociter: symtab.typing.typeChild.iterate do for foc: fociter loop {
+            fpv0: foc.parentTypeId
+            fowP0.append fpv0
+            fnv0: foc.nameId
+            fowN0.append fnv0
+        }
+        fk0: u64
+        fn0: fowP0.length
+        for fk0 < fn0 loop {
+            fp0: fowP0.get i: fk0
+            fnm0: fowN0.get i: fk0
+            fk0 = fk0 + 1
+            fco: symtab.typing.declChildOfId parentTypeId: fp0 nameId: fnm0
+            match (
+                fco
+            ) case some then {
+                if (symtab.reg.typetypeOf typeId: fco) == ztypes.ztypetype.functionType then {
+                    fpt0: symtab.reg.typetypeOf typeId: fp0
+                    isObj0: false
+                    if fpt0 == ztypes.ztypetype.recordType then isObj0 = true
+                    if fpt0 == ztypes.ztypetype.classType then isObj0 = true
+                    if fpt0 == ztypes.ztypetype.unionType then isObj0 = true
+                    if fpt0 == ztypes.ztypetype.variantType then isObj0 = true
+                    if fpt0 == ztypes.ztypetype.protocolType then isObj0 = true
+                    if fpt0 == ztypes.ztypetype.facetType then isObj0 = true
+                    if isObj0 then fnOwner.set key: fco value: fp0
+                }
+            } case none then null
+        }
     }
     t0: u64
     for t0 < last loop {
