@@ -433,6 +433,8 @@ ZTyping: class {
     dropDefault: u64
     # declSynthMember asked to declare a member of a type with no declaration
     synthNoOwner: u64
+    # declMemberList answered from the child edges: the owner had no declaration
+    enumFallback: u64
     isError: bool
     errors: (List zast.ErrorData)
     currentReturnTypeId: u64
@@ -592,8 +594,10 @@ ZTyping: class {
     }
 
     # declIdOfType -- the declaration that minted `typeId`; 0 for a type with
-    # none of its own (a monomorphisation links to its template through the
-    # type registry instead).
+    # none of its own. A monomorphisation HAS one -- declMonoType clones the
+    # template's -- so this returns the mono's own declaration, whose members
+    # carry instantiated types. (declOfTypeId, in ztypecheck, hops
+    # genericOrigin to the TEMPLATE's instead; the two differ on monos.)
     declIdOfType: function {:this typeId: u64} out u64 is {
         od9: u64
         {
@@ -1113,10 +1117,78 @@ ZTyping: class {
         this.declNew name: nid8 parent: od9 kind: kk9 node: node9
     }
 
+    # declMemberList -- a type's members, in declaration order, from the
+    # declaration tree rather than the child-edge tables: the member names
+    # (pool ids) and their types. Members are the field / method / arm / param
+    # children carrying a type; a unit's definitions and a type's `public:`
+    # block are not members and are skipped. False when the type has no
+    # declaration of its own, the child edges answer instead and enumFallback
+    # counts it. Order matches child-edge order once declReorderAllMembers has
+    # run, which is the last thing typecheck does -- measured equal for every
+    # record, class, variant, union, protocol, facet and function owner.
+    declMemberList: function {:this ownerTid: u64 names: List u64 tids: List u64} is {
+        od9: this.declIdOfType typeId: ownerTid
+        if od9 == 0 then {
+            this.enumFallback = this.enumFallback + 1
+            bo9: this.childIndex.get key: ownerTid
+            match (
+                bo9
+            ) case some then {
+                with rit9: bo9.rows.iterate do for ri9: rit9 loop {
+                    row9: this.typeChild.get i: ri9
+                    cto9: this.childTypeById.get key: row9.childNameId
+                    match (
+                        cto9
+                    ) case some then {
+                        names.append row9.nameId
+                        ctv9: cto9
+                        tids.append ctv9
+                    } case none then null
+                }
+            } case none then null
+            return
+        }
+        kids9: (List u64)
+        raw9: (List u64)
+        {
+            oo9: this.decls.get key: od9
+            match (
+                oo9
+            ) case some then {
+                with cit9: oo9.children.iterate do for c9: cit9 loop {
+                    kids9.append c9.declId
+                    raw9.append c9.nameId.u64
+                }
+            } case none then null
+        }
+        i9: u64
+        n9: kids9.length
+        for i9 < n9 loop {
+            isMem9: false
+            mt9: u64
+            {
+                ko9: this.decls.get key: (kids9.get i: i9)
+                match (
+                    ko9
+                ) case some then {
+                    if ko9.kind.fieldDecl then isMem9 = true
+                    if ko9.kind.methodDecl then isMem9 = true
+                    if ko9.kind.paramDecl then isMem9 = true
+                    if ko9.kind.armDecl then isMem9 = true
+                    mt9 = ko9.typeId
+                } case none then null
+            }
+            if isMem9 when mt9 > 0 then {
+                names.append (raw9.get i: i9)
+                tids.append mt9
+            }
+            i9 = i9 + 1
+        }
+    }
+
     # declMemberIdOf -- the declaration of member `nameId` under the type
-    # `parentTypeId` minted; 0 when that type has no declaration (a
-    # monomorphisation) or the member is not declared (a synthesized create,
-    # comparison or tag).
+    # `parentTypeId` minted; 0 when that type has no declaration of its own or
+    # the member is not declared.
     declMemberIdOf: function {:this parentTypeId: u64 nameId: u32} out u64 is {
         od9: this.declIdOfType typeId: parentTypeId
         if od9 == 0 then return 0
@@ -1716,6 +1788,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         dropGrant: 0
         dropDefault: 0
         synthNoOwner: 0
+        enumFallback: 0
         errors: (List zast.ErrorData)
         currentReturnTypeId: 0
         isError: false)
