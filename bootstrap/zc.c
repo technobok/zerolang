@@ -39220,7 +39220,6 @@ static void z_t3869_ZDumper_appendTypeChildrenCanon(z_t3842_ZDumper_t* this, z_t
     z_t989_List_String_t rows = z_t989_List_String_create((uint64_t)0);
     z_t1421_List_u64_t pids9 = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t nids9 = z_t1421_List_u64_create((uint64_t)0);
-    z_t1421_List_u64_t cnids9 = z_t1421_List_u64_create((uint64_t)0);
     z_t1421_List_u64_t poss9 = z_t1421_List_u64_create((uint64_t)0);
     z_t1680_ListIter_ZTypeChild_t citer = z_t1668_List_ZTypeChild_iterate(&st->typing.typeChild);
     while (1) {
@@ -39229,14 +39228,12 @@ static void z_t3869_ZDumper_appendTypeChildrenCanon(z_t3842_ZDumper_t* this, z_t
         z_t1666_ZTypeChild_t crow = *(z_t1666_ZTypeChild_t*)_iter0.data;
         (void)(z_t1421_List_u64_append(&pids9, crow.parentTypeId));
         (void)(z_t1421_List_u64_append(&nids9, crow.nameId));
-        (void)(z_t1421_List_u64_append(&cnids9, crow.childNameId));
         (void)(z_t1421_List_u64_append(&poss9, crow.position));
     }
     uint64_t ri9 = ((uint64_t)0);
     while ((ri9 < pids9.length)) {
         uint64_t pid9 = z_t1421_List_u64_get(&pids9, ri9);
         uint64_t nid9 = z_t1421_List_u64_get(&nids9, ri9);
-        uint64_t cnid9 = z_t1421_List_u64_get(&cnids9, ri9);
         uint64_t pos9 = z_t1421_List_u64_get(&poss9, ri9);
         ri9 = (ri9 + 1);
         z_t947_Option_String_t pdu = z_t3592_definedUnitOf9(st, pid9);
@@ -39293,7 +39290,6 @@ static void z_t3869_ZDumper_appendTypeChildrenCanon(z_t3842_ZDumper_t* this, z_t
     z_t989_List_String_destroy(&rows);
     z_t1421_List_u64_destroy(&pids9);
     z_t1421_List_u64_destroy(&nids9);
-    z_t1421_List_u64_destroy(&cnids9);
     z_t1421_List_u64_destroy(&poss9);
 }
 
