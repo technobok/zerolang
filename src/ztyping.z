@@ -421,6 +421,23 @@ ZTyping: class {
     # does not exist yet); drained into root-proxy links by indexUnitDefs
     declProxyTids: (List u64)
     declProxyUnits: (List String)
+    # metadata writes that found no member declaration, so only the sidecar
+    # recorded them. The sidecar replay exists to reconcile exactly these:
+    # every counter must be 0 before the sidecars can be deleted.
+    dropOwn: u64
+    dropOwnId: u64
+    # declSetMemberType could not reach a member declaration, so the member's
+    # type reached the declaration only through the sidecar replay. Split by
+    # cause: the owner type has no declaration at all, vs the owner is not a
+    # function so no parameter declaration may be minted for it.
+    dropTypeIdNoOwner: u64
+    dropTypeIdNotFn: u64
+    dropFnptr: u64
+    dropLock: u64
+    dropGrant: u64
+    dropDefault: u64
+    # declSynthMember asked to declare a member of a type with no declaration
+    synthNoOwner: u64
     isError: bool
     errors: (List zast.ErrorData)
     currentReturnTypeId: u64
@@ -696,7 +713,10 @@ ZTyping: class {
             # a function type's members are its parameters, and a synthesized
             # constructor gains them after its own declaration exists
             od8: this.declIdOfType typeId: parentTypeId
-            if od8 == 0 then return
+            if od8 == 0 then {
+                this.dropTypeIdNoOwner = this.dropTypeIdNoOwner + 1
+                return
+            }
             isFn8: false
             node8: u32
             {
@@ -709,7 +729,10 @@ ZTyping: class {
                     node8 = oo8.node
                 } case none then null
             }
-            if isFn8 == false then return
+            if isFn8 == false then {
+                this.dropTypeIdNotFn = this.dropTypeIdNotFn + 1
+                return
+            }
             md8 = (this.declNew
                 name: nid8
                 parent: od8
@@ -1125,7 +1148,10 @@ ZTyping: class {
     # already declared (a type writing its own `create` in an is-block).
     declSynthMember: function {:this parentTypeId: u64 nameId: u64 kind: declkind} is {
         od9: this.declIdOfType typeId: parentTypeId
-        if od9 == 0 then return
+        if od9 == 0 then {
+            this.synthNoOwner = this.synthNoOwner + 1
+            return
+        }
         nid8: nameId.u32.orPanic
         if (this.declFindChild parentDeclId: od9 nameId: nid8) > 0 then return
         node9: u32
@@ -1390,6 +1416,8 @@ ZTyping: class {
             ) case some then {
                 do8.grantsPrivate = true
             } case none then null
+        } else {
+            this.dropGrant = this.dropGrant + 1
         }
     }
 
@@ -1439,6 +1467,7 @@ ZTyping: class {
             this.childLockField.set key: idopt value: true
         } case none then null
         nid8: pool.find s: name
+        landed8: false
         if nid8 > 0 then {
             od8: this.declIdOfType typeId: parentTypeId
             if od8 > 0 then {
@@ -1449,10 +1478,12 @@ ZTyping: class {
                         do8
                     ) case some then {
                         do8.lockFieldDecl = md8
+                        landed8 = true
                     } case none then null
                 }
             }
         }
+        if (landed8) == false then this.dropLock = this.dropLock + 1
     }
 
     isChildLockField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -1481,6 +1512,7 @@ ZTyping: class {
             this.childIsFnptrField.set key: idopt value: true
         } case none then null
         nid8: pool.find s: name
+        landed8: false
         if nid8 > 0 then {
             md8: this.declMemberIdOf :parentTypeId nameId: nid8
             if md8 > 0 then {
@@ -1489,9 +1521,11 @@ ZTyping: class {
                     do8
                 ) case some then {
                     do8.fnptrField = true
+                    landed8 = true
                 } case none then null
             }
         }
+        if (landed8) == false then this.dropFnptr = this.dropFnptr + 1
     }
 
     isChildFnptrField: function {:this pool: zast.StringPool parentTypeId: u64 name: StringView} out bool is {
@@ -1533,9 +1567,15 @@ ZTyping: class {
     # member is not a declared one.
     declSetDefault: function {:this parentTypeId: u64 pool: zast.StringPool name: StringView value: DefaultVal} is {
         nid8: pool.find s: name
-        if nid8 == 0 then return
+        if nid8 == 0 then {
+            this.dropDefault = this.dropDefault + 1
+            return
+        }
         md8: this.declMemberIdOf :parentTypeId nameId: nid8
-        if md8 == 0 then return
+        if md8 == 0 then {
+            this.dropDefault = this.dropDefault + 1
+            return
+        }
         do8: this.decls.get key: md8
         match (
             do8
@@ -1624,6 +1664,7 @@ ZTyping: class {
             this.childOwnership.set key: idopt value: oc
         } case none then null
         nid8: pool.find s: name
+        landed8: false
         if nid8 > 0 then {
             md8: this.declMemberIdOf :parentTypeId nameId: nid8
             if md8 > 0 then {
@@ -1633,9 +1674,11 @@ ZTyping: class {
                 ) case some then {
                     oc8: ownership
                     do8.ownership = oc8
+                    landed8 = true
                 } case none then null
             }
         }
+        if (landed8) == false then this.dropOwn = this.dropOwn + 1
     }
 
     # setChildOwnershipId -- the id-keyed form of setChildOwnership.
@@ -1656,6 +1699,8 @@ ZTyping: class {
                 oc8: ownership
                 do8.ownership = oc8
             } case none then null
+        } else {
+            this.dropOwnId = this.dropOwnId + 1
         }
     }
 
@@ -1835,6 +1880,15 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         refDecl: (Map u64 value: u64)
         declProxyTids: (List u64)
         declProxyUnits: (List String)
+        dropOwn: 0
+        dropOwnId: 0
+        dropTypeIdNoOwner: 0
+        dropTypeIdNotFn: 0
+        dropFnptr: 0
+        dropLock: 0
+        dropGrant: 0
+        dropDefault: 0
+        synthNoOwner: 0
         errors: (List zast.ErrorData)
         currentReturnTypeId: 0
         isError: false)
