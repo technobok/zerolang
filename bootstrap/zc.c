@@ -70994,7 +70994,6 @@ uint64_t z_t2889_checkBoxConstruction(z_t1266_ZSymbolTable_t* st, z_t105_StringV
         uint64_t crId = z_t1580_ZTypeRegistry_newType(&st->reg, ((z_t105_StringView_t){ crn.data, crn.size }), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }));
         (void)(z_t2109_ZTyping_declSynthMember(&st->typing, mid, ((uint64_t)5ULL), ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL })));
         (void)(z_t2115_ZTyping_setChildId(&st->typing, mid, ((uint64_t)5ULL), crId));
-        z_t989_List_String_t cNames2 = z_t989_List_String_create((uint64_t)0);
         z_t1421_List_u64_t cIds2 = z_t1421_List_u64_create((uint64_t)0);
         z_t1421_List_u64_t cNid2 = z_t1421_List_u64_create((uint64_t)0);
         z_t1706_OptionView_ChildBucket_t bxb9 = z_t1687_Map_u64_ChildBucket_get(st->typing.childIndex, vt);
@@ -71014,15 +71013,10 @@ uint64_t z_t2889_checkBoxConstruction(z_t1266_ZSymbolTable_t* st, z_t105_StringV
                         case Z_OPTIONVAL_U64_TAG_SOME: {
                             uint64_t cto2 = _m16.data.some;
                             (void)cto2;
-                            z_t74_String_t cnB4 = z_t989_List_String_get(&ast->names.texts, ((uint64_t)(tc2.nameId - 1)));
-                            z_t74_String_t cn2 = z_t74_String_copy(&cnB4);
-                            (void)(z_t989_List_String_append(&cNames2, cn2));
-                            cn2 = (z_t74_String_t){0};
                             uint64_t cid3 = cto2;
                             (void)(z_t1421_List_u64_append(&cIds2, cid3));
                             uint64_t nid2 = tc2.nameId;
                             (void)(z_t1421_List_u64_append(&cNid2, nid2));
-    z_t74_String_free(&cn2);
                             break;
                         }
                         case Z_OPTIONVAL_U64_TAG_NONE: {
@@ -71039,9 +71033,8 @@ uint64_t z_t2889_checkBoxConstruction(z_t1266_ZSymbolTable_t* st, z_t105_StringV
             default: break;
         }
         uint64_t bi = ((uint64_t)0);
-        uint64_t bn2 = cNames2.length;
+        uint64_t bn2 = cNid2.length;
         while ((bi < bn2)) {
-            z_t74_String_t chn = z_t989_List_String_get(&cNames2, bi);
             uint64_t chi = z_t1421_List_u64_get(&cIds2, bi);
             uint64_t chnId = z_t1421_List_u64_get(&cNid2, bi);
             z_t169_optionval_u64_t ext9 = z_t2118_ZTyping_childOfId(&st->typing, mid, chnId);
@@ -71053,7 +71046,12 @@ uint64_t z_t2889_checkBoxConstruction(z_t1266_ZSymbolTable_t* st, z_t105_StringV
                     break;
                 }
                 case Z_OPTIONVAL_U64_TAG_NONE: {
-                    (void)(z_t2115_ZTyping_setChildId(&st->typing, mid, ((uint64_t)z_t1217_poolFind(&ast->names, ((z_t105_StringView_t){ chn.data, chn.size }))), chi));
+                    z_t2015_declkind_t kk9 = ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_FIELDDECL });
+                    if (z_t1413_ztypetype_eq(z_t1589_ZTypeRegistry_typetypeOf(&st->reg, chi), ((z_t1413_ztypetype_t){ .tag = Z_ZTYPETYPE_TAG_FUNCTIONTYPE }))) {
+                        kk9 = ((z_t2015_declkind_t){ .tag = Z_DECLKIND_TAG_METHODDECL });
+                    }
+                    (void)(z_t2109_ZTyping_declSynthMember(&st->typing, mid, chnId, kk9));
+                    (void)(z_t2115_ZTyping_setChildId(&st->typing, mid, chnId, chi));
                     break;
                 }
                 default: break;
@@ -71064,7 +71062,6 @@ uint64_t z_t2889_checkBoxConstruction(z_t1266_ZSymbolTable_t* st, z_t105_StringV
     z_t1706_OptionView_ChildBucket_destroy(&bxb9);
     z_t1421_List_u64_destroy(&cNid2);
     z_t1421_List_u64_destroy(&cIds2);
-    z_t989_List_String_destroy(&cNames2);
     z_t74_String_free(&crn);
     }
     z_t1068_Node_t _ah617 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)(call->callable - 1)));
