@@ -2119,8 +2119,7 @@ Analysis: class {
 
     # emitSuf -- L005: a redundant numeric suffix. The safe fix removes the `.` and the type
     # name (e.g. `5.i32` -> `5`); the context already pins the type.
-    emitSuf: function {:this uname: StringView ln: u32 col: u32 tname: StringView} is {
-        uname
+  emitSuf: function {:this ln: u32 col: u32 tname: StringView} is {
         srcOwned: this.source.copy
         sv: srcOwned.stringview
         lineStart: lineStartIndex src: sv
@@ -2149,7 +2148,6 @@ Analysis: class {
         lhs: Node
         rhs: Node
         isCmp: bool
-        uname: StringView
         st: zenv.ZSymbolTable
     } is {
         # a LEADING literal's suffix is load-bearing at arithmetic ops (the
@@ -2159,12 +2157,12 @@ Analysis: class {
         if isCmp then {
             ls: operandSuffix :ast n: lhs
             if ls.tname.length > 0 when (isAnchor :ast n: rhs tname: ls.tname.stringview :st) then {
-                this.emitSuf :uname ln: ls.line col: ls.col tname: ls.tname.stringview
+                this.emitSuf ln: ls.line col: ls.col tname: ls.tname.stringview
             }
         }
         rs: operandSuffix :ast n: rhs
         if rs.tname.length > 0 when (isAnchor :ast n: lhs tname: rs.tname.stringview :st) then {
-            this.emitSuf :uname ln: rs.line col: rs.col tname: rs.tname.stringview
+            this.emitSuf ln: rs.line col: rs.col tname: rs.tname.stringview
         }
     }
 
@@ -2174,14 +2172,13 @@ Analysis: class {
         :this
         topath: Node
         value: Node
-        uname: StringView
         st: zenv.ZSymbolTable
     } is {
         vs: operandSuffix :ast n: value
         if vs.tname.length > 0 then {
             tn: typeNameOfNode n: topath :st
             if tn.length > 0 when (tn.stringview == vs.tname.stringview) then {
-                this.emitSuf :uname ln: vs.line col: vs.col tname: vs.tname.stringview
+                this.emitSuf ln: vs.line col: vs.col tname: vs.tname.stringview
             }
         }
     }
@@ -2303,10 +2300,8 @@ Analysis: class {
         callNid: u32
         callable: Node
         arguments: List u32
-        uname: StringView
         st: zenv.ZSymbolTable
     } is {
-        uname
         isRet9: false
         {
             ck9: st.typing.callKind.get key: callNid.u64
@@ -2422,7 +2417,7 @@ Analysis: class {
 
     # sufNamedArg -- a named call/constructor argument whose suffix the parameter / field type
     # fixes.
-    sufNamedArg: function {:this ast: Ast arg: Node calleeType: u64 uname: StringView st: zenv.ZSymbolTable} is {
+    sufNamedArg: function {:this ast: Ast arg: Node calleeType: u64 st: zenv.ZSymbolTable} is {
         match (
             arg
         ) case namedoperation then {
@@ -2469,7 +2464,7 @@ Analysis: class {
                     ) case some then {
                         ptn: nameOfTypeId tid: pto :st
                         if ptn.stringview == s9.tname.stringview then {
-                            this.emitSuf :uname ln: s9.line col: s9.col tname: s9.tname.stringview
+                            this.emitSuf ln: s9.line col: s9.col tname: s9.tname.stringview
                         }
                     } case none then null
                 }
@@ -2479,25 +2474,25 @@ Analysis: class {
 
     # sufNamedArgReturn -- a return value whose suffix the enclosing function's return type
     # fixes.
-    sufNamedArgReturn: function {:this ast: Ast arg: Node rtName: StringView uname: StringView} is {
+    sufNamedArgReturn: function {:this ast: Ast arg: Node rtName: StringView} is {
         match (
             arg
         ) case namedoperation then {
             s9: operandSuffix :ast n: (ast.nodes.get i: (arg.operation - 1).u64)
             if s9.tname.length > 0 when (s9.tname.stringview == rtName) then {
-                this.emitSuf :uname ln: s9.line col: s9.col tname: s9.tname.stringview
+                this.emitSuf ln: s9.line col: s9.col tname: s9.tname.stringview
             }
         } else {
             s8: operandSuffix :ast n: arg
             if s8.tname.length > 0 when (s8.tname.stringview == rtName) then {
-                this.emitSuf :uname ln: s8.line col: s8.col tname: s8.tname.stringview
+                this.emitSuf ln: s8.line col: s8.col tname: s8.tname.stringview
             }
         }
     }
 
     # sufCall -- redundant suffixes in a call: a `return` uses the enclosing function's return
     # type; otherwise each named argument's parameter type.
-    sufCall: function {:this ast: Ast callNid: u32 callable: Node arguments: List u32 uname: StringView st: zenv.ZSymbolTable funcretId: u32} is {
+    sufCall: function {:this ast: Ast callNid: u32 callable: Node arguments: List u32 st: zenv.ZSymbolTable funcretId: u32} is {
         ck: st.typing.callKind.get key: callNid.u64
         isRet: false
         match (
@@ -2517,7 +2512,6 @@ Analysis: class {
                     :ast
                     arg: (ast.nodes.get i: (aId9 - 1).u64)
                     rtName: rtName.stringview
-                    :uname
                 )
             }
         } else {
@@ -2532,7 +2526,6 @@ Analysis: class {
                         :ast
                         arg: (ast.nodes.get i: (aId9 - 1).u64)
                         calleeType: co
-                        :uname
                         :st
                     )
                 }
@@ -2554,7 +2547,6 @@ Analysis: class {
                 lhs: bl9
                 rhs: br9
                 isCmp: (ztypecheck.isComparisonOp name: bop9.stringview)
-                :uname
                 :st
             )
             this.walkSuf :ast n: (ast.nodes.get i: (n.lhs - 1).u64) :uname :st :funcretId
@@ -2573,7 +2565,6 @@ Analysis: class {
                 callNid: n.nodeid
                 callable: (ast.nodes.get i: (n.callable - 1).u64)
                 arguments: n.arguments
-                :uname
                 :st
                 :funcretId
             )
@@ -2581,7 +2572,6 @@ Analysis: class {
                 callNid: n.nodeid
                 callable: (ast.nodes.get i: (n.callable - 1).u64)
                 arguments: n.arguments
-                :uname
                 :st
             )
             this.walkSuf :ast n: (ast.nodes.get i: (n.callable - 1).u64) :uname :st :funcretId
@@ -2615,7 +2605,7 @@ Analysis: class {
         } case reassignment then {
             tpn9: ast.nodes.get i: (n.topath - 1).u64
             rvn9: ast.nodes.get i: (n.value - 1).u64
-            this.sufReassign :ast topath: tpn9 value: rvn9 :uname :st
+            this.sufReassign :ast topath: tpn9 value: rvn9 :st
             this.walkSuf :ast n: tpn9 :uname :st :funcretId
             this.walkSuf :ast n: rvn9 :uname :st :funcretId
         } case swapstmt then {

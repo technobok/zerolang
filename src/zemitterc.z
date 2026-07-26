@@ -2670,11 +2670,9 @@ popLoopLabel: function {ctx: Ctx id: u64 ind: StringView buf: String.borrow} is 
 methodOwnerId: function {
     ast: Ast
     symtab: zenv.ZSymbolTable
-    ctx: Ctx
     rtid: u64
     mn: StringView
 } out u64 is {
-    ctx
     direct: symtab.typing.declChildOf pool: ast.names parentTypeId: rtid name: mn
     match (
         direct
@@ -2761,7 +2759,7 @@ emitInstanceMethodCall: function {
     if recvExpr.length == 0 then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: (call.callable - 1).u64)
     rtidc: chaseColMono :symtab :ctx tid: rtid0
-    rtid: methodOwnerId :ast :symtab :ctx rtid: rtidc mn: mn.stringview
+    rtid: methodOwnerId :ast :symtab rtid: rtidc mn: mn.stringview
     if rtid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: rtid) != ztypes.ztypetype.classType then return "".string
     monoLk2: monoOriginName :symtab tid: rtid
@@ -3348,7 +3346,7 @@ emitListMethodCall: function {
         return e4
     }
     if mn.stringview == "extend" then {
-        eaa: listTakeArgBase :ast :symtab :ctx :call label: "from"
+        eaa: listTakeArgBase :ast :call label: "from"
         ea: ztypes.mangleVarName name: eaa.stringview
         e5: "\{cb}_extend(\{recvR9}, &\{ea})"
         return e5
@@ -3738,13 +3736,9 @@ listArg: function {
 # extend source); the bare atom text otherwise.
 listTakeArgBase: function {
     ast: Ast
-    symtab: zenv.ZSymbolTable
-    ctx: Ctx
     call: zast.CallData
     label: StringView
 } out String is {
-    symtab
-    ctx
     aiter: call.arguments.iterate
     for aId9: aiter loop {
         a: ast.nodes.get i: (aId9 - 1).u64
@@ -5382,11 +5376,9 @@ dottedParentChild: function {ast: Ast n: Node} out String is {
 # (the user create, no receiver). "" when not such a 3-segment bare create.
 emitCrossUnitBareCreate: function {ast: Ast
     symtab: zenv.ZSymbolTable
-    ctx: Ctx
     parent: Node
     child: StringView
 } out String is {
-    ctx
     if child != "create" then return "".string
     pbase9: dottedBaseAtom :ast n: parent
     ptype9: dottedChildText :ast n: parent
@@ -6318,7 +6310,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 if (dpOk9) == false then {
                     # runtime-backed units: only a bodied+demanded free fn
                     # earns the id-cname reference/auto-call route here
-                    dpOk9 = stdFnRefEmittable :ast :symtab :ctx fid: dpUfo9
+                    dpOk9 = stdFnRefEmittable :ast :symtab fid: dpUfo9
                 }
                 if dpOk9 when (symtab.reg.typetypeOf typeId: dpUfo9) == ztypes.ztypetype.functionType then {
                     dpUfc9: symtab.reg.cnameOf tid: dpUfo9
@@ -6344,7 +6336,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         }
         mnc0: aliasOrChild :ast :symtab aliasId: n.nodeid.u64 childId: n.child
         dps9: ast.nodes.get i: (n.parent - 1).u64
-        ccbc9: emitCrossUnitBareCreate :ast :symtab :ctx parent: dps9 child: mnc0.stringview
+        ccbc9: emitCrossUnitBareCreate :ast :symtab parent: dps9 child: mnc0.stringview
         if ccbc9.length > 0 then return ccbc9
         if mnc0.stringview == "copy" then {
             # `.copy` on a generic-param field inside a clone body: the node
@@ -7155,7 +7147,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
             if nrtt9 == ztypes.ztypetype.classType then nDisp9 = true
             if nrtt9 == ztypes.ztypetype.recordType then nDisp9 = true
             if nDisp9 then {
-                nlidM9: methodOwnerId :ast :symtab :ctx rtid: nlid9 mn: mn2.stringview
+                nlidM9: methodOwnerId :ast :symtab rtid: nlid9 mn: mn2.stringview
                 nmco9: (symtab.typing.declChildOf
                     pool: ast.names
                     parentTypeId: nlidM9
@@ -9282,7 +9274,7 @@ emitStmt: function {
         kiter: n.conditions.iterate
         for kId9: kiter loop {
             k9r: ast.nodes.get i: (kId9 - 1).u64
-            emitForCond :ast :symtab :ctx n: k9r :cond :ind :tmp :buf
+            emitForCond :ast :symtab :ctx n: k9r :cond :ind :buf
         }
         # `for loop { ... }` -- no conditions, no postconditions: an
         # unconditional loop that exits via break/return.
@@ -9304,7 +9296,7 @@ emitStmt: function {
         popLoopLabel :ctx id: lidW :ind :buf
         ctx.condDepth = ctx.condDepth - 1
     } case yieldexpr then {
-        emitYieldStmt :ast :symtab :ctx yd: n :ind :tmp :buf
+        emitYieldStmt :ast :symtab :ctx yd: n :ind :buf
     } else {
         # a no-arg method auto-call in statement position (this.accept,
         # this.statepop) is a dotted path: emit the call expression as a statement.
@@ -11109,10 +11101,8 @@ emitForCond: function {
     n: Node
     cond: String.borrow
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
 } is {
-    tmp
     match (
         n
     ) case namedoperation then {
@@ -13672,7 +13662,7 @@ scanNeeds: function {ast: Ast ctx: Ctx n: Node} is {
 }
 
 # record every method's return type for the program.
-fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} is {
+fillMethodReturns: function {program: Node ctx: Ctx} is {
     match (
         program
     ) case program then {
@@ -13692,7 +13682,6 @@ fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} i
             }
             if opId9 > 0 then {
                 (fillMethodReturnsIn
-                    :symtab
                     :ctx
                     ast: program.ast
                     mainOpId: opId9
@@ -13704,7 +13693,6 @@ fillMethodReturns: function {program: Node symtab: zenv.ZSymbolTable ctx: Ctx} i
 
 # record a unit's method return types.
 fillMethodReturnsIn: function {
-    symtab: zenv.ZSymbolTable
     ctx: Ctx
     ast: Ast
     mainOpId: u32
@@ -13716,7 +13704,6 @@ fillMethodReturnsIn: function {
             tnm: zast.nameTextCopy :ast ref: bmNode9.name
             (fillTypeMethodReturns
                 :ast
-                :symtab
                 :ctx
                 typeName: tnm.stringview
                 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
@@ -13728,12 +13715,10 @@ fillMethodReturnsIn: function {
 # record one type's method return types.
 fillTypeMethodReturns: function {
     ast: Ast
-    symtab: zenv.ZSymbolTable
     ctx: Ctx
     typeName: StringView
     op: Node
 } is {
-    symtab
     match (
         op
     ) case objectdef then {
@@ -14872,7 +14857,7 @@ emitC: function {
     buildDefUnitIndex :symtab :ctx
     ctxBindMain :ctx name: ctx.realMain.stringview
     fillConstVals :program :symtab :ctx
-    fillMethodReturns :program :symtab :ctx
+    fillMethodReturns :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :ctx
     nodeEstE9: u64
@@ -15463,7 +15448,7 @@ emitListMono: function {
             }
         }
         t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: delems9.stringview
-        lvm: listviewMethods :symtab :ctx :monoId nm: nm.stringview ect: ect.stringview
+        lvm: listviewMethods :symtab :monoId nm: nm.stringview ect: ect.stringview
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringview
         buf.append t4
         buf.append "\n"
@@ -15502,7 +15487,7 @@ emitListMono: function {
             :buf
         )
     } case none then null
-    emitListIter :symtab :ctx :monoId nm: nm.stringview :buf
+    emitListIter :symtab :monoId nm: nm.stringview :buf
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
@@ -15511,12 +15496,10 @@ emitListMono: function {
 # emitted by the earlier OptionView pass, so this can reference it.
 emitListIter: function {
     symtab: zenv.ZSymbolTable
-    ctx: Ctx
     monoId: u64
     nm: StringView
     buf: String.borrow
 } is {
-    ctx
     liId: monoMethodReturn :symtab :monoId nameId: wkIterate
     if liId == 0 then return
     liName: typeNameOfReg9 :symtab tid: liId
@@ -15630,12 +15613,10 @@ emitListViewMono: function {
 # List mono carries a listview child; "" otherwise.
 listviewMethods: function {
     symtab: zenv.ZSymbolTable
-    ctx: Ctx
     monoId: u64
     nm: StringView
     ect: StringView
 } out String is {
-    ctx
     lo: symtab.typing.declChildOfId parentTypeId: monoId nameId: wkListview
     match (
         lo
@@ -15946,11 +15927,9 @@ setFreeItemDel: function {isStr: bool strC: StringView} out String is {
 # a {tag; void* data} struct with a no-op destroy (the view owns nothing).
 emitOptionViewMono: function {
     symtab: zenv.ZSymbolTable
-    ctx: Ctx
     monoId: u64
     buf: String.borrow
 } is {
-    ctx
     mn: typeNameOfReg9 :symtab tid: monoId
     nm: cbaseNoPrefix tid: monoId name: mn.stringview
     ovu: cUpperOf text: mn.stringview
@@ -16064,11 +16043,9 @@ mapFreeKeyDel: function {isStr: bool strC: StringView valFree: StringView} out S
 mapValFreeStmt: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    valName: StringView
     valTid: u64
     slot: StringView
 } out String is {
-    valName
     if valTid == ctx.strTid then return "\{ctx.strC}_free(&\{slot});"
     if valTid > 0 then {
         vmid: chaseColMono :symtab :ctx tid: valTid
@@ -16246,14 +16223,12 @@ emitMapMono: function {
     vfDestroy: (mapValFreeStmt
         :symtab
         :ctx
-        valName: valName.stringview
         :valTid
         slot: "p->entries[i].value"
     )
     vfDup: (mapValFreeStmt
         :symtab
         :ctx
-        valName: valName.stringview
         :valTid
         slot: "_this->entries[existing].value"
     )
@@ -17307,8 +17282,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable ctx: Ctx buf: String.borro
 # concrete generic-arg rows on monos (setGenericArg stamps a 0 placeholder), so
 # resolve the value via the get-return OptionView's element name and the key via
 # the mangled-name remainder, mirroring emitMapMono.
-monoMapKV: function {symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64 acc: List u64} is {
-    ctx
+monoMapKV: function {symtab: zenv.ZSymbolTable monoId: u64 acc: List u64} is {
     go: symtab.typing.declChildOfId parentTypeId: monoId nameId: wkGet
     match (
         go
@@ -17341,7 +17315,7 @@ monoElemIdsOf: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64
         return
     }
     if (originIsTid :symtab tid: monoId originTid: ctx.mapOriginTid) then {
-        monoMapKV :symtab :ctx :monoId :acc
+        monoMapKV :symtab :monoId :acc
         return
     }
     isWrap: false
@@ -17380,8 +17354,7 @@ monoElemIdsOf: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx monoId: u64
 # buildUserTypeList -- the file-unit (main + dep) struct types: RECORD / CLASS /
 # UNION / VARIANT that are not monos and not generic templates. A mono embedding
 # one of these by value must be emitted after it.
-buildUserTypeList: function {symtab: zenv.ZSymbolTable ctx: Ctx acc: List u64} is {
-    ctx
+buildUserTypeList: function {symtab: zenv.ZSymbolTable acc: List u64} is {
     last: symtab.reg.nextTypeId
     t: u64
     for t < last loop {
@@ -17684,8 +17657,7 @@ collectLateMonosKind: function {
 # emittable-unit fns always; a runtime-backed unit's fn only when it is a
 # BODIED (non-native), DEMANDED free fn (natives keep routing through the
 # declaration-driven call emitter and have no id-cname definition).
-stdFnRefEmittable: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx fid: u64} out bool is {
-    ctx
+stdFnRefEmittable: function {ast: Ast symtab: zenv.ZSymbolTable fid: u64} out bool is {
     duo9: definedInUnitOf :symtab tid: fid
     match (
         duo9
@@ -17710,11 +17682,11 @@ stdFnRefEmittable: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx fid: u6
 }
 
 # true when type `tid` needs a function-pointer typedef.
-fnptrTypedefEligible: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} out bool is {
+fnptrTypedefEligible: function {ast: Ast symtab: zenv.ZSymbolTable tid: u64} out bool is {
     if (isGenericType :symtab :tid) then return false
     mo: monoOriginName :symtab :tid
     if mo.length > 0 then return false
-    return (stdFnRefEmittable :ast :symtab :ctx fid: tid)
+    return (stdFnRefEmittable :ast :symtab fid: tid)
 }
 
 # fnRegReturnId -- a FUNCTION type's registered return type id (0 when none).
@@ -17984,7 +17956,7 @@ emitFnptrTypedefs: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx buf: St
     t0: u64
     for t0 < last loop {
         if (symtab.reg.typetypeOf typeId: t0) == ztypes.ztypetype.functionType then {
-            if (fnptrTypedefEligible :ast :symtab :ctx tid: t0) then {
+            if (fnptrTypedefEligible :ast :symtab tid: t0) then {
                 emitOneFnptrTypedef :ast :symtab :ctx tid: t0 :seen :fnOwner :buf
             }
         }
@@ -18002,7 +17974,7 @@ emitUserStructsOrdered: function {
 } is {
     last: symtab.reg.nextTypeId
     userList: (List u64)
-    buildUserTypeList :symtab :ctx acc: userList
+    buildUserTypeList :symtab acc: userList
     # user PROTOCOLs upfront (fat pointer; no by-value user embedding)
     tp: u64
     for tp < last loop {
@@ -18211,7 +18183,7 @@ emitMonos: function {
 } is {
     last: symtab.reg.nextTypeId
     userListM: (List u64)
-    buildUserTypeList :symtab :ctx acc: userListM
+    buildUserTypeList :symtab acc: userListM
     emitCliFwdDecls :symtab :ctx :buf
     emitMainFwdDecls :symtab :ctx :buf
     # one classification sweep over the registry fills the per-category
@@ -18470,7 +18442,7 @@ emitMonos: function {
     tiov: u64
     for tiov < wOptView9.length loop {
         ovId9: wOptView9.get i: tiov
-        emitOptionViewMono :symtab :ctx monoId: ovId9 :buf
+        emitOptionViewMono :symtab monoId: ovId9 :buf
         tiov = tiov + 1
     }
     # ListView structs next -- a List's listview companion references
@@ -19068,11 +19040,9 @@ emitFacetImpl: function {
     implTid: u64
     implName: StringView
     facetTid: u64
-    facetName: StringView
     label: StringView
     buf: String.borrow
 } is {
-    facetName
     if (isGenericType :symtab tid: implTid) then return
     implBase: cnameOf tid: implTid name: implName
     implCtype: "\{implBase}_t"
@@ -19207,7 +19177,6 @@ emitFacetImplsForType: function {
                 :implTid
                 :implName
                 facetTid: ftid
-                facetName: ""
                 label: flabel.stringview
                 :buf
             )
@@ -19272,8 +19241,7 @@ conformanceLabelFor: function {symtab: zenv.ZSymbolTable implTid: u64 protoTid: 
 # emitProtocolDispatch -- a method call on a protocol-typed receiver routes
 # through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
 # fileTypeIdOf -- the io File class type id if `nid` stamps as File, else 0.
-fileTypeIdOf: function {symtab: zenv.ZSymbolTable ctx: Ctx nid: u64} out u64 is {
-    ctx
+fileTypeIdOf: function {symtab: zenv.ZSymbolTable nid: u64} out u64 is {
     tid: stampIdOf :symtab :nid
     if tid == 0 then return 0
     if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return 0
@@ -19357,7 +19325,7 @@ emitFileMethodCall: function {
     if mn.stringview == "accept" then isFM = true
     if (isFM) == false then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    fid: fileTypeIdOf :symtab :ctx nid: bnid
+    fid: fileTypeIdOf :symtab nid: bnid
     if fid == 0 then return "".string
     fc: symtab.reg.cnameOf tid: fid
     {
@@ -19953,7 +19921,7 @@ emitParsedMethodCall: function {
     if mn.stringview == "positional" then isPM = true
     if (isPM) == false then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: (call.callable - 1).u64)
-    pid: fileTypeIdOf :symtab :ctx nid: bnid
+    pid: fileTypeIdOf :symtab nid: bnid
     if pid == 0 then return "".string
     pcn: typeNameOfReg9 :symtab tid: pid
     if pcn.stringview != "Parsed" then return "".string
@@ -21518,7 +21486,7 @@ emitYieldFromNode: function {
         iexF9: ast.nodes.get i: (n.expression - 1).u64
         emitYieldFromNode :ast :symtab :ctx n: iexF9 :ind :tmp :buf
     } case yieldexpr then {
-        emitYieldStmt :ast :symtab :ctx yd: n :ind :tmp :buf
+        emitYieldStmt :ast :symtab :ctx yd: n :ind :buf
     } else null
 }
 
@@ -21566,10 +21534,8 @@ emitYieldStmt: function {
     ctx: Ctx
     yd: zast.YieldExprData
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
 } is {
-    tmp
     k: ctx.genYieldNext
     ctx.genYieldNext = k + 1
     # an interpolated yield value builds via a self-contained statement
