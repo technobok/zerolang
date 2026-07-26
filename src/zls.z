@@ -1966,31 +1966,7 @@ fnSigTextOpt: function {
         match (
             prog
         ) case program then {
-            mNms9: (List u64)
-            mTds9: (List u64)
-            o.typing.declMemberList ownerTid: tid names: mNms9 tids: mTds9
-            mk9: u64
-            mn9: mNms9.length
-            for mk9 < mn9 loop {
-                mnid9: mNms9.get i: mk9
-                mtid9: mTds9.get i: mk9
-                mk9 = mk9 + 1
-                cnB9: prog.ast.names.texts.get i: (mnid9 - 1).u64
-                cn9: cnB9.stringview
-                isRecv9: false
-                if mnid9 == wkThis then isRecv9 = true
-                zt9: o.reg.typeById.get key: tid
-                match (
-                    zt9
-                ) case some then {
-                    if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
-                } case none then null
-                if (isRecv9) == false then {
-                    pnames9.append cn9.string
-                    ptids9.append mtid9
-                    pnids9.append mnid9
-                }
-            }
+            userParams :prog :o :tid names: pnames9 tids: ptids9 nameIds: pnids9
         } else null
         # render each param display string once the member list is collected:
         # resolving a member declaration locks `o` exclusively. A defaulted
@@ -2161,31 +2137,7 @@ fnParamDisplays: function {
         match (
             prog
         ) case program then {
-            mNms9: (List u64)
-            mTds9: (List u64)
-            o.typing.declMemberList ownerTid: tid names: mNms9 tids: mTds9
-            mk9: u64
-            mn9: mNms9.length
-            for mk9 < mn9 loop {
-                mnid9: mNms9.get i: mk9
-                mtid9: mTds9.get i: mk9
-                mk9 = mk9 + 1
-                cnB9: prog.ast.names.texts.get i: (mnid9 - 1).u64
-                cn9: cnB9.stringview
-                isRecv9: false
-                if mnid9 == wkThis then isRecv9 = true
-                zt9: o.reg.typeById.get key: tid
-                match (
-                    zt9
-                ) case some then {
-                    if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
-                } case none then null
-                if (isRecv9) == false then {
-                    pnames9.append cn9.string
-                    ptids9.append mtid9
-                    pnids9.append mnid9
-                }
-            }
+            userParams :prog :o :tid names: pnames9 tids: ptids9 nameIds: pnids9
         } else null
         pi9: u64
         for pi9 < pnames9.length loop {
@@ -3700,6 +3652,48 @@ addTypeMembers: function {
     } case none then null
 }
 
+# userParams -- a function type's user parameters, in declaration order:
+# names, type ids and name pool ids, with the receiver skipped. The receiver
+# is either the shorthand `this` or the type's recorded long-form receiver
+# name. Collected in one pass because resolving a member declaration takes an
+# exclusive lock on `o`, so no caller may probe while enumerating.
+userParams: function {
+    prog: zast.ProgramData
+    o: zenv.ZSymbolTable
+    tid: u64
+    names: List String
+    tids: List u64
+    nameIds: List u64
+} is {
+    mNms9: (List u64)
+    mTds9: (List u64)
+    o.typing.declMemberList ownerTid: tid names: mNms9 tids: mTds9
+    mk9: u64
+    mn9: mNms9.length
+    for mk9 < mn9 loop {
+        mnid9: mNms9.get i: mk9
+        mtid9: mTds9.get i: mk9
+        mk9 = mk9 + 1
+        cnB9: prog.ast.names.texts.get i: (mnid9 - 1).u64
+        cn9: cnB9.stringview
+        isRecv9: false
+        if mnid9 == wkThis then isRecv9 = true
+        {
+            zt9: o.reg.typeById.get key: tid
+            match (
+                zt9
+            ) case some then {
+                if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
+            } case none then null
+        }
+        if (isRecv9) == false then {
+            names.append cn9.string
+            tids.append mtid9
+            nameIds.append mnid9
+        }
+    }
+}
+
 # addTypeMembersIn -- addTypeMembers with the program narrowed (prog is
 # the ProgramData payload).
 addTypeMembersIn: function {
@@ -3711,32 +3705,18 @@ addTypeMembersIn: function {
     # a unit's children are its definitions, not members: addUnitMembers
     # handles those, and declMemberList excludes them by design
     if (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unitType then return
-    mNms8: (List u64)
-    mTds8: (List u64)
-    o.typing.declMemberList ownerTid: tid names: mNms8 tids: mTds8
+    pn8: (List String)
+    pt8: (List u64)
+    pi8: (List u64)
+    userParams :prog :o :tid names: pn8 tids: pt8 nameIds: pi8
     mk8: u64
-    mn8: mNms8.length
+    mn8: pn8.length
     for mk8 < mn8 loop {
-        mnid8: mNms8.get i: mk8
-        mtid8: mTds8.get i: mk8
+        cn9: pn8.get i: mk8
+        k9: 5.u8
+        if (o.reg.typetypeOf typeId: (pt8.get i: mk8)) == ztypes.ztypetype.functionType then k9 = 2
+        addCand :sink name: cn9.stringview kind: k9
         mk8 = mk8 + 1
-        cnB8: prog.ast.names.texts.get i: (mnid8 - 1).u64
-        cn9: cnB8.stringview
-        isRecv9: false
-        if mnid8 == wkThis then isRecv9 = true
-        {
-            zt9: o.reg.typeById.get key: tid
-            match (
-                zt9
-            ) case some then {
-                if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
-            } case none then null
-        }
-        if (isRecv9) == false then {
-            k9: 5.u8
-            if (o.reg.typetypeOf typeId: mtid8) == ztypes.ztypetype.functionType then k9 = 2
-            addCand :sink name: cn9 kind: k9
-        }
     }
 }
 
@@ -4258,33 +4238,7 @@ emitLabels: function {
         match (
             o
         ) case some then {
-            mNms7: (List u64)
-            mTds7: (List u64)
-            o.typing.declMemberList ownerTid: funcId9 names: mNms7 tids: mTds7
-            mk7: u64
-            mn7: mNms7.length
-            for mk7 < mn7 loop {
-                mnid7: mNms7.get i: mk7
-                mtid7: mTds7.get i: mk7
-                mk7 = mk7 + 1
-                {
-                    cnB9: prog.ast.names.texts.get i: (mnid7 - 1).u64
-                    cn9: cnB9.stringview
-                    isRecv9: false
-                    if mnid7 == wkThis then isRecv9 = true
-                    zt9: o.reg.typeById.get key: funcId9
-                    match (
-                        zt9
-                    ) case some then {
-                        if (ztypecheck.optStrEquals o: zt9.thisParamName s: cn9) then isRecv9 = true
-                    } case none then null
-                    if (isRecv9) == false then {
-                        pnames9.append cn9.string
-                        pnids9.append mnid7
-                        pptids9.append mtid7
-                    }
-                }
-            }
+            userParams :prog :o tid: funcId9 names: pnames9 tids: pptids9 nameIds: pnids9
         } case none then null
     } else null
     if pnames9.length == 0 then return false
