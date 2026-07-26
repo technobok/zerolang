@@ -64734,13 +64734,13 @@ _s0; });
         }
     z_t944_OptionView_String_destroy(&tan5);
     }
-    z_t169_optionval_u64_t preMo9 = z_t1965_ZTyping_declChildOfId(&st->typing, bt, cnId9);
+    z_t169_optionval_u64_t mo = z_t1965_ZTyping_declChildOfId(&st->typing, bt, cnId9);
     bool preHas9 = false;
-    z_t169_optionval_u64_t _m65 = preMo9;
+    z_t169_optionval_u64_t _m65 = mo;
     switch (_m65.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
-            uint64_t preMo9 = _m65.data.some;
-            (void)preMo9;
+            uint64_t mo = _m65.data.some;
+            (void)mo;
             preHas9 = true;
             break;
         }
@@ -64754,10 +64754,10 @@ _s0; });
             uint64_t cb9 = z_t2677_canonicalChildBase(ast, st, bt, ((z_t105_StringView_t){ cn.data, cn.size }));
             if ((cb9 > 0)) {
                 bt = cb9;
+                mo = z_t1965_ZTyping_declChildOfId(&st->typing, bt, cnId9);
             }
         }
     }
-    z_t169_optionval_u64_t mo = z_t1965_ZTyping_declChildOfId(&st->typing, bt, cnId9);
     z_t169_optionval_u64_t _m66 = mo;
     switch (_m66.tag) {
         case Z_OPTIONVAL_U64_TAG_SOME: {
@@ -71424,8 +71424,11 @@ uint64_t z_t2765_checkCase(z_t1266_ZSymbolTable_t* st, z_t105_StringView_t unitN
                 z_t74_String_append(&_s16, armName.data, armName.size);
                 z_t74_String_t asname = _s16;
                 uint64_t armMarker = z_t2012_ZSymbolTable_pushBlock(st, ((z_t105_StringView_t){ asname.data, asname.size }));
+                z_t169_optionval_u64_t armo9 = ((z_t169_optionval_u64_t){ .tag = Z_OPTIONVAL_U64_TAG_NONE });
+                if ((subjT > 0)) {
+                    armo9 = z_t1965_ZTyping_declChildOfId(&st->typing, subjT, armId9);
+                }
                 if (isSum && (subjT > 0)) {
-                    z_t169_optionval_u64_t armo9 = z_t1965_ZTyping_declChildOfId(&st->typing, subjT, armId9);
                     z_t169_optionval_u64_t _m18 = armo9;
                     switch (_m18.tag) {
                         case Z_OPTIONVAL_U64_TAG_SOME: {
@@ -71452,13 +71455,12 @@ uint64_t z_t2765_checkCase(z_t1266_ZSymbolTable_t* st, z_t105_StringView_t unitN
                     }
                 }
                 if ((targetName.size > 0) && (subjT > 0)) {
-                    z_t169_optionval_u64_t po = z_t1965_ZTyping_declChildOfId(&st->typing, subjT, armId9);
-                    z_t169_optionval_u64_t _m22 = po;
+                    z_t169_optionval_u64_t _m22 = armo9;
                     switch (_m22.tag) {
                         case Z_OPTIONVAL_U64_TAG_SOME: {
-                            uint64_t po = _m22.data.some;
-                            (void)po;
-                            (void)(z_t2055_ZSymbolTable_narrow(st, &ast->names, ((z_t105_StringView_t){ targetName.data, targetName.size }), po, ((z_t105_StringView_t){ armName.data, armName.size }), true));
+                            uint64_t armo9 = _m22.data.some;
+                            (void)armo9;
+                            (void)(z_t2055_ZSymbolTable_narrow(st, &ast->names, ((z_t105_StringView_t){ targetName.data, targetName.size }), armo9, ((z_t105_StringView_t){ armName.data, armName.size }), true));
                             break;
                         }
                         case Z_OPTIONVAL_U64_TAG_NONE: {
