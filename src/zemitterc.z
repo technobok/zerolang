@@ -1059,7 +1059,7 @@ Ctx: class {
     svC: String
     litIds: (List u64)
     usedLits: (Map u64 value: bool)
-    constVals: (Map String value: String)
+    constVals: (Map u64 value: String)
     needs: (Map String value: bool)
     methodReturns: (Map String value: String)
     dataElems: (Map String value: String)
@@ -6127,7 +6127,7 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
         ) case some then {
             return (emitLocalAtomName :ctx name: av)
         } case none then null
-        cgo: ctx.constVals.getv key: av
+        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name.u64)
         match (
             cgo
         ) case some then {
@@ -6263,6 +6263,46 @@ emitExpr: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx n: Node} out Str
                 rcRecv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (n.parent - 1).u64)
                 okTagX9: variantTag :symtab tid: pMono9 arm: "ok"
                 return "({ __auto_type _rc = (\{rcRecv9.stringview}); if (_rc.tag != \{okTagX9.stringview}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
+            }
+        }
+        # `unit.CONST` -- a constant of another unit inlines its rendered C
+        # text, exactly as a bare reference to a constant of this unit does
+        {
+            dbU9: String
+            dcId9: u64
+            {
+                dbA9: ast.nodes.get i: (n.parent - 1).u64
+                if dbA9.atomid then {
+                    dbT9: ast.names.texts.get i: (dbA9.name - 1).u64
+                    dbU9 = dbT9.copy
+                }
+            }
+            {
+                dcA9: ast.nodes.get i: (n.child - 1).u64
+                if dcA9.atomid then dcId9 = dcA9.name.u64
+            }
+            if dbU9.length > 0 when dcId9 > 0 then {
+                isU9: false
+                {
+                    duo9: symtab.reg.unitNameTid.get key: dbU9.copy
+                    match (
+                        duo9
+                    ) case some then {
+                        isU9 = true
+                    } case none then null
+                }
+                if isU9 then {
+                    ckU9: constKeyIn :ast unitName: dbU9.stringview nameId: dcId9
+                    if ckU9 > 0 then {
+                        cvo9: ctx.constVals.get key: ckU9
+                        match (
+                            cvo9
+                        ) case some then {
+                            cvs9: cvo9.stringview
+                            return cvs9.string
+                        } case none then null
+                    }
+                }
             }
         }
         # a stamped implicit zero-create on a unit-qualified type path
@@ -7836,7 +7876,7 @@ evalConstI64: function {ast: Ast ctx: Ctx n: Node} out cfold is {
         ) case ok then {
             return (cfold ok: true val: pl9)
         } case err then null
-        cg9: ctx.constVals.getv key: at9
+        cg9: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name.u64)
         match (
             cg9
         ) case some then {
@@ -10179,8 +10219,11 @@ emitBoolElse: function {
 
 # scalarArmLabel -- the C case label for a scalar arm: the constant
 # pool's rendering when the arm names a constant, else the name itself.
-scalarArmLabel: function {ctx: Ctx arm: StringView} out String is {
-    ck: arm.string
+scalarArmLabel: function {ast: Ast ctx: Ctx arm: StringView} out String is {
+    ck: constKeyIn :ast unitName: ctx.mainName.stringview nameId: (zast.poolFind
+        pool: ast.names
+        text: arm
+    ).u64
     cgo: ctx.constVals.get key: ck
     match (
         cgo
@@ -10270,7 +10313,7 @@ emitScalarClause: function {
         c
     ) case caseclause then {
         arm: c.name.stringview
-    lbl: scalarArmLabel :ctx :arm
+    lbl: scalarArmLabel :ast :ctx :arm
         l2: "\{ind}case \{lbl}: {\n"
         buf.append l2
         ind3: "\{ind}    "
@@ -13357,6 +13400,20 @@ typeNameOfReg9: function {symtab: zenv.ZSymbolTable tid: u64} out String is {
     return (ztypecheck.regTypeNameOf reg: symtab.reg :tid)
 }
 
+# constKeyIn -- the constVals key for constant `nameId` declared in `unitName`:
+# the two pool ids packed into one u64, so units may share constant names.
+# 0 when the unit name is not interned (it can then own no constant).
+constKeyIn: function {ast: Ast unitName: StringView nameId: u64} out u64 is {
+    uid9: (zast.poolFind pool: ast.names text: unitName).u64
+    if uid9 == 0 then return 0
+    return (uid9 * 4294967296) + nameId
+}
+
+# constKeyOf -- constKeyIn for the unit currently bound on ctx.
+constKeyOf: function {ast: Ast ctx: Ctx nameId: u64} out u64 is {
+    return (constKeyIn :ast unitName: ctx.mainName.stringview :nameId)
+}
+
 # isConstShape -- a unit member value that folds to a C constant
 # expression: numeric/float atoms, already-rendered constant names, and
 # binop trees over those.
@@ -13376,8 +13433,7 @@ isConstShape: function {ast: Ast ctx: Ctx n: Node} out bool is {
                 if b0 <= 57 then return true
             }
         } case none then null
-        ak: avK9.copy
-        cgo: ctx.constVals.get key: ak
+        cgo: ctx.constVals.get key: (constKeyOf :ast :ctx nameId: n.name.u64)
         match (
             cgo
         ) case some then {
@@ -13796,13 +13852,11 @@ fillConstValsIn: function {
         bmNode9: ast.nodes.get i: (bm - 1).u64
         if bmNode9.namedoperation then {
             if (isConstShape :ast :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)) then {
-                nm: zast.nameTextCopy :ast ref: bmNode9.name
                 cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: (bmNode9.operation - 1).u64)
-                nmv: nm.stringview
-                nk: nmv.string
+                nk: constKeyOf :ast :ctx nameId: bmNode9.name.u64
                 cvv: cv.stringview
                 ck: cvv.string
-                ctx.constVals.set key: nk value: ck
+                if nk > 0 then ctx.constVals.set key: nk value: ck
             }
         }
     }
@@ -14784,7 +14838,7 @@ emitC: function {
         :svC
         :litIds
         usedLits: (Map u64 value: bool)
-        constVals: (Map String value: String)
+        constVals: (Map u64 value: String)
         tailRetActive: false
         defUnitId: (Map u64 value: u64)
         unitIdByName: (Map String value: u64)

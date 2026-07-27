@@ -22271,7 +22271,7 @@ resolveConstantDef: function {
     ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    mainName: StringView
+    unitName: StringView
     defName: StringView
     defn: Node
 } is {
@@ -22282,23 +22282,55 @@ resolveConstantDef: function {
             :ast
             :ty
             :reg
-            :mainName
+            mainName: unitName
             :defName
             wrapperId: defn.nodeid
             n: (ast.nodes.get i: (defn.expression - 1).u64)
         )
         iexL9: ast.nodes.get i: (defn.expression - 1).u64
-        resolveConstantDef :ast :ty :reg :mainName :defName defn: iexL9
+        resolveConstantDef :ast :ty :reg :unitName :defName defn: iexL9
+    } case dottedpath then {
+        # a width-suffixed numeric literal (`1.u32`) is a dotted path over the
+        # literal, not an atom: the child names the constant's type
+        sfLit9: String
+        sfTy9: String
+        {
+            sfB9: ast.nodes.get i: (defn.parent - 1).u64
+            if sfB9.atomid then sfLit9 = zast.nameTextCopy :ast ref: sfB9.name
+        }
+        {
+            sfC9: ast.nodes.get i: (defn.child - 1).u64
+            if sfC9.atomid then sfTy9 = zast.nameTextCopy :ast ref: sfC9.name
+        }
+        if sfLit9.length > 0 when sfTy9.length > 0 then {
+            if (isNumericLiteralName name: sfLit9.stringview) then {
+                sfT9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: sfTy9.stringview
+                match (
+                    sfT9
+                ) case some then {
+                    sfU9: reg.unitNameTid.get key: unitName.string
+                    match (
+                        sfU9
+                    ) case some then {
+                        (ty.setMemberType
+                            parentTypeId: sfU9
+                            nameId: (zast.poolFind pool: ast.names text: defName).u64
+                            childTypeId: sfT9
+                        )
+                    } case none then null
+                } case none then null
+            }
+        }
     } case atomid then {
         dfN9: zast.nameTextCopy :ast ref: defn.name
         if (isNumericLiteralName name: dfN9.stringview) then {
             base: "i64"
             if (isFloatLiteralName name: dfN9.stringview) then base = "f64"
-            tOpt: walkLookupTyperef :ast :ty :reg currentUnit: mainName :base
+            tOpt: walkLookupTyperef :ast :ty :reg currentUnit: unitName :base
             match (
                 tOpt
             ) case some then {
-                cu: reg.unitNameTid.get key: mainName.string
+                cu: reg.unitNameTid.get key: unitName.string
                 match (
                     cu
                 ) case some then {
@@ -22312,7 +22344,7 @@ resolveConstantDef: function {
         } else {
             # a bare TYPE name is not a constant value: unit constants take
             # literal values (a zero value is a function-body binding)
-            bOpt9: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: dfN9.stringview
+            bOpt9: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: dfN9.stringview
             match (
                 bOpt9
             ) case some then {
@@ -22355,16 +22387,16 @@ resolveConstantDef: function {
             # walk stamps the refs and the binop; a literal result materialises
             # to its default, a concrete one (an already-materialised constant)
             # keeps it.
-            bt: constantOperandType :ast :ty :reg :mainName n: defn
+            bt: constantOperandType :ast :ty :reg mainName: unitName n: defn
             base2: ""
             if bt == literalIntId then base2 = "i64"
             if bt == literalFloatId then base2 = "f64"
             if base2.length > 0 then {
-                mOpt: walkLookupTyperef :ast :ty :reg currentUnit: mainName base: base2
+                mOpt: walkLookupTyperef :ast :ty :reg currentUnit: unitName base: base2
                 match (
                     mOpt
                 ) case some then {
-                    cu2: reg.unitNameTid.get key: mainName.string
+                    cu2: reg.unitNameTid.get key: unitName.string
                     match (
                         cu2
                     ) case some then {
@@ -22377,7 +22409,7 @@ resolveConstantDef: function {
                 } case none then null
             } else {
                 if bt > 0 then {
-                    cu3: reg.unitNameTid.get key: mainName.string
+                    cu3: reg.unitNameTid.get key: unitName.string
                     match (
                         cu3
                     ) case some then {
@@ -22398,7 +22430,7 @@ resolveConstantDefsInUnit: function {
     ast: Ast
     ty: ztyping.ZTyping
     reg: ztypes.ZTypeRegistry
-    mainName: StringView
+    unitName: StringView
     unitdefId: u32
 } is {
     bodyIds9: zast.unitBodyIdsAt :ast unitId: unitdefId
@@ -22415,7 +22447,7 @@ resolveConstantDefsInUnit: function {
                         :ast
                         :ty
                         :reg
-                        :mainName
+                        :unitName
                         defName: defName.stringview
                         defn: (ast.nodes.get i: (bmNode9.operation - 1).u64)
                     )
@@ -22425,31 +22457,47 @@ resolveConstantDefsInUnit: function {
     }
 }
 
-# resolveConstantDefs -- materialise the main unit's numeric
-# constant definitions the way the oracle resolves them on first name lookup. Runs
-# post-demand so the numeric defaults are already in resolved.
+# resolveConstantDefs -- materialise every unit's constant definitions the way
+# the oracle resolves them on first name lookup, so a constant is a member of
+# the unit that declares it and `unit.NAME` resolves across units the way
+# `unit.fn` does. Runs post-demand so the numeric defaults are already resolved.
 resolveConstantDefs: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program: Node} is {
     match (
         program
     ) case program then {
-        mainName: program.mainUnitName.stringview
-        uiter: program.ast.units.iterate
-        for uId9: uiter loop {
-            u: program.ast.nodes.get i: (uId9 - 1).u64
-            match (
-                u
-            ) case namedoperation then {
-                nm: zast.poolTextCopy pool: program.ast.names ref: u.name
-                if nm.stringview == mainName then {
-                    (resolveConstantDefsInUnit
-                        :ty
-                        :reg
-                        ast: program.ast
-                        :mainName
-                        unitdefId: u.operation
-                    )
-                }
-            } else null
+        # stage (unit name, unit body) first: the call below takes an exclusive
+        # lock on program.ast, which cannot run while the unit-row iteration
+        # holds a shared one
+        unms9: (List String)
+        uops9: (List u32)
+        {
+            uiter: program.ast.units.iterate
+            for uId9: uiter loop {
+                u: program.ast.nodes.get i: (uId9 - 1).u64
+                match (
+                    u
+                ) case namedoperation then {
+                    nm: zast.poolTextCopy pool: program.ast.names ref: u.name
+                    if nm.length > 0 then {
+                        unms9.append nm.copy
+                        uop9: u.operation
+                        uops9.append uop9
+                    }
+                } else null
+            }
+        }
+        ui9: u64
+        un9: unms9.length
+        for ui9 < un9 loop {
+            unm9: unms9.get i: ui9
+            (resolveConstantDefsInUnit
+                :ty
+                :reg
+                ast: program.ast
+                unitName: unm9.stringview
+                unitdefId: (uops9.get i: ui9)
+            )
+            ui9 = ui9 + 1
         }
     } else null
 }
