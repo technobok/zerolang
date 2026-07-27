@@ -1,0 +1,82 @@
+# get_borrow_writeback.z -- List.get / ListView.get honour their declared
+# `out of.borrow`: the result ALIASES the element, it is not a snapshot. A
+# field write through a bound get is visible on a later get, and an append
+# to an element's INLINE container field reaches the stored element rather
+# than growing a copy's header and stranding the original. Covers: class
+# element (bound write, inline projection, inline-container append), String
+# element (bound read, .copy, interp), a ListView get over the same storage,
+# and a re-binding of a get-bound name by an owned value.
+
+Item: class {
+    n: u64
+    tag: String
+    kids: (List u64)
+}
+
+main: function is {
+    xs: (List Item)
+    xs.append (Item n: 1 tag: "one".string kids: (List u64))
+    xs.append (Item n: 2 tag: "two".string kids: (List u64))
+
+    # a field write through a bound get lands in the stored element
+    {
+        e0: xs.get i: 0
+        e0.n = 41
+    }
+    {
+        r0: xs.get i: 0
+        print "n0=\{r0.n}"
+    }
+
+    # the same rule without a binding: an inline projection
+    {
+        e1: xs.get i: 1
+        e1.n = 99
+    }
+    print "n1=\{(xs.get i: 1).n}"
+
+    # appending through an element's INLINE container field must grow the
+    # stored element's buffer, not a copy's -- past the initial capacity a
+    # by-value get reallocs the copy and leaves the element empty
+    {
+        e2: xs.get i: 0
+        k: u64
+        for k < 40 loop {
+            e2.kids.append (k + 100)
+            k = k + 1
+        }
+    }
+    {
+        r2: xs.get i: 0
+        print "kids=\{r2.kids.length} k0=\{r2.kids.get i: 0} k39=\{r2.kids.get i: 39}"
+    }
+
+    # String elements take the same borrow lowering
+    ss: (List String)
+    ss.append "alpha".string
+    ss.append "beta".string
+    {
+        s0: ss.get i: 0
+        owned: s0.copy
+        print "s0=\{s0} len=\{s0.length} owned=\{owned}"
+    }
+    print "inline=\{(ss.get i: 1).length}"
+
+    # a ListView over the same storage must agree with List.get
+    {
+        v: xs.listview
+        w: v.get i: 0
+        print "vn=\{w.n} vtag=\{w.tag}"
+    }
+
+    # re-binding a get-bound name with an owned value: the borrow alias from
+    # the first binding must not outlive it
+    {
+        nm: ss.get i: 1
+        print "reb1=\{nm}"
+    }
+    {
+        nm: "gamma".string
+        print "reb2=\{nm}"
+    }
+}
