@@ -9119,7 +9119,7 @@ fnReturnBaseNameOf: function {ast: Ast op: Node} out String is {
 # nodeids. The clone's rows never become reachable from the program roots, so
 # its body's stamps stay out of the dump; only its walk's scope/entry/variable
 # rows are visible.
-cloneUnitMethod: function {ast: Ast ids: zgenerator.GenIds op: Node} out Option Node is {
+cloneUnitMethod: function {ast: Ast op: Node} out Option Node is {
     match (
         op
     ) case functiondef then {
@@ -9127,20 +9127,19 @@ cloneUnitMethod: function {ast: Ast ids: zgenerator.GenIds op: Node} out Option 
         params9: (List u32)
         with piter: op.parameters.iterate do for ppId9: piter loop {
             pp: ast.nodes.get i: (ppId9 - 1).u64
-            pc: zgenerator.clonePath :ast :ids n: pp
+            pc: zgenerator.clonePath :ast n: pp
             params9.append (zast.tableAdd :ast n: pc)
         }
         rt9: (zgenerator.rewriteOptToThisAt
             :ast
-            :ids
             oId: op.returntype
             promoted: pm9
         )
-        body9: zgenerator.rewriteOptToThisAt :ast :ids oId: op.body promoted: pm9
+        body9: zgenerator.rewriteOptToThisAt :ast oId: op.body promoted: pm9
         ln9: op.lineno
         cn9: op.colno
         fnew: (Node.functiondef (zast.FunctionData
-            nodeid: (ids.mint :ast)
+            nodeid: (zast.tableReserve :ast)
             lineno: ln9
             colno: cn9
             returntype: rt9
@@ -9233,7 +9232,6 @@ buildUnitMono: function {
                 }
             } else null
         }
-        ids9: zgenerator.newGenIds
         fiter: bodyIds9.iterate
         for fm: fiter loop {
             fmNode9: ast.nodes.get i: (fm - 1).u64
@@ -9409,8 +9407,7 @@ buildUnitMono: function {
                     )
                     co9: (cloneUnitMethod
                         :ast
-                        ids: ids9
-                        op: (ast.nodes.get i: (fmNode9.operation - 1).u64)
+                            op: (ast.nodes.get i: (fmNode9.operation - 1).u64)
                     )
                     match (
                         co9
@@ -22662,7 +22659,6 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
         ik: "system.Iterator".string
         iterTid: optU64Or o: (resolvedByKey ast: program.ast :ty :reg key: ik) d: 0
         if iterTid == 0 then return
-        ids: zgenerator.newGenIds
         ui: u64
         un: program.ast.units.length
         for ui < un loop {
@@ -22676,7 +22672,6 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
             if uOpId9 > 0 then {
                 (lowerGeneratorsInUnit
                     :ty
-                    :ids
                     ast: program.ast
                     unitdefId: uOpId9
                 )
@@ -22691,7 +22686,6 @@ lowerGenerators: function {ty: ztyping.ZTyping reg: ztypes.ZTypeRegistry program
 # to the unit body under `{name}_iter`.
 lowerGeneratorsInUnit: function {
     ty: ztyping.ZTyping
-    ids: zgenerator.GenIds
     ast: Ast
     unitdefId: u32
 } is {
@@ -22750,7 +22744,6 @@ lowerGeneratorsInUnit: function {
                 sname: "\{dnm}_iter"
                 fnNode: zast.tableTake :ast id: opId9
                 lowOpt: (zgenerator.lowerOne :ast
-                    :ids
                     fn: fnNode
                     synthName: sname.stringview
                     receiverType: ""
@@ -22786,7 +22779,6 @@ lowerGeneratorsInUnit: function {
                     cls: lowOpt.synthClass.take
                     clsN: (zgenerator.mkNamedOp
                         :ast
-                        :ids
                         line: 0
                         col: 0
                         name: sname.stringview
@@ -22820,7 +22812,6 @@ lowerGeneratorsInUnit: function {
                     (lowerGeneratorMethods
                         :ast
                         :ty
-                        :ids
                         typeName: tnm.stringview
                         defn: (ast.nodes.get i: (oel.operation - 1).u64)
                         dst: pendingCls
@@ -22861,7 +22852,6 @@ lowerGeneratorsInUnit: function {
 lowerGeneratorMethods: function {
     ast: Ast
     ty: ztyping.ZTyping
-    ids: zgenerator.GenIds
     typeName: StringView
     defn: Node
     dst: List Node
@@ -22869,8 +22859,8 @@ lowerGeneratorMethods: function {
     match (
         defn
     ) case objectdef then {
-        lowerGeneratorItems :ast :ty :ids :typeName items: defn.asItems :dst
-        lowerGeneratorItems :ast :ty :ids :typeName items: defn.isItems :dst
+        lowerGeneratorItems :ast :ty :typeName items: defn.asItems :dst
+        lowerGeneratorItems :ast :ty :typeName items: defn.isItems :dst
     } else null
 }
 
@@ -22878,7 +22868,6 @@ lowerGeneratorMethods: function {
 lowerGeneratorItems: function {
     ast: Ast
     ty: ztyping.ZTyping
-    ids: zgenerator.GenIds
     typeName: StringView
     items: List u32
     dst: List Node
@@ -22913,7 +22902,6 @@ lowerGeneratorItems: function {
                 sname: "\{typeName}_\{mnm}_iter"
                 fnNode: zast.tableTake :ast id: bm2.operation
                 lowOpt: (zgenerator.lowerOne :ast
-                    :ids
                     fn: fnNode
                     synthName: sname.stringview
                     receiverType: typeName
@@ -22938,7 +22926,6 @@ lowerGeneratorItems: function {
                     cls: lowOpt.synthClass.take
                     clsN: (zgenerator.mkNamedOp
                         :ast
-                        :ids
                         line: 0
                         col: 0
                         name: sname.stringview
