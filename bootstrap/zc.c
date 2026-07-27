@@ -71769,7 +71769,31 @@ uint64_t z_t2766_checkValue(z_t1266_ZSymbolTable_t* st, z_t105_StringView_t unit
                     break;
                 }
                 case Z_OPTIONVAL_U64_TAG_NONE: {
+                    z_t74_String_t lvc9 = z_t74_String_copy(&lvNm9);
+                    z_t74_String_t _s3 = z_t74_String_create((uint64_t)36);
+                    z_t74_String_append(&_s3, "Unknown reference '", sizeof("Unknown reference '")-1);
+                    z_t74_String_append(&_s3, lvc9.data, lvc9.size);
+                    z_t74_String_append(&_s3, "'", sizeof("'")-1);
+                    z_t74_String_t lvm9 = _s3;
+                    z_t74_String_t lvn9 = ((z_t74_String_t){0});
+                    z_t74_String_t lvcH9 = z_t74_String_copy(&lvNm9);
+                    z_t74_String_t _s5 = z_t74_String_create((uint64_t)111);
+                    z_t74_String_append(&_s5, "the ':name' shorthand reads a local named '", sizeof("the ':name' shorthand reads a local named '")-1);
+                    z_t74_String_append(&_s5, lvcH9.data, lvcH9.size);
+                    z_t74_String_append(&_s5, "'; write the argument in full to pass something else", sizeof("'; write the argument in full to pass something else")-1);
+                    z_t74_String_t lvh9 = _s5;
+                    (void)(z_t2378_addErrorH(st, (*(z_t1071_LabelValueData_t*)_m0.data).nodeid, (*(z_t1071_LabelValueData_t*)_m0.data).lineno, (*(z_t1071_LabelValueData_t*)_m0.data).colno, ((z_t876_err_t){ .tag = Z_ERR_TAG_BADREFERENCE }), &lvm9, &lvn9, &lvh9, ({ __auto_type _rc = (({ uint64_t _v = lvNm9.size; z_t407_resultval_u32_convError_t _r = {0}; if (_v > 4294967295U) { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_ERR; _r.data.err.tag = Z_CONVERROR_TAG_OUTOFRANGE; } else { _r.tag = Z_RESULTVAL_U32_CONVERROR_TAG_OK; _r.data.ok = (uint32_t)_v; } _r; })); if (_rc.tag != Z_RESULTVAL_U32_CONVERROR_TAG_OK) z_panic("orPanic: result is err"); _rc.data.ok; })));
+                    z_t74_String_free(&lvc9);
+                    z_t74_String_free(&lvm9);
+                    z_t74_String_free(&lvn9);
+                    z_t74_String_free(&lvcH9);
+                    z_t74_String_free(&lvh9);
                     return 0;
+    z_t74_String_free(&lvh9);
+    z_t74_String_free(&lvcH9);
+    z_t74_String_free(&lvn9);
+    z_t74_String_free(&lvm9);
+    z_t74_String_free(&lvc9);
                     break;
                 }
                 default: z_unreachable();
@@ -71781,10 +71805,10 @@ uint64_t z_t2766_checkValue(z_t1266_ZSymbolTable_t* st, z_t105_StringView_t unit
             z_t1068_Node_t _ah675 = z_t1130_List_Node_get(&ast->nodes, ((uint64_t)((*(z_t1089_YieldExprData_t*)_m0.data).expr - 1)));
             (void)(z_t2766_checkValue(st, unitName, ast, unitBody, _ah675));
             z_t169_optionval_u64_t yvo = z_t2027_ZSymbolTable_lookup(st, _zs2044);
-            z_t169_optionval_u64_t _m3 = yvo;
-            switch (_m3.tag) {
+            z_t169_optionval_u64_t _m7 = yvo;
+            switch (_m7.tag) {
                 case Z_OPTIONVAL_U64_TAG_SOME: {
-                    uint64_t yvo = _m3.data.some;
+                    uint64_t yvo = _m7.data.some;
                     (void)yvo;
                     if (z_t2730_typeIsReftype(st, yvo)) {
                         (void)(z_t2745_drainPendingBorrow(st));
