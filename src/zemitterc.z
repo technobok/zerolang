@@ -1083,6 +1083,7 @@ Ctx: class {
     breakLabelCleanup: (List String)
     breakLabelCleanupVar: (List String)
     borrowedVars: (Map String value: bool)
+    colGetFromCode: bool
     strTid: u64
     svTid: u64
     strOriginTid: u64
@@ -3124,6 +3125,36 @@ bindingRhsIsBorrow: function {
     }
 }
 
+# rhsIsBorrowGet -- the binding RHS is a List/ListView `get` lowered by pointer,
+# so the local must ALIAS the element storage rather than snapshot it. Shares
+# callRhsIsBorrow's receiver derivation, so the receiver text cannot diverge.
+rhsIsBorrowGet: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: Node
+} out bool is {
+    match (
+        n
+    ) case expression then {
+        return (rhsIsBorrowGet :ast :symtab :ctx n: (ast.nodes.get i: (n.expression - 1).u64))
+    } case statementline then {
+        return (rhsIsBorrowGet :ast :symtab :ctx n: (ast.nodes.get i: (n.statementline - 1).u64))
+    } case call then {
+        cbl9: ast.nodes.get i: (n.callable - 1).u64
+        ch9: aliasChildName :ast :symtab n: cbl9
+        if ch9.stringview != "get" then return false
+        bt9: chaseColMono :symtab :ctx tid: (dottedReceiverStampId :ast :symtab callable: cbl9)
+        isC9: false
+        if (originIsTid :symtab tid: bt9 originTid: ctx.listOriginTid) then isC9 = true
+        if (originIsTid :symtab tid: bt9 originTid: ctx.listViewOriginTid) then isC9 = true
+        if (isC9) == false then return false
+        return (listGetIsPtr :ast :symtab :ctx monoId: bt9)
+    } else {
+        return false
+    }
+}
+
 # emitStrConvCall -- the `.str` sized-conversion method on a String / StringView
 # / str parent: `<parent>.str to: N` -> z_String_to_<name>(data, len). "" when
 # not a .str-to-str conversion. The capacity rides the result mono type.
@@ -3297,6 +3328,7 @@ emitListMethodCall: function {
     if mn.stringview == "get" then {
         v: listArg :ast :symtab :ctx :call label: "i"
         e1: "\{cb}_get(\{recvR9}, \{v})"
+        if (listGetIsPtr :ast :symtab :ctx monoId: bt) then return "(*\{e1})"
         return e1
     }
     if mn.stringview == "set" then {
@@ -8768,6 +8800,20 @@ emitStmt: function {
             tmp.listFreeVars.append nm.copy
             return
         }
+        if (rhsIsBorrowGet :ast :symtab :ctx n: avn9) then {
+            # a borrowed element get: bind the POINTER and alias the name to the
+            # deref, so every downstream use stays a value-shaped lvalue. No
+            # destructor and no take-invalidation: the container owns the element.
+            rvb9: emitExpr :ast :symtab :ctx n: avn9
+            flushArgHoists :ctx :ind :tmp :buf
+            lbg0: "\{ind}__auto_type __borrow_\{nm} = &\{rvb9};\n"
+            buf.append lbg0
+            lbg1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
+            buf.append lbg1
+            bga9: "(*__borrow_\{nm})"
+            nvSet xs: ctx.aliases name: n.name.stringview val: bga9.stringview
+            return
+        }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.svTid then {
             lvN: bindLitIndex :ast :symtab :ctx n: avn9
             if lvN > 0 then {
@@ -12723,6 +12769,40 @@ isReftypeParam: function {ast: Ast symtab: zenv.ZSymbolTable ctx: Ctx tid: u64} 
     return true
 }
 
+# elemBorrowsByPtr -- a List/ListView element type whose `get` lowers to a
+# POINTER into the element storage, honouring the declared `out of.borrow`.
+# Mirrors the parameter-passing classification: user CLASSES and String carry
+# heap fields and inline container headers, so a copy is NOT a borrow (a field
+# write is dropped, and an append through an inline container field reallocs
+# the copy's buffer and strands the stored element on a freed pointer). A
+# UNION is a value-stable {tag, void* data} whose payload pointer is already
+# shared, and a valtype has no interior -- for both, the copy IS the borrow.
+elemBorrowsByPtr: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    tid: u64
+} out bool is {
+    if tid == 0 then return false
+    if tid == ctx.strTid then return true
+    if (chaseStrTypedef :symtab :ctx :tid) == ctx.strTid then return true
+    return (isReftypeParam :ast :symtab :ctx :tid)
+}
+
+# listGetIsPtr -- the `get` of this List/ListView mono returns a pointer. False
+# while the runtime templates still carry their own by-value `get` (the
+# emitted C must agree with whichever compiler read the template), so the
+# lowering flips atomically when `get` moves into emitColGet.
+listGetIsPtr: function {
+    ast: Ast
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    monoId: u64
+} out bool is {
+    if (ctx.colGetFromCode) == false then return false
+    return (elemBorrowsByPtr :ast :symtab :ctx tid: (listElemType :symtab :monoId))
+}
+
 # isBorrowStringParam -- a String param with BORROW/LOCK ownership, passed BY
 # REFERENCE so the callee's mutations (append/reserve) persist to the caller. A
 # `.take` String param is moved by value instead; StringView is value-passed.
@@ -14859,6 +14939,7 @@ emitC: function {
         breakLabelCleanup: (List String)
         breakLabelCleanupVar: (List String)
         borrowedVars: (Map String value: bool)
+        colGetFromCode: false
         strTid: strId
         svTid: svId
         :strOriginTid
@@ -14878,6 +14959,14 @@ emitC: function {
         :optionvalOriginTid
         :resultvalOriginTid
     )
+    {
+        lgp9: "\{runtimeDir}/z_List.c.tmpl"
+        lgt9: readTemplateCached :ctx path: lgp9.stringview
+        lgv9: lgt9.stringview
+        if lgv9.length > 0 when (lgv9.contains needle: "_get(") == false then {
+            ctx.colGetFromCode = true
+        }
+    }
     buildDefUnitIndex :symtab :ctx
     ctxBindMain :ctx name: ctx.realMain.stringview
     fillConstVals :program :symtab :ctx
@@ -15477,6 +15566,15 @@ emitListMono: function {
         buf.append t4
         buf.append "\n"
     }
+    if ctx.colGetFromCode then {
+        (emitColGet
+            nm: nm.stringview
+            ect: ect.stringview
+            kind: "List"
+            ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
+            :buf
+        )
+    }
     co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.wkContains.u64
     match (
         co
@@ -15512,6 +15610,40 @@ emitListMono: function {
         )
     } case none then null
     emitListIter :symtab :monoId nm: nm.stringview :buf
+}
+
+# emitColGet -- the element `get` for a List / ListView mono. The declared
+# signature is `out of.borrow`: for an element kind whose copy is not a borrow
+# the C function returns a POINTER into the storage and the call site derefs,
+# so every value context stays value-shaped. `kind` only spells the panic
+# message. One emitter for both templates, so List.listview cannot hand out a
+# view that disagrees with its source. The return type and its forward
+# declaration come from one string and cannot diverge.
+emitColGet: function {
+    nm: StringView
+    ect: StringView
+    kind: StringView
+    ptr: bool
+    buf: String.borrow
+} is {
+    rt: ect.string
+    rv: "    return _this->data[_idx];\n".string
+    if ptr then {
+        rt = "\{ect}*"
+        rv = "    return &_this->data[_idx];\n".string
+    }
+    s0: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx);\n"
+    buf.append s0
+    s1: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx) {\n"
+    buf.append s1
+    buf.append "    if (_idx >= _this->length) {\n"
+    buf.append "        char _zp_buf[96];\n"
+    s2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} get: index %lu out of bounds (length %lu)\", (unsigned long)_idx, (unsigned long)_this->length);\n"
+    buf.append s2
+    buf.append "        z_panic(_zp_buf);\n"
+    buf.append "    }\n"
+    buf.append rv
+    buf.append "}\n\n"
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
@@ -15630,6 +15762,15 @@ emitListViewMono: function {
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringview
         buf.append t2
         buf.append "\n"
+    }
+    if ctx.colGetFromCode then {
+        (emitColGet
+            nm: nm.stringview
+            ect: ect.stringview
+            kind: "ListView"
+            ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: eid)
+            :buf
+        )
     }
 }
 
