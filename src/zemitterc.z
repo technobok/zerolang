@@ -1876,9 +1876,13 @@ isStringyTid: function {ctx: Ctx tid: u64} out bool is {
 # expression (a String operand view-converts via a compound literal).
 svValueForm: function {ctx: Ctx expr: StringView isStr: bool} out String is {
     if isStr then {
+        # callers hand this a bare atom name, so resolve it: a borrowed element
+        # get binds the name to a deref projection, and the raw name has no
+        # declaration. aliasResolve is a no-op on an already-emitted expression.
+        rex9: aliasResolve :ctx name: expr
         acc: ".".string
-        if (isPtrVar :ctx name: expr) then acc = "->".string
-        v1: "((\{ctx.svC}_t){ \{expr}\{acc}data, \{expr}\{acc}size })"
+        if (isPtrVar :ctx name: rex9.stringview) then acc = "->".string
+        v1: "((\{ctx.svC}_t){ \{rex9}\{acc}data, \{rex9}\{acc}size })"
         return v1
     } else {
         v2: expr.string
@@ -8666,6 +8670,15 @@ emitStmt: function {
             }
         }
         nm: ztypes.mangleVarName name: n.name.stringview
+        # this statement introduces a fresh local: a borrow alias left by an
+        # earlier binding of the same name names a C variable that is out of
+        # scope here, so drop it before the legs below re-establish one.
+        {
+            sab9: nvGet xs: ctx.aliases name: n.name.stringview
+            if sab9.length > 0 when (sab9.stringview.startsWith prefix: "(*__borrow_") then {
+                nvRemove xs: ctx.aliases name: n.name.stringview
+            }
+        }
         nbrw9: bindingRhsIsBorrow :ast :symtab :ctx n: avn9
         ctx.borrowedVars.set key: nm.copy value: nbrw9
         if ctx.genActive when (isYieldNode :ast n: avn9) then {
