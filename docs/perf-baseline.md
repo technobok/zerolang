@@ -104,6 +104,49 @@ survive; see the W0 census discussion), Node payload inlining (<1% of blocks).
 Checker gap noted: `capacity:` + a dotted cross-unit value type trips Map
 generic inference (callKind stays unsized).
 
+## Registry-row census (perf, 2026-07-28 @ 2d8e831) — `ZType.name` → `nameId` NO-GO
+
+Flat profile of the self-compile (`perf record -F 4999`, 465 symbols, no call
+graph). The whole `ZType`-row access surface:
+
+| symbol | share of cycles |
+|---|---|
+| `List_ZType_get` | **0.58%** |
+| `ZTypeRegistry_newEntry` | 0.35% |
+| `ZTypeRegistry_typetypeOf` | 0.27% |
+| `ztypetype_eq` | 0.22% |
+| `ZTypeRegistry_genericOriginOf` | 0.14% |
+| **`ZTypeRegistry_nameOf`** | **0.09%** |
+
+Sanity check: the `typeById` → `List` row above independently recorded
+`List_ZType_get` at 0.65%; this run says 0.58%. The profile is sound.
+
+**Verdict: do not convert `ZType.name: String` to `nameId: u32`, and do not add
+a `List ztypetype` sidecar.** The proposal was that the row shrinks 232 → 208 B
+(−10.3%, `_Static_assert`-verified) and ~35 `for tid < nextTypeId` scans walk it,
+by analogy with the `typeById` flip. The analogy fails on two measured points:
+
+1. **`List_ZType_get` returns a pointer, not a copy** — `static z_t1413_ZType_t*
+   … { return &_this->data[_idx]; }`, since the borrowed-element `get` arc. The
+   row size therefore costs **nothing per access**; it is pure cache residency.
+2. **That residency is already free.** 3,881 rows × 232 B = 900 KB → 807 KB.
+   Both fit in L2 and the scans are sequential, so prefetch covers them.
+
+`typeById` won −6.9% instructions because it *deleted* a 3.43% hash-and-probe.
+Here the entire deletable surface is 0.58%, of which a row shrink captures a
+fraction — realistically <0.1%, an order of magnitude below the noise floor —
+against **~309 reader sites across 41 functions**. The sidecar dies the same way:
+`typetypeOf` + `ztypetype_eq` is 0.49%, already a pointer deref plus a field read.
+
+The allocation argument was retired separately and empirically — see `2d8e831`,
+which cut 0.76% of all allocations and moved the wall not at all.
+
+**If this is reopened, it must be on an architecture argument, not a perf one:**
+lock granularity (a `u32` return composes with live views where a
+`String`-returning wrapper cannot — `zls.z:1924`) or consistency with
+`Decl.name` / `thisParamNameId` / `destructorNameId`. Both are legitimate;
+neither is a speed claim.
+
 ## Cache census (perf, 2026-07-17 @ 476ce11) — union→variant flip NO-GO
 
 Self-compile, 5-run perf stat: IPC 2.42 (8.18G instr / 3.38G cycles), L1-dcache
