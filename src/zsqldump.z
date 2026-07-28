@@ -141,6 +141,12 @@ ownOptStr: function {o: OptionView String} out Option String is {
 }
 
 # an optional string as a SQL literal (NULL when none).
+# sqlStrOrNull -- a quoted SQL string, or NULL when the value is absent.
+sqlStrOrNull: function {s: StringView present: bool} out String is {
+    if (present) == false then return "NULL".string
+    return (sqlStr :s)
+}
+
 optStrSql: function {o: Option String} out String is {
     match (
         o
@@ -587,7 +593,7 @@ ZDumper: class {
     # appendTypes -- one row per registered type, read by sequential id from
     # the registry. The dumper emits the full (small) registry; the
     # differential filters to the example's own unit via defined_in_unit.
-    appendTypes: function {:this st: zenv.ZSymbolTable} is {
+    appendTypes: function {:this st: zenv.ZSymbolTable pool: zast.StringPool} is {
         n: st.reg.nextTypeId
         tid: u64
         for tid < n loop {
@@ -602,8 +608,10 @@ ZDumper: class {
             valSql: optBoolSql o: zt.isValtype
             genSql: boolNum b: zt.isgeneric
             goSql: optIdStr o: zt.genericOriginId
-            ndSql: optStrSome o: zt.destructorName
-            dnSql: optStrSql o: zt.destructorName
+            dnid9: zt.destructorNameId
+            ndSql: boolNum b: (dnid9) != 0
+            dnTx9: zast.poolTextCopy :pool ref: dnid9
+            dnSql: sqlStrOrNull s: dnTx9.stringview present: (dnid9) != 0
             heapSql: boolNum b: zt.isHeapAllocated
             cnSql: cnameSql c: zt.cname.stringview
             duSql: optStrSql o: (definedUnitOf9 :st :tid)
@@ -1036,7 +1044,7 @@ ZDumper: class {
         this.emitSection title: "generic_arg" :rows
     }
 
-    appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable} is {
+    appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable pool: zast.StringPool} is {
         rows: (List String)
         n: st.reg.nextTypeId
         tid: u64
@@ -1056,7 +1064,7 @@ ZDumper: class {
                 ttSql: sqlStr s: ttName.stringview
                 valSql: optBoolSql o: zt.isValtype
                 genSql: boolNum b: zt.isgeneric
-                ndSql: optStrSome o: zt.destructorName
+                ndSql: boolNum b: (zt.destructorNameId) != 0
                 heapSql: boolNum b: zt.isHeapAllocated
                 line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql}"
                 rows.append line
@@ -1495,10 +1503,10 @@ dumpSql: function {program: Node vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out S
     d.appendNodes :program
     d.appendSynthNodes typing: symtab.typing
     d.appendUnits :program typing: symtab.typing
-    d.appendTypes st: symtab
     match (
         program
     ) case program then {
+        d.appendTypes st: symtab pool: program.ast.names
         d.appendDecls ast: program.ast typing: symtab.typing
     } else null
     d.appendGenericChildren st: symtab
@@ -1553,10 +1561,10 @@ dumpCanon: function {program: Node symtab: zenv.ZSymbolTable} out String is {
     mu: mainUnitNameOf :program
     d: ZDumper acc: "".string
     d.appendUnitsCanon :program
-    d.appendTypesCanon unm: mu.stringview st: symtab
     match (
         program
     ) case program then {
+        d.appendTypesCanon unm: mu.stringview st: symtab pool: program.ast.names
         d.appendDeclChildCanon ast: program.ast unm: mu.stringview st: symtab
         d.appendArgDispositionCanon ast: program.ast st: symtab
     } else null

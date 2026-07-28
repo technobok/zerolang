@@ -458,7 +458,7 @@ ZType: class {
     # parallel to genericArgs: true when the ordinal is a numeric VALUE
     # (a sized record's `to:`), false when it is a type id
     genericArgIsValue: (List bool)
-    destructorName: (Option String)
+    destructorNameId: u32
     isHeapAllocated: bool
     isBox: bool
     isNative: bool
@@ -554,7 +554,7 @@ holeType: function {} out ZType is {
     genericChildTids: (List u64)
     genericArgs: (List u64)
     genericArgIsValue: (List bool)
-    destructorName: (Option.none String)
+    destructorNameId: 0
     isHeapAllocated: false
     isBox: false
     isNative: false
@@ -634,7 +634,7 @@ ZTypeRegistry: class {
         genericChildTids: (List u64)
         genericArgs: (List u64)
         genericArgIsValue: (List bool)
-        destructorName: (Option.none String)
+        destructorNameId: 0
         isHeapAllocated: false
         isBox: false
         isNative: false
@@ -709,23 +709,23 @@ ZTypeRegistry: class {
     }
 
     hasDestructorName: function {:this typeId: u64} out bool is {
-        if typeId >= this.typeById.length then return false
+        return (this.destructorNameIdOf :typeId) != 0
+    }
+
+    # destructorNameIdOf -- the pool id of the destructor's name, or 0 when the
+    # type has none.
+    destructorNameIdOf: function {:this typeId: u64} out u32 is {
+        if typeId >= this.typeById.length then return 0
         got: this.typeById.get i: typeId
-        match (
-            got.destructorName
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
+        return got.destructorNameId
     }
 
     # --- post-construction metadata stamps: mutate the stored ZType in
     # place through the by-id table. ---
-    setDestructorName: function {:this typeId: u64 name: StringView} is {
+    setDestructorName: function {:this typeId: u64 nameId: u32} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.get i: typeId
-        got.destructorName = (Option.some name.string)
+        got.destructorNameId = nameId
     }
 
     setIsBox: function {:this typeId: u64} is {
@@ -1782,7 +1782,8 @@ main: function is {
     print "=== carriers ==="
     reg: newRegistry
     t0: reg.newType name: "point" typetype: ztypetype.recordType
-    reg.setDestructorName typeId: t0 name: "z_point_destroy"
+    # the smoke asserts presence only; 1 stands in for a pool id
+    reg.setDestructorName typeId: t0 nameId: 1
     tt0: reg.typetypeOf typeId: t0
     ht0: reg.hasType typeId: t0
     hd0: reg.hasDestructorName typeId: t0
