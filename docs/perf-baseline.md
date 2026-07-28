@@ -180,7 +180,7 @@ still come from, by subsystem (chains containing the frame):
 
 | frames containing | blocks | share | note |
 |---|---|---|---|
-| resolveTypeIdByName (emitter) | 1.46M | 14.2% | name-keyed type resolution: composed "unit.name" String keys + split iterators; REGISTRY names, not pool names |
+| resolveTypeIdByName (emitter) | 1.46M | 14.2% | **SUPERSEDED — do not act on this row.** It predates `ec071e6` ("E1: id-key resolveTypeIdByName"), which rewrote the chain to one `poolFind` then id-keyed stages. Re-verified 2026-07-28: `resolveTypeIdByNameId`, `typeIdByNameStages9`, `resolveUnitChildById` and `walkLookupTyperefById` read `ZType.name` **zero** times, so migrating registry names to pool ids buys nothing here. What remains on this path is the `unitNameTid: Map String u64` probe key (an owned String per probe, 7-way fan-out in `walkLookupTyperefById`) and the composed-key fallback — both UNIT names. |
 | nameTextCopy | 776k | 7.5% | consumers copying pool text OUT (keys, diagnostics, name lists) instead of borrowing/id-comparing |
 | tokSpan (tokenizer) | 556k | 5.4% | one owned String per token from the source span |
 | dataFieldNames | 293k | 2.8% | copies edge-name texts into List String on the auto-call path |
