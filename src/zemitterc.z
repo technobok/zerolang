@@ -926,14 +926,7 @@ matchDiverges: function {symtab: zenv.ZSymbolTable nid: u64} out bool is {
 # stampNameOf -- the registry name of a node's stamped type ("" unstamped).
 stampNameOf: function {symtab: zenv.ZSymbolTable nid: u64} out String is {
     go: ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid
-    if go > 0 then {
-        t: symtab.reg.typeById.get key: go
-        match (
-            t
-        ) case some then {
-            return t.name.copy
-        } case none then null
-    }
+    if go > 0 then return (symtab.reg.nameOf tid: go)
     return "".string
 }
 
@@ -2746,13 +2739,8 @@ emitInstanceMethodCall: function {
             # it. Matching the literal "this" alone drops a renamed receiver.
             recvNm9: "this".string
             {
-                mto9: symtab.reg.typeById.get key: mco9
-                match (
-                    mto9
-                ) case some then {
-                    tpnm9: ztypecheck.optStrOrEmpty o: mto9.thisParamName
-                    if tpnm9.length > 0 then recvNm9 = tpnm9
-                } case none then null
+                tpnm9: symtab.reg.thisParamNameOf tid: mco9
+                if tpnm9.length > 0 then recvNm9 = tpnm9
             }
             args: String
             posIdx9: u64
@@ -4152,20 +4140,7 @@ renderDefault: function {
 # fnTypeTakesThis -- a FUNCTION type whose signature carries a `this` receiver
 # (a method-ref slot auto-calls through itself with the receiver).
 fnTypeTakesThis: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
-    t: symtab.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        match (
-            t.thisParamName
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
-    } case none then {
-        return false
-    }
+    return (symtab.reg.hasThisParamName :tid)
 }
 
 # emitAllDefaultedCall -- a bare reference to a function whose params are ALL
@@ -4881,14 +4856,7 @@ emitByrefArg: function {
 # fnIsNativeId -- the fn id's isNative flag (a mono inherits it from its
 # native template at mint).
 fnIsNativeId: function {symtab: zenv.ZSymbolTable fid: u64} out bool is {
-    fz9: symtab.reg.typeById.get key: fid
-    match (
-        fz9
-    ) case some then {
-        return fz9.isNative
-    } case none then {
-        return false
-    }
+    return (symtab.reg.isNativeOf tid: fid)
 }
 
 # emitGenericFnCall -- a generic free-function call (identity 42): the callable
@@ -13048,14 +13016,7 @@ isTypedefType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
 # typechecker (isBox). Distinguishes the builtin Box from a user class also
 # named Box (e.g. linkedlist's generic Box).
 isBoxTid: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
-    t: symtab.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        return t.isBox
-    } case none then {
-        return false
-    }
+    return (symtab.reg.isBoxOf :tid)
 }
 
 # nodeIsAtomBox -- n is a bare atom whose type is a builtin Box (a heap pointer),
@@ -13353,14 +13314,7 @@ recFieldLists: function {
 # (borrowed typeById view, StringView compare). The none arm mirrors
 # comparing against the empty string.
 regNameIs: function {symtab: zenv.ZSymbolTable tid: u64 name: StringView} out bool is {
-    t: symtab.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        return t.name.stringview == name
-    } case none then {
-        return name.length == 0
-    }
+    return (symtab.reg.nameIs :tid :name)
 }
 
 # unitIdOf9 -- the interned id for a unit name; 0 when never recorded as a
@@ -15282,17 +15236,7 @@ listElemType: function {symtab: zenv.ZSymbolTable monoId: u64} out u64 is {
     match (
         go
     ) case some then {
-        t: symtab.reg.typeById.get key: go
-        match (
-            t
-        ) case some then {
-            rt: t.returnTypeId
-            match (
-                rt
-            ) case some then {
-                return rt
-            } case none then null
-        } case none then null
+        return (symtab.reg.returnTypeOf tid: go)
     } case none then null
     return 0
 }
@@ -15730,14 +15674,7 @@ listviewMethods: function {
 # isGenericType -- the type is a generic template (arms typed by generic
 # params; never emitted as a concrete struct).
 isGenericType: function {symtab: zenv.ZSymbolTable tid: u64} out bool is {
-    t: symtab.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        return t.isgeneric
-    } case none then {
-        return false
-    }
+    return (symtab.reg.isGenericOf :tid)
 }
 
 # internUnitId9 -- the interned id for a unit name; minted on first sight.
@@ -16278,17 +16215,7 @@ emitMapMono: function {
     match (
         go
     ) case some then {
-        gt: symtab.reg.typeById.get key: go
-        match (
-            gt
-        ) case some then {
-            rto: gt.returnTypeId
-            match (
-                rto
-            ) case some then {
-                ovId = rto
-            } case none then null
-        } case none then null
+        ovId = symtab.reg.returnTypeOf tid: go
     } case none then null
     if ovId == 0 then return
     ovName: typeNameOfReg9 :symtab tid: ovId
@@ -16342,17 +16269,7 @@ emitMapMono: function {
     match (
         roMm9
     ) case some then {
-        rtMm9: symtab.reg.typeById.get key: roMm9
-        match (
-            rtMm9
-        ) case some then {
-            rrtoMm9: rtMm9.returnTypeId
-            match (
-                rrtoMm9
-            ) case some then {
-                rmWrapId9 = rrtoMm9
-            } case none then null
-        } case none then null
+        rmWrapId9 = symtab.reg.returnTypeOf tid: roMm9
     } case none then null
     rmWrapName9: typeNameOfReg9 :symtab tid: rmWrapId9
     rmWrap9: cbaseNoPrefix tid: rmWrapId9 name: rmWrapName9.stringview
@@ -17775,21 +17692,7 @@ fnptrTypedefEligible: function {ast: Ast symtab: zenv.ZSymbolTable tid: u64} out
 
 # fnRegReturnId -- a FUNCTION type's registered return type id (0 when none).
 fnRegReturnId: function {symtab: zenv.ZSymbolTable tid: u64} out u64 is {
-    t: symtab.reg.typeById.get key: tid
-    match (
-        t
-    ) case some then {
-        rto: t.returnTypeId
-        match (
-            rto
-        ) case some then {
-            return rto
-        } case none then {
-            return 0
-        }
-    } case none then {
-        return 0
-    }
+    return (symtab.reg.returnTypeOf :tid)
 }
 
 # fnptrRetTypeC -- C return type for a FUNCTION's `_ft` typedef. The return type
