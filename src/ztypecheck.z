@@ -3670,7 +3670,10 @@ resolveFunction: function {
                     }
                 }
                 if (paramIsThisReceiver :ast op: (ast.nodes.get i: (pm.operation - 1).u64)) then {
-                    reg.setThisParamName typeId: fid name: pname.stringview
+                    (reg.setThisParamName
+                        typeId: fid
+                        nameId: (zast.poolSet pool: ast.names text: pname.stringview)
+                    )
                 }
                 (recordTyperef
                     :ty
@@ -10239,15 +10242,16 @@ cloneMethodInto: function {
     # and the no-paren auto-call, funcReturnsBorrow carries the `.borrow`
     # return marker, and funcReturnNode backs methodReturnOf for concrete
     # (non-generic) returns.
-    tpn0: String
+    tpn0id: u32
     isNat0: false
     if tplFnId < reg.typeById.length then {
         tz0: reg.typeById.get i: tplFnId
         if tz0.isNative then isNat0 = true
-        tpn0 = optStrOrEmpty o: tz0.thisParamName
+        tpn0id = tz0.thisParamNameId
     }
     if isNat0 then reg.setNative typeId: fid5 value: true
-    if tpn0.length > 0 then reg.setThisParamName typeId: fid5 name: tpn0.stringview
+    if tpn0id > 0 then reg.setThisParamName typeId: fid5 nameId: tpn0id
+    tpn0: zast.poolTextCopy pool: ast.names ref: tpn0id
     if (optBoolOr o: (ty.funcReturnsBorrow.get key: tplFnId) d: false) then {
         ty.funcReturnsBorrow.set key: fid5 value: true
     }
@@ -12816,7 +12820,10 @@ methodHasNoUserArgs: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool
         soleName = snB9.copy
     }
     if soleId == zast.wkThis.u64 then return true
-    return (st.reg.thisParamNameIs tid: mid name: soleName.stringview)
+    return (st.reg.thisParamNameIs
+        tid: mid
+        nameId: (zast.poolFind pool: ast.names text: soleName.stringview)
+    )
 }
 
 # fnAutoCallable -- a bare reference to this function is a zero-argument
@@ -12827,7 +12834,7 @@ fnAutoCallable: function {ast: Ast st: zenv.ZSymbolTable mid: u64} out bool is {
     if (methodHasNoUserArgs :ast :st :mid) then return true
     thisPnId9: u64
     {
-        tpn9: st.reg.thisParamNameOf tid: mid
+        tpn9: zast.poolTextCopy pool: ast.names ref: (st.reg.thisParamNameIdOf tid: mid)
         if tpn9.length > 0 then {
             thisPnId9 = (zast.poolFind pool: ast.names text: tpn9.stringview).u64
         }
@@ -16307,7 +16314,10 @@ positionalParamName: function {
             isRecv9: false
             if skipRecv then {
                 if tnB9.stringview == "this" then isRecv9 = true
-                if (st.reg.thisParamNameIs tid: funcId name: tnB9.stringview) then isRecv9 = true
+                if (st.reg.thisParamNameIs
+                    tid: funcId
+                    nameId: ppnid9.u32.orPanic
+                ) then isRecv9 = true
             }
             if (isRecv9) == false then {
                 if seen == idx then {
@@ -16737,7 +16747,7 @@ missingCtorFields: function {
     pcnt: names.length
     if pcnt == 0 then return
     thisPn9: String
-    thisPn9 = st.reg.thisParamNameOf tid: effId
+    thisPn9 = zast.poolTextCopy pool: ast.names ref: (st.reg.thisParamNameIdOf tid: effId)
     vpos: u64
     i: u64
     for i < pcnt loop {
@@ -18807,7 +18817,7 @@ checkGenericCall: function {
                     pnB9: ast.names.texts.get i: (gcNid9 - 1).u64
                     isRecv9: gcNid9 == zast.wkThis.u64
                     if (isRecv9) == false then {
-                        isRecv9 = (st.reg.thisParamNameIs tid: funcId name: pnB9.stringview)
+                        isRecv9 = (st.reg.thisParamNameIs tid: funcId nameId: gcNid9.u32.orPanic)
                     }
                     if (isRecv9) == false then {
                         pn2: pnB9.copy

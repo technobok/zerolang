@@ -443,7 +443,7 @@ ZType: class {
     name: String
     typetype: ztypetype
     returnTypeId: (optionval u64)
-    thisParamName: (Option String)
+    thisParamNameId: u32
     isgeneric: bool
     isValtype: (optionval bool)
     genericOriginId: (optionval u64)
@@ -545,7 +545,7 @@ holeType: function {} out ZType is {
     name: "".string
     typetype: ztypetype.nullType
     returnTypeId: (optionval.none u64)
-    thisParamName: (Option.none String)
+    thisParamNameId: 0
     isgeneric: false
     isValtype: (optionval.none bool)
     genericOriginId: (optionval.none u64)
@@ -625,7 +625,7 @@ ZTypeRegistry: class {
         name: name.string
         :typetype
         returnTypeId: (optionval.none u64)
-        thisParamName: (Option.none String)
+        thisParamNameId: 0
         isgeneric: false
         isValtype: (optionval.none bool)
         genericOriginId: (optionval.none u64)
@@ -883,44 +883,24 @@ ZTypeRegistry: class {
         return 0
     }
 
-    # thisParamNameOf -- a method's receiver-parameter name, or "".
-    thisParamNameOf: function {:this tid: u64} out String is {
-        if tid >= this.typeById.length then return "".string
+    # thisParamNameIdOf -- the pool id of a method's receiver-parameter name,
+    # or 0 when it declares none.
+    thisParamNameIdOf: function {:this tid: u64} out u32 is {
+        if tid >= this.typeById.length then return 0
         got: this.typeById.get i: tid
-        t9: got.thisParamName
-        match (
-            t9
-        ) case some then {
-            return t9.copy
-        } case none then null
-        return "".string
+        return got.thisParamNameId
     }
 
     # hasThisParamName -- the type declares a receiver parameter.
     hasThisParamName: function {:this tid: u64} out bool is {
-        if tid >= this.typeById.length then return false
-        got: this.typeById.get i: tid
-        t9: got.thisParamName
-        match (
-            t9
-        ) case some then {
-            return true
-        } case none then null
-        return false
+        return (this.thisParamNameIdOf :tid) != 0
     }
 
     # thisParamNameIs -- the receiver parameter is named `name`; false when the
     # type declares none, so an undeclared receiver never matches.
-    thisParamNameIs: function {:this tid: u64 name: StringView} out bool is {
-        if tid >= this.typeById.length then return false
-        got: this.typeById.get i: tid
-        t9: got.thisParamName
-        match (
-            t9
-        ) case some then {
-            return (t9.stringview == name)
-        } case none then null
-        return false
+    thisParamNameIs: function {:this tid: u64 nameId: u32} out bool is {
+        if nameId == 0 then return false
+        return (this.thisParamNameIdOf :tid) == nameId
     }
 
     # isGenericOf -- the type is a generic template.
@@ -1029,10 +1009,10 @@ ZTypeRegistry: class {
         got.def = declId
     }
 
-    setThisParamName: function {:this typeId: u64 name: StringView} is {
+    setThisParamName: function {:this typeId: u64 nameId: u32} is {
         if typeId >= this.typeById.length then return
         got: this.typeById.get i: typeId
-        got.thisParamName = (Option.some name.string)
+        got.thisParamNameId = nameId
     }
 
     # recordDemand / isDemanded -- the names of cross-unit types a definition
