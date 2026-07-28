@@ -542,6 +542,9 @@ ZTypeRegistry: class {
     nextScopeId: u64
     nextEntryId: u64
     nextConformanceId: u64
+    # the shared unregistered id worn by every `break` / `continue` entry
+    # (see ctlPlaceholder); 0 until first use
+    ctlPlaceholderTid: u64
     typeById: (Map u64 value: ZType)
     crossUnitDemand: (Set String)
     unitNameTid: (Map String value: u64)
@@ -555,10 +558,25 @@ ZTypeRegistry: class {
     # true when the last getOrMintSpec minted a fresh instance (checkGenericCall's wasNew)
     specWasFresh: bool
 } as {
+    # allocType -- an id with no ZType behind it, for an expression that has
+    # no type: the result of auto-calling a method declared without `out`.
+    # Staying unregistered is what keeps the stamp out of the dump's type join.
     allocType: function {:this} out u64 is {
         r: this.nextTypeId
         this.nextTypeId = this.nextTypeId + 1
         return r
+    }
+
+    # ctlPlaceholder -- the one unregistered id every `break` / `continue`
+    # entry wears. Those names carry no type; the id exists only so the entry
+    # has a slot, and every reader dispatches on the name instead. One id
+    # rather than one per loop keeps the id space dense. Minted on first use;
+    # 0 is the notype sentinel, so it doubles as "not minted yet".
+    ctlPlaceholder: function {:this} out u64 is {
+        if this.ctlPlaceholderTid > 0 then return this.ctlPlaceholderTid
+        t9: this.allocType
+        this.ctlPlaceholderTid = t9
+        return t9
     }
     allocScope: function {:this} out u64 is {
         r: this.nextScopeId
@@ -1116,6 +1134,7 @@ newRegistry: function {} out ZTypeRegistry is {
         nextScopeId: 0
         nextEntryId: 0
         nextConformanceId: 0
+        ctlPlaceholderTid: 0
         typeById: (Map u64 value: ZType)
         crossUnitDemand: (Set String)
         unitNameTid: (Map String value: u64)
