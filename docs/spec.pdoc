@@ -3583,9 +3583,13 @@ different monomorphized types.
 
 Bucket dispatch hashes #~"String" / #~"StringView" keys through SipHash-1-3
 with a per-process random seed (initialised once at program start) and numeric
-keys through the splitmix64 finalizer. Bucket iteration order therefore varies
-across runs — see #~"String.hash" for the user-facing native that shares the
-same primitive.
+keys through the splitmix64 finalizer — see #~"String.hash" for the user-facing
+native that shares the same primitive. The random seed moves entries between
+#_*"buckets" from run to run, but it does #_*"not" affect iteration order: a map
+is a compact dict — a dense entry array plus a separate index table — and
+iteration walks the entry array, so it is in #_*"insertion order" and is stable
+across runs. Resize preserves that order (tombstones are compacted out, the
+survivors keep their relative order).
 
 #---: set
 
@@ -3625,11 +3629,12 @@ monomorphization). The set takes ownership of items on #~"add"; on a
 duplicate-add the caller's copy is destroyed so the take-on-add contract
 holds. On #~"delete" the stored item is destroyed.
 
-Iteration is in bucket order, not insertion order, and bucket order is
-randomised by the per-process SipHash seed (same dispatch as #~"Map" —
-SipHash for String, splitmix64 for numerics). The table grows when the
-load factor exceeds 2/3; capacity starts at 8 and doubles on resize.
-Tombstones from #~"delete" are reclaimed during resize.
+Iteration is in #_*"insertion order" and stable across runs: like #~"Map", a
+set is a compact dict and iteration walks its dense entry array, not the hash
+table, so the per-process SipHash seed does not reach it. The table grows when
+the load factor exceeds 2/3; capacity starts at 8 and doubles on resize.
+Tombstones from #~"delete" are skipped by iteration and reclaimed during resize,
+which preserves the relative order of the survivors.
 
 #---: string
 
