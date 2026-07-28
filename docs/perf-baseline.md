@@ -106,6 +106,53 @@ survive; see the W0 census discussion), Node payload inlining (<1% of blocks).
 Checker gap noted: `capacity:` + a dotted cross-unit value type trips Map
 generic inference (callKind stays unsized).
 
+## Assoc-list census (perf, 2026-07-29 @ b3055f6) — `NameVal`/`NameTid` → pool ids is a NO-GO
+
+The last step of the names-are-ids arc (2a `1e7f0c4`, 2b `b3055f6`) was to key the
+emitter's five per-function association lists — `ctx.aliases`, `narrowBox`,
+`exclArms` (`NameVal`) and `narrowTid`, `exclTids` (`NameTid`) — by pool id
+instead of by name text. **It was implemented, measured, and reverted.**
+
+The target surface, flat profile at `b3055f6`:
+
+| symbol | share of cycles |
+|---|---|
+| `nvGet` | 0.13% |
+| `isPtrVar` (the sibling `List String` scan) | 0.09% |
+| `nvSet` / `nvHas` / `nvRemove` / `ntGet` / `ntSet` / `ntRemove` | below the sampling floor |
+
+**0.22% is the entire ceiling.** Against that, every one of the 68 call sites
+holds *text*, not an id — the names come from the ~192 `nameTextCopy` sites, which
+are out of this arc's scope — so keying by id cannot remove a materialisation. It
+can only insert a `poolFind` where a 1–5 element `StringView` scan used to be.
+
+Measured against a same-session `b3055f6` binary, identical flags, two interleaved
+`-r 7` rounds: **instructions +1.10%** (6,030.6M → 6,097.1M, ±0.15%), cycles
++0.48%, cache-misses and wall flat. The mechanism is visible in the profile:
+`StringPool_find` **0.39% → 0.66%** and `StringPool_probeSlot` **1.20% → 1.61%**
+— roughly **+0.7pp of probe machinery bought to chase a 0.22% target.** `nvGet`
+itself did not shrink (0.13% → 0.35%, plus a new `nameIdE` at 0.18%).
+
+Hoisting would not rescue it: the 68 sites collapse to ~24 distinct names, so at
+best it recovers ~65% of the added probes — an *estimated* +0.25pp, still above
+the 0.22% ceiling, and that is before the hoists' own complexity.
+
+The change also cost architecture rather than buying it. Reaching the alias list
+from `aliasResolve` forced the `Ast` carrier into eight more emitter helpers
+(`aliasResolve`, `svValueForm`, `takeSourceResolve`, `emitLocalAtomName`,
+`emitStringMethod`, `implicitTakeSourceAtom`, `emitReturnCleanup`) and ~35 call
+sites, to relocate a text→id conversion that the callers still perform.
+
+`NameVal`'s own comment already said this — *"a handful of entries at most, so
+linear StringView probes beat a map's per-probe owned-key allocation and hash"*.
+**The precondition for an id flip is that the callers already hold ids.** 2b met
+it (the AST payloads did, after 2a); this does not. Reopen only after the
+`nameTextCopy` debt is paid, which would change the premise.
+
+Oracle for the record: the reverted implementation was correct — emitted C,
+`dump --canon` and raw `--dump-sql` were all byte-identical across the 148
+examples and the self-compile. It was rejected on cost, not on behaviour.
+
 ## Registry-row census (perf, 2026-07-28 @ 2d8e831) — `ZType.name` → `nameId` NO-GO
 
 Flat profile of the self-compile (`perf record -F 4999`, 465 symbols, no call
