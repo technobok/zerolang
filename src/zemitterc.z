@@ -8601,14 +8601,15 @@ emitStmt: function {
                 }
             }
         }
-        nm: ztypes.mangleVarName name: n.name.stringview
+        anmC9: zast.poolTextCopy pool: ast.names ref: n.name
+        nm: ztypes.mangleVarName name: anmC9.stringview
         # this statement introduces a fresh local: a borrow alias left by an
         # earlier binding of the same name names a C variable that is out of
         # scope here, so drop it before the legs below re-establish one.
         {
-            sab9: nvGet xs: ctx.aliases name: n.name.stringview
+            sab9: nvGet xs: ctx.aliases name: anmC9.stringview
             if sab9.length > 0 when (sab9.stringview.startsWith prefix: "(*__borrow_") then {
-                nvRemove xs: ctx.aliases name: n.name.stringview
+                nvRemove xs: ctx.aliases name: anmC9.stringview
             }
         }
         nbrw9: bindingRhsIsBorrow :ast :symtab :ctx n: avn9
@@ -8756,7 +8757,7 @@ emitStmt: function {
             lbg1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
             buf.append lbg1
             bga9: "(*__borrow_\{nm})"
-            nvSet xs: ctx.aliases name: n.name.stringview val: bga9.stringview
+            nvSet xs: ctx.aliases name: anmC9.stringview val: bga9.stringview
             return
         }
         if (stampIdOf :symtab nid: n.nodeid.u64) == ctx.svTid then {
@@ -9173,7 +9174,7 @@ emitStmt: function {
                     match (
                         mcn9
                     ) case caseclause then {
-                        if mcn9.name.length > 0 then {
+                        if mcn9.name != 0 then {
                             melim9 = false
                         } else {
                             maf9: (evalConstI64
@@ -9214,8 +9215,7 @@ emitStmt: function {
         emitMatchStmt :ast :symtab :ctx m: n assignTo: "" :ind :tmp :buf
         ctx.condDepth = ctx.condDepth - 1
     } case withexpr then {
-        wn9: n.name.stringview
-        wnm: wn9.string
+        wnm: zast.nameTextCopy :ast ref: n.name
         wsid9: stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
         wct: String
         if (originTidOf :symtab tid: wsid9) > 0 then {
@@ -9756,8 +9756,9 @@ emitGenericDissect: function {
                 cnode9
             ) case caseclause then {
                 if win9 == 0 then {
-                    if cnode9.name.length > 0 then {
-                        pu9: cnode9.name.stringview.parseU64
+                    if cnode9.name != 0 then {
+                        cnt9: zast.poolTextCopy pool: ast.names ref: cnode9.name
+                        pu9: cnt9.stringview.parseU64
                         match (
                             pu9
                         ) case ok then {
@@ -9770,13 +9771,15 @@ emitGenericDissect: function {
     } else {
         cn0: String
         if concrete9 > 0 then cn0 = typeNameOfReg9 :symtab tid: concrete9
+        cnid9: u32
+        if cn0.length > 0 then cnid9 = zast.poolFind pool: ast.names text: cn0.stringview
         with cit9: m.clauses.iterate do for cId9: cit9 loop {
             cnode9: ast.nodes.get i: (cId9 - 1).u64
             match (
                 cnode9
             ) case caseclause then {
                 if win9 == 0 then {
-                    if cn0.length > 0 when cnode9.name.stringview == cn0.stringview then win9 = cnode9.statement
+                    if cnid9 != 0 when cnode9.name == cnid9 then win9 = cnode9.statement
                 }
             } else null
         }
@@ -9931,7 +9934,7 @@ emitMatchStmt: function {
         match (
             c3
         ) case caseclause then {
-            cnm9: c3.name.copy
+            cnm9: zast.poolTextCopy pool: ast.names ref: c3.name
             covA9.append cnm9
         } else null
     }
@@ -10093,7 +10096,7 @@ emitBoolMatch: function {
             c
         ) case caseclause then {
             condB9: subj.string
-            if c.name.stringview == "false" then condB9 = "!\{subj}"
+            if (zast.nameTextEq :ast ref: c.name s: "false") then condB9 = "!\{subj}"
             kwB9: "if"
             if (firstB9) == false then kwB9 = "else if"
             firstB9 = false
@@ -10255,7 +10258,8 @@ emitScalarClause: function {
     match (
         c
     ) case caseclause then {
-        arm: c.name.stringview
+        armC9: zast.nameTextCopy :ast ref: c.name
+        arm: armC9.stringview
     lbl: scalarArmLabel :ast :ctx :arm
         l2: "\{ind}case \{lbl}: {\n"
         buf.append l2
@@ -10296,7 +10300,8 @@ emitMatchClause: function {
     match (
         c
     ) case caseclause then {
-        arm: c.name.stringview
+        armC9: zast.nameTextCopy :ast ref: c.name
+        arm: armC9.stringview
         tg: variantTag :symtab tid: vtid :arm
         l2: "\{ind}case \{tg}: {\n"
         buf.append l2
@@ -12217,8 +12222,7 @@ emitTailStmt: function {
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
         return true
     } case withexpr then {
-        wnT9: n.name.stringview
-        wnmT9: wnT9.string
+        wnmT9: zast.nameTextCopy :ast ref: n.name
         wsidT9: stampIdDeep :ast :symtab n: (ast.nodes.get i: (n.value - 1).u64)
         wctT9: String
         if (originTidOf :symtab tid: wsidT9) > 0 then {

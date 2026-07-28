@@ -8344,24 +8344,25 @@ blockHasYieldingLoop: function {ast: Ast blk: Node} out bool is {
     }
 }
 
-# assignmentLocalName -- the local name a statement-line binds via `name: value`, or "".
-assignmentLocalName: function {ast: Ast line: Node} out String is {
+# assignmentLocalName -- the pool id of the local a statement-line binds via
+# `name: value`, or 0.
+assignmentLocalName: function {ast: Ast line: Node} out u32 is {
     match (
         line
     ) case statementline then {
         return (assignmentInnerName s: (ast.nodes.get i: (line.statementline - 1).u64))
     } else {
-        return "".string
+        return 0
     }
 }
 # the bound name of assignment statement `s`.
-assignmentInnerName: function {s: Node} out String is {
+assignmentInnerName: function {s: Node} out u32 is {
     match (
         s
     ) case assignment then {
-        return s.name.copy
+        return s.name
     } else {
-        return "".string
+        return 0
     }
 }
 
@@ -8392,11 +8393,11 @@ addPromotedLocalsBlk: function {
         siter: blk.statements.iterate
         for stId9: siter loop {
             nm: assignmentLocalName :ast line: (ast.nodes.get i: (stId9 - 1).u64)
-            if nm.length != 0 then {
+            if nm != 0 then {
                 lf: resolveAtomType :ty :reg :ast unitName: "" nm: "i64" thisName: ""
                 (ty.setMemberType
                     parentTypeId: iterId
-                    nameId: (zast.poolFind pool: ast.names text: nm.stringview).u64
+                    nameId: nm.u64
                     childTypeId: lf
                 )
             }
@@ -14906,7 +14907,8 @@ checkAssignment: function {
             bo: r0.copy
             v.borrowOrigin = (Option.some bo)
         }
-        st.defineVar name: asgn.name.stringview var: v
+        anmD9: zast.poolTextCopy pool: ast.names ref: asgn.name
+        st.defineVar name: anmD9.stringview var: v
         vid2: vid
         st.typing.defVariableId.set key: asgn.nodeid.u64 value: vid2
         st.typing.variableOrigin.set key: vid2 value: false
@@ -14956,9 +14958,10 @@ checkAssignment: function {
         # subject's type and records the narrowed subtype).
         ucArm: unionCreateArmName :ast :st n: av9
         if ucArm.length > 0 then {
+            anmN9: zast.poolTextCopy pool: ast.names ref: asgn.name
             (st.narrow
                 pool: ast.names
-                name: asgn.name.stringview
+                name: anmN9.stringview
                 toTypeId: vt
                 subtypeName: ucArm.stringview
                 shadow: false
@@ -15256,7 +15259,8 @@ checkWith: function {
         }
         v: st.reg.newVariable ztypeId: vt ownership: own
         vid: v.variableId
-        st.defineVar name: withnode.name.stringview var: v
+        wnmD9: zast.poolTextCopy pool: ast.names ref: withnode.name
+        st.defineVar name: wnmD9.stringview var: v
         vid2: vid
         st.typing.defVariableId.set key: withnode.nodeid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {

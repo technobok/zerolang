@@ -1186,7 +1186,7 @@ Parser: class {
         if tt == zlexer.TT.labelPreTok then {
             lblTok: lex.acceptAny
             lvName: lblTok.tokstr.copy
-            asgnName: lblTok.tokstr.copy
+            asgnName: this.internName name: lblTok.tokstr.stringview
             lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
             asgn: Node.assignment (zast.AssignmentData
                 nodeid: this.nextId
@@ -1204,7 +1204,7 @@ Parser: class {
         }
         if tt == zlexer.TT.labelTok then {
             lblTok: lex.acceptAny
-            nm: lblTok.tokstr.copy
+            nm: this.internName name: lblTok.tokstr.stringview
             lex.accept tt: zlexer.TT.eolTok
             eLook: this.exprLookahead :lex
             if eLook then {
@@ -1526,7 +1526,7 @@ Parser: class {
             lex.accept tt: zlexer.TT.eolTok
             idOpt: lex.accept tt: zlexer.TT.refIdTok
             match idOpt case some then {
-                nm: idOpt.tokstr.copy
+                nm: this.internName name: idOpt.tokstr.stringview
                 armNode: Node.atomid (zast.AtomIdData
                     nodeid: this.nextId
                     lineno: idOpt.lineno
@@ -1854,7 +1854,7 @@ Parser: class {
             isLabel: t.toktype == zlexer.TT.labelTok
             if isLabel then {
                 lblTok: lex.acceptAny
-                nm: lblTok.tokstr.copy
+                nm: this.internName name: lblTok.tokstr.stringview
                 vpaths: this.operationPaths :lex
                 n: vpaths.length
                 if n == 0 then {
@@ -3139,7 +3139,7 @@ Parser: class {
     # Returns an `error` Node on failure (FILENOTFOUND distinguishable via
     # isFileNotFound) or a benign `atomid` "ok" sentinel on success -- so a
     # bare Node return avoids disassembling an owned result carrier.
-    loadUnit: function {:this vfs: zvfs.ZVfs parentid: u32 unitname: String coreNames: List String outBody: List u32 outExterns: List String outNames: List String} out Node is {
+    loadUnit: function {:this vfs: zvfs.ZVfs parentid: u32 unitname: String coreNames: List String outBody: List u32 outExterns: List String outNames: List u32} out Node is {
         valid: isValidUnitName name: unitname.stringview
         if (valid) == false then {
             return (Node.error (zast.ErrorData
@@ -3242,7 +3242,7 @@ Parser: class {
                 if (inCore) == false then {
                     handled: false
                     if hasSubdir then {
-                        subNames: (List String)
+                        subNames: (List u32)
                         sub: (this.loadUnit
                             :vfs
                             parentid: dirid
@@ -3293,7 +3293,7 @@ Parser: class {
     parse: function {:this vfs: zvfs.ZVfs rootid: u32 mainUnitName: String} out Node is {
         units: (List u32)
         coreNames: (List String)
-        coreNamesOut: (List String)
+        coreNamesOut: (List u32)
         coreExterns: (List String)
         coreRes: (this.loadUnit
             :vfs
@@ -3316,7 +3316,7 @@ Parser: class {
         if coreOk then {
             defNames.append "core".string
             cnIt: coreNamesOut.iterate
-            for cn: cnIt loop coreNames.append cn.copy
+            for cn: cnIt loop coreNames.append (zast.poolTextCopy pool: this.ast.names ref: cn)
         }
         loadQueue: (List String)
         loadQueue.append mainUnitName.copy
@@ -3327,7 +3327,7 @@ Parser: class {
             already: defNames.contains item: name
             if (already) == false then {
                 unitExterns: (List String)
-                throwNames: (List String)
+                throwNames: (List u32)
                 res: (this.loadUnit
                     :vfs
                     parentid: rootid
@@ -3397,6 +3397,9 @@ Parser: class {
 # a borrowed reftype mutates the caller's list -- the lib `extendraw`
 # pattern), so the child loops never move an owned accumulator across an
 # iteration (no E0200) and collectExterns returns a plain owned local.
+# Both carry Ast.names pool ids: a scope membership test is an integer
+# compare, and text is materialised only at the two edges (the unit-name
+# shape test, and collectExterns' returned file names).
 #
 # Bias: keep a name unless it is provably bound. A spurious extern fails
 # to resolve to a file and is harmless; a missed extern would drop a unit.
@@ -3404,46 +3407,53 @@ Parser: class {
 
 # Record `name` as an extern unless it is bound, not a valid unit name, or
 # already recorded.
-ewEmit: function {externs: List String scope: List String name: String.take} is {
-    inScope: scope.contains item: name
+ewEmit: function {ast: Ast externs: List u32 scope: List u32 nameId: u32} is {
+    inScope: scope.contains item: nameId
     if inScope then return
-    valid: isValidUnitName name: name.stringview
-    if valid then {
-        dup: externs.contains item: name
-        if dup then return
-        externs.append name.copy
-    }
+    dup: externs.contains item: nameId
+    if dup then return
+    t9: zast.nameTextCopy :ast ref: nameId
+    valid: isValidUnitName name: t9.stringview
+    if valid then externs.append nameId
 }
 
 # Push an optional bound name (a namedoperation / param / loop label).
 # A ref of 0 -- a positional arm, which binds no name -- pushes nothing.
-ewBindOptName: function {ast: Ast scope: List String ref: u32} is {
+ewBindOptName: function {scope: List u32 ref: u32} is {
     if ref == 0 then return
-    scope.append (zast.nameTextCopy :ast :ref)
+    scope.append ref
+}
+
+# Push a scope seed named by its text (`this` / `type` / `meta`). A name the
+# pool never interned cannot be referenced either, so a miss binds nothing.
+ewBindKnown: function {ast: Ast scope: List u32 text: StringView} is {
+    id9: zast.poolFind pool: ast.names :text
+    if id9 == 0 then return
+    scope.append id9
 }
 
 # Bind one namedoperation arm's name.
-ewBindOneName: function {ast: Ast scope: List String item: Node} is {
+ewBindOneName: function {scope: List u32 item: Node} is {
     match (
         item
     ) case namedoperation then {
-        ewBindOptName :ast :scope ref: item.name
+        ewBindOptName :scope ref: item.name
     } else null
 }
 
 # Bind the top-level names of a converted id-list (unit bodies).
-ewBindNameIds: function {ast: Ast scope: List String items: List u32} is {
+ewBindNameIds: function {ast: Ast scope: List u32 items: List u32} is {
     ei9: u64
     en9: items.length
     for ei9 < en9 loop {
         eid9: items.get i: ei9
-        ewBindOneName :ast :scope item: (ast.nodes.get i: (eid9 - 1).u64)
+        ewBindOneName :scope item: (ast.nodes.get i: (eid9 - 1).u64)
         ei9 = ei9 + 1
     }
 }
 
 # Drop bindings introduced since depth `n` (block / scope exit).
-ewTruncate: function {scope: List String n: u64} is {
+ewTruncate: function {scope: List u32 n: u64} is {
     for scope.length > n loop scope.pop
 }
 
@@ -3451,8 +3461,8 @@ ewTruncate: function {scope: List String n: u64} is {
 # ewWalkOptAt -- the id-taking entry (0 = absent).
 ewWalkOptAt: function {
     ast: Ast
-    externs: List String
-    scope: List String
+    externs: List u32
+    scope: List u32
     oId: u32
 } is {
     if oId == 0 then return
@@ -3463,8 +3473,8 @@ ewWalkOptAt: function {
 # Walk a converted id-list (unit bodies).
 ewWalkBodyIds: function {
     ast: Ast
-    externs: List String
-    scope: List String
+    externs: List u32
+    scope: List u32
     items: List u32
 } is {
     wi9: u64
@@ -3480,7 +3490,7 @@ ewWalkBodyIds: function {
 # the real form (assignment / reassignment / swap / bare expression);
 # unwrap one level, then dispatch. An assignment binds its name for the
 # lines that follow (but not for its own value).
-ewWalkLine: function {ast: Ast externs: List String scope: List String line: Node} is {
+ewWalkLine: function {ast: Ast externs: List u32 scope: List u32 line: Node} is {
     match (
         line
     ) case statementline then {
@@ -3494,15 +3504,15 @@ ewWalkLine: function {ast: Ast externs: List String scope: List String line: Nod
 # fields does not free anything still owned by the enclosing statement.
 ewWalkStmtInner: function {
     ast: Ast
-    externs: List String
-    scope: List String
+    externs: List u32
+    scope: List u32
     inner: Node
 } is {
     match (
         inner
     ) case assignment then {
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.value - 1).u64)
-        scope.append inner.name.copy
+        scope.append inner.name
     } case reassignment then {
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.topath - 1).u64)
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (inner.value - 1).u64)
@@ -3517,12 +3527,12 @@ ewWalkStmtInner: function {
 # A for-loop condition arm: a named arm (`label op`) binds the loop
 # variable for the body after its iterable is walked; an unnamed arm
 # (a `while` / leading condition) is just walked.
-ewWalkForCond: function {ast: Ast externs: List String scope: List String cond: Node} is {
+ewWalkForCond: function {ast: Ast externs: List u32 scope: List u32 cond: Node} is {
     match (
         cond
     ) case namedoperation then {
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (cond.operation - 1).u64)
-        ewBindOptName :ast :scope ref: cond.name
+        ewBindOptName :scope ref: cond.name
     } else {
         ewWalk :ast :externs :scope node: cond
     }
@@ -3531,11 +3541,11 @@ ewWalkForCond: function {ast: Ast externs: List String scope: List String cond: 
 # The core recursive walk: same arms and child order as zast.printNode.
 # Emits atomid references; threads the bound scope through nested
 # definitions and blocks.
-ewWalk: function {ast: Ast externs: List String scope: List String node: Node} is {
+ewWalk: function {ast: Ast externs: List u32 scope: List u32 node: Node} is {
     match (
         node
     ) case error then null case placeholder then null case atomid then {
-        ewEmit :externs :scope name: (zast.nameTextCopy :ast ref: node.name)
+        ewEmit :ast :externs :scope nameId: node.name
     } case labelvalue then null case stringchunk then null case binop then {
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.lhs - 1).u64)
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.operator - 1).u64)
@@ -3591,7 +3601,7 @@ ewWalk: function {ast: Ast externs: List String scope: List String node: Node} i
     } case withexpr then {
         base: scope.length
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.value - 1).u64)
-        scope.append node.name.copy
+        scope.append node.name
         ewWalk :ast :externs :scope node: (ast.nodes.get i: (node.body - 1).u64)
         ewTruncate :scope n: base
     } case caseexpr then {
@@ -3611,9 +3621,9 @@ ewWalk: function {ast: Ast externs: List String scope: List String node: Node} i
         ewTruncate :scope n: base
     } case objectdef then {
         base: scope.length
-        scope.append "this".string
-        scope.append "type".string
-        scope.append "meta".string
+        ewBindKnown :ast :scope text: "this"
+        ewBindKnown :ast :scope text: "type"
+        ewBindKnown :ast :scope text: "meta"
         ewBindNameIds :ast :scope items: node.isItems
         ewBindNameIds :ast :scope items: node.asItems
         ewWalkBodyIds :ast :externs :scope items: node.isItems
@@ -3621,9 +3631,9 @@ ewWalk: function {ast: Ast externs: List String scope: List String node: Node} i
         ewTruncate :scope n: base
     } case unitdef then {
         base: scope.length
-        scope.append "this".string
-        scope.append "type".string
-        scope.append "meta".string
+        ewBindKnown :ast :scope text: "this"
+        ewBindKnown :ast :scope text: "type"
+        ewBindKnown :ast :scope text: "meta"
         ewBindNameIds :ast :scope items: node.body
         ewWalkBodyIds :ast :externs :scope items: node.body
         ewTruncate :scope n: base
@@ -3635,13 +3645,17 @@ ewWalk: function {ast: Ast externs: List String scope: List String node: Node} i
 # forward references resolve), then walks the body. Returns the deduped
 # extern names in source-reference order; parse() loads them as units.
 collectExterns: function {ast: Ast body: List u32} out List String is {
-    externs: (List String)
-    scope: (List String)
-    scope.append "this".string
-    scope.append "type".string
-    scope.append "meta".string
+    externIds: (List u32)
+    scope: (List u32)
+    ewBindKnown :ast :scope text: "this"
+    ewBindKnown :ast :scope text: "type"
+    ewBindKnown :ast :scope text: "meta"
     ewBindNameIds :ast :scope items: body
-    ewWalkBodyIds :ast :externs :scope items: body
+    ewWalkBodyIds :ast externs: externIds :scope items: body
+    externs: (List String capacity: externIds.length)
+    with eit9: externIds.iterate do for eid9: eit9 loop {
+        externs.append (zast.poolTextCopy pool: ast.names ref: eid9)
+    }
     return externs
 }
 
