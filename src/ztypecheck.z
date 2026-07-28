@@ -5740,8 +5740,9 @@ fieldTypeNeedsCleanup: function {
             if tto8 == ztypes.ztypetype.classType then boxed8 = true
             if tto8 == ztypes.ztypetype.unionType then boxed8 = true
             if boxed8 then {
-                gk8: "\{duo8}.\{name}"
-                if (ty.resolving.has item: gk8) then return true
+                if (ty.declIsResolving
+                    declId: (declOfUnitDef :ty :ast defUnit: duo8.stringview :name)
+                ) then return true
             }
         } case none then null
         descendNamed :ty :reg :ast defUnit: duo8.stringview :name
@@ -6387,14 +6388,44 @@ declOfUnitDef: function {
     defUnit: StringView
     name: StringView
 } out u64 is {
+    return (declOfUnitDefId
+        :ty
+        :defUnit
+        nameId: (zast.poolFind pool: ast.names text: name)
+    )
+}
+
+# declOfUnitDefId -- the same walk for a caller that already holds the
+# definition's name id: unit root, then the child edge. No key is built.
+# preIndexKey -- the (unit, def) id pair used while the Decl tree is still
+# being built. Not a lookup key in the tree sense: the tree does not exist yet.
+preIndexKey: function {ast: Ast defUnit: StringView nameId: u32} out u64 is {
+    return (((nameIdOf :ast name: defUnit).u64 * 4294967296) + nameId.u64)
+}
+
+# defWasResolved -- has this definition's body already been resolved? The mark
+# lives on its Decl; the pre-index pair covers the window before the unit root's
+# children exist (see ZTyping.preIndexDefined).
+defWasResolved: function {
+    ty: ztyping.ZTyping
+    ast: Ast
+    defUnit: StringView
+    nameId: u32
+} out bool is {
+    d9: declOfUnitDefId :ty :defUnit :nameId
+    if d9 > 0 then {
+        if (ty.declIsDefined declId: d9) then return true
+    }
+    return (ty.preIndexDefined.has item: (preIndexKey :ast :defUnit :nameId))
+}
+
+declOfUnitDefId: function {ty: ztyping.ZTyping defUnit: StringView nameId: u32} out u64 is {
+    if nameId == 0 then return 0
     ro9: ty.unitRootByName.getv key: defUnit
     match (
         ro9
     ) case some then {
-        return (ty.declFindChild
-            parentDeclId: ro9
-            nameId: (zast.poolFind pool: ast.names text: name)
-        )
+        return (ty.declFindChild parentDeclId: ro9 :nameId)
     } case none then null
     return 0
 }
@@ -6460,11 +6491,10 @@ resolveAliasKey: function {
     defUnit: StringView
     name: StringView
 } out u64 is {
-    ak9: "\{defUnit}.\{name}"
     adecl9: declOfUnitDef :ty :ast :defUnit :name
     tgt9: reexportTargetOf :ty :ast declId: adecl9
     if tgt9.length == 0 then return 0
-    if (ty.resolving.has item: ak9) then return 0
+    if (ty.declIsResolving declId: adecl9) then return 0
     tu9: String
     tn9: String
     with sit9: (tgt9.stringview.split sep: ".") do for seg9: sit9 loop {
@@ -6474,10 +6504,9 @@ resolveAliasKey: function {
             tn9 = seg9.string
         }
     }
-    gk9: ak9.copy
-    ty.resolving.add item: gk9
+    ty.declSetResolving declId: adecl9 mark: true
     atid9: descendNamed :ty :reg :ast defUnit: tu9.stringview name: tn9.stringview
-    ty.resolving.delete item: ak9
+    ty.declSetResolving declId: adecl9 mark: false
     typeRooted9: false
     if atid9 == 0 then {
         # a type-rooted target (`true: bool.true`): the root names a tagged
@@ -6567,10 +6596,14 @@ descendNamed: function {
         alo9: resolveAliasKey :ty :reg :ast :defUnit :name
         if alo9 > 0 then return alo9
     }
-    dk9a: "\{defUnit}.\{name}"
-    if (ty.definedKeys.has item: dk9a) then return tid9
-    dk9b: "\{defUnit}.\{name}"
-    if (ty.resolving.has item: dk9b) then {
+    ddecl9: declOfUnitDef :ty :ast :defUnit :name
+    if (defWasResolved
+        :ty
+        :ast
+        :defUnit
+        nameId: (zast.poolFind pool: ast.names text: name)
+    ) then return tid9
+    if (ty.declIsResolving declId: ddecl9) then {
         # A grey hit is a back-edge. Reference-kind targets (UNION/CLASS --
         # boxed) are legal forward declarations; a VALUE-kind target reached
         # through a containment edge cannot lay out.
@@ -6624,8 +6657,8 @@ resolveDef: function {
     defName: StringView
     defn: Node
 } is {
-    gk0: "\{unitName}.\{defName}"
-    ty.resolving.add item: gk0
+    rdecl0: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    ty.declSetResolving declId: rdecl0 mark: true
     # A containment edge is ONE hop: this def's own resolution starts a
     # fresh context (its field/arm legs re-arm the flag), so an outer field
     # bracket never taints nested param/return resolution.
@@ -6728,7 +6761,9 @@ resolveDef: function {
             tgtKey9: "\{apNm9}.\{acNm9}"
             # The alias target is read off the re-export Decl's node on demand
             # (reexportTargetOf); resolution reuses the target's canonical id.
-            if (ty.resolving.has item: tgtKey9) then {
+            if (ty.declIsResolving
+                declId: (declOfUnitDef :ty :ast defUnit: apNm9.stringview name: acNm9.stringview)
+            ) then {
                 aem9: "alias cycle: '\{unitName}.\{defName}' aliases '\{tgtKey9}' which is still resolving"
                 addResolveError :ty e: zast.err.typeError msg: aem9
             }
@@ -6759,10 +6794,18 @@ resolveDef: function {
     # Unit -> def childOf edges are built at mint (declareCanonicalType) for real
     # defs and on demand (resolvedByKey's alias-follow) for aliases; no tail pass.
     ty.inContainmentEdge = prevCE0
-    gk1: "\{unitName}.\{defName}"
-    ty.resolving.delete item: gk1
-    dkk0: "\{unitName}.\{defName}"
-    ty.definedKeys.add item: dkk0
+    rdecl1: declOfUnitDef :ty :ast defUnit: unitName name: defName
+    ty.declSetResolving declId: rdecl1 mark: false
+    if rdecl1 > 0 then {
+        ty.declSetDefined declId: rdecl1
+    } else {
+        pk1: (preIndexKey
+            :ast
+            defUnit: unitName
+            nameId: (zast.poolFind pool: ast.names text: defName)
+        )
+        ty.preIndexDefined.add item: pk1
+    }
 }
 
 # resolveUnitBody -- resolve every top-level definition signature in a unit.
@@ -6915,8 +6958,12 @@ resolveUnitBody: function {
                             unitOpId: bmNode9.operation
                         )
                     } else {
-                        rkeyE: "\{unitName}.\{defName}"
-                        if (ty.definedKeys.has item: rkeyE) == false then {
+                        if (defWasResolved
+                            :ty
+                            :ast
+                            defUnit: unitName
+                            nameId: bmNode9.name
+                        ) == false then {
                             (resolveDef
                                 :ty
                                 :reg
@@ -7250,8 +7297,12 @@ resolveDemandedUnitBody: function {
                     }
                     if (shadowed) == false then {
                         anyDemanded = true
-                        rkey: "\{unitName}.\{dn}"
-                        if (ty.definedKeys.has item: rkey) == false then {
+                        if (defWasResolved
+                            :ty
+                            :ast
+                            defUnit: unitName
+                            nameId: bmNode9.name
+                        ) == false then {
                             (resolveDef
                                 :ty
                                 :reg
@@ -7324,8 +7375,7 @@ resolveConformanceDefs: function {
                 op: (ast.nodes.get i: (bmNode9.operation - 1).u64)
             ) then {
                 dn: zast.nameTextCopy :ast ref: bmNode9.name
-                rkey: "\{unitName}.\{dn}"
-                if (ty.definedKeys.has item: rkey) == false then {
+                if (defWasResolved :ty :ast defUnit: unitName nameId: bmNode9.name) == false then {
                     (resolveDef
                         :ty
                         :reg
@@ -22176,8 +22226,12 @@ resolveNamedDefsIn: function {
                 if dn.stringview == wantA then hit = true
                 if dn.stringview == wantB then hit = true
                 if hit then {
-                    rkey: "\{unitName}.\{dn}"
-                    if (ty.definedKeys.has item: rkey) == false then {
+                    if (defWasResolved
+                        :ty
+                        :ast
+                        defUnit: unitName
+                        nameId: bmNode9.name
+                    ) == false then {
                         (resolveDef
                             :ty
                             :reg

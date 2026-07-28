@@ -164,6 +164,13 @@ Decl: class {
     # defaultVal -- a member's default value (none when unset). (Named
     # defaultVal, not default, which is a C keyword the emitter would not mangle.)
     defaultVal: DefaultVal
+    # demand-resolution state for a unit-level definition: `resolving` is the
+    # DFS grey mark (a reference that walks back into it is a cycle back-edge,
+    # and uses the forward-decl id instead of re-descending), `defined` the
+    # done mark. On the declaration itself, so the walk that finds the
+    # definition also finds its state.
+    resolving: bool
+    defined: bool
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
@@ -313,16 +320,15 @@ ZTyping: class {
     # aggregate typecheck state
     conformance: (List ztypes.ZConformance)
     preludeUnit: (Map String value: String)
-    # names whose definition BODY has been resolved (the demand "done" marker);
-    # distinct from `resolved` now that references pre-populate it.
-    definedKeys: (Set String)
-    # names whose definition body is currently being resolved -- the DFS grey
-    # set. A reference that walks back into a grey name is a cycle back-edge:
-    # it uses the forward-decl id instead of re-descending.
-    resolving: (Set String)
     # true once indexUnitDefs has populated the node finder; descent is gated
     # off before then (generator lowering runs pre-index).
     defNodeIndexBuilt: bool
+    # Demand marks for the PRE-INDEX window only. Generator lowering resolves
+    # system.Iterator / system.optionval before indexUnitDefs builds the unit
+    # roots' children, so those definitions have no Decl to carry the mark yet.
+    # Keyed by (unitNameId << 32) | defNameId -- an id pair, never a synthesized
+    # name. Every post-index mark lives on the Decl itself.
+    preIndexDefined: (Set u64)
     # memoized pseudo-shell ids for literal do-block break values: the optionval
     # instance over a literal payload keys off ONE shell per literal kind, not a
     # fresh mint per occurrence.
@@ -392,6 +398,8 @@ ZTyping: class {
             typeId: 0
             ownership: ztypes.zparamownership.noneMode
             defaultVal: DefaultVal.none
+            resolving: false
+            defined: false
             grantsPrivate: false
             fnptrField: false
             lockFieldDecl: 0
@@ -544,6 +552,32 @@ ZTyping: class {
     # declSetType -- record the canonical type a declaration minted, and the
     # reverse edge. The first mint wins, so a later alias declaration sharing
     # the type does not displace the defining one.
+    # declSetResolving / declIsResolving -- the DFS grey mark.
+    declSetResolving: function {:this declId: u64 mark: bool} is {
+        if (this.declValid id: declId) == false then return
+        do9: this.decls.get i: (declId - 1)
+        do9.resolving = mark
+    }
+
+    declIsResolving: function {:this declId: u64} out bool is {
+        if (this.declValid id: declId) == false then return false
+        do9: this.decls.get i: (declId - 1)
+        return do9.resolving
+    }
+
+    # declSetDefined / declIsDefined -- the demand "done" mark.
+    declSetDefined: function {:this declId: u64} is {
+        if (this.declValid id: declId) == false then return
+        do9: this.decls.get i: (declId - 1)
+        do9.defined = true
+    }
+
+    declIsDefined: function {:this declId: u64} out bool is {
+        if (this.declValid id: declId) == false then return false
+        do9: this.decls.get i: (declId - 1)
+        return do9.defined
+    }
+
     declSetType: function {:this declId: u64 typeId: u64} is {
         {
             if (this.declValid id: declId) then {
@@ -1570,9 +1604,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nodeConst: (List NodeConstRow)
         conformance: (List ztypes.ZConformance)
         preludeUnit: (Map String value: String)
-        definedKeys: (Set String)
-        resolving: (Set String)
         defNodeIndexBuilt: false
+        preIndexDefined: (Set u64)
         systemUnitTid: 0
         nullTypeId: 0
         literalIntShellId: 0
