@@ -591,24 +591,24 @@ ZDumper: class {
         n: st.reg.nextTypeId
         tid: u64
         for tid < n loop {
-            zt: st.reg.typeById.get key: tid
-            match (
-                zt
-            ) case some then {
-                nameSql: sqlStr s: zt.name.stringview
-                ttName: ztypes.ztypetypeName t: zt.typetype
-                ttSql: sqlStr s: ttName.stringview
-                valSql: optBoolSql o: zt.isValtype
-                genSql: boolNum b: zt.isgeneric
-                goSql: optIdStr o: zt.genericOriginId
-                ndSql: optStrSome o: zt.destructorName
-                dnSql: optStrSql o: zt.destructorName
-                heapSql: boolNum b: zt.isHeapAllocated
-                cnSql: cnameSql c: zt.cname.stringview
-                duSql: optStrSql o: (definedUnitOf9 :st :tid)
-                row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
-                this.acc.append s: row
-            } case none then null
+            if (st.reg.typeValid :tid) == false then {
+                tid = tid + 1
+                continue
+            }
+            zt: st.reg.typeById.get i: tid
+            nameSql: sqlStr s: zt.name.stringview
+            ttName: ztypes.ztypetypeName t: zt.typetype
+            ttSql: sqlStr s: ttName.stringview
+            valSql: optBoolSql o: zt.isValtype
+            genSql: boolNum b: zt.isgeneric
+            goSql: optIdStr o: zt.genericOriginId
+            ndSql: optStrSome o: zt.destructorName
+            dnSql: optStrSql o: zt.destructorName
+            heapSql: boolNum b: zt.isHeapAllocated
+            cnSql: cnameSql c: zt.cname.stringview
+            duSql: optStrSql o: (definedUnitOf9 :st :tid)
+            row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{dnSql}, \{heapSql}, \{cnSql}, \{duSql});\n"
+            this.acc.append s: row
             tid = tid + 1
         }
     }
@@ -878,20 +878,17 @@ ZDumper: class {
         n: st.reg.nextTypeId
         tid: u64
         for tid < n loop {
-            zt: st.reg.typeById.get key: tid
-            match (
-                zt
-            ) case some then {
-                idx9: u64
-                gn9: zt.genericChildKeys.length
-                for idx9 < gn9 loop {
-                    gk9: zt.genericChildKeys.get i: idx9
-                    gv9: zt.genericChildTids.get i: idx9
-                    row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{gk9}, \{gv9});\n"
-                    this.acc.append s: row
-                    idx9 = idx9 + 1
-                }
-            } case none then null
+            if tid >= st.reg.typeById.length then return
+            zt: st.reg.typeById.get i: tid
+            idx9: u64
+            gn9: zt.genericChildKeys.length
+            for idx9 < gn9 loop {
+                gk9: zt.genericChildKeys.get i: idx9
+                gv9: zt.genericChildTids.get i: idx9
+                row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{gk9}, \{gv9});\n"
+                this.acc.append s: row
+                idx9 = idx9 + 1
+            }
             tid = tid + 1
         }
     }
@@ -903,19 +900,15 @@ ZDumper: class {
         tid: u64
         for tid < n loop {
             gargs9: (List u64)
-            {
-                zt: st.reg.typeById.get key: tid
-                match (
-                    zt
-                ) case some then {
-                    zn9: zt.genericArgs.length
-                    zi9: u64
-                    for zi9 < zn9 loop {
-                        ze9: zt.genericArgs.get i: zi9
-                        gargs9.append ze9
-                        zi9 = zi9 + 1
-                    }
-                } case none then null
+            if tid < st.reg.typeById.length then {
+                zt: st.reg.typeById.get i: tid
+                zn9: zt.genericArgs.length
+                zi9: u64
+                for zi9 < zn9 loop {
+                    ze9: zt.genericArgs.get i: zi9
+                    gargs9.append ze9
+                    zi9 = zi9 + 1
+                }
             }
             an9: gargs9.length
             ai9: u64
@@ -938,30 +931,26 @@ ZDumper: class {
         for tid < n loop {
             gkeys9: (List u64)
             gtids9: (List u64)
-            {
-                zt: st.reg.typeById.get key: tid
+            if tid < st.reg.typeById.length then {
+                zt: st.reg.typeById.get i: tid
+                du: definedUnitOf9 :st :tid
+                inUnit: false
                 match (
-                    zt
+                    du
                 ) case some then {
-                    du: definedUnitOf9 :st :tid
-                    inUnit: false
-                    match (
-                        du
-                    ) case some then {
-                        if du.stringview == unm then inUnit = true
-                    } case none then null
-                    if inUnit then {
-                        zn8: zt.genericChildKeys.length
-                        zi8: u64
-                        for zi8 < zn8 loop {
-                            zk8: zt.genericChildKeys.get i: zi8
-                            gkeys9.append zk8
-                            zt8: zt.genericChildTids.get i: zi8
-                            gtids9.append zt8
-                            zi8 = zi8 + 1
-                        }
-                    }
+                    if du.stringview == unm then inUnit = true
                 } case none then null
+                if inUnit then {
+                    zn8: zt.genericChildKeys.length
+                    zi8: u64
+                    for zi8 < zn8 loop {
+                        zk8: zt.genericChildKeys.get i: zi8
+                        gkeys9.append zk8
+                        zt8: zt.genericChildTids.get i: zi8
+                        gtids9.append zt8
+                        zi8 = zi8 + 1
+                    }
+                }
             }
             {
                 if gkeys9.length > 0 then {
@@ -1002,28 +991,24 @@ ZDumper: class {
         tid: u64
         for tid < n loop {
             cargs9: (List u64)
-            {
-                zt: st.reg.typeById.get key: tid
+            if tid < st.reg.typeById.length then {
+                zt: st.reg.typeById.get i: tid
+                du: definedUnitOf9 :st :tid
+                inUnit: false
                 match (
-                    zt
+                    du
                 ) case some then {
-                    du: definedUnitOf9 :st :tid
-                    inUnit: false
-                    match (
-                        du
-                    ) case some then {
-                        if du.stringview == unm then inUnit = true
-                    } case none then null
-                    if inUnit then {
-                        cz9: zt.genericArgs.length
-                        ci9: u64
-                        for ci9 < cz9 loop {
-                            ce9: zt.genericArgs.get i: ci9
-                            cargs9.append ce9
-                            ci9 = ci9 + 1
-                        }
-                    }
+                    if du.stringview == unm then inUnit = true
                 } case none then null
+                if inUnit then {
+                    cz9: zt.genericArgs.length
+                    ci9: u64
+                    for ci9 < cz9 loop {
+                        ce9: zt.genericArgs.get i: ci9
+                        cargs9.append ce9
+                        ci9 = ci9 + 1
+                    }
+                }
             }
             {
                 if cargs9.length > 0 then {
@@ -1056,29 +1041,26 @@ ZDumper: class {
         n: st.reg.nextTypeId
         tid: u64
         for tid < n loop {
-            zt: st.reg.typeById.get key: tid
+            if tid >= st.reg.typeById.length then return
+            zt: st.reg.typeById.get i: tid
+            du: definedUnitOf9 :st :tid
+            inUnit: false
             match (
-                zt
+                du
             ) case some then {
-                du: definedUnitOf9 :st :tid
-                inUnit: false
-                match (
-                    du
-                ) case some then {
-                    if du.stringview == unm then inUnit = true
-                } case none then null
-                if inUnit then {
-                    nameSql: sqlStr s: zt.name.stringview
-                    ttName: ztypes.ztypetypeName t: zt.typetype
-                    ttSql: sqlStr s: ttName.stringview
-                    valSql: optBoolSql o: zt.isValtype
-                    genSql: boolNum b: zt.isgeneric
-                    ndSql: optStrSome o: zt.destructorName
-                    heapSql: boolNum b: zt.isHeapAllocated
-                    line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql}"
-                    rows.append line
-                }
+                if du.stringview == unm then inUnit = true
             } case none then null
+            if inUnit then {
+                nameSql: sqlStr s: zt.name.stringview
+                ttName: ztypes.ztypetypeName t: zt.typetype
+                ttSql: sqlStr s: ttName.stringview
+                valSql: optBoolSql o: zt.isValtype
+                genSql: boolNum b: zt.isgeneric
+                ndSql: optStrSome o: zt.destructorName
+                heapSql: boolNum b: zt.isHeapAllocated
+                line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql}"
+                rows.append line
+            }
             tid = tid + 1
         }
         this.emitSection title: "types" :rows
@@ -1543,14 +1525,9 @@ optU64Or0: function {o: optionval u64} out u64 is {
 # canonTypeName -- a type id's registered name, or "?" when unregistered.
 # Renders foreign-key ids as stable names in the canonical dump.
 canonTypeName: function {reg: ztypes.ZTypeRegistry tid: u64} out String is {
-    zt: reg.typeById.get key: tid
-    match (
-        zt
-    ) case some then {
-        return zt.name.copy
-    } case none then {
-        return "?".string
-    }
+    if (reg.typeValid :tid) == false then return "?".string
+    zt: reg.typeById.get i: tid
+    return zt.name.copy
 }
 
 # dumpCanon -- a canonical, id-normalized rendering of the typecheck state

@@ -536,6 +536,33 @@ ParamList: class {
 
 # the registry of every type: each ZType keyed by id, plus the name and
 # child indexes the resolver and emitter query.
+# holeType -- the row standing in for an id minted by allocType, which names an
+# expression with no type. typeId 0 marks it: a real row carries its own index,
+# and index 0 is `notype`, which is always registered.
+holeType: function {} out ZType is {
+    return (ZType
+    typeId: 0
+    name: "".string
+    typetype: ztypetype.nullType
+    returnTypeId: (optionval.none u64)
+    thisParamName: (Option.none String)
+    isgeneric: false
+    isValtype: (optionval.none bool)
+    genericOriginId: (optionval.none u64)
+    isTagGenericOrigin: false
+    genericChildKeys: (List u64)
+    genericChildTids: (List u64)
+    genericArgs: (List u64)
+    genericArgIsValue: (List bool)
+    destructorName: (Option.none String)
+    isHeapAllocated: false
+    isBox: false
+    isNative: false
+    runtimeIndexed: false
+    def: 0
+    cname: "".string)
+}
+
 ZTypeRegistry: class {
     nextTypeId: u64
     nextVariableId: u64
@@ -545,7 +572,7 @@ ZTypeRegistry: class {
     # the shared unregistered id worn by every `break` / `continue` entry
     # (see ctlPlaceholder); 0 until first use
     ctlPlaceholderTid: u64
-    typeById: (Map u64 value: ZType)
+    typeById: (List ZType)
     crossUnitDemand: (Set String)
     unitNameTid: (Map String value: u64)
     unitSeededDemand: (Map String value: bool)
@@ -564,6 +591,7 @@ ZTypeRegistry: class {
     allocType: function {:this} out u64 is {
         r: this.nextTypeId
         this.nextTypeId = this.nextTypeId + 1
+        this.typeById.append (holeType)
         return r
     }
 
@@ -613,8 +641,7 @@ ZTypeRegistry: class {
         runtimeIndexed: false
         def: 0
         cname: (composeCname tid: id :name))
-        idForKey: id
-        this.typeById.set key: idForKey value: t
+        this.typeById.append t
         return id
     }
 
@@ -666,50 +693,28 @@ ZTypeRegistry: class {
     # scalar facts. The symbol table reads these for narrowing,
     # exclusion, and live-owned-var detection. ---
     hasType: function {:this typeId: u64} out bool is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            return true
-        } case none then {
-            return false
-        }
+        return (this.typeValid tid: typeId)
     }
 
     typetypeOf: function {:this typeId: u64} out ztypetype is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            return got.typetype
-        } case none then {
-            return ztypetype.nullType
-        }
+        if typeId >= this.typeById.length then return ztypetype.nullType
+        got: this.typeById.get i: typeId
+        return got.typetype
     }
 
     isTagGenericOriginOf: function {:this typeId: u64} out bool is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            return got.isTagGenericOrigin
-        } case none then {
-            return false
-        }
+        if typeId >= this.typeById.length then return false
+        got: this.typeById.get i: typeId
+        return got.isTagGenericOrigin
     }
 
     hasDestructorName: function {:this typeId: u64} out bool is {
-        got: this.typeById.get key: typeId
+        if typeId >= this.typeById.length then return false
+        got: this.typeById.get i: typeId
         match (
-            got
+            got.destructorName
         ) case some then {
-            match (
-                got.destructorName
-            ) case some then {
-                return true
-            } case none then {
-                return false
-            }
+            return true
         } case none then {
             return false
         }
@@ -718,242 +723,188 @@ ZTypeRegistry: class {
     # --- post-construction metadata stamps: mutate the stored ZType in
     # place through the by-id table. ---
     setDestructorName: function {:this typeId: u64 name: StringView} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.destructorName = (Option.some name.string)
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.destructorName = (Option.some name.string)
     }
 
     setIsBox: function {:this typeId: u64} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.isBox = true
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.isBox = true
     }
 
     setIsHeapAllocated: function {:this typeId: u64} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.isHeapAllocated = true
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.isHeapAllocated = true
     }
 
     setTagGenericOrigin: function {:this typeId: u64} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.isTagGenericOrigin = true
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.isTagGenericOrigin = true
     }
 
     # cnameOf -- the mint-composed C name for a type id ("" when absent).
     cnameOf: function {:this tid: u64} out String is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.cname.copy
-        } case none then {
-            return "".string
-        }
+        if tid >= this.typeById.length then return "".string
+        got: this.typeById.get i: tid
+        return got.cname.copy
     }
 
     setValtype: function {:this typeId: u64 value: bool} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.isValtype = (optionval.some value)
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.isValtype = (optionval.some value)
     }
 
     setGeneric: function {:this typeId: u64 value: bool} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.isgeneric = value
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.isgeneric = value
     }
 
     setNative: function {:this typeId: u64 value: bool} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.isNative = value
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.isNative = value
     }
 
 
     setGenericChild: function {:this parentId: u64 key: u64 child: u64} is {
-        got: this.typeById.get key: parentId
-        match (
-            got
-        ) case some then {
-            idx: u64
-            gn: got.genericChildKeys.length
-            found: false
-            for idx < gn loop {
-                if found == false then {
-                    if (got.genericChildKeys.get i: idx) == key then {
-                        got.genericChildTids.set i: idx val: child
-                        found = true
-                    }
-                }
-                idx = idx + 1
-            }
+        if parentId >= this.typeById.length then return
+        got: this.typeById.get i: parentId
+        idx: u64
+        gn: got.genericChildKeys.length
+        found: false
+        for idx < gn loop {
             if found == false then {
-                got.genericChildKeys.append key
-                got.genericChildTids.append child
+                if (got.genericChildKeys.get i: idx) == key then {
+                    got.genericChildTids.set i: idx val: child
+                    found = true
+                }
             }
-        } case none then null
+            idx = idx + 1
+        }
+        if found == false then {
+            got.genericChildKeys.append key
+            got.genericChildTids.append child
+        }
     }
 
     getGenericChild: function {:this parentId: u64 key: u64} out optionval u64 is {
-        got: this.typeById.get key: parentId
-        match (
-            got
-        ) case some then {
-            idx: u64
-            gn: got.genericChildKeys.length
-            for idx < gn loop {
-                if (got.genericChildKeys.get i: idx) == key then {
-                    return (optionval.some (got.genericChildTids.get i: idx))
-                }
-                idx = idx + 1
+        if parentId >= this.typeById.length then return (optionval.none u64)
+        got: this.typeById.get i: parentId
+        idx: u64
+        gn: got.genericChildKeys.length
+        for idx < gn loop {
+            if (got.genericChildKeys.get i: idx) == key then {
+                return (optionval.some (got.genericChildTids.get i: idx))
             }
-        } case none then null
+            idx = idx + 1
+        }
         return (optionval.none u64)
     }
 
     appendGenericArg: function {:this specId: u64 arg: u64} is {
-        got: this.typeById.get key: specId
-        match (
-            got
-        ) case some then {
-            got.genericArgs.append arg
-            got.genericArgIsValue.append false
-        } case none then null
+        if specId >= this.typeById.length then return
+        got: this.typeById.get i: specId
+        got.genericArgs.append arg
+        got.genericArgIsValue.append false
     }
 
     # appendGenericArgValue -- record a numeric VALUE ordinal (the literal,
     # not a type id) for a sized specialization.
     appendGenericArgValue: function {:this specId: u64 value: u64} is {
-        got: this.typeById.get key: specId
-        match (
-            got
-        ) case some then {
-            got.genericArgs.append value
-            got.genericArgIsValue.append true
-        } case none then null
+        if specId >= this.typeById.length then return
+        got: this.typeById.get i: specId
+        got.genericArgs.append value
+        got.genericArgIsValue.append true
     }
 
     genericArgCount: function {:this specId: u64} out u64 is {
-        got: this.typeById.get key: specId
-        match (
-            got
-        ) case some then {
-            return got.genericArgs.length
-        } case none then null
+        if specId >= this.typeById.length then return 0
+        got: this.typeById.get i: specId
+        return got.genericArgs.length
         return 0
     }
 
     genericArgAt: function {:this specId: u64 ordinal: u64} out u64 is {
-        got: this.typeById.get key: specId
-        match (
-            got
-        ) case some then {
-            if ordinal < got.genericArgs.length then return (got.genericArgs.get i: ordinal)
-        } case none then null
+        if specId >= this.typeById.length then return 0
+        got: this.typeById.get i: specId
+        if ordinal < got.genericArgs.length then return (got.genericArgs.get i: ordinal)
         return 0
     }
 
     genericArgIsValueAt: function {:this specId: u64 ordinal: u64} out bool is {
-        got: this.typeById.get key: specId
-        match (
-            got
-        ) case some then {
-            if ordinal < got.genericArgIsValue.length then {
-                return (got.genericArgIsValue.get i: ordinal)
-            }
-        } case none then null
+        if specId >= this.typeById.length then return false
+        got: this.typeById.get i: specId
+        if ordinal < got.genericArgIsValue.length then return (got.genericArgIsValue.get i: ordinal)
         return false
+    }
+
+    # typeValid -- `tid` addresses a registered row rather than a hole. A hole
+    # (an id minted by allocType) carries typeId 0; a real row carries its own
+    # index, and index 0 is `notype`, which is always registered.
+    typeValid: function {:this tid: u64} out bool is {
+        if tid >= this.typeById.length then return false
+        if tid == 0 then return true
+        got: this.typeById.get i: tid
+        return (got.typeId == tid)
     }
 
     # nameOf -- a type's registered name, or "" when the id has none.
     nameOf: function {:this tid: u64} out String is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.name.copy
-        } case none then null
+        if tid >= this.typeById.length then return "".string
+        got: this.typeById.get i: tid
+        return got.name.copy
         return "".string
     }
 
     # defOf -- the declaration that minted this type, or 0.
     defOf: function {:this tid: u64} out u64 is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.def
-        } case none then null
+        if tid >= this.typeById.length then return 0
+        got: this.typeById.get i: tid
+        return got.def
         return 0
     }
 
     # returnTypeOf -- a function type's return type id, or 0 when it has none.
     returnTypeOf: function {:this tid: u64} out u64 is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return 0
+        got: this.typeById.get i: tid
+        r9: got.returnTypeId
         match (
-            got
+            r9
         ) case some then {
-            r9: got.returnTypeId
-            match (
-                r9
-            ) case some then {
-                return r9
-            } case none then null
+            return r9
         } case none then null
         return 0
     }
 
     # thisParamNameOf -- a method's receiver-parameter name, or "".
     thisParamNameOf: function {:this tid: u64} out String is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return "".string
+        got: this.typeById.get i: tid
+        t9: got.thisParamName
         match (
-            got
+            t9
         ) case some then {
-            t9: got.thisParamName
-            match (
-                t9
-            ) case some then {
-                return t9.copy
-            } case none then null
+            return t9.copy
         } case none then null
         return "".string
     }
 
     # hasThisParamName -- the type declares a receiver parameter.
     hasThisParamName: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        t9: got.thisParamName
         match (
-            got
+            t9
         ) case some then {
-            t9: got.thisParamName
-            match (
-                t9
-            ) case some then {
-                return true
-            } case none then null
+            return true
         } case none then null
         return false
     }
@@ -961,71 +912,56 @@ ZTypeRegistry: class {
     # thisParamNameIs -- the receiver parameter is named `name`; false when the
     # type declares none, so an undeclared receiver never matches.
     thisParamNameIs: function {:this tid: u64 name: StringView} out bool is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        t9: got.thisParamName
         match (
-            got
+            t9
         ) case some then {
-            t9: got.thisParamName
-            match (
-                t9
-            ) case some then {
-                return (t9.stringview == name)
-            } case none then null
+            return (t9.stringview == name)
         } case none then null
         return false
     }
 
     # isGenericOf -- the type is a generic template.
     isGenericOf: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.isgeneric
-        } case none then null
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        return got.isgeneric
         return false
     }
 
     # isNativeOf -- the type is compiler-provided.
     isNativeOf: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.isNative
-        } case none then null
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        return got.isNative
         return false
     }
 
     # isValtypeOf -- the type is known to be a valtype. An unset or
     # unregistered id is neither a valtype nor a reftype.
     isValtypeOf: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        v9: got.isValtype
         match (
-            got
+            v9
         ) case some then {
-            v9: got.isValtype
-            match (
-                v9
-            ) case some then {
-                return v9
-            } case none then null
+            return v9
         } case none then null
         return false
     }
 
     # isReftypeOf -- the type is known to be a reftype.
     isReftypeOf: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        v9: got.isValtype
         match (
-            got
+            v9
         ) case some then {
-            v9: got.isValtype
-            match (
-                v9
-            ) case some then {
-                return (v9) == false
-            } case none then null
+            return (v9) == false
         } case none then null
         return false
     }
@@ -1033,12 +969,9 @@ ZTypeRegistry: class {
     # isBoxOf -- the type is the builtin Box (a heap pointer), not a user
     # class that happens to be named Box.
     isBoxOf: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.isBox
-        } case none then null
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        return got.isBox
         return false
     }
 
@@ -1046,81 +979,60 @@ ZTypeRegistry: class {
     # view so no String is materialized. An unregistered id has no name, which
     # matches only the empty string.
     nameIs: function {:this tid: u64 name: StringView} out bool is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return (got.name.stringview == name)
-        } case none then null
+        if tid >= this.typeById.length then return (name.length == 0)
+        got: this.typeById.get i: tid
+        return (got.name.stringview == name)
         return (name.length == 0)
     }
 
     # isRuntimeIndexedOf -- a data block reached by `.index` / `.array`, so its
     # static array must be emitted.
     isRuntimeIndexedOf: function {:this tid: u64} out bool is {
-        got: this.typeById.get key: tid
-        match (
-            got
-        ) case some then {
-            return got.runtimeIndexed
-        } case none then null
+        if tid >= this.typeById.length then return false
+        got: this.typeById.get i: tid
+        return got.runtimeIndexed
         return false
     }
 
     # genericOriginOf -- the template a mono was instantiated from, or 0 when
     # the type has no origin (0 is `notype`, never a real origin).
     genericOriginOf: function {:this tid: u64} out u64 is {
-        got: this.typeById.get key: tid
+        if tid >= this.typeById.length then return 0
+        got: this.typeById.get i: tid
+        go9: got.genericOriginId
         match (
-            got
+            go9
         ) case some then {
-            go9: got.genericOriginId
-            match (
-                go9
-            ) case some then {
-                return go9
-            } case none then null
+            return go9
         } case none then null
         return 0
     }
 
     setGenericOrigin: function {:this typeId: u64 value: u64} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            vc: value
-            got.genericOriginId = (optionval.some vc)
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        vc: value
+        got.genericOriginId = (optionval.some vc)
     }
 
     setReturnType: function {:this typeId: u64 value: u64} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            vc: value
-            got.returnTypeId = (optionval.some vc)
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        vc: value
+        got.returnTypeId = (optionval.some vc)
     }
 
     # setDef -- link a minted type to the declaration that minted it.
     setDef: function {:this typeId: u64 declId: u64} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.def = declId
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.def = declId
     }
 
     setThisParamName: function {:this typeId: u64 name: StringView} is {
-        got: this.typeById.get key: typeId
-        match (
-            got
-        ) case some then {
-            got.thisParamName = (Option.some name.string)
-        } case none then null
+        if typeId >= this.typeById.length then return
+        got: this.typeById.get i: typeId
+        got.thisParamName = (Option.some name.string)
     }
 
     # recordDemand / isDemanded -- the names of cross-unit types a definition
@@ -1331,7 +1243,7 @@ newRegistry: function {} out ZTypeRegistry is {
         nextEntryId: 0
         nextConformanceId: 0
         ctlPlaceholderTid: 0
-        typeById: (Map u64 value: ZType)
+        typeById: (List ZType capacity: 512)
         crossUnitDemand: (Set String)
         unitNameTid: (Map String value: u64)
         unitSeededDemand: (Map String value: bool)
